@@ -77,6 +77,7 @@ import {
   resolveSessionStoreEntry,
   resolveSessionTranscriptPath,
   type SessionEntry,
+  type SessionPostCompactionDelegate,
 } from "../../config/sessions.js";
 import { removeSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
@@ -102,6 +103,7 @@ import {
   resolveMessageChannel,
 } from "../../utils/message-channel.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { stagePostCompactionDelegate } from "../continuation-delegate-store.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
@@ -233,17 +235,27 @@ export async function releaseQueuedCompactionCompletion(params: {
   const refreshedSessionEntry = resolved.existing ?? sessionEntry;
   const { dispatchPostCompactionDelegates } =
     await import("./post-compaction-delegate-dispatch.js");
+  // Recovery parity with the auto-compaction path (agent-runner.ts finally):
+  // dispatchPostCompactionDelegates pushes delegates that failed both the
+  // delivery enqueue and the internal re-persist onto this array. Re-stage the
+  // survivors below so a double persistence failure does not silently drop the
+  // volitional request_compaction recovery work (I2).
+  const postCompactionDelegatesToPreserve: SessionPostCompactionDelegate[] = [];
   const dispatchResult = await dispatchPostCompactionDelegates({
     cfg: params.followupRun.run.config,
     compactionCount: compactionId,
     followupRun: params.followupRun,
-    postCompactionDelegatesToPreserve: [],
+    postCompactionDelegatesToPreserve,
     releaseTraceparent: params.traceparent,
     sessionEntry: refreshedSessionEntry,
     sessionKey: params.sessionKey,
     sessionStore: params.activeSessionStore,
     storePath: params.storePath,
   });
+
+  for (const delegate of postCompactionDelegatesToPreserve) {
+    stagePostCompactionDelegate(params.sessionKey, delegate);
+  }
 
   const { emitContinuationCompactionReleasedSpan } =
     await import("../../infra/continuation-tracer.js");

@@ -110,7 +110,7 @@ export async function enqueueContinuationReturnDeliveries(
     );
     deliveryIds.push(deliveryId);
 
-    deps.enqueueSystemEvent(params.text, {
+    const enqueued = deps.enqueueSystemEvent(params.text, {
       sessionKey,
       trusted: true,
       ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
@@ -118,6 +118,12 @@ export async function enqueueContinuationReturnDeliveries(
       sessionDeliveryAckId: deliveryId,
       ...(params.stateDir ? { sessionDeliveryAckStateDir: params.stateDir } : {}),
     });
+    if (!enqueued) {
+      // Idempotent delivery enqueue can return the existing durable row id for
+      // the already-queued in-memory event. Do not ack here: that would delete
+      // the durable backing row for the surviving queued event before the
+      // prompt-drain path consumes it. The surviving event carries the ack id.
+    }
     if (params.wakeRecipients) {
       deps.requestHeartbeatNow({
         sessionKey,
@@ -125,9 +131,10 @@ export async function enqueueContinuationReturnDeliveries(
         parentRunId: params.childRunId,
       });
     }
-    // Do NOT ack the durable file here. The in-memory event carries the ack id
-    // and the prompt-drain path acknowledges it only after recipient consumption;
-    // non-attached recipients still need restart recovery to replay this file.
+    // For a queued event, do NOT ack the durable file here. The in-memory event
+    // carries the ack id and the prompt-drain path acknowledges it only after
+    // recipient consumption; non-attached recipients still need restart recovery
+    // to replay this file.
     delivered += 1;
   }
 

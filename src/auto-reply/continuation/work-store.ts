@@ -198,6 +198,7 @@ export function enqueuePendingWork(work: PendingContinuationWork): PendingContin
   };
   const flow = createManagedTaskFlow({
     ownerKey: work.sessionKey,
+    ...(work.chainId ? { chainId: work.chainId } : {}),
     controllerId: CONTINUATION_WORK_CONTROLLER_ID,
     notifyPolicy: "silent",
     goal: workGoal(work),

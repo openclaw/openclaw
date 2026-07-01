@@ -260,6 +260,7 @@ type MockFlow = {
   flowId: string;
   syncMode: "managed";
   ownerKey: string;
+  chainId?: string;
   controllerId: string;
   status: "queued" | "running" | "succeeded" | "failed";
   notifyPolicy: "silent";
@@ -287,6 +288,7 @@ vi.mock("../../tasks/task-flow-registry.js", () => ({
       flowId: `flow-${++flowCounter}`,
       syncMode: "managed",
       ownerKey: params.ownerKey,
+      chainId: params.chainId,
       controllerId: params.controllerId ?? "tests/controller",
       status: params.status ?? "queued",
       notifyPolicy: "silent",
@@ -547,6 +549,21 @@ describe("durable continuation_work dispatch", () => {
       }),
     ]);
     expect(systemEvents).toEqual([]);
+  });
+
+  it("writes continuation chainId into the managed TaskFlow row", () => {
+    enqueuePendingWork({
+      sessionKey: "agent:main:main",
+      hop: 1,
+      delayMs: 1_000,
+      electedAt: Date.now(),
+      dueAt: Date.now() + 1_000,
+      maxChainLength: 8,
+      reason: "chain id persistence",
+      chainId: "chain-persisted",
+    });
+
+    expect([...mockFlows.values()][0]?.chainId).toBe("chain-persisted");
   });
 
   it("resolves normalized session-store aliases before treating work as missing-session", async () => {

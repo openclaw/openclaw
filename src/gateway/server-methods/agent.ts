@@ -2752,12 +2752,15 @@ export const agentHandlers: GatewayRequestHandlers = {
           }
           const execApprovalFollowupElevatedDefaults =
             execApprovalFollowupRuntimeHandoff?.bashElevated;
+          const subagentTraceparentHandoff = consumeSubagentTraceparentHandoff({
+            idempotencyKey: idem,
+            sessionKey: resolvedSessionKey,
+          })?.traceparent;
+          const trustedContinuationRuntimeHandoff =
+            canUseInternalRuntimeHandoff || Boolean(subagentTraceparentHandoff);
           const inheritedTraceparent =
-            request.traceparent ??
-            consumeSubagentTraceparentHandoff({
-              idempotencyKey: idem,
-              sessionKey: resolvedSessionKey,
-            })?.traceparent ??
+            (canUseInternalRuntimeHandoff ? request.traceparent : undefined) ??
+            subagentTraceparentHandoff ??
             sessionContinuationTraceparent;
 
           dispatchAgentRunFromGateway({
@@ -2818,8 +2821,17 @@ export const agentHandlers: GatewayRequestHandlers = {
                   internalEvents: request.internalEvents,
                 }),
               cleanupBundleMcpOnRunEnd: request.cleanupBundleMcpOnRunEnd,
-              drainsContinuationDelegateQueue: request.drainsContinuationDelegateQueue,
-              continuationTrigger: request.continuationTrigger,
+              // Internal continuation controls: reserved for backend callers.
+              // These fields are stripped from the public generated schema, but
+              // raw RPC clients can still set them. Ignore them for non-backend
+              // clients so an ordinary caller cannot force continuation
+              // queue-drain semantics or mark runs continuation/heartbeat-like.
+              drainsContinuationDelegateQueue: trustedContinuationRuntimeHandoff
+                ? request.drainsContinuationDelegateQueue
+                : undefined,
+              continuationTrigger: trustedContinuationRuntimeHandoff
+                ? request.continuationTrigger
+                : undefined,
               traceparent: inheritedTraceparent,
               abortSignal: activeRunAbort.controller.signal,
               lifecycleGeneration,
