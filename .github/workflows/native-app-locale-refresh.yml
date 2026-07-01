@@ -22,7 +22,7 @@ permissions:
 
 concurrency:
   group: native-app-locale-refresh-${{ github.event_name == 'push' && github.ref || format('manual-{0}', github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor != 'github-actions[bot]' }}
 
 jobs:
   refresh:
