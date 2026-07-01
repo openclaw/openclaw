@@ -453,6 +453,20 @@ function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
   );
 }
 
+// Resolve a real path safely, returning null on failure.
+function safeRealpathSync(targetPath: string): string | null {
+  try { return fs.realpathSync.native(targetPath); } catch { return null; }
+}
+
+// Check whether a resolved file path belongs to the host openclaw package
+// (used to allow host SDK symlinks that escape the plugin root, #93886).
+function isHostOpenClawPackage(entryPath: string): boolean {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(entryPath, "..", "..", "package.json"), "utf8"));
+    return pkg?.name === "openclaw";
+  } catch { return false; }
+}
+
 type PluginRegistrySnapshot = {
   arrays: {
     tools: PluginRegistry["tools"];
@@ -2456,12 +2470,22 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         rejectHardlinks,
         skipLexicalRootCheck: true,
       });
+      let safeSource: string;
       if (!opened.ok) {
-        pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
-        continue;
+        // The path may escape the plugin root via a symlink to the host openclaw
+        // installation (e.g. codex's node_modules/openclaw -> /app). Treat host
+        // SDK imports as allowed aliases rather than boundary violations.
+        const realEntry = safeRealpathSync(moduleLoadSource);
+        if (realEntry && isHostOpenClawPackage(realEntry)) {
+          safeSource = realEntry;
+        } else {
+          pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
+          continue;
+        }
+      } else {
+        safeSource = opened.path;
+        fs.closeSync(opened.fd);
       }
-      const safeSource = opened.path;
-      fs.closeSync(opened.fd);
 
       let mod: OpenClawPluginModule | null = null;
       let moduleLoadMs = 0;
@@ -2566,12 +2590,19 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
               rejectHardlinks,
               skipLexicalRootCheck: true,
             });
+            let safeRuntimeSource: string;
             if (!runtimeOpened.ok) {
-              pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
-              continue;
+              const realEntry = safeRealpathSync(runtimeModuleSource);
+              if (realEntry && isHostOpenClawPackage(realEntry)) {
+                safeRuntimeSource = realEntry;
+              } else {
+                pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
+                continue;
+              }
+            } else {
+              safeRuntimeSource = runtimeOpened.path;
+              fs.closeSync(runtimeOpened.fd);
             }
-            const safeRuntimeSource = runtimeOpened.path;
-            fs.closeSync(runtimeOpened.fd);
             let runtimeMod: OpenClawPluginModule | null = null;
             try {
               runtimeMod = withProfile(
@@ -3246,12 +3277,19 @@ export async function loadOpenClawPluginCliRegistry(
       }),
       skipLexicalRootCheck: true,
     });
+    let safeSource: string;
     if (!opened.ok) {
-      pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
-      continue;
+      const realEntry = safeRealpathSync(sourceForCliMetadata);
+      if (realEntry && isHostOpenClawPackage(realEntry)) {
+        safeSource = realEntry;
+      } else {
+        pushPluginLoadError("plugin entry path escapes plugin root or fails alias checks");
+        continue;
+      }
+    } else {
+      safeSource = opened.path;
+      fs.closeSync(opened.fd);
     }
-    const safeSource = opened.path;
-    fs.closeSync(opened.fd);
 
     let mod: OpenClawPluginModule | null;
     try {
