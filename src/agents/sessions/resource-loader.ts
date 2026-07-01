@@ -92,9 +92,12 @@ function loadContextFileFromDir(dir: string): { path: string; content: string } 
 export function loadProjectContextFiles(options: {
   cwd: string;
   agentDir: string;
+  /** Trusted workspace root boundary. The ancestor walk stops here.
+   *  When omitted the boundary falls back to cwd (backward-compatible). */
+  workspaceDir?: string;
 }): Array<{ path: string; content: string }> {
-  const resolvedCwd = options.cwd;
-  const resolvedAgentDir = options.agentDir;
+  const resolvedCwd = resolve(options.cwd);
+  const resolvedAgentDir = resolve(options.agentDir);
 
   const contextFiles: Array<{ path: string; content: string }> = [];
   const seenPaths = new Set<string>();
@@ -107,8 +110,22 @@ export function loadProjectContextFiles(options: {
 
   const ancestorContextFiles: Array<{ path: string; content: string }> = [];
 
+  // Use the explicit workspace boundary when provided, otherwise fall back to
+  // cwd so existing callers that don't pass workspaceDir are unchanged.
+  const boundary = resolve(options.workspaceDir ?? options.cwd);
+
+  // Fail-closed: if cwd is not within the workspace boundary, do not walk
+  // ancestors — a relative, symlink-mismatched, or non-descendant cwd could
+  // otherwise bypass the equality-only stop condition and load context files
+  // from parent directories outside the trusted workspace.
+  if (
+    resolvedCwd !== boundary &&
+    !resolvedCwd.startsWith(boundary.endsWith("/") ? boundary : `${boundary}/`)
+  ) {
+    return contextFiles;
+  }
+
   let currentDir = resolvedCwd;
-  const root = resolve("/");
 
   while (true) {
     const contextFile = loadContextFileFromDir(currentDir);
@@ -117,7 +134,9 @@ export function loadProjectContextFiles(options: {
       seenPaths.add(contextFile.path);
     }
 
-    if (currentDir === root) {
+    // Stop traversing at the trusted workspace boundary — do not walk into
+    // ancestor directories outside the agent's workspace.
+    if (currentDir === boundary) {
       break;
     }
 
@@ -136,6 +155,9 @@ export function loadProjectContextFiles(options: {
 export interface DefaultResourceLoaderOptions {
   cwd: string;
   agentDir: string;
+  /** Trusted workspace root for context-file ancestor walk boundary.
+   *  When not set the boundary falls back to cwd. */
+  workspaceDir?: string;
   settingsManager?: SettingsManager;
   eventBus?: EventBus;
   additionalExtensionPaths?: string[];
@@ -177,6 +199,7 @@ export interface DefaultResourceLoaderOptions {
 export class DefaultResourceLoader implements ResourceLoader {
   private cwd: string;
   private agentDir: string;
+  private workspaceDir: string;
   private settingsManager: SettingsManager;
   private eventBus: EventBus;
   private packageManager: DefaultPackageManager;
@@ -236,6 +259,7 @@ export class DefaultResourceLoader implements ResourceLoader {
   constructor(options: DefaultResourceLoaderOptions) {
     this.cwd = options.cwd;
     this.agentDir = options.agentDir;
+    this.workspaceDir = options.workspaceDir ?? options.cwd;
     this.settingsManager =
       options.settingsManager ?? SettingsManager.create(this.cwd, this.agentDir);
     this.eventBus = options.eventBus ?? createEventBus();
@@ -506,7 +530,11 @@ export class DefaultResourceLoader implements ResourceLoader {
     const agentsFiles = {
       agentsFiles: this.noContextFiles
         ? []
-        : loadProjectContextFiles({ cwd: this.cwd, agentDir: this.agentDir }),
+        : loadProjectContextFiles({
+            cwd: this.cwd,
+            agentDir: this.agentDir,
+            workspaceDir: this.workspaceDir,
+          }),
     };
     const resolvedAgentsFiles = this.agentsFilesOverride
       ? this.agentsFilesOverride(agentsFiles)
