@@ -3,8 +3,12 @@ import { describe, expect, it } from "vitest";
 import { type OpenClawConfig, DEFAULT_GATEWAY_PORT } from "../config/config.js";
 import {
   buildDefaultHookUrl,
+  buildGogWatchPullLogArgs,
   buildGogWatchServeLogArgs,
   buildTopicPath,
+  isGmailHookPullRuntimeConfig,
+  isGmailHookPushRuntimeConfig,
+  parseSubscriptionPath,
   parseTopicPath,
   resolveGmailHookRuntimeConfig,
 } from "./gmail.js";
@@ -48,6 +52,10 @@ describe("gmail hook config", () => {
     if (!result.ok) {
       return;
     }
+    expect(result.value.delivery.mode).toBe("push");
+    if (!isGmailHookPushRuntimeConfig(result.value)) {
+      return;
+    }
     expect(result.value.serve.path).toBe(expected.servePath);
     expect(result.value.tailscale.path).toBe(expected.publicPath);
     if (expected.target !== undefined) {
@@ -69,15 +77,80 @@ describe("gmail hook config", () => {
     });
   });
 
+  it("parses subscription path", () => {
+    expect(parseSubscriptionPath("projects/proj/subscriptions/sub")).toEqual({
+      projectId: "proj",
+      subscriptionName: "sub",
+    });
+    expect(parseSubscriptionPath("sub")).toBeNull();
+  });
+
   it("resolves runtime config with defaults", () => {
     const result = resolveGmailHookRuntimeConfig(baseConfig, {});
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.value.account).toBe("openclaw@gmail.com");
+      expect(result.value.delivery.mode).toBe("push");
       expect(result.value.label).toBe("INBOX");
       expect(result.value.includeBody).toBe(true);
+      if (!isGmailHookPushRuntimeConfig(result.value)) {
+        return;
+      }
       expect(result.value.serve.port).toBe(8788);
       expect(result.value.hookUrl).toBe(`http://127.0.0.1:${DEFAULT_GATEWAY_PORT}/hooks/gmail`);
+    }
+  });
+
+  it("resolves pull delivery without push token or callback server settings", () => {
+    const result = resolveGmailHookRuntimeConfig(
+      {
+        hooks: {
+          token: "hook-token",
+          gmail: {
+            account: "openclaw@gmail.com",
+            topic: "projects/demo/topics/gog-gmail-watch",
+            delivery: {
+              mode: "pull",
+              subscription: "projects/demo/subscriptions/gog-gmail-watch",
+            },
+          },
+        },
+      },
+      {},
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.value.delivery).toEqual({
+      mode: "pull",
+      subscription: "projects/demo/subscriptions/gog-gmail-watch",
+    });
+    expect("pushToken" in result.value).toBe(false);
+    expect("serve" in result.value).toBe(false);
+    expect("tailscale" in result.value).toBe(false);
+  });
+
+  it("requires a full Pub/Sub subscription path for pull delivery", () => {
+    const result = resolveGmailHookRuntimeConfig(
+      {
+        hooks: {
+          token: "hook-token",
+          gmail: {
+            account: "openclaw@gmail.com",
+            topic: "projects/demo/topics/gog-gmail-watch",
+            subscription: "gog-gmail-watch",
+            delivery: { mode: "pull" },
+          },
+        },
+      },
+      {},
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("full Pub/Sub path");
     }
   });
 
@@ -85,6 +158,10 @@ describe("gmail hook config", () => {
     const result = resolveGmailHookRuntimeConfig(baseConfig, {});
     expect(result.ok).toBe(true);
     if (!result.ok) {
+      return;
+    }
+    expect(result.value.delivery.mode).toBe("push");
+    if (!isGmailHookPushRuntimeConfig(result.value)) {
       return;
     }
 
@@ -106,6 +183,50 @@ describe("gmail hook config", () => {
       "8788",
       "--path",
       "/gmail-pubsub",
+      "--include-body",
+      "--max-bytes",
+      "20000",
+    ]);
+  });
+
+  it("builds watch pull log args without hook secrets", () => {
+    const result = resolveGmailHookRuntimeConfig(
+      {
+        hooks: {
+          token: "hook-token",
+          gmail: {
+            account: "openclaw@gmail.com",
+            topic: "projects/demo/topics/gog-gmail-watch",
+            delivery: {
+              mode: "pull",
+              subscription: "projects/demo/subscriptions/gog-gmail-watch",
+            },
+          },
+        },
+      },
+      {},
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.value.delivery.mode).toBe("pull");
+    if (!isGmailHookPullRuntimeConfig(result.value)) {
+      return;
+    }
+
+    const args = buildGogWatchPullLogArgs(result.value);
+    expect(args).not.toContain("hook-token");
+    expect(args).not.toContain("--hook-token");
+    expect(args).not.toContain("--hook-url");
+    expect(args).toEqual([
+      "gmail",
+      "watch",
+      "pull",
+      "--account",
+      "openclaw@gmail.com",
+      "--subscription",
+      "projects/demo/subscriptions/gog-gmail-watch",
       "--include-body",
       "--max-bytes",
       "20000",
