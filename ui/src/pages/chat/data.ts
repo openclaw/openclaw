@@ -1,3 +1,5 @@
+// Control UI module implements app chat behavior.
+import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
 import {
   GatewayRequestError,
   type GatewayBrowserClient,
@@ -5,6 +7,7 @@ import {
 } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { SessionsListResult } from "../../api/types.ts";
+import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   scopedAgentIdForSession,
@@ -26,11 +29,8 @@ import {
   normalizeOptionalString,
 } from "../../lib/string-coerce.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-// Control UI module implements app chat behavior.
-import { isNonTerminalAgentRunStatus } from "../../../../src/shared/agent-run-status.js";
 import { resetToolStream } from "../../ui/app-tool-stream.ts";
 import { executeSlashCommand } from "../../ui/chat/slash-command-executor.ts";
-import { parseSlashCommand } from "../../ui/chat/slash-commands.ts";
 import { formatConnectError } from "../../ui/connect-error.ts";
 import {
   controlUiNowMs,

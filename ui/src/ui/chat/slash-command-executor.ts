@@ -17,6 +17,7 @@ import type {
   ModelCatalogEntry,
   SessionsListResult,
 } from "../../api/types.ts";
+import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
 import { sessionModelMatchesDefaults } from "../../lib/session-model-defaults.ts";
 import type { SessionCapability, SessionPatch } from "../../lib/sessions/index.ts";
 import {
@@ -39,7 +40,6 @@ import {
   normalizeThinkLevel,
   resolveThinkingDefaultForModel,
 } from "../thinking.ts";
-import { SLASH_COMMANDS } from "./slash-commands.ts";
 
 export type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */

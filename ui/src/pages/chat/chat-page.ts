@@ -60,14 +60,11 @@ import {
   renderChatQuotaPill,
   resetChatSessionPickerState,
 } from "../../ui/chat/session-controls.ts";
-import {
-  applyRemoteSlashCommandsResult,
-  refreshSlashCommands,
-} from "../../ui/chat/slash-commands.ts";
 import { applyModelCatalogResult, loadModels } from "../../ui/controllers/models.ts";
 import type { EmbedSandboxMode } from "../../ui/embed-sandbox.ts";
 import type { SidebarContent } from "../../ui/sidebar-content.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
+import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
 import {
   CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS,
   persistChatComposerState,

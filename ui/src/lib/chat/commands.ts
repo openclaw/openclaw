@@ -1,12 +1,8 @@
-// Control UI chat module implements slash commands behavior.
-import type {
-  CommandEntry,
-  CommandsListResult,
-} from "../../../../packages/gateway-protocol/src/index.js";
+// Control UI chat domain owns pure slash command rules.
+import type { CommandEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { IconName } from "../../components/icons.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
 
@@ -382,11 +378,11 @@ function normalizeCommandEntry(
   };
 }
 
-function replaceSlashCommands(next: SlashCommandDef[]) {
+export function replaceSlashCommands(next: SlashCommandDef[]) {
   SLASH_COMMANDS.splice(0, SLASH_COMMANDS.length, ...next);
 }
 
-function buildSlashCommandsFromEntries(entries: CommandEntry[]): SlashCommandDef[] {
+export function buildSlashCommandsFromEntries(entries: CommandEntry[]): SlashCommandDef[] {
   const local = buildLocalSlashCommands();
   const reservedLocalNames = buildReservedLocalSlashNames(local);
   const mapped = entries
@@ -406,7 +402,9 @@ function buildSlashCommandsFromEntries(entries: CommandEntry[]): SlashCommandDef
   return Array.from(deduped.values());
 }
 
-function getRemoteCommandEntries(result: CommandsListResult | null | undefined): CommandEntry[] {
+export function getRemoteCommandEntries(
+  result: { commands?: unknown } | null | undefined,
+): CommandEntry[] {
   const commands = result?.commands;
   if (!Array.isArray(commands)) {
     return [];
@@ -416,140 +414,13 @@ function getRemoteCommandEntries(result: CommandsListResult | null | undefined):
     .filter((entry): entry is CommandEntry => entry !== null);
 }
 
-function buildFallbackSlashCommands(): SlashCommandDef[] {
+export function buildFallbackSlashCommands(): SlashCommandDef[] {
   return buildLocalSlashCommands();
 }
 
 export const SLASH_COMMANDS: SlashCommandDef[] = buildFallbackSlashCommands();
 
-let refreshSeq = 0;
-const REMOTE_SLASH_COMMAND_CACHE_TTL_MS = 60_000;
-
-type RemoteSlashCommandCacheEntry = {
-  commands?: SlashCommandDef[];
-  expiresAt: number;
-  inFlight?: Promise<SlashCommandDef[]>;
-};
-
-let remoteSlashCommandCache = new WeakMap<
-  GatewayBrowserClient,
-  Map<string, RemoteSlashCommandCacheEntry>
->();
-
-function remoteSlashCommandCacheKey(agentId: string | undefined): string {
-  return agentId ?? "";
-}
-
-function getRemoteSlashCommandCache(
-  client: GatewayBrowserClient,
-): Map<string, RemoteSlashCommandCacheEntry> {
-  let cache = remoteSlashCommandCache.get(client);
-  if (!cache) {
-    cache = new Map();
-    remoteSlashCommandCache.set(client, cache);
-  }
-  return cache;
-}
-
-async function requestRemoteSlashCommands(
-  client: GatewayBrowserClient,
-  agentId: string | undefined,
-  fallback: SlashCommandDef[] | undefined,
-): Promise<SlashCommandDef[]> {
-  try {
-    const result = await client.request<CommandsListResult>("commands.list", {
-      ...(agentId ? { agentId } : {}),
-      includeArgs: true,
-      scope: "text",
-    });
-    if (!Array.isArray(result?.commands)) {
-      return buildFallbackSlashCommands();
-    }
-    const commands = buildSlashCommandsFromEntries(getRemoteCommandEntries(result));
-    const cache = getRemoteSlashCommandCache(client);
-    cache.set(remoteSlashCommandCacheKey(agentId), {
-      commands,
-      expiresAt: Date.now() + REMOTE_SLASH_COMMAND_CACHE_TTL_MS,
-    });
-    return commands;
-  } catch {
-    return fallback ?? buildFallbackSlashCommands();
-  }
-}
-
-function loadRemoteSlashCommands(
-  client: GatewayBrowserClient,
-  agentId: string | undefined,
-): Promise<SlashCommandDef[]> {
-  const cache = getRemoteSlashCommandCache(client);
-  const key = remoteSlashCommandCacheKey(agentId);
-  const cached = cache.get(key);
-  const now = Date.now();
-  if (cached?.commands && cached.expiresAt > now) {
-    return Promise.resolve(cached.commands);
-  }
-  if (cached?.inFlight) {
-    return cached.inFlight;
-  }
-  const inFlight = requestRemoteSlashCommands(client, agentId, cached?.commands).finally(() => {
-    const latest = cache.get(key);
-    if (latest?.inFlight === inFlight) {
-      delete latest.inFlight;
-    }
-  });
-  cache.set(key, {
-    ...(cached?.commands ? { commands: cached.commands } : {}),
-    expiresAt: cached?.expiresAt ?? 0,
-    inFlight,
-  });
-  return inFlight;
-}
-
-export function applyRemoteSlashCommandsResult(params: {
-  client: GatewayBrowserClient | null;
-  agentId?: string | null;
-  result: CommandsListResult | null | undefined;
-}): boolean {
-  if (!Array.isArray(params.result?.commands)) {
-    return false;
-  }
-  const agentId = params.agentId?.trim();
-  const commands = buildSlashCommandsFromEntries(getRemoteCommandEntries(params.result));
-  if (params.client) {
-    const cache = getRemoteSlashCommandCache(params.client);
-    cache.set(remoteSlashCommandCacheKey(agentId), {
-      commands,
-      expiresAt: Date.now() + REMOTE_SLASH_COMMAND_CACHE_TTL_MS,
-    });
-  }
-  refreshSeq += 1;
-  replaceSlashCommands(commands);
-  return true;
-}
-
-export async function refreshSlashCommands(params: {
-  client: GatewayBrowserClient | null;
-  agentId?: string | null;
-}): Promise<void> {
-  const seq = ++refreshSeq;
-  const agentId = params.agentId?.trim();
-  if (!params.client) {
-    if (seq !== refreshSeq) {
-      return;
-    }
-    replaceSlashCommands(buildFallbackSlashCommands());
-    return;
-  }
-  const commands = await loadRemoteSlashCommands(params.client, agentId);
-  if (seq !== refreshSeq) {
-    return;
-  }
-  replaceSlashCommands(commands);
-}
-
 export function resetSlashCommandsForTest(): void {
-  refreshSeq = 0;
-  remoteSlashCommandCache = new WeakMap();
   replaceSlashCommands(buildFallbackSlashCommands());
 }
 
