@@ -707,7 +707,7 @@ function resolveHistoryStartIndex(
 }
 
 export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
-  let items: ChatItem[] = [];
+  const items: ChatItem[] = [];
   const historyRenderLimit = resolveHistoryRenderLimit(props.historyRenderLimit);
   const history = (Array.isArray(props.messages) ? props.messages : []).filter(
     (message) => !isAssistantHeartbeatAckForDisplay(message),
