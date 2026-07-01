@@ -1,6 +1,9 @@
-// Coverage for small run-attempt decision helpers.
 import { describe, expect, it } from "vitest";
+// Coverage for small run-attempt decision helpers.
+import type { OpenClawConfig } from "../../../config/config.js";
 import {
+  countProviderNativeToolsForPrecheck,
+  resolveAttemptPromptModeAndSkillsPrompt,
   resolveAttemptStreamAuthProfileId,
   resolveAttemptToolPolicyMessageProvider,
   resolveEmbeddedAttemptSessionWriteLockOptions,
@@ -45,6 +48,154 @@ describe("resolveAttemptStreamAuthProfileId", () => {
         } as never,
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("countProviderNativeToolsForPrecheck", () => {
+  const codexNativeConfig = {
+    auth: {
+      profiles: {
+        "openai:test": {
+          provider: "openai",
+          mode: "oauth",
+        },
+      },
+    },
+    tools: {
+      web: {
+        search: {
+          enabled: true,
+          openaiCodex: { enabled: true, mode: "cached" },
+        },
+      },
+    },
+  } satisfies OpenClawConfig;
+  const openAIChatGptResponsesModel = {
+    api: "openai-chatgpt-responses",
+    id: "gpt-5.5",
+    provider: "openai",
+  };
+  const openAIResponsesModel = {
+    api: "openai-responses",
+    id: "gpt-5.5",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
+  };
+
+  const nativeToolCases: {
+    name: string;
+    config: OpenClawConfig;
+    model: { api?: unknown; id?: unknown; provider?: unknown; baseUrl?: unknown };
+    expectedCount: number;
+  }[] = [
+    {
+      name: "native Codex search active",
+      config: codexNativeConfig,
+      model: openAIChatGptResponsesModel,
+      expectedCount: 1,
+    },
+    { name: "default OpenAI Responses", config: {}, model: openAIResponsesModel, expectedCount: 1 },
+    {
+      name: "disabled OpenAI Responses web search",
+      config: { tools: { web: { search: { enabled: false } } } },
+      model: openAIResponsesModel,
+      expectedCount: 0,
+    },
+    {
+      name: "OpenAI Responses custom base URL",
+      config: {},
+      model: {
+        ...openAIResponsesModel,
+        baseUrl: "https://proxy.example.invalid/v1",
+      },
+      expectedCount: 0,
+    },
+    {
+      name: "OpenAI Responses non-native search provider",
+      config: { tools: { web: { search: { provider: "brave" } } } },
+      model: openAIResponsesModel,
+      expectedCount: 0,
+    },
+    {
+      name: "disabled web search",
+      config: {
+        ...codexNativeConfig,
+        tools: { web: { search: { enabled: false, openaiCodex: { enabled: true } } } },
+      },
+      model: openAIChatGptResponsesModel,
+      expectedCount: 0,
+    },
+    {
+      name: "disabled native Codex search",
+      config: {
+        ...codexNativeConfig,
+        tools: { web: { search: { enabled: true, openaiCodex: { enabled: false } } } },
+      },
+      model: openAIChatGptResponsesModel,
+      expectedCount: 0,
+    },
+    {
+      name: "OpenAI Responses API with Codex native config",
+      config: codexNativeConfig,
+      model: openAIResponsesModel,
+      expectedCount: 1,
+    },
+    {
+      name: "denied Codex web_search policy",
+      config: { ...codexNativeConfig, tools: { ...codexNativeConfig.tools, deny: ["web_search"] } },
+      model: openAIChatGptResponsesModel,
+      expectedCount: 0,
+    },
+    {
+      name: "denied OpenAI Responses web_search policy",
+      config: { tools: { deny: ["web_search"] } },
+      model: openAIResponsesModel,
+      expectedCount: 0,
+    },
+    {
+      name: "OpenAI provider without required auth",
+      config: {
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              openaiCodex: { enabled: true, mode: "cached" },
+            },
+          },
+        },
+      },
+      model: openAIChatGptResponsesModel,
+      expectedCount: 0,
+    },
+  ];
+
+  it.each(nativeToolCases)("$name", ({ config, model, expectedCount }) => {
+    expect(
+      countProviderNativeToolsForPrecheck({
+        config,
+        model,
+        nativeWebSearchPolicyContext: {},
+      }),
+    ).toBe(expectedCount);
+  });
+});
+
+describe("resolveAttemptPromptModeAndSkillsPrompt", () => {
+  it.each([
+    ["no runtime allowlist", undefined, "full", "SKILLS"],
+    ["empty runtime allowlist", [], "minimal", "SKILLS"],
+    ["named runtime allowlist", ["read"], "minimal", undefined],
+  ] as const)("%s", (_name, toolsAllow, expectedPromptMode, expectedSkillsPrompt) => {
+    expect(
+      resolveAttemptPromptModeAndSkillsPrompt({
+        promptMode: "full",
+        skillsPrompt: "SKILLS",
+        toolsAllow,
+      }),
+    ).toEqual({
+      promptMode: expectedPromptMode,
+      ...(expectedSkillsPrompt ? { skillsPrompt: expectedSkillsPrompt } : {}),
+    });
   });
 });
 

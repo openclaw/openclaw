@@ -411,6 +411,8 @@ import {
 } from "./attempt.prompt-helpers.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "./attempt.queue-message.js";
 import {
+  countProviderNativeToolsForPrecheck,
+  resolveAttemptPromptModeAndSkillsPrompt,
   resolveAttemptStreamAuthProfileId,
   resolveAttemptToolPolicyMessageProvider,
   resolveEmbeddedAttemptSessionWriteLockOptions,
@@ -1944,9 +1946,12 @@ export async function runEmbeddedAttempt(
       (isRawModelRun ? "none" : resolvePromptModeForSession(params.sessionKey));
     const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
 
-    // When toolsAllow is set, use minimal prompt and strip skills catalog
-    const effectivePromptMode = params.toolsAllow?.length ? ("minimal" as const) : promptMode;
-    const effectiveSkillsPrompt = params.toolsAllow?.length ? undefined : skillsPrompt;
+    const { promptMode: effectivePromptMode, skillsPrompt: effectiveSkillsPrompt } =
+      resolveAttemptPromptModeAndSkillsPrompt({
+        promptMode,
+        skillsPrompt,
+        toolsAllow: params.toolsAllow,
+      });
     const openClawReferences = await resolveOpenClawReferencePaths({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
@@ -4609,6 +4614,18 @@ export async function runEmbeddedAttempt(
                   : {}),
                 systemPrompt: systemPromptForHook,
                 prompt: llmBoundaryPromptForPrecheck,
+                contextMode: params.bootstrapContextMode,
+                promptImageCount: imageResult.images.length,
+                toolCount:
+                  effectiveTools.length +
+                  clientToolDefs.length +
+                  countProviderNativeToolsForPrecheck({
+                    config: params.config,
+                    model: params.model,
+                    agentId: sessionAgentId,
+                    agentDir,
+                    nativeWebSearchPolicyContext,
+                  }),
                 contextTokenBudget,
                 reserveTokens,
                 toolResultMaxChars: promptToolResultMaxChars,

@@ -23,6 +23,7 @@ const MESSAGE_BOUNDARY_OVERHEAD_TOKENS = 12;
 const CONTENT_BLOCK_OVERHEAD_TOKENS = 6;
 const IMAGE_BLOCK_TOKENS = 2_000;
 const TRUNCATION_ROUTE_BUFFER_TOKENS = 512;
+const LIGHTWEIGHT_MIN_PROMPT_BUDGET_RATIO = 0.875;
 
 /** Pre-prompt routing decision plus the budget facts used to explain it in logs and session state. */
 export type PreemptiveCompactionDecision = {
@@ -250,6 +251,9 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   unwindowedMessages?: AgentMessage[];
   systemPrompt?: string;
   prompt: string;
+  contextMode?: "full" | "lightweight";
+  promptImageCount?: number;
+  toolCount?: number;
   contextTokenBudget: number;
   reserveTokens: number;
   toolResultMaxChars?: number;
@@ -281,22 +285,24 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   }
   const contextTokenBudget = Math.max(1, Math.floor(params.contextTokenBudget));
   const requestedReserveTokens = Math.max(0, Math.floor(params.reserveTokens));
-  // The ratio-derived share (half the window) is the default prompt budget, but
-  // for small-context models it can drop below the absolute floor. Treat
-  // MIN_PROMPT_BUDGET_TOKENS as a true floor — but never let it claim more than
-  // the window itself minus one token, so a tiny window still leaves room for a
-  // reserve slot instead of collapsing the budget to zero. Without this floor,
-  // a 4 K-context model keeps only ~2 K for the prompt and every lightweight
-  // cron prompt overflows even when the session history is empty.
-  const ratioPromptBudget = Math.max(1, Math.floor(contextTokenBudget * MIN_PROMPT_BUDGET_RATIO));
-  const windowBoundedFloor = Math.min(
+  const promptImageCount = Math.max(0, Math.floor(params.promptImageCount ?? 0));
+  const toolCount = Math.max(0, Math.floor(params.toolCount ?? 0));
+  const sharedMinPromptBudget = Math.min(
     MIN_PROMPT_BUDGET_TOKENS,
-    Math.max(0, contextTokenBudget - 1),
+    Math.max(1, Math.floor(contextTokenBudget * MIN_PROMPT_BUDGET_RATIO)),
   );
-  const minPromptBudget = Math.max(
-    Math.min(MIN_PROMPT_BUDGET_TOKENS, ratioPromptBudget),
-    windowBoundedFloor,
-  );
+  const lightweightPromptBudgetEligible =
+    params.contextMode === "lightweight" &&
+    promptImageCount === 0 &&
+    toolCount === 0 &&
+    params.messages.length === 0 &&
+    (!params.unwindowedMessages || params.unwindowedMessages.length === 0);
+  const minPromptBudget = lightweightPromptBudgetEligible
+    ? Math.max(
+        sharedMinPromptBudget,
+        Math.max(1, Math.floor(contextTokenBudget * LIGHTWEIGHT_MIN_PROMPT_BUDGET_RATIO)),
+      )
+    : sharedMinPromptBudget;
   // Keep a minimum prompt budget even when reserveTokens asks for most of the context window.
   const effectiveReserveTokens = Math.min(
     requestedReserveTokens,

@@ -346,26 +346,82 @@ describe("preemptive-compaction", () => {
     expect(result.route).toBe("fits");
   });
 
-  it("keeps almost the whole window for the prompt when the context window is below the budget floor", () => {
-    // Regression for #96658: a small-context model (e.g. phi3:mini at 4 096
-    // tokens) with the default 20 000 reserve floor previously kept only
-    // ~2 048 tokens for the prompt, so every lightweight cron prompt overflowed
-    // and compact_only had nothing to compact. The budget floor must be
-    // window-bounded so tiny windows still reserve almost all of their space
-    // for the prompt instead of collapsing to the ratio share.
-    const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [makeAssistantHistory("short history")],
-      systemPrompt: "sys",
-      prompt: "hello",
-      contextTokenBudget: 4_096,
-      reserveTokens: 20_000,
-    });
+  it.each([
+    {
+      name: "admits the reported empty-history lightweight cron prompt",
+      contextMode: "lightweight" as const,
+      messages: () => [],
+      promptImageCount: 0,
+      toolCount: 0,
+      expectedPromptBudget: 3_584,
+      expectedRoute: "fits" as const,
+    },
+    {
+      name: "keeps prompt-image lightweight runs on the shared prompt floor",
+      contextMode: "lightweight" as const,
+      messages: () => [],
+      promptImageCount: 1,
+      toolCount: 0,
+      expectedPromptBudget: 2_048,
+      expectedRoute: "compact_only" as const,
+    },
+    {
+      name: "keeps tool-enabled lightweight runs on the shared prompt floor",
+      contextMode: "lightweight" as const,
+      messages: () => [],
+      promptImageCount: 0,
+      toolCount: 1,
+      expectedPromptBudget: 2_048,
+      expectedRoute: "compact_only" as const,
+    },
+    {
+      name: "keeps lightweight shared-history prompts on the shared prompt floor",
+      contextMode: "lightweight" as const,
+      messages: () => [makeAssistantHistory("existing shared heartbeat conversation")],
+      promptImageCount: 0,
+      toolCount: 0,
+      expectedPromptBudget: 2_048,
+      expectedRoute: "compact_only" as const,
+    },
+    {
+      name: "keeps full-context small models on the shared prompt floor",
+      contextMode: "full" as const,
+      messages: () => [],
+      promptImageCount: 0,
+      toolCount: 0,
+      expectedPromptBudget: 2_048,
+      expectedRoute: "compact_only" as const,
+    },
+  ])(
+    "$name",
+    ({
+      contextMode,
+      messages,
+      promptImageCount,
+      toolCount,
+      expectedPromptBudget,
+      expectedRoute,
+    }) => {
+      const result = shouldPreemptivelyCompactBeforePrompt({
+        messages: messages(),
+        systemPrompt: "",
+        prompt: "run scheduled task",
+        contextMode,
+        promptImageCount,
+        toolCount,
+        contextTokenBudget: 4_096,
+        reserveTokens: 20_000,
+        llmBoundaryTokenPressure: {
+          estimatedPromptTokens: 3_544,
+          source: "reported_lightweight_cron",
+        },
+      });
 
-    expect(result.promptBudgetBeforeReserve).toBe(4_095);
-    expect(result.effectiveReserveTokens).toBe(1);
-    expect(result.shouldCompact).toBe(false);
-    expect(result.route).toBe("fits");
-  });
+      expect(result.promptBudgetBeforeReserve).toBe(expectedPromptBudget);
+      expect(result.shouldCompact).toBe(expectedRoute === "compact_only");
+      expect(result.route).toBe(expectedRoute);
+    },
+  );
 
   it("keeps the requested reserve when it leaves enough prompt budget", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({

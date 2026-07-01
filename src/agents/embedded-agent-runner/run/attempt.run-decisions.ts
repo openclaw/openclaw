@@ -1,13 +1,119 @@
 /**
  * Resolves per-attempt runtime decisions from config and channel context.
  */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../../config/config.js";
+import {
+  isNativeWebSearchAllowedByToolPolicy,
+  resolveCodexNativeSearchActivation,
+  type NativeWebSearchToolPolicyParams,
+} from "../../codex-native-web-search-core.js";
 import {
   resolveSessionLockMaxHoldFromTimeout,
   resolveSessionWriteLockOptions,
 } from "../../session-write-lock.js";
+import type { PromptMode } from "../../system-prompt.types.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
+
+type ProviderNativeToolPolicyContext = Omit<
+  NativeWebSearchToolPolicyParams,
+  "agentId" | "config" | "modelId" | "modelProvider"
+>;
+
+function readStringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function isOpenAIApiBaseUrlForNativeSearch(baseUrl: unknown): boolean {
+  const trimmed = readStringValue(baseUrl)?.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return /^https?:\/\/api\.openai\.com(?:\/v1)?\/?$/i.test(trimmed);
+}
+
+function isOpenAIResponsesNativeSearchEligibleModel(params: {
+  model: { api?: unknown; provider?: unknown; baseUrl?: unknown };
+}): boolean {
+  const provider = readStringValue(params.model.provider);
+  if (
+    params.model.api !== "openai-responses" ||
+    !provider ||
+    normalizeProviderId(provider) !== "openai"
+  ) {
+    return false;
+  }
+  const baseUrl = readStringValue(params.model.baseUrl);
+  return !baseUrl || isOpenAIApiBaseUrlForNativeSearch(baseUrl);
+}
+
+function shouldUseOpenAIResponsesNativeSearchProvider(config: OpenClawConfig | undefined): boolean {
+  const provider = config?.tools?.web?.search?.provider;
+  if (typeof provider !== "string") {
+    return true;
+  }
+  const normalized = normalizeProviderId(provider);
+  return normalized === "" || normalized === "auto" || normalized === "openai";
+}
+
+function isOpenAIResponsesNativeSearchActive(params: {
+  agentId?: string;
+  config?: OpenClawConfig;
+  model: { api?: unknown; id?: unknown; provider?: unknown; baseUrl?: unknown };
+  nativeWebSearchPolicyContext?: ProviderNativeToolPolicyContext;
+}): boolean {
+  const modelProvider = readStringValue(params.model.provider);
+  return (
+    params.config?.tools?.web?.search?.enabled !== false &&
+    shouldUseOpenAIResponsesNativeSearchProvider(params.config) &&
+    isOpenAIResponsesNativeSearchEligibleModel({ model: params.model }) &&
+    isNativeWebSearchAllowedByToolPolicy({
+      config: params.config,
+      modelProvider,
+      modelId: readStringValue(params.model.id),
+      agentId: params.agentId,
+      ...(params.nativeWebSearchPolicyContext ?? {}),
+    })
+  );
+}
+
+export function countProviderNativeToolsForPrecheck(params: {
+  agentId?: string;
+  agentDir?: string;
+  config?: OpenClawConfig;
+  model: { api?: unknown; id?: unknown; provider?: unknown; baseUrl?: unknown };
+  nativeWebSearchPolicyContext?: ProviderNativeToolPolicyContext;
+}): number {
+  const activation = resolveCodexNativeSearchActivation({
+    config: params.config,
+    modelProvider: readStringValue(params.model.provider),
+    modelApi: readStringValue(params.model.api),
+    modelId: readStringValue(params.model.id),
+    agentId: params.agentId,
+    agentDir: params.agentDir,
+    ...(params.nativeWebSearchPolicyContext ?? {}),
+  });
+  return (
+    (activation.state === "native_active" ? 1 : 0) +
+    (isOpenAIResponsesNativeSearchActive(params) ? 1 : 0)
+  );
+}
+
+export function resolveAttemptPromptModeAndSkillsPrompt(params: {
+  promptMode: PromptMode;
+  skillsPrompt?: string;
+  toolsAllow?: readonly string[];
+}): { promptMode: PromptMode; skillsPrompt?: string } {
+  const hasRuntimeToolAllowlist = params.toolsAllow !== undefined;
+  const hasNamedRuntimeToolAllowlist = (params.toolsAllow?.length ?? 0) > 0;
+  return {
+    promptMode: hasRuntimeToolAllowlist ? "minimal" : params.promptMode,
+    ...(!hasNamedRuntimeToolAllowlist && params.skillsPrompt !== undefined
+      ? { skillsPrompt: params.skillsPrompt }
+      : {}),
+  };
+}
 
 /**
  * Builds the session write-lock timing for a live embedded attempt. The lock is
