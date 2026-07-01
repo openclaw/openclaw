@@ -43,7 +43,7 @@ import {
   hasBotMention,
   renderTelegramTextEntities,
   resolveTelegramPrimaryMedia,
-  resolveTelegramRichMessageBody,
+  resolveTelegramRichMessagePlaceholder,
   resolveTelegramRichMessageText,
 } from "./bot/body-helpers.js";
 import { buildTelegramGroupPeerId, buildTelegramInboundOriginTarget } from "./bot/helpers.js";
@@ -281,7 +281,7 @@ export async function resolveTelegramInboundBody(params: {
   const hasUserText = Boolean(rawText || locationText);
   let rawBody = [rawText, locationText].filter(Boolean).join("\n").trim();
   if (!rawBody) {
-    rawBody = resolveTelegramRichMessageBody(msg) ?? placeholder;
+    rawBody = richText ?? resolveTelegramRichMessagePlaceholder(msg) ?? placeholder;
   }
   if (!rawBody && allMedia.length === 0) {
     return null;
