@@ -145,7 +145,6 @@ export function resolveSubagentRunOrphanReason(params: {
     }
     if (
       params.includeStaleUnended === true &&
-      sessionEntry.abortedLastRun !== true &&
       isStaleUnendedSubagentRun(params.entry, params.now)
     ) {
       return "stale-unended-run";
