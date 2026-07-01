@@ -84,7 +84,7 @@ async function fetchDocsSearch(query: string): Promise<DocResult[]> {
     try {
       payload = JSON.parse(new TextDecoder().decode(bytes)) as DocsSearchResponse;
     } catch {
-      return [];
+      throw new Error("Docs search returned an invalid response");
     }
     return parseDocsSearchResults(payload.results);
   } finally {

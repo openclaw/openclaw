@@ -95,7 +95,7 @@ describe("docsSearchCommand", () => {
     expect(runtime.log).toHaveBeenCalled();
   });
 
-  it("handles malformed JSON from docs search API gracefully", async () => {
+  it("reports malformed JSON from docs search API as an error", async () => {
     fetchMock.mockResolvedValueOnce(
       new Response("not json at all", {
         status: 200,
@@ -106,9 +106,8 @@ describe("docsSearchCommand", () => {
 
     await docsSearchCommand(["plugin", "allowlist"], runtime);
 
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(runtime.exit).not.toHaveBeenCalled();
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("No results"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("invalid response"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
   it("rejects oversized docs search responses", async () => {
