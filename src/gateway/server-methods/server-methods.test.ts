@@ -2973,6 +2973,7 @@ describe("exec approval handlers", () => {
     });
 
     const { id } = getRequestedExecApprovalPayload(broadcasts);
+    const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
 
     const resolveRespond = vi.fn();
     await resolveExecApproval({
@@ -2987,7 +2988,51 @@ describe("exec approval handlers", () => {
     expect(mockCallArg(resolveRespond, 0, 1)).toBeUndefined();
     expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
       message:
-        "allow-always is unavailable because the effective policy requires approval every time",
+        "Allow Always is unavailable because the effective policy requires approval every time.",
+    });
+
+    const denyRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id,
+      decision: "deny",
+      respond: denyRespond,
+      context,
+    });
+
+    await requestPromise;
+    expect(denyRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+
+  it("rejects allow-always when the request marks it unavailable", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        twoPhase: true,
+        ask: "on-miss",
+        unavailableDecisions: ["allow-always"],
+      },
+    });
+    const { id } = await waitForRequestedExecApprovalPayload(broadcasts);
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id,
+      decision: "allow-always",
+      respond: resolveRespond,
+      context,
+    });
+
+    expect(mockCallArg(resolveRespond)).toBe(false);
+    expect(mockCallArg(resolveRespond, 0, 1)).toBeUndefined();
+    expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
+      message:
+        "Allow Always is unavailable for this command. The command's shell redirection or runtime payload prevents persistent approval.",
     });
 
     const denyRespond = vi.fn();

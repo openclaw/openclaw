@@ -22,6 +22,7 @@ import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   resolveExecApprovalAllowedDecisions,
+  formatAllowAlwaysUnavailableMessage,
   resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalRequest,
   type ExecApprovalResolved,
@@ -440,8 +441,7 @@ export function createExecApprovalHandlers(
           return allowedDecisions.includes(decision)
             ? null
             : {
-                message:
-                  "allow-always is unavailable because the effective policy requires approval every time",
+                message: formatAllowAlwaysUnavailableMessage(snapshot.request.ask),
                 details: APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS,
               };
         },
