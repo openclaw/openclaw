@@ -18,6 +18,7 @@ import {
   createMattermostClient,
   createMattermostDirectChannelWithRetry,
   createMattermostPost,
+  fetchMattermostChannel,
   fetchMattermostChannelByName,
   fetchMattermostMe,
   fetchMattermostUserByUsername,
@@ -33,7 +34,7 @@ import {
   setInteractionSecret,
 } from "./interactions.js";
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "./runtime-api.js";
-import { isMattermostId, resolveMattermostOpaqueTarget } from "./target-resolution.js";
+import { isMattermostId, parseMattermostApiStatus, resolveMattermostOpaqueTarget } from "./target-resolution.js";
 
 export type MattermostSendOpts = {
   cfg: OpenClawConfig;
@@ -299,7 +300,30 @@ function mergeDmRetryOptions(
 
 async function resolveTargetChannelId(params: ResolveTargetChannelIdParams): Promise<string> {
   if (params.target.kind === "channel") {
-    return params.target.id;
+    try {
+      const client = createMattermostClient({
+        baseUrl: params.baseUrl,
+        botToken: params.token,
+        allowPrivateNetwork: params.allowPrivateNetwork,
+      });
+      await fetchMattermostChannel(client, params.target.id);
+      return params.target.id;
+    } catch (err) {
+      if (parseMattermostApiStatus(err) === 404) {
+        if (params.logger?.debug) {
+          params.logger.debug(
+            `mattermost channel ${params.target.id} not found by id, falling back to name lookup`,
+          );
+        }
+        return await resolveChannelIdByName({
+          baseUrl: params.baseUrl,
+          token: params.token,
+          name: params.target.id,
+          allowPrivateNetwork: params.allowPrivateNetwork,
+        });
+      }
+      throw err;
+    }
   }
   if (params.target.kind === "channel-name") {
     return await resolveChannelIdByName({

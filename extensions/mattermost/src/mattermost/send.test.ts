@@ -26,6 +26,7 @@ const mockState = vi.hoisted(() => ({
   createMattermostDirectChannel: vi.fn(),
   createMattermostDirectChannelWithRetry: vi.fn(),
   createMattermostPost: vi.fn(),
+  fetchMattermostChannel: vi.fn(),
   fetchMattermostChannelByName: vi.fn(),
   fetchMattermostMe: vi.fn(),
   fetchMattermostUser: vi.fn(),
@@ -157,6 +158,7 @@ vi.mock("./client.js", () => ({
   createMattermostDirectChannel: mockState.createMattermostDirectChannel,
   createMattermostDirectChannelWithRetry: mockState.createMattermostDirectChannelWithRetry,
   createMattermostPost: mockState.createMattermostPost,
+  fetchMattermostChannel: mockState.fetchMattermostChannel,
   fetchMattermostChannelByName: mockState.fetchMattermostChannelByName,
   fetchMattermostMe: mockState.fetchMattermostMe,
   fetchMattermostUser: mockState.fetchMattermostUser,
@@ -205,6 +207,7 @@ describe("sendMessageMattermost", () => {
     mockState.createMattermostDirectChannel.mockReset();
     mockState.createMattermostDirectChannelWithRetry.mockReset();
     mockState.createMattermostPost.mockReset();
+    mockState.fetchMattermostChannel.mockReset();
     mockState.fetchMattermostChannelByName.mockReset();
     mockState.fetchMattermostMe.mockReset();
     mockState.fetchMattermostUser.mockReset();
@@ -216,6 +219,9 @@ describe("sendMessageMattermost", () => {
     mockState.createMattermostDirectChannelWithRetry.mockResolvedValue({ id: "dm-channel-1" });
     mockState.fetchMattermostMe.mockResolvedValue({ id: "bot-user" });
     mockState.fetchMattermostUserTeams.mockResolvedValue([{ id: "team-1" }]);
+    mockState.fetchMattermostChannel.mockImplementation(
+      (_client: unknown, channelId: string) => Promise.resolve({ id: channelId }),
+    );
     mockState.fetchMattermostChannelByName.mockResolvedValue({ id: "town-square" });
     mockState.uploadMattermostFile.mockResolvedValue({ id: "file-1" });
     ({ parseMattermostTarget, sendMessageMattermost } = await import("./send.js"));
@@ -742,5 +748,37 @@ describe("sendMessageMattermost user-first resolution", () => {
     expect(retryCall?.[2]?.maxRetries).toBe(overrideOptions.maxRetries);
     expect(retryCall?.[2]?.timeoutMs).toBe(overrideOptions.timeoutMs);
     expect(retryCall?.[2]?.initialDelayMs).toBe(1000);
+  });
+
+  it("validates channel id before sending and falls back to name lookup on 404", async () => {
+    const chanId = "fffff666666666666666666666"; // 26 chars
+    mockState.resolveMattermostAccount.mockReturnValue(makeAccount("token-validate-404"));
+    mockState.fetchMattermostChannel.mockRejectedValueOnce(
+      new Error("Mattermost API 404: channel not found"),
+    );
+    mockState.fetchMattermostChannelByName.mockResolvedValueOnce({ id: "resolved-chan-id" });
+
+    const res = await sendMessageMattermost(chanId, "hello", { cfg: TEST_CFG });
+
+    expect(mockState.fetchMattermostChannel).toHaveBeenCalledTimes(1);
+    expect(mockState.fetchMattermostChannelByName).toHaveBeenCalledTimes(1);
+    const params = createMattermostPostParams();
+    expect(params.channelId).toBe("resolved-chan-id");
+    expect(res.channelId).toBe("resolved-chan-id");
+  });
+
+  it("rethrows non-404 channel validation errors instead of falling back", async () => {
+    const chanId = "ababab1111111111ababab1111"; // 26 chars
+    mockState.resolveMattermostAccount.mockReturnValue(makeAccount("token-validate-500"));
+    mockState.fetchMattermostChannel.mockRejectedValueOnce(
+      new Error("Mattermost API 503: service unavailable"),
+    );
+
+    await expect(
+      sendMessageMattermost(chanId, "hello", { cfg: TEST_CFG }),
+    ).rejects.toThrow("Mattermost API 503: service unavailable");
+
+    expect(mockState.fetchMattermostChannel).toHaveBeenCalledTimes(1);
+    expect(mockState.fetchMattermostChannelByName).not.toHaveBeenCalled();
   });
 });
