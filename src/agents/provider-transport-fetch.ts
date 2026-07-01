@@ -40,6 +40,7 @@ import {
   getModelProviderRequestTransport,
   mergeModelProviderRequestOverrides,
   resolveProviderRequestPolicyConfig,
+  type ModelProviderRequestTransportOverrides,
 } from "./provider-request-config.js";
 
 const DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS = 60;
@@ -550,6 +551,108 @@ function shouldBypassLongSdkRetry(response: Response): boolean {
   return status === 429;
 }
 
+type ProviderRequestRateLimitConfig = NonNullable<
+  ModelProviderRequestTransportOverrides["rateLimit"]
+>;
+
+type ProviderRequestRateLimitBucket = {
+  queue: Promise<void>;
+  queued: number;
+  requestTimes: number[];
+  lastDispatchAt: number;
+};
+
+const providerRequestRateLimitBuckets = new Map<string, ProviderRequestRateLimitBucket>();
+
+function resetProviderRequestRateLimitBucketsForTests(): void {
+  providerRequestRateLimitBuckets.clear();
+}
+
+function sleepForRateLimit(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    return Promise.reject(signal.reason);
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      },
+      clampTimerTimeoutMs(delayMs, 0) ?? 0,
+    );
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function resolveProviderRateLimitKey(model: Model): string {
+  return [model.provider, model.id, model.api, model.baseUrl].join("\0");
+}
+
+function resolveProviderRateLimitDelayMs(
+  bucket: ProviderRequestRateLimitBucket,
+  config: ProviderRequestRateLimitConfig,
+): number {
+  const now = Date.now();
+  bucket.requestTimes = bucket.requestTimes.filter((time) => time > now - 60_000);
+  const intervalDelayMs = Math.max(0, (config.minIntervalMs ?? 0) - (now - bucket.lastDispatchAt));
+  const oldest = bucket.requestTimes[0];
+  const minuteDelayMs =
+    config.requestsPerMinute &&
+    bucket.requestTimes.length >= config.requestsPerMinute &&
+    oldest !== undefined
+      ? Math.max(0, oldest + 60_000 - now)
+      : 0;
+  return Math.max(intervalDelayMs, minuteDelayMs);
+}
+
+async function waitForProviderRequestRateLimit(
+  model: Model,
+  config?: ProviderRequestRateLimitConfig,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (!config || (!config.requestsPerMinute && !config.minIntervalMs)) {
+    return;
+  }
+  const key = resolveProviderRateLimitKey(model);
+  const bucket = providerRequestRateLimitBuckets.get(key) ?? {
+    queue: Promise.resolve(),
+    queued: 0,
+    requestTimes: [],
+    lastDispatchAt: 0,
+  };
+  providerRequestRateLimitBuckets.set(key, bucket);
+  const maxQueueSize = config.maxQueueSize ?? Number.POSITIVE_INFINITY;
+  if (bucket.queued >= maxQueueSize) {
+    throw new ProviderHttpError(
+      `${model.provider}/${model.id}: provider request rate-limit queue is full`,
+      {
+        status: 429,
+        code: "provider_rate_limit_queue_full",
+        type: "rate_limit",
+      },
+    );
+  }
+  bucket.queued += 1;
+  const turn = bucket.queue.then(async () => {
+    const delayMs = resolveProviderRateLimitDelayMs(bucket, config);
+    if (delayMs > 0) {
+      await sleepForRateLimit(delayMs, signal);
+    }
+    bucket.lastDispatchAt = Date.now();
+    bucket.requestTimes.push(bucket.lastDispatchAt);
+  });
+  bucket.queue = turn.catch(() => undefined);
+  try {
+    await turn;
+  } finally {
+    bucket.queued = Math.max(0, bucket.queued - 1);
+  }
+}
+
 const managedStreamCleanupRegistry = new FinalizationRegistry<{ finalize: () => Promise<void> }>(
   (held) => {
     void held.finalize();
@@ -774,6 +877,10 @@ export function resolveProviderTransportSsrFPolicy(params: {
   );
 }
 
+export const testing = {
+  resetProviderRequestRateLimitBucketsForTests,
+};
+
 export function buildGuardedModelFetch(
   model: Model,
   timeoutMs?: number,
@@ -782,6 +889,7 @@ export function buildGuardedModelFetch(
   const requestConfig = resolveModelRequestPolicy(model);
   const dispatcherPolicy = buildProviderRequestDispatcherPolicy(requestConfig);
   const requestTimeoutMs = resolveModelRequestTimeoutMs(model, timeoutMs);
+  const rateLimitConfig = getModelProviderRequestTransport(model)?.rateLimit;
   const summarizeError = (error: unknown): string => {
     if (!error || typeof error !== "object") {
       return `type=${typeof error}`;
@@ -871,6 +979,9 @@ export function buildGuardedModelFetch(
         baseInit?.headers,
         localServiceSignal,
       );
+      if (rateLimitConfig) {
+        await waitForProviderRequestRateLimit(model, rateLimitConfig, localServiceSignal);
+      }
       result = await fetchWithSsrFGuard(
         useEnvProxy
           ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)

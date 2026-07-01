@@ -1018,7 +1018,7 @@ export const FIELD_HELP: Record<string, string> = {
   "models.providers.*.localService.idleStopMs":
     "Milliseconds to keep an OpenClaw-started local model server alive after the last request finishes. Set 0 to keep it alive until OpenClaw exits.",
   "models.providers.*.request":
-    "Optional request overrides for model-provider requests, including extra headers, auth overrides, proxy routing, TLS client settings, and optional allowPrivateNetwork for trusted self-hosted endpoints. Use these only when your upstream or enterprise network path requires transport customization.",
+    "Optional request overrides for model-provider requests, including extra headers, auth overrides, proxy routing, TLS client settings, per-model-provider rate limiting, and optional allowPrivateNetwork for trusted self-hosted endpoints. Use these only when your upstream or enterprise network path requires transport customization.",
   "models.providers.*.request.headers":
     "Extra headers merged into provider requests after default attribution and auth resolution.",
   "models.providers.*.request.auth":
@@ -1081,6 +1081,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Skips upstream TLS certificate verification. Use only for controlled development environments.",
   "models.providers.*.request.allowPrivateNetwork":
     "When true, allow model-provider HTTP requests to private, CGNAT, or similar ranges through the provider HTTP fetch guard (fetchWithSsrFGuard). Custom/local provider base URLs already trust the exact configured origin, except metadata/link-local origins; set this to false to opt out of that trust. OpenAI Responses WebSocket reuses request for headers/TLS but does not use that fetch SSRF path. Use true only for operator-controlled self-hosted endpoints that must reach private origins outside the configured baseUrl origin.",
+  "models.providers.*.request.rateLimit":
+    "Optional local rate-limit guard for this model provider's HTTP requests. OpenClaw admits requests by provider/model/baseUrl bucket before dispatching to the upstream provider, so this is useful for provider compliance and cost protection but does not replace provider-side quotas.",
+  "models.providers.*.request.rateLimit.requestsPerMinute":
+    "Maximum number of model-provider requests admitted per rolling minute for the provider/model/baseUrl bucket.",
+  "models.providers.*.request.rateLimit.minIntervalMs":
+    "Minimum milliseconds between admitted requests for the provider/model/baseUrl bucket. Use this to pace providers with strict burst limits.",
+  "models.providers.*.request.rateLimit.maxQueueSize":
+    "Maximum number of local requests allowed to wait behind the provider/model/baseUrl bucket. When full, OpenClaw rejects new requests with a local 429 instead of building an unbounded backlog.",
   "models.providers.*.models":
     "Declared model list for a provider including identifiers, metadata, provider-specific params, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
   "models.providers.*.models[].agentRuntime":

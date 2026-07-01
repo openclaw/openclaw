@@ -6,6 +6,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ModelDefinitionConfig } from "../config/types.js";
 import type {
+  ConfiguredModelProviderRateLimit,
   ConfiguredModelProviderRequest,
   ConfiguredProviderRequest,
 } from "../config/types.provider-request.js";
@@ -72,9 +73,12 @@ export type ProviderRequestTransportOverrides = {
   tls?: ProviderRequestTlsOverride;
 };
 
+export type ProviderRequestRateLimitOverride = ConfiguredModelProviderRateLimit;
+
 /** Model-scoped transport overrides, including private-network policy. */
 export type ModelProviderRequestTransportOverrides = ProviderRequestTransportOverrides & {
   allowPrivateNetwork?: boolean;
+  rateLimit?: ProviderRequestRateLimitOverride;
 };
 
 // Resolved request config separates configured vs default state so transports
@@ -348,12 +352,36 @@ export function sanitizeConfiguredModelProviderRequest(
   const sanitized = sanitizeConfiguredProviderRequest(request);
   const rawAllow = request?.allowPrivateNetwork;
   const allowPrivateNetwork = rawAllow === true ? true : rawAllow === false ? false : undefined;
-  if (!sanitized && allowPrivateNetwork === undefined) {
+  const rawRateLimit = request?.rateLimit;
+  const rateLimit =
+    rawRateLimit && typeof rawRateLimit === "object" && !Array.isArray(rawRateLimit)
+      ? {
+          ...(typeof rawRateLimit.requestsPerMinute === "number" &&
+          Number.isFinite(rawRateLimit.requestsPerMinute) &&
+          rawRateLimit.requestsPerMinute > 0
+            ? { requestsPerMinute: Math.floor(rawRateLimit.requestsPerMinute) }
+            : {}),
+          ...(typeof rawRateLimit.minIntervalMs === "number" &&
+          Number.isFinite(rawRateLimit.minIntervalMs) &&
+          rawRateLimit.minIntervalMs > 0
+            ? { minIntervalMs: Math.floor(rawRateLimit.minIntervalMs) }
+            : {}),
+          ...(typeof rawRateLimit.maxQueueSize === "number" &&
+          Number.isFinite(rawRateLimit.maxQueueSize) &&
+          rawRateLimit.maxQueueSize >= 0
+            ? { maxQueueSize: Math.floor(rawRateLimit.maxQueueSize) }
+            : {}),
+        }
+      : undefined;
+  const normalizedRateLimit =
+    rateLimit && Object.keys(rateLimit).length > 0 ? rateLimit : undefined;
+  if (!sanitized && allowPrivateNetwork === undefined && !normalizedRateLimit) {
     return undefined;
   }
   return {
     ...sanitized,
     ...(allowPrivateNetwork !== undefined ? { allowPrivateNetwork } : {}),
+    ...(normalizedRateLimit ? { rateLimit: normalizedRateLimit } : {}),
   };
 }
 
@@ -395,6 +423,10 @@ export function mergeModelProviderRequestOverrides(
     if (current?.allowPrivateNetwork !== undefined) {
       merged ??= {};
       merged.allowPrivateNetwork = current.allowPrivateNetwork;
+    }
+    if (current?.rateLimit) {
+      merged ??= {};
+      merged.rateLimit = current.rateLimit;
     }
   }
   return merged;

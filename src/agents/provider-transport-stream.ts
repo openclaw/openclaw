@@ -101,7 +101,9 @@ function createSupportedTransportStreamFn(
 
 function hasOpenClawTransportRequirement(model: Model): boolean {
   const request = getModelProviderRequestTransport(model);
-  return Boolean(request?.proxy || request?.tls || getModelProviderLocalService(model));
+  return Boolean(
+    request?.proxy || request?.tls || request?.rateLimit || getModelProviderLocalService(model),
+  );
 }
 
 /** Returns whether OpenClaw has a managed transport implementation for this API. */
@@ -124,7 +126,7 @@ export function createTransportAwareStreamFnForModel(
   }
   if (!isTransportAwareApiSupported(model.api)) {
     throw new Error(
-      `Model-provider request.proxy/request.tls/localService is not yet supported for api "${model.api}"`,
+      `Model-provider request.proxy/request.tls/request.rateLimit/localService is not yet supported for api "${model.api}"`,
     );
   }
   return createSupportedTransportStreamFn(model, ctx);

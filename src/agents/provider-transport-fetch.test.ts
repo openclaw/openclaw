@@ -3,7 +3,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { Stream } from "openai/streaming";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildGuardedModelFetch } from "./provider-transport-fetch.js";
+import { buildGuardedModelFetch, testing } from "./provider-transport-fetch.js";
 
 type ProviderRequestPolicyConfigMockResult = {
   allowPrivateNetwork: boolean;
@@ -17,6 +17,7 @@ const {
   buildProviderRequestDispatcherPolicyMock,
   fetchWithSsrFGuardMock,
   ensureModelProviderLocalServiceMock,
+  getModelProviderRequestTransportMock,
   mergeModelProviderRequestOverridesMock,
   resolveProviderRequestPolicyConfigMock,
   shouldUseEnvHttpProxyForUrlMock,
@@ -59,6 +60,7 @@ const {
     >(() => undefined),
     fetchWithSsrFGuardMock: vi.fn(),
     ensureModelProviderLocalServiceMock: vi.fn(),
+    getModelProviderRequestTransportMock: vi.fn(() => undefined),
     mergeModelProviderRequestOverridesMock: vi.fn((current, overrides) => ({
       ...current,
       ...overrides,
@@ -92,7 +94,7 @@ vi.mock("./provider-local-service.js", () => ({
 
 vi.mock("./provider-request-config.js", () => ({
   buildProviderRequestDispatcherPolicy: buildProviderRequestDispatcherPolicyMock,
-  getModelProviderRequestTransport: vi.fn(() => undefined),
+  getModelProviderRequestTransport: getModelProviderRequestTransportMock,
   mergeModelProviderRequestOverrides: mergeModelProviderRequestOverridesMock,
   resolveProviderRequestPolicyConfig: resolveProviderRequestPolicyConfigMock,
 }));
@@ -154,6 +156,7 @@ function openResponseStreamText(text: string): {
 
 describe("buildGuardedModelFetch", () => {
   beforeEach(() => {
+    testing.resetProviderRequestRateLimitBucketsForTests();
     managedStreamCleanupRegistrations.length = 0;
     fetchWithSsrFGuardMock.mockReset().mockResolvedValue({
       response: new Response("ok", { status: 200 }),
@@ -161,6 +164,7 @@ describe("buildGuardedModelFetch", () => {
       release: vi.fn(async () => undefined),
     });
     ensureModelProviderLocalServiceMock.mockReset().mockResolvedValue(undefined);
+    getModelProviderRequestTransportMock.mockClear().mockReturnValue(undefined);
     buildProviderRequestDispatcherPolicyMock.mockClear().mockReturnValue(undefined);
     mergeModelProviderRequestOverridesMock.mockClear();
     resolveProviderRequestPolicyConfigMock
@@ -974,6 +978,72 @@ describe("buildGuardedModelFetch", () => {
     await fetcher("http://127.0.0.1:11434/api/chat", { method: "POST" });
 
     expect(latestGuardedFetchParams().timeoutMs).toBe(300_000);
+  });
+
+  it("paces configured provider requests before dispatch", async () => {
+    vi.useFakeTimers();
+    try {
+      const model = {
+        id: "gpt-5.4",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">;
+      getModelProviderRequestTransportMock.mockReturnValue({ rateLimit: { minIntervalMs: 50 } });
+      fetchWithSsrFGuardMock.mockImplementation(async () => ({
+        response: new Response("ok", { status: 200 }),
+        finalUrl: "https://api.openai.com/v1/responses",
+        release: vi.fn(async () => undefined),
+      }));
+      const fetcher = buildGuardedModelFetch(model);
+
+      const first = await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
+      await first.text();
+      const second = fetcher("https://api.openai.com/v1/responses", { method: "POST" });
+
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(49);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2));
+      await second;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects provider requests past the configured local queue size", async () => {
+    vi.useFakeTimers();
+    try {
+      const model = {
+        id: "gpt-5.4",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">;
+      getModelProviderRequestTransportMock.mockReturnValue({
+        rateLimit: { minIntervalMs: 50, maxQueueSize: 1 },
+      });
+      fetchWithSsrFGuardMock.mockImplementation(async () => ({
+        response: new Response("ok", { status: 200 }),
+        finalUrl: "https://api.openai.com/v1/responses",
+        release: vi.fn(async () => undefined),
+      }));
+      const fetcher = buildGuardedModelFetch(model);
+
+      const first = await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
+      await first.text();
+      const queued = fetcher("https://api.openai.com/v1/responses", { method: "POST" });
+
+      await expect(
+        fetcher("https://api.openai.com/v1/responses", { method: "POST" }),
+      ).rejects.toMatchObject({ status: 429, code: "provider_rate_limit_queue_full" });
+      await vi.advanceTimersByTimeAsync(50);
+      await vi.waitFor(() => expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2));
+      await queued;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not force explicit debug proxy overrides onto plain HTTP model transports", async () => {

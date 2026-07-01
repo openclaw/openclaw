@@ -326,10 +326,20 @@ const ConfiguredProviderRequestSchema = z
   .strict()
   .optional();
 
+const ConfiguredModelProviderRateLimitSchema = z
+  .object({
+    requestsPerMinute: z.number().int().positive().optional(),
+    minIntervalMs: z.number().int().nonnegative().optional(),
+    maxQueueSize: z.number().int().nonnegative().optional(),
+  })
+  .strict()
+  .optional();
+
 const ConfiguredModelProviderRequestSchema = z
   .object({
     ...ConfiguredProviderRequestFields,
     allowPrivateNetwork: z.boolean().optional(),
+    rateLimit: ConfiguredModelProviderRateLimitSchema,
   })
   .strict()
   .optional();
