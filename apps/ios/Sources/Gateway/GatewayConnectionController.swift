@@ -30,6 +30,7 @@ enum GatewayTLSFingerprintProbeResult: Equatable {
 
 typealias GatewayTCPReachabilityProbe = @Sendable (String, Int, Double, String) async -> Bool
 typealias GatewayTLSFingerprintProbeFunction = @Sendable (URL) async -> GatewayTLSFingerprintProbeResult
+typealias GatewayServiceEndpointResolver = @Sendable (NWEndpoint) async -> (host: String, port: Int)?
 
 private enum GatewayTLSFingerprintProbeBudget {
     static let tcpConnectTimeoutSeconds = 3.0
@@ -175,6 +176,7 @@ final class GatewayConnectionController {
     private var pendingTrustConnect: PendingTrustConnect?
     private let tcpReachabilityProbe: GatewayTCPReachabilityProbe
     private let tlsFingerprintProbe: GatewayTLSFingerprintProbeFunction
+    private let serviceEndpointResolver: GatewayServiceEndpointResolver?
 
     private struct SavedManualEndpoint: Equatable {
         let host: String
@@ -187,13 +189,15 @@ final class GatewayConnectionController {
         startDiscovery: Bool = true,
         deferDiscoveryUntilLocalNetworkRequest: Bool = false,
         tcpReachabilityProbe: @escaping GatewayTCPReachabilityProbe = defaultGatewayTCPReachabilityProbe,
-        tlsFingerprintProbe: @escaping GatewayTLSFingerprintProbeFunction = defaultGatewayTLSFingerprintProbe)
+        tlsFingerprintProbe: @escaping GatewayTLSFingerprintProbeFunction = defaultGatewayTLSFingerprintProbe,
+        serviceEndpointResolver: GatewayServiceEndpointResolver? = nil)
     {
         self.discoveryEnabled = startDiscovery
         self.appModel = appModel
         self.localNetworkAccessRequested = !deferDiscoveryUntilLocalNetworkRequest
         self.tcpReachabilityProbe = tcpReachabilityProbe
         self.tlsFingerprintProbe = tlsFingerprintProbe
+        self.serviceEndpointResolver = serviceEndpointResolver
 
         GatewaySettingsStore.bootstrapPersistence()
         let defaults = UserDefaults.standard
@@ -284,7 +288,12 @@ final class GatewayConnectionController {
         let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
 
         // Resolve the service endpoint (SRV/A/AAAA). TXT is unauthenticated; do not route via TXT.
-        guard let target = await self.resolveServiceEndpoint(gateway.endpoint) else {
+        let target = if let serviceEndpointResolver {
+            await serviceEndpointResolver(gateway.endpoint)
+        } else {
+            await self.resolveServiceEndpoint(gateway.endpoint)
+        }
+        guard let target else {
             return "Failed to resolve the discovered gateway endpoint."
         }
 

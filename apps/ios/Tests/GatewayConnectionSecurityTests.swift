@@ -218,6 +218,49 @@ import os
         #expect(appModel.gatewayStatusText.contains("\(host):\(port)"))
     }
 
+    @Test @MainActor func discoveredFirstUseTLSProbeFailureClearsStaleTrustPrompt() async {
+        let staleHost = "stale-\(UUID().uuidString).example.com"
+        let stalePort = 18789
+        let staleStableID = "manual|\(staleHost.lowercased())|\(stalePort)"
+        let discoveredStableID = "discovered|\(UUID().uuidString)"
+        let discoveredHost = "gateway.tailnet.ts.net"
+        let discoveredPort = 443
+        defer {
+            clearTLSFingerprint(stableID: staleStableID)
+            clearTLSFingerprint(stableID: discoveredStableID)
+        }
+        self.clearTLSFingerprint(stableID: staleStableID)
+        self.clearTLSFingerprint(stableID: discoveredStableID)
+
+        let tlsResults = OSAllocatedUnfairLock(initialState: [
+            GatewayTLSFingerprintProbeResult.fingerprint("abc123"),
+            .failure(.tlsHandshakeTimeout),
+        ])
+        let appModel = NodeAppModel()
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            tcpReachabilityProbe: { _, _, _, _ in true },
+            tlsFingerprintProbe: { _ in tlsResults.withLock { $0.removeFirst() } },
+            serviceEndpointResolver: { _ in (host: discoveredHost, port: discoveredPort) })
+
+        await controller.connectManual(host: staleHost, port: stalePort, useTLS: true)
+        #expect(controller.pendingTrustPrompt?.fingerprintSha256 == "abc123")
+
+        let gateway = self.makeDiscoveredGateway(
+            stableID: discoveredStableID,
+            lanHost: nil,
+            tailnetDns: discoveredHost,
+            gatewayPort: discoveredPort,
+            fingerprint: nil)
+        let message = await controller.connectWithDiagnostics(gateway)
+
+        #expect(controller.pendingTrustPrompt == nil)
+        #expect(message?.contains("TLS fingerprint verification timed out") == true)
+        #expect(message?.contains("\(discoveredHost):\(discoveredPort)") == true)
+        #expect(appModel.gatewayStatusText == message)
+    }
+
     @Test @MainActor func clearAllTLSFingerprints_removesStoredPins() async {
         let stableID1 = "test|\(UUID().uuidString)"
         let stableID2 = "test|\(UUID().uuidString)"
