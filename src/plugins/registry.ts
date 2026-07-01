@@ -107,7 +107,7 @@ import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import {
   clearPluginInteractiveHandlersForPlugin,
-  registerPluginInteractiveHandler,
+  registerRegistryPluginInteractiveHandler,
 } from "./interactive-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import {
@@ -2834,7 +2834,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerSecurityAuditCollector: (collector) =>
                 registerSecurityAuditCollector(record, collector),
               registerInteractiveHandler: (registration) => {
-                const result = registerPluginInteractiveHandler(record.id, registration, {
+                const result = registerRegistryPluginInteractiveHandler(record.id, registration, {
                   pluginName: record.name,
                   pluginRoot: record.rootDir,
                 });
@@ -2845,7 +2845,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                     source: record.source,
                     message: result.error ?? "interactive handler registration failed",
                   });
+                  return;
                 }
+                registry.interactiveHandlers ??= [];
+                registry.interactiveHandlers.push({
+                  ...registration,
+                  pluginId: record.id,
+                  pluginName: record.name,
+                  pluginRoot: record.rootDir,
+                });
               },
               onConversationBindingResolved: (handler) =>
                 registerConversationBindingResolvedHandler(record, handler),

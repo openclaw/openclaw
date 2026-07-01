@@ -13,6 +13,7 @@ import type { TelegramGetChat } from "./bot/types.js";
 import { buildTelegramOpaqueCallbackData } from "./native-command-callback-data.js";
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const pluginStateTestRuntime = await import("openclaw/plugin-sdk/plugin-state-test-runtime");
+const pluginRuntime = await import("openclaw/plugin-sdk/plugin-runtime");
 const conversationRuntime = await import("openclaw/plugin-sdk/conversation-runtime");
 const configMutation = await import("openclaw/plugin-sdk/config-mutation");
 const sessionStoreRuntime = await import("openclaw/plugin-sdk/session-store-runtime");
@@ -233,6 +234,7 @@ describe("createTelegramBot", () => {
   });
   afterEach(() => {
     pluginStateTestRuntime.resetPluginStateStoreForTests();
+    pluginRuntime.clearPluginInteractiveHandlers();
     if (previousStateDir === undefined) {
       delete process.env.OPENCLAW_STATE_DIR;
     } else {
@@ -246,6 +248,7 @@ describe("createTelegramBot", () => {
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = createTelegramBotTestStateDir();
     resetTelegramForumFlagCacheForTest();
+    pluginRuntime.clearPluginInteractiveHandlers();
     clearAccountThrottlersForTest();
     throttlerSpy.mockReset();
     setTelegramBotRuntimeForTest(
@@ -1278,6 +1281,56 @@ describe("createTelegramBot", () => {
     const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
     expect(payload.Body).toContain("callback_data: cmd:option_a");
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
+  });
+
+  it("routes plugin callback_query payloads to plugin handlers without fallback callback_data text", async () => {
+    const pluginHandler = vi.fn(async (ctx) => {
+      expect(ctx.callback.namespace).toBe("code-agent");
+      expect(ctx.callback.payload).toBe("approve-123");
+      await ctx.respond.clearButtons();
+      return { handled: true };
+    });
+    expect(
+      pluginRuntime.registerPluginInteractiveHandler("openclaw-code-agent", {
+        channel: "telegram",
+        namespace: "code-agent",
+        handler: pluginHandler,
+      }),
+    ).toEqual({ ok: true });
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = requireValue(
+      onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as
+        | ((ctx: Record<string, unknown>) => Promise<void>)
+        | undefined,
+      "callback_query handler",
+    );
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-plugin-1",
+        data: "code-agent:approve-123",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 10,
+          reply_markup: {
+            inline_keyboard: [[{ text: "Approve", callback_data: "code-agent:approve-123" }]],
+          },
+          text: "Approve this code-agent action?",
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(pluginHandler).toHaveBeenCalledTimes(1);
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 10, {
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-plugin-1");
   });
 
   it("preserves raw slash callback_query payloads as command text", async () => {

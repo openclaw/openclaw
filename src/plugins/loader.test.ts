@@ -3049,6 +3049,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(registry.nodeHostCommands).toStrictEqual([]);
     expect(registry.nodeInvokePolicies).toStrictEqual([]);
     expect(registry.securityAuditCollectors).toStrictEqual([]);
+    expect(registry.interactiveHandlers).toStrictEqual([]);
     expect(resolvePluginInteractiveNamespaceMatch("slack", "failme:payload")).toBeNull();
     expect(getContextEngineFactory("failme-context")).toBeUndefined();
     expect(listContextEngineIds()).not.toContain("failme-context");
@@ -3669,9 +3670,16 @@ module.exports = { id: "throws-after-import", register() {} };`,
       onlyPluginIds: ["cached-command-interactive"],
     } satisfies Parameters<typeof loadOpenClawPlugins>[0];
 
-    loadOpenClawPlugins(loadOptions);
+    const registry = loadOpenClawPlugins(loadOptions);
     expect(getPluginCommandSpecs()).toEqual([
       { name: "hue", description: "Control Hue lights", acceptsArgs: false },
+    ]);
+    expect(registry.interactiveHandlers).toEqual([
+      expect.objectContaining({
+        channel: "telegram",
+        namespace: "hue",
+        pluginId: "cached-command-interactive",
+      }),
     ]);
     const match = resolvePluginInteractiveNamespaceMatch("telegram", "hue:on");
     expect(match?.namespace).toBe("hue");
