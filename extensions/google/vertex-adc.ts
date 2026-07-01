@@ -9,7 +9,9 @@ import {
   resolveExpiresAtMsFromDurationMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { GOOGLE_OAUTH_BODY_MAX_BYTES } from "./oauth.http.js";
 
 type GoogleAuthorizedUserCredentials = {
   type: "authorized_user";
@@ -277,7 +279,10 @@ async function refreshGoogleVertexAuthorizedUserAccessToken(params: {
 async function readGoogleOauthTokenResponsePayload(
   response: Response,
 ): Promise<GoogleOauthTokenResponsePayload | undefined> {
-  const bytes = Buffer.from(await response.arrayBuffer());
+  const bytes = await readResponseWithLimit(response, GOOGLE_OAUTH_BODY_MAX_BYTES, {
+    onOverflow: ({ size, maxBytes }) =>
+      new Error(`Google OAuth token response exceeds ${maxBytes} bytes (received ${size})`),
+  });
   const text = decodeGoogleOauthTokenResponseBody(bytes, response.headers.get("content-encoding"));
   if (!text.trim()) {
     return undefined;

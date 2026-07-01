@@ -7,7 +7,7 @@ import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtim
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { DEFAULT_FETCH_TIMEOUT_MS } from "./oauth.shared.js";
 
-const GOOGLE_OAUTH_BODY_MAX_BYTES = 16 * 1024 * 1024;
+export const GOOGLE_OAUTH_BODY_MAX_BYTES = 16 * 1024 * 1024;
 
 export async function fetchWithTimeout(
   url: string,
