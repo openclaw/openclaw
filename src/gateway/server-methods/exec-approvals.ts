@@ -126,21 +126,21 @@ async function respondWithExecApprovalsNodePayload<TParams extends { nodeId: str
       allowlist,
     });
     if (!allowed.ok) {
+      const message =
+        allowed.reason === "command not allowlisted"
+          ? `Node ${nodeId} does not allow ${params.command}: blocked by gateway node command policy.`
+          : `Node ${nodeId} does not support ${params.command}. ` +
+            `The node must advertise ${params.command}, or the operator must edit the node host approvals file directly.`;
       params.respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `Node ${nodeId} does not support ${params.command}. ` +
-            `The node must advertise ${params.command}, or the operator must edit the node host approvals file directly.`,
-          {
-            details: {
-              supportedCommands: nodeSession.commands,
-              requestedCommand: params.command,
-              reason: allowed.reason,
-            },
+        errorShape(ErrorCodes.INVALID_REQUEST, message, {
+          details: {
+            supportedCommands: nodeSession.commands,
+            requestedCommand: params.command,
+            reason: allowed.reason,
           },
-        ),
+        }),
       );
       return;
     }
