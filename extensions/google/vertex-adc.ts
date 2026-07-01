@@ -9,6 +9,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type GoogleAuthorizedUserCredentials = {
@@ -277,7 +278,9 @@ async function refreshGoogleVertexAuthorizedUserAccessToken(params: {
 async function readGoogleOauthTokenResponsePayload(
   response: Response,
 ): Promise<GoogleOauthTokenResponsePayload | undefined> {
-  const bytes = Buffer.from(await response.arrayBuffer());
+  const bytes = await readResponseWithLimit(response, 16 * 1024 * 1024, {
+    onOverflow: () => new Error("google-vertex-adc: token response exceeds 16 MiB"),
+  });
   const text = decodeGoogleOauthTokenResponseBody(bytes, response.headers.get("content-encoding"));
   if (!text.trim()) {
     return undefined;
