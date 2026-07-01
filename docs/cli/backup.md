@@ -31,6 +31,7 @@ openclaw backup verify ./2026-03-09T08-00-00.000+08-00-openclaw-backup.tar.gz
 - `openclaw backup verify <archive>` validates that the archive contains exactly one root manifest, rejects traversal-style archive paths, and checks that every manifest-declared payload exists in the tarball.
 - `openclaw backup create --verify` runs that validation immediately after writing the archive.
 - `openclaw backup create --only-config` backs up just the active JSON config file.
+- If you only need a SQLite-safe sync artifact for one OpenClaw database, use [`openclaw snapshot`](/cli/snapshot). Backup is for broad recovery archives.
 
 ## What gets backed up
 

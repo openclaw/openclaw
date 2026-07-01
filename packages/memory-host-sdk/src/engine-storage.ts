@@ -57,4 +57,9 @@ export {
   configureMemorySqliteWalMaintenance,
   requireNodeSqlite,
 } from "./host/sqlite.js";
+export {
+  createVacuumedSqliteSnapshot,
+  verifySqliteDatabaseIntegrity,
+  type SqliteSnapshotResult,
+} from "./host/sqlite-snapshot.js";
 export { isFileMissingError, statRegularFile } from "./host/fs-utils.js";

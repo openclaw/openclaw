@@ -260,6 +260,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["acp"], policy: { networkProxy: "bypass" } },
   { commandPath: ["approvals"], policy: { networkProxy: "bypass" } },
   { commandPath: ["backup"], policy: { bypassConfigGuard: true, networkProxy: "bypass" } },
+  { commandPath: ["snapshot"], policy: { bypassConfigGuard: true, networkProxy: "bypass" } },
   { commandPath: ["chat"], policy: { networkProxy: "bypass" } },
   { commandPath: ["config"], policy: { networkProxy: "bypass" } },
   { commandPath: ["cron"], policy: { networkProxy: "bypass" } },

@@ -38,6 +38,11 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "snapshot",
+    description: "Create, verify, list, and restore SQLite snapshots",
+    hasSubcommands: true,
+  },
+  {
     name: "migrate",
     description: "Import state from another agent system",
     hasSubcommands: true,

@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
+import { createVacuumedSqliteSnapshot } from "../../packages/memory-host-sdk/src/engine-storage.js";
 import {
   buildBackupArchiveBasename,
   buildBackupArchivePath,
@@ -653,22 +653,8 @@ async function createStateSqliteBackupPlan(params: {
       path.resolve(archiveSourcePath) === globalStateSqlitePath
         ? await fs.realpath(archiveSourcePath)
         : archiveSourcePath;
-    const source = new sqlite.DatabaseSync(sourceDatabasePath, {
-      allowExtension: true,
-      readOnly: true,
-    });
     const sourcePath = path.join(params.tempDir, `openclaw-state-db-${snapshots.length}.sqlite`);
-    try {
-      source.exec("PRAGMA busy_timeout = 30000;");
-      // VACUUM INTO removes deleted-page remnants before the snapshot enters
-      // the archive. Load sqlite-vec best-effort so memory indexes using vec0
-      // can still be compacted without weakening that privacy property.
-      await loadSqliteVecExtension({ db: source });
-      source.prepare("VACUUM INTO ?").run(sourcePath);
-    } finally {
-      source.close();
-    }
-    await fs.chmod(sourcePath, 0o600);
+    await createVacuumedSqliteSnapshot({ sourcePath: sourceDatabasePath, targetPath: sourcePath });
     if (path.resolve(archiveSourcePath) === globalStateSqlitePath) {
       const snapshot = new sqlite.DatabaseSync(sourcePath);
       try {
