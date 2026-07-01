@@ -84,6 +84,7 @@ const OPENCLAW_LOG_EVENT_ATTRIBUTE = "openclaw.log.event";
 const OPENCLAW_LOG_CATEGORY_ATTRIBUTE = "openclaw.log.category";
 const OPENCLAW_LOG_OUTCOME_ATTRIBUTE = "openclaw.log.outcome";
 const OPENCLAW_LOG_REASON_ATTRIBUTE = "openclaw.log.reason";
+const OPENCLAW_LOG_SITE_ID_ATTRIBUTE = "openclaw.log.site_id";
 const BLOCKED_OTEL_LOG_ATTRIBUTE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 const RESERVED_OTEL_LOG_ATTRIBUTE_KEYS = new Set([
   OTEL_EVENT_NAME_ATTRIBUTE,
@@ -92,6 +93,7 @@ const RESERVED_OTEL_LOG_ATTRIBUTE_KEYS = new Set([
   OPENCLAW_LOG_CATEGORY_ATTRIBUTE,
   OPENCLAW_LOG_OUTCOME_ATTRIBUTE,
   OPENCLAW_LOG_REASON_ATTRIBUTE,
+  OPENCLAW_LOG_SITE_ID_ATTRIBUTE,
 ]);
 const RESERVED_OTEL_LOG_RAW_ATTRIBUTE_KEYS = new Set([
   "eventName",
@@ -101,6 +103,8 @@ const RESERVED_OTEL_LOG_RAW_ATTRIBUTE_KEYS = new Set([
   "log.category",
   "log.outcome",
   "log.reason",
+  "log.site_id",
+  "log.siteId",
 ]);
 const PRELOADED_OTEL_SDK_ENV = "OPENCLAW_OTEL_PRELOADED";
 const OTEL_EXPORTER_OTLP_ENDPOINT_ENV = "OTEL_EXPORTER_OTLP_ENDPOINT";
@@ -2039,6 +2043,13 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             OPENCLAW_LOG_REASON_ATTRIBUTE,
             lowCardinalityAttr(evt.reason, "none"),
           );
+          if (evt.code?.siteId) {
+            assignReservedOtelLogAttribute(
+              attributes,
+              OPENCLAW_LOG_SITE_ID_ATTRIBUTE,
+              lowCardinalityAttr(evt.code.siteId),
+            );
+          }
           assignReservedOtelLogAttribute(attributes, OPENCLAW_SIGNAL_TYPE_ATTRIBUTE, "log.record");
           assignOtelLogAttribute(attributes, "openclaw.log.level", logLevelName);
           if (!captureLogBody) {

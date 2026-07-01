@@ -69,6 +69,7 @@ describe("diagnostic log events", () => {
     expect(event.category).toBe("diagnostic");
     expect(event.outcome).toBe("success");
     expect(event.reason).toBe("none");
+    expect(event.code?.siteId).toMatch(/^[0-9a-f]{16}$/u);
     expect(event.attributes).toStrictEqual({
       subsystem: "diagnostic",
       runId: "run-1",
@@ -214,6 +215,40 @@ describe("diagnostic log events", () => {
     expect(Object.hasOwn(event.attributes ?? {}, "__openclawDiagnosticLogSemantics")).toBe(false);
   });
 
+  it("adds safe code-owner and site semantics to generic log records", async () => {
+    const received: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
+    const unsubscribe = onInternalDiagnosticEvent((evt) => {
+      if (evt.type === "log.record") {
+        received.push(evt);
+      }
+    });
+
+    function emitGenericFallbackLog() {
+      const logger = getChildLogger({ subsystem: "gateway/heartbeat" });
+      logger.warn(
+        {
+          reason: "channel_not_ready",
+          status: "skipped",
+        },
+        "heartbeat: channel not ready",
+      );
+    }
+
+    emitGenericFallbackLog();
+    await flushDiagnosticEvents();
+    unsubscribe();
+
+    expect(received).toHaveLength(1);
+    const [event] = received;
+    expect(event.event).toMatch(/^gateway\.heartbeat\.[a-z0-9_.:-]+\.warn$/u);
+    expect(event.event).not.toBe("gateway.heartbeat.warn");
+    expect(event.category).toBe("gateway.heartbeat");
+    expect(event.outcome).toBe("warning");
+    expect(event.reason).toBe("channel_not_ready");
+    expect(event.code?.functionName).toContain("emitGenericFallbackLog");
+    expect(event.code?.siteId).toMatch(/^[0-9a-f]{16}$/u);
+  });
+
   it("uses safe structured status and reason codes for generic log semantics", async () => {
     const received: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
     const unsubscribe = onInternalDiagnosticEvent((evt) => {
@@ -235,7 +270,7 @@ describe("diagnostic log events", () => {
 
     expect(received).toHaveLength(1);
     const [event] = received;
-    expect(event.event).toBe("gateway.heartbeat.warn");
+    expect(event.event).toMatch(/^gateway\.heartbeat(\.[a-z0-9_.:-]+)?\.warn$/u);
     expect(event.category).toBe("gateway.heartbeat");
     expect(event.outcome).toBe("warning");
     expect(event.reason).toBe("channel_not_ready");

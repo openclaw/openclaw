@@ -1607,6 +1607,7 @@ describe("diagnostics-otel service", () => {
         attributes: {
           token: "ghp_abcdefghijklmnopqrstuvwxyz123456", // pragma: allowlist secret
           subsystem: "diagnostic",
+          "log.site_id": "spoofed",
         },
         trace: {
           traceId: TRACE_ID,
@@ -1729,8 +1730,12 @@ describe("diagnostics-otel service", () => {
         "log.category": "spoofed",
         "log.outcome": "failure",
         "log.reason": "spoofed",
+        "log.site_id": "spoofed",
         "log.body_redacted": false,
         ...cappedAttributes,
+      },
+      code: {
+        siteId: "0123456789abcdef",
       },
     });
 
@@ -1742,6 +1747,7 @@ describe("diagnostics-otel service", () => {
       "openclaw.log.category": "diagnostic",
       "openclaw.log.outcome": "success",
       "openclaw.log.reason": "configured",
+      "openclaw.log.site_id": "0123456789abcdef",
       "openclaw.signal.type": "log.record",
     });
     expect(emitCall?.attributes?.["openclaw.log.body_redacted"]).toBe(true);
@@ -1750,9 +1756,11 @@ describe("diagnostics-otel service", () => {
     expect(Object.hasOwn(emitCall?.attributes ?? {}, "openclaw.log.category")).toBe(true);
     expect(Object.hasOwn(emitCall?.attributes ?? {}, "openclaw.log.outcome")).toBe(true);
     expect(Object.hasOwn(emitCall?.attributes ?? {}, "openclaw.log.reason")).toBe(true);
+    expect(Object.hasOwn(emitCall?.attributes ?? {}, "openclaw.log.site_id")).toBe(true);
     expect(Object.hasOwn(emitCall?.attributes ?? {}, "openclaw.otel.event.name")).toBe(false);
     expect(emitCall?.attributes?.["openclaw.signal.type"]).not.toBe("security.event");
     expect(emitCall?.attributes?.["openclaw.log.event"]).not.toBe("spoofed.event");
+    expect(emitCall?.attributes?.["openclaw.log.site_id"]).not.toBe("spoofed");
   });
 
   test("keeps granular content capture from enabling OTLP log bodies", async () => {
@@ -1894,6 +1902,7 @@ describe("diagnostics-otel service", () => {
         filepath: "/Users/alice/openclaw/src/private.ts",
         line: 42,
         functionName: "handler",
+        siteId: "fedcba9876543210",
         location: "/Users/alice/openclaw/src/private.ts:42",
       },
     } as Parameters<typeof emitDiagnosticEvent>[0]);
@@ -1907,6 +1916,7 @@ describe("diagnostics-otel service", () => {
     expect(String(emitCall.attributes["openclaw.good"])).toMatch(/^y+/);
     expect(emitCall.attributes["code.lineno"]).toBe(42);
     expect(emitCall.attributes["code.function"]).toBe("handler");
+    expect(emitCall.attributes["openclaw.log.site_id"]).toBe("fedcba9876543210");
     expect(String(emitCall.attributes["openclaw.good"]).length).toBeLessThanOrEqual(4200);
     expect(Object.hasOwn(emitCall.attributes, `openclaw.${PROTO_KEY}`)).toBe(false);
     expect(Object.hasOwn(emitCall.attributes, "openclaw.constructor")).toBe(false);

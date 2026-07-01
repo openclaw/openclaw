@@ -1,4 +1,5 @@
 // Logger implementation writes structured log output with redaction and transports.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -64,6 +65,7 @@ type HostnameResolver = () => string;
 type DiagnosticLogCode = {
   line?: number;
   functionName?: string;
+  siteId?: string;
 };
 
 const MAX_DIAGNOSTIC_LOG_BINDINGS_JSON_CHARS = 8 * 1024;
@@ -212,6 +214,64 @@ function diagnosticLogEventFromCategory(category: string, level: string): string
   }
   const levelSegment = normalizeDiagnosticLogSemanticValue(level.toLowerCase(), "log");
   return `${category}.${levelSegment}`;
+}
+
+function normalizeDiagnosticLogEventSegment(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = sanitizeDiagnosticLogText(value.trim(), MAX_DIAGNOSTIC_LOG_NAME_CHARS)
+    .replace(/[<>]/gu, "")
+    .replace(/[^A-Za-z0-9_.:-]+/gu, ".")
+    .replace(/\.+/gu, ".")
+    .replace(/^\.|\.$/gu, "")
+    .toLowerCase();
+  return DIAGNOSTIC_LOG_SEMANTIC_VALUE_RE.test(normalized) ? normalized : undefined;
+}
+
+function diagnosticLogEventFromCode(category: string, level: string, code: DiagnosticLogCode) {
+  const levelSegment = normalizeDiagnosticLogSemanticValue(level.toLowerCase(), "log");
+  const functionSegment = normalizeDiagnosticLogEventSegment(code.functionName);
+  if (category === "unknown") {
+    return functionSegment ? `log.${functionSegment}.${levelSegment}` : "log.record";
+  }
+  return functionSegment
+    ? `${category}.${functionSegment}.${levelSegment}`
+    : diagnosticLogEventFromCategory(category, level);
+}
+
+function normalizeDiagnosticSourcePath(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  const normalized = value.replace(/\\/gu, "/");
+  for (const marker of ["/src/", "/extensions/", "/packages/", "/ui/", "/docs/"]) {
+    const index = normalized.lastIndexOf(marker);
+    if (index >= 0) {
+      return normalized.slice(index + 1);
+    }
+  }
+  const basename = path.basename(normalized);
+  return basename || undefined;
+}
+
+function diagnosticLogSiteId(params: {
+  filePath?: unknown;
+  line?: number;
+  functionName?: string;
+  category: string;
+  level: string;
+}): string | undefined {
+  const sourcePath = normalizeDiagnosticSourcePath(params.filePath);
+  const functionName = normalizeDiagnosticLogEventSegment(params.functionName) ?? "unknown";
+  const line = params.line ?? "unknown";
+  if (!sourcePath && line === "unknown" && functionName === "unknown") {
+    return undefined;
+  }
+  const seed = `${sourcePath ?? "unknown"}:${line}:${functionName}:${params.category}:${
+    params.level
+  }`;
+  return createHash("sha256").update(seed).digest("hex").slice(0, 16);
 }
 
 function diagnosticLogOutcomeFromLevel(level: string): string {
@@ -699,8 +759,18 @@ function buildDiagnosticLogRecord(logObj: TsLogRecord) {
   );
   const event = normalizeDiagnosticLogSemanticValue(
     firstSemanticSourceValue("event", ["logEvent"]),
-    diagnosticLogEventFromCategory(category, logLevelName),
+    diagnosticLogEventFromCode(category, logLevelName, code),
   );
+  const siteId = diagnosticLogSiteId({
+    filePath: meta?.path?.filePath,
+    line: code.line,
+    functionName: code.functionName,
+    category,
+    level: logLevelName,
+  });
+  if (siteId) {
+    code.siteId = siteId;
+  }
   const statusOutcome = diagnosticLogOutcomeFromStatus(
     firstSemanticSourceValue("outcome", ["logOutcome"]) ??
       firstReasonCodeValue(["status", "state"]),

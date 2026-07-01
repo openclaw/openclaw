@@ -136,17 +136,22 @@ Raw model/tool content is **not** exported by default. Spans carry bounded
 identifiers (channel, provider, model, error category, hash-only request ids,
 tool source, tool owner, and skill name/source) and never include prompt text,
 response text, tool inputs, tool outputs, skill file paths, or session keys.
-OTLP log records keep severity, logger, code location, trusted trace context,
-stable event identity, and sanitized attributes by default, but the raw log
-message body is exported only when `diagnostics.otel.captureContent` is set to
-boolean `true`. Granular `captureContent.*` subkeys do not enable log bodies.
+OTLP log records keep severity, logger, safe code owner, an opaque log-site id,
+trusted trace context, stable event identity, and sanitized attributes by
+default, but the raw log message body is exported only when
+`diagnostics.otel.captureContent` is set to boolean `true`. Granular
+`captureContent.*` subkeys do not enable log bodies.
 When a diagnostic log body is withheld, the exported body is
 `[message redacted]` and `openclaw.log.body_redacted` is `true`. Every exported
 diagnostic log still carries `eventName`, `otel.event.name`,
 `openclaw.signal.type=log.record`, `openclaw.log.event`,
 `openclaw.log.category`, `openclaw.log.outcome`, and `openclaw.log.reason` so
-logs remain queryable without message content. Trusted security records are
-exported separately with `openclaw.signal.type=security.event`,
+logs remain queryable without message content. OpenClaw-owned log calls may set
+an explicit low-cardinality event such as `heartbeat.runner.started`; generic
+diagnostic logs fall back to safe category + code-owner + severity semantics and
+carry `openclaw.log.site_id` so repeated call sites can be grouped without
+exporting local file paths. Trusted security records are exported separately
+with `openclaw.signal.type=security.event`,
 `eventName=openclaw.security.<action>`, `otel.event.name`, and the structured
 `openclaw.security.*` fields. Labels that look like scoped agent session keys
 are replaced with `unknown`.

@@ -708,6 +708,7 @@ export type DiagnosticLogRecordEvent = DiagnosticBaseEvent & {
   code?: {
     line?: number;
     functionName?: string;
+    siteId?: string;
   };
 };
 
