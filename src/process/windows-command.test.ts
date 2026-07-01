@@ -42,4 +42,21 @@ describe("resolveWindowsCommandShim", () => {
       }),
     ).toBe("npm.cmd");
   });
+
+  it("appends .cmd for npm-installed CLI backends on Windows", () => {
+    expect(
+      resolveWindowsCommandShim({
+        command: "claude",
+        cmdCommands: ["claude", "codex"],
+        platform: "win32",
+      }),
+    ).toBe("claude.cmd");
+    expect(
+      resolveWindowsCommandShim({
+        command: "codex",
+        cmdCommands: ["claude", "codex"],
+        platform: "win32",
+      }),
+    ).toBe("codex.cmd");
+  });
 });
