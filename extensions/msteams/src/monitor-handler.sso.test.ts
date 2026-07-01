@@ -1,5 +1,6 @@
 // Msteams tests cover monitor handler.sso plugin behavior.
 import { describe, expect, it, vi } from "vitest";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   makeMSTeamsSsoTokenStoreKey,
   type MSTeamsSsoStoredToken,
@@ -66,7 +67,51 @@ function createFakeFetch(handlers: Array<(url: string, init?: unknown) => unknow
   return { fetchImpl, calls };
 }
 
+describe("readResponseWithLimit integration", () => {
+  it("reads a small JSON response successfully", async () => {
+    const body = JSON.stringify({ token: "test", connectionName: "test" });
+    const response = new Response(body, {
+      headers: { "content-type": "application/json" },
+    });
+    const buffer = await readResponseWithLimit(response, 16 * 1024 * 1024);
+    const parsed = JSON.parse(buffer.toString());
+    expect(parsed).toEqual({ token: "test", connectionName: "test" });
+  });
+
+  it("rejects an oversized response", async () => {
+    const oversized = "x".repeat(17 * 1024 * 1024);
+    const response = new Response(oversized, {
+      headers: { "content-type": "application/json" },
+    });
+    await expect(
+      readResponseWithLimit(response, 16 * 1024 * 1024),
+    ).rejects.toThrow();
+  });
+});
+
 describe("handleSigninTokenExchangeInvoke", () => {
+  it("returns an error for non-JSON response from the User Token service", async () => {
+    const { fetchImpl } = createFakeFetch([
+      () => ({
+        ok: true,
+        status: 200,
+        body: "<html>not json</html>",
+      }),
+    ]);
+    const { sso } = createSsoDeps({ fetchImpl });
+
+    const result = await handleSigninTokenExchangeInvoke({
+      value: { id: "flow-1", connectionName: "GraphConnection", token: "exchangeable-token" },
+      user: { userId: "aad-user-guid", channelId: "msteams" },
+      deps: sso,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("unexpected_response");
+      expect(result.message).toContain("invalid JSON");
+    }
+  });
   it("exchanges the Teams token and persists the result", async () => {
     const { fetchImpl, calls } = createFakeFetch([
       () => ({

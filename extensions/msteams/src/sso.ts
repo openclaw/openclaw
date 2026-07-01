@@ -26,6 +26,7 @@
 
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import { readMSTeamsHttpErrorDetail } from "./http-error.js";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import type { MSTeamsSsoTokenStore } from "./sso-token-store.js";
 import { buildUserAgent } from "./user-agent.js";
 
@@ -130,7 +131,8 @@ async function callUserTokenService(
   }
   let parsed: unknown;
   try {
-    parsed = await response.json();
+    const buffer = await readResponseWithLimit(response, 16 * 1024 * 1024);
+    parsed = JSON.parse(buffer.toString());
   } catch {
     return { error: "invalid JSON from User Token service", status: response.status };
   }
