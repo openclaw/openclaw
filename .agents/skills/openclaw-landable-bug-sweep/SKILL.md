@@ -68,7 +68,7 @@ Reject:
 - feature requests, new knobs, migrations, release work, workflow policy, support
 - plugin SDK/API boundary changes, including compatibility shims, new SDK methods, SDK exports, or plugin-facing channel/provider seams
 - auth/security boundary changes unless explicitly assigned
-- bugs needing live credentials that are unavailable
+- bugs requiring unavailable external accounts, restricted external services, or privileged runtime access
 - PRs with red CI unless you fix, rebase, push, and recheck them green
 - PRs you only reviewed locally but did not refresh/push/check live
 - PRs whose final head has not passed `$autoreview`
@@ -130,9 +130,9 @@ validation evidence; inspect the code, tests, and CI before judging correctness.
 - If maintainer cannot push to contributor branch: create own branch/PR, preserve useful commits or credit.
 - If CI turns red after local proof, treat that as normal work: inspect the failing job, fix or reject, rerun, and only count the PR once green.
 
-## Output Ledger
+## Output Tracking Log
 
-Maintain a running ledger:
+Maintain a running tracking log:
 
 ```text
 accepted:
