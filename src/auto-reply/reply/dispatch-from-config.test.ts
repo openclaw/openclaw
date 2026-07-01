@@ -1467,6 +1467,53 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("passes source reply transcript mirror through routed final delivery", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    mocks.routeReply.mockClear();
+    transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
+    installThreadingTestPlugin({ id: "telegram", defaultAccountId: "default" });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "slack",
+        Surface: "slack",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:999",
+        AccountId: "default",
+        SessionKey: "agent:main:telegram:group:999",
+      }),
+      cfg: automaticDirectReplyConfig,
+      dispatcher,
+      replyResolver: async () =>
+        setReplyPayloadMetadata(
+          { text: "Persisted routed internal reply" },
+          {
+            sourceReplyTranscriptMirror: {
+              sessionKey: "agent:main:telegram:group:999",
+              agentId: "main",
+              text: "Persisted routed internal reply",
+              idempotencyKey: "run-1:internal-source-reply:0",
+            },
+          },
+        ),
+    });
+
+    expect(result.queuedFinal).toBe(true);
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: { text: "Persisted routed internal reply" },
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:telegram:group:999",
+          agentId: "main",
+          text: "Persisted routed internal reply",
+          idempotencyKey: "run-1:internal-source-reply:0",
+        }),
+      }),
+    );
+    expect(transcriptMocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
   it("passes reply policy to routed block delivery", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();

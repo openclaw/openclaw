@@ -1791,7 +1791,11 @@ export async function dispatchReplyFromConfig(
 
   const routeReplyToOriginating = async (
     payload: ReplyPayload,
-    options?: { abortSignal?: AbortSignal; mirror?: boolean; kind?: ReplyDispatchKind },
+    options?: {
+      abortSignal?: AbortSignal;
+      mirror?: boolean | TranscriptMirror;
+      kind?: ReplyDispatchKind;
+    },
   ) => {
     if (!shouldRouteToOriginating || !routeReplyChannel || !routeReplyTo || !routeReplyRuntime) {
       return null;
@@ -2511,10 +2515,12 @@ export async function dispatchReplyFromConfig(
       throwIfFinalDeliveryAborted();
       const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
       throwIfFinalDeliveryAborted();
+      const routedTranscriptMirror =
+        hasTranscriptOwner || !sourceReplyTranscriptMirror ? false : sourceReplyTranscriptMirror;
       const result = await routeReplyToOriginating(normalizedPayload, {
         abortSignal,
         kind: "final",
-        ...(hasTranscriptOwner ? { mirror: false } : {}),
+        mirror: routedTranscriptMirror,
       });
       if (result) {
         if (!result.ok) {
@@ -2522,7 +2528,7 @@ export async function dispatchReplyFromConfig(
             `dispatch-from-config: route-reply (final) failed: ${result.error ?? "unknown error"}`,
           );
         }
-        if (isRoutedReplyDelivered(result)) {
+        if (isRoutedReplyDelivered(result) && routedTranscriptMirror === false) {
           await mirrorDeliveredReplyToTranscript({
             metadata: sourceReplyTranscriptMirror,
             cfg,

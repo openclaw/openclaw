@@ -14,6 +14,7 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
+import type { SessionTranscriptDeliveryMirror } from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
@@ -94,7 +95,20 @@ type RouteReplyParams = {
   /** Optional abort signal for cooperative cancellation. */
   abortSignal?: AbortSignal;
   /** Mirror reply into session transcript (default: true when sessionKey is set). */
-  mirror?: boolean;
+  mirror?:
+    | boolean
+    | {
+        sessionKey: string;
+        agentId?: string;
+        text?: string;
+        mediaUrls?: string[];
+        idempotencyKey?: string;
+        isGroup?: boolean;
+        groupId?: string;
+        expectedSessionId?: string;
+        storePath?: string;
+        deliveryMirror?: SessionTranscriptDeliveryMirror;
+      };
   /** Whether this message is being sent in a group/channel context */
   isGroup?: boolean;
   /** Group or channel identifier for correlation with received events */
@@ -300,16 +314,31 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       session: outboundSession,
       signal: abortSignal,
       mirror:
-        params.mirror !== false && params.sessionKey
-          ? {
-              sessionKey: params.sessionKey,
-              agentId: resolvedAgentId,
-              text,
-              mediaUrls,
-              ...(params.isGroup != null ? { isGroup: params.isGroup } : {}),
-              ...(params.groupId ? { groupId: params.groupId } : {}),
-            }
-          : undefined,
+        params.mirror === false
+          ? undefined
+          : typeof params.mirror === "object"
+            ? {
+                ...params.mirror,
+                agentId: params.mirror.agentId ?? resolvedAgentId,
+                text: params.mirror.text ?? text,
+                mediaUrls: params.mirror.mediaUrls ?? mediaUrls,
+                ...(params.mirror.isGroup === undefined && params.isGroup != null
+                  ? { isGroup: params.isGroup }
+                  : {}),
+                ...(params.mirror.groupId === undefined && params.groupId
+                  ? { groupId: params.groupId }
+                  : {}),
+              }
+            : params.sessionKey
+              ? {
+                  sessionKey: params.sessionKey,
+                  agentId: resolvedAgentId,
+                  text,
+                  mediaUrls,
+                  ...(params.isGroup != null ? { isGroup: params.isGroup } : {}),
+                  ...(params.groupId ? { groupId: params.groupId } : {}),
+                }
+              : undefined,
     });
     if (send.status === "failed" || send.status === "partial_failed") {
       throw send.error;

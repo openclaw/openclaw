@@ -1000,4 +1000,42 @@ describe("routeReply", () => {
       mirror: undefined,
     });
   });
+
+  it("passes explicit mirror metadata through outbound delivery", async () => {
+    await routeReply({
+      payload: { text: "hi" },
+      channel: "slack",
+      to: "channel:C123",
+      sessionKey: "agent:main:main",
+      mirror: {
+        sessionKey: "agent:main:main",
+        agentId: "helper",
+        text: "persist me",
+        mediaUrls: ["https://example.com/image.png"],
+        idempotencyKey: "run-1:reply:0",
+        expectedSessionId: "session-1",
+        storePath: "/tmp/session-store.json",
+        deliveryMirror: {
+          kind: "channel-final",
+          sourceMessageId: "msg-1",
+        },
+      },
+      cfg: {} as never,
+    });
+    expectLastDeliveryFields({
+      mirror: {
+        sessionKey: "agent:main:main",
+        agentId: "helper",
+        text: "persist me",
+        mediaUrls: ["https://example.com/image.png"],
+        idempotencyKey: "run-1:reply:0",
+        expectedSessionId: "session-1",
+        storePath: "/tmp/session-store.json",
+        deliveryMirror: {
+          kind: "channel-final",
+          sourceMessageId: "msg-1",
+        },
+      },
+    });
+  });
 });
