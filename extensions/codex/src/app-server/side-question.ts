@@ -34,6 +34,7 @@ import {
 } from "./config.js";
 import {
   resolveCodexMessageToolProvider,
+  restoreOpenClawShellDynamicTools,
   shouldEnableCodexAppServerNativeToolSurface,
 } from "./dynamic-tool-build.js";
 import {
@@ -741,7 +742,11 @@ async function createCodexSideToolBridge(input: {
       requireExplicitMessageTarget: true,
     });
     const codexFilteredTools = filterCodexDynamicTools(allTools, input.pluginConfig);
-    tools = filterToolsForVisionInputs(codexFilteredTools, {
+    const shellRestoredTools =
+      sandbox?.enabled === true
+        ? codexFilteredTools
+        : restoreOpenClawShellDynamicTools(codexFilteredTools, allTools, input.pluginConfig);
+    tools = filterToolsForVisionInputs(shellRestoredTools, {
       modelHasVision: runtimeModel.input?.includes("image") ?? false,
       hasInboundImages: false,
     });

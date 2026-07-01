@@ -1533,6 +1533,131 @@ describe("runCodexAppServerSideQuestion", () => {
     });
   });
 
+  it("restores OpenClaw exec for direct side questions so the dispatched shell command runs (issue #92238)", async () => {
+    const execExecuteMock = vi.fn().mockResolvedValue({
+      content: [{ type: "text", text: "exec done" }],
+    });
+    createOpenClawCodingToolsMock.mockReturnValue([
+      {
+        name: "exec",
+        description: "Run a shell command",
+        parameters: { type: "object", properties: { command: { type: "string" } } },
+        execute: execExecuteMock,
+      },
+      {
+        name: "wiki_status",
+        description: "Check wiki status",
+        parameters: { type: "object", properties: {} },
+        execute: toolExecuteMock,
+      },
+    ]);
+    const client = createFakeClient();
+    let toolResponse: unknown;
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        setTimeout(() => {
+          void (async () => {
+            toolResponse = await client.handleRequest({
+              id: 43,
+              method: "item/tool/call",
+              params: {
+                threadId: "side-thread",
+                turnId: "turn-1",
+                callId: "exec-1",
+                tool: "exec",
+                arguments: { command: "echo restored" },
+              },
+            });
+            client.emit(agentDelta("side-thread", "turn-1", "Ran it."));
+            client.emit(turnCompleted("side-thread", "turn-1", "Ran it."));
+          })();
+        }, 0);
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    const result = await runCodexAppServerSideQuestion(sideParams());
+
+    expect(result).toEqual({ text: "Ran it." });
+    const [execCallId, execArguments, execSignal] = mockCall(execExecuteMock);
+    expect(execExecuteMock).toHaveBeenCalledTimes(1);
+    expect(execCallId).toBe("exec-1");
+    expect(execArguments).toEqual({ command: "echo restored" });
+    expect(execSignal).toBeInstanceOf(AbortSignal);
+    expect(toolResponse).toEqual({
+      success: true,
+      contentItems: [{ type: "inputText", text: "exec done" }],
+    });
+  });
+
+  it("keeps exec unavailable for direct side questions when config excludes it", async () => {
+    const execExecuteMock = vi.fn();
+    createOpenClawCodingToolsMock.mockReturnValue([
+      {
+        name: "exec",
+        description: "Run a shell command",
+        parameters: { type: "object", properties: { command: { type: "string" } } },
+        execute: execExecuteMock,
+      },
+    ]);
+    const client = createFakeClient();
+    let toolResponse: unknown;
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        setTimeout(() => {
+          void (async () => {
+            toolResponse = await client.handleRequest({
+              id: 44,
+              method: "item/tool/call",
+              params: {
+                threadId: "side-thread",
+                turnId: "turn-1",
+                callId: "exec-2",
+                tool: "exec",
+                arguments: { command: "echo restored" },
+              },
+            });
+            client.emit(agentDelta("side-thread", "turn-1", "No shell."));
+            client.emit(turnCompleted("side-thread", "turn-1", "No shell."));
+          })();
+        }, 0);
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await runCodexAppServerSideQuestion(sideParams(), {
+      pluginConfig: { codexDynamicToolsExclude: ["exec"] },
+    });
+
+    expect(execExecuteMock).not.toHaveBeenCalled();
+    expect(toolResponse).toEqual({
+      success: false,
+      contentItems: [{ type: "inputText", text: "Unknown OpenClaw tool: exec" }],
+    });
+  });
+
   it("clears side-thread dynamic tool diagnostics at the app-server request boundary", async () => {
     const client = createFakeClient();
     const diagnosticEvents: DiagnosticEventPayload[] = [];
