@@ -12,6 +12,10 @@ export type SessionState = {
   lastLongRunningWarnAgeMs?: number;
   state: SessionStateValue;
   queueDepth: number;
+  /** Count of messages steered into an active embedded run since the last
+   *  idle transition.  Subtracted from queueDepth on idle so that steered
+   *  messages don't leave stale residual depth (#98685). */
+  embeddedSteeredCount?: number;
   activeQueuedTurn?: boolean;
   toolCallHistory?: ToolCallRecord[];
   toolLoopWarningBuckets?: Map<string, number>;
@@ -117,6 +121,8 @@ function mergeSessionState(target: SessionState, source: SessionState): void {
   target.lastActivity = Math.max(target.lastActivity, source.lastActivity);
   // Queue depth is additive when session id/key aliases collapse into one diagnostic entry.
   target.queueDepth += source.queueDepth;
+  target.embeddedSteeredCount =
+    (target.embeddedSteeredCount ?? 0) + (source.embeddedSteeredCount ?? 0);
   target.activeQueuedTurn ||= source.activeQueuedTurn;
   target.lastStuckWarnAgeMs =
     target.lastStuckWarnAgeMs === undefined || source.lastStuckWarnAgeMs === undefined

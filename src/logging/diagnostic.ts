@@ -676,6 +676,11 @@ export function logMessageQueued(params: {
   }
   const state = getDiagnosticSessionState(params);
   state.queueDepth += 1;
+  // Track messages steered into an active embedded run separately so
+  // they can be subtracted on idle without clearing real backlog (#98685).
+  if (params.source === "embedded-agent-runner") {
+    state.embeddedSteeredCount = (state.embeddedSteeredCount ?? 0) + 1;
+  }
   state.lastActivity = Date.now();
   state.generation = (state.generation ?? 0) + 1;
   state.lastStuckWarnAgeMs = undefined;
@@ -896,10 +901,11 @@ export function logSessionStateChange(
     state.activeQueuedTurn = state.queueDepth > 0;
   }
   if (params.state === "idle") {
-    // Reset queueDepth to 0 on idle.  A single embedded run may absorb
-    // multiple steered messages (each incrementing queueDepth), so a
-    // single decrement on completion leaves residual stale depth (#98685).
-    state.queueDepth = 0;
+    // Decrement by 1 for normal completion, and subtract any additional
+    // steered-message depth accumulated during an embedded run (#98685).
+    const steered = state.embeddedSteeredCount ?? 0;
+    state.queueDepth = Math.max(0, state.queueDepth - 1 - steered);
+    state.embeddedSteeredCount = 0;
     state.activeQueuedTurn = false;
   }
   if (!isProbeSession && diag.isEnabled("debug")) {
