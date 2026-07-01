@@ -13,7 +13,7 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
   return actual;
 }
 
-const providerEndpointPlugins = vi.hoisted(() => [
+const providerEndpointPlugins = vi.hoisted((): Record<string, unknown>[] => [
   {
     // Mirrors manifest-declared endpoint metadata without loading real plugins.
     providerEndpoints: [
@@ -73,6 +73,15 @@ const providerEndpointPlugins = vi.hoisted(() => [
         hosts: ["api.x.ai"],
       },
       {
+        endpointClass: "xiaomi-native",
+        hosts: [
+          "api.xiaomimimo.com",
+          "token-plan-ams.xiaomimimo.com",
+          "token-plan-cn.xiaomimimo.com",
+          "token-plan-sgp.xiaomimimo.com",
+        ],
+      },
+      {
         endpointClass: "nvidia-native",
         hosts: ["integrate.api.nvidia.com"],
         baseUrls: ["https://integrate.api.nvidia.com/v1"],
@@ -112,11 +121,13 @@ const providerEndpointPlugins = vi.hoisted(() => [
   },
 ]);
 
-vi.mock("../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: () => ({
-    plugins: providerEndpointPlugins,
-    diagnostics: [],
-  }),
+vi.mock("../plugins/manifest-metadata-scan.js", () => ({
+  listOpenClawPluginManifestMetadata: () =>
+    providerEndpointPlugins.map((manifest, index) => ({
+      pluginDir: `/plugins/provider-attribution-${index}`,
+      manifest,
+      origin: "bundled",
+    })),
 }));
 
 vi.mock("../plugins/manifest-metadata-scan.js", () => ({
@@ -295,6 +306,54 @@ describe("provider attribution", () => {
       ["mistral", false, "vendor-sdk-hook-only", "custom-user-agent"],
       ["together", false, "vendor-sdk-hook-only", "default-headers"],
     ]);
+  });
+
+  it("skips unreadable manifest provider endpoint rows while preserving healthy rows", () => {
+    const poisonedManifest: Record<string, unknown> = {};
+    Object.defineProperty(poisonedManifest, "providerEndpoints", {
+      get() {
+        throw new Error("provider endpoint manifest getter exploded");
+      },
+    });
+
+    providerEndpointPlugins.unshift(poisonedManifest);
+    try {
+      expectRecordFields(resolveProviderEndpoint("https://api.openai.com/v1"), {
+        endpointClass: "openai-public",
+        hostname: "api.openai.com",
+      });
+    } finally {
+      providerEndpointPlugins.shift();
+    }
+  });
+
+  it("skips unreadable manifest provider request rows while preserving healthy rows", () => {
+    const poisonedManifest: Record<string, unknown> = {};
+    Object.defineProperty(poisonedManifest, "providerRequest", {
+      get() {
+        throw new Error("provider request manifest getter exploded");
+      },
+    });
+
+    providerEndpointPlugins.unshift(poisonedManifest);
+    try {
+      expectRecordFields(
+        resolveProviderRequestCapabilities({
+          provider: "moonshot",
+          api: "openai-completions",
+          baseUrl: "https://api.moonshot.ai/v1",
+          capability: "llm",
+          transport: "stream",
+        }),
+        {
+          endpointClass: "moonshot-native",
+          knownProviderFamily: "moonshot",
+          compatibilityFamily: "moonshot",
+        },
+      );
+    } finally {
+      providerEndpointPlugins.shift();
+    }
   });
 
   it("authorizes hidden xAI attribution on api.x.ai and the default xAI route", () => {
