@@ -1488,7 +1488,7 @@
     "android:install": "node scripts/run-android-gradle.mjs :app:installPlayDebug",
     "android:install:third-party": "node scripts/run-android-gradle.mjs :app:installThirdPartyDebug",
     "android:lint": "cd apps/android && ./gradlew :app:ktlintCheck :benchmark:ktlintCheck",
-    "android:lint:android": "node scripts/run-android-gradle.mjs :app:lintDebug",
+    "android:lint:android": "node scripts/run-android-gradle.mjs :app:lintPlayDebug :app:lintThirdPartyDebug",
     "android:run": "node scripts/run-android-gradle.mjs :app:installPlayDebug -- adb shell am start -n ai.openclaw.app/.MainActivity",
     "android:run:third-party": "node scripts/run-android-gradle.mjs :app:installThirdPartyDebug -- adb shell am start -n ai.openclaw.app/.MainActivity",
     "android:release": "bash scripts/android-release.sh",

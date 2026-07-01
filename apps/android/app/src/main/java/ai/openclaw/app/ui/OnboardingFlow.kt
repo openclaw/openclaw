@@ -314,7 +314,7 @@ fun OnboardingFlow(
                     gatewayEndpointValidationMessage(
                       scanned.error ?: GatewayEndpointValidationError.INVALID_URL,
                       GatewayEndpointInputSource.QR_SCAN,
-                  )
+                    )
                   return@addOnSuccessListener
                 }
                 val config = resolveCurrentGatewayConfig(setupCodeValue = scannedSetupCode)
