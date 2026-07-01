@@ -39,6 +39,7 @@ const NVIDIA_ULTRA_DEFAULT_PARAMS = {
     force_nonempty_content: true,
   },
 } as const;
+const NVIDIA_SUPER_STALE_CONTEXT_WINDOW = 262_144;
 const NVIDIA_SUPER_BUNDLED_MODEL = manifest.modelCatalog.providers.nvidia.models.find(
   (model) => model.id === NVIDIA_SUPER_MODEL_ID,
 );
@@ -152,9 +153,13 @@ function parseNvidiaFeaturedModels(rows: readonly unknown[]): ModelDefinitionCon
 
 function applyNvidiaModelDefaults(models: ModelDefinitionConfig[]): ModelDefinitionConfig[] {
   return models.map((model) => {
-    if (model.id === NVIDIA_SUPER_MODEL_ID && NVIDIA_SUPER_BUNDLED_MODEL) {
+    if (
+      model.id === NVIDIA_SUPER_MODEL_ID &&
+      model.contextWindow === NVIDIA_SUPER_STALE_CONTEXT_WINDOW &&
+      NVIDIA_SUPER_BUNDLED_MODEL
+    ) {
       // NVIDIA's hosted model page advertises 1M context, but its featured feed still says 256K.
-      // Keep live and fallback catalogs aligned until the feed reports the hosted limit.
+      // Correct only that stale value so future provider-owned limits pass through unchanged.
       return { ...model, contextWindow: NVIDIA_SUPER_BUNDLED_MODEL.contextWindow };
     }
     if (model.id !== NVIDIA_DEFAULT_MODEL_ID) {

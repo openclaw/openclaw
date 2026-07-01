@@ -117,6 +117,26 @@ describe("nvidia provider catalog", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("preserves non-stale Super context from NVIDIA's featured catalog", async () => {
+    mockFeaturedCatalogResponse({
+      "featured-models": [
+        {
+          model: "nemotron-3-super-120b-a12b",
+          "model-name": "Nemotron 3 Super 120B",
+          context: 524288,
+          "max-output": 8192,
+        },
+      ],
+    });
+
+    const provider = await buildLiveNvidiaProvider();
+
+    expect(provider.models[0]).toMatchObject({
+      id: "nvidia/nemotron-3-super-120b-a12b",
+      contextWindow: 524_288,
+    });
+  });
+
   it("falls back to the bundled catalog when the featured catalog is unavailable", async () => {
     mockFeaturedCatalogResponse({ error: "unavailable" }, 503);
 
