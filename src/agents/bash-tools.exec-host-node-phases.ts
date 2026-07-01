@@ -37,6 +37,7 @@ import {
   formatExecCommand,
   resolveSystemRunCommandRequest,
 } from "../infra/system-run-command.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import { addSafeTimeoutDelayGraceMs } from "../utils/timer-delay.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { renderExecOutputText } from "./bash-tools.exec-output.js";
@@ -235,20 +236,22 @@ export function formatNodeRunToolResult(params: {
   const stdout = typeof payloadObj.stdout === "string" ? payloadObj.stdout : "";
   const stderr = typeof payloadObj.stderr === "string" ? payloadObj.stderr : "";
   const errorText = typeof payloadObj.error === "string" ? payloadObj.error : "";
+  const output = redactToolPayloadText(stdout || stderr || errorText);
+  const aggregated = redactToolPayloadText([stdout, stderr, errorText].filter(Boolean).join("\n"));
   const success = typeof payloadObj.success === "boolean" ? payloadObj.success : false;
   const exitCode = typeof payloadObj.exitCode === "number" ? payloadObj.exitCode : null;
   return {
     content: [
       {
         type: "text",
-        text: renderExecOutputText(stdout || stderr || errorText),
+        text: renderExecOutputText(output),
       },
     ],
     details: {
       status: success ? "completed" : "failed",
       exitCode,
       durationMs: Date.now() - params.startedAt,
-      aggregated: [stdout, stderr, errorText].filter(Boolean).join("\n"),
+      aggregated,
       cwd: params.cwd,
     } satisfies ExecToolDetails,
   };
