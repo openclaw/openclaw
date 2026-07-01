@@ -168,6 +168,63 @@ describe("startPluginServices", () => {
     expectServiceLifecycleState({ starts, stops, contexts, config });
   });
 
+  it("continues starting healthy services after unreadable service metadata", async () => {
+    const starts: string[] = [];
+    const stops: string[] = [];
+    const registry = createRegistry([createTrackingService("service-a", { starts, stops })]);
+    registry.services.unshift({
+      pluginId: "broken-service-plugin",
+      pluginName: "Broken Service Plugin",
+      get service() {
+        throw new Error("service getter exploded");
+      },
+      source: "test",
+      origin: "workspace",
+      rootDir: "/plugins/broken-service",
+    } as (typeof registry.services)[number]);
+
+    const handle = await startPluginServices({
+      registry,
+      config: createServiceConfig(),
+    });
+    await handle.stop();
+
+    expect(starts).toEqual(["a"]);
+    expect(stops).toEqual(["a"]);
+    expect(mockedLogger.error.mock.calls).toEqual([
+      [
+        "plugin service failed (unknown-service, plugin=broken-service-plugin, root=/plugins/broken-service): service getter exploded",
+      ],
+    ]);
+  });
+
+  it("allows unknown-service as an explicit service id", async () => {
+    const starts: string[] = [];
+    await startTrackingServices({
+      services: [createTrackingService("unknown-service", { starts })],
+    });
+
+    expect(starts).toEqual(["e"]);
+    expect(mockedLogger.error).not.toHaveBeenCalled();
+  });
+
+  it("tracks stop handlers installed during service startup", async () => {
+    const stop = vi.fn();
+    const service: OpenClawPluginService = {
+      id: "dynamic-stop-service",
+      start() {
+        service.stop = stop;
+      },
+    };
+
+    const handle = await startTrackingServices({
+      services: [service],
+    });
+    await handle.stop();
+
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
   it("registers dynamic HTTP routes into the service registry scope", async () => {
     const serviceRegistry = createRegistry([
       {
