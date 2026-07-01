@@ -1,4 +1,3 @@
-/** Handles channel-native Codex/OpenAI login commands. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -29,10 +28,6 @@ function parseLoginCommand(commandBodyNormalized: string): { providerInput: stri
   return { providerInput };
 }
 
-function hasConfiguredCommandOwners(params: HandleCommandsParams): boolean {
-  return codexChannelLoginRuntime.hasConfiguredCommandOwnerAllowlist(params.cfg);
-}
-
 function hasInternalAdminScope(params: HandleCommandsParams): boolean {
   return (
     Array.isArray(params.ctx.GatewayClientScopes) &&
@@ -44,7 +39,8 @@ function canStartCodexLogin(params: HandleCommandsParams): boolean {
   return (
     params.command.isAuthorizedSender &&
     params.command.senderIsOwner &&
-    (hasConfiguredCommandOwners(params) || hasInternalAdminScope(params))
+    (codexChannelLoginRuntime.hasConfiguredCommandOwnerAllowlist(params.cfg) ||
+      hasInternalAdminScope(params))
   );
 }
 
@@ -132,10 +128,6 @@ function resolveLoginAgentId(params: HandleCommandsParams): string | undefined {
   );
 }
 
-function buildFinalReply(status: string): ReplyPayload {
-  return { text: status };
-}
-
 async function emitLoginMessage(params: HandleCommandsParams, text: string): Promise<void> {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -157,6 +149,12 @@ async function runChannelCodexLogin(params: {
   runtime?: RuntimeEnv;
 }): Promise<ReplyPayload> {
   const flowKey = buildCodexLoginFlowKey(params.commandParams, params.provider);
+  if (!params.commandParams.opts?.onBlockReply) {
+    return {
+      text: "Codex login needs a live private response path so the code can be shown before it expires. Use the Web UI or a private chat and send `/login codex` again.",
+    };
+  }
+
   const reservation = codexChannelLoginRuntime.reserveFlow({
     flows: activeCodexLoginFlows,
     flowKey,
@@ -164,16 +162,6 @@ async function runChannelCodexLogin(params: {
   if (reservation.status === "active") {
     return {
       text: "A Codex login code is already active for this chat or channel. Complete it, or wait for it to expire before requesting a new one.",
-    };
-  }
-  if (!params.commandParams.opts?.onBlockReply) {
-    codexChannelLoginRuntime.releaseFlow({
-      flows: activeCodexLoginFlows,
-      flowKey,
-      record: reservation.record,
-    });
-    return {
-      text: "Codex login needs a live private response path so the code can be shown before it expires. Use the Web UI or a private chat and send `/login codex` again.",
     };
   }
 
@@ -188,11 +176,9 @@ async function runChannelCodexLogin(params: {
       unsupportedPromptMessage: "Channel /login supports only fixed Codex device-code auth.",
       runLoginFlow: params.runLoginFlow,
     });
-    return buildFinalReply("Codex login complete. Try your request again now.");
+    return { text: "Codex login complete. Try your request again now." };
   } catch {
-    return buildFinalReply(
-      "Codex login did not complete. Send `/login codex` to request a new code.",
-    );
+    return { text: "Codex login did not complete. Send `/login codex` to request a new code." };
   } finally {
     codexChannelLoginRuntime.releaseFlow({
       flows: activeCodexLoginFlows,

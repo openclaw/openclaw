@@ -1,4 +1,3 @@
-// Lazy runtime facade for channel-triggered provider auth login flows.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -37,11 +36,9 @@ const bindProviderAuthLoginFlowRuntime = createLazyRuntimeMethodBinder(
   loadProviderAuthLoginFlowRuntime,
 );
 
-/** Runs provider login and persists returned auth profiles. Loaded lazily for channel /login. */
 export const runModelsAuthLoginFlow: ProviderAuthLoginFlowRuntime["runModelsAuthLoginFlow"] =
   bindProviderAuthLoginFlowRuntime((runtime) => runtime.runModelsAuthLoginFlow);
 
-/** Normalizes channel login aliases to the provider that owns Codex ChatGPT auth. */
 function resolveCodexLoginProvider(rawProvider: string | undefined): string | null {
   const normalized = normalizeLowercaseStringOrEmpty(rawProvider ?? "codex").replace(/_/gu, "-");
   if (!normalized) {
@@ -50,13 +47,11 @@ function resolveCodexLoginProvider(rawProvider: string | undefined): string | nu
   return CODEX_LOGIN_PROVIDER_ALIASES.has(normalized) ? CODEX_LOGIN_PROVIDER : null;
 }
 
-/** Checks whether command-owner login is explicitly configured. */
 function hasConfiguredCommandOwnerAllowlist(cfg: OpenClawConfig): boolean {
   const owners = cfg.commands?.ownerAllowFrom;
   return Array.isArray(owners) && owners.some((owner) => normalizeOptionalString(String(owner)));
 }
 
-/** Keeps a pinned auth profile only when it belongs to the requested provider. */
 function resolveProviderScopedProfileId(
   authProfileOverride: string | undefined,
   provider: string,
@@ -71,7 +66,6 @@ function resolveProviderScopedProfileId(
     : undefined;
 }
 
-/** Reserves a login flow key while preserving active non-expired flow dedupe. */
 function reserveCodexLoginFlow(params: {
   flows: Map<string, CodexLoginFlowRecord>;
   flowKey: string;
@@ -90,7 +84,6 @@ function reserveCodexLoginFlow(params: {
   return { status: "reserved", record };
 }
 
-/** Releases a reserved login flow only if this caller still owns the reservation. */
 function releaseCodexLoginFlow(params: {
   flows: Map<string, CodexLoginFlowRecord>;
   flowKey: string;
@@ -101,7 +94,6 @@ function releaseCodexLoginFlow(params: {
   }
 }
 
-/** Builds a fixed device-code prompter that can only emit text to the channel. */
 function buildCodexDeviceLoginPrompter(params: {
   sendMessage: (message: string) => Promise<void>;
   unsupportedPromptMessage: string;
@@ -133,7 +125,6 @@ function buildCodexDeviceLoginPrompter(params: {
   };
 }
 
-/** Runs fixed Codex device-code login for private channel and Web UI surfaces. */
 async function runCodexDeviceLoginFlow(params: {
   provider: string;
   agentId: string;
@@ -160,7 +151,6 @@ async function runCodexDeviceLoginFlow(params: {
   });
 }
 
-/** Shared private-channel Codex login helpers for text and native command surfaces. */
 export const codexChannelLoginRuntime = {
   resolveProvider: resolveCodexLoginProvider,
   hasConfiguredCommandOwnerAllowlist,
