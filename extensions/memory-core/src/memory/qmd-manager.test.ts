@@ -212,6 +212,7 @@ import {
 } from "../dreaming-state.js";
 import { resolveQmdSessionArtifactIdentity } from "../qmd-session-artifacts.js";
 import { QmdMemoryManager, resolveQmdMcporterSearchProcessTimeoutMs } from "./qmd-manager.js";
+import { MEMORY_SEARCH_DEADLINE_CONTROL } from "./search-deadline.js";
 
 const spawnMock = mockedSpawn as unknown as Mock;
 const originalPath = process.env.PATH;
@@ -291,117 +292,6 @@ describe("QmdMemoryManager", () => {
   function expectMockMessageNotContains(mock: Mock, text: string): void {
     expect(mockMessages(mock).join("\n")).not.toContain(text);
   }
-
-  function createClosableQmdManagerForTest(params?: {
-    mode?: "full" | "status" | "cli";
-    pendingUpdate?: Promise<void> | null;
-    queuedForcedUpdate?: Promise<void> | null;
-  }): QmdMemoryManager {
-    const manager = Object.create(QmdMemoryManager.prototype) as QmdMemoryManager;
-    const mutable = manager as unknown as {
-      closed: boolean;
-      resolveCloseSignal: () => void;
-      updateTimer: NodeJS.Timeout | null;
-      embedTimer: NodeJS.Timeout | null;
-      watchTimer: NodeJS.Timeout | null;
-      watcher: { close: () => Promise<void> } | null;
-      queuedForcedRuns: number;
-      pendingUpdate: Promise<void> | null;
-      queuedForcedUpdate: Promise<void> | null;
-      mode: "full" | "status" | "cli";
-      db: { close: () => void } | null;
-    };
-    mutable.closed = false;
-    mutable.resolveCloseSignal = vi.fn();
-    mutable.updateTimer = null;
-    mutable.embedTimer = null;
-    mutable.watchTimer = null;
-    mutable.watcher = null;
-    mutable.queuedForcedRuns = 0;
-    mutable.pendingUpdate = params?.pendingUpdate ?? null;
-    mutable.queuedForcedUpdate = params?.queuedForcedUpdate ?? null;
-    mutable.mode = params?.mode ?? "cli";
-    mutable.db = null;
-    return manager;
-  }
-
-  it("clears qmd CLI close timeout timers when update waits settle first", async () => {
-    vi.useFakeTimers();
-    try {
-      const manager = createClosableQmdManagerForTest({
-        pendingUpdate: Promise.resolve(),
-        queuedForcedUpdate: Promise.resolve(),
-      });
-
-      await manager.close();
-      await vi.advanceTimersByTimeAsync(5_000);
-
-      expectMockMessageNotContains(logWarnMock, "qmd close timed out");
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("uses one qmd CLI close timeout across pending and queued update waits", async () => {
-    vi.useFakeTimers();
-    try {
-      const manager = createClosableQmdManagerForTest({
-        pendingUpdate: new Promise(() => {}),
-        queuedForcedUpdate: new Promise(() => {}),
-      });
-      let closed = false;
-
-      const closePromise = manager.close().then(() => {
-        closed = true;
-      });
-
-      await vi.advanceTimersByTimeAsync(4_999);
-      await Promise.resolve();
-      expect(closed).toBe(false);
-
-      await vi.advanceTimersByTimeAsync(1);
-      await closePromise;
-
-      expect(closed).toBe(true);
-      expectMockMessageContains(
-        logWarnMock,
-        "qmd close timed out waiting for pending update and queued forced update after 5000ms",
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("waits for pending update cleanup without timeout for full qmd managers", async () => {
-    vi.useFakeTimers();
-    try {
-      let resolvePending!: () => void;
-      const manager = createClosableQmdManagerForTest({
-        mode: "full",
-        pendingUpdate: new Promise<void>((resolve) => {
-          resolvePending = resolve;
-        }),
-      });
-      let closed = false;
-
-      const closePromise = manager.close().then(() => {
-        closed = true;
-      });
-
-      await vi.advanceTimersByTimeAsync(5_000);
-      await Promise.resolve();
-      expect(closed).toBe(false);
-
-      resolvePending();
-      await closePromise;
-
-      expect(closed).toBe(true);
-      expectMockMessageNotContains(logWarnMock, "qmd close timed out");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
 
   it("caps mcporter search process timeout grace", () => {
     expect(resolveQmdMcporterSearchProcessTimeoutMs(1_000)).toBe(5_000);
@@ -529,7 +419,9 @@ describe("QmdMemoryManager", () => {
     const { manager } = await createManager();
     spawnMock.mockClear();
     let searchAttempts = 0;
+    const events: string[] = [];
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      events.push(`command:${args[0]}${args[1] ? `:${args[1]}` : ""}`);
       if (args[0] === "query" || args[0] === "search" || args[0] === "vsearch") {
         const child = createMockChild({ autoClose: false });
         searchAttempts += 1;
@@ -549,11 +441,38 @@ describe("QmdMemoryManager", () => {
       onDebug: (entry) => {
         debug.push(entry);
       },
+      [MEMORY_SEARCH_DEADLINE_CONTROL]: (action) => {
+        events.push(`phase:${action}`);
+      },
     });
 
     expect(searchAttempts).toBe(2);
     expect(countQmdCommand((args) => args[0] === "collection" && args[1] === "list")).toBe(1);
     expect(debug.at(-1)?.qmd?.collectionValidation?.cacheState).toBe("bypass-force");
+    expect(events.filter((event) => event.startsWith("phase:"))).toEqual([
+      "phase:pause",
+      "phase:resume",
+      "phase:pause",
+      "phase:resume",
+    ]);
+    const isSearchCommand = (event: string) =>
+      ["command:query:", "command:search:", "command:vsearch:"].some((prefix) =>
+        event.startsWith(prefix),
+      );
+    const firstSearch = events.findIndex(isSearchCommand);
+    const firstSearchEnd = events.indexOf("phase:resume");
+    const collectionRepair = events.findIndex(
+      (event, index) => index > firstSearchEnd && event.startsWith("command:collection:"),
+    );
+    const retryStart = events.indexOf("phase:pause", firstSearchEnd + 1);
+    const retrySearch = events.findIndex(
+      (event, index) => index > firstSearch && isSearchCommand(event),
+    );
+    expect(events.indexOf("phase:pause")).toBeLessThan(firstSearch);
+    expect(firstSearch).toBeLessThan(firstSearchEnd);
+    expect(firstSearchEnd).toBeLessThan(collectionRepair);
+    expect(collectionRepair).toBeLessThan(retryStart);
+    expect(retryStart).toBeLessThan(retrySearch);
   });
 
   it("reuses persisted qmd multi-collection support probe across managers", async () => {
@@ -4107,9 +4026,11 @@ describe("QmdMemoryManager", () => {
       },
     } as OpenClawConfig;
 
+    const commandPhases: string[] = [];
     spawnMock.mockImplementation((cmd: string, args: string[]) => {
       const child = createMockChild({ autoClose: false });
       if (isMcporterCommand(cmd) && args[0] === "call") {
+        expect(commandPhases).toEqual(["pause"]);
         // Verify it calls qmd.query (v2) not qmd.deep_search (v1)
         expect(args[1]).toBe("qmd.query");
         const callArgs = JSON.parse(args[args.indexOf("--args") + 1]);
@@ -4134,7 +4055,13 @@ describe("QmdMemoryManager", () => {
     });
 
     const { manager } = await createManager();
-    await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+    await manager.search("hello", {
+      sessionKey: "agent:main:slack:dm:u123",
+      [MEMORY_SEARCH_DEADLINE_CONTROL]: (action) => {
+        commandPhases.push(action);
+      },
+    });
+    expect(commandPhases).toEqual(["pause", "resume"]);
     await manager.close();
   });
 

@@ -144,6 +144,11 @@ vi.mock("../../manager-runtime.js", () => ({
 
 import { QmdMemoryManager } from "./qmd-manager.js";
 import {
+  MEMORY_SEARCH_DEADLINE_CONTROL,
+  runMemorySearchWithDeadline,
+  type MemorySearchDeadlineControlOptions,
+} from "./search-deadline.js";
+import {
   closeAllMemorySearchManagers,
   closeMemorySearchManager,
   getMemorySearchManager,
@@ -1019,13 +1024,62 @@ describe("getMemorySearchManager caching", () => {
     expect(fallbackSearch).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps same-call qmd-to-builtin fallback searches on the default deadline", async () => {
+  it("does not wait for failed qmd retirement before starting builtin fallback", async () => {
+    const retryAgentId = "retry-agent-slow-retirement";
+    const { manager: firstManager } = await createFailedQmdSearchHarness({
+      agentId: retryAgentId,
+      errorMessage: "qmd query failed",
+    });
+    mockPrimary.close.mockImplementationOnce(async () => await new Promise(() => {}));
+    const onDebug = vi.fn();
+
+    try {
+      const results = await firstManager.search("hello", { onDebug });
+
+      expect(results).toHaveLength(1);
+      expect(onDebug).toHaveBeenCalledWith({ backend: "builtin" });
+      expect(mockPrimary.close).toHaveBeenCalledTimes(1);
+      expect(fallbackSearch).toHaveBeenCalledTimes(1);
+    } finally {
+      mockPrimary.close.mockImplementation(async () => {});
+    }
+  });
+
+  it("signals builtin fallback to calls queued behind the failed qmd primary", async () => {
+    const retryAgentId = "retry-agent-concurrent-fallback";
+    const { manager: firstManager } = await createFailedQmdSearchHarness({
+      agentId: retryAgentId,
+      errorMessage: "qmd query failed",
+    });
+    const fallbackGate = createDeferred<typeof fallbackManager>();
+    mockMemoryIndexGet.mockImplementation(async () => await fallbackGate.promise);
+    const firstDebug = vi.fn();
+    const secondDebug = vi.fn();
+
+    const firstSearch = firstManager.search("first", { onDebug: firstDebug });
+    await vi.waitFor(() => expect(firstDebug).toHaveBeenCalledWith({ backend: "builtin" }));
+    const secondSearch = firstManager.search("second", { onDebug: secondDebug });
+    await vi.waitFor(() => expect(secondDebug).toHaveBeenCalledWith({ backend: "builtin" }));
+
+    fallbackGate.resolve(fallbackManager);
+    await expect(Promise.all([firstSearch, secondSearch])).resolves.toHaveLength(2);
+    expect(fallbackSearch).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives same-call qmd-to-builtin fallback a fresh default deadline", async () => {
     vi.useFakeTimers();
     try {
       const retryAgentId = "retry-agent-fallback-timeout";
       const { manager: firstManager } = await createFailedQmdSearchHarness({
         agentId: retryAgentId,
         errorMessage: "qmd query failed",
+      });
+      mockPrimary.search.mockReset();
+      mockPrimary.search.mockImplementationOnce(async () => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 10_000);
+        });
+        throw new Error("qmd query failed");
       });
       let fallbackSignal: AbortSignal | undefined;
       fallbackSearch.mockImplementationOnce(
@@ -1034,9 +1088,21 @@ describe("getMemorySearchManager caching", () => {
           return await new Promise(() => {});
         },
       );
+      const onDebug = vi.fn();
 
       let settled = false;
-      const resultPromise = firstManager.search("hello").then(
+      const resultPromise = runMemorySearchWithDeadline({
+        timeoutMs: 15_000,
+        run: async (signal, controlDeadline) => {
+          const searchOptions: NonNullable<ManagerSearchParams[1]> &
+            MemorySearchDeadlineControlOptions = {
+            signal,
+            onDebug,
+            [MEMORY_SEARCH_DEADLINE_CONTROL]: controlDeadline,
+          };
+          return await firstManager.search("hello", searchOptions);
+        },
+      }).then(
         () => {
           settled = true;
           return undefined;
@@ -1046,9 +1112,14 @@ describe("getMemorySearchManager caching", () => {
           return error;
         },
       );
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(9_999);
+
+      expect(fallbackSearch).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
 
       expect(fallbackSearch).toHaveBeenCalledTimes(1);
+      expect(onDebug).toHaveBeenCalledWith({ backend: "builtin" });
       await vi.advanceTimersByTimeAsync(14_999);
 
       expect(settled).toBe(false);
@@ -1063,6 +1134,31 @@ describe("getMemorySearchManager caching", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("propagates caller cancellation to a same-call builtin fallback", async () => {
+    const retryAgentId = "retry-agent-fallback-abort";
+    const { manager: firstManager } = await createFailedQmdSearchHarness({
+      agentId: retryAgentId,
+      errorMessage: "qmd query failed",
+    });
+    let fallbackSignal: AbortSignal | undefined;
+    fallbackSearch.mockImplementationOnce(
+      async (_query: string, opts?: Parameters<SearchManager["search"]>[1]) => {
+        fallbackSignal = opts?.signal;
+        return await new Promise(() => {});
+      },
+    );
+    const controller = new AbortController();
+    const abortError = new Error("memory_search timed out after 45s");
+
+    const resultPromise = firstManager.search("hello", { signal: controller.signal });
+    await vi.waitFor(() => expect(fallbackSearch).toHaveBeenCalledTimes(1));
+    controller.abort(abortError);
+
+    await expect(resultPromise).rejects.toBe(abortError);
+    expect(fallbackSignal?.aborted).toBe(true);
+    expect(fallbackSignal?.reason).toBe(abortError);
   });
 
   it("keeps original qmd error when fallback manager initialization fails", async () => {

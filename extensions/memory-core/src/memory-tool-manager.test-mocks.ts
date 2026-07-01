@@ -1,6 +1,10 @@
 // Memory Core plugin module implements memory tool manager mock behavior.
 import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { vi } from "vitest";
+import {
+  MEMORY_SEARCH_DEADLINE_CONTROL,
+  type MemorySearchDeadlineAction,
+} from "./memory/search-deadline.js";
 
 type SearchImpl = (opts?: {
   maxResults?: number;
@@ -9,6 +13,7 @@ type SearchImpl = (opts?: {
   qmdSearchModeOverride?: "query" | "search" | "vsearch";
   onDebug?: (debug: MemorySearchRuntimeDebug) => void;
   signal?: AbortSignal;
+  [MEMORY_SEARCH_DEADLINE_CONTROL]?: (action: MemorySearchDeadlineAction) => void;
 }) => Promise<unknown[]>;
 export type MemoryReadParams = { relPath: string; from?: number; lines?: number };
 type MemoryReadResult = {
@@ -26,6 +31,7 @@ let resolvedBackend: MemoryBackend | undefined;
 let workspaceDir = "/workspace";
 let customStatus: Record<string, unknown> | undefined;
 let searchImpl: SearchImpl = async () => [];
+let closeImpl: () => Promise<void> = async () => {};
 let getManagerImpl:
   | ((params: { cfg?: unknown; agentId?: string; purpose?: string }) => Promise<{
       manager?: unknown;
@@ -58,7 +64,7 @@ const stubManager = {
   }),
   sync: vi.fn(),
   probeVectorAvailability: vi.fn(async () => true),
-  close: vi.fn(async () => {}),
+  close: vi.fn(async () => await closeImpl()),
 };
 
 const getMemorySearchManagerMock = vi.fn(
@@ -102,6 +108,10 @@ export function setMemorySearchImpl(next: SearchImpl): void {
   searchImpl = next;
 }
 
+export function setMemoryCloseImpl(next: () => Promise<void>): void {
+  closeImpl = next;
+}
+
 export function setMemorySearchManagerImpl(
   next: (params: { cfg?: unknown; agentId?: string; purpose?: string }) => Promise<{
     manager?: unknown;
@@ -128,6 +138,7 @@ export function resetMemoryToolMockState(overrides?: {
   customStatus = undefined;
   getManagerImpl = undefined;
   searchImpl = overrides?.searchImpl ?? (async () => []);
+  closeImpl = async () => {};
   readFileImpl =
     overrides?.readFileImpl ??
     (async (params: MemoryReadParams) => ({

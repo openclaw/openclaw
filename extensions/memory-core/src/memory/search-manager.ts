@@ -24,6 +24,12 @@ import {
   type ResolvedQmdConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import {
+  DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
+  MEMORY_SEARCH_DEADLINE_CONTROL,
+  runMemorySearchWithDeadline,
+  type MemorySearchDeadlineControlOptions,
+} from "./search-deadline.js";
 
 const MEMORY_SEARCH_MANAGER_CACHE_KEY = Symbol.for("openclaw.memorySearchManagerCache");
 type Maybe<T> = T | null;
@@ -74,7 +80,6 @@ type MemorySearchManagerCacheStore = {
 };
 
 const QMD_MANAGER_OPEN_FAILURE_COOLDOWN_MS = 60_000;
-const SAME_CALL_BUILTIN_FALLBACK_SEARCH_TIMEOUT_MS = 15_000;
 
 function createMemorySearchManagerCacheStore(): MemorySearchManagerCacheStore {
   return {
@@ -168,53 +173,6 @@ function clearQmdManagerOpenFailure(scopeKey: string, identityKey: string): void
   if (failure?.identityKey === identityKey) {
     QMD_MANAGER_OPEN_FAILURES.delete(scopeKey);
   }
-}
-
-function createMemorySearchTimeoutError(timeoutMs: number): Error {
-  return new Error(`memory_search timed out after ${Math.round(timeoutMs / 1000)}s`);
-}
-
-function abortReasonAsError(signal: AbortSignal): Error {
-  const { reason } = signal;
-  if (reason instanceof Error) {
-    return reason;
-  }
-  return new Error(typeof reason === "string" ? reason : "memory search aborted");
-}
-
-async function runWithSearchDeadline<T>(params: {
-  timeoutMs: number;
-  parentSignal?: AbortSignal;
-  run: (signal: AbortSignal) => Promise<T>;
-}): Promise<T> {
-  const controller = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let removeParentAbort: (() => void) | undefined;
-  return await new Promise<T>((resolve, reject) => {
-    const rejectWith = (error: Error) => {
-      controller.abort(error);
-      reject(error);
-    };
-    if (params.parentSignal?.aborted) {
-      rejectWith(abortReasonAsError(params.parentSignal));
-      return;
-    }
-    if (params.parentSignal) {
-      const onParentAbort = () => rejectWith(abortReasonAsError(params.parentSignal!));
-      params.parentSignal.addEventListener("abort", onParentAbort, { once: true });
-      removeParentAbort = () => params.parentSignal?.removeEventListener("abort", onParentAbort);
-    }
-    timer = setTimeout(() => {
-      rejectWith(createMemorySearchTimeoutError(params.timeoutMs));
-    }, params.timeoutMs);
-    timer.unref?.();
-    params.run(controller.signal).then(resolve, reject);
-  }).finally(() => {
-    if (timer) {
-      clearTimeout(timer);
-    }
-    removeParentAbort?.();
-  });
 }
 
 function hashQmdManagerIdentity(identityKey: string): string {
@@ -631,7 +589,6 @@ class FallbackMemoryManager implements MemorySearchManager {
     },
   ) {
     this.ensureOpen();
-    let failedPrimaryInThisCall = false;
     if (!this.primaryFailed) {
       try {
         return await this.deps.primary.search(query, opts);
@@ -644,25 +601,34 @@ class FallbackMemoryManager implements MemorySearchManager {
         this.primaryFailed = true;
         this.lastError = formatErrorMessage(err);
         log.warn(`qmd memory failed; switching to builtin index: ${this.lastError}`);
-        await this.deps.primary.close?.().catch(() => {});
         // Evict the failed wrapper so the next request can retry QMD with a fresh manager.
         this.evictCacheEntry();
-        failedPrimaryInThisCall = true;
+        // Retirement must not delay the same-call builtin fallback. QMD owns
+        // its internal shutdown bounds; this close is best-effort cleanup.
+        void this.deps.primary.close?.().catch(() => {});
       }
     }
-    const fallback = await this.ensureFallback();
-    if (fallback) {
-      if (failedPrimaryInThisCall) {
-        // Same-call builtin fallback must not inherit a raised QMD tool deadline.
-        return await runWithSearchDeadline({
-          timeoutMs: SAME_CALL_BUILTIN_FALLBACK_SEARCH_TIMEOUT_MS,
-          parentSignal: opts?.signal,
-          run: async (signal) => await fallback.search(query, { ...opts, signal }),
-        });
-      }
-      return await fallback.search(query, opts);
-    }
-    throw new Error(this.lastError ?? "memory search unavailable");
+    // The fallback owns a fresh default budget. Release any outer QMD clock
+    // before builtin setup so earlier QMD maintenance cannot shorten it.
+    (opts as MemorySearchDeadlineControlOptions | undefined)?.[MEMORY_SEARCH_DEADLINE_CONTROL]?.(
+      "handoff",
+    );
+    // Expose the backend transition before fallback setup starts. This must run
+    // for concurrent and later calls that observe an already-failed primary too.
+    opts?.onDebug?.({ backend: "builtin" });
+    // Calls already queued on this failed wrapper must receive the same
+    // bounded builtin setup and search budget as the first fallback call.
+    return await runMemorySearchWithDeadline({
+      timeoutMs: DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
+      parentSignal: opts?.signal,
+      run: async (signal) => {
+        const fallback = await this.ensureFallback();
+        if (!fallback) {
+          throw new Error(this.lastError ?? "memory search unavailable");
+        }
+        return await fallback.search(query, { ...opts, signal });
+      },
+    });
   }
 
   async readFile(params: { relPath: string; from?: number; lines?: number }) {

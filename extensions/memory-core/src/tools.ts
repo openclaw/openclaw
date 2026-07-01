@@ -20,6 +20,14 @@ import {
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { asRecord } from "./dreaming-shared.js";
+import {
+  DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
+  MEMORY_SEARCH_DEADLINE_CONTROL,
+  resolveMemorySearchAbortError,
+  runMemorySearchWithDeadline,
+  type MemorySearchDeadlineAction,
+  type MemorySearchDeadlineControlOptions,
+} from "./memory/search-deadline.js";
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
 import {
@@ -44,9 +52,12 @@ type MemorySearchToolResult =
   | MemoryCorpusSearchResult;
 type MemoryManagerContext = Awaited<ReturnType<typeof getMemoryManagerContextWithPurpose>>;
 type ActiveMemoryManagerContext = Extract<MemoryManagerContext, { manager: unknown }>;
+type MemoryManagerSearchOptions = NonNullable<
+  Parameters<ActiveMemoryManagerContext["manager"]["search"]>[1]
+> &
+  MemorySearchDeadlineControlOptions;
 type QmdRuntimeDebug = NonNullable<MemorySearchRuntimeDebug["qmd"]>;
 
-const DEFAULT_MEMORY_SEARCH_TOOL_TIMEOUT_MS = 15_000;
 const MEMORY_SEARCH_TOOL_COOLDOWN_MS = 60_000;
 
 const memorySearchToolCooldowns = new Map<string, { until: number; error: string }>();
@@ -99,25 +110,6 @@ function recordMemorySearchToolCooldown(key: string, error: string): void {
   });
 }
 
-function resolveMemorySearchToolTimeoutMs(resolved: {
-  backend?: string;
-  qmd?: { limits?: { timeoutMs?: unknown } };
-}): number {
-  const qmdTimeoutMs = resolved.backend === "qmd" ? resolved.qmd?.limits?.timeoutMs : undefined;
-  return typeof qmdTimeoutMs === "number" && Number.isFinite(qmdTimeoutMs) && qmdTimeoutMs > 0
-    ? Math.floor(qmdTimeoutMs)
-    : DEFAULT_MEMORY_SEARCH_TOOL_TIMEOUT_MS;
-}
-
-function resolveMemorySearchPhaseTimeoutMs(params: {
-  backend?: string;
-  resolved: { backend?: string; qmd?: { limits?: { timeoutMs?: unknown } } };
-}): number {
-  return params.backend === "qmd"
-    ? resolveMemorySearchToolTimeoutMs(params.resolved)
-    : DEFAULT_MEMORY_SEARCH_TOOL_TIMEOUT_MS;
-}
-
 export const testing = {
   resetMemorySearchToolCooldowns() {
     memorySearchToolCooldowns.clear();
@@ -132,55 +124,22 @@ function isActiveMemoryManagerContext(
 
 async function closeMemoryManagers(
   managers: Iterable<ActiveMemoryManagerContext["manager"]>,
+  parentSignal?: AbortSignal,
 ): Promise<void> {
-  for (const manager of managers) {
-    try {
-      await manager.close?.();
-    } catch {
-      // Search results should not be hidden by best-effort transient cleanup.
-    }
+  const pending = Array.from(managers, async (manager) => await manager.close?.());
+  if (pending.length === 0) {
+    return;
   }
-}
-
-async function runMemorySearchToolWithDeadline<T>(params: {
-  timeoutMs: number;
-  run: (signal: AbortSignal) => Promise<T>;
-}): Promise<{ status: "ok"; value: T } | { status: "unavailable"; error: string }> {
-  const timeoutError = () =>
-    new Error(`memory_search timed out after ${Math.round(params.timeoutMs / 1000)}s`);
-  // Abort the losing task when the deadline fires so in-flight embedding work
-  // is cancelled instead of retrying orphaned for minutes after the tool
-  // already returned "timed out" to the agent.
-  const controller = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<"timeout">((resolve) => {
-    timer = setTimeout(() => {
-      // Resolve before aborting: abort listeners run synchronously and an
-      // abort-aware search could reject the task first, replacing the stable
-      // timeout result with a provider-wrapped abort error.
-      resolve("timeout");
-      controller.abort(timeoutError());
-    }, params.timeoutMs);
-    timer.unref?.();
-  });
-  const task = params.run(controller.signal);
-  task.catch(() => undefined);
-
   try {
-    const result = await Promise.race([task, timeoutPromise]);
-    if (result === "timeout") {
-      return {
-        status: "unavailable",
-        error: timeoutError().message,
-      };
-    }
-    return { status: "ok", value: result as T };
-  } catch (error) {
-    return { status: "unavailable", error: formatErrorMessage(error) };
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
+    await runMemorySearchWithDeadline({
+      timeoutMs: DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
+      parentSignal,
+      run: async () => {
+        await Promise.allSettled(pending);
+      },
+    });
+  } catch {
+    // Search results should not be hidden by best-effort transient cleanup.
   }
 }
 
@@ -418,8 +377,11 @@ export function createMemorySearchTool(options: {
     parameters: MemorySearchSchema,
     execute:
       ({ cfg, agentId }) =>
-      async (_toolCallId, params) => {
+      async (_toolCallId, params, callerSignal) => {
         const rawParams = asToolParamsRecord(params);
+        if (callerSignal?.aborted) {
+          throw resolveMemorySearchAbortError(callerSignal);
+        }
         const query = readStringParam(rawParams, "query", { required: true });
         const maxResults = readPositiveIntegerParam(rawParams, "maxResults");
         const minScore = readFiniteNumberParam(rawParams, "minScore");
@@ -437,32 +399,35 @@ export function createMemorySearchTool(options: {
           requestedCorpus === "wiki" ? undefined : readMemorySearchToolCooldown(cooldownKey);
         let activeUnavailablePhase: "memory" | "supplement" | undefined;
         let failedUnavailablePhase: "memory" | "supplement" | undefined;
-        const runUnavailablePhaseWithDeadline = async <T>(
+        const runUnavailablePhase = async <T>(
           phase: "memory" | "supplement",
-          timeoutMs: number,
-          task: (signal: AbortSignal) => Promise<T>,
+          task: () => Promise<T>,
         ): Promise<T> => {
           activeUnavailablePhase = phase;
           try {
-            const outcome = await runMemorySearchToolWithDeadline({
-              timeoutMs,
-              run: task,
-            });
-            if (outcome.status === "unavailable") {
-              failedUnavailablePhase = phase;
-              throw new Error(outcome.error);
-            }
-            return outcome.value;
+            return await task();
+          } catch (error) {
+            failedUnavailablePhase = phase;
+            throw error;
           } finally {
             if (activeUnavailablePhase === phase) {
               activeUnavailablePhase = undefined;
             }
           }
         };
+        const runWithDefaultDeadline = async <T>(
+          task: (
+            signal: AbortSignal,
+            controlDeadline: (action: MemorySearchDeadlineAction) => void,
+          ) => Promise<T>,
+        ): Promise<T> =>
+          await runMemorySearchWithDeadline({
+            timeoutMs: DEFAULT_MEMORY_SEARCH_TIMEOUT_MS,
+            parentSignal: callerSignal,
+            run: task,
+          });
         const runMemorySearchTool = async () => {
           const toolStartedAt = Date.now();
-          const { resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
-          const resolvedMemoryBackend = resolveMemoryBackendConfig({ cfg, agentId });
           const shouldQuerySupplements = requestedCorpus === "wiki" || requestedCorpus === "all";
           const shouldQueryMemory = requestedCorpus !== "wiki" && !cooldown;
           if (cooldown && !shouldQuerySupplements) {
@@ -470,27 +435,39 @@ export function createMemorySearchTool(options: {
           }
           const memoryManagerPurpose = options.oneShotCliRun ? "cli" : undefined;
           const memoryManagersToClose = new Set<ActiveMemoryManagerContext["manager"]>();
+          let cleanupStarted = false;
           const trackMemoryManager = (context: MemoryManagerContext): MemoryManagerContext => {
             if (memoryManagerPurpose === "cli" && isActiveMemoryManagerContext(context)) {
-              memoryManagersToClose.add(context.manager);
+              if (cleanupStarted) {
+                // Setup can settle after its deadline. Close that late transient
+                // manager instead of leaking it after the tool has returned.
+                void closeMemoryManagers([context.manager]);
+              } else {
+                memoryManagersToClose.add(context.manager);
+              }
             }
             return context;
           };
           try {
-            const memory = shouldQueryMemory
-              ? await runUnavailablePhaseWithDeadline(
+            const memorySetup = shouldQueryMemory
+              ? await runUnavailablePhase(
                   "memory",
-                  DEFAULT_MEMORY_SEARCH_TOOL_TIMEOUT_MS,
                   async () =>
-                    trackMemoryManager(
-                      await getMemoryManagerContextWithPurpose({
-                        cfg,
-                        agentId,
-                        purpose: memoryManagerPurpose,
-                      }),
-                    ),
+                    await runWithDefaultDeadline(async () => {
+                      const { resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
+                      const resolvedMemoryBackend = resolveMemoryBackendConfig({ cfg, agentId });
+                      const context = trackMemoryManager(
+                        await getMemoryManagerContextWithPurpose({
+                          cfg,
+                          agentId,
+                          purpose: memoryManagerPurpose,
+                        }),
+                      );
+                      return { context, resolvedMemoryBackend };
+                    }),
                 )
               : null;
+            const memory = memorySetup?.context ?? null;
             if (shouldQueryMemory && memory && "error" in memory && !shouldQuerySupplements) {
               recordMemorySearchToolCooldown(
                 cooldownKey,
@@ -538,134 +515,148 @@ export function createMemorySearchTool(options: {
                   hits: number;
                 }
               | undefined;
-            if (shouldQueryMemory && memory && !("error" in memory)) {
-              const memoryPhaseTimeoutMs = resolveMemorySearchPhaseTimeoutMs({
-                backend: memory.manager.status().backend,
-                resolved: resolvedMemoryBackend,
-              });
-              await runUnavailablePhaseWithDeadline(
-                "memory",
-                memoryPhaseTimeoutMs,
-                async (deadlineSignal) => {
-                  let activeMemory = memory;
-                  const runtimeDebug: MemorySearchRuntimeDebug[] = [];
-                  const qmdSearchModeOverride = resolveActiveMemoryQmdSearchModeOverride(
-                    cfg,
-                    options.agentSessionKey,
-                  );
-                  const searchSources: MemorySource[] | undefined =
-                    requestedCorpus === "sessions"
-                      ? (["sessions"] as MemorySource[])
-                      : requestedCorpus === "memory"
-                        ? (["memory"] as MemorySource[])
-                        : undefined;
-                  const searchOptions = {
+            if (shouldQueryMemory && memorySetup && memory && !("error" in memory)) {
+              await runUnavailablePhase("memory", async () => {
+                let activeMemory = memory;
+                const runtimeDebug: MemorySearchRuntimeDebug[] = [];
+                const qmdSearchModeOverride = resolveActiveMemoryQmdSearchModeOverride(
+                  cfg,
+                  options.agentSessionKey,
+                );
+                const searchSources: MemorySource[] | undefined =
+                  requestedCorpus === "sessions"
+                    ? (["sessions"] as MemorySource[])
+                    : requestedCorpus === "memory"
+                      ? (["memory"] as MemorySource[])
+                      : undefined;
+                const createSearchOptions = (
+                  signal: AbortSignal,
+                  controlDeadline: (action: MemorySearchDeadlineAction) => void,
+                ) =>
+                  ({
                     maxResults,
                     minScore,
                     sessionKey: options.agentSessionKey,
                     qmdSearchModeOverride,
-                    signal: deadlineSignal,
+                    signal,
                     onDebug: (debug: MemorySearchRuntimeDebug) => {
                       runtimeDebug.push(debug);
                     },
+                    [MEMORY_SEARCH_DEADLINE_CONTROL]: controlDeadline,
                     ...(searchSources ? { sources: searchSources } : {}),
-                  };
-                  managerMs = memory.debug?.managerMs;
-                  managerCacheState = memory.debug?.managerCacheState;
-                  try {
-                    rawResults = await activeMemory.manager.search(query, searchOptions);
-                  } catch (error) {
-                    if (!isClosedMemoryStoreError(error)) {
-                      throw error;
-                    }
-                    const refreshed = trackMemoryManager(
+                  }) satisfies MemoryManagerSearchOptions;
+                const searchActiveMemory = async (): Promise<MemorySearchResult[]> =>
+                  await runWithDefaultDeadline(
+                    async (signal, controlDeadline) =>
+                      await activeMemory.manager.search(
+                        query,
+                        createSearchOptions(signal, controlDeadline),
+                      ),
+                  );
+                managerMs = memory.debug?.managerMs;
+                managerCacheState = memory.debug?.managerCacheState;
+                try {
+                  rawResults = await searchActiveMemory();
+                } catch (error) {
+                  if (!isClosedMemoryStoreError(error)) {
+                    throw error;
+                  }
+                  const refreshed = await runWithDefaultDeadline(async () =>
+                    trackMemoryManager(
                       await getMemoryManagerContextWithPurpose({
                         cfg,
                         agentId,
                         purpose: memoryManagerPurpose,
                       }),
-                    );
-                    if ("error" in refreshed) {
-                      throw error;
-                    }
-                    managerMs = refreshed.debug?.managerMs;
-                    managerCacheState = refreshed.debug?.managerCacheState;
-                    activeMemory = refreshed;
-                    rawResults = await activeMemory.manager.search(query, searchOptions);
+                    ),
+                  );
+                  if ("error" in refreshed) {
+                    throw error;
                   }
-                  const statusBeforeRetry = activeMemory.manager.status();
-                  pausedIndexIdentityReason =
-                    resolvePausedMemoryIndexIdentityReason(statusBeforeRetry);
+                  managerMs = refreshed.debug?.managerMs;
+                  managerCacheState = refreshed.debug?.managerCacheState;
+                  activeMemory = refreshed;
+                  rawResults = await searchActiveMemory();
+                }
+                const statusBeforeRetry = activeMemory.manager.status();
+                pausedIndexIdentityReason =
+                  resolvePausedMemoryIndexIdentityReason(statusBeforeRetry);
+                if (pausedIndexIdentityReason) {
+                  return;
+                }
+                if (rawResults.length === 0 && activeMemory.manager.sync) {
+                  await runWithDefaultDeadline(async () => {
+                    // Sync may join shared/background manager maintenance and has
+                    // no request-cancellation contract. Bound only this tool's wait.
+                    await activeMemory.manager.sync?.({ reason: "search", force: true });
+                  });
+                  rawResults = await searchActiveMemory();
+                  pausedIndexIdentityReason = resolvePausedMemoryIndexIdentityReason(
+                    activeMemory.manager.status(),
+                  );
                   if (pausedIndexIdentityReason) {
                     return;
                   }
-                  if (rawResults.length === 0 && activeMemory.manager.sync) {
-                    await activeMemory.manager.sync({ reason: "search", force: true });
-                    rawResults = await activeMemory.manager.search(query, searchOptions);
-                    pausedIndexIdentityReason = resolvePausedMemoryIndexIdentityReason(
-                      activeMemory.manager.status(),
-                    );
-                    if (pausedIndexIdentityReason) {
-                      return;
-                    }
-                  }
-                  rawResults = await filterMemorySearchHitsBySessionVisibility({
-                    cfg,
-                    agentId,
-                    requesterSessionKey: options.agentSessionKey,
-                    sandboxed: options.sandboxed === true,
-                    hits: rawResults,
+                }
+                rawResults = await runWithDefaultDeadline(
+                  async () =>
+                    await filterMemorySearchHitsBySessionVisibility({
+                      cfg,
+                      agentId,
+                      requesterSessionKey: options.agentSessionKey,
+                      sandboxed: options.sandboxed === true,
+                      hits: rawResults,
+                    }),
+                );
+                if (requestedCorpus === "sessions") {
+                  rawResults = rawResults.filter((hit) => hit.source === "sessions");
+                } else if (requestedCorpus === "memory") {
+                  rawResults = rawResults.filter((hit) => hit.source === "memory");
+                }
+                const status = activeMemory.manager.status();
+                const decorated = decorateCitations(rawResults, includeCitations);
+                const memoryResults =
+                  status.backend === "qmd"
+                    ? clampResultsByInjectedChars(
+                        decorated,
+                        memorySetup.resolvedMemoryBackend.qmd?.limits.maxInjectedChars,
+                      )
+                    : decorated;
+                surfacedMemoryResults = memoryResults.map((result) => ({
+                  ...result,
+                  corpus: result.source,
+                }));
+                if (dreamingEnabled) {
+                  queueShortTermRecallTracking({
+                    workspaceDir: status.workspaceDir,
+                    query,
+                    rawResults,
+                    surfacedResults: memoryResults,
+                    timezone: dreaming.timezone,
                   });
-                  if (requestedCorpus === "sessions") {
-                    rawResults = rawResults.filter((hit) => hit.source === "sessions");
-                  } else if (requestedCorpus === "memory") {
-                    rawResults = rawResults.filter((hit) => hit.source === "memory");
-                  }
-                  const status = activeMemory.manager.status();
-                  const decorated = decorateCitations(rawResults, includeCitations);
-                  const memoryResults =
+                }
+                provider = status.provider;
+                model = status.model;
+                fallback = status.fallback;
+                const latestDebug = runtimeDebug.at(-1);
+                const qmdDebug = mergeQmdRuntimeDebug(runtimeDebug);
+                searchMode = latestDebug?.effectiveMode;
+                const searchMs = Math.max(0, Date.now() - searchStartedAt);
+                searchDebug = {
+                  backend: status.backend,
+                  configuredMode: latestDebug?.configuredMode,
+                  effectiveMode:
                     status.backend === "qmd"
-                      ? clampResultsByInjectedChars(
-                          decorated,
-                          resolvedMemoryBackend.qmd?.limits.maxInjectedChars,
-                        )
-                      : decorated;
-                  surfacedMemoryResults = memoryResults.map((result) => ({
-                    ...result,
-                    corpus: result.source,
-                  }));
-                  if (dreamingEnabled) {
-                    queueShortTermRecallTracking({
-                      workspaceDir: status.workspaceDir,
-                      query,
-                      rawResults,
-                      surfacedResults: memoryResults,
-                      timezone: dreaming.timezone,
-                    });
-                  }
-                  provider = status.provider;
-                  model = status.model;
-                  fallback = status.fallback;
-                  const latestDebug = runtimeDebug.at(-1);
-                  const qmdDebug = mergeQmdRuntimeDebug(runtimeDebug);
-                  searchMode = latestDebug?.effectiveMode;
-                  const searchMs = Math.max(0, Date.now() - searchStartedAt);
-                  searchDebug = {
-                    backend: status.backend,
-                    configuredMode: latestDebug?.configuredMode,
-                    effectiveMode:
-                      status.backend === "qmd"
-                        ? (latestDebug?.effectiveMode ?? latestDebug?.configuredMode)
-                        : "n/a",
-                    fallback: latestDebug?.fallback,
-                    managerMs,
-                    searchMs,
-                    managerCacheState,
-                    qmd: qmdDebug,
-                    hits: rawResults.length,
-                  };
-                },
-              );
+                      ? (latestDebug?.effectiveMode ?? latestDebug?.configuredMode)
+                      : "n/a",
+                  fallback: latestDebug?.fallback,
+                  managerMs,
+                  searchMs,
+                  managerCacheState,
+                  qmd: qmdDebug,
+                  hits: rawResults.length,
+                };
+              });
               if (pausedIndexIdentityReason) {
                 return jsonResult(
                   buildPausedMemoryIndexUnavailableResult(pausedIndexIdentityReason),
@@ -673,16 +664,18 @@ export function createMemorySearchTool(options: {
               }
             }
             const supplementResults = shouldQuerySupplements
-              ? await runUnavailablePhaseWithDeadline(
+              ? await runUnavailablePhase(
                   "supplement",
-                  DEFAULT_MEMORY_SEARCH_TOOL_TIMEOUT_MS,
                   async () =>
-                    await searchMemoryCorpusSupplements({
-                      query,
-                      maxResults,
-                      agentSessionKey: options.agentSessionKey,
-                      corpus: requestedCorpus,
-                    }),
+                    await runWithDefaultDeadline(
+                      async () =>
+                        await searchMemoryCorpusSupplements({
+                          query,
+                          maxResults,
+                          agentSessionKey: options.agentSessionKey,
+                          corpus: requestedCorpus,
+                        }),
+                    ),
                 )
               : [];
             // Wiki and memory scores use incomparable scales, so corpus=all first
@@ -712,12 +705,20 @@ export function createMemorySearchTool(options: {
               debug: searchDebug,
             });
           } finally {
-            await closeMemoryManagers(memoryManagersToClose);
+            cleanupStarted = true;
+            await closeMemoryManagers(memoryManagersToClose, callerSignal);
           }
         };
         try {
-          return await runMemorySearchTool();
+          const result = await runMemorySearchTool();
+          if (callerSignal?.aborted) {
+            throw resolveMemorySearchAbortError(callerSignal);
+          }
+          return result;
         } catch (error) {
+          if (callerSignal?.aborted) {
+            throw resolveMemorySearchAbortError(callerSignal);
+          }
           const unavailablePhase = failedUnavailablePhase ?? activeUnavailablePhase;
           const shouldRecordCooldown =
             requestedCorpus !== "wiki" &&
