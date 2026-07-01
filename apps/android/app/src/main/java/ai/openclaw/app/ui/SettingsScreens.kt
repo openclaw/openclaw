@@ -1012,7 +1012,7 @@ internal fun gatewayStatusLabel(
   return when {
     status.contains("connecting") || status.contains("reconnecting") -> "Connecting..."
     status.contains("pair") -> "Pairing needed"
-    status.contains("auth") -> gatewayAuthNeededSummary(gatewayConnectionProblem)
+    status.contains("auth") || status.contains("device identity") -> gatewayAuthNeededSummary(gatewayConnectionProblem)
     status.contains("fingerprint verification timed out") -> "TLS timed out"
     status.contains("no tls endpoint") -> "No TLS endpoint"
     status.contains("certificate") || status.contains("tls") -> "Certificate review needed"

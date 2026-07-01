@@ -48,6 +48,21 @@ class SettingsScreensTest {
   }
 
   @Test
+  fun gatewayStatusLabelMatchesRealGatewayDeviceIdentityFailureText() {
+    // Device-identity handshake rejections (message-handler.ts) say "device identity
+    // required" / "control ui requires device identity...", which do not contain "auth" —
+    // the status gate needs a second substring for these two codes to be reachable.
+    assertEquals(
+      "Device identity required",
+      gatewayStatusLabel(
+        "Gateway error: device identity required",
+        isConnected = false,
+        gatewayConnectionProblem = authProblem("DEVICE_IDENTITY_REQUIRED"),
+      ),
+    )
+  }
+
+  @Test
   fun gatewayStatusLabelFallsBackToGenericAuthLabelWithoutAKnownReason() {
     assertEquals("Authentication needed", gatewayStatusLabel("auth failed", isConnected = false, gatewayConnectionProblem = null))
     assertEquals(
