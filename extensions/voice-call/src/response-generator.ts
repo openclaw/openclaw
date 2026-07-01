@@ -336,6 +336,11 @@ export async function generateVoiceResponse(
     // before post-turn compaction completes (#79521).
     const blockReplyPayloads: VoiceResponsePayload[] = [];
     let earlyTextSpoken = false;
+    // Track the pending early-TTS promise so the caller's fallback-speak
+    // decision (below) always sees the settled outcome.  Without this await
+    // the run can finish while TTS is still in-flight, earlyTextSpoken reads
+    // false, and the fallback path fires a duplicate speak.
+    let pendingEarlyText: Promise<void> | undefined;
 
     const result = await agentRuntime.runEmbeddedAgent({
       sessionId,
@@ -370,7 +375,7 @@ export async function generateVoiceResponse(
         if (!earlyTextSpoken && onEarlyText) {
           const earlyText = extractSpokenTextFromPayloads([payload]);
           if (earlyText) {
-            onEarlyText(earlyText)
+            pendingEarlyText = onEarlyText(earlyText)
               .then((delivered) => {
                 // Only suppress the final post-run fallback speak when
                 // early TTS delivery is confirmed successful.  If the
@@ -388,6 +393,18 @@ export async function generateVoiceResponse(
         }
       },
     });
+
+    // Ensure the early-TTS outcome is known before deciding whether to
+    // flag the text as already spoken.  When onEarlyText resolves after
+    // the run (e.g. real network I/O to the TTS provider), the flag would
+    // otherwise be false and the caller would fire a duplicate fallback.
+    if (pendingEarlyText) {
+      try {
+        await pendingEarlyText;
+      } catch {
+        // Handled in the per-callback catch above.
+      }
+    }
 
     const text = extractSpokenTextFromPayloads(
       blockReplyPayloads.length > 0

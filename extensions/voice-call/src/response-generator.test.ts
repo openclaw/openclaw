@@ -710,6 +710,67 @@ describe("generateVoiceResponse", () => {
     expect(result.text).toBe("TTS attempt that throws.");
   });
 
+  it("awaits pending TTS so a late-resolving onEarlyText still suppresses fallback speak", async () => {
+    // The critical race: the embedded run settles before the async TTS
+    // delivery resolves.  Without awaiting the pending promise, the
+    // earlyTextSpoken flag reads false and the webhook fires a duplicate
+    // fallback speak.
+    const blockPayloads: Array<Record<string, unknown>> = [
+      { text: '{"spoken":"TTS that takes a beat."}' },
+    ];
+
+    let resolveTts: (delivered: boolean) => void = () => {};
+    const ttsDelivered = new Promise<boolean>((resolve) => {
+      resolveTts = resolve;
+    });
+
+    const runEmbeddedAgent = vi.fn(
+      async (
+        args: EmbeddedAgentArgs & {
+          onBlockReply?: (payload: Record<string, unknown>) => void;
+        },
+      ) => {
+        // Fire block reply immediately.
+        args.onBlockReply?.(blockPayloads[0]);
+        // Run returns before TTS promise settles — the real scenario.
+        return {
+          payloads: [{ text: '{"spoken":"stale"}' }],
+          meta: { durationMs: 12, aborted: false },
+        };
+      },
+    );
+
+    const { runtime: baseRuntime } = createAgentRuntime([]);
+    const runtime = {
+      ...baseRuntime,
+      runEmbeddedAgent,
+    } as CoreAgentDeps;
+
+    const onEarlyText = vi.fn(async (_text: string) => ttsDelivered);
+
+    const responsePromise = generateVoiceResponse({
+      voiceConfig: VoiceCallConfigSchema.parse({ responseTimeoutMs: 5000 }),
+      coreConfig: {} as CoreConfig,
+      agentRuntime: runtime,
+      callId: "call-race",
+      from: "+15550005555",
+      transcript: [],
+      userMessage: "test race condition",
+      onEarlyText,
+    });
+
+    // TTS hasn't resolved yet; the response should still be pending.
+    resolveTts(true);
+
+    const result = await responsePromise;
+
+    expect(onEarlyText).toHaveBeenCalledWith("TTS that takes a beat.");
+    // Because we awaited the pending TTS, earlyTextSpoken must be true
+    // and the webhook fallback speak guard must be suppressed.
+    expect(result.earlyTextSpoken).toBe(true);
+    expect(result.text).toBe("TTS that takes a beat.");
+  });
+
   it("passes the routed voice agent explicit tool allowlist to the embedded run", async () => {
     const { runtime, runEmbeddedAgent } = createAgentRuntime([
       { text: '{"spoken":"No tools needed."}' },
