@@ -162,7 +162,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // model can self-correct, and keep the frames for location.
 function formatQuickJsError(name: string, message: string, stack: string | undefined): string {
   const header = message ? `${name}: ${message}` : name;
-  return stack ? `${header}\n${stack}` : header;
+  if (!stack || stack.split(/\r?\n/, 1)[0] === header) {
+    return header;
+  }
+  return `${header}\n${stack}`;
 }
 
 function errorMessage(error: unknown): string {

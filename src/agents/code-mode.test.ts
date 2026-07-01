@@ -1686,6 +1686,29 @@ describe("Code Mode", () => {
     expect(error.startsWith("at ")).toBe(false);
   });
 
+  it("does not duplicate host error headers or expose host stack frames", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = resultDetails(
+      await codeModeTools[0].execute("code-call-host-error", {
+        code: 'return globalThis.__openclawHostRequest("unsupported", "[]");',
+      }),
+    );
+
+    expect(details).toMatchObject({
+      status: "failed",
+      error: "Error: unsupported code mode bridge method",
+    });
+  });
+
   it("clamps omitted code-mode catalog search limits to maxSearchLimit", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const config = {
