@@ -24,6 +24,7 @@ scenario:
     kind: flow
     summary: Verify session-transcript memory can outrank stale durable notes and drive the final answer toward the newer fact.
     config:
+      requiredChannelDriver: qa-channel
       staleFact: ORBIT-9
       currentFact: ORBIT-10
       transcriptId: qa-session-memory-ranking

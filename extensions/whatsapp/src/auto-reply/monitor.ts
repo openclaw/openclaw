@@ -1,4 +1,5 @@
 // Whatsapp plugin module implements monitor behavior.
+import type { WAMessageKey } from "baileys";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/account-core";
 import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
@@ -27,7 +28,13 @@ import {
 } from "../connection-controller.js";
 import { resolveWhatsAppInboundPolicy } from "../inbound-policy.js";
 import { normalizeWebInboundMessage } from "../inbound/message-aliases.js";
-import { attachWebInboxToSocket, type WhatsAppGroupMetadataCache } from "../inbound/monitor.js";
+import {
+  attachWebInboxToSocket,
+  readWhatsAppBaileysCacheEntry,
+  type WhatsAppBaileysGroupMetadataCache,
+  type WhatsAppBaileysMessageCache,
+  type WhatsAppGroupMetadataCache,
+} from "../inbound/monitor.js";
 import type { WebInboundMessageInput } from "../inbound/types.js";
 import {
   newConnectionId,
@@ -159,9 +166,6 @@ export async function monitorWebChannel(
   const replyLogger = getChildLogger({ module: "web-auto-reply", runId });
   const heartbeatLogger = getChildLogger({ module: "web-heartbeat", runId });
   const reconnectLogger = getChildLogger({ module: "web-reconnect", runId });
-  const statusController = createWebChannelStatusController(tuning.statusSink);
-  statusController.emit();
-
   const baseCfg = getRuntimeConfig();
   const sourceCfg = getRuntimeConfigSourceSnapshot();
   const { cfg, account } = resolveWebMonitorConfigSnapshot({
@@ -196,6 +200,8 @@ export async function monitorWebChannel(
   >();
   const groupMemberNames = new Map<string, Map<string, string>>();
   const groupMetadataCache: WhatsAppGroupMetadataCache = new Map();
+  const recentMessageKeys: WhatsAppBaileysMessageCache = new Map();
+  const baileysGroupMetaCache: WhatsAppBaileysGroupMetadataCache = new Map();
   const echoTracker = createEchoTracker({ maxItems: 100, logVerbose });
 
   const sleep =
@@ -234,6 +240,8 @@ export async function monitorWebChannel(
     sleep,
     isNonRetryableStatus: isNonRetryableWebCloseStatus,
   });
+  const statusController = createWebChannelStatusController(tuning.statusSink);
+  statusController.emit();
 
   try {
     while (true) {
@@ -269,6 +277,14 @@ export async function monitorWebChannel(
       try {
         connection = await controller.openConnection({
           connectionId,
+          getMessage: async (key: WAMessageKey) =>
+            key.id && key.remoteJid
+              ? readWhatsAppBaileysCacheEntry(recentMessageKeys, `${key.remoteJid}:${key.id}`)
+              : undefined,
+          cachedGroupMetadata: async (jid: string) => {
+            const meta = readWhatsAppBaileysCacheEntry(baileysGroupMetaCache, jid);
+            return meta?.participants?.length ? meta : undefined;
+          },
           createListener: async ({ sock, connection: connectionLocal }) => {
             const onMessage = createWebOnMessageHandler({
               cfg,
@@ -304,12 +320,17 @@ export async function monitorWebChannel(
               disconnectRetryPolicy: reconnectPolicy,
               disconnectRetryAbortSignal: controller.getDisconnectRetryAbortSignal(),
               groupMetadataCache,
+              recentMessageKeys,
+              baileysGroupMetaCache,
               onMessage: async (msg: WebInboundMessageInput) => {
                 const normalized = normalizeWebInboundMessage(msg);
                 const inboundAt = Date.now();
                 controller.noteInbound(inboundAt);
                 statusController.noteInbound(inboundAt);
                 await onMessage(normalized);
+              },
+              onPendingWorkChanged: (pendingWorkCount, at) => {
+                statusController.noteBusy(pendingWorkCount > 0, at);
               },
               sock,
             })) as ManagedWhatsAppListener;

@@ -33,44 +33,44 @@ class GatewayBootstrapAuthTest {
   @Test
   fun doesNotConnectOperatorSessionWhenOnlyBootstrapAuthExists() {
     assertFalse(
-      shouldConnectOperatorSession(
+      resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = "", bootstrapToken = "bootstrap-1", password = ""),
         storedOperatorToken = "",
-      ),
+      ) != null,
     )
     assertFalse(
-      shouldConnectOperatorSession(
+      resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
         storedOperatorToken = null,
-      ),
+      ) != null,
     )
   }
 
   @Test
   fun connectsOperatorSessionWhenSharedPasswordOrStoredAuthExists() {
     assertTrue(
-      shouldConnectOperatorSession(
+      resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = "bootstrap-1", password = null),
         storedOperatorToken = null,
-      ),
+      ) != null,
     )
     assertTrue(
-      shouldConnectOperatorSession(
+      resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = "shared-password"),
         storedOperatorToken = null,
-      ),
+      ) != null,
     )
     assertTrue(
-      shouldConnectOperatorSession(
+      resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "bootstrap-1", password = null),
         storedOperatorToken = "stored-token",
-      ),
+      ) != null,
     )
     assertTrue(
-      shouldConnectOperatorSession(
+      resolveOperatorSessionConnectAuth(
         NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "", password = null),
         storedOperatorToken = null,
-      ),
+      ) != null,
     )
   }
 
@@ -350,6 +350,29 @@ class GatewayBootstrapAuthTest {
   }
 
   @Test
+  fun connect_showsTlsTimeoutGuidanceWhenFingerprintProbeTimesOut() {
+    val app = RuntimeEnvironment.getApplication()
+    val runtime =
+      NodeRuntime(
+        app,
+        tlsFingerprintProbe = { _, _ ->
+          GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT)
+        },
+      )
+
+    runtime.connect(
+      GatewayEndpoint.manual(host = "gateway.example", port = 18789),
+      NodeRuntime.GatewayConnectAuth(token = "shared-token", bootstrapToken = null, password = null),
+    )
+
+    assertEquals(
+      "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
+      waitForStatusText(runtime),
+    )
+    assertNull(runtime.pendingGatewayTrust.value)
+  }
+
+  @Test
   fun resetGatewaySetupAuth_clearsStoredGatewayAndDeviceTokens() {
     val app = RuntimeEnvironment.getApplication()
     val securePrefs =
@@ -374,6 +397,25 @@ class GatewayBootstrapAuthTest {
     assertNull(prefs.loadGatewayPassword())
     assertNull(authStore.loadToken(deviceId, "node"))
     assertNull(authStore.loadToken(deviceId, "operator"))
+  }
+
+  @Test
+  fun restoredManualMicWithoutRecordAudioClearsStalePreference() {
+    val app = RuntimeEnvironment.getApplication()
+    shadowOf(app).denyPermissions(Manifest.permission.RECORD_AUDIO)
+    val securePrefs =
+      app.getSharedPreferences(
+        "openclaw.node.secure.test.${UUID.randomUUID()}",
+        android.content.Context.MODE_PRIVATE,
+      )
+    val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
+    prefs.setVoiceMicEnabled(true)
+
+    val runtime = NodeRuntime(app, prefs)
+
+    assertEquals(VoiceCaptureMode.Off, runtime.voiceCaptureMode.value)
+    assertFalse(prefs.voiceMicEnabled.value)
+    assertFalse(readField<MutableStateFlow<Boolean>>(runtime, "externalAudioCaptureActive").value)
   }
 
   @Test

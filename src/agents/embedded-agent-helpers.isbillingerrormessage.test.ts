@@ -1039,6 +1039,38 @@ describe("image dimension errors", () => {
 });
 
 describe("classifyAssistantFailoverReason", () => {
+  const opencodeGoStalledStreamError = {
+    role: "assistant" as const,
+    api: "openai-completions" as const,
+    provider: "opencode-go",
+    model: "deepseek-v4-flash",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "error" as const,
+    errorMessage: "opencode-go stream timed out after provider-owned SSE boundary stalled",
+    content: [],
+    timestamp: 0,
+  };
+
+  it("classifies opencode-go provider-owned stalled streams as timeout", () => {
+    expect(classifyAssistantFailoverReason(opencodeGoStalledStreamError)).toBe("timeout");
+  });
+
+  it("does not classify caller-aborted assistant messages as provider failover", () => {
+    expect(
+      classifyAssistantFailoverReason({
+        ...opencodeGoStalledStreamError,
+        stopReason: "aborted",
+      }),
+    ).toBeNull();
+  });
+
   it("uses structured assistant error bodies for model-not-found 400s", () => {
     expect(
       classifyAssistantFailoverReason({

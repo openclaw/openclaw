@@ -150,10 +150,3 @@ export function isContextOverflow(message: AssistantMessage, contextWindow?: num
 
   return false;
 }
-
-/**
- * Get the overflow patterns for testing purposes.
- */
-export function getOverflowPatterns(): RegExp[] {
-  return [...OVERFLOW_PATTERNS];
-}

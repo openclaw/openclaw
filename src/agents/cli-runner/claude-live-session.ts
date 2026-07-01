@@ -2,6 +2,7 @@
  * Manages reusable Claude CLI stdio sessions for CLI-backed agent turns.
  */
 import crypto from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import {
@@ -33,6 +34,7 @@ import {
 } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
+import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
 import { buildClaudeOwnerKey } from "./helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
 import type { PreparedCliRunContext } from "./types.js";
@@ -730,10 +732,6 @@ function parseSessionId(parsed: Record<string, unknown>): string | undefined {
   return sessionId || undefined;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function normalizePositiveInt(
   value: number | undefined,
   fallback: number,
@@ -1063,39 +1061,49 @@ async function createClaudeLiveSession(params: {
   cleanup: () => Promise<void>;
 }): Promise<ClaudeLiveSession> {
   let session: ClaudeLiveSession | null = null;
-  const managedRun = await params.supervisor.spawn({
-    sessionId: params.context.params.sessionId,
-    backendId: params.context.backendResolved.id,
-    scopeKey: `claude-live:${params.key}`,
-    replaceExistingScope: true,
-    mode: "child",
-    argv: params.argv,
-    cwd: params.context.cwd ?? params.context.workspaceDir,
-    env: params.mcpCaptureKey
-      ? { ...params.env, OPENCLAW_MCP_CLI_CAPTURE_KEY: params.mcpCaptureKey }
-      : params.env,
-    stdinMode: "pipe-open",
-    captureOutput: false,
-    onStdout: (chunk) => {
-      if (session) {
-        handleClaudeStdout(session, chunk);
-      }
-    },
-    onStderr: (chunk) => {
-      if (session) {
-        session.stderr += chunk;
-        if (session.stderr.length > CLAUDE_LIVE_MAX_STDERR_CHARS) {
-          closeLiveSession(
-            session,
-            "abort",
-            createOutputLimitError(session, "Claude CLI stderr exceeded limit."),
-          );
-          return;
-        }
-        resetNoOutputTimer(session);
-      }
-    },
+  const mcpCaptureAttempt = await prepareCliBundleMcpCaptureAttempt({
+    mode: params.context.backendResolved.bundleMcpMode,
+    backend: params.context.preparedBackend.backend,
+    env: params.env,
+    captureKey: params.mcpCaptureKey,
   });
+  let managedRun: ManagedRun;
+  try {
+    managedRun = await params.supervisor.spawn({
+      sessionId: params.context.params.sessionId,
+      backendId: params.context.backendResolved.id,
+      scopeKey: `claude-live:${params.key}`,
+      replaceExistingScope: true,
+      mode: "child",
+      argv: params.argv,
+      cwd: params.context.cwd ?? params.context.workspaceDir,
+      env: mcpCaptureAttempt.env ?? params.env,
+      stdinMode: "pipe-open",
+      captureOutput: false,
+      onStdout: (chunk) => {
+        if (session) {
+          handleClaudeStdout(session, chunk);
+        }
+      },
+      onStderr: (chunk) => {
+        if (session) {
+          session.stderr += chunk;
+          if (session.stderr.length > CLAUDE_LIVE_MAX_STDERR_CHARS) {
+            closeLiveSession(
+              session,
+              "abort",
+              createOutputLimitError(session, "Claude CLI stderr exceeded limit."),
+            );
+            return;
+          }
+          resetNoOutputTimer(session);
+        }
+      },
+    });
+  } catch (error) {
+    await mcpCaptureAttempt.cleanup?.();
+    throw error;
+  }
   session = {
     key: params.key,
     fingerprint: params.fingerprint,
@@ -1109,7 +1117,10 @@ async function createClaudeLiveSession(params: {
     drainTimer: null,
     drainingAbortedTurn: false,
     idleTimer: null,
-    cleanup: params.cleanup,
+    cleanup: async () => {
+      await mcpCaptureAttempt.cleanup?.();
+      await params.cleanup();
+    },
     cleanupPromise: null,
     closing: false,
     mcpCaptureKey: params.mcpCaptureKey,

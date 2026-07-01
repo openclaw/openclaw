@@ -5,7 +5,12 @@ import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
-import { renderMarkdownFence, renderWikiMarkdown, slugifyWikiSegment } from "./markdown.js";
+import {
+  preserveHumanNotesBlock,
+  renderMarkdownFence,
+  renderWikiMarkdown,
+  slugifyWikiSegment,
+} from "./markdown.js";
 import { resolveMemoryWikiTimestamp } from "./time.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
@@ -32,6 +37,14 @@ function assertUtf8Text(buffer: Buffer, sourcePath: string): string {
     throw new Error(`Cannot ingest binary file as markdown source: ${sourcePath}`);
   }
   return buffer.toString("utf8");
+}
+
+async function readExistingSourcePage(pagePath: string): Promise<string> {
+  try {
+    return await fs.readFile(pagePath, "utf8");
+  } catch {
+    return await fs.readFile(pagePath, "utf8");
+  }
 }
 
 export async function ingestMemoryWikiSource(params: {
@@ -82,7 +95,12 @@ export async function ingestMemoryWikiSource(params: {
     ].join("\n"),
   });
 
-  await fs.writeFile(pagePath, markdown, "utf8");
+  const existing = created ? "" : await readExistingSourcePage(pagePath);
+  await fs.writeFile(
+    pagePath,
+    existing ? preserveHumanNotesBlock(markdown, existing) : markdown,
+    "utf8",
+  );
   await appendMemoryWikiLog(params.config.vault.path, {
     type: "ingest",
     timestamp,

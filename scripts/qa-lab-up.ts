@@ -33,8 +33,9 @@ Options:
 }
 
 function parseQaLabUpArgs(argv: readonly string[]) {
+  const args = argv[0] === "--" ? argv.slice(1) : argv;
   return parseArgs({
-    args: [...argv],
+    args: [...args],
     options,
     allowPositionals: false,
   }).values;
@@ -66,12 +67,15 @@ async function runQaLabUp(argv: readonly string[], deps: QaLabUpDeps = {}): Prom
   }
 
   const parsePort = (value: string | undefined, flag: string) => {
-    if (!value) {
+    if (value === undefined) {
       return undefined;
     }
     const parsed = parseStrictPositiveInteger(value);
     if (parsed === undefined) {
       throw new Error(`${flag} must be a positive integer.`);
+    }
+    if (parsed > 65535) {
+      throw new Error(`${flag} must be a TCP port from 1 to 65535.`);
     }
     return parsed;
   };

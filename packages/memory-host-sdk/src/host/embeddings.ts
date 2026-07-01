@@ -31,6 +31,15 @@ export type LocalEmbeddingProviderRuntimeOptions = {
   nodeLlamaCppImportUrl?: string;
 };
 
+function copyEmbeddingVector(vector: ArrayLike<number>, maxLength?: number): number[] {
+  const length = Math.min(maxLength ?? vector.length, vector.length);
+  const values: number[] = [];
+  for (let index = 0; index < length; index += 1) {
+    values.push(vector[index]);
+  }
+  return values;
+}
+
 async function disposeResources(
   resources: Array<DisposableResource | null | undefined>,
 ): Promise<void> {
@@ -144,9 +153,7 @@ export async function createLocalEmbeddingProviderInProcess(
   const outputDimensionality =
     typeof options.outputDimensionality === "number" ? options.outputDimensionality : undefined;
   const normalize = (vector: ArrayLike<number>): number[] =>
-    sanitizeAndNormalizeEmbedding(
-      outputDimensionality ? Array.from(vector).slice(0, outputDimensionality) : Array.from(vector),
-    );
+    sanitizeAndNormalizeEmbedding(copyEmbeddingVector(vector, outputDimensionality));
 
   return {
     id: "local",

@@ -48,8 +48,10 @@ Sources/Gateway/GatewayConnectionIssue.swift
 Sources/Gateway/GatewayDiscoveryDebugLogView.swift
 Sources/Gateway/GatewayDiscoveryModel.swift
 Sources/Gateway/GatewayHealthMonitor.swift
+Sources/Gateway/GatewayProblemPrimaryAction.swift
 Sources/Gateway/GatewayProblemView.swift
 Sources/Gateway/GatewayQuickSetupSheet.swift
+Sources/Gateway/NotificationPermissionGuidanceDialog.swift
 Sources/Gateway/GatewayServiceResolver.swift
 Sources/Gateway/GatewaySettingsStore.swift
 Sources/Gateway/GatewayTrustPromptAlert.swift
@@ -75,6 +77,7 @@ Sources/Permissions/PermissionRequestBridge.swift
 Sources/Push/ExecApprovalNotificationBridge.swift
 Sources/Push/BackgroundAliveBeacon.swift
 Sources/Push/PushBuildConfig.swift
+Sources/Push/PushEnrollmentConsent.swift
 Sources/Push/PushRegistrationManager.swift
 Sources/Push/PushRelayClient.swift
 Sources/Push/PushRelayKeychainStore.swift
@@ -97,6 +100,7 @@ Sources/Status/VoiceWakeToast.swift
 Sources/Voice/TalkGatewayPermissionState.swift
 Sources/Voice/TalkDefaults.swift
 Sources/Voice/RealtimeTalkRelaySession.swift
+Sources/Voice/TalkGatewaySpeechClient.swift
 Sources/Voice/TalkModeGatewayConfig.swift
 Sources/Voice/TalkModeManager.swift
 Sources/Voice/TalkModeManager+Permissions.swift
@@ -109,10 +113,10 @@ Sources/Voice/VoiceWakePreferences.swift
 ShareExtension/ShareViewController.swift
 ActivityWidget/OpenClawActivityWidgetBundle.swift
 ActivityWidget/OpenClawLiveActivity.swift
-WatchExtension/Sources/OpenClawWatchApp.swift
-WatchExtension/Sources/WatchConnectivityReceiver.swift
-WatchExtension/Sources/WatchInboxStore.swift
-WatchExtension/Sources/WatchInboxView.swift
+WatchApp/Sources/OpenClawWatchApp.swift
+WatchApp/Sources/WatchConnectivityReceiver.swift
+WatchApp/Sources/WatchInboxStore.swift
+WatchApp/Sources/WatchInboxView.swift
 ../shared/OpenClawKit/Sources/OpenClawChatUI/ChatComposer.swift
 ../shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownRenderer.swift
 ../shared/OpenClawKit/Sources/OpenClawChatUI/ChatMarkdownPreprocessor.swift

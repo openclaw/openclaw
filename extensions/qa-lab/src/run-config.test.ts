@@ -161,6 +161,22 @@ describe("qa run config", () => {
     expect(outputDir.startsWith(path.join(repoRoot, ".artifacts", "qa-e2e", "lab-"))).toBe(true);
   });
 
+  it("keeps generated run output dirs unique within the same millisecond", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-06-23T07:30:00.000Z"));
+      const repoRoot = path.resolve("/tmp/openclaw-repo");
+      const first = createQaRunOutputDir(repoRoot);
+      const second = createQaRunOutputDir(repoRoot);
+
+      expect(first).not.toBe(second);
+      expect(path.basename(first)).toMatch(/^lab-2026-06-23-073000000Z-[0-9a-f]{8}$/u);
+      expect(path.basename(second)).toMatch(/^lab-2026-06-23-073000000Z-[0-9a-f]{8}$/u);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("prefers the Codex OAuth default when the runtime resolver says it is available", () => {
     defaultQaRuntimeModelForMode.mockImplementation((mode, options) =>
       mode === "live-frontier"

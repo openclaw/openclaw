@@ -33,7 +33,9 @@ const mocks = vi.hoisted(() => {
     printWizardHeader: vi.fn(),
     probeGatewayReachable: vi.fn(),
     waitForGatewayReachable: vi.fn(),
+    resolveAdvertisedControlUiLinks: vi.fn(),
     resolveControlUiLinks: vi.fn(),
+    resolveLocalControlUiProbeLinks: vi.fn(),
     summarizeExistingConfig: vi.fn(),
     promptAuthConfig: vi.fn(),
     promptGatewayConfig: vi.fn(),
@@ -104,7 +106,9 @@ vi.mock("./onboard-helpers.js", () => ({
   guardCancel: <T>(value: T) => value,
   printWizardHeader: mocks.printWizardHeader,
   probeGatewayReachable: mocks.probeGatewayReachable,
+  resolveAdvertisedControlUiLinks: mocks.resolveAdvertisedControlUiLinks,
   resolveControlUiLinks: mocks.resolveControlUiLinks,
+  resolveLocalControlUiProbeLinks: mocks.resolveLocalControlUiProbeLinks,
   summarizeExistingConfig: mocks.summarizeExistingConfig,
   waitForGatewayReachable: mocks.waitForGatewayReachable,
 }));
@@ -220,6 +224,14 @@ function setupBaseWizardState(config: OpenClawConfig = {}) {
   mocks.resolveGatewayPort.mockReturnValue(18789);
   mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
   mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
+  mocks.resolveLocalControlUiProbeLinks.mockReturnValue({
+    httpUrl: "http://127.0.0.1:18789/",
+    wsUrl: "ws://127.0.0.1:18789",
+  });
+  mocks.resolveAdvertisedControlUiLinks.mockResolvedValue({
+    httpUrl: "http://127.0.0.1:18789/",
+    wsUrl: "ws://127.0.0.1:18789",
+  });
   mocks.summarizeExistingConfig.mockReturnValue("");
   mocks.createClackPrompter.mockReturnValue({
     intro: vi.fn(async () => {}),
@@ -349,12 +361,7 @@ describe("runConfigureWizard", () => {
         },
       },
     });
-    queueWizardPrompts({
-      select: ["local", "__continue"],
-      confirm: [],
-    });
-
-    await runConfigureWizard({ command: "configure" }, createRuntime());
+    await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
 
     const probeRequests = mocks.probeGatewayReachable.mock.calls.map(([request]) =>
       requireRecord(request, "probe request"),
@@ -366,6 +373,40 @@ describe("runConfigureWizard", () => {
     expect(localProbe?.timeoutMs).toBe(300);
     expect(remoteProbe?.token).toBe("token");
     expect(remoteProbe?.timeoutMs).toBe(300);
+  });
+
+  it("advertises LAN Control UI links while probing the local gateway", async () => {
+    setupBaseWizardState({
+      gateway: {
+        mode: "local",
+        bind: "lan",
+        auth: { token: "token" },
+      },
+    });
+    mocks.resolveAdvertisedControlUiLinks.mockResolvedValueOnce({
+      httpUrl: "http://10.211.55.3:18789/",
+      wsUrl: "ws://10.211.55.3:18789",
+    });
+    mocks.resolveLocalControlUiProbeLinks.mockReturnValueOnce({
+      httpUrl: "http://127.0.0.1:18789/",
+      wsUrl: "ws://127.0.0.1:18789",
+    });
+    await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
+
+    expect(mocks.resolveAdvertisedControlUiLinks).toHaveBeenCalledWith(
+      expect.objectContaining({ bind: "lan", port: 18789 }),
+    );
+    expect(mocks.probeGatewayReachable).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Web UI: http://10.211.55.3:18789/"),
+      "Control UI",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway WS: ws://10.211.55.3:18789"),
+      "Control UI",
+    );
   });
 
   it("exits with code 1 when configure wizard is cancelled", async () => {
@@ -420,15 +461,25 @@ describe("runConfigureWizard", () => {
 
   it("persists provider-owned web search config changes returned by setupSearch", async () => {
     setupBaseWizardState();
-    mocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) =>
-      createEnabledWebSearchConfig("firecrawl", {
+    mocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) => {
+      const configured = createEnabledWebSearchConfig("firecrawl", {
         enabled: true,
         config: { webSearch: { apiKey: "fc-entered-key" } },
-      })(cfg),
-    );
+      })(cfg);
+      return {
+        ...configured,
+        tools: {
+          ...configured.tools,
+          web: {
+            ...configured.tools?.web,
+            fetch: { provider: "firecrawl" },
+          },
+        },
+      };
+    });
     queueWizardPrompts({
       select: [],
-      confirm: [true, false],
+      confirm: [true, true],
     });
 
     await runWebConfigureWizard();
@@ -442,6 +493,12 @@ describe("runConfigureWizard", () => {
     const search = getWebSearch(written);
     expect(search.provider).toBe("firecrawl");
     expect(search.enabled).toBe(true);
+    const tools = requireRecord(written.tools, "tools config");
+    const web = requireRecord(tools.web, "web config");
+    expect(requireRecord(web.fetch, "web fetch config")).toEqual({
+      enabled: true,
+      provider: "firecrawl",
+    });
     const firecrawl = getPluginEntry(written, "firecrawl");
     expect(firecrawl.enabled).toBe(true);
     const firecrawlConfig = requireRecord(firecrawl.config, "firecrawl config");
@@ -449,6 +506,45 @@ describe("runConfigureWizard", () => {
       "fc-entered-key",
     );
     expect(mocks.setupSearch).toHaveBeenCalledOnce();
+    expect(mocks.setupSearch).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      { preserveDisabledSearchState: false },
+    );
+  });
+
+  it("keeps web_search disabled when provider setup has no credential", async () => {
+    setupBaseWizardState();
+    mocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) => ({
+      ...cfg,
+      tools: {
+        ...cfg.tools,
+        web: {
+          ...cfg.tools?.web,
+          fetch: { provider: "firecrawl" },
+          search: { enabled: false, provider: "firecrawl" },
+        },
+      },
+    }));
+    queueWizardPrompts({
+      select: [],
+      confirm: [true, true],
+    });
+
+    await runWebConfigureWizard();
+
+    const written = requireWriteConfig();
+    expect(getWebSearch(written)).toMatchObject({
+      enabled: false,
+      provider: "firecrawl",
+    });
+    const tools = requireRecord(written.tools, "tools config");
+    const web = requireRecord(tools.web, "web config");
+    expect(requireRecord(web.fetch, "web fetch config")).toEqual({
+      enabled: true,
+      provider: "firecrawl",
+    });
   });
 
   it("notes unavailable web search providers under plugin policy", async () => {

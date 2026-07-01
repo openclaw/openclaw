@@ -34,6 +34,7 @@ PLUGIN_CLI_AFTER_LOG="$LOG_DIR/plugin-cli-after.log"
 AGENT_LOG="$LOG_DIR/agent.log"
 STATUS_JSON="$LOG_DIR/status.json"
 STATUS_ERR="$LOG_DIR/status.err"
+CLICKCLACK_PLUGIN_INSTALL_LOG="$LOG_DIR/clickclack-plugin-install.log"
 CLICKCLACK_OUTBOUND_JSON="$LOG_DIR/clickclack-outbound.json"
 CLICKCLACK_OUTBOUND_ERR="$LOG_DIR/clickclack-outbound.err"
 CLICKCLACK_SERVER_LOG="$LOG_DIR/clickclack-server.log"
@@ -77,6 +78,7 @@ dump_debug_logs() {
     "$PLUGIN_CLI_AFTER_LOG" \
     "$AGENT_LOG" \
     "$STATUS_JSON" \
+    "$CLICKCLACK_PLUGIN_INSTALL_LOG" \
     "$CLICKCLACK_OUTBOUND_JSON" \
     "$CLICKCLACK_SERVER_LOG" \
     "$GATEWAY_LOG" \
@@ -161,6 +163,10 @@ node scripts/e2e/lib/release-scenarios/assertions.mjs assert-agent-turn "$SUCCES
 
 openclaw release-upgrade ping >"$PLUGIN_CLI_AFTER_LOG" 2>&1
 node scripts/e2e/lib/release-scenarios/assertions.mjs assert-file-contains "$PLUGIN_CLI_AFTER_LOG" "release-upgrade-plugin:pong"
+
+clickclack_plugin_dir="$(mktemp -d "$scenario_tmp/clickclack-plugin.XXXXXX")"
+node scripts/e2e/lib/release-user-journey/write-clickclack-plugin.mjs "$clickclack_plugin_dir"
+openclaw plugins install "$clickclack_plugin_dir" >"$CLICKCLACK_PLUGIN_INSTALL_LOG" 2>&1
 
 openclaw channels status --json >"$STATUS_JSON" 2>"$STATUS_ERR"
 node scripts/e2e/lib/release-user-journey/assertions.mjs assert-channel-status clickclack "$STATUS_JSON"

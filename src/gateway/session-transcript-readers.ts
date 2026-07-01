@@ -1,3 +1,5 @@
+import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.js";
+import { resolveSessionTranscriptReadTarget } from "../config/sessions/session-accessor.js";
 import type {
   ReadRecentSessionMessagesOptions,
   ReadSessionMessagesAsyncOptions,
@@ -12,6 +14,7 @@ import {
   readRecentSessionMessagesWithStats as readRecentSessionMessagesWithStatsFile,
   readRecentSessionMessagesWithStatsAsync as readRecentSessionMessagesWithStatsAsyncFile,
   readRecentSessionTranscriptLines as readRecentSessionTranscriptLinesFile,
+  readSessionMessagesPageWithStatsAsync as readSessionMessagesPageWithStatsAsyncFile,
   readRecentSessionUsageFromTranscript as readRecentSessionUsageFromTranscriptFile,
   readRecentSessionUsageFromTranscriptAsync as readRecentSessionUsageFromTranscriptAsyncFile,
   readSessionMessageByIdAsync as readSessionMessageByIdAsyncFile,
@@ -30,12 +33,7 @@ import {
 export type { ReadRecentSessionMessagesOptions, ReadSessionMessagesAsyncOptions };
 export { attachOpenClawTranscriptMeta, capArrayByJsonBytes } from "./session-utils.fs.js";
 
-export type SessionTranscriptReadScope = {
-  agentId?: string;
-  sessionFile?: string;
-  sessionId: string;
-  storePath?: string;
-};
+export type { SessionTranscriptReadScope };
 
 type SessionTitleFields = {
   firstUserMessage: string | null;
@@ -72,13 +70,40 @@ type SessionTranscriptUsageSnapshot = {
   costUsd?: number;
 };
 
+type FileBackedReadScope = {
+  agentId?: string;
+  sessionFile: string;
+  sessionId: string;
+  storePath?: string;
+};
+
+function resolveFileBackedReadScope(scope: SessionTranscriptReadScope): FileBackedReadScope {
+  const target = resolveSessionTranscriptReadTarget(scope);
+  const storePath = resolveConcreteReadStorePath(scope.storePath);
+  return {
+    agentId: target.agentId,
+    sessionFile: target.sessionFile,
+    sessionId: target.sessionId,
+    ...(storePath ? { storePath } : {}),
+  };
+}
+
+function resolveConcreteReadStorePath(storePath: string | undefined): string | undefined {
+  const trimmed = storePath?.trim();
+  if (!trimmed || trimmed === "(multiple)" || trimmed.includes("{agentId}")) {
+    return undefined;
+  }
+  return trimmed;
+}
+
 /** Reads display messages from a session transcript through the reader seam. */
 export function readSessionMessages(scope: SessionTranscriptReadScope): unknown[] {
+  const target = resolveFileBackedReadScope(scope);
   return readSessionMessagesFile(
-    scope.sessionId,
-    scope.storePath,
-    scope.sessionFile,
-    scope.agentId,
+    target.sessionId,
+    target.storePath,
+    target.sessionFile,
+    target.agentId,
   );
 }
 
@@ -87,12 +112,13 @@ export function readRecentSessionMessages(
   scope: SessionTranscriptReadScope,
   opts?: ReadRecentSessionMessagesOptions,
 ): unknown[] {
+  const target = resolveFileBackedReadScope(scope);
   return readRecentSessionMessagesFile(
-    scope.sessionId,
-    scope.storePath,
-    scope.sessionFile,
+    target.sessionId,
+    target.storePath,
+    target.sessionFile,
     opts,
-    scope.agentId,
+    target.agentId,
   );
 }
 
@@ -101,22 +127,24 @@ export function visitSessionMessages(
   scope: SessionTranscriptReadScope,
   visit: (message: unknown, seq: number) => void,
 ): number {
+  const target = resolveFileBackedReadScope(scope);
   return visitSessionMessagesFile(
-    scope.sessionId,
-    scope.storePath,
-    scope.sessionFile,
+    target.sessionId,
+    target.storePath,
+    target.sessionFile,
     visit,
-    scope.agentId,
+    target.agentId,
   );
 }
 
 /** Counts display messages in a session transcript through the reader seam. */
 export function readSessionMessageCount(scope: SessionTranscriptReadScope): number {
+  const target = resolveFileBackedReadScope(scope);
   return readSessionMessageCountFile(
-    scope.sessionId,
-    scope.storePath,
-    scope.sessionFile,
-    scope.agentId,
+    target.sessionId,
+    target.storePath,
+    target.sessionFile,
+    target.agentId,
   );
 }
 
@@ -125,12 +153,13 @@ export async function readSessionMessagesAsync(
   scope: SessionTranscriptReadScope,
   opts: ReadSessionMessagesAsyncOptions,
 ): Promise<unknown[]> {
+  const target = resolveFileBackedReadScope(scope);
   return await readSessionMessagesAsyncFile(
-    scope.sessionId,
-    scope.storePath,
-    scope.sessionFile,
+    target.sessionId,
+    target.storePath,
+    target.sessionFile,
     opts,
-    scope.agentId,
+    target.agentId,
   );
 }
 
@@ -139,12 +168,13 @@ export async function readSessionMessagesWithSourceAsync(
   scope: SessionTranscriptReadScope,
   opts: ReadSessionMessagesAsyncOptions,
 ): Promise<ReadSessionMessagesResult> {
+  const target = resolveFileBackedReadScope(scope);
   return await readSessionMessagesWithSourceAsyncFile(
-    scope.sessionId,
-    scope.storePath,
-    scope.sessionFile,
+    target.sessionId,
+    target.storePath,
+    target.sessionFile,
     opts,
-    scope.agentId,
+    target.agentId,
   );
 }
 
@@ -153,12 +183,13 @@ export async function readRecentSessionMessagesAsync(
   scope: SessionTranscriptReadScope,
   opts?: ReadRecentSessionMessagesOptions,
 ): Promise<unknown[]> {
+  const target = resolveFileBackedReadScope(scope);
   return await readRecentSessionMessagesAsyncFile(
-    scope.sessionId,
-    scope.storePath,
-    scope.sessionFile,
+    target.sessionId,
+    target.storePath,
+    target.sessionFile,
     opts,
-    scope.agentId,
+    target.agentId,
   );
 }
 
@@ -168,12 +199,13 @@ export async function readSessionMessageByIdAsync(
   messageId: string,
   opts?: { allowResetArchiveFallback?: boolean },
 ): Promise<ReadSessionMessageByIdResult> {
+  const target = resolveFileBackedReadScope(scope);
   return await readSessionMessageByIdAsyncFile(
-    scope.sessionId,
-    scope.storePath,
-    scope.sessionFile,
+    target.sessionId,
+    target.storePath,
+    target.sessionFile,
     messageId,
-    { ...opts, agentId: scope.agentId },
+    { ...opts, agentId: target.agentId },
   );
 }
 
@@ -183,13 +215,14 @@ export async function visitSessionMessagesAsync(
   visit: (message: unknown, seq: number) => void,
   opts: { mode: "full"; reason: string; cache?: "reuse" | "skip" },
 ): Promise<number> {
+  const target = resolveFileBackedReadScope(scope);
   return await visitSessionMessagesAsyncFile(
-    scope.sessionId,
-    scope.storePath,
-    scope.sessionFile,
+    target.sessionId,
+    target.storePath,
+    target.sessionFile,
     visit,
     opts,
-    scope.agentId,
+    target.agentId,
   );
 }
 
@@ -197,11 +230,12 @@ export async function visitSessionMessagesAsync(
 export async function readSessionMessageCountAsync(
   scope: SessionTranscriptReadScope,
 ): Promise<number> {
+  const target = resolveFileBackedReadScope(scope);
   return await readSessionMessageCountAsyncFile(
-    scope.sessionId,
-    scope.storePath,
-    scope.sessionFile,
-    scope.agentId,
+    target.sessionId,
+    target.storePath,
+    target.sessionFile,
+    target.agentId,
   );
 }
 
@@ -210,12 +244,13 @@ export function readRecentSessionMessagesWithStats(
   scope: SessionTranscriptReadScope,
   opts: ReadRecentSessionMessagesOptions,
 ): ReadRecentSessionMessagesResult {
+  const target = resolveFileBackedReadScope(scope);
   return readRecentSessionMessagesWithStatsFile(
-    scope.sessionId,
-    scope.storePath,
-    scope.sessionFile,
+    target.sessionId,
+    target.storePath,
+    target.sessionFile,
     opts,
-    scope.agentId,
+    target.agentId,
   );
 }
 
@@ -224,12 +259,28 @@ export async function readRecentSessionMessagesWithStatsAsync(
   scope: SessionTranscriptReadScope,
   opts: ReadRecentSessionMessagesOptions,
 ): Promise<ReadRecentSessionMessagesResult> {
+  const target = resolveFileBackedReadScope(scope);
   return await readRecentSessionMessagesWithStatsAsyncFile(
-    scope.sessionId,
-    scope.storePath,
-    scope.sessionFile,
+    target.sessionId,
+    target.storePath,
+    target.sessionFile,
     opts,
-    scope.agentId,
+    target.agentId,
+  );
+}
+
+/** Reads one offset page with total-count metadata through the reader seam. */
+export async function readSessionMessagesPageWithStatsAsync(
+  scope: SessionTranscriptReadScope,
+  opts: { offset: number; maxMessages: number; allowResetArchiveFallback?: boolean },
+): Promise<ReadRecentSessionMessagesResult> {
+  const target = resolveFileBackedReadScope(scope);
+  return await readSessionMessagesPageWithStatsAsyncFile(
+    target.sessionId,
+    target.storePath,
+    target.sessionFile,
+    opts,
+    target.agentId,
   );
 }
 
@@ -239,11 +290,12 @@ export function readRecentSessionTranscriptLines(
     maxLines: number;
   },
 ): { lines: string[]; totalLines: number } | null {
+  const target = resolveFileBackedReadScope(params);
   return readRecentSessionTranscriptLinesFile({
-    sessionId: params.sessionId,
-    storePath: params.storePath,
-    sessionFile: params.sessionFile,
-    agentId: params.agentId,
+    sessionId: target.sessionId,
+    storePath: target.storePath,
+    sessionFile: target.sessionFile,
+    agentId: target.agentId,
     maxLines: params.maxLines,
   });
 }
@@ -253,11 +305,12 @@ export function readSessionTitleFieldsFromTranscript(
   scope: SessionTranscriptReadScope,
   opts?: { includeInterSession?: boolean },
 ): SessionTitleFields {
+  const target = resolveFileBackedReadScope(scope);
   return readSessionTitleFieldsFromTranscriptFile(
-    scope.sessionId,
-    scope.storePath,
-    scope.sessionFile,
-    scope.agentId,
+    target.sessionId,
+    target.storePath,
+    target.sessionFile,
+    target.agentId,
     opts,
   );
 }
@@ -267,11 +320,12 @@ export async function readSessionTitleFieldsFromTranscriptAsync(
   scope: SessionTranscriptReadScope,
   opts?: { includeInterSession?: boolean },
 ): Promise<SessionTitleFields> {
+  const target = resolveFileBackedReadScope(scope);
   return await readSessionTitleFieldsFromTranscriptAsyncFile(
-    scope.sessionId,
-    scope.storePath,
-    scope.sessionFile,
-    scope.agentId,
+    target.sessionId,
+    target.storePath,
+    target.sessionFile,
+    target.agentId,
     opts,
   );
 }
@@ -281,11 +335,12 @@ export function readFirstUserMessageFromTranscript(
   scope: SessionTranscriptReadScope,
   opts?: { includeInterSession?: boolean },
 ): string | null {
+  const target = resolveFileBackedReadScope(scope);
   return readFirstUserMessageFromTranscriptFile(
-    scope.sessionId,
-    scope.storePath,
-    scope.sessionFile,
-    scope.agentId,
+    target.sessionId,
+    target.storePath,
+    target.sessionFile,
+    target.agentId,
     opts,
   );
 }
@@ -294,11 +349,12 @@ export function readFirstUserMessageFromTranscript(
 export function readLatestSessionUsageFromTranscript(
   scope: SessionTranscriptReadScope,
 ): SessionTranscriptUsageSnapshot | null {
+  const target = resolveFileBackedReadScope(scope);
   return readLatestSessionUsageFromTranscriptFile(
-    scope.sessionId,
-    scope.storePath,
-    scope.sessionFile,
-    scope.agentId,
+    target.sessionId,
+    target.storePath,
+    target.sessionFile,
+    target.agentId,
   );
 }
 
@@ -306,11 +362,12 @@ export function readLatestSessionUsageFromTranscript(
 export async function readLatestSessionUsageFromTranscriptAsync(
   scope: SessionTranscriptReadScope,
 ): Promise<SessionTranscriptUsageSnapshot | null> {
+  const target = resolveFileBackedReadScope(scope);
   return await readLatestSessionUsageFromTranscriptAsyncFile(
-    scope.sessionId,
-    scope.storePath,
-    scope.sessionFile,
-    scope.agentId,
+    target.sessionId,
+    target.storePath,
+    target.sessionFile,
+    target.agentId,
   );
 }
 
@@ -319,11 +376,12 @@ export async function readRecentSessionUsageFromTranscriptAsync(
   scope: SessionTranscriptReadScope,
   maxBytes: number,
 ): Promise<SessionTranscriptUsageSnapshot | null> {
+  const target = resolveFileBackedReadScope(scope);
   return await readRecentSessionUsageFromTranscriptAsyncFile(
-    scope.sessionId,
-    scope.storePath,
-    scope.sessionFile,
-    scope.agentId,
+    target.sessionId,
+    target.storePath,
+    target.sessionFile,
+    target.agentId,
     maxBytes,
   );
 }
@@ -333,11 +391,12 @@ export async function readLatestRecentSessionUsageFromTranscriptAsync(
   scope: SessionTranscriptReadScope,
   maxBytes: number,
 ): Promise<SessionTranscriptUsageSnapshot | null> {
+  const target = resolveFileBackedReadScope(scope);
   return await readLatestRecentSessionUsageFromTranscriptAsyncFile(
-    scope.sessionId,
-    scope.storePath,
-    scope.sessionFile,
-    scope.agentId,
+    target.sessionId,
+    target.storePath,
+    target.sessionFile,
+    target.agentId,
     maxBytes,
   );
 }
@@ -347,11 +406,12 @@ export function readRecentSessionUsageFromTranscript(
   scope: SessionTranscriptReadScope,
   maxBytes: number,
 ): SessionTranscriptUsageSnapshot | null {
+  const target = resolveFileBackedReadScope(scope);
   return readRecentSessionUsageFromTranscriptFile(
-    scope.sessionId,
-    scope.storePath,
-    scope.sessionFile,
-    scope.agentId,
+    target.sessionId,
+    target.storePath,
+    target.sessionFile,
+    target.agentId,
     maxBytes,
   );
 }
@@ -362,11 +422,12 @@ export function readSessionPreviewItemsFromTranscript(
   maxItems: number,
   maxChars: number,
 ): ReturnType<typeof readSessionPreviewItemsFromTranscriptFile> {
+  const target = resolveFileBackedReadScope(scope);
   return readSessionPreviewItemsFromTranscriptFile(
-    scope.sessionId,
-    scope.storePath,
-    scope.sessionFile,
-    scope.agentId,
+    target.sessionId,
+    target.storePath,
+    target.sessionFile,
+    target.agentId,
     maxItems,
     maxChars,
   );

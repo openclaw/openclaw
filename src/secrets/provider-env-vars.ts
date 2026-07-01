@@ -17,6 +17,7 @@ import {
 } from "../plugins/plugin-metadata-snapshot.js";
 import { listSetupProviderIds } from "../plugins/setup-descriptors.js";
 import { hasKind } from "../plugins/slots.js";
+import { appendUniqueEnvVarCandidates } from "../shared/env-var-candidates.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
@@ -94,27 +95,6 @@ function shouldUsePluginProviderAuthEvidence(
   // Auth evidence can point at local credential files, so workspace plugins must be explicitly
   // trusted through config before their evidence participates in auth discovery.
   return isWorkspacePluginTrustedForProviderEnvVars(plugin, params?.config);
-}
-
-function appendUniqueEnvVarCandidates(
-  target: Record<string, string[]>,
-  providerId: string,
-  keys: readonly string[],
-) {
-  const normalizedProviderId = providerId.trim();
-  if (!normalizedProviderId || keys.length === 0) {
-    return;
-  }
-  const bucket = (target[normalizedProviderId] ??= []);
-  const seen = new Set(bucket);
-  for (const key of keys) {
-    const normalizedKey = key.trim();
-    if (!normalizedKey || seen.has(normalizedKey)) {
-      continue;
-    }
-    seen.add(normalizedKey);
-    bucket.push(normalizedKey);
-  }
 }
 
 function appendUniqueAuthEvidence(

@@ -185,13 +185,23 @@ function serializeFormForSubmit(state: ConfigState): string {
 type ConfigSubmitMethod = "config.set" | "config.apply";
 type ConfigSubmitBusyKey = "configSaving" | "configApplying";
 
-function resolveUpdateStatusBanner(params: { status?: string; reason?: string }): {
+function resolveUpdateStatusBanner(params: {
+  status?: string;
+  reason?: string;
+  handoff?: { command?: string; message?: string };
+}): {
   tone: "danger" | "warn" | "info";
   text: string;
 } {
   const status = (params.status ?? "error").trim() || "error";
   const reason = (params.reason ?? "unexpected-error").trim() || "unexpected-error";
   const tone = status === "skipped" ? "warn" : "danger";
+  const handoffCommand = params.handoff?.command?.trim();
+  const handoffMessage = params.handoff?.message?.trim();
+  const handoffUnavailableGuidance = handoffCommand
+    ? `Run \`${handoffCommand}\` from a shell outside the Gateway process.`
+    : (handoffMessage ??
+      "OpenClaw could not find a safe supervisor handoff. Run `openclaw update` from a shell outside the Gateway process.");
   const guidance =
     {
       dirty: "Commit or stash changes, then retry.",
@@ -209,6 +219,7 @@ function resolveUpdateStatusBanner(params: { status?: string; reason?: string })
         "The update was not applied because gateway restarts are disabled. Enable restarts in config, then retry — or run `openclaw update` from the CLI.",
       "restart-unavailable":
         "This global install cannot be safely replaced while restarts are disabled and no supervisor is present.",
+      "managed-service-handoff-unavailable": handoffUnavailableGuidance,
       "restart-unhealthy":
         "The replacement process never became healthy. The previous process stayed up so you can recover.",
       "doctor-failed": "Doctor repair failed. Run `openclaw doctor --non-interactive` and retry.",
@@ -285,7 +296,7 @@ export async function runUpdate(state: ConfigState) {
     const res = await state.client.request<{
       ok?: boolean;
       result?: { status?: string; reason?: string; after?: { version?: string | null } };
-      handoff?: { status?: string };
+      handoff?: { status?: string; command?: string; message?: string };
     }>("update.run", {
       sessionKey: state.applySessionKey,
     });
@@ -310,6 +321,7 @@ export async function runUpdate(state: ConfigState) {
     state.updateStatusBanner = resolveUpdateStatusBanner({
       status,
       reason: res.result?.reason,
+      handoff: res.handoff,
     });
   } catch (err) {
     state.lastError = String(err);

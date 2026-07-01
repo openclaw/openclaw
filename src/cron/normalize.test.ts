@@ -5,7 +5,8 @@ import {
   validateCronUpdateParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "./normalize.js";
-import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
+
+const DEFAULT_TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1000;
 
 function expectNormalizedAtSchedule(scheduleInput: Record<string, unknown>) {
   const normalized = normalizeCronJobCreate({
@@ -151,6 +152,20 @@ describe("normalizeCronJobCreate", () => {
     }) as unknown as Record<string, { model?: unknown }>;
 
     expect(normalized.payload?.model).toBeNull();
+  });
+
+  it("preserves explicit null thinking clear in payload patches", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        kind: "agentTurn",
+        thinking: null,
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.thinking).toBeNull();
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
   });
 
   it("coerces ISO schedule.at to normalized ISO (UTC)", () => {
@@ -872,6 +887,20 @@ describe("normalizeCronJobPatch", () => {
     const payload = normalized.payload as Record<string, unknown>;
     expect(payload.kind).toBe("agentTurn");
     expect(payload.toolsAllow).toBeNull();
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
+  });
+
+  it("preserves null fallback lists so patches can clear the fallback override", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        kind: "agentTurn",
+        fallbacks: null,
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.fallbacks).toBeNull();
     expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
   });
 

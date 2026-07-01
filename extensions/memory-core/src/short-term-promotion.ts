@@ -63,11 +63,6 @@ export const SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH = path.join(
   ".dreams",
   "phase-signals.json",
 );
-export const SHORT_TERM_LOCK_RELATIVE_PATH = path.join(
-  "memory",
-  ".dreams",
-  "short-term-promotion.lock",
-);
 const SHORT_TERM_LOCK_WAIT_TIMEOUT_MS = 10_000;
 const SHORT_TERM_LOCK_STALE_MS = 60_000;
 const SHORT_TERM_LOCK_RETRY_DELAY_MS = 40;
@@ -79,6 +74,14 @@ const PHASE_SIGNAL_REM_BOOST_MAX = 0.09;
 const PHASE_SIGNAL_HALF_LIFE_DAYS = 14;
 const DREAMING_TRANSCRIPT_PROMPT_LINE_RE =
   /\[[^\]]*dreaming-narrative[^\]]*]\s*(?:User|Assistant):\s*Write a dream diary entry from these memory fragments:?/i;
+const RAW_SESSION_METADATA_RE =
+  /\bSession Key\b.{0,260}\bSession ID\b|\bSession ID\b.{0,260}\bSession Key\b/i;
+const RAW_CONVERSATION_SUMMARY_RE = /^(?:[-*+]\s*)?Conversation Summary:/i;
+const RAW_TRANSCRIPT_TURN_RE = /^(?:[-*+]\s*)?(?:user|assistant):\s/i;
+const MEMORY_FLUSH_PROMPT_RE =
+  /Save important context from this session to the daily memory file\.\s*STRICT RULES:/i;
+const PROMOTION_SCORE_METADATA_RE =
+  /\[\s*score=\d+(?:\.\d+)?\s+recalls=\d+\s+avg=\d+(?:\.\d+)?\s+source=memory\//i;
 const DREAMING_DIFF_PREFIX_RE = /@@\s*-\d+(?:,\d+)?\s+[-*+]\s+/iy;
 const GENERIC_DAY_HEADING_RE =
   /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
@@ -414,7 +417,12 @@ function isContaminatedDreamingSnippet(raw: string): boolean {
   }
   if (
     /<!--\s*openclaw-memory-promotion:/i.test(snippet) ||
-    DREAMING_TRANSCRIPT_PROMPT_LINE_RE.test(snippet)
+    DREAMING_TRANSCRIPT_PROMPT_LINE_RE.test(snippet) ||
+    RAW_SESSION_METADATA_RE.test(snippet) ||
+    RAW_CONVERSATION_SUMMARY_RE.test(snippet) ||
+    RAW_TRANSCRIPT_TURN_RE.test(snippet) ||
+    MEMORY_FLUSH_PROMPT_RE.test(snippet) ||
+    PROMOTION_SCORE_METADATA_RE.test(snippet)
   ) {
     return true;
   }
@@ -837,17 +845,6 @@ function isProcessLikelyAlive(pid: number): boolean {
     // EPERM and unknown errors are treated as alive to avoid stealing active locks.
     return true;
   }
-}
-
-async function canStealStaleLock(lockPath: string): Promise<boolean> {
-  const ownerPid = await fs
-    .readFile(lockPath, "utf-8")
-    .then((raw) => parseLockOwnerPid(raw))
-    .catch(() => null);
-  if (ownerPid === null) {
-    return true;
-  }
-  return !isProcessLikelyAlive(ownerPid);
 }
 
 async function sleep(ms: number): Promise<void> {
@@ -1318,39 +1315,47 @@ export async function loadShortTermPromotionDreamingStats(params: {
   };
 }
 
-async function shortTermRecallSourceExists(params: {
-  workspaceDir: string;
-  entry: Pick<ShortTermRecallEntry, "path">;
-}): Promise<boolean> {
-  const workspaceDir = params.workspaceDir.trim();
-  if (!workspaceDir) {
-    return false;
-  }
-  for (const sourcePath of resolveShortTermSourcePathCandidates(workspaceDir, params.entry.path)) {
-    try {
-      const stat = await fs.stat(sourcePath);
-      if (stat.isFile()) {
-        return true;
-      }
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        continue;
-      }
-      throw err;
+async function shortTermRecallSourceIsFile(sourcePath: string): Promise<boolean> {
+  try {
+    const stat = await fs.stat(sourcePath);
+    return stat.isFile();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
     }
+    throw err;
   }
-  return false;
 }
 
 export async function filterLiveShortTermRecallEntries(params: {
   workspaceDir: string;
   entries: ShortTermRecallEntry[];
 }): Promise<ShortTermRecallEntry[]> {
+  const workspaceDir = params.workspaceDir.trim();
+  if (!workspaceDir) {
+    return [];
+  }
+  const sourceFileChecks = new Map<string, Promise<boolean>>();
+  const checkSourceFile = (sourcePath: string): Promise<boolean> => {
+    const existing = sourceFileChecks.get(sourcePath);
+    if (existing) {
+      return existing;
+    }
+    const check = shortTermRecallSourceIsFile(sourcePath);
+    sourceFileChecks.set(sourcePath, check);
+    return check;
+  };
   const results = await Promise.all(
-    params.entries.map(async (entry) => ({
-      entry,
-      exists: await shortTermRecallSourceExists({ workspaceDir: params.workspaceDir, entry }),
-    })),
+    params.entries.map(async (entry) => {
+      let exists = false;
+      for (const sourcePath of resolveShortTermSourcePathCandidates(workspaceDir, entry.path)) {
+        if (await checkSourceFile(sourcePath)) {
+          exists = true;
+          break;
+        }
+      }
+      return { entry, exists };
+    }),
   );
   return results.filter((result) => result.exists).map((result) => result.entry);
 }
@@ -1465,6 +1470,14 @@ export async function recordShortTermRecalls(params: {
       const recallDays = mergeRecentDistinct(recallDaysBase, todayBucket, MAX_RECALL_DAYS);
       const conceptTags = deriveConceptTags({ path: normalizedPath, snippet });
 
+      const unchangedRepeatedSignal =
+        Boolean(params.dedupeByQueryPerDay) &&
+        queryHashesBase.includes(queryHash) &&
+        existing?.snippet === snippet;
+      const lastRecalledAt = unchangedRepeatedSignal
+        ? (existing?.lastRecalledAt ?? nowIso)
+        : nowIso;
+
       store.entries[key] = {
         key,
         path: normalizedPath,
@@ -1478,7 +1491,7 @@ export async function recordShortTermRecalls(params: {
         totalScore,
         maxScore,
         firstRecalledAt: existing?.firstRecalledAt ?? nowIso,
-        lastRecalledAt: nowIso,
+        lastRecalledAt,
         queryHashes,
         recallDays,
         conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
@@ -1614,6 +1627,14 @@ export async function recordGroundedShortTermCandidates(params: {
       const recallDays = mergeRecentDistinct(recallDaysBase, dayBucket, MAX_RECALL_DAYS);
       const conceptTags = deriveConceptTags({ path: item.path, snippet: item.snippet });
 
+      const unchangedRepeatedSignal =
+        Boolean(params.dedupeByQueryPerDay) &&
+        queryHashesBase.includes(queryHash) &&
+        existing?.snippet === item.snippet;
+      const lastRecalledAt = unchangedRepeatedSignal
+        ? (existing?.lastRecalledAt ?? nowIso)
+        : nowIso;
+
       store.entries[key] = {
         key,
         path: item.path,
@@ -1627,7 +1648,7 @@ export async function recordGroundedShortTermCandidates(params: {
         totalScore,
         maxScore,
         firstRecalledAt: existing?.firstRecalledAt ?? nowIso,
-        lastRecalledAt: nowIso,
+        lastRecalledAt,
         queryHashes,
         recallDays,
         conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
@@ -1773,6 +1794,32 @@ export async function readLightStagedKeys(params: {
     }
   }
   return keys;
+}
+
+export async function filterFreshLightDreamingEntries(params: {
+  workspaceDir: string;
+  entries: readonly ShortTermRecallEntry[];
+  nowMs?: number;
+}): Promise<ShortTermRecallEntry[]> {
+  const workspaceDir = params.workspaceDir.trim();
+  if (!workspaceDir || params.entries.length === 0) {
+    return [];
+  }
+  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
+  const phaseSignals = await readPhaseSignalStore(workspaceDir, nowIso);
+  return params.entries.filter((entry) => {
+    const phaseSignal = phaseSignals.entries[entry.key];
+    if (!phaseSignal || phaseSignal.lightHits <= 0) {
+      return true;
+    }
+    const lastLightMs = parseStoreTimestampMs(phaseSignal.lastLightAt);
+    if (!Number.isFinite(lastLightMs)) {
+      return true;
+    }
+    const lastRecalledAtMs = parseStoreTimestampMs(entry.lastRecalledAt);
+    return Number.isFinite(lastRecalledAtMs) && lastRecalledAtMs > lastLightMs;
+  });
 }
 
 export async function rankShortTermPromotionCandidates(
@@ -2526,10 +2573,6 @@ export function resolveShortTermRecallStorePath(workspaceDir: string): string {
   return resolveStorePath(workspaceDir);
 }
 
-export function resolveShortTermPhaseSignalStorePath(workspaceDir: string): string {
-  return resolvePhaseSignalPath(workspaceDir);
-}
-
 export function resolveShortTermRecallLockPath(workspaceDir: string): string {
   return resolveLockPath(workspaceDir);
 }
@@ -2822,7 +2865,6 @@ export async function removeGroundedShortTermCandidates(params: {
 
 export const testing = {
   parseLockOwnerPid,
-  canStealStaleLock,
   isProcessLikelyAlive,
   readRecallStore: readStore,
   readPhaseSignalStore,

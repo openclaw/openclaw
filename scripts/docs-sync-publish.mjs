@@ -91,6 +91,13 @@ const GENERATED_LOCALES = [
     navMode: "clone-en",
   },
   {
+    language: "hi",
+    dir: "hi",
+    navFile: "hi-navigation.json",
+    tmFile: "hi.tm.jsonl",
+    navMode: "clone-en",
+  },
+  {
     language: "ar",
     dir: "ar",
     navFile: "ar-navigation.json",
@@ -168,11 +175,18 @@ const GENERATED_LOCALES = [
     // once the docs host accepts it.
     navigation: false,
   },
+  {
+    language: "ru",
+    dir: "ru",
+    navFile: "ru-navigation.json",
+    tmFile: "ru.tm.jsonl",
+    navMode: "clone-en",
+  },
 ];
 
 function readOptionValue(argv, index, optionName) {
   const value = argv[index + 1];
-  if (value === undefined || value === "" || value.startsWith("--")) {
+  if (value === undefined || value === "" || value.startsWith("-")) {
     throw new Error(`${optionName} requires a value`);
   }
   return value;

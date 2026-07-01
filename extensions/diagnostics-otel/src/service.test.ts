@@ -220,13 +220,26 @@ type OtelContextFlags = {
   traces?: boolean;
   metrics?: boolean;
   logs?: boolean;
+  protocol?: NonNullable<
+    NonNullable<OpenClawPluginServiceContext["config"]["diagnostics"]>["otel"]
+  >["protocol"];
+  logsExporter?: NonNullable<
+    NonNullable<OpenClawPluginServiceContext["config"]["diagnostics"]>["otel"]
+  >["logsExporter"];
   captureContent?: NonNullable<
     NonNullable<OpenClawPluginServiceContext["config"]["diagnostics"]>["otel"]
   >["captureContent"];
 };
 function createOtelContext(
   endpoint: string,
-  { traces = false, metrics = false, logs = false, captureContent }: OtelContextFlags = {},
+  {
+    traces = false,
+    metrics = false,
+    logs = false,
+    protocol = OTEL_TEST_PROTOCOL,
+    logsExporter,
+    captureContent,
+  }: OtelContextFlags = {},
 ): OpenClawPluginServiceContext {
   return {
     config: {
@@ -235,10 +248,11 @@ function createOtelContext(
         otel: {
           enabled: true,
           endpoint,
-          protocol: OTEL_TEST_PROTOCOL,
+          protocol,
           traces,
           metrics,
           logs,
+          ...(logsExporter !== undefined ? { logsExporter } : {}),
           ...(captureContent !== undefined ? { captureContent } : {}),
         },
       },
@@ -360,6 +374,38 @@ function histogramCreateOptions(name: string) {
   return call?.[1] as
     | { unit?: unknown; advice?: { explicitBucketBoundaries?: unknown[] } }
     | undefined;
+}
+
+type StdoutDiagnosticLogLine = {
+  ts?: string;
+  signal?: string;
+  "service.name"?: string;
+  severityText?: string;
+  severityNumber?: number;
+  body?: unknown;
+  attributes?: Record<string, unknown>;
+  trace_id?: string;
+  span_id?: string;
+  trace_flags?: string;
+};
+
+function captureStdoutWrites() {
+  const writes: string[] = [];
+  const spy = vi.spyOn(process.stdout, "write").mockImplementation(((
+    chunk: string | Uint8Array,
+  ) => {
+    writes.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8"));
+    return true;
+  }) as typeof process.stdout.write);
+  return { writes, spy };
+}
+
+function parseSingleStdoutDiagnosticLogLine(writes: string[]): StdoutDiagnosticLogLine {
+  expect(writes).toHaveLength(1);
+  expect(writes[0]?.endsWith("\n")).toBe(true);
+  const line = writes[0]?.slice(0, -1) ?? "";
+  expect(line).not.toContain("\n");
+  return JSON.parse(line) as StdoutDiagnosticLogLine;
 }
 
 async function emitAndCaptureLog(
@@ -1067,6 +1113,94 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("starts stdout-only logs when OTLP protocol is unsupported", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: false,
+      metrics: false,
+      logs: true,
+      protocol: "grpc",
+      logsExporter: "stdout",
+    });
+    const capture = captureStdoutWrites();
+    try {
+      await service.start(ctx);
+      emitDiagnosticEvent({
+        type: "log.record",
+        level: "INFO",
+        message: "stdout only log",
+      });
+      await flushDiagnosticEvents();
+
+      const line = parseSingleStdoutDiagnosticLogLine(capture.writes);
+      expect(line.body).toBe("log");
+      expect(logExporterCtor).not.toHaveBeenCalled();
+      expect(traceExporterCtor).not.toHaveBeenCalled();
+      expect(metricExporterCtor).not.toHaveBeenCalled();
+      expect(ctx.logger.warn).not.toHaveBeenCalledWith(
+        "diagnostics-otel: unsupported protocol grpc",
+      );
+    } finally {
+      capture.spy.mockRestore();
+      await service.stop?.(ctx);
+    }
+  });
+
+  test("exports trusted security events as stdout JSONL logs", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext("", { logs: true, logsExporter: "stdout" });
+    const trace = createDiagnosticTraceContext({
+      traceId: TRACE_ID,
+      spanId: SPAN_ID,
+      traceFlags: "01",
+    });
+    const stdout = captureStdoutWrites();
+
+    try {
+      await service.start(ctx);
+      emitTrustedSecurityEvent({
+        eventId: "security-event-stdout",
+        category: "tool",
+        action: "tool.execution.blocked",
+        outcome: "denied",
+        severity: "medium",
+        reason: "tools.deny",
+        attributes: {
+          secretish: "token sk-test-secret",
+          [PROTO_KEY]: "blocked",
+        },
+        trace,
+      });
+      await flushDiagnosticEvents();
+
+      expect(logExporterCtor).not.toHaveBeenCalled();
+      expect(logEmit).not.toHaveBeenCalled();
+      const record = parseSingleStdoutDiagnosticLogLine(stdout.writes);
+      expect(record.body).toBe("openclaw.security.event");
+      expect(record.severityText).toBe("WARN");
+      expect(record.severityNumber).toBe(13);
+      expect(record.attributes).toMatchObject({
+        "openclaw.security.event_id": "security-event-stdout",
+        "openclaw.security.category": "tool",
+        "openclaw.security.action": "tool.execution.blocked",
+        "openclaw.security.outcome": "denied",
+        "openclaw.security.severity": "medium",
+        "openclaw.security.reason": "tools.deny",
+        "openclaw.security.attribute.secretish": "unknown",
+      });
+      expect(Object.hasOwn(record.attributes ?? {}, "openclaw.security.attribute.__proto__")).toBe(
+        false,
+      );
+      expect(record.trace_id).toBe(TRACE_ID);
+      expect(record.span_id).toBe(SPAN_ID);
+      expect(record.trace_flags).toBe("01");
+      expect(JSON.stringify(record)).not.toContain("sk-test-secret");
+    } finally {
+      stdout.spy.mockRestore();
+      await service.stop?.(ctx);
+    }
+  });
+
   test("records liveness warning diagnostics", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
@@ -1440,6 +1574,123 @@ describe("diagnostics-otel service", () => {
     expect(metricOptions.url).toBe("https://metric-env.example.com/otlp/v1/metrics");
     expect(logOptions.url).toBe("https://log-env.example.com/otlp/v1/logs");
     await service.stop?.(ctx);
+  });
+
+  test("exports diagnostic logs as stdout JSONL without constructing the OTLP log exporter", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext("", {
+      logs: true,
+      logsExporter: "stdout",
+      captureContent: true,
+    });
+    ctx.config.diagnostics!.otel!.serviceName = "rovoclaw-openclaw";
+    const stdout = captureStdoutWrites();
+
+    try {
+      await service.start(ctx);
+
+      expect(logExporterCtor).not.toHaveBeenCalled();
+      emitDiagnosticEventWithTrustedTraceContext({
+        type: "log.record",
+        level: "WARN",
+        message: "Using API key sk-1234567890abcdef1234567890abcdef",
+        attributes: {
+          token: "ghp_abcdefghijklmnopqrstuvwxyz123456", // pragma: allowlist secret
+          subsystem: "diagnostic",
+        },
+        trace: {
+          traceId: TRACE_ID,
+          spanId: SPAN_ID,
+          traceFlags: "01",
+        },
+      });
+      await flushDiagnosticEvents();
+
+      expect(logEmit).not.toHaveBeenCalled();
+      const record = parseSingleStdoutDiagnosticLogLine(stdout.writes);
+      expect(record.ts).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+      expect(record.signal).toBe("openclaw.diagnostic.log");
+      expect(record["service.name"]).toBe("rovoclaw-openclaw");
+      expect(record.severityText).toBe("WARN");
+      expect(record.severityNumber).toBe(13);
+      expect(String(record.body)).not.toContain("sk-1234567890abcdef1234567890abcdef");
+      expect(String(record.body)).toContain("sk-123");
+      expect(record.attributes).toMatchObject({
+        "openclaw.log.level": "WARN",
+        "openclaw.subsystem": "diagnostic",
+      });
+      const tokenAttr = record.attributes?.["openclaw.token"];
+      expect(tokenAttr).not.toBe("ghp_abcdefghijklmnopqrstuvwxyz123456"); // pragma: allowlist secret
+      expect(record.trace_id).toBe(TRACE_ID);
+      expect(record.span_id).toBe(SPAN_ID);
+      expect(JSON.stringify(record)).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz123456"); // pragma: allowlist secret
+    } finally {
+      stdout.spy.mockRestore();
+      await service.stop?.(ctx);
+    }
+  });
+
+  test("keeps explicit OTLP log export off stdout", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      logs: true,
+      logsExporter: "otlp",
+    });
+    const stdout = captureStdoutWrites();
+
+    try {
+      await service.start(ctx);
+      emitDiagnosticEvent({
+        type: "log.record",
+        level: "INFO",
+        message: "otlp only",
+      });
+      await flushDiagnosticEvents();
+
+      expect(logExporterCtor).toHaveBeenCalledTimes(1);
+      expect(logEmit).toHaveBeenCalledTimes(1);
+      expect(stdout.writes).toEqual([]);
+    } finally {
+      stdout.spy.mockRestore();
+      await service.stop?.(ctx);
+    }
+  });
+
+  test("exports diagnostic logs to OTLP and stdout when logsExporter is both", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      logs: true,
+      logsExporter: "both",
+    });
+    const stdout = captureStdoutWrites();
+
+    try {
+      await service.start(ctx);
+      emitDiagnosticEvent({
+        type: "log.record",
+        level: "ERROR",
+        message: "both sinks",
+        attributes: {
+          subsystem: "diagnostic",
+        },
+      });
+      await flushDiagnosticEvents();
+
+      expect(logExporterCtor).toHaveBeenCalledTimes(1);
+      const emitCall = mockCallArg(logEmit, 0) as {
+        attributes?: Record<string, unknown>;
+        body?: string;
+        severityText?: string;
+      };
+      const record = parseSingleStdoutDiagnosticLogLine(stdout.writes);
+      expect(emitCall.body).toBe("log");
+      expect(record.body).toBe(emitCall.body);
+      expect(record.severityText).toBe(emitCall.severityText);
+      expect(record.attributes).toEqual(emitCall.attributes);
+    } finally {
+      stdout.spy.mockRestore();
+      await service.stop?.(ctx);
+    }
   });
 
   test("omits log message bodies from OTLP logs unless broad content capture is enabled", async () => {
@@ -1869,7 +2120,7 @@ describe("diagnostics-otel service", () => {
       sessionKey: "session-key",
       sessionId: "session-id",
       provider: "anthropic",
-      model: "claude-sonnet-4.6",
+      model: "anthropic/claude-sonnet-4.6",
       usage: {
         input: 100,
         output: 40,
@@ -1885,7 +2136,9 @@ describe("diagnostics-otel service", () => {
     const modelUsageOptions = startedSpanOptions("openclaw.model.usage");
     expect(modelUsageOptions?.attributes?.["gen_ai.operation.name"]).toBe("chat");
     expect(modelUsageOptions?.attributes?.["gen_ai.system"]).toBe("anthropic");
-    expect(modelUsageOptions?.attributes?.["gen_ai.request.model"]).toBe("claude-sonnet-4.6");
+    expect(modelUsageOptions?.attributes?.["gen_ai.request.model"]).toBe(
+      "anthropic/claude-sonnet-4.6",
+    );
     expect(modelUsageOptions?.attributes?.["gen_ai.usage.input_tokens"]).toBe(150);
     expect(modelUsageOptions?.attributes?.["gen_ai.usage.output_tokens"]).toBe(40);
     expect(modelUsageOptions?.attributes?.["gen_ai.usage.cache_read.input_tokens"]).toBe(30);
@@ -1912,8 +2165,8 @@ describe("diagnostics-otel service", () => {
       runId: "run-1",
       callId: "call-1",
       sessionKey: "session-key",
-      provider: "openai",
-      model: "gpt-5.4",
+      provider: "anthropic",
+      model: "anthropic/claude-sonnet-4.6",
       api: "openai-completions",
       durationMs: 250,
     });
@@ -1942,8 +2195,8 @@ describe("diagnostics-otel service", () => {
     expect(genAiOperationDuration?.record).toHaveBeenCalledTimes(2);
     expect(genAiOperationDuration?.record).toHaveBeenCalledWith(0.25, {
       "gen_ai.operation.name": "text_completion",
-      "gen_ai.provider.name": "openai",
-      "gen_ai.request.model": "gpt-5.4",
+      "gen_ai.provider.name": "anthropic",
+      "gen_ai.request.model": "unknown",
     });
     expect(genAiOperationDuration?.record).toHaveBeenCalledWith(1.25, {
       "gen_ai.operation.name": "generate_content",
@@ -2031,6 +2284,23 @@ describe("diagnostics-otel service", () => {
       requestPayloadBytes: 1234,
       responseStreamBytes: 567,
       timeToFirstByteMs: 45,
+      promptStats: {
+        inputMessagesCount: 2,
+        inputMessagesChars: 3456,
+        systemPromptChars: 789,
+        toolDefinitionsCount: 4,
+        toolDefinitionsChars: 2345,
+        totalChars: 6590,
+      },
+      usage: {
+        input: 100,
+        output: 20,
+        cacheRead: 30,
+        cacheWrite: 5,
+        reasoningTokens: 8,
+        promptTokens: 135,
+        total: 155,
+      },
       trace: {
         traceId: TRACE_ID,
         spanId: CHILD_SPAN_ID,
@@ -2165,6 +2435,21 @@ describe("diagnostics-otel service", () => {
     expect(modelSpanAttributes["openclaw.model_call.request_bytes"]).toBe(1234);
     expect(modelSpanAttributes["openclaw.model_call.response_bytes"]).toBe(567);
     expect(modelSpanAttributes["openclaw.model_call.time_to_first_byte_ms"]).toBe(45);
+    expect(modelSpanAttributes["openclaw.model_call.prompt.input_messages_count"]).toBe(2);
+    expect(modelSpanAttributes["openclaw.model_call.prompt.input_messages_chars"]).toBe(3456);
+    expect(modelSpanAttributes["openclaw.model_call.prompt.system_prompt_chars"]).toBe(789);
+    expect(modelSpanAttributes["openclaw.model_call.prompt.tool_definitions_count"]).toBe(4);
+    expect(modelSpanAttributes["openclaw.model_call.prompt.tool_definitions_chars"]).toBe(2345);
+    expect(modelSpanAttributes["openclaw.model_call.prompt.total_chars"]).toBe(6590);
+    expect(modelSpanAttributes["openclaw.model_call.usage.input_tokens"]).toBe(100);
+    expect(modelSpanAttributes["openclaw.model_call.usage.output_tokens"]).toBe(20);
+    expect(modelSpanAttributes["openclaw.model_call.usage.cache_read_input_tokens"]).toBe(30);
+    expect(modelSpanAttributes["openclaw.model_call.usage.cache_creation_input_tokens"]).toBe(5);
+    expect(modelSpanAttributes["openclaw.model_call.usage.reasoning_output_tokens"]).toBe(8);
+    expect(modelSpanAttributes["openclaw.model_call.usage.prompt_tokens"]).toBe(135);
+    expect(modelSpanAttributes["openclaw.model_call.usage.total_tokens"]).toBe(155);
+    expect(modelSpanAttributes["gen_ai.usage.input_tokens"]).toBe(135);
+    expect(modelSpanAttributes["gen_ai.usage.output_tokens"]).toBe(20);
     const runDuration = lastHistogramRecord("openclaw.run.duration_ms");
     expect(runDuration?.[0]).toBe(100);
     expect(Object.hasOwn(runDuration?.[1] ?? {}, "openclaw.runId")).toBe(false);

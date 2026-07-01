@@ -25,6 +25,7 @@ import {
   classifyOAuthRefreshFailureError,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import type { BootstrapContextRunKind } from "../../agents/bootstrap-mode.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import {
@@ -42,8 +43,10 @@ import {
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
 import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
+import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { isFailoverError } from "../../agents/failover-error.js";
+import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
@@ -79,12 +82,14 @@ import {
 } from "../../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
+import { truncateUtf16Safe } from "../../shared/utf16-slice.js";
 import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
@@ -123,6 +128,7 @@ import {
   buildEmbeddedRunExecutionParams,
   resolveQueuedReplyRuntimeConfig,
   resolveModelFallbackOptions,
+  resolveRunFastModeForFallbackCandidate,
 } from "./agent-runner-utils.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import {
@@ -750,7 +756,7 @@ function extractCodexUsageLimitMessage(text: string): string | undefined {
   if (!message) {
     return undefined;
   }
-  return message.length > 500 ? `${message.slice(0, 497)}...` : message;
+  return message.length > 500 ? `${truncateUtf16Safe(message, 497)}...` : message;
 }
 
 function isPureTransientRateLimitSummary(err: unknown): boolean {
@@ -1592,6 +1598,7 @@ export async function runAgentTurnWithFallback(params: {
   toolProgressDetail?: "explain" | "raw";
   replyMediaContext?: ReplyMediaContext;
   onCompactionNoticePayload?: (payload: ReplyPayload) => Promise<void> | void;
+  isRestartRecoveryArmed?: () => boolean;
 }): Promise<AgentRunLoopResult> {
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
@@ -1727,6 +1734,25 @@ export async function runAgentTurnWithFallback(params: {
     }
     didNotifyAgentRunStart = true;
     params.opts?.onAgentRunStart?.(runId);
+  };
+  const signalExecutionPhaseForTyping = (
+    info: Parameters<NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>>[0],
+  ) => {
+    const isUserVisibleExecutionActivity =
+      info.phase === "turn_accepted" ||
+      info.phase === "process_spawned" ||
+      info.phase === "model_call_started" ||
+      info.phase === "tool_execution_started" ||
+      info.phase === "assistant_output_started";
+    if (!isUserVisibleExecutionActivity) {
+      return;
+    }
+    notifyAgentRunStart();
+    void (
+      params.typingSignals.signalExecutionActivity?.() ?? params.typingSignals.signalRunStart()
+    ).catch((err: unknown) => {
+      logVerbose(`execution phase typing signal failed: ${String(err)}`);
+    });
   };
   const currentMessageId = params.sessionCtx.MessageSidFull ?? params.sessionCtx.MessageSid;
   const notifyUserAboutCompaction = shouldNotifyUserAboutCompaction(runtimeConfig);
@@ -2077,7 +2103,9 @@ export async function runAgentTurnWithFallback(params: {
       const sourceRepliesAreToolOnly =
         params.followupRun.run.sourceReplyDeliveryMode === "message_tool_only";
       const shouldSuppressProgressAfterMessageToolDelivery = () =>
-        sourceRepliesAreToolOnly && messageToolOnlyDeliveryCompleted;
+        sourceRepliesAreToolOnly &&
+        messageToolOnlyDeliveryCompleted &&
+        params.opts?.allowProgressCallbacksWhenSourceDeliverySuppressed !== true;
       const onToolResult = params.opts?.onToolResult;
       const outcomePlan = buildAgentRuntimeOutcomePlan();
       const runLane = CommandLane.Main;
@@ -2089,6 +2117,17 @@ export async function runAgentTurnWithFallback(params: {
       const notifyUserMessagePersisted = () => {
         queuedUserMessagePersistedAcrossFallback = true;
       };
+      const fastModeStartedAtMs = Date.now();
+      const fastModeAutoProgressState: FastModeAutoProgressState = {
+        offAnnounced: false,
+        resetAnnounced: false,
+      };
+      const bootstrapContextRunKind: BootstrapContextRunKind =
+        resolveHeartbeatRunScope(params.opts) === "commitment-only"
+          ? "commitment-only"
+          : params.opts?.isHeartbeat
+            ? "heartbeat"
+            : "default";
       // Profiler-only milestone: it separates fallback setup from the actual
       // model run without adding extra live logs/snapshots to normal turns.
       agentTurnTiming.logMilestoneIfSlow({
@@ -2155,6 +2194,13 @@ export async function runAgentTurnWithFallback(params: {
             const suppressAssistantErrorPersistenceForCandidate =
               assistantErrorPersistedAcrossFallback;
             const candidateRun = resolveRunForFallbackCandidate(provider, model);
+            const candidateFastMode = resolveRunFastModeForFallbackCandidate({
+              run: candidateRun,
+              config: runtimeConfig,
+              provider,
+              model,
+              sessionEntry: params.getActiveSessionEntry(),
+            });
             const activeProbe = effectiveRun.autoFallbackPrimaryProbe;
             if (activeProbe && provider === activeProbe.provider && model === activeProbe.model) {
               markAutoFallbackPrimaryProbe({
@@ -2282,7 +2328,10 @@ export async function runAgentTurnWithFallback(params: {
                     await params.opts.onPartialReply({ text: textForTyping });
                   },
                   onReasoningText: async (text) => {
-                    await params.opts?.onReasoningStream?.({ text });
+                    await params.opts?.onReasoningStream?.({
+                      text,
+                      requiresReasoningProgressOptIn: true,
+                    });
                   },
                   onToolEvent: async (payload) => {
                     await cliToolSummaryTracker.noteToolEvent(payload);
@@ -2302,14 +2351,17 @@ export async function runAgentTurnWithFallback(params: {
                   },
                   onCommentaryText:
                     params.opts?.commentaryProgressEnabled === true && params.opts.onItemEvent
-                      ? async ({ text, itemId }) => {
+                      ? async (payload) => {
                           await params.opts?.onItemEvent?.({
+                            itemId: payload.itemId,
                             kind: "preamble",
-                            progressText: text,
-                            itemId,
+                            progressText: payload.text,
                           });
                         }
                       : undefined,
+                  onFastModeAutoProgress: async (payload) => {
+                    await params.opts?.onToolResult?.(payload);
+                  },
                   onErrorBeforeLifecycle: async () => {
                     if (!rollbackFallbackCandidateSelection) {
                       return;
@@ -2358,6 +2410,11 @@ export async function runAgentTurnWithFallback(params: {
                     provider: cliExecutionProvider,
                     model,
                     thinkLevel: params.followupRun.run.thinkLevel,
+                    fastMode: candidateFastMode.fastMode,
+                    fastModeStartedAtMs,
+                    fastModeAutoOnSeconds: candidateFastMode.fastModeAutoOnSeconds,
+                    fastModeAutoProgressState,
+                    isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
                     timeoutMs: params.followupRun.run.timeoutMs,
                     runTimeoutOverrideMs: params.followupRun.run.runTimeoutOverrideMs,
                     runId,
@@ -2372,6 +2429,8 @@ export async function runAgentTurnWithFallback(params: {
                     cliSessionId: cliSessionBinding?.sessionId,
                     cliSessionBinding,
                     authProfileId: authProfile.authProfileId,
+                    bootstrapContextMode: params.opts?.bootstrapContextMode,
+                    bootstrapContextRunKind,
                     bootstrapPromptWarningSignaturesSeen,
                     bootstrapPromptWarningSignature:
                       bootstrapPromptWarningSignaturesSeen[
@@ -2386,16 +2445,20 @@ export async function runAgentTurnWithFallback(params: {
                       params.followupRun.originatingTo ??
                       params.sessionCtx.OriginatingTo ??
                       params.sessionCtx.To,
+                    senderId: params.followupRun.run.senderId,
+                    chatId: params.followupRun.originatingChatId,
+                    channelContext: params.followupRun.run.channelContext,
                     currentThreadTs:
                       cliCurrentThreadId != null ? String(cliCurrentThreadId) : undefined,
                     currentMessageId: cliCurrentMessageId,
                     currentInboundAudio: hasInboundAudio(params.sessionCtx),
                     agentAccountId: params.followupRun.run.agentAccountId,
-                    senderId: params.followupRun.run.senderId,
                     senderIsOwner: params.followupRun.run.senderIsOwner,
+                    approvalReviewerDeviceId: params.followupRun.run.approvalReviewerDeviceId,
                     toolsAllow: params.opts?.toolsAllow,
                     disableTools: params.opts?.disableTools,
                     abortSignal: runAbortSignal,
+                    onExecutionPhase: signalExecutionPhaseForTyping,
                     replyOperation: params.replyOperation,
                   },
                 }),
@@ -2416,7 +2479,7 @@ export async function runAgentTurnWithFallback(params: {
             }
             const { embeddedContext, senderContext, runBaseParams } =
               buildEmbeddedRunExecutionParams({
-                run: candidateRun,
+                run: { ...candidateRun, ...candidateFastMode },
                 replyRoute: params.followupRun,
                 sessionCtx: params.sessionCtx,
                 hasRepliedRef: params.opts?.hasRepliedRef,
@@ -2490,6 +2553,9 @@ export async function runAgentTurnWithFallback(params: {
                     provider: embeddedRunProvider,
                     agentHarnessId: embeddedRunHarnessOverride,
                     agentHarnessRuntimeOverride: embeddedRunHarnessOverride,
+                    fastModeStartedAtMs,
+                    fastModeAutoProgressState,
+                    isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
                     sandboxSessionKey: params.runtimePolicySessionKey,
                     prompt: params.commandBody,
                     transcriptPrompt: params.transcriptCommandBody,
@@ -2529,7 +2595,7 @@ export async function runAgentTurnWithFallback(params: {
                     enableHeartbeatTool: params.opts?.enableHeartbeatTool,
                     forceHeartbeatTool: params.opts?.forceHeartbeatTool,
                     bootstrapContextMode: params.opts?.bootstrapContextMode,
-                    bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
+                    bootstrapContextRunKind,
                     images: currentTurnImages.images,
                     imageOrder: currentTurnImages.imageOrder,
                     abortSignal: runAbortSignal,
@@ -2540,6 +2606,7 @@ export async function runAgentTurnWithFallback(params: {
                         lifecycleGeneration = info.lifecycleGeneration;
                       }
                     },
+                    onExecutionPhase: signalExecutionPhaseForTyping,
                     blockReplyBreak: params.resolvedBlockStreamingBreak,
                     blockReplyChunking: params.blockReplyChunking,
                     onPartialReply: async (payload) => {
@@ -2567,246 +2634,286 @@ export async function runAgentTurnWithFallback(params: {
                               text: payload.text,
                               mediaUrls: payload.mediaUrls,
                               isReasoningSnapshot: payload.isReasoningSnapshot,
+                              requiresReasoningProgressOptIn:
+                                payload.requiresReasoningProgressOptIn,
                             });
                           }
                         : undefined,
+                    streamReasoningInNonStreamModes: params.opts?.streamReasoningInNonStreamModes,
                     onReasoningEnd: params.opts?.onReasoningEnd,
-                    onAgentEvent: async (evt) => {
-                      lifecycleBackstop.note(evt);
-                      // Signal run start only after the embedded agent emits real activity.
-                      const hasLifecyclePhase =
-                        evt.stream === "lifecycle" && typeof evt.data.phase === "string";
-                      if (evt.stream !== "lifecycle" || hasLifecyclePhase) {
-                        notifyAgentRunStart();
-                      }
-                      // Trigger typing when tools start executing.
-                      // Must await to ensure typing indicator starts before tool summaries are emitted.
-                      if (evt.stream === "tool") {
-                        const phase = readStringValue(evt.data.phase) ?? "";
-                        const name = readStringValue(evt.data.name);
-                        const toolCallId = readStringValue(evt.data.toolCallId) ?? "";
-                        const args =
-                          evt.data.args && typeof evt.data.args === "object"
-                            ? (evt.data.args as Record<string, unknown>)
-                            : undefined;
-                        if (
+                    onAgentEvent: (() => {
+                      // Normalize commentary deltas/snapshots into full preamble text.
+                      const commentaryTextByItem = new Map<string, string>();
+                      const lastEmittedCommentaryByItem = new Map<string, string>();
+                      return async (evt) => {
+                        lifecycleBackstop.note(evt);
+                        // Signal run start only after the embedded agent emits real activity.
+                        const hasLifecyclePhase =
+                          evt.stream === "lifecycle" && typeof evt.data.phase === "string";
+                        if (evt.stream !== "lifecycle" || hasLifecyclePhase) {
+                          notifyAgentRunStart();
+                        }
+                        // Trigger typing when tools start executing.
+                        // Must await to ensure typing indicator starts before tool summaries are emitted.
+                        if (evt.stream === "tool") {
+                          const phase = readStringValue(evt.data.phase) ?? "";
+                          const name = readStringValue(evt.data.name);
+                          const toolCallId = readStringValue(evt.data.toolCallId) ?? "";
+                          const args =
+                            evt.data.args && typeof evt.data.args === "object"
+                              ? (evt.data.args as Record<string, unknown>)
+                              : undefined;
+                          if (
+                            sourceRepliesAreToolOnly &&
+                            toolCallId &&
+                            name &&
+                            (phase === "start" || phase === "update") &&
+                            args &&
+                            isMessagingToolSendAction(name, args)
+                          ) {
+                            messageToolOnlyDeliveryToolCallIds.add(toolCallId);
+                          }
+                          if (shouldSuppressProgressAfterMessageToolDelivery()) {
+                            return;
+                          }
+                          if (phase === "start" || phase === "update") {
+                            const toolStartProgressPromise = params.opts?.onToolStart?.({
+                              itemId: readStringValue(evt.data.itemId),
+                              toolCallId: readStringValue(evt.data.toolCallId),
+                              name,
+                              phase,
+                              args,
+                              detailMode: params.toolProgressDetail,
+                            });
+                            await Promise.all([
+                              params.typingSignals.signalToolStart(),
+                              toolStartProgressPromise,
+                            ]);
+                          }
+                          const commandOutput = buildCommandOutputFromToolResultEvent(evt);
+                          if (commandOutput) {
+                            await params.opts?.onCommandOutput?.(commandOutput);
+                          }
+                        }
+                        const suppressItemChannelProgress =
+                          evt.stream === "item" &&
+                          evt.data.suppressChannelProgress === true &&
+                          Boolean(params.opts?.onToolStart);
+                        const itemPhase =
+                          evt.stream === "item" ? readStringValue(evt.data.phase) : "";
+                        const itemName =
+                          evt.stream === "item" ? readStringValue(evt.data.name) : "";
+                        const itemStatus =
+                          evt.stream === "item" ? readStringValue(evt.data.status) : "";
+                        const itemToolCallId =
+                          evt.stream === "item" ? (readStringValue(evt.data.toolCallId) ?? "") : "";
+                        const completedMessageToolDelivery =
                           sourceRepliesAreToolOnly &&
-                          toolCallId &&
-                          name &&
-                          (phase === "start" || phase === "update") &&
-                          args &&
-                          isMessagingToolSendAction(name, args)
+                          itemPhase === "end" &&
+                          itemStatus === "completed" &&
+                          itemToolCallId.length > 0 &&
+                          messageToolOnlyDeliveryToolCallIds.has(itemToolCallId);
+                        const suppressProgressAfterMessageToolDelivery =
+                          shouldSuppressProgressAfterMessageToolDelivery();
+                        if (completedMessageToolDelivery) {
+                          messageToolOnlyDeliveryToolCallIds.delete(itemToolCallId);
+                          messageToolOnlyDeliveryCompleted = true;
+                        }
+                        if (
+                          evt.stream === "assistant" &&
+                          readStringValue(evt.data.phase) === "commentary" &&
+                          !shouldSuppressProgressAfterMessageToolDelivery()
                         ) {
-                          messageToolOnlyDeliveryToolCallIds.add(toolCallId);
+                          const commentaryItemId = readStringValue(evt.data.itemId) ?? "";
+                          const snapshotText = readStringValue(evt.data.text);
+                          const deltaText = readStringValue(evt.data.delta);
+                          const accumulated =
+                            evt.data.replace === true && snapshotText
+                              ? snapshotText
+                              : deltaText
+                                ? `${commentaryTextByItem.get(commentaryItemId) ?? ""}${deltaText}`
+                                : (snapshotText ?? "");
+                          commentaryTextByItem.set(commentaryItemId, accumulated);
+                          const commentaryText = accumulated.replace(/\s+/g, " ").trim();
+                          if (
+                            commentaryText &&
+                            lastEmittedCommentaryByItem.get(commentaryItemId) !== commentaryText
+                          ) {
+                            lastEmittedCommentaryByItem.set(commentaryItemId, commentaryText);
+                            await params.opts?.onItemEvent?.({
+                              itemId: commentaryItemId || undefined,
+                              kind: "preamble",
+                              title: "Preamble",
+                              phase: "update",
+                              progressText: commentaryText,
+                            });
+                          }
                         }
-                        if (shouldSuppressProgressAfterMessageToolDelivery()) {
-                          return;
-                        }
-                        if (phase === "start" || phase === "update") {
-                          const toolStartProgressPromise = params.opts?.onToolStart?.({
+                        if (
+                          evt.stream === "item" &&
+                          !suppressItemChannelProgress &&
+                          (!suppressProgressAfterMessageToolDelivery ||
+                            completedMessageToolDelivery)
+                        ) {
+                          await params.opts?.onItemEvent?.({
                             itemId: readStringValue(evt.data.itemId),
                             toolCallId: readStringValue(evt.data.toolCallId),
-                            name,
-                            phase,
-                            args,
-                            detailMode: params.toolProgressDetail,
+                            kind: readStringValue(evt.data.kind),
+                            title: readStringValue(evt.data.title),
+                            name: itemName,
+                            phase: itemPhase,
+                            status: itemStatus,
+                            summary: readStringValue(evt.data.summary),
+                            progressText: readStringValue(evt.data.progressText),
+                            meta: readStringValue(evt.data.meta),
+                            approvalId: readStringValue(evt.data.approvalId),
+                            approvalSlug: readStringValue(evt.data.approvalSlug),
                           });
-                          await Promise.all([
-                            params.typingSignals.signalToolStart(),
-                            toolStartProgressPromise,
-                          ]);
                         }
-                        const commandOutput = buildCommandOutputFromToolResultEvent(evt);
-                        if (commandOutput) {
-                          await params.opts?.onCommandOutput?.(commandOutput);
-                        }
-                      }
-                      const suppressItemChannelProgress =
-                        evt.stream === "item" &&
-                        evt.data.suppressChannelProgress === true &&
-                        Boolean(params.opts?.onToolStart);
-                      const itemPhase =
-                        evt.stream === "item" ? readStringValue(evt.data.phase) : "";
-                      const itemName = evt.stream === "item" ? readStringValue(evt.data.name) : "";
-                      const itemStatus =
-                        evt.stream === "item" ? readStringValue(evt.data.status) : "";
-                      const itemToolCallId =
-                        evt.stream === "item" ? (readStringValue(evt.data.toolCallId) ?? "") : "";
-                      const completedMessageToolDelivery =
-                        sourceRepliesAreToolOnly &&
-                        itemPhase === "end" &&
-                        itemStatus === "completed" &&
-                        itemToolCallId.length > 0 &&
-                        messageToolOnlyDeliveryToolCallIds.has(itemToolCallId);
-                      const suppressProgressAfterMessageToolDelivery =
-                        shouldSuppressProgressAfterMessageToolDelivery();
-                      if (completedMessageToolDelivery) {
-                        messageToolOnlyDeliveryToolCallIds.delete(itemToolCallId);
-                        messageToolOnlyDeliveryCompleted = true;
-                      }
-                      if (
-                        evt.stream === "item" &&
-                        !suppressItemChannelProgress &&
-                        (!suppressProgressAfterMessageToolDelivery || completedMessageToolDelivery)
-                      ) {
-                        await params.opts?.onItemEvent?.({
-                          itemId: readStringValue(evt.data.itemId),
-                          toolCallId: readStringValue(evt.data.toolCallId),
-                          kind: readStringValue(evt.data.kind),
-                          title: readStringValue(evt.data.title),
-                          name: itemName,
-                          phase: itemPhase,
-                          status: itemStatus,
-                          summary: readStringValue(evt.data.summary),
-                          progressText: readStringValue(evt.data.progressText),
-                          meta: readStringValue(evt.data.meta),
-                          approvalId: readStringValue(evt.data.approvalId),
-                          approvalSlug: readStringValue(evt.data.approvalSlug),
-                        });
-                      }
-                      if (
-                        evt.stream === "plan" &&
-                        !shouldSuppressProgressAfterMessageToolDelivery()
-                      ) {
-                        await params.opts?.onPlanUpdate?.({
-                          phase: readStringValue(evt.data.phase),
-                          title: readStringValue(evt.data.title),
-                          explanation: readStringValue(evt.data.explanation),
-                          steps: Array.isArray(evt.data.steps)
-                            ? evt.data.steps.filter(
-                                (step): step is string => typeof step === "string",
-                              )
-                            : undefined,
-                          source: readStringValue(evt.data.source),
-                        });
-                      }
-                      if (
-                        evt.stream === "approval" &&
-                        !shouldSuppressProgressAfterMessageToolDelivery()
-                      ) {
-                        await params.opts?.onApprovalEvent?.({
-                          phase: readStringValue(evt.data.phase),
-                          kind: readStringValue(evt.data.kind),
-                          status: readStringValue(evt.data.status),
-                          title: readStringValue(evt.data.title),
-                          itemId: readStringValue(evt.data.itemId),
-                          toolCallId: readStringValue(evt.data.toolCallId),
-                          approvalId: readStringValue(evt.data.approvalId),
-                          approvalSlug: readStringValue(evt.data.approvalSlug),
-                          command: readStringValue(evt.data.command),
-                          host: readStringValue(evt.data.host),
-                          reason: readStringValue(evt.data.reason),
-                          scope: readApprovalScopeValue(evt.data.scope),
-                          message: readStringValue(evt.data.message),
-                        });
-                      }
-                      if (
-                        evt.stream === "command_output" &&
-                        !shouldSuppressProgressAfterMessageToolDelivery()
-                      ) {
-                        await params.opts?.onCommandOutput?.({
-                          itemId: readStringValue(evt.data.itemId),
-                          phase: readStringValue(evt.data.phase),
-                          title: readStringValue(evt.data.title),
-                          toolCallId: readStringValue(evt.data.toolCallId),
-                          name: readStringValue(evt.data.name),
-                          output: readStringValue(evt.data.output),
-                          status: readStringValue(evt.data.status),
-                          exitCode:
-                            typeof evt.data.exitCode === "number" || evt.data.exitCode === null
-                              ? evt.data.exitCode
+                        if (
+                          evt.stream === "plan" &&
+                          !shouldSuppressProgressAfterMessageToolDelivery()
+                        ) {
+                          await params.opts?.onPlanUpdate?.({
+                            phase: readStringValue(evt.data.phase),
+                            title: readStringValue(evt.data.title),
+                            explanation: readStringValue(evt.data.explanation),
+                            steps: Array.isArray(evt.data.steps)
+                              ? evt.data.steps.filter(
+                                  (step): step is string => typeof step === "string",
+                                )
                               : undefined,
-                          durationMs:
-                            typeof evt.data.durationMs === "number"
-                              ? evt.data.durationMs
+                            source: readStringValue(evt.data.source),
+                          });
+                        }
+                        if (
+                          evt.stream === "approval" &&
+                          !shouldSuppressProgressAfterMessageToolDelivery()
+                        ) {
+                          await params.opts?.onApprovalEvent?.({
+                            phase: readStringValue(evt.data.phase),
+                            kind: readStringValue(evt.data.kind),
+                            status: readStringValue(evt.data.status),
+                            title: readStringValue(evt.data.title),
+                            itemId: readStringValue(evt.data.itemId),
+                            toolCallId: readStringValue(evt.data.toolCallId),
+                            approvalId: readStringValue(evt.data.approvalId),
+                            approvalSlug: readStringValue(evt.data.approvalSlug),
+                            command: readStringValue(evt.data.command),
+                            host: readStringValue(evt.data.host),
+                            reason: readStringValue(evt.data.reason),
+                            scope: readApprovalScopeValue(evt.data.scope),
+                            message: readStringValue(evt.data.message),
+                          });
+                        }
+                        if (
+                          evt.stream === "command_output" &&
+                          !shouldSuppressProgressAfterMessageToolDelivery()
+                        ) {
+                          await params.opts?.onCommandOutput?.({
+                            itemId: readStringValue(evt.data.itemId),
+                            phase: readStringValue(evt.data.phase),
+                            title: readStringValue(evt.data.title),
+                            toolCallId: readStringValue(evt.data.toolCallId),
+                            name: readStringValue(evt.data.name),
+                            output: readStringValue(evt.data.output),
+                            status: readStringValue(evt.data.status),
+                            exitCode:
+                              typeof evt.data.exitCode === "number" || evt.data.exitCode === null
+                                ? evt.data.exitCode
+                                : undefined,
+                            durationMs:
+                              typeof evt.data.durationMs === "number"
+                                ? evt.data.durationMs
+                                : undefined,
+                            cwd: readStringValue(evt.data.cwd),
+                          });
+                        }
+                        if (
+                          evt.stream === "patch" &&
+                          !shouldSuppressProgressAfterMessageToolDelivery()
+                        ) {
+                          await params.opts?.onPatchSummary?.({
+                            itemId: readStringValue(evt.data.itemId),
+                            phase: readStringValue(evt.data.phase),
+                            title: readStringValue(evt.data.title),
+                            toolCallId: readStringValue(evt.data.toolCallId),
+                            name: readStringValue(evt.data.name),
+                            added: Array.isArray(evt.data.added)
+                              ? evt.data.added.filter(
+                                  (entry): entry is string => typeof entry === "string",
+                                )
                               : undefined,
-                          cwd: readStringValue(evt.data.cwd),
-                        });
-                      }
-                      if (
-                        evt.stream === "patch" &&
-                        !shouldSuppressProgressAfterMessageToolDelivery()
-                      ) {
-                        await params.opts?.onPatchSummary?.({
-                          itemId: readStringValue(evt.data.itemId),
-                          phase: readStringValue(evt.data.phase),
-                          title: readStringValue(evt.data.title),
-                          toolCallId: readStringValue(evt.data.toolCallId),
-                          name: readStringValue(evt.data.name),
-                          added: Array.isArray(evt.data.added)
-                            ? evt.data.added.filter(
-                                (entry): entry is string => typeof entry === "string",
-                              )
-                            : undefined,
-                          modified: Array.isArray(evt.data.modified)
-                            ? evt.data.modified.filter(
-                                (entry): entry is string => typeof entry === "string",
-                              )
-                            : undefined,
-                          deleted: Array.isArray(evt.data.deleted)
-                            ? evt.data.deleted.filter(
-                                (entry): entry is string => typeof entry === "string",
-                              )
-                            : undefined,
-                          summary: readStringValue(evt.data.summary),
-                        });
-                      }
-                      if (evt.stream === "compaction") {
-                        const phase = readStringValue(evt.data.phase) ?? "";
-                        const backend = readStringValue(evt.data.backend);
-                        const hookMessages = readCompactionHookMessages(evt.data.messages);
-                        const sendCompactionUserNotices = async (
-                          noticePhase: "start" | "end" | "incomplete",
-                        ) => {
-                          if (hookMessages.length > 0) {
-                            await sendCompactionHookMessages(hookMessages);
-                          }
-                          if (notifyUserAboutCompaction) {
-                            await sendCompactionNotice(noticePhase);
-                          }
-                        };
-                        if (phase === "start") {
-                          if (params.opts?.onCompactionStart) {
-                            await params.opts.onCompactionStart();
-                          }
-                          await sendCompactionUserNotices("start");
+                            modified: Array.isArray(evt.data.modified)
+                              ? evt.data.modified.filter(
+                                  (entry): entry is string => typeof entry === "string",
+                                )
+                              : undefined,
+                            deleted: Array.isArray(evt.data.deleted)
+                              ? evt.data.deleted.filter(
+                                  (entry): entry is string => typeof entry === "string",
+                                )
+                              : undefined,
+                            summary: readStringValue(evt.data.summary),
+                          });
                         }
-                        if (phase === "end") {
-                          const completed = evt.data?.completed === true;
-                          if (completed) {
-                            attemptCompactionCount += 1;
-                            if (backend === CODEX_APP_SERVER_COMPACTION_BACKEND) {
-                              const modelRef = formatCompactionModelRef(provider, model);
-                              const consoleMessage =
-                                `codex app-server auto-compaction succeeded for ${modelRef}; ` +
-                                "refreshed session context";
-                              agentCompactionLog.info(
-                                "codex app-server auto-compaction succeeded",
-                                {
-                                  event: "codex_app_server_compaction_succeeded",
-                                  backend,
-                                  provider,
-                                  model,
-                                  sessionKey: params.sessionKey,
-                                  sessionId: effectiveRun.sessionId,
-                                  threadId: readStringValue(evt.data.threadId),
-                                  turnId: readStringValue(evt.data.turnId),
-                                  itemId: readStringValue(evt.data.itemId),
-                                  compactionCount: attemptCompactionCount,
-                                  consoleMessage,
-                                },
-                              );
+                        if (evt.stream === "compaction") {
+                          const phase = readStringValue(evt.data.phase) ?? "";
+                          const backend = readStringValue(evt.data.backend);
+                          const hookMessages = readCompactionHookMessages(evt.data.messages);
+                          const sendCompactionUserNotices = async (
+                            noticePhase: "start" | "end" | "incomplete",
+                          ) => {
+                            if (hookMessages.length > 0) {
+                              await sendCompactionHookMessages(hookMessages);
                             }
-                            if (params.opts?.onCompactionEnd) {
-                              await params.opts.onCompactionEnd();
+                            if (notifyUserAboutCompaction) {
+                              await sendCompactionNotice(noticePhase);
                             }
-                            await sendCompactionUserNotices("end");
-                          } else {
-                            await sendCompactionUserNotices("incomplete");
+                          };
+                          if (phase === "start") {
+                            if (params.opts?.onCompactionStart) {
+                              await params.opts.onCompactionStart();
+                            }
+                            await sendCompactionUserNotices("start");
+                          }
+                          if (phase === "end") {
+                            const completed = evt.data?.completed === true;
+                            if (completed) {
+                              attemptCompactionCount += 1;
+                              if (backend === CODEX_APP_SERVER_COMPACTION_BACKEND) {
+                                const modelRef = formatCompactionModelRef(provider, model);
+                                const consoleMessage =
+                                  `codex app-server auto-compaction succeeded for ${modelRef}; ` +
+                                  "refreshed session context";
+                                agentCompactionLog.info(
+                                  "codex app-server auto-compaction succeeded",
+                                  {
+                                    event: "codex_app_server_compaction_succeeded",
+                                    backend,
+                                    provider,
+                                    model,
+                                    sessionKey: params.sessionKey,
+                                    sessionId: effectiveRun.sessionId,
+                                    threadId: readStringValue(evt.data.threadId),
+                                    turnId: readStringValue(evt.data.turnId),
+                                    itemId: readStringValue(evt.data.itemId),
+                                    compactionCount: attemptCompactionCount,
+                                    consoleMessage,
+                                  },
+                                );
+                              }
+                              if (params.opts?.onCompactionEnd) {
+                                await params.opts.onCompactionEnd();
+                              }
+                              await sendCompactionUserNotices("end");
+                            } else {
+                              await sendCompactionUserNotices("incomplete");
+                            }
                           }
                         }
-                      }
-                    },
+                      };
+                    })(),
                     // Always pass onBlockReply so flushBlockReplyBuffer works before tool execution,
                     // even when regular block streaming is disabled. The handler sends directly
                     // via opts.onBlockReply when the pipeline isn't available.
@@ -3081,13 +3188,27 @@ export async function runAgentTurnWithFallback(params: {
         !isBilling && !shouldSurfaceToControlUi ? classifyProviderRequestError(err) : undefined;
       const isTransientHttp = isTransientHttpError(message);
 
+      // Drain/restart aborts stay silent and defer to post-restart
+      // main-session recovery, which resumes the interrupted turn (or emits its
+      // own genuine non-resumable notice). A generic "try again" here is a
+      // false terminal that invites a duplicate manual retry. Restart abort is
+      // treated exactly like user abort for visible output; the fail()
+      // bookkeeping for drain/lane-cleared is still recorded.
       if (isReplyOperationRestartAbort(params.replyOperation)) {
         takePendingLifecycleTerminal()?.emit("end", err);
+        if (params.isRestartRecoveryArmed?.() !== true) {
+          return {
+            kind: "final",
+            payload: markAgentRunFailureReplyPayload({
+              text: buildRestartLifecycleReplyText(),
+            }),
+          };
+        }
         return {
           kind: "final",
-          payload: markAgentRunFailureReplyPayload({
-            text: buildRestartLifecycleReplyText(),
-          }),
+          payload: {
+            text: SILENT_REPLY_TOKEN,
+          },
         };
       }
 

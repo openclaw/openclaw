@@ -37,6 +37,7 @@ import {
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getGlobalHookRunnerRegistry } from "../plugins/hook-runner-global-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { deriveToolParams } from "../plugins/host-tool-param-parsers.js";
 import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tools.js";
@@ -72,6 +73,18 @@ export {
   consumePreExecutionBlockedToolCall,
   peekAdjustedParamsForToolCall,
 } from "./agent-tools.before-tool-call.state.js";
+import {
+  BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS,
+  BEFORE_TOOL_CALL_HOOK_CONTEXT,
+  BEFORE_TOOL_CALL_SOURCE_TOOL,
+  BEFORE_TOOL_CALL_WRAPPED,
+  type BeforeToolCallDiagnosticOptions,
+} from "./before-tool-call-metadata.js";
+export {
+  copyBeforeToolCallHookMarker,
+  isToolWrappedWithBeforeToolCallHook,
+  setBeforeToolCallDiagnosticsEnabled,
+} from "./before-tool-call-metadata.js";
 import { copyChannelAgentToolMeta, getChannelAgentToolMeta } from "./channel-tools.js";
 import {
   getCodeModeExecBeforeHookMetadata,
@@ -82,6 +95,7 @@ import {
 } from "./code-mode-control-tools.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { normalizeToolName } from "./tool-policy.js";
+import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
 import { getToolTerminalPresentation } from "./tool-terminal-presentation.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -98,20 +112,6 @@ export type ToolOutcomeObservation = {
 
 export type ToolOutcomeObserver = (observation: ToolOutcomeObservation) => void;
 
-/** Detect abort-related errors produced by the supplied signal. */
-export function isAbortSignalCancellation(err: unknown, signal?: AbortSignal): boolean {
-  if (!signal?.aborted) {
-    return false;
-  }
-  if (err === signal.reason) {
-    return true;
-  }
-  return (
-    err instanceof Error &&
-    (err.name === "AbortError" || ("cause" in err && err.cause === signal.reason))
-  );
-}
-
 export type HookContext = {
   agentId?: string;
   config?: OpenClawConfig;
@@ -125,6 +125,11 @@ export type HookContext = {
   runId?: string;
   trace?: DiagnosticTraceContext;
   channelId?: string;
+  /** Originating channel for approval delivery routing; mirrors exec approval turn-source fields. */
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
   loopDetection?: ToolLoopDetectionConfig;
   onToolOutcome?: ToolOutcomeObserver;
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
@@ -206,9 +211,10 @@ export type BeforeToolCallPolicyDiagnosticState = {
 
 /** Return whether before_tool_call hooks or trusted policies are active. */
 export function getBeforeToolCallPolicyDiagnosticState(): BeforeToolCallPolicyDiagnosticState {
+  const policyRegistry = getGlobalHookRunnerRegistry() ?? undefined;
   return {
     hasBeforeToolCallHook: getGlobalHookRunner()?.hasHooks("before_tool_call") === true,
-    trustedToolPolicies: getTrustedToolPolicyDiagnosticEntries(),
+    trustedToolPolicies: getTrustedToolPolicyDiagnosticEntries(policyRegistry),
   };
 }
 
@@ -219,10 +225,6 @@ export function hasBeforeToolCallPolicy(): boolean {
 }
 
 const log = createSubsystemLogger("agents/tools");
-const BEFORE_TOOL_CALL_WRAPPED = Symbol("beforeToolCallWrapped");
-const BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS = Symbol("beforeToolCallDiagnosticOptions");
-const BEFORE_TOOL_CALL_SOURCE_TOOL = Symbol("beforeToolCallSourceTool");
-const BEFORE_TOOL_CALL_HOOK_CONTEXT = Symbol("beforeToolCallHookContext");
 const BEFORE_TOOL_CALL_HOOK_FAILURE_REASON =
   "Tool call blocked because before_tool_call hook failed";
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
@@ -673,6 +675,10 @@ async function requestPluginToolApproval(params: {
         toolCallId: params.toolCallId,
         agentId: params.ctx?.agentId,
         sessionKey: params.ctx?.sessionKey,
+        turnSourceChannel: params.ctx?.turnSourceChannel,
+        turnSourceTo: params.ctx?.turnSourceTo,
+        turnSourceAccountId: params.ctx?.turnSourceAccountId,
+        turnSourceThreadId: params.ctx?.turnSourceThreadId,
         timeoutMs,
         twoPhase: true,
       },
@@ -782,7 +788,13 @@ async function requestPluginToolApproval(params: {
     };
   } catch (err) {
     notifyPluginApprovalResolution(approval, PluginApprovalResolutions.CANCELLED);
-    if (isAbortSignalCancellation(err, params.signal)) {
+    const signal = params.signal;
+    const abortCancelled =
+      signal?.aborted === true &&
+      (err === signal.reason ||
+        (err instanceof Error &&
+          (err.name === "AbortError" || ("cause" in err && err.cause === signal.reason))));
+    if (abortCancelled) {
       log.warn(`plugin approval wait cancelled by run abort: ${String(err)}`);
       return {
         blocked: true,
@@ -1113,7 +1125,8 @@ export async function runBeforeToolCallHook(args: {
   const hookRunner = getGlobalHookRunner();
   try {
     const hasBeforeToolCallHooks = hookRunner?.hasHooks("before_tool_call") === true;
-    const shouldRunTrustedPolicies = hasTrustedToolPolicies();
+    const policyRegistry = getGlobalHookRunnerRegistry() ?? undefined;
+    const shouldRunTrustedPolicies = hasTrustedToolPolicies(policyRegistry);
     const normalizedParams = isPlainObject(params) ? params : {};
     const initialCorePolicyResult = resolveSkillWorkshopToolApproval({
       toolName,
@@ -1165,6 +1178,7 @@ export async function runBeforeToolCallHook(args: {
           },
           toolContext,
           {
+            ...(policyRegistry ? { registry: policyRegistry } : {}),
             ...(args.ctx?.config ? { config: args.ctx.config } : {}),
             deriveEvent: deriveToolEventParams,
             normalizeEvent(eventValue) {
@@ -1553,12 +1567,13 @@ export function wrapToolWithBeforeToolCallHook(
   };
   copyPluginToolMeta(tool, wrappedTool);
   copyChannelAgentToolMeta(tool as never, wrappedTool as never);
+  copyToolTerminalPresentation(tool, wrappedTool);
   Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_WRAPPED, {
     value: true,
     enumerable: true,
   });
   Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS, {
-    value: hookOptions,
+    value: hookOptions satisfies BeforeToolCallDiagnosticOptions,
     enumerable: false,
   });
   Object.defineProperty(wrappedTool, BEFORE_TOOL_CALL_SOURCE_TOOL, {
@@ -1570,21 +1585,6 @@ export function wrapToolWithBeforeToolCallHook(
     enumerable: false,
   });
   return wrappedTool;
-}
-
-/** Return true when a tool already carries the before_tool_call wrapper marker. */
-export function isToolWrappedWithBeforeToolCallHook(tool: AnyAgentTool): boolean {
-  const taggedTool = tool as unknown as Record<symbol, unknown>;
-  return taggedTool[BEFORE_TOOL_CALL_WRAPPED] === true;
-}
-
-/** Toggle diagnostic event emission on an existing before_tool_call wrapper. */
-export function setBeforeToolCallDiagnosticsEnabled(tool: AnyAgentTool, enabled: boolean): void {
-  const taggedTool = tool as unknown as Record<symbol, unknown>;
-  const options = taggedTool[BEFORE_TOOL_CALL_DIAGNOSTIC_OPTIONS];
-  if (options && typeof options === "object" && "emitDiagnostics" in options) {
-    (options as { emitDiagnostics: boolean }).emitDiagnostics = enabled;
-  }
 }
 
 /** Rebuild a before_tool_call wrapper while preserving the original source tool. */
@@ -1613,31 +1613,8 @@ export function rewrapToolWithBeforeToolCallHook(
   delete (rewrapSource as unknown as Record<symbol, unknown>)[BEFORE_TOOL_CALL_WRAPPED];
   copyPluginToolMeta(tool, rewrapSource);
   copyChannelAgentToolMeta(tool as never, rewrapSource as never);
+  copyToolTerminalPresentation(tool, rewrapSource);
   return wrapToolWithBeforeToolCallHook(rewrapSource, ctx ?? preservedContext, options);
-}
-
-/** Copy before_tool_call marker metadata when another wrapper replaces a tool. */
-export function copyBeforeToolCallHookMarker(source: AnyAgentTool, target: AnyAgentTool): void {
-  if (!isToolWrappedWithBeforeToolCallHook(source)) {
-    return;
-  }
-  Object.defineProperty(target, BEFORE_TOOL_CALL_WRAPPED, {
-    value: true,
-    enumerable: true,
-  });
-  const taggedSource = source as unknown as Record<symbol, unknown>;
-  const sourceTool = taggedSource[BEFORE_TOOL_CALL_SOURCE_TOOL];
-  if (sourceTool && typeof sourceTool === "object") {
-    Object.defineProperty(target, BEFORE_TOOL_CALL_SOURCE_TOOL, {
-      value: sourceTool,
-      enumerable: false,
-    });
-  }
-  const hookContext = taggedSource[BEFORE_TOOL_CALL_HOOK_CONTEXT];
-  Object.defineProperty(target, BEFORE_TOOL_CALL_HOOK_CONTEXT, {
-    value: hookContext,
-    enumerable: false,
-  });
 }
 
 function recordPreExecutionBlockedToolCall(toolCallId?: string, runId?: string): void {

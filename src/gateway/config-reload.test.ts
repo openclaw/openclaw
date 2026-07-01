@@ -28,7 +28,6 @@ import {
   listPluginInstallWholeRecordPaths,
   resolveConfigReloadMetadata,
   resolveGatewayReloadSettings,
-  shouldInvalidateSkillsSnapshotForPaths,
   startGatewayConfigReloader,
 } from "./config-reload.js";
 
@@ -161,7 +160,7 @@ describe("buildGatewayReloadPlan", () => {
       resolveAccount: () => ({}),
     },
     reload: {
-      configPrefixes: ["web", "channels.whatsapp.accounts"],
+      configPrefixes: ["web", "channels.whatsapp.accounts", "channels.whatsapp.selfChatMode"],
       noopPrefixes: ["channels.whatsapp"],
     },
   };
@@ -174,6 +173,12 @@ describe("buildGatewayReloadPlan", () => {
       pluginId: "browser",
       pluginName: "Browser",
       registration: { restartPrefixes: ["browser"] },
+      source: "test",
+    },
+    {
+      pluginId: "canvas",
+      pluginName: "Canvas",
+      registration: { restartPrefixes: ["plugins.entries.canvas"] },
       source: "test",
     },
   ];
@@ -233,6 +238,14 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartGateway).toBe(false);
     expect(plan.restartChannels).toEqual(new Set(["whatsapp"]));
     expect(plan.hotReasons).toEqual(changedPaths);
+    expect(plan.noopPaths).toStrictEqual([]);
+  });
+
+  it("restarts the WhatsApp channel when selfChatMode changes (configPrefix wins over broad noop prefix)", () => {
+    const plan = buildGatewayReloadPlan(["channels.whatsapp.selfChatMode"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set(["whatsapp"]));
+    expect(plan.hotReasons).toContain("channels.whatsapp.selfChatMode");
     expect(plan.noopPaths).toStrictEqual([]);
   });
 
@@ -365,6 +378,14 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.reloadPlugins).toBe(true);
     expect(plan.disposeMcpRuntimes).toBe(true);
     expect(plan.hotReasons).toContain("plugins.entries.lossless-claw.config.mode");
+  });
+
+  it("keeps restart-owned plugin entry config changes restart-backed", () => {
+    const plan = buildGatewayReloadPlan(["plugins.entries.canvas.enabled"]);
+
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toEqual(["plugins.entries.canvas.enabled"]);
+    expect(plan.hotReasons).toStrictEqual([]);
   });
 
   it("lists plugin install metadata and whole-record paths structurally", () => {
@@ -1865,43 +1886,6 @@ describe("startGatewayConfigReloader watcher error recovery", () => {
       }
       await reloader?.stop();
     }
-  });
-});
-
-describe("shouldInvalidateSkillsSnapshotForPaths", () => {
-  it.each([
-    "skills",
-    "skills.allowBundled",
-    "skills.entries",
-    "skills.entries.himalaya",
-    "skills.entries.himalaya.enabled",
-    "skills.profile",
-  ])("returns true for skills path %s", (path) => {
-    expect(shouldInvalidateSkillsSnapshotForPaths([path])).toBe(true);
-  });
-
-  it.each([
-    "tools.profile",
-    "agents.defaults.model",
-    "gateway.port",
-    "skillset.allowBundled",
-    "channels.telegram.enabled",
-  ])("returns false for unrelated path %s", (path) => {
-    expect(shouldInvalidateSkillsSnapshotForPaths([path])).toBe(false);
-  });
-
-  it("returns true when any path in the list matches", () => {
-    expect(
-      shouldInvalidateSkillsSnapshotForPaths([
-        "gateway.port",
-        "skills.allowBundled",
-        "channels.telegram.enabled",
-      ]),
-    ).toBe(true);
-  });
-
-  it("returns false for empty input", () => {
-    expect(shouldInvalidateSkillsSnapshotForPaths([])).toBe(false);
   });
 });
 

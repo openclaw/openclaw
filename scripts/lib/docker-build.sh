@@ -55,13 +55,27 @@ docker_build_transient_failure() {
     "$log_file"
 }
 
+docker_build_resource_exhausted_failure() {
+  local log_file="$1"
+  grep -Eqi 'ResourceExhausted|cannot allocate memory|out of memory|exit code: 137|signal: killed|Killed' "$log_file"
+}
+
+docker_build_print_resource_exhausted_hint() {
+  cat >&2 <<'EOF'
+Docker build failed because the builder ran out of memory.
+Try increasing the Docker/BuildKit memory limit, closing other memory-heavy processes, or rebuilding with a smaller OpenClaw build heap, for example:
+  OPENCLAW_DOCKER_BUILD_NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_DOCKER_BUILD_TSDOWN_MAX_OLD_SPACE_MB=4096 ./scripts/docker/setup.sh
+EOF
+}
+
 docker_build_retry_count() {
   local configured="${OPENCLAW_DOCKER_BUILD_RETRIES:-2}"
   if [[ "$configured" =~ ^[0-9]+$ ]]; then
-    echo "$configured"
+    echo "$((10#$configured))"
     return 0
   fi
-  echo 2
+  echo "invalid OPENCLAW_DOCKER_BUILD_RETRIES: $configured" >&2
+  return 2
 }
 
 docker_build_timeout_required() {
@@ -86,9 +100,10 @@ docker_build_heartbeat_seconds() {
   local configured="${OPENCLAW_DOCKER_BUILD_HEARTBEAT_SECONDS:-30}"
   if [[ "$configured" =~ ^[0-9]+$ ]] && [ "$configured" -ge 1 ]; then
     echo "$((10#$configured))"
-    return
+    return 0
   fi
-  echo 30
+  echo "invalid OPENCLAW_DOCKER_BUILD_HEARTBEAT_SECONDS: $configured" >&2
+  return 2
 }
 
 docker_build_run_command() {
@@ -205,7 +220,8 @@ docker_build_with_retries() {
   local label="$1"
   shift
   local retries
-  retries="$(docker_build_retry_count)"
+  retries="$(docker_build_retry_count)" || return $?
+  docker_build_heartbeat_seconds >/dev/null || return $?
   local attempt=1
   local max_attempts=$((retries + 1))
   local log_file
@@ -232,6 +248,9 @@ docker_build_with_retries() {
 
     if [ "$attempt" -ge "$max_attempts" ] || ! docker_build_transient_failure "$log_file"; then
       docker_e2e_print_log "$log_file"
+      if docker_build_resource_exhausted_failure "$log_file"; then
+        docker_build_print_resource_exhausted_hint
+      fi
       rm -f "$log_file"
       return 1
     fi

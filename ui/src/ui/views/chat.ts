@@ -20,26 +20,27 @@ import { renderChatQueue } from "../chat/chat-queue.ts";
 import { buildRawSidebarContent } from "../chat/chat-sidebar-raw.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "../chat/chat-welcome.ts";
 import { copyToClipboard } from "../chat/clipboard.ts";
+import { decodeCodeBlockCopyPayload } from "../chat/code-block-copy-payload.ts";
 import { renderContextNotice } from "../chat/context-notice.ts";
 import { DeletedMessages } from "../chat/deleted-messages.ts";
 import { exportChatMarkdown } from "../chat/export.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
   renderMessageGroup,
-  renderReadingIndicatorGroup,
-  renderStreamingGroup,
+  renderStreamGroup,
+  type StreamGroupPart,
 } from "../chat/grouped-render.ts";
 import { CHAT_HISTORY_RENDER_LIMIT } from "../chat/history-limits.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../chat/input-history.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
-import type { RealtimeTalkConversationEntry } from "../chat/realtime-talk-conversation.ts";
 import {
   REALTIME_TALK_FALLBACK_PROVIDERS,
   listSelectableRealtimeTalkProviders,
   resolveControlUiRealtimeTalkProviderTransports,
   type RealtimeTalkCatalogProvider,
 } from "../chat/realtime-talk-catalog.ts";
+import type { RealtimeTalkConversationEntry } from "../chat/realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "../chat/realtime-talk.ts";
 import { renderChatRunControls } from "../chat/run-controls.ts";
 import type { ChatRunUiStatus } from "../chat/run-lifecycle.ts";
@@ -59,6 +60,7 @@ import {
   renderCompactionIndicator,
   renderFallbackIndicator,
 } from "../chat/status-indicators.ts";
+import type { ChatStreamSegment } from "../chat/stream-text.ts";
 import { getExpandedToolCards, syncToolCardExpansionState } from "../chat/tool-expansion-state.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
@@ -116,7 +118,7 @@ export type ChatProps = {
   messages: unknown[];
   sideResult?: ChatSideResult | null;
   toolMessages: unknown[];
-  streamSegments: Array<{ text: string; ts: number }>;
+  streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
   assistantAvatarUrl?: string | null;
@@ -163,6 +165,7 @@ export type ChatProps = {
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   showNewMessages?: boolean;
   onScrollToBottom?: () => void;
+  onAssistantAttachmentLoaded?: () => void;
   onRefresh: () => void;
   onToggleFocusMode?: () => void;
   getDraft?: () => string;
@@ -202,6 +205,12 @@ export type ChatProps = {
   onChatScroll?: (event: Event) => void;
   basePath?: string;
   composerControls?: TemplateResult | typeof nothing | ReturnType<typeof guard>;
+  /** Selected message to reply to (set via right-click or keyboard shortcut). */
+  replyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
+  /** Clear the current reply target. */
+  onClearReply?: () => void;
+  /** Set the reply target from a message element. */
+  onSetReply?: (target: { messageId: string; text: string; senderLabel?: string | null }) => void;
   sessionWorkspace?: {
     collapsed: boolean;
     sessionKey: string;
@@ -290,16 +299,10 @@ function renderNativeTalkSelect(params: {
   value: string;
   options: TalkSelectOption[];
   onSelect: (value: string) => void;
-  selectedLabel?: string;
 }) {
-  const selectedLabel =
-    params.selectedLabel ?? params.options.find((entry) => entry.value === params.value)?.label;
   return html`
     <label class="agent-chat__talk-field" data-talk-select=${params.label.toLowerCase()}>
       <span>${params.label}</span>
-      ${selectedLabel
-        ? html`<span class="agent-chat__talk-select-label">${selectedLabel}</span>`
-        : nothing}
       <select
         .value=${params.value}
         @change=${(event: Event) =>
@@ -367,8 +370,6 @@ function renderRealtimeTalkOptions(props: ChatProps) {
   const sensitivityOptions = isCustomSensitivity
     ? [...TALK_SENSITIVITY_OPTIONS, { label: "Custom", value: "__custom" }]
     : TALK_SENSITIVITY_OPTIONS;
-  const sensitivityLabel =
-    sensitivityOptions.find((entry) => entry.value === sensitivityValue)?.label ?? "Custom";
   const updateSensitivity = (value: string) => {
     if (value !== "__custom") {
       onChange({ vadThreshold: value });
@@ -396,7 +397,6 @@ function renderRealtimeTalkOptions(props: ChatProps) {
           label: "Sensitivity",
           value: sensitivityValue,
           options: sensitivityOptions,
-          selectedLabel: sensitivityLabel,
           onSelect: updateSensitivity,
         })}
       </div>
@@ -506,6 +506,11 @@ function renderRealtimeTalkConversation(props: ChatProps) {
   `;
 }
 
+type PendingClearedSubmittedDraft = {
+  key: string;
+  value: string;
+};
+
 interface ChatEphemeralState {
   slashMenuOpen: boolean;
   slashMenuItems: SlashCommandDef[];
@@ -519,6 +524,8 @@ interface ChatEphemeralState {
   searchQuery: string;
   pinnedExpanded: boolean;
   composerComposing: boolean;
+  composerInputIntentKey: string | null;
+  pendingClearedSubmittedDraft: PendingClearedSubmittedDraft | null;
   historyRenderSessionKey: string | null;
   historyRenderMessagesRef: unknown[] | null;
   historyRenderMessageCount: number;
@@ -546,6 +553,8 @@ function createChatEphemeralState(): ChatEphemeralState {
     searchQuery: "",
     pinnedExpanded: false,
     composerComposing: false,
+    composerInputIntentKey: null,
+    pendingClearedSubmittedDraft: null,
     historyRenderSessionKey: null,
     historyRenderMessagesRef: null,
     historyRenderMessageCount: 0,
@@ -602,6 +611,47 @@ function commitComposerDraft(props: ChatProps, value: string): void {
   props.onDraftChange(value);
 }
 
+function markComposerInputIntent(key: string): void {
+  vs.composerInputIntentKey = key;
+}
+
+function consumeComposerInputIntent(key: string): boolean {
+  if (vs.composerInputIntentKey !== key) {
+    return false;
+  }
+  vs.composerInputIntentKey = null;
+  return true;
+}
+
+function clearPendingClearedSubmittedDraft(key: string): void {
+  if (vs.pendingClearedSubmittedDraft?.key === key) {
+    vs.pendingClearedSubmittedDraft = null;
+  }
+}
+
+function isExplicitComposerInsertion(event: InputEvent): boolean {
+  return event.inputType === "insertFromPaste" || event.inputType === "insertFromDrop";
+}
+
+function suppressStaleSubmittedDraftReplay(
+  target: HTMLTextAreaElement,
+  event: InputEvent,
+  draftMirror: ComposerDraftMirror,
+  hasInputIntent: boolean,
+): boolean {
+  const pending = vs.pendingClearedSubmittedDraft;
+  if (!pending) {
+    return false;
+  }
+  if (target.value !== pending.value || hasInputIntent || isExplicitComposerInsertion(event)) {
+    return false;
+  }
+
+  target.value = draftMirror.value;
+  adjustTextareaHeight(target);
+  return true;
+}
+
 function sameChatItemsInput(previous: BuildChatItemsProps, next: BuildChatItemsProps): boolean {
   return (
     previous.sessionKey === next.sessionKey &&
@@ -630,6 +680,37 @@ function buildCachedChatItems(input: BuildChatItemsProps): ReturnType<typeof bui
   cached.input = input;
   cached.items = items;
   return items;
+}
+
+type RenderChatItem = ReturnType<typeof buildChatItems>[number];
+type StreamRunRenderItem = { kind: "stream-run"; key: string; parts: StreamGroupPart[] };
+
+// Fold each contiguous run of in-flight stream/reading-indicator items into a
+// single group so segmented replies render under one assistant avatar instead
+// of one bubble per segment (#63956). Any message/group/divider breaks the run,
+// so interleaved tool calls keep their own groups.
+function coalesceStreamRuns(
+  items: ReturnType<typeof buildChatItems>,
+): Array<RenderChatItem | StreamRunRenderItem> {
+  const result: Array<RenderChatItem | StreamRunRenderItem> = [];
+  let run: StreamGroupPart[] = [];
+  const flush = () => {
+    const [first] = run;
+    if (first) {
+      result.push({ kind: "stream-run", key: `stream-run:${first.key}`, parts: run });
+      run = [];
+    }
+  };
+  for (const item of items) {
+    if (item.kind === "stream" || item.kind === "reading-indicator") {
+      run.push(item);
+      continue;
+    }
+    flush();
+    result.push(item);
+  }
+  flush();
+  return result;
 }
 
 function deletedChatItemsSignature(
@@ -668,8 +749,6 @@ export function resetChatViewState() {
   chatItemsBySession.clear();
   composerDraftMirrors.clear();
 }
-
-export const cleanupChatModuleState = resetChatViewState;
 
 function resolveChatHistoryRenderCap(messageCount: number): number {
   return Math.min(Math.max(0, messageCount), CHAT_HISTORY_RENDER_LIMIT);
@@ -1984,6 +2063,60 @@ function renderSlashMenu(
   `;
 }
 
+let activeReplyContextMenu: HTMLElement | null = null;
+let contextMenuDocumentClickHandler: ((e: MouseEvent) => void) | null = null;
+let contextMenuKeydownHandler: ((e: KeyboardEvent) => void) | null = null;
+
+function removeReplyContextMenu() {
+  activeReplyContextMenu?.remove();
+  activeReplyContextMenu = null;
+  document.querySelector(".chat-reply-context-menu")?.remove();
+  if (contextMenuDocumentClickHandler) {
+    document.removeEventListener("click", contextMenuDocumentClickHandler);
+    contextMenuDocumentClickHandler = null;
+  }
+  if (contextMenuKeydownHandler) {
+    document.removeEventListener("keydown", contextMenuKeydownHandler);
+    contextMenuKeydownHandler = null;
+  }
+}
+
+function stableReplyMessageId(senderLabel: string | undefined, text: string): string {
+  const source = `${senderLabel ?? ""}\n${text}`;
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `reply:${(hash >>> 0).toString(16)}`;
+}
+
+function createReplyContextMenuButton(onClick: () => void): HTMLButtonElement {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.setAttribute("role", "menuitem");
+  button.setAttribute("aria-label", "Reply to message");
+
+  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  icon.setAttribute("viewBox", "0 0 24 24");
+  icon.setAttribute("width", "16");
+  icon.setAttribute("height", "16");
+  icon.setAttribute("fill", "currentColor");
+  icon.setAttribute("stroke", "none");
+  icon.setAttribute("aria-hidden", "true");
+  icon.setAttribute("focusable", "false");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z");
+  icon.appendChild(path);
+
+  const label = document.createElement("span");
+  label.textContent = "Reply";
+
+  button.append(icon, label);
+  button.addEventListener("click", onClick);
+  return button;
+}
+
 export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
@@ -2032,13 +2165,93 @@ export function renderChat(props: ChatProps) {
     if (!btn) {
       return;
     }
-    const code = (btn as HTMLElement).dataset.code ?? "";
+    const button = btn as HTMLElement;
+    const code = decodeCodeBlockCopyPayload(button.dataset.code ?? "", button.dataset.codeEncoding);
     void copyToClipboard(code).then((copied) => {
       if (!copied) {
         return;
       }
       btn.classList.add("copied");
       setTimeout(() => btn.classList.remove("copied"), 1500);
+    });
+  };
+  const handleChatContextMenu = (e: MouseEvent, p: ChatProps) => {
+    const bubble = (e.target as HTMLElement).closest(".chat-bubble");
+    if (!bubble) {
+      return;
+    }
+    if (typeof p.onSetReply !== "function") {
+      return;
+    }
+    const group = bubble.closest(".chat-group");
+    if (!group) {
+      return;
+    }
+    // Skip streaming messages and reading indicators
+    if (
+      group.querySelector(".chat-reading-indicator") ||
+      group.querySelector(".chat-bubble.streaming")
+    ) {
+      return;
+    }
+    const senderEl = group.querySelector(".chat-sender-name");
+    const senderLabel = senderEl?.textContent?.trim() ?? undefined;
+    const text = (bubble as HTMLElement).dataset.messageText?.trim().slice(0, 500) ?? "";
+    if (!text) {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    const messageId =
+      (bubble as HTMLElement).dataset.messageId?.trim() || stableReplyMessageId(senderLabel, text);
+    removeReplyContextMenu();
+    const menu = document.createElement("div");
+    menu.className = "chat-reply-context-menu";
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("aria-label", "Message actions");
+    menu.style.left = `${e.clientX}px`;
+    menu.style.top = `${e.clientY}px`;
+    const button = createReplyContextMenuButton(() => {
+      p.onSetReply?.({ messageId, text, senderLabel });
+      removeReplyContextMenu();
+      composerTextarea?.focus();
+    });
+    menu.append(button);
+    document.body.appendChild(menu);
+    activeReplyContextMenu = menu;
+    // Clamp menu position within the viewport
+    const menuRect = menu.getBoundingClientRect();
+    let left = e.clientX;
+    let top = e.clientY;
+    if (left + menuRect.width > window.innerWidth) {
+      left = window.innerWidth - menuRect.width - 8;
+    }
+    if (top + menuRect.height > window.innerHeight) {
+      top = window.innerHeight - menuRect.height - 8;
+    }
+    menu.style.left = `${Math.max(0, left)}px`;
+    menu.style.top = `${Math.max(0, top)}px`;
+    button.focus();
+    requestAnimationFrame(() => {
+      if (!menu.isConnected || activeReplyContextMenu !== menu) {
+        return;
+      }
+      contextMenuDocumentClickHandler = (ev: MouseEvent) => {
+        if (!menu.contains(ev.target as Node | null)) {
+          removeReplyContextMenu();
+        }
+      };
+      const handleKeydown = (ev: KeyboardEvent) => {
+        if (ev.key === "Escape") {
+          ev.preventDefault();
+          ev.stopPropagation();
+          removeReplyContextMenu();
+          composerTextarea?.focus();
+        }
+      };
+      contextMenuKeydownHandler = handleKeydown;
+      document.addEventListener("click", contextMenuDocumentClickHandler);
+      document.addEventListener("keydown", handleKeydown);
     });
   };
   const handleChatThreadScroll = (event: Event) => {
@@ -2086,6 +2299,7 @@ export function renderChat(props: ChatProps) {
       })}
       @scroll=${handleChatThreadScroll}
       @click=${handleCodeBlockCopy}
+      @contextmenu=${(e: MouseEvent) => handleChatContextMenu(e, props)}
     >
       <div class="chat-thread-inner">
         ${showLoadingSkeleton
@@ -2156,7 +2370,7 @@ export function renderChat(props: ChatProps) {
           ],
           () =>
             repeat(
-              chatItems,
+              coalesceStreamRuns(chatItems),
               (item) => item.key,
               (item) => {
                 if (item.kind === "divider") {
@@ -2193,23 +2407,13 @@ export function renderChat(props: ChatProps) {
                     </div>
                   `;
                 }
-                if (item.kind === "reading-indicator") {
-                  return renderReadingIndicatorGroup(
-                    assistantIdentity,
-                    props.basePath,
-                    props.assistantAttachmentAuthToken ?? null,
-                  );
-                }
-                if (item.kind === "stream") {
-                  return renderStreamingGroup(
-                    item.text,
-                    item.startedAt,
-                    item.isStreaming,
-                    props.onOpenSidebar,
-                    assistantIdentity,
-                    props.basePath,
-                    props.assistantAttachmentAuthToken ?? null,
-                  );
+                if (item.kind === "stream-run") {
+                  return renderStreamGroup(item.parts, {
+                    onOpenSidebar: props.onOpenSidebar,
+                    assistant: assistantIdentity,
+                    basePath: props.basePath,
+                    authToken: props.assistantAttachmentAuthToken ?? null,
+                  });
                 }
                 if (item.kind === "group") {
                   if (deleted.has(item.key)) {
@@ -2234,6 +2438,7 @@ export function renderChat(props: ChatProps) {
                       expandedToolCards.get(toolCardId) ?? false,
                     onToggleToolExpanded: toggleToolCardExpanded,
                     onRequestUpdate: requestUpdate,
+                    onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
                     assistantName: props.assistantName,
                     assistantAvatar: assistantIdentity.avatar,
                     userName: props.userName ?? null,
@@ -2265,10 +2470,22 @@ export function renderChat(props: ChatProps) {
     if (typeof hostDraft !== "string") {
       return;
     }
+    const mirrorKey = composerDraftMirrorKey(props);
+    const submittedDraft = draftMirror.value;
+    const clearedSubmittedDraft =
+      hostDraft === "" && submittedDraft !== "" && target?.value === submittedDraft;
     // Sends can clear the host draft synchronously before Lit rerenders; keep
     // the local mirror aligned so the submitted text does not stay editable.
     draftMirror.hostDraft = hostDraft;
     draftMirror.value = hostDraft;
+    if (clearedSubmittedDraft) {
+      vs.pendingClearedSubmittedDraft = {
+        key: mirrorKey,
+        value: submittedDraft,
+      };
+    } else {
+      clearPendingClearedSubmittedDraft(mirrorKey);
+    }
     if (target && target.value !== hostDraft) {
       target.value = hostDraft;
       adjustTextareaHeight(target);
@@ -2419,14 +2636,24 @@ export function renderChat(props: ChatProps) {
     }
     updateSlashMenu(target.value, requestUpdate, props, {}, () => target.value);
   };
+  const handleBeforeInput = (e: InputEvent) => {
+    if (!vs.composerComposing && !e.isComposing) {
+      markComposerInputIntent(composerDraftMirrorKey(props));
+    }
+  };
   const handleInput = (e: InputEvent) => {
     const target = e.target as HTMLTextAreaElement;
+    const mirrorKey = composerDraftMirrorKey(props);
+    const hasInputIntent = consumeComposerInputIntent(mirrorKey);
     if (vs.composerComposing || e.isComposing) {
       // Skip adjustTextareaHeight during IME composition — each pinyin
       // keystroke fires `input` and the height read/write forces a
       // synchronous reflow that blocks the composition thread.
       // Resize runs once in handleCompositionEnd → syncComposerValue.
       draftMirror.value = target.value;
+      return;
+    }
+    if (suppressStaleSubmittedDraftReplay(target, e, draftMirror, hasInputIntent)) {
       return;
     }
     syncComposerValue(target);
@@ -2470,6 +2697,30 @@ export function renderChat(props: ChatProps) {
       @click=${(event: MouseEvent) => focusComposerFromChrome(event, props.connected)}
     >
       ${renderSlashMenu(requestUpdate, props, visibleDraft)} ${renderAttachmentPreview(props)}
+      ${props.replyTarget
+        ? html`
+            <div class="chat-reply-preview">
+              <span class="chat-reply-preview__icon">${icons.messageSquare}</span>
+              <span class="chat-reply-preview__label"
+                >Replying to ${props.replyTarget.senderLabel ?? "message"}</span
+              >
+              <span class="chat-reply-preview__text"
+                >${props.replyTarget.text.slice(0, 120)}${props.replyTarget.text.length > 120
+                  ? "…"
+                  : ""}</span
+              >
+              <button
+                type="button"
+                class="chat-reply-preview__dismiss"
+                @click=${() => props.onClearReply?.()}
+                aria-label="Cancel reply"
+                title="Cancel reply"
+              >
+                ${icons.x}
+              </button>
+            </div>
+          `
+        : nothing}
       <div class="agent-chat__composer-status-stack">
         ${renderFallbackIndicator(props.fallbackStatus)}
         ${renderCompactionIndicator(props.compactionStatus)}
@@ -2540,6 +2791,7 @@ export function renderChat(props: ChatProps) {
           aria-activedescendant=${ifDefined(activeSlashMenuOptionId ?? undefined)}
           aria-describedby=${SLASH_MENU_ACTIVE_ANNOUNCEMENT_ID}
           @keydown=${handleKeyDown}
+          @beforeinput=${handleBeforeInput}
           @input=${handleInput}
           @compositionstart=${() => {
             vs.composerComposing = true;
@@ -2645,6 +2897,12 @@ export function renderChat(props: ChatProps) {
       class="card chat"
       @drop=${(e: DragEvent) => handleDrop(e, props)}
       @dragover=${(e: DragEvent) => e.preventDefault()}
+      @keydown=${(e: KeyboardEvent) => {
+        if (e.key === "Escape" && props.replyTarget && !e.defaultPrevented) {
+          e.preventDefault();
+          props.onClearReply?.();
+        }
+      }}
     >
       ${props.disabledReason ? html`<div class="callout">${props.disabledReason}</div>` : nothing}
       ${

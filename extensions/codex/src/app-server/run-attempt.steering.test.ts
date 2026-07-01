@@ -7,6 +7,7 @@ import {
   createParams,
   createStartedThreadHarness,
   fastWait,
+  mockClientRuntimeMethods,
   queueActiveRunMessageForTest,
   runCodexAppServerAttempt,
   setCodexAppServerClientFactoryForTest,
@@ -227,6 +228,7 @@ describe("runCodexAppServerAttempt steering", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;

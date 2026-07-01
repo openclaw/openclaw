@@ -14,7 +14,18 @@ export function serializeJsonlEntry(entry: unknown): string {
 }
 
 export function serializeJsonlLine(entry: unknown): string {
-  return JSON.stringify(entry);
+  const serialized = JSON.stringify(entry);
+  // JSON.stringify returns undefined when the root value is undefined, a
+  // function, or a symbol. Without this guard the template literal in
+  // serializeJsonlEntry coerces it to the literal string "undefined", which is
+  // not valid JSON and is silently skipped by readers — a fail-silent loss of a
+  // transcript entry. Fail fast instead so the caller fixes the bad value.
+  if (serialized === undefined) {
+    throw new TypeError(
+      `serializeJsonlLine: entry of type ${typeof entry} is not JSON-serializable (JSON.stringify returned undefined)`,
+    );
+  }
+  return serialized;
 }
 
 export function serializeJsonlEntries(entries: readonly unknown[]): string {
@@ -48,13 +59,6 @@ export function appendSerializedJsonlEntrySync(
   const content = options?.prefixNewline ? `\n${serializedEntry}` : serializedEntry;
   appendFileSync(filePath, content, "utf-8");
   return content;
-}
-
-export function appendJsonlEntriesSync(filePath: string, entries: readonly unknown[]): void {
-  if (entries.length === 0) {
-    return;
-  }
-  appendFileSync(filePath, serializeJsonlEntries(entries), "utf-8");
 }
 
 export async function writeJsonlEntry(

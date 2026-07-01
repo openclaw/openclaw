@@ -23,6 +23,7 @@ import {
   getGatewayConfigModule,
   getSessionsHandlers,
   createDeferred,
+  createLinearSessionTranscript,
   sessionStoreEntry,
 } from "./test/server-sessions.test-helpers.js";
 
@@ -43,6 +44,19 @@ type MockCalls = {
 };
 type SessionStoreEntryOptions = Parameters<typeof sessionStoreEntry>[1];
 type MutationMethod = "sessions.patch" | "sessions.compact";
+
+function expectedLastMessageTranscript(sessionId: string, contents: string[]): string {
+  const records = createLinearSessionTranscript(sessionId, contents)
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  const header = records[0];
+  const last = records.at(-1);
+  if (!header || !last) {
+    throw new Error("expected a canonical transcript fixture");
+  }
+  return `${JSON.stringify(header)}\n${JSON.stringify({ ...last, parentId: null })}\n`;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -195,9 +209,9 @@ async function writeMainSessionStore(options?: SessionStoreEntryOptions) {
 function expectMainPatchBroadcast(
   result: Awaited<ReturnType<typeof invokeSessionsPatch>>,
   expected: Record<string, unknown>,
-) {
+): Record<string, unknown> {
   expectFields(result.responsePayload, { ok: true, key: "agent:main:main" });
-  expectChangedBroadcast(result.broadcastToConnIds, {
+  return expectChangedBroadcast(result.broadcastToConnIds, {
     sessionKey: "agent:main:main",
     reason: "patch",
     ...expected,
@@ -431,6 +445,83 @@ test("sessions.list uses the gateway model catalog for effective thinking defaul
   });
 });
 
+test("sessions.list exposes effective fast auto defaults from the selected model", async () => {
+  testState.agentConfig = {
+    model: { primary: "openai/gpt-5.5" },
+    models: {
+      "openai/gpt-5.5": { params: { fastMode: "auto", fastAutoOnSeconds: 30 } },
+    },
+  };
+  await writeMainSessionStore({
+    modelProvider: "openai",
+    model: "gpt-5.5",
+  });
+
+  const { respond } = await invokeSessionsList({
+    requestId: "req-sessions-list-fast-default",
+  });
+
+  const payload = expectRespondPayload(respond);
+  const session = findSession(payload, "agent:main:main");
+  expectFields(session, {
+    fastMode: undefined,
+    effectiveFastMode: "auto",
+    effectiveFastModeSource: "config",
+    fastAutoOnSeconds: 30,
+  });
+});
+
+test("sessions.list resolves effective fast metadata from the raw runtime provider", async () => {
+  testState.agentConfig = {
+    model: { primary: "openai-codex/gpt-5.5" },
+    models: {
+      "openai/gpt-5.5": { params: { fastMode: "auto", fastAutoOnSeconds: 30 } },
+      "openai-codex/gpt-5.5": { params: { fastMode: false, fastAutoOnSeconds: 45 } },
+    },
+  };
+  await writeMainSessionStore({
+    modelProvider: "openai-codex",
+    model: "gpt-5.5",
+  });
+
+  const { respond } = await invokeSessionsList({
+    requestId: "req-sessions-list-fast-raw-provider",
+  });
+
+  const payload = expectRespondPayload(respond);
+  const session = findSession(payload, "agent:main:main");
+  expectFields(session, {
+    effectiveFastMode: false,
+    effectiveFastModeSource: "config",
+    fastAutoOnSeconds: 45,
+  });
+});
+
+test("sessions.changed mutation events refresh effective fast metadata", async () => {
+  testState.agentConfig = {
+    model: { primary: "openai/gpt-5.5" },
+    models: {
+      "openai/gpt-5.5": { params: { fastMode: "auto", fastAutoOnSeconds: 30 } },
+    },
+  };
+  await writeMainSessionStore({
+    modelProvider: "openai",
+    model: "gpt-5.5",
+  });
+
+  const result = await invokeSessionsPatch({
+    key: "main",
+    fastMode: false,
+  });
+
+  expectMainPatchBroadcast(result, {
+    fastMode: false,
+    effectiveFastMode: false,
+    effectiveFastModeSource: "session",
+    fastAutoOnSeconds: 30,
+  });
+});
+
 test("sessions.list marks sessions with active abortable runs", async () => {
   await expectListedSessionActiveRun("req-sessions-list-active-run", {}, true);
 });
@@ -594,7 +685,31 @@ test("sessions.changed mutation events include live session setting metadata", a
     verboseLevel: "on",
   });
 
-  expectMainPatchBroadcast(result, sessionSettings);
+  expectMainPatchBroadcast(result, {
+    ...sessionSettings,
+    // An explicit session override resolves to the same effective mode and the
+    // sessions.changed builder carries the row-built channel-aware value.
+    effectiveResponseUsage: "full",
+  });
+});
+
+test("sessions.changed mutation events carry the resolved effectiveResponseUsage when the session has no override", async () => {
+  // No explicit responseUsage and no configured default → the row builder resolves
+  // effectiveResponseUsage to "off". The event must carry that resolved value, not
+  // the absent raw responseUsage, so a UI consumer's effective display stays fresh.
+  await writeMainSessionStore({ verboseLevel: "on" });
+
+  const result = await invokeSessionsPatch({
+    key: "main",
+    verboseLevel: "on",
+  });
+
+  const payload = expectMainPatchBroadcast(result, {
+    effectiveResponseUsage: "off",
+  });
+  // Raw responseUsage is genuinely absent (no override), proving the event does not
+  // merely echo the raw field.
+  expect(payload.responseUsage).toBeUndefined();
 });
 
 test("sessions.changed mutation events include sendPolicy metadata", async () => {
@@ -646,11 +761,11 @@ test("sessions.compact scopes selected global truncation to the requested agent"
     params: {
       key: "global",
       agentId: "work",
-      maxLines: 1,
+      maxLines: 2,
     },
   });
 
-  expectFields(responsePayload, { ok: true, key: "global", compacted: true, kept: 1 });
+  expectFields(responsePayload, { ok: true, key: "global", compacted: true, kept: 2 });
   expectChangedBroadcast(broadcastToConnIds, {
     sessionKey: "global",
     agentId: "work",
@@ -658,9 +773,77 @@ test("sessions.compact scopes selected global truncation to the requested agent"
     compacted: true,
   });
   await expect(fs.readFile(globalStores.mainTranscript, "utf-8")).resolves.toBe(
-    "main one\nmain two\n",
+    createLinearSessionTranscript("sess-main-global", ["main one", "main two"]),
   );
-  await expect(fs.readFile(globalStores.workTranscript, "utf-8")).resolves.toBe("work two\n");
+  await expect(fs.readFile(globalStores.workTranscript, "utf-8")).resolves.toBe(
+    expectedLastMessageTranscript("sess-work-global", ["work one", "work two"]),
+  );
+  await resetConfiguredGlobalAgentSessionStore(globalStores);
+});
+
+test("sessions.compact trims default global agent when no agentId is supplied", async () => {
+  const globalStores = await createConfiguredGlobalAgentSessionStore({ withTranscripts: true });
+  const { broadcastToConnIds, responsePayload } = await invokeSessionsCompact({
+    getRuntimeConfig: globalStores.getRuntimeConfig,
+    params: {
+      key: "global",
+      maxLines: 2,
+    },
+  });
+
+  expectFields(responsePayload, { ok: true, key: "global", compacted: true, kept: 2 });
+  expectChangedBroadcast(broadcastToConnIds, {
+    sessionKey: "global",
+    agentId: "main",
+    reason: "compact",
+    compacted: true,
+  });
+  await expect(fs.readFile(globalStores.mainTranscript, "utf-8")).resolves.toBe(
+    expectedLastMessageTranscript("sess-main-global", ["main one", "main two"]),
+  );
+  await expect(fs.readFile(globalStores.workTranscript, "utf-8")).resolves.toBe(
+    createLinearSessionTranscript("sess-work-global", ["work one", "work two"]),
+  );
+  await resetConfiguredGlobalAgentSessionStore(globalStores);
+});
+
+test("sessions.compact keeps manual trim no-op response shape", async () => {
+  const globalStores = await createConfiguredGlobalAgentSessionStore({ withTranscripts: true });
+  const { broadcastToConnIds, responsePayload } = await invokeSessionsCompact({
+    getRuntimeConfig: globalStores.getRuntimeConfig,
+    params: {
+      key: "global",
+      agentId: "work",
+      maxLines: 5,
+    },
+  });
+
+  expectFields(responsePayload, { ok: true, key: "global", compacted: false, kept: 3 });
+  expect(broadcastToConnIds).not.toHaveBeenCalled();
+  await expect(fs.readFile(globalStores.workTranscript, "utf-8")).resolves.toBe(
+    createLinearSessionTranscript("sess-work-global", ["work one", "work two"]),
+  );
+  await resetConfiguredGlobalAgentSessionStore(globalStores);
+});
+
+test("sessions.compact keeps manual trim no-transcript response shape", async () => {
+  const globalStores = await createConfiguredGlobalAgentSessionStore();
+  const { broadcastToConnIds, responsePayload } = await invokeSessionsCompact({
+    getRuntimeConfig: globalStores.getRuntimeConfig,
+    params: {
+      key: "global",
+      agentId: "work",
+      maxLines: 1,
+    },
+  });
+
+  expectFields(responsePayload, {
+    ok: true,
+    key: "global",
+    compacted: false,
+    reason: "no transcript",
+  });
+  expect(broadcastToConnIds).not.toHaveBeenCalled();
   await resetConfiguredGlobalAgentSessionStore(globalStores);
 });
 

@@ -74,6 +74,7 @@ export type CodexAppServerThreadBinding = {
   userMcpServersFingerprint?: string;
   mcpServersFingerprint?: string;
   nativeHookRelayGeneration?: string;
+  appServerRuntimeFingerprint?: string;
   pluginAppsFingerprint?: string;
   pluginAppsInputFingerprint?: string;
   pluginAppPolicyContext?: PluginAppPolicyContext;
@@ -214,6 +215,11 @@ export async function readCodexAppServerBinding(
         parsed.nativeHookRelayGeneration.trim()
           ? parsed.nativeHookRelayGeneration
           : undefined,
+      appServerRuntimeFingerprint:
+        typeof parsed.appServerRuntimeFingerprint === "string" &&
+        parsed.appServerRuntimeFingerprint.trim()
+          ? parsed.appServerRuntimeFingerprint
+          : undefined,
       pluginAppsFingerprint:
         typeof parsed.pluginAppsFingerprint === "string" ? parsed.pluginAppsFingerprint : undefined,
       pluginAppsInputFingerprint:
@@ -274,6 +280,7 @@ export async function writeCodexAppServerBinding(
       userMcpServersFingerprint: binding.userMcpServersFingerprint,
       mcpServersFingerprint: binding.mcpServersFingerprint,
       nativeHookRelayGeneration: binding.nativeHookRelayGeneration,
+      appServerRuntimeFingerprint: binding.appServerRuntimeFingerprint,
       pluginAppsFingerprint: binding.pluginAppsFingerprint,
       pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
       pluginAppPolicyContext: binding.pluginAppPolicyContext,
@@ -413,6 +420,9 @@ function readDestructiveApprovalMode(
   }
   if (value === "auto") {
     return bindingSchemaVersion === 1 ? "allow" : "auto";
+  }
+  if (value === "always" && bindingSchemaVersion === 2) {
+    return "always";
   }
   if (value === "on-request" && bindingSchemaVersion === 1) {
     return "auto";

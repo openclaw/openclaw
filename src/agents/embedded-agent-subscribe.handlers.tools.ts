@@ -80,6 +80,7 @@ import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import type { AgentEvent } from "./runtime/index.js";
 import { buildToolMutationState, isSameToolMutationAction } from "./tool-mutation.js";
 import { normalizeToolName } from "./tool-policy.js";
+import { readToolResultDetails } from "./tool-result-error.js";
 
 type ExecApprovalReplyModule = typeof import("../infra/exec-approval-reply.js");
 type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
@@ -299,14 +300,41 @@ function emitTrackedItemEvent(ctx: ToolHandlerContext, itemData: AgentItemEventD
     ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
     data: itemData,
   });
-  void ctx.params.onAgentEvent?.({
+  emitAgentEventCallbackBestEffort(ctx, {
     stream: "item",
     data: itemData,
   });
 }
 
-function readToolResultDetailsRecord(result: unknown): Record<string, unknown> | undefined {
-  return readRecordField(asOptionalObjectRecord(result)?.details);
+function warnBestEffortEventFailure(ctx: ToolHandlerContext, label: string, error: unknown): void {
+  ctx.log.warn(`${label} callback failed: ${String(error)}`);
+}
+
+function emitExecutionPhaseBestEffort(
+  ctx: ToolHandlerContext,
+  info: Parameters<NonNullable<ToolHandlerContext["params"]["onExecutionPhase"]>>[0],
+): void {
+  try {
+    ctx.params.onExecutionPhase?.(info);
+  } catch (error) {
+    warnBestEffortEventFailure(ctx, "tool execution phase", error);
+  }
+}
+
+function emitAgentEventCallbackBestEffort(
+  ctx: ToolHandlerContext,
+  event: Parameters<NonNullable<ToolHandlerContext["params"]["onAgentEvent"]>>[0],
+): void {
+  try {
+    const result = ctx.params.onAgentEvent?.(event);
+    if (isPromiseLike<void>(result)) {
+      void Promise.resolve(result).catch((error: unknown) => {
+        warnBestEffortEventFailure(ctx, "tool agent event", error);
+      });
+    }
+  } catch (error) {
+    warnBestEffortEventFailure(ctx, "tool agent event", error);
+  }
 }
 
 function applyCurrentMessageProvider(
@@ -326,21 +354,21 @@ function applyCurrentMessageProvider(
 }
 
 function applyToolSendReceiptForExtraction(result: unknown, receiptResult: unknown): unknown {
-  const toolSend = readToolResultDetailsRecord(receiptResult)?.toolSend;
+  const toolSend = readToolResultDetails(receiptResult)?.toolSend;
   if (toolSend === undefined) {
     return result;
   }
   return {
     ...readRecordField(result),
     details: {
-      ...readToolResultDetailsRecord(result),
+      ...readToolResultDetails(result),
       toolSend,
     },
   };
 }
 
 function isAsyncStartedToolResult(result: unknown): boolean {
-  const details = readToolResultDetailsRecord(result);
+  const details = readToolResultDetails(result);
   return details?.async === true && details.status === "started";
 }
 
@@ -348,7 +376,7 @@ function readAsyncStartedTaskIds(result: unknown): {
   asyncTaskRunId?: string;
   asyncTaskId?: string;
 } {
-  const details = readToolResultDetailsRecord(result);
+  const details = readToolResultDetails(result);
   if (!details) {
     return {};
   }
@@ -362,7 +390,7 @@ function readAsyncStartedTaskIds(result: unknown): {
 }
 
 function readExecToolDetails(result: unknown): ExecToolDetails | null {
-  const details = readToolResultDetailsRecord(result);
+  const details = readToolResultDetails(result);
   if (!details || typeof details.status !== "string") {
     return null;
   }
@@ -392,7 +420,7 @@ function capLiveExecResult(result: unknown): unknown {
   if (!result || typeof result !== "object" || Array.isArray(result)) {
     return result;
   }
-  const details = readToolResultDetailsRecord(result);
+  const details = readToolResultDetails(result);
   return {
     ...(result as Record<string, unknown>),
     details: {
@@ -443,7 +471,7 @@ function shouldEmitLiveExecUpdate(ctx: ToolHandlerContext, toolCallId: string): 
 }
 
 function readApplyPatchSummary(result: unknown): ApplyPatchSummary | null {
-  const details = readToolResultDetailsRecord(result);
+  const details = readToolResultDetails(result);
   const summary =
     details?.summary && typeof details.summary === "object" && !Array.isArray(details.summary)
       ? (details.summary as Record<string, unknown>)
@@ -780,7 +808,7 @@ export function handleToolExecutionStart(
     const args = evt.args;
     const runId = ctx.params.runId;
     ctx.state.toolExecutionSinceLastBlockReply = true;
-    ctx.params.onExecutionPhase?.({
+    emitExecutionPhaseBestEffort(ctx, {
       phase: "tool_execution_started",
       tool: toolName,
       toolCallId,
@@ -898,7 +926,7 @@ export function handleToolExecutionStart(
     };
     emitTrackedItemEvent(ctx, itemData);
     // Best-effort typing signal; do not block tool summaries on slow emitters.
-    void ctx.params.onAgentEvent?.({
+    emitAgentEventCallbackBestEffort(ctx, {
       stream: "tool",
       data: {
         phase: "start",
@@ -1037,7 +1065,7 @@ export function handleToolExecutionUpdate(
   };
   emitTrackedItemEvent(ctx, itemData);
   if (!toolProgress) {
-    void ctx.params.onAgentEvent?.({
+    emitAgentEventCallbackBestEffort(ctx, {
       stream: "tool",
       data: {
         phase: "update",
@@ -1075,7 +1103,7 @@ export function handleToolExecutionUpdate(
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
         data: outputData,
       });
-      void ctx.params.onAgentEvent?.({
+      emitAgentEventCallbackBestEffort(ctx, {
         stream: "command_output",
         data: outputData,
       });
@@ -1322,7 +1350,7 @@ export async function handleToolExecutionEnd(
       : {}),
   };
   emitTrackedItemEvent(ctx, itemData);
-  void ctx.params.onAgentEvent?.({
+  emitAgentEventCallbackBestEffort(ctx, {
     stream: "tool",
     data: {
       phase: "result",
@@ -1368,7 +1396,7 @@ export async function handleToolExecutionEnd(
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
         data: approvalData,
       });
-      void ctx.params.onAgentEvent?.({
+      emitAgentEventCallbackBestEffort(ctx, {
         stream: "approval",
         data: approvalData,
       });
@@ -1435,7 +1463,7 @@ export async function handleToolExecutionEnd(
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
         data: outputData,
       });
-      void ctx.params.onAgentEvent?.({
+      emitAgentEventCallbackBestEffort(ctx, {
         stream: "command_output",
         data: outputData,
       });
@@ -1461,7 +1489,7 @@ export async function handleToolExecutionEnd(
             ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
             data: approvalData,
           });
-          void ctx.params.onAgentEvent?.({
+          emitAgentEventCallbackBestEffort(ctx, {
             stream: "approval",
             data: approvalData,
           });
@@ -1507,7 +1535,7 @@ export async function handleToolExecutionEnd(
         ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
         data: patchData,
       });
-      void ctx.params.onAgentEvent?.({
+      emitAgentEventCallbackBestEffort(ctx, {
         stream: "patch",
         data: patchData,
       });
@@ -1526,6 +1554,9 @@ export async function handleToolExecutionEnd(
     isToolError,
     result,
     sanitizedResult,
+  });
+  await Promise.resolve(ctx.params.onToolStreamBoundary?.()).catch((error: unknown) => {
+    ctx.log.debug(`embedded run tool stream boundary callback failed: ${String(error)}`);
   });
 
   // Run after_tool_call plugin hook (fire-and-forget)

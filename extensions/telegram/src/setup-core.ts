@@ -40,9 +40,6 @@ export function getTelegramUserIdHelpLines(): string[] {
   ];
 }
 
-export const TELEGRAM_TOKEN_HELP_LINES = getTelegramTokenHelpLines();
-export const TELEGRAM_USER_ID_HELP_LINES = getTelegramUserIdHelpLines();
-
 function normalizeTelegramAllowFromInput(raw: string): string {
   return raw
     .trim()

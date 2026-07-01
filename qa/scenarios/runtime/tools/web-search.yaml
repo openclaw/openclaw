@@ -13,10 +13,19 @@ scenario:
     - The mock provider plans exactly one happy-path web_search call.
     - The mock provider plans one denied-input failure-path web_search call.
     - Runtime parity coverage hard-fails call/result drift in the standard direct-loading gate.
+  plugins:
+    - qa-lab
+  gatewayConfigPatch:
+    tools:
+      web:
+        search:
+          enabled: true
+          provider: qa-lab-search
   docsRefs:
     - qa/scenarios/index.yaml
   codeRefs:
     - src/agents/tools/web-search.ts
+    - extensions/qa-lab/src/qa-web-search-provider.ts
     - extensions/qa-lab/src/runtime-tool-fixture.ts
   execution:
     kind: flow
@@ -35,6 +44,7 @@ scenario:
         action: hard gate in the standard direct-loading tier
         reason: web_search is an OpenClaw integration tool and must stay visible and callable under OpenClaw and Codex direct runtime parity.
       promptSnippet: "target=web_search"
+      failurePrompt: "tool search qa failure target=web_search. Call web_search exactly once with query OPENCLAW_QA_WEB_SEARCH_DENIED_INPUT and then summarize the failure."
       failurePromptSnippet: "failure target=web_search"
 
 flow:

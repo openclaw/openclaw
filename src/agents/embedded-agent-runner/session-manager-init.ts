@@ -2,6 +2,7 @@
  * Prepares session managers and transcript state before embedded runs.
  */
 import fs from "node:fs/promises";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { serializeJsonlLine, writeJsonlLines } from "../../config/sessions/transcript-jsonl.js";
 import { invalidateSessionFileRepairCache } from "../session-file-repair.js";
 
@@ -12,10 +13,6 @@ type SessionHeaderEntry = {
   parentSession?: string;
 };
 type SessionMessageEntry = { type: "message"; message?: { role?: string } };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 async function assertExistingHeaderIsReadable(sessionFile: string): Promise<void> {
   const content = await fs.readFile(sessionFile, "utf-8");

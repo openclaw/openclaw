@@ -229,21 +229,14 @@ export function resolveEmbeddedAttemptToolConstructionPlan(params: {
   };
 }
 
-/** Returns whether the allowlist requires any built-in coding/OpenClaw tools. */
-export function shouldBuildCoreCodingToolsForAllowlist(toolsAllow?: string[]): boolean {
-  return resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow }).includeCoreTools;
-}
-
-/**
- * Decides whether the bundled MCP runtime is needed for this attempt. Bundle
- * runtime creation follows explicit bundle/plugin allowlist names rather than
- * generic local tool names.
- */
-export function shouldCreateBundleMcpRuntimeForAttempt(params: {
-  toolsEnabled: boolean;
-  disableTools?: boolean;
-  toolsAllow?: string[];
-}): boolean {
+function shouldCreateBundleRuntimeForAttempt(
+  params: {
+    toolsEnabled: boolean;
+    disableTools?: boolean;
+    toolsAllow?: string[];
+  },
+  matchesAllowlist: (normalizedToolName: string) => boolean,
+): boolean {
   if (!params.toolsEnabled || params.disableTools === true) {
     return false;
   }
@@ -256,8 +249,20 @@ export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   if (hasWildcardToolAllowlist(params.toolsAllow)) {
     return true;
   }
-  return params.toolsAllow.some((toolName) => {
-    const normalized = normalizeToolName(toolName);
+  return params.toolsAllow.some((toolName) => matchesAllowlist(normalizeToolName(toolName)));
+}
+
+/**
+ * Decides whether the bundled MCP runtime is needed for this attempt. Bundle
+ * runtime creation follows explicit bundle/plugin allowlist names rather than
+ * generic local tool names.
+ */
+export function shouldCreateBundleMcpRuntimeForAttempt(params: {
+  toolsEnabled: boolean;
+  disableTools?: boolean;
+  toolsAllow?: string[];
+}): boolean {
+  return shouldCreateBundleRuntimeForAttempt(params, (normalized) => {
     return isBundleMcpAllowlistName(normalized) || isPluginGroupAllowlistName(normalized);
   });
 }
@@ -272,20 +277,7 @@ export function shouldCreateBundleLspRuntimeForAttempt(params: {
   disableTools?: boolean;
   toolsAllow?: string[];
 }): boolean {
-  if (!params.toolsEnabled || params.disableTools === true) {
-    return false;
-  }
-  if (!params.toolsAllow) {
-    return true;
-  }
-  if (params.toolsAllow.length === 0) {
-    return false;
-  }
-  if (hasWildcardToolAllowlist(params.toolsAllow)) {
-    return true;
-  }
-  return params.toolsAllow.some((toolName) => {
-    const normalized = normalizeToolName(toolName);
+  return shouldCreateBundleRuntimeForAttempt(params, (normalized) => {
     return normalized.startsWith("lsp_");
   });
 }

@@ -52,7 +52,8 @@ import {
   ensureWorkspaceAndSessions,
   guardCancel,
   probeGatewayReachable,
-  resolveControlUiLinks,
+  resolveAdvertisedControlUiLinks,
+  resolveLocalControlUiProbeLinks,
   summarizeExistingConfig,
   waitForGatewayReachable,
 } from "./onboard-helpers.js";
@@ -122,7 +123,7 @@ async function runGatewayHealthCheck(params: {
   runtime: RuntimeEnv;
   port: number;
 }): Promise<void> {
-  const localLinks = resolveControlUiLinks({
+  const localLinks = resolveLocalControlUiProbeLinks({
     bind: params.cfg.gateway?.bind ?? "loopback",
     port: params.port,
     customBindHost: params.cfg.gateway?.customBindHost,
@@ -337,10 +338,14 @@ async function promptWebToolsConfig(
           };
         }
       } else {
-        workingConfig = await setupSearch(workingConfig, runtime, prompter);
+        workingConfig = await setupSearch(workingConfig, runtime, prompter, {
+          preserveDisabledSearchState: false,
+        });
+        const selectedSearch = workingConfig.tools?.web?.search;
         nextSearch = {
-          ...workingConfig.tools?.web?.search,
-          enabled: workingConfig.tools?.web?.search?.provider ? true : existingSearch?.enabled,
+          ...selectedSearch,
+          enabled:
+            selectedSearch?.enabled ?? (selectedSearch?.provider ? true : existingSearch?.enabled),
           openaiCodex: {
             ...existingSearch?.openaiCodex,
             ...(nextSearch.openaiCodex as Record<string, unknown> | undefined),
@@ -359,7 +364,7 @@ async function promptWebToolsConfig(
   );
 
   const nextFetch = {
-    ...existingFetch,
+    ...workingConfig.tools?.web?.fetch,
     enabled: enableFetch,
   };
 
@@ -828,7 +833,14 @@ export async function runConfigureWizard(
     }
 
     const bind = nextConfig.gateway?.bind ?? "loopback";
-    const links = resolveControlUiLinks({
+    const displayLinks = await resolveAdvertisedControlUiLinks({
+      bind,
+      port: gatewayPort,
+      customBindHost: nextConfig.gateway?.customBindHost,
+      basePath: nextConfig.gateway?.controlUi?.basePath,
+      tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
+    });
+    const probeLinks = resolveLocalControlUiProbeLinks({
       bind,
       port: gatewayPort,
       customBindHost: nextConfig.gateway?.customBindHost,
@@ -858,13 +870,13 @@ export async function runConfigureWizard(
       }));
 
     let gatewayProbe = await probeGatewayReachable({
-      url: links.wsUrl,
+      url: probeLinks.wsUrl,
       token,
       password: newPassword,
     });
     if (!gatewayProbe.ok && newPassword !== oldPassword && oldPassword) {
       gatewayProbe = await probeGatewayReachable({
-        url: links.wsUrl,
+        url: probeLinks.wsUrl,
         token,
         password: oldPassword,
       });
@@ -875,8 +887,8 @@ export async function runConfigureWizard(
 
     note(
       [
-        `Web UI: ${links.httpUrl}`,
-        `Gateway WS: ${links.wsUrl}`,
+        `Web UI: ${displayLinks.httpUrl}`,
+        `Gateway WS: ${displayLinks.wsUrl}`,
         gatewayStatusLine,
         "Docs: https://docs.openclaw.ai/web/control-ui",
       ].join("\n"),

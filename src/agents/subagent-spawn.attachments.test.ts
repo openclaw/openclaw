@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
+import { decodeStrictBase64 } from "./subagent-attachments.js";
 import {
   createSubagentSpawnTestConfig,
   loadSubagentSpawnModuleForTest,
@@ -33,7 +34,6 @@ describe("decodeStrictBase64", () => {
   const maxBytes = 1024;
 
   it("valid base64 returns buffer with correct bytes", () => {
-    const { decodeStrictBase64 } = subagentSpawnModule;
     const input = "hello world";
     const encoded = Buffer.from(input).toString("base64");
     const result = decodeStrictBase64(encoded, maxBytes);
@@ -41,27 +41,22 @@ describe("decodeStrictBase64", () => {
   });
 
   it("empty string returns null", () => {
-    const { decodeStrictBase64 } = subagentSpawnModule;
     expect(decodeStrictBase64("", maxBytes)).toBeNull();
   });
 
   it("bad padding (length % 4 !== 0) returns null", () => {
-    const { decodeStrictBase64 } = subagentSpawnModule;
     expect(decodeStrictBase64("abc", maxBytes)).toBeNull();
   });
 
   it("non-base64 chars returns null", () => {
-    const { decodeStrictBase64 } = subagentSpawnModule;
     expect(decodeStrictBase64("!@#$", maxBytes)).toBeNull();
   });
 
   it("whitespace-only returns null (empty after strip)", () => {
-    const { decodeStrictBase64 } = subagentSpawnModule;
     expect(decodeStrictBase64("   ", maxBytes)).toBeNull();
   });
 
   it("pre-decode oversize guard: encoded string > maxEncodedBytes * 2 returns null", () => {
-    const { decodeStrictBase64 } = subagentSpawnModule;
     // Pre-decode guard rejects obviously oversized payloads before allocating
     // the decoded buffer.
     const oversized = "A".repeat(2737);
@@ -69,14 +64,12 @@ describe("decodeStrictBase64", () => {
   });
 
   it("decoded byteLength exceeds maxDecodedBytes returns null", () => {
-    const { decodeStrictBase64 } = subagentSpawnModule;
     const bigBuf = Buffer.alloc(1025, 0x42);
     const encoded = bigBuf.toString("base64");
     expect(decodeStrictBase64(encoded, maxBytes)).toBeNull();
   });
 
   it("valid base64 at exact boundary returns Buffer", () => {
-    const { decodeStrictBase64 } = subagentSpawnModule;
     const exactBuf = Buffer.alloc(1024, 0x41);
     const encoded = exactBuf.toString("base64");
     const result = decodeStrictBase64(encoded, maxBytes);

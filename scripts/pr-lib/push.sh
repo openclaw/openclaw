@@ -247,6 +247,7 @@ push_prep_head_to_pr_branch() {
   local rerun_gates_on_lease_retry="${5:-false}"
   local docs_only="${6:-false}"
   local result_env_path="${7:-.local/push-result.env}"
+  local local_prep_head_sha="$prep_head_sha"
 
   setup_prhead_remote
 
@@ -277,6 +278,10 @@ push_prep_head_to_pr_branch() {
           exit 1
         fi
       else
+        if [ "$rerun_gates_on_lease_retry" != "true" ]; then
+          echo "PR head changed during sync; re-run prepare-sync-head from the refreshed branch."
+          exit 1
+        fi
         echo "Lease push failed, retrying once with fresh PR head..."
         lease_sha=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
         pushed_from_sha="$lease_sha"
@@ -285,6 +290,7 @@ push_prep_head_to_pr_branch() {
           git fetch origin "pull/$pr/head:pr-$pr-latest" --force
           git rebase "pr-$pr-latest"
           prep_head_sha=$(git rev-parse HEAD)
+          local_prep_head_sha="$prep_head_sha"
           run_prepare_push_retry_gates "$docs_only"
         fi
 
@@ -318,16 +324,24 @@ push_prep_head_to_pr_branch() {
   local pr_head_sha_after
   pr_head_sha_after=$(gh pr view "$pr" --json headRefOid --jq .headRefOid)
 
-  git fetch origin main
   git fetch origin "pull/$pr/head:pr-$pr-verify" --force
-  git merge-base --is-ancestor origin/main "pr-$pr-verify" || {
-    echo "PR branch is behind main after push."
-    exit 1
-  }
+  local local_prep_tree
+  local remote_prep_tree
+  local_prep_tree=$(git rev-parse "${local_prep_head_sha}^{tree}")
+  remote_prep_tree=$(git rev-parse "pr-$pr-verify^{tree}")
   git branch -D "pr-$pr-verify" 2>/dev/null || true
+  if [ "$local_prep_tree" != "$remote_prep_tree" ]; then
+    echo "Pushed PR head tree differs from the prepared local tree."
+    exit 1
+  fi
+
+  # merge-verify owns relevance-aware mainline drift checks. Requiring every
+  # prepared head to contain main here forces needless rebases, while GraphQL
+  # createCommitOnBranch cannot move a rebased branch's commit ancestry.
   # Security: shell-escape values to prevent command injection when sourced.
   printf '%s=%q\n' \
     PUSH_PREP_HEAD_SHA "$prep_head_sha" \
+    PUSH_LOCAL_PREP_HEAD_SHA "$local_prep_head_sha" \
     PUSHED_FROM_SHA "$pushed_from_sha" \
     PR_HEAD_SHA_AFTER_PUSH "$pr_head_sha_after" \
     > "$result_env_path"

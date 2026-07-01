@@ -1,15 +1,21 @@
 // Cron run log error tests cover persisted failure reasons and summaries.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { migrateLegacyCronRunLogsToSqlite } from "../commands/doctor/cron/legacy-run-log-migration.js";
 import { appendCronRunLog, readCronRunLogEntriesPage, type CronRunLogEntry } from "./run-log.js";
+
+const runLogTempDirs: string[] = [];
+
+afterAll(() => {
+  cleanupTempDirs(runLogTempDirs);
+});
 
 async function writeLegacyRunLogAndMigrate(
   entries: Array<Record<string, unknown>>,
 ): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cron-run-log-"));
+  const dir = makeTempDir(runLogTempDirs, "cron-run-log-");
   const storePath = path.join(dir, "cron", "jobs.json");
   const file = path.join(dir, "cron", "runs", "job-1.jsonl");
   await fs.mkdir(path.dirname(file), { recursive: true });
@@ -43,7 +49,7 @@ describe("cron run log errorReason", () => {
   });
 
   it("validates persisted errorReason against the full failover reason set", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cron-run-log-"));
+    const dir = makeTempDir(runLogTempDirs, "cron-run-log-");
     const storePath = path.join(dir, "jobs.json");
     const reasons = [
       "auth",
@@ -104,7 +110,7 @@ describe("cron run log errorReason", () => {
   });
 
   it("uses provider context when deriving persisted run-log reasons", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cron-run-log-"));
+    const dir = makeTempDir(runLogTempDirs, "cron-run-log-");
     const storePath = path.join(dir, "jobs.json");
     await appendCronRunLog({
       storePath,
@@ -123,7 +129,7 @@ describe("cron run log errorReason", () => {
   });
 
   it("includes derived errorReason values in run-log search", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "cron-run-log-"));
+    const dir = makeTempDir(runLogTempDirs, "cron-run-log-");
     const storePath = path.join(dir, "jobs.json");
     await appendCronRunLog({
       storePath,

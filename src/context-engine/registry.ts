@@ -44,9 +44,16 @@ export type ContextEngineFactory = (
   ctx: ContextEngineFactoryContext,
 ) => ContextEngine | Promise<ContextEngine>;
 export type ContextEngineRegistrationResult = { ok: true } | { ok: false; existingOwner: string };
+export type ContextEngineRegistrationLifecycle = "runtime" | "readOnlyDiscovery";
+export type ContextEngineRegistration = {
+  factory: ContextEngineFactory;
+  owner: string;
+  lifecycle: ContextEngineRegistrationLifecycle;
+};
 
 type RegisterContextEngineForOwnerOptions = {
   allowSameOwnerRefresh?: boolean;
+  lifecycle?: ContextEngineRegistrationLifecycle;
 };
 
 const LEGACY_SESSION_KEY_COMPAT = Symbol.for("openclaw.contextEngine.sessionKeyCompat");
@@ -389,13 +396,7 @@ export type ContextEngineRuntimeQuarantine = {
 };
 
 type ContextEngineRegistryState = {
-  engines: Map<
-    string,
-    {
-      factory: ContextEngineFactory;
-      owner: string;
-    }
-  >;
+  engines: Map<string, ContextEngineRegistration>;
   quarantinedEngines: Map<string, ContextEngineRuntimeQuarantine>;
 };
 
@@ -512,6 +513,7 @@ export function registerContextEngineForOwner(
   opts?: RegisterContextEngineForOwnerOptions,
 ): ContextEngineRegistrationResult {
   const normalizedOwner = requireContextEngineOwner(owner);
+  const lifecycle = opts?.lifecycle ?? "runtime";
   const registry = getContextEngineRegistryState().engines;
   const existing = registry.get(id);
   if (
@@ -524,11 +526,18 @@ export function registerContextEngineForOwner(
   if (existing && existing.owner !== normalizedOwner) {
     return { ok: false, existingOwner: existing.owner };
   }
+  if (existing?.lifecycle === "runtime" && lifecycle === "readOnlyDiscovery") {
+    // Read-only discovery may re-run after live activation. It can collect metadata, but it must
+    // not replace the runtime-safe factory with a closure that captured a read-only plugin mode.
+    return { ok: true };
+  }
   if (existing && opts?.allowSameOwnerRefresh !== true) {
     return { ok: false, existingOwner: existing.owner };
   }
-  registry.set(id, { factory, owner: normalizedOwner });
-  clearContextEngineRuntimeQuarantine(id);
+  registry.set(id, { factory, owner: normalizedOwner, lifecycle });
+  if (lifecycle === "runtime") {
+    clearContextEngineRuntimeQuarantine(id);
+  }
   return { ok: true };
 }
 
@@ -550,7 +559,13 @@ export function registerContextEngine(
  * Return the factory for a registered engine, or undefined.
  */
 export function getContextEngineFactory(id: string): ContextEngineFactory | undefined {
-  return getContextEngineRegistryState().engines.get(id)?.factory;
+  const registration = getContextEngineRegistration(id);
+  return registration?.lifecycle === "runtime" ? registration.factory : undefined;
+}
+
+/** Returns registration metadata so callers can distinguish discovery snapshots from runtime entries. */
+export function getContextEngineRegistration(id: string): ContextEngineRegistration | undefined {
+  return getContextEngineRegistryState().engines.get(id);
 }
 
 /**
@@ -942,6 +957,13 @@ export async function resolveContextEngine(
       error: "not registered",
       defaultEngineId,
     });
+    return resolveDefaultContextEngine(defaultEngineId, factoryCtx);
+  }
+
+  if (!isDefaultEngine && entry.lifecycle === "readOnlyDiscovery") {
+    console.warn(
+      `[context-engine] Context engine "${engineId}" owner=${entry.owner} is registered for read-only discovery only; falling back to default engine "${defaultEngineId}" without quarantine until runtime activation registers it.`,
+    );
     return resolveDefaultContextEngine(defaultEngineId, factoryCtx);
   }
 

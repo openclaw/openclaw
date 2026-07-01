@@ -10,12 +10,12 @@ import type {
   ChannelPlugin,
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { runMessageAction } from "./message-action-runner.js";
-import { extractToolPayload } from "./tool-payload.js";
 
 type ChannelActionHandler = NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>;
 
@@ -401,6 +401,7 @@ describe("runMessageAction plugin dispatch", () => {
             messageId: "om_123",
           },
           defaultAccountId: "ops",
+          requesterAccountId: "ops",
           requesterSenderId: "trusted-user",
           sessionKey: "agent:alpha:main",
           sessionId: "session-123",
@@ -421,6 +422,7 @@ describe("runMessageAction plugin dispatch", () => {
           {
             action: "pin",
             accountId: "ops",
+            requesterAccountId: "ops",
             requesterSenderId: "trusted-user",
             sessionKey: "agent:alpha:main",
             sessionId: "session-123",

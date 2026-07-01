@@ -19,6 +19,7 @@ import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { privateFileStore } from "../../infra/private-file-store.js";
 import { tempWorkspace } from "../../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
@@ -157,7 +158,7 @@ export function buildCliAgentSystemPrompt(params: {
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
       host: "openclaw",
-      os: `${os.type()} ${os.release()}`,
+      os: resolveRuntimeOsLabel(),
       arch: os.arch(),
       node: process.version,
       model: params.modelDisplay,
@@ -196,9 +197,6 @@ export function buildCliAgentSystemPrompt(params: {
     contextFiles: params.contextFiles,
   });
 }
-
-/** Alternate export name for the CLI system prompt builder. */
-export const buildSystemPrompt = buildCliAgentSystemPrompt;
 
 /** Applies backend model aliases to a requested CLI model id. */
 export function normalizeCliModel(modelId: string, backend: CliBackendConfig): string {

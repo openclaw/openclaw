@@ -71,6 +71,11 @@ OpenProse registers `/prose` as a user-invocable skill command:
 `/prose run <handle/slug>` resolves to `https://p.prose.md/<handle>/<slug>`.
 Direct URLs are fetched as-is using the `web_fetch` tool.
 
+Top-level remote runs are explicit. Remote imports inside a `.prose` program are
+transitive code dependencies: before OpenProse fetches any remote `use` target,
+it shows the resolved import list and requires the operator to reply exactly
+`approve remote prose imports` for that run.
+
 ## What it can do
 
 - Multi-agent research and synthesis with explicit parallelism.
@@ -167,9 +172,12 @@ User-level persistent agents live at:
 
 ## Security
 
-Treat `.prose` files like code. Review them before running. Use OpenClaw tool
-allowlists and approval gates to control side effects. For deterministic,
-approval-gated workflows, compare with [Lobster](/tools/lobster).
+Treat `.prose` files like code. Review them before running, including remote
+`use` imports. Top-level `/prose run https://...` requests are explicit, but
+transitive remote imports require per-run approval before they are fetched or
+executed. Use OpenClaw tool allowlists and approval gates to control side
+effects. For deterministic, approval-gated workflows, compare with
+[Lobster](/tools/lobster).
 
 ## Related
 

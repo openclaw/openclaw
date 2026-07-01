@@ -31,7 +31,6 @@ import {
   buildButtonProps,
   resolveInteractionCallbackUrl,
   setInteractionSecret,
-  type MattermostInteractiveButtonInput,
 } from "./interactions.js";
 import { loadOutboundMediaFromUrl, type OpenClawConfig } from "./runtime-api.js";
 import { isMattermostId, resolveMattermostOpaqueTarget } from "./target-resolution.js";
@@ -62,10 +61,6 @@ export type MattermostSendResult = {
   channelId: string;
   receipt: MessageReceipt;
 };
-
-export type MattermostReplyButtons = Array<
-  MattermostInteractiveButtonInput | MattermostInteractiveButtonInput[]
->;
 
 type MattermostTarget =
   | { kind: "channel"; id: string }
@@ -433,13 +428,6 @@ async function resolveMattermostSendContext(
     channelId,
     allowPrivateNetwork,
   };
-}
-
-export async function resolveMattermostSendChannelId(
-  to: string,
-  opts: MattermostSendOpts,
-): Promise<string> {
-  return (await resolveMattermostSendContext(to, opts)).channelId;
 }
 
 export async function sendMessageMattermost(

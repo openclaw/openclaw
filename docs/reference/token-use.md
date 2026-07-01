@@ -54,7 +54,7 @@ for bounded runtime excerpts and injected runtime-owned blocks. They are
 separate from bootstrap limits, startup-context limits, and skills prompt
 limits.
 
-`toolResultMaxChars` is an advanced ceiling. When it is unset, OpenClaw chooses
+`toolResultMaxChars` is an advanced ceiling (up to `1000000` characters). When it is unset, OpenClaw chooses
 the live tool-result cap from the effective model context window: `16000` chars
 below 100K tokens, `32000` chars at 100K+ tokens, and `64000` chars at 200K+
 tokens, still bounded by the runtime context-share guard.
@@ -76,6 +76,8 @@ Use these in chat:
   configured for the active model.
 - `/usage off|tokens|full` → appends a **per-response usage footer** to every reply.
   - Persists per session (stored as `responseUsage`).
+  - `/usage reset` (aliases: `inherit`, `clear`, `default`) — clears the session
+    override so the session re-inherits the configured default.
   - `/usage full` shows estimated cost only when OpenClaw has usage metadata and
     local pricing for the active model. Otherwise it shows tokens only.
 - `/usage cost` → shows a local cost summary from OpenClaw session logs.

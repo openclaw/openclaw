@@ -18,6 +18,7 @@ const {
   runHeartbeatOnceMock,
   loadConfigMock,
   fetchWithSsrFGuardMock,
+  sendCronAnnouncePayloadStrictMock,
   runCronIsolatedAgentTurnMock,
   cleanupBrowserSessionsForLifecycleEndMock,
   getGlobalHookRunnerMock,
@@ -34,12 +35,13 @@ const {
   >(async () => ({ status: "ran", durationMs: 1 })),
   loadConfigMock: vi.fn(),
   fetchWithSsrFGuardMock: vi.fn(),
+  sendCronAnnouncePayloadStrictMock: vi.fn(async () => {}),
   runCronIsolatedAgentTurnMock: vi.fn<RunCronIsolatedAgentTurnMock>(async () => ({
     status: "ok",
     summary: "ok",
   })),
   cleanupBrowserSessionsForLifecycleEndMock: vi.fn(async () => {}),
-  runCronChangedMock: vi.fn(async () => {}),
+  runCronChangedMock: vi.fn(async (_event: unknown, _context?: unknown) => {}),
   getGlobalHookRunnerMock: vi.fn(() => ({
     hasHooks: (hookName: string) => hookName === "cron_changed",
     runCronChanged: runCronChangedMock,
@@ -154,6 +156,14 @@ vi.mock("../config/io.js", async () => {
 vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
+
+vi.mock("../cron/delivery.js", async () => {
+  const actual = await vi.importActual<typeof import("../cron/delivery.js")>("../cron/delivery.js");
+  return {
+    ...actual,
+    sendCronAnnouncePayloadStrict: sendCronAnnouncePayloadStrictMock,
+  };
+});
 
 vi.mock("../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: runCronIsolatedAgentTurnMock,
@@ -272,6 +282,7 @@ describe("buildGatewayCronService", () => {
     runHeartbeatOnceMock.mockClear();
     loadConfigMock.mockClear();
     fetchWithSsrFGuardMock.mockClear();
+    sendCronAnnouncePayloadStrictMock.mockClear();
     runCronIsolatedAgentTurnMock.mockClear();
     cleanupBrowserSessionsForLifecycleEndMock.mockClear();
     runCronChangedMock.mockClear();
@@ -285,7 +296,7 @@ describe("buildGatewayCronService", () => {
     });
   });
 
-  it("requests a safe gateway restart when isolated cron setup times out", async () => {
+  it("backs off isolated cron setup timeout without gateway restart", async () => {
     vi.useFakeTimers();
     const cfg = createCronConfig("server-cron-isolated-setup-timeout");
     loadConfigMock.mockReturnValue(cfg);
@@ -315,12 +326,7 @@ describe("buildGatewayCronService", () => {
       const runResult = await runPromise;
 
       expect(runResult).toEqual({ ok: true, ran: true });
-      expect(requestSafeGatewayRestartMock).toHaveBeenCalledTimes(1);
-      expect(requestSafeGatewayRestartMock).toHaveBeenCalledWith({
-        reason: "cron.isolated_agent_setup_timeout",
-        delayMs: 0,
-        preservePendingEmitHooks: true,
-      });
+      expect(requestSafeGatewayRestartMock).not.toHaveBeenCalled();
     } finally {
       state.cron.stop();
       vi.useRealTimers();
@@ -579,6 +585,148 @@ describe("buildGatewayCronService", () => {
 
       expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
       expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("redacts command summary before cron_changed hook delivery", async () => {
+    const cfg = createCronConfig("server-cron-command-hook-redaction");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "hook-redacted-command",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "command",
+          argv: [
+            process.execPath,
+            "-e",
+            "process.stdout.write('Visit www.example.com/device and enter code 123456; Log in with token=opaque-secret-value\\n')",
+          ],
+        },
+      });
+
+      runCronChangedMock.mockClear();
+      await state.cron.run(job.id, "force");
+
+      const event = runCronChangedMock.mock.calls
+        .map((_, index) =>
+          requireRecord(
+            callArg(runCronChangedMock, index, 0, "cron_changed event"),
+            "cron_changed event",
+          ),
+        )
+        .find((hookEvent) => hookEvent.action === "finished");
+      const summary = typeof event?.summary === "string" ? event.summary : "";
+      expect(summary).toContain("[redacted-url]");
+      expect(summary).toContain("[redacted-code]");
+      expect(summary).toContain("token=***");
+      expect(summary).not.toContain("www.example.com/device");
+      expect(summary).not.toContain("123456");
+      expect(summary).not.toContain("opaque-secret-value");
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("redacts command summary secrets before announce delivery", async () => {
+    const cfg = createCronConfig("server-cron-command-announce-redaction");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "announce-redacted-command",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "command",
+          argv: [
+            process.execPath,
+            "-e",
+            "process.stdout.write('Log in with token=opaque-secret-value\\n')",
+          ],
+        },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "123",
+        },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      const announcePayload = requireRecord(
+        callArg(sendCronAnnouncePayloadStrictMock, 0, 0, "cron announce payload"),
+        "cron announce payload",
+      );
+      const message = typeof announcePayload.message === "string" ? announcePayload.message : "";
+      expect(message).toContain("token=***");
+      expect(message).not.toContain("opaque-secret-value");
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("leaves non-command cron_changed summaries unchanged", async () => {
+    const cfg = createCronConfig("server-cron-non-command-summary");
+    loadConfigMock.mockReturnValue(cfg);
+    const summary = "Visit https://example.com/report and enter code ABCD-EFGH";
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({ status: "ok", summary });
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "non-command-summary",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "report" },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "123",
+        },
+      });
+
+      runCronChangedMock.mockClear();
+      await state.cron.run(job.id, "force");
+
+      expect(sendCronAnnouncePayloadStrictMock).not.toHaveBeenCalled();
+
+      const event = runCronChangedMock.mock.calls
+        .map((_, index) =>
+          requireRecord(
+            callArg(runCronChangedMock, index, 0, "cron_changed event"),
+            "cron_changed event",
+          ),
+        )
+        .find((hookEvent) => hookEvent.action === "finished");
+      expect(event?.summary).toBe(summary);
     } finally {
       state.cron.stop();
     }

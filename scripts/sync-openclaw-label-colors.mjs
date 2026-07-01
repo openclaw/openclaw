@@ -138,6 +138,7 @@ const EXACT_COLORS = new Map(
     "dedupe:child": COLORS.paleBlue,
     dependencies: COLORS.neutralGray,
     "dependencies-changed": COLORS.paleYellow,
+    "security-sensitive-changed": COLORS.paleYellow,
     github_actions: COLORS.neutralGray,
     go: COLORS.neutralGray,
     java: COLORS.neutralGray,
