@@ -864,6 +864,56 @@ describe("session MCP runtime", () => {
     }
   });
 
+  it("matches toolFilter include using namespaced <server>__<tool> names (#98193)", async () => {
+    // `openclaw mcp probe` shows namespaced names; copying them into
+    // `mcp tools --include` must keep working instead of dropping every tool.
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-tool-filter-ns-"));
+    const serverPath = path.join(tempDir, "tool-filter-ns.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeListToolsMcpServer({
+      filePath: serverPath,
+      logPath,
+      tools: [
+        { name: "query", inputSchema: { type: "object", properties: {} } },
+        { name: "list_tables", inputSchema: { type: "object", properties: {} } },
+        { name: "query_rw", inputSchema: { type: "object", properties: {} } },
+      ],
+    });
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-tool-filter-ns",
+      sessionKey: "agent:test:session-tool-filter-ns",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            duck: {
+              command: process.execPath,
+              args: [serverPath],
+              toolFilter: {
+                // Namespaced names as printed by `mcp probe`.
+                include: ["duck__query", "duck__list_tables"],
+              },
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools.map((tool) => tool.toolName).toSorted()).toEqual([
+        "list_tables",
+        "query",
+      ]);
+      expect(catalog.servers.duck?.toolCount).toBe(2);
+      expect(catalog.servers.duck?.tools?.filteredCount).toBe(1);
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("lists MCP tools from servers that omit the tools capability", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-unadvertised-tools-"));
     const serverPath = path.join(tempDir, "unadvertised-tools.mjs");

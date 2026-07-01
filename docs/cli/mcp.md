@@ -444,7 +444,7 @@ Notes:
 - `add` accepts stdio flags such as `--command`, `--arg`, `--env`, and `--cwd`, or HTTP flags such as `--url`, `--transport`, `--header`, `--auth oauth`, TLS, timeout, and tool-selection flags.
 - `set` expects one JSON object value on the command line.
 - `configure` updates enablement, tool filters, timeouts, OAuth, TLS, and parallel-tool-call hints without replacing the whole server definition.
-- `tools` updates per-server tool filters. Include/exclude entries are MCP tool names and simple `*` globs.
+- `tools` updates per-server tool filters. Include/exclude entries are MCP tool names and simple `*` globs. Names match against the server's **raw** tool name (for example `query`) **or** the namespaced `<server>__<tool>` form that `mcp probe` prints (for example `motherduck__query`); either spelling works. A non-empty `--include` that matches no advertised tool logs a `bundle-mcp` warning and leaves the server with no exposed tools, so check the spelling if a filtered server stops appearing.
 - `login` runs the OAuth flow for HTTP servers configured with `auth: "oauth"`. The first run prints an authorization URL; rerun with `--code` after approval.
 - `logout` clears stored OAuth credentials for the named server without removing the saved server definition.
 - `reload` disposes cached in-process MCP runtimes. Gateway or agent processes in another process still need their own reload or restart path.

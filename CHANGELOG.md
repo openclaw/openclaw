@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **MCP tool filter:** `mcp.servers.<name>.toolFilter` (`openclaw mcp tools --include/--exclude`) now matches both the raw server tool name and the namespaced `<server>__<tool>` form printed by `openclaw mcp probe`, and logs a `bundle-mcp` warning when a non-empty `include` matches no advertised tool instead of silently hiding every tool from the agent. (#98193)
 - **WeChat account routing:** `startAccount` preserves session routing by resolving manifest channel account config from raw account keys with opaque provider ids, while still ignoring manifest account keys that normalize to blocked object keys. (#93686) Thanks @zhangguiping-xydt.
 
 ## 2026.6.11
