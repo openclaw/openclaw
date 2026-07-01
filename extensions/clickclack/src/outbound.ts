@@ -2,7 +2,7 @@
  * Outbound ClickClack delivery helpers for channel messages, thread replies,
  * and direct messages.
  */
-import { resolveClickClackAccount } from "./accounts.js";
+import { resolveRuntimeClickClackAccount } from "./accounts.js";
 import { createClickClackClient } from "./http-client.js";
 import { resolveChannelId, resolveWorkspaceId } from "./resolve.js";
 import { parseClickClackTarget } from "./target.js";
@@ -20,7 +20,10 @@ export async function sendClickClackText(params: {
   threadId?: string | number | null;
   replyToId?: string | number | null;
 }) {
-  const account = resolveClickClackAccount({ cfg: params.cfg, accountId: params.accountId });
+  const account = await resolveRuntimeClickClackAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const client = createClickClackClient({ baseUrl: account.baseUrl, token: account.token });
   const workspaceId = await resolveWorkspaceId(client, account.workspace);
   const parsed = parseClickClackTarget(params.to);

@@ -15,6 +15,7 @@ import {
   normalizeResolvedSecretInputString,
   resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
+import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClickClackAccountConfig, CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
@@ -52,18 +53,22 @@ function resolveMergedClickClackAccountConfig(
   });
 }
 
+function clickClackTokenPath(accountId: string): string {
+  return accountId === DEFAULT_ACCOUNT_ID
+    ? "channels.clickclack.token"
+    : `channels.clickclack.accounts.${accountId}.token`;
+}
+
 function resolveClickClackToken(params: {
   cfg: CoreConfig;
   value: unknown;
   accountId: string;
   env?: NodeJS.ProcessEnv;
-}): string {
+}): { token: string; configured: boolean } {
+  const path = clickClackTokenPath(params.accountId);
   const resolved = resolveSecretInputString({
     value: params.value,
-    path:
-      params.accountId === DEFAULT_ACCOUNT_ID
-        ? "channels.clickclack.token"
-        : `channels.clickclack.accounts.${params.accountId}.token`,
+    path,
     defaults: params.cfg.secrets?.defaults,
     mode: "inspect",
   });
@@ -89,16 +94,33 @@ function resolveClickClackToken(params: {
           `Secret provider "${resolved.ref.provider}" is not configured (ref: env:${resolved.ref.provider}:${resolved.ref.id}).`,
         );
       }
-      return normalizeSecretInputString((params.env ?? process.env)[resolved.ref.id]) ?? "";
+      const token = normalizeSecretInputString((params.env ?? process.env)[resolved.ref.id]) ?? "";
+      return { token, configured: Boolean(token) };
     }
-    return "";
+    return { token: "", configured: resolved.status === "configured_unavailable" };
   }
-  return (
+  const token =
     normalizeResolvedSecretInputString({
       value: resolved.value,
-      path: "channels.clickclack.token",
-    }) ?? ""
-  );
+      path,
+    }) ?? "";
+  return { token, configured: Boolean(token) };
+}
+
+async function resolveRuntimeClickClackToken(params: {
+  cfg: CoreConfig;
+  value: unknown;
+  accountId: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<string> {
+  const resolved = await resolveConfiguredSecretInputString({
+    config: params.cfg,
+    env: params.env ?? process.env,
+    value: params.value,
+    path: clickClackTokenPath(params.accountId),
+    unresolvedReasonStyle: "detailed",
+  });
+  return resolved.value ?? "";
 }
 
 /**
@@ -115,17 +137,18 @@ export function resolveClickClackAccount(params: {
   const baseEnabled = params.cfg.channels?.clickclack?.enabled !== false;
   const enabled = baseEnabled && merged.enabled !== false;
   const baseUrl = merged.baseUrl?.trim().replace(/\/$/, "") ?? "";
-  const token = resolveClickClackToken({
+  const tokenResolution = resolveClickClackToken({
     cfg: params.cfg,
     value: merged.token,
     accountId,
     env: params.env,
   });
+  const token = tokenResolution.token;
   const workspace = merged.workspace?.trim() ?? "";
   return {
     accountId,
     enabled,
-    configured: Boolean(baseUrl && token && workspace),
+    configured: Boolean(baseUrl && tokenResolution.configured && workspace),
     name: normalizeOptionalString(merged.name),
     baseUrl,
     token,
@@ -154,6 +177,25 @@ export function resolveClickClackAccount(params: {
  * Returns all enabled accounts, including the implicit default account when
  * legacy top-level ClickClack config is present.
  */
+export async function resolveRuntimeClickClackAccount(params: {
+  cfg: CoreConfig;
+  accountId?: string | null;
+  env?: NodeJS.ProcessEnv;
+}): Promise<ResolvedClickClackAccount> {
+  const account = resolveClickClackAccount(params);
+  const token = await resolveRuntimeClickClackToken({
+    cfg: params.cfg,
+    value: account.config.token,
+    accountId: account.accountId,
+    env: params.env,
+  });
+  return {
+    ...account,
+    token,
+    configured: Boolean(account.baseUrl && token && account.workspace),
+  };
+}
+
 export function listEnabledClickClackAccounts(cfg: CoreConfig): ResolvedClickClackAccount[] {
   return listClickClackAccountIds(cfg)
     .map((accountId) => resolveClickClackAccount({ cfg, accountId }))

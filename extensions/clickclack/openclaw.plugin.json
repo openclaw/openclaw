@@ -4,6 +4,16 @@
     "onStartup": false
   },
   "channels": ["clickclack"],
+  "channelConfigs": {
+    "clickclack": {
+      "label": "ClickClack",
+      "description": "ClickClack channel integration for self-hosted chat bot tokens.",
+      "schema": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    }
+  },
   "channelEnvVars": {
     "clickclack": ["CLICKCLACK_BOT_TOKEN"]
   },

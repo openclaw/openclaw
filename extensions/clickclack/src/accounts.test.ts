@@ -4,6 +4,7 @@ import {
   listClickClackAccountIds,
   resolveClickClackAccount,
   resolveDefaultClickClackAccountId,
+  resolveRuntimeClickClackAccount,
 } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
 
@@ -108,6 +109,40 @@ describe("ClickClack account resolution", () => {
       replyMode: "agent",
       token: "ccb_live",
       workspace: "wsp_1",
+    });
+  });
+
+  it("resolves exec SecretRefs for runtime account use", async () => {
+    const cfg = {
+      secrets: {
+        providers: {
+          test_exec: {
+            source: "exec",
+            command: process.execPath,
+            args: [
+              "-e",
+              "let s='';process.stdin.on('data',c=>s+=c);process.stdin.on('end',()=>{const r=JSON.parse(s);process.stdout.write(JSON.stringify({protocolVersion:1,values:Object.fromEntries(r.ids.map(id=>[id,'  ccb_exec  ']))}));});",
+            ],
+          },
+        },
+      },
+      channels: {
+        clickclack: {
+          enabled: true,
+          baseUrl: "https://app.clickclack.chat",
+          workspace: "wsp_1",
+          token: { source: "exec", provider: "test_exec", id: "CLICKCLACK_SERVICE_TOKEN" },
+        },
+      },
+    } satisfies CoreConfig;
+
+    expect(resolveClickClackAccount({ cfg })).toMatchObject({
+      configured: true,
+      token: "",
+    });
+    await expect(resolveRuntimeClickClackAccount({ cfg })).resolves.toMatchObject({
+      configured: true,
+      token: "ccb_exec",
     });
   });
 
