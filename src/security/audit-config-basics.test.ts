@@ -1,5 +1,9 @@
 // Covers baseline config security audit findings.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -150,6 +154,289 @@ describe("security audit config basics", () => {
         }),
       ]),
     );
+  });
+
+  it("does not flag gateway password or hooks token when source config uses env references", async () => {
+    const report = await runSecurityAudit({
+      config: {
+        gateway: {
+          auth: { password: "actual-resolved-password" },
+        },
+        hooks: { enabled: true, token: "actual-resolved-token" },
+      },
+      sourceConfig: {
+        gateway: {
+          auth: { password: "${OPENCLAW_GATEWAY_PASSWORD}" },
+        },
+        hooks: { enabled: true, token: "${OPENCLAW_HOOKS_TOKEN}" },
+      },
+      configSnapshot: {
+        path: "/tmp/openclaw.json",
+        exists: true,
+        raw: '{"gateway":{"auth":{"password":"${OPENCLAW_GATEWAY_PASSWORD}"}},"hooks":{"enabled":true,"token":"${OPENCLAW_HOOKS_TOKEN}"}}',
+        parsed: {
+          gateway: {
+            auth: { password: "${OPENCLAW_GATEWAY_PASSWORD}" },
+          },
+          hooks: { enabled: true, token: "${OPENCLAW_HOOKS_TOKEN}" },
+        },
+        sourceConfig: {
+          gateway: {
+            auth: { password: "${OPENCLAW_GATEWAY_PASSWORD}" },
+          },
+          hooks: { enabled: true, token: "${OPENCLAW_HOOKS_TOKEN}" },
+        },
+        resolved: {
+          gateway: {
+            auth: { password: "${OPENCLAW_GATEWAY_PASSWORD}" },
+          },
+          hooks: { enabled: true, token: "${OPENCLAW_HOOKS_TOKEN}" },
+        },
+        valid: true,
+        runtimeConfig: {},
+        config: {},
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      } as ConfigFileSnapshot,
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(
+      report.findings.some((f) => f.checkId === "config.secrets.gateway_password_in_config"),
+    ).toBe(false);
+    expect(report.findings.some((f) => f.checkId === "config.secrets.hooks_token_in_config")).toBe(
+      false,
+    );
+  });
+
+  it("still flags gateway password or hooks token when the env reference is authored in config.env", async () => {
+    const report = await runSecurityAudit({
+      config: {
+        env: {
+          vars: {
+            OPENCLAW_GATEWAY_PASSWORD: "config-owned-gateway-password",
+            OPENCLAW_HOOKS_TOKEN: "config-owned-hooks-token",
+          },
+        },
+        gateway: {
+          auth: { password: "config-owned-gateway-password" },
+        },
+        hooks: { enabled: true, token: "config-owned-hooks-token" },
+      },
+      sourceConfig: {
+        env: {
+          vars: {
+            OPENCLAW_GATEWAY_PASSWORD: "${OPENCLAW_GATEWAY_PASSWORD}",
+            OPENCLAW_HOOKS_TOKEN: "${OPENCLAW_HOOKS_TOKEN}",
+          },
+        },
+        gateway: {
+          auth: { password: "${OPENCLAW_GATEWAY_PASSWORD}" },
+        },
+        hooks: { enabled: true, token: "${OPENCLAW_HOOKS_TOKEN}" },
+      },
+      configSnapshot: {
+        path: "/tmp/openclaw.json",
+        exists: true,
+        raw: '{"env":{"vars":{"OPENCLAW_GATEWAY_PASSWORD":"config-owned-gateway-password","OPENCLAW_HOOKS_TOKEN":"config-owned-hooks-token"}},"gateway":{"auth":{"password":"${OPENCLAW_GATEWAY_PASSWORD}"}},"hooks":{"enabled":true,"token":"${OPENCLAW_HOOKS_TOKEN}"}}',
+        parsed: {
+          env: {
+            vars: {
+              OPENCLAW_GATEWAY_PASSWORD: "config-owned-gateway-password",
+              OPENCLAW_HOOKS_TOKEN: "config-owned-hooks-token",
+            },
+          },
+          gateway: {
+            auth: { password: "${OPENCLAW_GATEWAY_PASSWORD}" },
+          },
+          hooks: { enabled: true, token: "${OPENCLAW_HOOKS_TOKEN}" },
+        },
+        sourceConfig: {
+          env: {
+            vars: {
+              OPENCLAW_GATEWAY_PASSWORD: "${OPENCLAW_GATEWAY_PASSWORD}",
+              OPENCLAW_HOOKS_TOKEN: "${OPENCLAW_HOOKS_TOKEN}",
+            },
+          },
+          gateway: {
+            auth: { password: "${OPENCLAW_GATEWAY_PASSWORD}" },
+          },
+          hooks: { enabled: true, token: "${OPENCLAW_HOOKS_TOKEN}" },
+        },
+        resolved: {
+          env: {
+            vars: {
+              OPENCLAW_GATEWAY_PASSWORD: "config-owned-gateway-password",
+              OPENCLAW_HOOKS_TOKEN: "config-owned-hooks-token",
+            },
+          },
+          gateway: {
+            auth: { password: "config-owned-gateway-password" },
+          },
+          hooks: { enabled: true, token: "config-owned-hooks-token" },
+        },
+        valid: true,
+        runtimeConfig: {},
+        config: {},
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      } as ConfigFileSnapshot,
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(
+      report.findings.some(
+        (f) => f.checkId === "config.secrets.gateway_password_in_config" && f.severity === "warn",
+      ),
+    ).toBe(true);
+    expect(
+      report.findings.some(
+        (f) => f.checkId === "config.secrets.hooks_token_in_config" && f.severity === "info",
+      ),
+    ).toBe(true);
+  });
+
+  it("still flags gateway password or hooks token when the env reference is authored in an $include file", async () => {
+    const fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audit-include-"));
+    try {
+      const includePath = path.join(fixtureRoot, "secrets.json");
+      const configPath = path.join(fixtureRoot, "openclaw.json");
+      await fs.writeFile(
+        includePath,
+        JSON.stringify({
+          env: {
+            vars: {
+              OPENCLAW_GATEWAY_PASSWORD: "config-owned-gateway-password",
+              OPENCLAW_HOOKS_TOKEN: "config-owned-hooks-token",
+            },
+          },
+          gateway: { auth: { password: "${OPENCLAW_GATEWAY_PASSWORD}" } },
+          hooks: { enabled: true, token: "${OPENCLAW_HOOKS_TOKEN}" },
+        }),
+        "utf8",
+      );
+      const rawConfig = JSON.stringify({ $include: "./secrets.json" });
+      await fs.writeFile(configPath, rawConfig, "utf8");
+
+      const report = await runSecurityAudit({
+        config: {
+          env: {
+            vars: {
+              OPENCLAW_GATEWAY_PASSWORD: "config-owned-gateway-password",
+              OPENCLAW_HOOKS_TOKEN: "config-owned-hooks-token",
+            },
+          },
+          gateway: { auth: { password: "config-owned-gateway-password" } },
+          hooks: { enabled: true, token: "config-owned-hooks-token" },
+        },
+        sourceConfig: {
+          env: {
+            vars: {
+              OPENCLAW_GATEWAY_PASSWORD: "${OPENCLAW_GATEWAY_PASSWORD}",
+              OPENCLAW_HOOKS_TOKEN: "${OPENCLAW_HOOKS_TOKEN}",
+            },
+          },
+          gateway: { auth: { password: "${OPENCLAW_GATEWAY_PASSWORD}" } },
+          hooks: { enabled: true, token: "${OPENCLAW_HOOKS_TOKEN}" },
+        },
+        configSnapshot: {
+          path: configPath,
+          exists: true,
+          raw: rawConfig,
+          parsed: { $include: "./secrets.json" },
+          sourceConfig: {},
+          resolved: {},
+          valid: true,
+          runtimeConfig: {},
+          config: {},
+          issues: [],
+          warnings: [],
+          legacyIssues: [],
+        } as ConfigFileSnapshot,
+        env: {},
+        includeFilesystem: false,
+        includeChannelSecurity: false,
+      });
+
+      expect(
+        report.findings.some(
+          (f) => f.checkId === "config.secrets.gateway_password_in_config" && f.severity === "warn",
+        ),
+      ).toBe(true);
+      expect(
+        report.findings.some(
+          (f) => f.checkId === "config.secrets.hooks_token_in_config" && f.severity === "info",
+        ),
+      ).toBe(true);
+    } finally {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("still flags gateway password and hooks token stored as plaintext literals", async () => {
+    const report = await runSecurityAudit({
+      config: {
+        gateway: {
+          auth: { password: "literal-password" },
+        },
+        hooks: { enabled: true, token: "literal-token" },
+      },
+      sourceConfig: {
+        gateway: {
+          auth: { password: "literal-password" },
+        },
+        hooks: { enabled: true, token: "literal-token" },
+      },
+      configSnapshot: {
+        path: "/tmp/openclaw.json",
+        exists: true,
+        raw: '{"gateway":{"auth":{"password":"literal-password"}},"hooks":{"enabled":true,"token":"literal-token"}}',
+        parsed: {
+          gateway: {
+            auth: { password: "literal-password" },
+          },
+          hooks: { enabled: true, token: "literal-token" },
+        },
+        sourceConfig: {
+          gateway: {
+            auth: { password: "literal-password" },
+          },
+          hooks: { enabled: true, token: "literal-token" },
+        },
+        resolved: {
+          gateway: {
+            auth: { password: "literal-password" },
+          },
+          hooks: { enabled: true, token: "literal-token" },
+        },
+        valid: true,
+        runtimeConfig: {},
+        config: {},
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      } as ConfigFileSnapshot,
+      env: {},
+      includeFilesystem: false,
+      includeChannelSecurity: false,
+    });
+
+    expect(
+      report.findings.some(
+        (f) => f.checkId === "config.secrets.gateway_password_in_config" && f.severity === "warn",
+      ),
+    ).toBe(true);
+    expect(
+      report.findings.some(
+        (f) => f.checkId === "config.secrets.hooks_token_in_config" && f.severity === "info",
+      ),
+    ).toBe(true);
   });
 
   it("emits a redacted security audit summary event", async () => {

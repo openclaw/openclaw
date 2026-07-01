@@ -21,6 +21,7 @@ import {
   materializeGatewayAuthSecretRefs,
 } from "../gateway/auth-config-utils.js";
 import { isInterpreterLikeAllowlistPattern } from "../infra/command-analysis/inline-eval.js";
+import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import {
   type ExecApprovalsFile,
   loadExecApprovals,
@@ -34,7 +35,6 @@ import {
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
 import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
-import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
@@ -1238,11 +1238,12 @@ async function createAuditExecutionContext(
   const workspaceDir =
     opts.workspaceDir ?? resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg));
   const { readConfigSnapshotForAudit } = await loadAuditNonDeepModule();
-  const configSnapshot = includeFilesystem
-    ? opts.configSnapshot !== undefined
+  const configSnapshot =
+    opts.configSnapshot !== undefined
       ? opts.configSnapshot
-      : await readConfigSnapshotForAudit({ env, configPath }).catch(() => null)
-    : null;
+      : includeFilesystem
+        ? await readConfigSnapshotForAudit({ env, configPath }).catch(() => null)
+        : null;
   return {
     cfg,
     sourceConfig,
@@ -1307,7 +1308,13 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
   findings.push(...auditNonDeep.collectNodeDenyCommandPatternFindings(cfg));
   findings.push(...auditNonDeep.collectNodeDangerousAllowCommandFindings(cfg));
   findings.push(...auditNonDeep.collectMinimalProfileOverrideFindings(cfg));
-  findings.push(...auditNonDeep.collectSecretsInConfigFindings(cfg));
+  findings.push(
+    ...auditNonDeep.collectSecretsInConfigFindings(
+      cfg,
+      context.sourceConfig,
+      context.configSnapshot,
+    ),
+  );
   findings.push(...auditNonDeep.collectModelHygieneFindings(cfg));
   findings.push(...auditNonDeep.collectSmallModelRiskFindings({ cfg, env }));
   findings.push(...auditNonDeep.collectExposureMatrixFindings(cfg));

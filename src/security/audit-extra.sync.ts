@@ -5,6 +5,7 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { isDangerousNetworkMode, normalizeNetworkMode } from "../agents/sandbox/network-mode.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
@@ -13,7 +14,9 @@ import { getBlockedBindReason } from "../agents/sandbox/validate-sandbox-securit
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveConfigIncludes } from "../config/includes.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
+import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { resolveGatewayAuth, type ResolvedGatewayAuth } from "../gateway/auth.js";
@@ -24,7 +27,6 @@ import {
   resolveNodeCommandAllowlist,
 } from "../gateway/node-command-policy.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
-import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 
 /**
  * Synchronous security audit collector functions.
@@ -76,6 +78,39 @@ function isProbablySyncedPath(p: string): boolean {
 function looksLikeEnvRef(value: string): boolean {
   const v = value.trim();
   return v.startsWith("${") && v.endsWith("}");
+}
+
+function getIncludeResolvedParsedConfig(snapshot: ConfigFileSnapshot | null | undefined): unknown {
+  if (!snapshot?.parsed || typeof snapshot.parsed !== "object") {
+    return undefined;
+  }
+  if (!snapshot.exists || !snapshot.path) {
+    return snapshot.parsed;
+  }
+  try {
+    return resolveConfigIncludes(snapshot.parsed, snapshot.path);
+  } catch {
+    return snapshot.parsed;
+  }
+}
+
+function getParsedConfigString(
+  snapshot: ConfigFileSnapshot | null | undefined,
+  path: string,
+): string | undefined {
+  const parsed = getIncludeResolvedParsedConfig(snapshot);
+  if (!parsed || typeof parsed !== "object") {
+    return undefined;
+  }
+  const parts = path.split(".");
+  let current: unknown = parsed;
+  for (const part of parts) {
+    if (!current || typeof current !== "object") {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[part];
+  }
+  return typeof current === "string" ? current : undefined;
 }
 
 function isGatewayRemotelyExposed(cfg: OpenClawConfig): boolean {
@@ -576,10 +611,60 @@ export function collectSyncedFolderFindings(params: {
   return findings;
 }
 
-export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+function isConfigOwnedEnvRef(
+  value: string,
+  configSnapshot: ConfigFileSnapshot | null | undefined,
+): boolean {
+  const varName = value.trim().slice(2, -1).trim();
+  if (!varName) {
+    return false;
+  }
+  const parsed = getIncludeResolvedParsedConfig(configSnapshot);
+  if (!parsed || typeof parsed !== "object") {
+    return false;
+  }
+  const parsedEnv = (parsed as Record<string, unknown>).env;
+  if (!parsedEnv || typeof parsedEnv !== "object") {
+    return false;
+  }
+  const parsedEnvRecord = parsedEnv as Record<string, unknown>;
+  const vars = parsedEnvRecord.vars;
+  if (vars && typeof vars === "object") {
+    for (const key of Object.keys(vars)) {
+      if (key.trim().toUpperCase() === varName.toUpperCase()) {
+        return true;
+      }
+    }
+  }
+  for (const [key, val] of Object.entries(parsedEnvRecord)) {
+    if (key === "vars" || key === "shellEnv") {
+      continue;
+    }
+    if (typeof val !== "string") {
+      continue;
+    }
+    if (key.trim().toUpperCase() === varName.toUpperCase()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function collectSecretsInConfigFindings(
+  cfg: OpenClawConfig,
+  sourceConfig?: OpenClawConfig,
+  configSnapshot?: ConfigFileSnapshot | null,
+): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const password = normalizeOptionalString(cfg.gateway?.auth?.password) ?? "";
-  if (password && !looksLikeEnvRef(password)) {
+  const sourcePassword =
+    normalizeOptionalString(getParsedConfigString(configSnapshot, "gateway.auth.password")) ??
+    normalizeOptionalString(sourceConfig?.gateway?.auth?.password) ??
+    password;
+  const passwordIsEnvRef = looksLikeEnvRef(sourcePassword);
+  const passwordIsConfigOwnedEnvRef =
+    passwordIsEnvRef && isConfigOwnedEnvRef(sourcePassword, configSnapshot);
+  if (password && (!passwordIsEnvRef || passwordIsConfigOwnedEnvRef)) {
     findings.push({
       checkId: "config.secrets.gateway_password_in_config",
       severity: "warn",
@@ -592,7 +677,18 @@ export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAud
   }
 
   const hooksToken = normalizeOptionalString(cfg.hooks?.token) ?? "";
-  if (cfg.hooks?.enabled === true && hooksToken && !looksLikeEnvRef(hooksToken)) {
+  const sourceHooksToken =
+    normalizeOptionalString(getParsedConfigString(configSnapshot, "hooks.token")) ??
+    normalizeOptionalString(sourceConfig?.hooks?.token) ??
+    hooksToken;
+  const hooksTokenIsEnvRef = looksLikeEnvRef(sourceHooksToken);
+  const hooksTokenIsConfigOwnedEnvRef =
+    hooksTokenIsEnvRef && isConfigOwnedEnvRef(sourceHooksToken, configSnapshot);
+  if (
+    cfg.hooks?.enabled === true &&
+    hooksToken &&
+    (!hooksTokenIsEnvRef || hooksTokenIsConfigOwnedEnvRef)
+  ) {
     findings.push({
       checkId: "config.secrets.hooks_token_in_config",
       severity: "info",
