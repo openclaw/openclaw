@@ -5,6 +5,10 @@
  */
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  recordDurableSubagentRegistered,
+  recordDurableSubagentTerminal,
+} from "../durable/subagent.js";
 import { callGateway } from "../gateway/call.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -172,6 +176,7 @@ export type RegisterSubagentRunParams = {
   taskName?: string;
   agentId?: string;
   requesterAgentId?: string;
+  requesterRunId?: string;
   cleanup: "delete" | "keep";
   label?: string;
   model?: string;
@@ -362,6 +367,11 @@ export function createSubagentRunManager(params: {
           timeoutCompletion.startedAt = startedAt;
         }
         completionForRetry = timeoutCompletion;
+        recordDurableSubagentTerminal({
+          runId,
+          childSessionKey: entry.childSessionKey,
+          status: "timeout",
+        });
         await params.completeSubagentRun(completionForRetry);
       };
       if (waitStatus === "timeout") {
@@ -468,6 +478,12 @@ export function createSubagentRunManager(params: {
         triggerCleanup: true,
         startedAt: observedStartedAt,
       };
+      recordDurableSubagentTerminal({
+        runId,
+        childSessionKey: entry.childSessionKey,
+        status: outcome.status,
+        error: outcome.status === "error" ? outcome.error : undefined,
+      });
       await params.completeSubagentRun(completionForRetry);
     } catch (error) {
       const current = params.runs.get(runId);
@@ -793,8 +809,9 @@ export function createSubagentRunManager(params: {
       restoreKillReconciliationSnapshots(killReconciliationSnapshots);
       throw error;
     }
+    let backgroundTask: ReturnType<typeof createRunningTaskRun> | null | undefined;
     try {
-      const task = createRunningTaskRun({
+      backgroundTask = createRunningTaskRun({
         runtime: "subagent",
         sourceId: runId,
         ownerKey: requesterSessionKey,
@@ -811,7 +828,7 @@ export function createSubagentRunManager(params: {
         startedAt: now,
         lastEventAt: now,
       });
-      if (!task) {
+      if (!backgroundTask) {
         log.warn("Failed to persist background task for subagent run", {
           runId: registerParams.runId,
         });
@@ -822,6 +839,19 @@ export function createSubagentRunManager(params: {
         error,
       });
     }
+    recordDurableSubagentRegistered({
+      runId,
+      childSessionKey,
+      requesterSessionKey,
+      taskId: backgroundTask?.taskId,
+      taskFlowId: backgroundTask?.parentFlowId,
+      task: registerParams.task,
+      taskName: registerParams.taskName,
+      label: registerParams.label,
+      agentId: registerParams.agentId,
+      requesterAgentId: registerParams.requesterAgentId,
+      requesterRunId: registerParams.requesterRunId,
+    });
     params.ensureListener();
     params.persist();
     // Always start sweeper — session-mode runs (no archiveAtMs) also need TTL cleanup.
@@ -966,6 +996,12 @@ export function createSubagentRunManager(params: {
         supersededAt: existingKillReconciliation?.supersededAt,
       };
       pendingTaskFinalizations.push({ entry, endedAt: taskEndedAt });
+      recordDurableSubagentTerminal({
+        runId,
+        childSessionKey: entry.childSessionKey,
+        status: "killed",
+        error: reason,
+      });
       if (!entriesByChildSessionKey.has(entry.childSessionKey)) {
         entriesByChildSessionKey.set(entry.childSessionKey, entry);
       }

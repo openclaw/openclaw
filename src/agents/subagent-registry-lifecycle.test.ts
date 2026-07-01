@@ -1737,6 +1737,44 @@ describe("subagent registry lifecycle hardening", () => {
     expect(taskExecutorMocks.failTaskRunByRunId).not.toHaveBeenCalled();
   });
 
+  it("marks explicit blocker completions blocked without failing the task", async () => {
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+    });
+    const blockedReport = [
+      "I diagnosed the request, but it needs protected gateway auth changes.",
+      "",
+      "state: blocked",
+      "human_action_required: true",
+      "human_action_summary: Please approve updating gateway auth settings.",
+    ].join("\n");
+
+    const controller = createLifecycleController({
+      entry,
+      captureSubagentCompletionReply: vi.fn(async () => blockedReport),
+    });
+
+    await controller.completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: false,
+    });
+
+    expectFields(firstCallArg(taskExecutorMocks.completeTaskRunByRunId), {
+      runId: entry.runId,
+      runtime: "subagent",
+      sessionKey: entry.childSessionKey,
+      progressSummary: blockedReport,
+      terminalOutcome: "blocked",
+    });
+    expect(firstCallArg(taskExecutorMocks.completeTaskRunByRunId).terminalSummary).toContain(
+      "Required completion reported a blocker:",
+    );
+    expect(taskExecutorMocks.failTaskRunByRunId).not.toHaveBeenCalled();
+  });
+
   it("marks missing required completions blocked while preserving real final reports", async () => {
     const missingEntry = createRunEntry({
       expectsCompletionMessage: true,

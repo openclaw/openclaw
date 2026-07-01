@@ -28,6 +28,11 @@ import {
 } from "../channels/plugins/native-approval-prompt.js";
 import type { SubagentDelegationMode } from "../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
+import {
+  buildDurableSubagentOrchestrationGuidance,
+  resolveDurableOrchestrationPolicy,
+  type DurableOrchestrationPolicy,
+} from "../durable/orchestration-policy.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
 import type { AgentPromptSurfaceKind } from "../plugins/types.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
@@ -91,6 +96,7 @@ function normalizeSubagentDelegationMode(mode?: SubagentDelegationMode): Subagen
 
 function buildSubagentDelegationPreferenceSection(params: {
   mode: SubagentDelegationMode;
+  durableOrchestrationPolicy: DurableOrchestrationPolicy;
   isMinimal: boolean;
   hasSessionsSpawn: boolean;
   hasSubagents: boolean;
@@ -103,7 +109,9 @@ function buildSubagentDelegationPreferenceSection(params: {
     "## Sub-Agent Delegation",
     "Mode: prefer. You are the responsive coordinator for this conversation.",
     "- Reply directly only for trivial chat, clarifying questions, or a short answer already known from current context.",
-    "- Anything requiring more work than a direct reply should go through `sessions_spawn`; avoid doing expensive tool calls yourself.",
+    params.durableOrchestrationPolicy === "solo_first"
+      ? "- Prefer direct execution when current context and tools are enough; delegate only for parallel I/O, specialist isolation, fault isolation, or long background work."
+      : "- For non-trivial work, decide what stays local and what is delegated; use `sessions_spawn` when parallelism, specialist isolation, fault isolation, or background waiting makes the run more reliable.",
     "- Delegate file/code inspection, shell commands, web/browser use, long reads, debugging, coding, multi-step analysis, comparisons, non-trivial summarization, and background waiting.",
     "- Before spawning, decide what stays local and what is delegated. Give each child a clear objective, expected output, relevant files/inputs, write scope, verification ask, and whether it blocks your final answer.",
     '- Set `taskName` when you will need a stable handle later; keep it lowercase with underscores or hyphens. Omit `context` for isolated children; set `context:"fork"` only when current transcript details matter.',
@@ -494,6 +502,7 @@ function buildMessagingSection(params: {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   requireExplicitMessageTarget?: boolean;
   silentReplyPromptMode?: SilentReplyPromptMode;
+  durableOrchestrationPolicy?: DurableOrchestrationPolicy;
 }) {
   if (params.isMinimal) {
     return [];
@@ -511,13 +520,12 @@ function buildMessagingSection(params: {
   const completionEventGuidance = suppressSilentTokenGuidance
     ? "- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to a silent placeholder)."
     : `- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to ${SILENT_REPLY_TOKEN}).`;
-  const subagentOrchestrationGuidance = hasSessionsSpawn
-    ? hasSubagents
-      ? `- Sub-agent orchestration → use \`sessions_spawn(...)\` to start delegated work; include a clear objective/output/write-scope/verification brief and \`taskName\` when a stable handle helps; omit \`context\` for isolated children, set \`context:"fork"\` only when the child needs the current transcript; ${hasSessionsYield ? "use `sessions_yield` to wait for completion events; " : ""}use \`subagents(action=list)\` only for on-demand status/debugging visibility.`
-      : `- Sub-agent orchestration → use \`sessions_spawn(...)\` to start delegated work; include a clear objective/output/write-scope/verification brief and \`taskName\` when a stable handle helps; omit \`context\` for isolated children, set \`context:"fork"\` only when the child needs the current transcript${hasSessionsYield ? "; use `sessions_yield` to wait for completion events" : ""}.`
-    : hasSubagents
-      ? "- Sub-agent orchestration → use `subagents(action=list)` only for on-demand status/debugging visibility."
-      : "";
+  const subagentOrchestrationGuidance = buildDurableSubagentOrchestrationGuidance({
+    policy: params.durableOrchestrationPolicy,
+    hasSessionsSpawn,
+    hasSubagents,
+    hasSessionsYield,
+  });
   return [
     "## Messaging",
     messageToolOnly
@@ -711,6 +719,8 @@ export function buildAgentSystemPrompt(params: {
   requireExplicitMessageTarget?: boolean;
   /** Prompt-only strength for delegating non-trivial work through sub-agents. Defaults to "suggest". */
   subagentDelegationMode?: SubagentDelegationMode;
+  /** Prompt hint for when to keep work local versus fan out. Defaults to env/auto. */
+  durableOrchestrationPolicy?: DurableOrchestrationPolicy;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
   /** Prompt surface controls runtime-specific fallback fragments. Defaults to OpenClaw main. */
@@ -925,6 +935,8 @@ export function buildAgentSystemPrompt(params: {
   const promptMode = params.promptMode ?? "full";
   const isMinimal = promptMode === "minimal" || promptMode === "none";
   const subagentDelegationMode = normalizeSubagentDelegationMode(params.subagentDelegationMode);
+  const durableOrchestrationPolicy =
+    params.durableOrchestrationPolicy ?? resolveDurableOrchestrationPolicy();
   const sourceMessageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const messageChannelOptions = availableTools.has("message")
     ? buildMessageChannelOptions(runtimeChannel)
@@ -1019,6 +1031,7 @@ export function buildAgentSystemPrompt(params: {
     sourceMessageToolOnly,
     silentReplyPromptMode,
     subagentDelegationMode,
+    durableOrchestrationPolicy,
     sandboxInfo: params.sandboxInfo,
     displayWorkspaceDir,
     workspaceGuidance,
@@ -1056,7 +1069,12 @@ export function buildAgentSystemPrompt(params: {
       ...(renderOpenClawToolWorkflowHints
         ? [
             `For long waits, avoid rapid poll loops: use ${execToolName} with enough yieldMs or ${processToolName}(action=poll, timeout=<ms>).`,
-            "Larger work: use `sessions_spawn`; completion is push-based.",
+            buildDurableSubagentOrchestrationGuidance({
+              policy: durableOrchestrationPolicy,
+              hasSessionsSpawn,
+              hasSubagents: availableTools.has("subagents"),
+              hasSessionsYield: availableTools.has("sessions_yield"),
+            }),
             '`sessions_spawn`: omit `context` unless transcript needed; then set `context:"fork"`.',
           ]
         : []),
@@ -1088,6 +1106,7 @@ export function buildAgentSystemPrompt(params: {
       "",
       ...buildSubagentDelegationPreferenceSection({
         mode: subagentDelegationMode,
+        durableOrchestrationPolicy,
         isMinimal,
         hasSessionsSpawn,
         hasSubagents: availableTools.has("subagents"),
@@ -1309,6 +1328,7 @@ export function buildAgentSystemPrompt(params: {
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       requireExplicitMessageTarget: params.requireExplicitMessageTarget,
       silentReplyPromptMode,
+      durableOrchestrationPolicy,
     }),
     ...buildVoiceSection({ isMinimal, ttsHint: params.ttsHint }),
   );

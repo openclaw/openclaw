@@ -4,6 +4,7 @@ import { TALK_TEST_PROVIDER_ID } from "../../../src/test-utils/talk-test-provide
 import * as protocol from "./index.js";
 import {
   formatValidationErrors,
+  validateAgentParams,
   validateChatAbortParams,
   validateChatHistoryParams,
   validateChatMetadataParams,
@@ -802,6 +803,60 @@ describe("validateChatSendParams", () => {
     ).toBe(true);
     expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 2 })).toBe(true);
     expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 0 })).toBe(false);
+  });
+
+  it("accepts bounded context references", () => {
+    const base = {
+      sessionKey: "agent:main:main",
+      message: "hello",
+      idempotencyKey: "run-1",
+    };
+
+    expect(
+      validateChatSendParams({
+        ...base,
+        contextRefs: [
+          {
+            type: "work_unit",
+            id: "workboard:default:card-1",
+            label: "Card 1",
+            source: "workboard",
+            metadata: { status: "todo" },
+          },
+        ],
+      }),
+    ).toBe(true);
+    expect(
+      validateChatSendParams({
+        ...base,
+        contextRefs: [{ type: "bad type", id: "workboard:default:card-1" }],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("validateAgentParams contextRefs", () => {
+  it("accepts context references on direct agent runs", () => {
+    const base = {
+      message: "hello",
+      idempotencyKey: "run-1",
+    };
+
+    expect(
+      validateAgentParams({
+        ...base,
+        contextRefs: [{ type: "work_unit", id: "workboard:default:card-1" }],
+      }),
+    ).toBe(true);
+    expect(
+      validateAgentParams({
+        ...base,
+        contextRefs: Array.from({ length: 17 }, (_, index) => ({
+          type: "work_unit",
+          id: `wu-${index}`,
+        })),
+      }),
+    ).toBe(false);
   });
 });
 
