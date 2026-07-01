@@ -51,6 +51,27 @@ describe("native app i18n inventory", () => {
     expect(
       entries.some(
         (entry) =>
+          entry.source === 'OpenClaw needs ${labels.joinToString(", ")} permissions to continue.',
+      ),
+    ).toBe(true);
+    expect(
+      entries.some((entry) => entry.source === "Some channel status checks did not complete."),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.source === '\\(day.entryCount) \\(day.entryCount == 1 ? "entry" : "entries")',
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.source === 'Missing binaries: \\(self.missingBins.joined(separator: ", "))',
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
           entry.source ===
           "Approve this device on the gateway.\n1) `\\(commandLine)`\n2) `/pair approve` in your OpenClaw chat\n\\(requestLine)\nOpenClaw will also retry automatically when you return to this app.",
       ),
