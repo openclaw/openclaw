@@ -68,7 +68,11 @@ import { resolveCacheRetention } from "./cache-retention.js";
 import { resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { adjustMaxTokensForThinking, buildBaseOptions } from "./simple-options.js";
-import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultBlockText,
+  extractToolResultText,
+} from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 const ANTHROPIC_CACHE_CONTROL_LIMIT = 4;
@@ -161,18 +165,18 @@ function convertContentBlocks(content: readonly unknown[]):
         };
       }
   > = [];
-
-  if (text.trim().length > 0) {
-    blocks.push({ type: "text" as const, text: sanitizeSurrogates(text) });
-  } else {
-    blocks.push({ type: "text" as const, text: mediaPlaceholder ?? "(see attached image)" });
-  }
+  let hasTextBlock = false;
 
   for (const block of Array.isArray(content) ? content : []) {
     if (!block || typeof block !== "object") {
       continue;
     }
     const record = block as Record<string, unknown>;
+    const blockText = extractToolResultBlockText(block);
+    if (blockText) {
+      blocks.push({ type: "text" as const, text: sanitizeSurrogates(blockText) });
+      hasTextBlock = true;
+    }
     if (record.type !== "image") {
       continue;
     }
@@ -188,6 +192,9 @@ function convertContentBlocks(content: readonly unknown[]):
         data: typeof record.data === "string" ? record.data : "",
       },
     });
+  }
+  if (!hasTextBlock) {
+    blocks.unshift({ type: "text" as const, text: mediaPlaceholder ?? "(see attached image)" });
   }
 
   return blocks;

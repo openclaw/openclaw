@@ -15,6 +15,7 @@ import {
 import type { AnthropicOptions, AnthropicThinkingDisplay } from "../llm/providers/anthropic.js";
 import {
   describeToolResultMediaPlaceholder,
+  extractToolResultBlockText,
   extractToolResultText,
 } from "../llm/providers/tool-result-text.js";
 import type {
@@ -319,16 +320,17 @@ function convertContentBlocks(content: readonly unknown[]) {
         source: { type: "base64"; media_type: string; data: string };
       }
   > = [];
-  if (text.trim().length > 0) {
-    blocks.push({ type: "text", text: sanitizeTransportPayloadText(text) });
-  } else {
-    blocks.push({ type: "text", text: mediaPlaceholder ?? "(see attached image)" });
-  }
+  let hasTextBlock = false;
   for (const block of Array.isArray(content) ? content : []) {
     if (!block || typeof block !== "object") {
       continue;
     }
     const record = block as Record<string, unknown>;
+    const blockText = extractToolResultBlockText(block);
+    if (blockText) {
+      blocks.push({ type: "text", text: sanitizeTransportPayloadText(blockText) });
+      hasTextBlock = true;
+    }
     if (record.type !== "image") {
       continue;
     }
@@ -340,6 +342,9 @@ function convertContentBlocks(content: readonly unknown[]) {
         data: typeof record.data === "string" ? record.data : "",
       },
     });
+  }
+  if (!hasTextBlock) {
+    blocks.unshift({ type: "text", text: mediaPlaceholder ?? "(see attached image)" });
   }
   return blocks;
 }

@@ -141,6 +141,7 @@ function makeAnthropicTransportModel(
     reasoning?: boolean;
     params?: Record<string, unknown>;
     maxTokens?: number;
+    input?: AnthropicMessagesModel["input"];
     thinkingLevelMap?: AnthropicMessagesModel["thinkingLevelMap"];
     headers?: Record<string, string>;
     authHeader?: boolean;
@@ -156,7 +157,7 @@ function makeAnthropicTransportModel(
       baseUrl: params.baseUrl ?? "https://api.anthropic.com",
       reasoning: params.reasoning ?? true,
       ...(params.params ? { params: params.params } : {}),
-      input: ["text"],
+      input: params.input ?? ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200000,
       maxTokens: params.maxTokens ?? 8192,
@@ -2609,7 +2610,7 @@ describe("anthropic transport stream", () => {
     const imageData = Buffer.from("image").toString("base64");
 
     await runTransportStream(
-      makeAnthropicTransportModel({ id: "claude-sonnet-4-6" }),
+      makeAnthropicTransportModel({ id: "claude-sonnet-4-6", input: ["text", "image"] }),
       {
         messages: [
           {
@@ -2625,6 +2626,8 @@ describe("anthropic transport stream", () => {
             role: "toolResult",
             toolCallId: "tool_1",
             content: [
+              { type: "text", text: "before image" },
+              { type: "image", data: imageData, mimeType: "image/png" },
               {
                 type: "resource",
                 resource: {
@@ -2633,7 +2636,7 @@ describe("anthropic transport stream", () => {
                   text: '{"key":"value"}',
                 },
               },
-              { type: "image", data: imageData, mimeType: "image/png" },
+              { type: "text", text: "after image" },
             ],
             isError: false,
           },
@@ -2652,10 +2655,19 @@ describe("anthropic transport stream", () => {
       userMessage.content,
       (record) => record.type === "tool_result" && record.tool_use_id === "tool_1",
     );
-    // When images are present, content is an array
-    const textBlock = findRecord(toolResult.content, (record) => record.type === "text");
-    // Structured block should be serialized as text alongside the image
-    expect(textBlock.text).toEqual(expect.stringContaining('{"type":"resource"'));
+    expect(toolResult.content).toEqual([
+      { type: "text", text: "before image" },
+      {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: "image/png",
+          data: imageData,
+        },
+      },
+      { type: "text", text: expect.stringContaining('{"type":"resource"') },
+      { type: "text", text: "after image" },
+    ]);
     expect(toolResult.is_error).toBe(false);
   });
 

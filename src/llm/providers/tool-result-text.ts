@@ -146,27 +146,35 @@ export function describeToolResultMediaPlaceholder(blocks: readonly unknown[]): 
   return undefined;
 }
 
+export function extractToolResultBlockText(block: unknown): string | undefined {
+  if (!block || typeof block !== "object") {
+    return undefined;
+  }
+  const record = block as Record<string, unknown>;
+  if (typeof record.type === "string" && MEDIA_ONLY_TOOL_RESULT_TYPES.has(record.type)) {
+    return undefined;
+  }
+  if (record.type === "text") {
+    const text = typeof record.text === "string" ? record.text : "";
+    return text ? sanitizeSurrogates(text) : undefined;
+  }
+  const structured = stringifyStructuredBlock(record);
+  return structured ? sanitizeSurrogates(truncateProviderToolText(structured)) : undefined;
+}
+
 export function extractToolResultText(blocks: readonly unknown[]): string {
   const explicitTexts: string[] = [];
   const structuredTexts: string[] = [];
   for (const block of blocks) {
-    if (!block || typeof block !== "object") {
+    const text = extractToolResultBlockText(block);
+    if (!text) {
       continue;
     }
     const record = block as Record<string, unknown>;
-    if (typeof record.type === "string" && MEDIA_ONLY_TOOL_RESULT_TYPES.has(record.type)) {
-      continue;
-    }
     if (record.type === "text") {
-      const text = typeof record.text === "string" ? record.text : "";
-      if (text) {
-        explicitTexts.push(text);
-      }
-      continue;
-    }
-    const structured = stringifyStructuredBlock(record);
-    if (structured) {
-      structuredTexts.push(structured);
+      explicitTexts.push(text);
+    } else {
+      structuredTexts.push(text);
     }
   }
   if (explicitTexts.length > 0) {
