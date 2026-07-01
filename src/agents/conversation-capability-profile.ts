@@ -45,7 +45,7 @@ export type ConversationCapabilityProfileParams = {
   agentAccountId?: string | null;
   messageProvider?: string | null;
   messageChannel?: string | null;
-  chatType?: ChatType | string;
+  chatType?: string;
   messageTo?: string | null;
   messageThreadId?: string | number | null;
   currentChannelId?: string | null;
