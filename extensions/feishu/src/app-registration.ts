@@ -7,6 +7,7 @@ import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number
  * Replaces axios with native fetch, removes inquirer/ora/chalk in favor of
  * the openclaw WizardPrompter surface.
  */
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { renderQrTerminal } from "./qr-terminal.js";
 import type { FeishuDomain } from "./types.js";
@@ -21,6 +22,7 @@ const LARK_ACCOUNTS_URL = "https://accounts.larksuite.com";
 const REGISTRATION_PATH = "/oauth/v1/app/registration";
 
 const REQUEST_TIMEOUT_MS = 10_000;
+const FEISHU_REGISTRATION_RESPONSE_LIMIT_BYTES = 4 * 1024 * 1024;
 const DEFAULT_REGISTRATION_POLL_INTERVAL_SECONDS = 5;
 const DEFAULT_REGISTRATION_EXPIRE_SECONDS = 600;
 
@@ -108,8 +110,13 @@ async function fetchFeishuJson<T>(params: {
     auditContext: params.auditContext,
   });
   try {
-    // Registration poll returns 4xx for pending/error states with a JSON body.
-    return (await response.json()) as T;
+    const buffer = await readResponseWithLimit(response, FEISHU_REGISTRATION_RESPONSE_LIMIT_BYTES, {
+      onOverflow: () =>
+        new Error(
+          `Feishu registration response exceeded maximum size (${FEISHU_REGISTRATION_RESPONSE_LIMIT_BYTES} bytes)`,
+        ),
+    });
+    return JSON.parse(new TextDecoder().decode(buffer)) as T;
   } finally {
     await release();
   }

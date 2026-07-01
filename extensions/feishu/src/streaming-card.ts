@@ -8,6 +8,7 @@ import {
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { getFeishuUserAgent } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
@@ -49,6 +50,7 @@ type StreamingStartOptions = {
 const STREAMING_UPDATE_THROTTLE_MS = 160;
 const STREAMING_SIGNIFICANT_DELTA_CHARS = 18;
 const FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS = 7200;
+const FEISHU_STREAMING_RESPONSE_LIMIT_BYTES = 4 * 1024 * 1024;
 
 // Token cache (keyed by domain + appId)
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
@@ -116,7 +118,13 @@ async function getToken(creds: Credentials): Promise<string> {
     await release();
     throw new Error(`Token request failed with HTTP ${response.status}`);
   }
-  const data = (await response.json()) as {
+  const buffer = await readResponseWithLimit(response, FEISHU_STREAMING_RESPONSE_LIMIT_BYTES, {
+    onOverflow: () =>
+      new Error(
+        `Feishu streaming token response exceeded maximum size (${FEISHU_STREAMING_RESPONSE_LIMIT_BYTES} bytes)`,
+      ),
+  });
+  const data = JSON.parse(new TextDecoder().decode(buffer)) as {
     code: number;
     msg: string;
     tenant_access_token?: string;
@@ -276,7 +284,17 @@ export class FeishuStreamingSession {
       await releaseCreate();
       throw new Error(`Create card request failed with HTTP ${createRes.status}`);
     }
-    const createData = (await createRes.json()) as {
+    const createBuffer = await readResponseWithLimit(
+      createRes,
+      FEISHU_STREAMING_RESPONSE_LIMIT_BYTES,
+      {
+        onOverflow: () =>
+          new Error(
+            `Feishu create card response exceeded maximum size (${FEISHU_STREAMING_RESPONSE_LIMIT_BYTES} bytes)`,
+          ),
+      },
+    );
+    const createData = JSON.parse(new TextDecoder().decode(createBuffer)) as {
       code: number;
       msg: string;
       data?: { card_id: string };
