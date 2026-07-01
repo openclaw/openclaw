@@ -737,6 +737,21 @@ export interface PluginStateEntries {
   value_json: string;
 }
 
+export interface RoutineRecords {
+  backing_cron_job_id: string | null;
+  backing_cron_store_key: string | null;
+  created_at_ms: number;
+  description: string | null;
+  enabled: number;
+  name: string;
+  owner_agent_id: string | null;
+  owner_session_key: string | null;
+  routine_id: string;
+  routine_json: string;
+  trigger_kind: string;
+  updated_at_ms: number;
+}
+
 export interface SandboxRegistryEntries {
   backend_id: string | null;
   cdp_port: number | null;
@@ -1004,6 +1019,7 @@ export interface DB {
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;
+  routine_records: RoutineRecords;
   sandbox_registry_entries: SandboxRegistryEntries;
   schema_meta: SchemaMeta;
   skill_uploads: SkillUploads;

@@ -98,6 +98,12 @@ const subCliCommandCatalog = defineCommandDescriptorCatalog([
     parentDefaultHelp: true,
   },
   {
+    name: "routines",
+    description: "Manage durable team-operation routines",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
+  },
+  {
     name: "dns",
     description: "DNS helpers for wide-area discovery (Tailscale + CoreDNS)",
     hasSubcommands: true,

@@ -54,20 +54,20 @@ function cronCommandPayloadSchema(params: { argv: TSchema }) {
 }
 
 /** Session target accepted by cron jobs. */
-const CronSessionTargetSchema = Type.Union([
+export const CronSessionTargetSchema = Type.Union([
   Type.Literal("main"),
   Type.Literal("isolated"),
   Type.Literal("current"),
   Type.String({ pattern: "^session:.+" }),
 ]);
 /** Whether a cron job waits for heartbeat processing or wakes immediately. */
-const CronWakeModeSchema = Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]);
+export const CronWakeModeSchema = Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]);
 /** Run status factory reused for the active field and deprecated alias metadata. */
 function cronRunStatusSchema(options: Record<string, unknown> = {}) {
   return Type.Union([Type.Literal("ok"), Type.Literal("error"), Type.Literal("skipped")], options);
 }
 
-const CronRunStatusSchema = cronRunStatusSchema();
+export const CronRunStatusSchema = cronRunStatusSchema();
 const DeprecatedCronRunStatusSchema = cronRunStatusSchema({
   deprecated: true,
   description: "Deprecated alias for lastRunStatus.",

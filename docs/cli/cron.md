@@ -14,6 +14,12 @@ Manage cron jobs for the Gateway scheduler.
 Run `openclaw cron --help` for the full command surface. See [Cron jobs](/automation/cron-jobs) for the conceptual guide.
 </Tip>
 
+<Note>
+Use [`openclaw routines`](/cli/routines) when a scheduled job should become a
+named team-operation routine with stable ownership, delivery, and idempotent
+creation. Routine schedules are still backed by cron.
+</Note>
+
 ## Create jobs quickly
 
 `openclaw cron create` is an alias for `openclaw cron add`. For new jobs, put the schedule first and the prompt second:

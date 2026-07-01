@@ -10,6 +10,13 @@ sidebarTitle: "Scheduled tasks"
 
 Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at the right time, and can deliver output back to a chat channel or webhook endpoint.
 
+<Note>
+Use [Routines](/automation/routines) when a schedule-backed job should be a
+named, durable team operation with ownership, delivery target, status visibility,
+and idempotent create/delete semantics. Routines delegate schedule execution to
+cron instead of replacing it.
+</Note>
+
 ## Quick start
 
 <Steps>

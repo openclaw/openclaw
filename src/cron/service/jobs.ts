@@ -778,7 +778,7 @@ export function nextWakeAtMs(state: CronServiceState) {
 /** Creates a normalized cron job row from public add input and computes its initial schedule. */
 export function createJob(state: CronServiceState, input: CronJobCreate): CronJob {
   const now = state.deps.nowMs();
-  const id = crypto.randomUUID();
+  const id = normalizeOptionalString(input.id) ?? crypto.randomUUID();
   const schedule =
     input.schedule.kind === "every"
       ? {

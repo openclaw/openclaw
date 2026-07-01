@@ -385,7 +385,7 @@ async function assertValidCronAnnounceDelivery(params: {
   }
 }
 
-async function assertValidCronCreateDelivery(cfg: OpenClawConfig, jobCreate: CronJobCreate) {
+export async function assertValidCronCreateDelivery(cfg: OpenClawConfig, jobCreate: CronJobCreate) {
   await assertValidCronAnnounceDelivery({
     cfg,
     delivery: jobCreate.delivery,

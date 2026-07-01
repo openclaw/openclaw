@@ -478,6 +478,9 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
   return await locked(state, async () => {
     warnIfDisabled(state, "add");
     await ensureLoaded(state, { skipRecompute: true });
+    if (input.id && state.store?.jobs.some((job) => job.id === input.id)) {
+      throw new Error(`cron job already exists: ${input.id}`);
+    }
     const job = createJob(state, input);
     state.store?.jobs.push(job);
 

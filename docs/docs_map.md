@@ -134,6 +134,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Quick decision guide
   - H3: Scheduled Tasks (Cron) vs Heartbeat
   - H2: Core concepts
+  - H3: Routines
   - H3: Scheduled tasks (cron)
   - H3: Tasks
   - H3: Inferred commitments
@@ -148,6 +149,17 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 
 - Route: /automation/poll
 - Headings:
+  - H2: Related
+
+## automation/routines.md
+
+- Route: /automation/routines
+- Headings:
+  - H2: Quick start
+  - H2: What routines add
+  - H2: Relationship to cron and tasks
+  - H2: Status and missing backing jobs
+  - H2: Current scope
   - H2: Related
 
 ## automation/standing-orders.md
@@ -1831,6 +1843,19 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /cli/reset
 - Headings:
   - H1: openclaw reset
+  - H2: Related
+
+## cli/routines.md
+
+- Route: /cli/routines
+- Headings:
+  - H1: openclaw routines
+  - H2: Usage
+  - H2: Create
+  - H3: Options
+  - H2: Idempotency
+  - H2: Inspect
+  - H2: Enable, disable, delete
   - H2: Related
 
 ## cli/sandbox.md

@@ -354,6 +354,8 @@ export type CronStoreFile = {
 
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */
 export type CronJobCreate = Omit<CronJob, "id" | "createdAtMs" | "updatedAtMs" | "state"> & {
+  /** Internal callers can reserve a durable id before creation; public cron.add omits this. */
+  id?: string;
   state?: Partial<CronJobState>;
 };
 

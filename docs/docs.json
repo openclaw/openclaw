@@ -1297,6 +1297,7 @@
                 "group": "Automation",
                 "pages": [
                   "automation/index",
+                  "automation/routines",
                   "automation/cron-jobs",
                   "automation/tasks",
                   "automation/taskflow",
@@ -1701,6 +1702,7 @@
                       "cli/commitments",
                       "cli/message",
                       "cli/models",
+                      "cli/routines",
                       "cli/sessions",
                       "cli/system",
                       "cli/tasks"
