@@ -9,7 +9,11 @@ import type {
   ReplyParameters,
 } from "grammy/types";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
-import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
+import {
+  chunkMarkdownTextWithMode,
+  chunkText,
+  type ChunkMode,
+} from "openclaw/plugin-sdk/reply-chunking";
 import {
   escapeTelegramHtml,
   limitTelegramRichHtmlNesting,
@@ -402,7 +406,7 @@ function splitTelegramRichMarkdownTextChunks(
     const reducedLimit = Math.max(1, Math.min(chunk.length - 1, textLimit - 16));
     const nextChunks = chunkMarkdownTextWithMode(chunk, reducedLimit, chunkMode);
     if (nextChunks.length <= 1) {
-      chunks.push(chunk);
+      chunks.push(...chunkText(chunk, textLimit));
       continue;
     }
     queue.splice(index, 1, ...nextChunks);

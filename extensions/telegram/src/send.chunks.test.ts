@@ -1,5 +1,6 @@
 // Telegram tests cover plain-text chunk-splitting behavior.
 import { describe, expect, it } from "vitest";
+import { splitTelegramRichMarkdownChunks } from "./rich-message.js";
 import { splitTelegramPlainTextChunksForTests } from "./send.js";
 
 function containsLoneSurrogate(text: string): boolean {
@@ -53,5 +54,39 @@ describe("splitTelegramPlainTextChunks", () => {
     for (const chunk of chunks) {
       expect(containsLoneSurrogate(chunk)).toBe(false);
     }
+  });
+});
+
+describe("splitTelegramRichMarkdownChunks", () => {
+  it("hard-splits a chunk that exceeds the limit when markdown-aware split fails", () => {
+    // Fenced code block with no safe break point inside
+    const codeBlock = "```\n" + "A".repeat(500) + "\n```";
+    const chunks = splitTelegramRichMarkdownChunks(codeBlock, 200, "length");
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(200);
+    }
+  });
+
+  it("splits a long structured markdown response into bounded chunks", () => {
+    const markdown = [
+      "# Section 1",
+      "- Item one",
+      "- Item two",
+      "```\n" + "B".repeat(500) + "\n```",
+      "# Section 2",
+      "Some paragraph text here.",
+    ].join("\n\n");
+    const chunks = splitTelegramRichMarkdownChunks(markdown, 400, "length");
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(400);
+    }
+  });
+
+  it("preserves short messages without unnecessary splitting", () => {
+    const input = "Short message.";
+    const chunks = splitTelegramRichMarkdownChunks(input, 200, "length");
+    expect(chunks).toEqual([input]);
   });
 });
