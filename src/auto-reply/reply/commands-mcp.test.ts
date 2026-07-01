@@ -1,5 +1,6 @@
 // Tests MCP command configuration, listing, and enablement behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { McpToolCatalog, SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { withTempHome } from "../../config/home-env.test-harness.js";
 import { createCommandWorkspaceHarness } from "./commands-filesystem.test-support.js";
@@ -7,6 +8,21 @@ import { handleMcpCommand } from "./commands-mcp.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 
 const mcpServers = vi.hoisted(() => new Map<string, Record<string, unknown>>());
+
+const mcpRuntimeMocks = vi.hoisted(() => ({
+  peekSessionMcpRuntime: vi.fn<
+    (params: {
+      sessionId?: string | null;
+      sessionKey?: string | null;
+    }) => Pick<SessionMcpRuntime, "configFingerprint" | "peekCatalog"> | undefined
+  >(() => undefined),
+  resolveSessionMcpConfigSummary: vi.fn(() => ({
+    fingerprint: "mcp:0",
+    serverNames: [] as string[],
+  })),
+}));
+
+vi.mock("../../agents/agent-bundle-mcp-runtime.js", () => mcpRuntimeMocks);
 
 vi.mock("../../config/mcp-config.js", () => ({
   listConfiguredMcpServers: vi.fn(async () => ({
@@ -54,10 +70,146 @@ function buildCfg(): OpenClawConfig {
   };
 }
 
+function makeCatalog(
+  overrides: Partial<McpToolCatalog> & Pick<McpToolCatalog, "servers"> = { servers: {} },
+): McpToolCatalog {
+  return {
+    version: 1,
+    generatedAt: 0,
+    tools: [],
+    ...overrides,
+  };
+}
+
 describe("handleCommands /mcp", () => {
   afterEach(async () => {
     mcpServers.clear();
     await workspaceHarness.cleanupWorkspaces();
+    mcpRuntimeMocks.peekSessionMcpRuntime.mockReset().mockReturnValue(undefined);
+    mcpRuntimeMocks.resolveSessionMcpConfigSummary.mockReset().mockReturnValue({
+      fingerprint: "mcp:0",
+      serverNames: [],
+    });
+  });
+
+  it("shows connected live state for a server with a warm catalog", async () => {
+    await withTempHome("openclaw-command-mcp-home-", async () => {
+      const workspaceDir = await workspaceHarness.createWorkspace();
+      mcpServers.set("context7", { command: "uvx", args: ["context7-mcp"] });
+      const catalog = makeCatalog({
+        servers: { context7: { serverName: "context7", launchSummary: "uvx", toolCount: 3 } },
+      });
+      mcpRuntimeMocks.peekSessionMcpRuntime.mockReturnValue({
+        configFingerprint: "mcp:1",
+        peekCatalog: () => catalog,
+      });
+      mcpRuntimeMocks.resolveSessionMcpConfigSummary.mockReturnValue({
+        fingerprint: "mcp:1",
+        serverNames: ["context7"],
+      });
+
+      const showParams = buildCommandTestParams("/mcp show", buildCfg(), undefined, {
+        workspaceDir,
+      });
+      showParams.command.senderIsOwner = true;
+      const result = expectMcpResult(await handleMcpCommand(showParams, true));
+      expect(result.reply?.text).toContain("🩺 Live state (session):");
+      expect(result.reply?.text).toContain("context7: ✅ connected (3 tools)");
+    });
+  });
+
+  it("shows a diagnostic live-state line for a server that failed to connect", async () => {
+    await withTempHome("openclaw-command-mcp-home-", async () => {
+      const workspaceDir = await workspaceHarness.createWorkspace();
+      mcpServers.set("context7", { command: "uvx", args: ["context7-mcp"] });
+      const catalog = makeCatalog({
+        servers: {},
+        diagnostics: [
+          {
+            serverName: "context7",
+            safeServerName: "context7",
+            launchSummary: "uvx",
+            message: "connect ECONNREFUSED",
+          },
+        ],
+      });
+      mcpRuntimeMocks.peekSessionMcpRuntime.mockReturnValue({
+        configFingerprint: "mcp:1",
+        peekCatalog: () => catalog,
+      });
+      mcpRuntimeMocks.resolveSessionMcpConfigSummary.mockReturnValue({
+        fingerprint: "mcp:1",
+        serverNames: ["context7"],
+      });
+
+      const showParams = buildCommandTestParams("/mcp show context7", buildCfg(), undefined, {
+        workspaceDir,
+      });
+      showParams.command.senderIsOwner = true;
+      const result = expectMcpResult(await handleMcpCommand(showParams, true));
+      expect(result.reply?.text).toContain("context7: ⚠️ connect ECONNREFUSED");
+    });
+  });
+
+  it("marks live state stale when the session catalog predates the current config", async () => {
+    await withTempHome("openclaw-command-mcp-home-", async () => {
+      const workspaceDir = await workspaceHarness.createWorkspace();
+      mcpServers.set("context7", { command: "uvx", args: ["context7-mcp"] });
+      const catalog = makeCatalog({
+        servers: { context7: { serverName: "context7", launchSummary: "uvx", toolCount: 3 } },
+      });
+      mcpRuntimeMocks.peekSessionMcpRuntime.mockReturnValue({
+        configFingerprint: "mcp:old",
+        peekCatalog: () => catalog,
+      });
+      mcpRuntimeMocks.resolveSessionMcpConfigSummary.mockReturnValue({
+        fingerprint: "mcp:new",
+        serverNames: ["context7"],
+      });
+
+      const showParams = buildCommandTestParams("/mcp show", buildCfg(), undefined, {
+        workspaceDir,
+      });
+      showParams.command.senderIsOwner = true;
+      const result = expectMcpResult(await handleMcpCommand(showParams, true));
+      expect(result.reply?.text).toContain(
+        "context7: ♻️ config changed since last connect (stale)",
+      );
+    });
+  });
+
+  it("shows a not-yet-discovered note when the session runtime has no catalog yet", async () => {
+    await withTempHome("openclaw-command-mcp-home-", async () => {
+      const workspaceDir = await workspaceHarness.createWorkspace();
+      mcpServers.set("context7", { command: "uvx", args: ["context7-mcp"] });
+      mcpRuntimeMocks.peekSessionMcpRuntime.mockReturnValue({
+        configFingerprint: "mcp:1",
+        peekCatalog: () => null,
+      });
+
+      const showParams = buildCommandTestParams("/mcp show", buildCfg(), undefined, {
+        workspaceDir,
+      });
+      showParams.command.senderIsOwner = true;
+      const result = expectMcpResult(await handleMcpCommand(showParams, true));
+      expect(result.reply?.text).toContain(
+        "🩺 Live state (session): not yet discovered — connects on next agent MCP tool use.",
+      );
+    });
+  });
+
+  it("omits the live-state section when no session runtime exists yet", async () => {
+    await withTempHome("openclaw-command-mcp-home-", async () => {
+      const workspaceDir = await workspaceHarness.createWorkspace();
+      mcpServers.set("context7", { command: "uvx", args: ["context7-mcp"] });
+
+      const showParams = buildCommandTestParams("/mcp show", buildCfg(), undefined, {
+        workspaceDir,
+      });
+      showParams.command.senderIsOwner = true;
+      const result = expectMcpResult(await handleMcpCommand(showParams, true));
+      expect(result.reply?.text).not.toContain("Live state");
+    });
   });
 
   it("writes MCP config and shows it back", async () => {
