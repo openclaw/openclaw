@@ -70,6 +70,8 @@ const gpt56SolModel = {
   thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
 } satisfies Model<"openai-responses">;
 
+const testAllowedToolCallProviders = new Set(["openai", "openai-codex", "opencode"]);
+
 function createAssistantOutput(): AssistantMessage {
   return {
     role: "assistant",
@@ -284,7 +286,7 @@ describe("Responses reasoning effort", () => {
 });
 
 describe("convertResponsesMessages", () => {
-  const allowedToolCallProviders = new Set(["openai", "openai-codex", "opencode"]);
+  const allowedToolCallProviders = testAllowedToolCallProviders;
 
   it("adds explicit message item types for system and user input items", () => {
     const input = convertResponsesMessages(
@@ -620,6 +622,53 @@ describe("convertResponsesMessages", () => {
     ]);
   });
 
+  it("uses audio placeholder for audio-only tool results instead of image or no-output text", () => {
+    const input = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: nativeOpenAIModel.api,
+            provider: nativeOpenAIModel.provider,
+            model: nativeOpenAIModel.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [{ type: "toolCall", id: "call_audio", name: "audio", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_audio",
+            toolName: "audio",
+            content: [{ type: "audio", mimeType: "audio/mpeg", data: "YXVkaW8=" }],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+      } as unknown as Context,
+      allowedToolCallProviders,
+      { includeSystemPrompt: false },
+    ) as unknown as Array<Record<string, unknown>>;
+
+    const functionOutput = input.find((item) => item.type === "function_call_output");
+    expect(functionOutput).toMatchObject({
+      type: "function_call_output",
+      call_id: "call_audio",
+      output: "(see attached audio)",
+    });
+    expect(functionOutput?.output).not.toBe("(see attached image)");
+    expect(functionOutput?.output).not.toBe("(no output)");
+  });
+
   it("keeps encrypted reasoning replay item ids when requested", () => {
     const input = convertResponsesMessages(
       nativeOpenAIModel,
@@ -664,6 +713,37 @@ describe("convertResponsesMessages", () => {
       id: "rs_foundry_prior",
       encrypted_content: "ciphertext",
       summary: [],
+    });
+  });
+
+  it("serializes structured tool results as text instead of image placeholders", () => {
+    const input = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "toolResult",
+            toolCallId: "call_structured",
+            toolName: "session_status",
+            content: [
+              {
+                type: "json",
+                payload: { sessionKey: "current", model: "openai/gpt-5.4", status: "ok" },
+              },
+            ],
+            isError: false,
+            timestamp: 1,
+          },
+        ],
+      } as unknown as Context,
+      testAllowedToolCallProviders,
+      { includeSystemPrompt: false, replayResponsesItemIds: false },
+    ) as unknown as Array<Record<string, unknown>>;
+    expect(input).toContainEqual({
+      type: "function_call_output",
+      call_id: "call_structured",
+      output: expect.stringContaining('"type":"json"'),
     });
   });
 });
