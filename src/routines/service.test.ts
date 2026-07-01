@@ -143,8 +143,16 @@ function createFakeCronService(): FakeCronService {
   return service;
 }
 
+function readStoredRoutineJson(id = "daily-ops"): Record<string, unknown> | undefined {
+  const row = openOpenClawStateDatabase()
+    .db.prepare("SELECT routine_json AS routineJson FROM routine_records WHERE routine_id = ?")
+    .get(id) as { routineJson?: string } | undefined;
+  return row?.routineJson ? (JSON.parse(row.routineJson) as Record<string, unknown>) : undefined;
+}
+
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -652,6 +660,48 @@ describe("routine service", () => {
     });
   });
 
+  it("does not re-arm completed one-shot routines with a stale create stage", async () => {
+    await withOpenClawTestState({ prefix: "routine-completed-staged-one-shot-" }, async () => {
+      const cron = createFakeCronService();
+      const input = createRoutineInput({
+        id: "completed-stage",
+        trigger: {
+          kind: "schedule",
+          schedule: { kind: "at", at: new Date(Date.now() + 60_000).toISOString() },
+        },
+      });
+      cron.update.mockRejectedValueOnce(new Error("interrupted after staging"));
+
+      await expect(
+        createRoutine(input, { cron, cronStorePath: "/tmp/cron.sqlite" }),
+      ).rejects.toThrow("interrupted after staging");
+      const cronJobId = [...cron.jobs.keys()][0];
+      const cronJob = cronJobId ? cron.jobs.get(cronJobId) : undefined;
+      if (!cronJobId || !cronJob) {
+        throw new Error("expected staged one-shot backing cron job");
+      }
+      cron.jobs.set(cronJobId, {
+        ...cronJob,
+        enabled: false,
+        state: {
+          ...cronJob.state,
+          nextRunAtMs: undefined,
+          lastRunAtMs: Date.now(),
+          lastRunStatus: "ok",
+        },
+      });
+      cron.update.mockClear();
+
+      const replay = await createRoutine(input, { cron, cronStorePath: "/tmp/cron.sqlite" });
+
+      expect(replay.created).toBe(false);
+      expect(replay.idempotent).toBe(true);
+      expect(replay.routine.status.status).toBe("disabled");
+      expect(cron.update).not.toHaveBeenCalled();
+      expect(readStoredRoutineJson("completed-stage")).not.toHaveProperty("createStage");
+    });
+  });
+
   it("adopts generated-id backing cron jobs when the registry row is missing", async () => {
     await withOpenClawTestState({ prefix: "routine-adopt-generated-orphan-" }, async () => {
       const cron = createFakeCronService();
@@ -1020,6 +1070,33 @@ describe("routine service", () => {
     });
   });
 
+  it("persists enable intent before arming a disabled backing cron job", async () => {
+    await withOpenClawTestState({ prefix: "routine-enable-stage-" }, async () => {
+      const cron = createFakeCronService();
+      const created = await createRoutine(createRoutineInput({ enabled: false }), { cron });
+      const cronJobId = created.routine.trigger.cronJobId;
+      cron.update.mockRejectedValueOnce(new Error("interrupted before enable"));
+
+      await expect(setRoutineEnabled(created.routine.id, true, { cron })).rejects.toThrow(
+        "interrupted before enable",
+      );
+
+      expect(readStoredRoutineJson()).toMatchObject({
+        enabled: true,
+        enableStage: "enabling",
+      });
+      expect(cron.jobs.get(cronJobId)?.enabled).toBe(false);
+      cron.update.mockClear();
+
+      const replay = await setRoutineEnabled(created.routine.id, true, { cron });
+
+      expect(replay.changed).toBe(true);
+      expect(replay.routine.status.status).toBe("enabled");
+      expect(cron.update).toHaveBeenCalledWith(cronJobId, { enabled: true });
+      expect(readStoredRoutineJson()).not.toHaveProperty("enableStage");
+    });
+  });
+
   it.each([
     { initialEnabled: false, nextEnabled: true, label: "enable" },
     { initialEnabled: true, nextEnabled: false, label: "disable" },
@@ -1063,7 +1140,20 @@ describe("routine service", () => {
 
           await expect(
             setRoutineEnabled(created.routine.id, nextEnabled, { cron }),
-          ).rejects.toThrow("failed to persist routine: forced routine update failure");
+          ).rejects.toThrow(
+            nextEnabled
+              ? "forced routine update failure"
+              : "failed to persist routine: forced routine update failure",
+          );
+
+          if (nextEnabled) {
+            expect(cron.update).not.toHaveBeenCalled();
+            expect(cron.jobs.get(cronJobId)?.enabled).toBe(initialEnabled);
+            await expect(inspectRoutine(created.routine.id, { cron })).resolves.toMatchObject({
+              enabled: initialEnabled,
+            });
+            return;
+          }
 
           expect(cron.update).toHaveBeenCalledWith(cronJobId, { enabled: nextEnabled });
           expect(cron.update).toHaveBeenCalledWith(cronJobId, {

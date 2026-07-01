@@ -66,6 +66,7 @@ type RoutineRecord = {
 
 type RoutineStoredRecord = RoutineRecord & {
   createStage?: "creating";
+  enableStage?: "enabling";
 };
 
 export type RoutineCreateInput = {
@@ -717,7 +718,7 @@ function stageRoutineRecordForCreate(record: RoutineRecord): RoutineStoredRecord
 }
 
 function toPublicRoutineRecord(record: RoutineStoredRecord): RoutineRecord {
-  const { createStage: _createStage, ...publicRecord } = record;
+  const { createStage: _createStage, enableStage: _enableStage, ...publicRecord } = record;
   return publicRecord;
 }
 
@@ -974,7 +975,34 @@ async function maybeEnableRoutineBackingCronJob(params: {
   ) {
     return params.cronJob;
   }
+  if (isTerminalOneShotCronJob(params.cronJob)) {
+    return params.cronJob;
+  }
   return await params.context.cron.update(params.cronJob.id, { enabled: true });
+}
+
+function isTerminalOneShotCronJob(cronJob: CronJob): boolean {
+  if (cronJob.schedule.kind !== "at") {
+    return false;
+  }
+  return (
+    typeof cronJob.state.lastRunAtMs === "number" ||
+    cronJob.state.lastRunStatus !== undefined ||
+    cronJob.state.lastStatus !== undefined
+  );
+}
+
+function stageRoutineRecordForEnable(record: RoutineStoredRecord): RoutineStoredRecord {
+  return {
+    ...toPublicRoutineRecord(record),
+    enabled: true,
+    updatedAtMs: Date.now(),
+    enableStage: "enabling",
+  };
+}
+
+function hasRoutineInternalStage(record: RoutineStoredRecord): boolean {
+  return record.createStage === "creating" || record.enableStage === "enabling";
 }
 
 async function persistRoutineRecordThenMaybeArm(params: {
@@ -1287,19 +1315,34 @@ export async function setRoutineEnabled(
     }
     const changed = record.enabled !== enabled || cronJob.enabled !== enabled;
     if (!changed) {
+      const cleanRecord = hasRoutineInternalStage(record)
+        ? toPublicRoutineRecord({
+            ...record,
+            enabled: cronJob.enabled,
+            updatedAtMs: cronJob.updatedAtMs,
+          })
+        : record;
+      if (cleanRecord !== record) {
+        upsertRoutineRecordToSqlite(cleanRecord);
+      }
       return {
-        routine: toRoutineView(record, cronJob),
+        routine: toRoutineView(cleanRecord, cronJob),
         changed: false,
       };
     }
     const previousCronJob = structuredClone(cronJob);
     let postToggleCronJob = cronJob;
+    const stagedEnableRecord =
+      enabled && !cronJob.enabled ? stageRoutineRecordForEnable(record) : undefined;
+    if (stagedEnableRecord) {
+      upsertRoutineRecordToSqlite(stagedEnableRecord);
+    }
     if (previousCronJob.enabled !== enabled) {
       postToggleCronJob = await context.cron.update(cronJob.id, { enabled });
     }
     const updatedCronJob = await context.cron.readJob(cronJob.id);
     const updatedRecord = toPublicRoutineRecord({
-      ...record,
+      ...(stagedEnableRecord ?? record),
       enabled,
       updatedAtMs: Date.now(),
     });
