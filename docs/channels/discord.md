@@ -927,12 +927,13 @@ Default slash command settings:
 
   <Accordion title="Gateway proxy">
     Route Discord gateway WebSocket traffic and startup REST lookups (application ID + allowlist resolution) through an HTTP(S) proxy with `channels.discord.proxy`.
+    Discord Gateway proxying is explicit; it does not inherit ambient proxy environment variables from the Gateway process. Proxy URLs must target loopback or exactly match the active process proxy URL from `HTTP_PROXY`, `HTTPS_PROXY`, or `ALL_PROXY`.
 
 ```json5
 {
   channels: {
     discord: {
-      proxy: "http://proxy.example:8080",
+      proxy: "http://127.0.0.1:8080",
     },
   },
 }
@@ -946,7 +947,7 @@ Default slash command settings:
     discord: {
       accounts: {
         primary: {
-          proxy: "http://proxy.example:8080",
+          proxy: "http://127.0.0.1:8080",
         },
       },
     },
