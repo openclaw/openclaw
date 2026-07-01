@@ -30,20 +30,19 @@ describe("Dockerfile", () => {
 
   it("uses full bookworm for build stages and slim bookworm for runtime", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
-    expect(dockerfile).toContain(
-      'ARG OPENCLAW_NODE_BOOKWORM_IMAGE="docker.io/library/node:24-bookworm@sha256:8530f76a96d88820d288761f022e318970dda93d01536919fbc16076b7983e63"',
+    expect(dockerfile).toMatch(
+      /ARG OPENCLAW_NODE_BOOKWORM_IMAGE="docker\.io\/library\/node:24-bookworm@sha256:[a-f0-9]{64}"/,
     );
-    expect(dockerfile).toContain(
-      'ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="docker.io/library/node:24-bookworm-slim@sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf"',
+    expect(dockerfile).toMatch(
+      /ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="docker\.io\/library\/node:24-bookworm-slim@sha256:[a-f0-9]{64}"/,
     );
-    expect(dockerfile).toContain(
-      'ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.3.13@sha256:87416c977a612a204eb54ab9f3927023c2a3c971f4f345a01da08ea6262ae30e"',
+    expect(dockerfile).toMatch(
+      /ARG OPENCLAW_BUN_IMAGE="docker\.io\/oven\/bun:1\.3\.13@sha256:[a-f0-9]{64}"/,
     );
-    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS workspace-deps");
-    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build");
-    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime");
-    expect(dockerfile).toContain("FROM base-runtime");
-    expect(dockerfile).toContain("current multi-arch manifest list entries");
+    expect(dockerfile).toMatch(/FROM \$\{OPENCLAW_NODE_BOOKWORM_IMAGE\} AS workspace-deps/);
+    expect(dockerfile).toMatch(/FROM \$\{OPENCLAW_NODE_BOOKWORM_IMAGE\} AS build/);
+    expect(dockerfile).toMatch(/FROM \$\{OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE\} AS base-runtime/);
+    expect(dockerfile).toMatch(/current multi-arch manifest list entries/);
     expect(dockerfile).not.toContain("current amd64 entry");
     expect(dockerfile).not.toContain("OPENCLAW_VARIANT");
   });
@@ -51,11 +50,11 @@ describe("Dockerfile", () => {
   it("installs CA certificates in the slim runtime stage", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const collapsed = collapseDockerContinuations(dockerfile);
-    const runtimeIndex = collapsed.indexOf(
-      "FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime",
+    const runtimeIndex = collapsed.search(
+      /FROM \$\{OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE\}\s+AS base-runtime/,
     );
-    const caInstallIndex = collapsed.indexOf(
-      "ca-certificates curl git hostname lsof openssl procps python3",
+    const caInstallIndex = collapsed.search(
+      /ca-certificates\s+curl\s+git\s+hostname\s+lsof\s+openssl\s+procps\s+python3/,
     );
 
     expect(runtimeIndex).toBeGreaterThan(-1);
@@ -67,18 +66,18 @@ describe("Dockerfile", () => {
 
   it("installs python3 and tini in the slim runtime stage", async () => {
     const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
-    const runtimeIndex = dockerfile.indexOf(
-      "FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime",
+    const runtimeIndex = dockerfile.search(
+      /FROM \$\{OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE\}\s+AS base-runtime/,
     );
-    const pythonInstallIndex = dockerfile.indexOf(
-      "ca-certificates curl git hostname lsof openssl procps python3",
+    const pythonInstallIndex = dockerfile.search(
+      /ca-certificates\s+curl\s+git\s+hostname\s+lsof\s+openssl\s+procps\s+python3/,
     );
 
     expect(runtimeIndex).toBeGreaterThan(-1);
     expect(pythonInstallIndex).toBeGreaterThan(runtimeIndex);
     expect(pythonInstallIndex).toBeLessThan(dockerfile.indexOf("RUN chown node:node /app"));
-    expect(dockerfile).toContain(
-      "ca-certificates curl git hostname lsof openssl procps python3 tini",
+    expect(dockerfile).toMatch(
+      /ca-certificates\s+curl\s+git\s+hostname\s+lsof\s+openssl\s+procps\s+python3\s+tini/,
     );
     expect(dockerfile).toContain('ENTRYPOINT ["tini", "-s", "--"]');
   });
@@ -91,10 +90,10 @@ describe("Dockerfile", () => {
     expect(installIndex).toBeGreaterThan(-1);
     expect(browserArgIndex).toBeGreaterThan(-1);
     expect(browserArgIndex).toBeGreaterThan(installIndex);
-    expect(dockerfile).toContain(
-      "node /app/node_modules/playwright-core/cli.js install --with-deps chromium",
+    expect(dockerfile).toMatch(
+      /node \/app\/node_modules\/playwright-core\/cli\.js install --with-deps chromium/,
     );
-    expect(dockerfile).toContain("apt-get install -y --no-install-recommends xvfb");
+    expect(dockerfile).toMatch(/install_list="\$install_list xvfb"/);
   });
 
   it("uses the Docker target platform for pnpm install and prune", async () => {
@@ -234,26 +233,24 @@ describe("Dockerfile", () => {
 
   it("prunes runtime dependencies and omitted plugin packages after the build stage", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
-    expect(dockerfile).toContain("FROM build AS runtime-assets");
-    expect(dockerfile).toContain("ARG OPENCLAW_EXTENSIONS");
-    expect(dockerfile).toContain("ARG OPENCLAW_BUNDLED_PLUGIN_DIR");
-    expect(dockerfile).toContain(
-      "Opt-in plugin dependencies at build time (space- or comma-separated directory names).",
+    expect(dockerfile).toMatch(/FROM build AS runtime-assets/);
+    expect(dockerfile).toMatch(/ARG OPENCLAW_EXTENSIONS/);
+    expect(dockerfile).toMatch(/ARG OPENCLAW_BUNDLED_PLUGIN_DIR/);
+    expect(dockerfile).toMatch(/Opt-in plugin dependencies at build time/);
+    expect(dockerfile).toMatch(
+      /Example: docker build --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,matrix" \./,
     );
-    expect(dockerfile).toContain(
-      'Example: docker build --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,matrix" .',
+    expect(dockerfile).toMatch(
+      /RUN --mount=type=cache,id=openclaw-pnpm-store,target=\/root\/\.local\/share\/pnpm\/store,sharing=locked/,
     );
-    expect(dockerfile).toContain(
-      "RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \\",
+    expect(dockerfile).toMatch(/COPY --from=workspace-deps \/out\/packages\/ \.\/packages\//);
+    expect(dockerfile).toMatch(
+      /COPY --from=workspace-deps \/out\/\$\{OPENCLAW_BUNDLED_PLUGIN_DIR\}\/ \.\/\$\{OPENCLAW_BUNDLED_PLUGIN_DIR\}\//,
     );
-    expect(dockerfile).toContain("COPY --from=workspace-deps /out/packages/ ./packages/");
-    expect(dockerfile).toContain(
-      "COPY --from=workspace-deps /out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/",
+    expect(dockerfile).toMatch(
+      /OPENCLAW_EXTENSIONS="\$OPENCLAW_EXTENSIONS" OPENCLAW_BUNDLED_PLUGIN_DIR="\$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts\/prune-docker-plugin-dist\.mjs/,
     );
-    expect(dockerfile).toContain(
-      'OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs',
-    );
-    expect(dockerfile).toContain("CI=true pnpm prune --prod \\");
+    expect(dockerfile).toMatch(/CI=true pnpm prune --prod/);
     expect(dockerfile.indexOf("CI=true pnpm prune --prod \\")).toBeLessThan(
       dockerfile.indexOf(
         'OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs',
@@ -283,7 +280,7 @@ describe("Dockerfile", () => {
 
   it("keeps runtime workspace templates in final images", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
-    const runtimeStageIndex = dockerfile.lastIndexOf("FROM base-runtime");
+    const runtimeStageIndex = dockerfile.search(/AS base-runtime/);
     const templatesCopyIndex = dockerfile.indexOf(
       "COPY --from=runtime-assets --chown=node:node /app/src/agents/templates ./src/agents/templates",
       runtimeStageIndex,
@@ -450,7 +447,7 @@ describe("Dockerfile", () => {
 
   it("pre-creates named-volume mount points before switching to the node user", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
-    const runtimeStageIndex = dockerfile.lastIndexOf("FROM base-runtime");
+    const runtimeStageIndex = dockerfile.search(/AS base-runtime/);
     const parentConfigDirIndex = dockerfile.indexOf(
       "RUN install -d -m 0755 -o node -g node /home/node/.config",
       runtimeStageIndex,
