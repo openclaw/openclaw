@@ -2,8 +2,10 @@
 // termination semantics used by agent sessions.
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 
-const { spawnMock, waitForChildProcessMock } = vi.hoisted(() => ({
+const { killProcessTreeMock, spawnMock, waitForChildProcessMock } = vi.hoisted(() => ({
+  killProcessTreeMock: vi.fn(),
   spawnMock: vi.fn(),
   waitForChildProcessMock: vi.fn(),
 }));
@@ -16,8 +18,13 @@ vi.mock("../utils/child-process.js", () => ({
   waitForChildProcess: waitForChildProcessMock,
 }));
 
+vi.mock("../../process/kill-tree.js", () => ({
+  killProcessTree: killProcessTreeMock,
+}));
+
 type StubChild = EventEmitter & {
   kill: ReturnType<typeof vi.fn>;
+  pid?: number;
   stderr: EventEmitter;
   stdout: EventEmitter;
 };
@@ -42,6 +49,7 @@ function createDeferred<T>() {
 
 describe("execCommand", () => {
   beforeEach(() => {
+    killProcessTreeMock.mockReset();
     spawnMock.mockReset();
     waitForChildProcessMock.mockReset();
     vi.useRealTimers();
@@ -93,8 +101,37 @@ describe("execCommand", () => {
     expect(result.stdoutTruncatedChars).toBe(3);
   });
 
+  it("spawns with a process group when the platform supports tree signaling", async () => {
+    const { execCommand } = await import("./exec.js");
+
+    for (const [platform, expectedDetached] of [
+      ["linux", true],
+      ["win32", false],
+    ] as const) {
+      await withMockedPlatform(platform, async () => {
+        const child = createStubChild();
+        const wait = createDeferred<number | null>();
+        spawnMock.mockReturnValue(child);
+        waitForChildProcessMock.mockReturnValue(wait.promise);
+
+        const resultPromise = execCommand("cmd", ["arg"], "/tmp");
+        wait.resolve(0);
+        await resultPromise;
+
+        expect(spawnMock).toHaveBeenLastCalledWith("cmd", ["arg"], {
+          cwd: "/tmp",
+          detached: expectedDetached,
+          shell: false,
+          stdio: ["ignore", "pipe", "pipe"],
+          windowsHide: true,
+        });
+      });
+    }
+  });
+
   it("fails instead of silently truncating default exec output", async () => {
     const child = createStubChild();
+    child.pid = 2468;
     const wait = createDeferred<number | null>();
     spawnMock.mockReturnValue(child);
     waitForChildProcessMock.mockReturnValue(wait.promise);
@@ -105,7 +142,8 @@ describe("execCommand", () => {
     wait.resolve(0);
 
     const result = await resultPromise;
-    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(killProcessTreeMock).toHaveBeenCalledWith(2468, { graceMs: 5000 });
+    expect(child.kill).not.toHaveBeenCalled();
     expect(result.code).toBe(1);
     expect(result.killed).toBe(true);
     expect(result.outputLimitExceeded).toBe("stdout");
@@ -114,7 +152,47 @@ describe("execCommand", () => {
     expect(result.stderr).toContain("exec stdout exceeded output limit");
   });
 
-  it("escalates timed-out commands to SIGKILL after the grace period", async () => {
+  it("kills the process tree when commands time out", async () => {
+    vi.useFakeTimers();
+    const child = createStubChild();
+    child.pid = 1357;
+    const wait = createDeferred<number | null>();
+    spawnMock.mockReturnValue(child);
+    waitForChildProcessMock.mockReturnValue(wait.promise);
+    const { execCommand } = await import("./exec.js");
+
+    const resultPromise = execCommand("cmd", [], "/tmp", { timeout: 10 });
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(killProcessTreeMock).toHaveBeenCalledWith(1357, { graceMs: 5000 });
+    expect(child.kill).not.toHaveBeenCalled();
+
+    wait.resolve(null);
+    const result = await resultPromise;
+    expect(result.killed).toBe(true);
+  });
+
+  it("kills the process tree when aborted", async () => {
+    const child = createStubChild();
+    child.pid = 9753;
+    const wait = createDeferred<number | null>();
+    const controller = new AbortController();
+    spawnMock.mockReturnValue(child);
+    waitForChildProcessMock.mockReturnValue(wait.promise);
+    const { execCommand } = await import("./exec.js");
+
+    const resultPromise = execCommand("cmd", [], "/tmp", { signal: controller.signal });
+    controller.abort();
+
+    expect(killProcessTreeMock).toHaveBeenCalledWith(9753, { graceMs: 5000 });
+    expect(child.kill).not.toHaveBeenCalled();
+
+    wait.resolve(null);
+    const result = await resultPromise;
+    expect(result.killed).toBe(true);
+  });
+
+  it("falls back to direct kill when timed-out commands have no pid", async () => {
     // SIGTERM gives child processes a chance to clean up; SIGKILL is the
     // bounded fallback so an ignored signal cannot hang the session.
     vi.useFakeTimers();
@@ -126,6 +204,7 @@ describe("execCommand", () => {
 
     const resultPromise = execCommand("cmd", [], "/tmp", { timeout: 10 });
     await vi.advanceTimersByTimeAsync(10);
+    expect(killProcessTreeMock).not.toHaveBeenCalled();
     expect(child.kill).toHaveBeenCalledWith("SIGTERM");
     expect(child.kill).not.toHaveBeenCalledWith("SIGKILL");
 

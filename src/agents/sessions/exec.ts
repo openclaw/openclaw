@@ -3,6 +3,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { killProcessTree } from "../../process/kill-tree.js";
 import { waitForChildProcess } from "../utils/child-process.js";
 
 const DEFAULT_OUTPUT_LIMIT_CHARS = 16 * 1024 * 1024;
@@ -81,8 +82,10 @@ export async function execCommand(
   return new Promise((resolve) => {
     const proc = spawn(command, args, {
       cwd,
+      detached: process.platform !== "win32",
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
     });
 
     let stdout: OutputCapture = { text: "", truncatedChars: 0 };
@@ -136,13 +139,17 @@ export async function execCommand(
     const killProcess = () => {
       if (!killed) {
         killed = true;
-        proc.kill("SIGTERM");
-        forceKillTimer = setTimeout(() => {
-          if (!settled) {
-            proc.kill("SIGKILL");
-          }
-        }, FORCE_KILL_GRACE_MS);
-        forceKillTimer.unref?.();
+        if (proc.pid && proc.pid > 0) {
+          killProcessTree(proc.pid, { graceMs: FORCE_KILL_GRACE_MS });
+        } else {
+          proc.kill("SIGTERM");
+          forceKillTimer = setTimeout(() => {
+            if (!settled) {
+              proc.kill("SIGKILL");
+            }
+          }, FORCE_KILL_GRACE_MS);
+          forceKillTimer.unref?.();
+        }
       }
     };
 
