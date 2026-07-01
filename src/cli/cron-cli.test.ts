@@ -464,6 +464,68 @@ describe("cron cli", () => {
     expect(params?.delivery?.mode).toBe("announce");
   });
 
+  it("dry-runs cron add as pure params JSON without gateway calls", async () => {
+    await runCronCommand([
+      "cron",
+      "add",
+      "--name",
+      "Tools",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--agent",
+      "main",
+      "--message",
+      "hello",
+      "--tools",
+      "exec read write",
+      "--dry-run",
+      "--json",
+    ]);
+
+    expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "cron.add")).toBe(false);
+    expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "cron.status")).toBe(false);
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+    const payload = JSON.parse(stdoutText()) as CronAddParams;
+    expect(payload).toMatchObject({
+      name: "Tools",
+      agentId: "main",
+      sessionTarget: "isolated",
+      payload: {
+        kind: "agentTurn",
+        message: "hello",
+        toolsAllow: ["exec", "read", "write"],
+      },
+    });
+    expect(stdoutText()).not.toContain("dry-run");
+  });
+
+  it("prints the cron add dry-run note outside stdout JSON", async () => {
+    await runCronCommand([
+      "cron",
+      "add",
+      "--name",
+      "Preview",
+      "--every",
+      "10m",
+      "--session",
+      "isolated",
+      "--agent",
+      "main",
+      "--message",
+      "hello",
+      "--dry-run",
+    ]);
+
+    expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "cron.add")).toBe(false);
+    expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "cron.status")).toBe(false);
+    expectRuntimeErrorContaining("cron.add dry-run: no job created");
+    const payload = JSON.parse(stdoutText()) as CronAddParams;
+    expect(payload.name).toBe("Preview");
+    expect(payload.schedule).toEqual({ kind: "every", everyMs: 600000 });
+  });
+
   it("accepts positional cron create name with webhook delivery", async () => {
     const params = await runCronAddAndGetParams([
       "Webhook reminder",

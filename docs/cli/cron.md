@@ -137,6 +137,15 @@ reported as pre-model cron failures.
 One-shot jobs delete after success by default. Use `--keep-after-run` to preserve them.
 </Note>
 
+Preview a create request without saving it by passing `--dry-run`:
+
+```bash
+openclaw cron add --name quarterly-check --at 2026-07-01T09:00:00Z --message "Run quarterly check" --dry-run
+openclaw cron add --name quarterly-check --at 2026-07-01T09:00:00Z --message "Run quarterly check" --dry-run --json
+```
+
+The preview prints the `cron.add` params that would be sent to the gateway and returns before creating a job or checking scheduler status.
+
 ### Recurring jobs
 
 Recurring jobs use exponential retry backoff after consecutive errors: 30s, 1m, 5m, 15m, 60m. The schedule returns to normal after the next successful run.
