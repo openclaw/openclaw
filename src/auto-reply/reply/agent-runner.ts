@@ -2714,9 +2714,7 @@ export async function runReplyAgent(replyParams: {
         ...(effectiveContinuationSignal.traceparent
           ? { traceparent: effectiveContinuationSignal.traceparent }
           : {}),
-        ...(effectiveContinuationSignal.model
-          ? { model: effectiveContinuationSignal.model }
-          : {}),
+        ...(effectiveContinuationSignal.model ? { model: effectiveContinuationSignal.model } : {}),
       });
       enqueueSystemEvent(
         `[continuation:delegate-staged-post-compaction] Bracket delegate staged for post-compaction release: ${effectiveContinuationSignal.task}`,
@@ -3134,7 +3132,14 @@ export async function runReplyAgent(replyParams: {
       }
     }
 
-    if (!autoCompactionCount && continuationFeatureEnabled && sessionKey) {
+    // Persist staged post-compaction delegates to the session entry so they
+    // survive to the next compaction seam — including when auto-compaction
+    // already fired this turn. dispatchPostCompactionDelegates (above) consumes
+    // only delegates staged BEFORE it ran; a bracket/tool `post-compaction`
+    // delegate staged later in this same turn is still queued here and targets
+    // the NEXT seam. Without persisting it now the finally-drain below would
+    // consume and silently discard it (C1).
+    if (continuationFeatureEnabled && sessionKey) {
       const stagedCompactionDelegates = consumeStagedPostCompactionDelegates(sessionKey);
       if (stagedCompactionDelegates.length > 0) {
         try {
