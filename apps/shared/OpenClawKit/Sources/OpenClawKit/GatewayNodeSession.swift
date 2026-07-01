@@ -52,6 +52,7 @@ public actor GatewayNodeSession {
     private var activeToken: String?
     private var activeBootstrapToken: String?
     private var activePassword: String?
+    private var activeAdditionalHeaders: [String: String] = [:]
     private var activeConnectOptionsKey: String?
     private var activeSessionIdentity: ObjectIdentifier?
     private var connectOptions: GatewayConnectOptions?
@@ -191,6 +192,7 @@ public actor GatewayNodeSession {
         token: String?,
         bootstrapToken: String?,
         password: String?,
+        additionalHeaders: [String: String] = [:],
         connectOptions: GatewayConnectOptions,
         sessionBox: WebSocketSessionBox?,
         onConnected: @escaping @Sendable () async -> Void,
@@ -203,6 +205,7 @@ public actor GatewayNodeSession {
             self.activeToken != token ||
             self.activeBootstrapToken != bootstrapToken ||
             self.activePassword != password ||
+            self.activeAdditionalHeaders != additionalHeaders ||
             self.activeConnectOptionsKey != nextOptionsKey ||
             self.activeSessionIdentity != nextSessionIdentity ||
             self.channel == nil
@@ -222,6 +225,7 @@ public actor GatewayNodeSession {
                 token: token,
                 bootstrapToken: bootstrapToken,
                 password: password,
+                additionalHeaders: additionalHeaders,
                 session: sessionBox,
                 pushHandler: { [weak self] push in
                     await self?.handlePush(push)
@@ -235,6 +239,7 @@ public actor GatewayNodeSession {
             self.activeToken = token
             self.activeBootstrapToken = bootstrapToken
             self.activePassword = password
+            self.activeAdditionalHeaders = additionalHeaders
             self.activeConnectOptionsKey = nextOptionsKey
             self.activeSessionIdentity = nextSessionIdentity
         }

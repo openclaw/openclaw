@@ -78,11 +78,39 @@ public struct WebSocketTaskBox: @unchecked Sendable {
 
 public protocol WebSocketSessioning: AnyObject {
     func makeWebSocketTask(url: URL) -> WebSocketTaskBox
+    /// Create the upgrade task with extra HTTP headers on the handshake request.
+    ///
+    /// Used to satisfy an identity-aware reverse proxy that fronts the gateway (for
+    /// example one enforcing HTTP Basic auth). Gateway auth (token/password) travels
+    /// inside the `connect` protocol message, so it never collides with a proxy
+    /// `Authorization` header set here.
+    ///
+    /// The default implementation ignores `headers` and falls back to the URL-only
+    /// task, so existing conformers (including test doubles) keep working unchanged.
+    func makeWebSocketTask(url: URL, headers: [String: String]) -> WebSocketTaskBox
+}
+
+extension WebSocketSessioning {
+    public func makeWebSocketTask(url: URL, headers _: [String: String]) -> WebSocketTaskBox {
+        self.makeWebSocketTask(url: url)
+    }
 }
 
 extension URLSession: WebSocketSessioning {
     public func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
-        let task = self.webSocketTask(with: url)
+        Self.boxed(self.webSocketTask(with: url))
+    }
+
+    public func makeWebSocketTask(url: URL, headers: [String: String]) -> WebSocketTaskBox {
+        guard !headers.isEmpty else { return self.makeWebSocketTask(url: url) }
+        var request = URLRequest(url: url)
+        for (field, value) in headers {
+            request.setValue(value, forHTTPHeaderField: field)
+        }
+        return Self.boxed(self.webSocketTask(with: request))
+    }
+
+    private static func boxed(_ task: URLSessionWebSocketTask) -> WebSocketTaskBox {
         // Avoid "Message too long" receive errors for large snapshots / history payloads.
         task.maximumMessageSize = 16 * 1024 * 1024 // 16 MB
         return WebSocketTaskBox(task: task)
@@ -251,6 +279,9 @@ public actor GatewayChannelActor {
     private var token: String?
     private var bootstrapToken: String?
     private var password: String?
+    /// Extra HTTP headers applied to the WebSocket upgrade request (for example a
+    /// reverse-proxy `Authorization: Basic …`). Empty for direct gateway connections.
+    private let additionalHeaders: [String: String]
     private let session: WebSocketSessioning
     private var backoffMs: Double = 500
     private var shouldReconnect = true
@@ -283,6 +314,7 @@ public actor GatewayChannelActor {
         token: String?,
         bootstrapToken: String? = nil,
         password: String? = nil,
+        additionalHeaders: [String: String] = [:],
         session: WebSocketSessionBox? = nil,
         pushHandler: (@Sendable (GatewayPush) async -> Void)? = nil,
         connectOptions: GatewayConnectOptions? = nil,
@@ -292,6 +324,7 @@ public actor GatewayChannelActor {
         self.token = token
         self.bootstrapToken = bootstrapToken
         self.password = password
+        self.additionalHeaders = additionalHeaders
         self.session = session?.session ?? URLSession(configuration: .default)
         self.pushHandler = pushHandler
         self.connectOptions = connectOptions
@@ -378,7 +411,7 @@ public actor GatewayChannelActor {
         defer { self.isConnecting = false }
 
         self.task?.cancel(with: .goingAway, reason: nil)
-        self.task = self.session.makeWebSocketTask(url: self.url)
+        self.task = self.session.makeWebSocketTask(url: self.url, headers: self.additionalHeaders)
         self.task?.resume()
         do {
             try await AsyncTimeout.withTimeout(

@@ -206,7 +206,19 @@ GatewayTLSFailureProviding, GatewayDeviceTokenRetryTrustProviding, @unchecked Se
     }
 
     public func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
-        let task = self.session.webSocketTask(with: url)
+        Self.boxed(self.session.webSocketTask(with: url))
+    }
+
+    public func makeWebSocketTask(url: URL, headers: [String: String]) -> WebSocketTaskBox {
+        guard !headers.isEmpty else { return self.makeWebSocketTask(url: url) }
+        var request = URLRequest(url: url)
+        for (field, value) in headers {
+            request.setValue(value, forHTTPHeaderField: field)
+        }
+        return Self.boxed(self.session.webSocketTask(with: request))
+    }
+
+    private static func boxed(_ task: URLSessionWebSocketTask) -> WebSocketTaskBox {
         task.maximumMessageSize = 16 * 1024 * 1024
         return WebSocketTaskBox(task: task)
     }
