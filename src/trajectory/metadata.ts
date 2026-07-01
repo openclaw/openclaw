@@ -151,26 +151,36 @@ function buildPluginsFromManifest(params: {
   return {
     source: "manifest-registry",
     entries: snapshot.plugins
-      .map((plugin) => ({
-        id: plugin.id,
-        name: plugin.name,
-        version: plugin.version,
-        description: plugin.description,
-        origin: plugin.origin,
-        enabledByDefault: plugin.enabledByDefault,
-        format: plugin.format,
-        bundleFormat: plugin.bundleFormat,
-        bundleCapabilities: toSortedUniqueStrings(plugin.bundleCapabilities),
-        kind: plugin.kind,
-        source: plugin.source,
-        rootDir: plugin.rootDir,
-        workspaceDir: plugin.workspaceDir,
-        channels: toSortedUniqueStrings(plugin.channels),
-        providers: toSortedUniqueStrings(plugin.providers),
-        cliBackends: toSortedUniqueStrings(plugin.cliBackends),
-        hooks: toSortedUniqueStrings(plugin.hooks),
-        skills: toSortedUniqueStrings(plugin.skills),
-      }))
+      .flatMap((plugin) => {
+        try {
+          return [
+            {
+              id: plugin.id,
+              name: plugin.name,
+              version: plugin.version,
+              description: plugin.description,
+              origin: plugin.origin,
+              enabledByDefault: plugin.enabledByDefault,
+              format: plugin.format,
+              bundleFormat: plugin.bundleFormat,
+              bundleCapabilities: toSortedUniqueStrings(plugin.bundleCapabilities),
+              kind: plugin.kind,
+              source: plugin.source,
+              rootDir: plugin.rootDir,
+              workspaceDir: plugin.workspaceDir,
+              channels: toSortedUniqueStrings(plugin.channels),
+              providers: toSortedUniqueStrings(plugin.providers),
+              cliBackends: toSortedUniqueStrings(plugin.cliBackends),
+              hooks: toSortedUniqueStrings(plugin.hooks),
+              skills: toSortedUniqueStrings(plugin.skills),
+            },
+          ];
+        } catch {
+          // Support metadata is diagnostic-only. One unreadable manifest row
+          // must not break trajectory capture for the rest of the run.
+          return [];
+        }
+      })
       .toSorted((left, right) => left.id.localeCompare(right.id)),
   };
 }
