@@ -194,6 +194,15 @@ const XAI_MODEL_CATALOG = [
     maxTokens: 30_000,
     cost: XAI_GROK_420_COST,
   },
+  {
+    id: "grok-composer-2.5-fast",
+    name: "Grok Composer 2.5 Fast",
+    reasoning: true,
+    input: ["text"],
+    contextWindow: XAI_CODE_CONTEXT_WINDOW,
+    maxTokens: 10_000,
+    cost: XAI_CODE_FAST_COST,
+  },
 ] as const satisfies readonly XaiCatalogEntry[];
 
 const XAI_SELECTABLE_MODEL_IDS = new Set<string>([
