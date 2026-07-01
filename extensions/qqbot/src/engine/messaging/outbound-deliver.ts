@@ -17,6 +17,7 @@ import {
 } from "../utils/string-normalize.js";
 import { filterInternalMarkers } from "../utils/text-parsing.js";
 import { decodeMediaPath } from "./decode-media-path.js";
+import type { OutboundMediaAccessContext } from "./outbound-types.js";
 import {
   sendText as senderSendText,
   sendMedia as senderSendMedia,
@@ -28,7 +29,7 @@ import {
 // ---- Injected dependency interfaces ----
 
 /** Media target context — describes where to send media. */
-interface MediaTargetContext {
+interface MediaTargetContext extends OutboundMediaAccessContext {
   targetType: "c2c" | "group" | "channel" | "dm";
   targetId: string;
   account: GatewayAccount;
@@ -53,14 +54,16 @@ interface MediaSender {
   ): Promise<MediaSendResult>;
   sendVideoMsg(target: MediaTargetContext, videoPath: string): Promise<MediaSendResult>;
   sendDocument(target: MediaTargetContext, filePath: string): Promise<MediaSendResult>;
-  sendMedia(opts: {
-    to: string;
-    text: string;
-    mediaUrl: string;
-    accountId: string;
-    replyToId: string;
-    account: GatewayAccount;
-  }): Promise<MediaSendResult>;
+  sendMedia(
+    opts: {
+      to: string;
+      text: string;
+      mediaUrl: string;
+      accountId: string;
+      replyToId: string;
+      account: GatewayAccount;
+    } & OutboundMediaAccessContext,
+  ): Promise<MediaSendResult>;
 }
 
 /** Delivery dependencies — injected when calling parseAndSendMediaTags / sendPlainReply. */
@@ -85,7 +88,7 @@ interface DeliverEventContext {
   msgIdx?: string;
 }
 
-interface DeliverAccountContext {
+interface DeliverAccountContext extends OutboundMediaAccessContext {
   account: GatewayAccount;
   qualifiedTarget: string;
   log?: {
@@ -105,8 +108,9 @@ type ConsumeQuoteRefFn = () => string | undefined;
 
 function resolveMediaTargetContext(
   event: DeliverEventContext,
-  account: GatewayAccount,
+  actx: DeliverAccountContext,
 ): MediaTargetContext {
+  const { account } = actx;
   return {
     targetType:
       event.type === "c2c"
@@ -126,7 +130,36 @@ function resolveMediaTargetContext(
             : event.channelId!,
     account,
     replyToId: event.messageId,
+    ...(actx.mediaAccess ? { mediaAccess: actx.mediaAccess } : {}),
+    ...(actx.mediaLocalRoots ? { mediaLocalRoots: actx.mediaLocalRoots } : {}),
+    ...(actx.mediaReadFile ? { mediaReadFile: actx.mediaReadFile } : {}),
   };
+}
+
+function hasUrlScheme(value: string): boolean {
+  return /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value.trim());
+}
+
+function isBareRelativeMediaPath(value: string): boolean {
+  const trimmed = value.trim();
+  return (
+    Boolean(trimmed) &&
+    !trimmed.startsWith("#") &&
+    !trimmed.startsWith("//") &&
+    !hasUrlScheme(trimmed)
+  );
+}
+
+function extractMarkdownImageUrl(rawDestination: string | undefined): string | undefined {
+  const destination = rawDestination?.trim();
+  if (!destination) {
+    return undefined;
+  }
+  if (destination.startsWith("<")) {
+    const close = destination.indexOf(">");
+    return close > 1 ? destination.slice(1, close).trim() : undefined;
+  }
+  return destination.match(/^(\S+)\s+["'(]/)?.[1] ?? destination;
 }
 
 async function autoMediaBatch(params: {
@@ -135,6 +168,9 @@ async function autoMediaBatch(params: {
   replyToId: string;
   mediaUrls: string[];
   mediaSender: MediaSender;
+  mediaAccess?: OutboundMediaAccessContext["mediaAccess"];
+  mediaLocalRoots?: OutboundMediaAccessContext["mediaLocalRoots"];
+  mediaReadFile?: OutboundMediaAccessContext["mediaReadFile"];
   log?: DeliverAccountContext["log"];
   onResultError: (mediaUrl: string, error: string) => string;
   onThrownError: (mediaUrl: string, error: string) => string;
@@ -149,6 +185,9 @@ async function autoMediaBatch(params: {
         accountId: params.account.accountId,
         replyToId: params.replyToId,
         account: params.account,
+        mediaAccess: params.mediaAccess,
+        mediaLocalRoots: params.mediaLocalRoots,
+        mediaReadFile: params.mediaReadFile,
       });
       if (result.error) {
         params.log?.error(params.onResultError(mediaUrl, result.error));
@@ -443,7 +482,7 @@ export async function parseAndSendMediaTags(
 
   log?.debug?.(`Send queue: ${sendQueue.map((item) => item.type).join(" -> ")}`);
 
-  const mediaTarget = resolveMediaTargetContext(event, account);
+  const mediaTarget = resolveMediaTargetContext(event, actx);
 
   for (const item of sendQueue) {
     if (item.type === "text") {
@@ -480,6 +519,9 @@ export async function parseAndSendMediaTags(
             accountId: account.accountId,
             replyToId: event.messageId,
             account,
+            mediaAccess: actx.mediaAccess,
+            mediaLocalRoots: actx.mediaLocalRoots,
+            mediaReadFile: actx.mediaReadFile,
           }),
         log,
         onError: (error) => `sendMedia(auto) error: ${error}`,
@@ -518,7 +560,10 @@ export async function sendPlainReply(
   const collectedImageUrls: string[] = [];
   const localMediaToSend: string[] = [];
 
-  const collectImageUrl = (url: string | undefined | null): boolean => {
+  const collectImageUrl = (
+    url: string | undefined | null,
+    allowBareRelativeMedia = false,
+  ): boolean => {
     if (!url) {
       return false;
     }
@@ -533,7 +578,7 @@ export async function sendPlainReply(
       }
       return true;
     }
-    if (isLocalFilePath(url)) {
+    if (isLocalFilePath(url) || (allowBareRelativeMedia && isBareRelativeMediaPath(url))) {
       if (!localMediaToSend.includes(url)) {
         localMediaToSend.push(url);
         log?.debug?.(`Collected local media for auto-routing: ${url}`);
@@ -545,23 +590,23 @@ export async function sendPlainReply(
 
   if (payload.mediaUrls?.length) {
     for (const url of payload.mediaUrls) {
-      collectImageUrl(url);
+      collectImageUrl(url, true);
     }
   }
   if (payload.mediaUrl) {
-    collectImageUrl(payload.mediaUrl);
+    collectImageUrl(payload.mediaUrl, true);
   }
 
   // Extract markdown images.
   const mdImageRegex = /!\[([^\]]*)\]\(([^)]+)\)/gi;
   const mdMatches = [...replyText.matchAll(mdImageRegex)];
   for (const m of mdMatches) {
-    const url = m[2]?.trim();
+    const url = extractMarkdownImageUrl(m[2]);
     if (url && !collectedImageUrls.includes(url)) {
       if (url.startsWith("http://") || url.startsWith("https://")) {
         collectedImageUrls.push(url);
         log?.debug?.(`Extracted HTTP image from markdown: ${url.slice(0, 80)}...`);
-      } else if (isLocalFilePath(url)) {
+      } else if (isLocalFilePath(url) || isBareRelativeMediaPath(url)) {
         if (!localMediaToSend.includes(url)) {
           localMediaToSend.push(url);
           log?.debug?.(`Collected local media from markdown for auto-routing: ${url}`);
@@ -588,7 +633,7 @@ export async function sendPlainReply(
   let textWithoutImages = filterInternalMarkers(replyText);
 
   for (const m of mdMatches) {
-    const url = m[2]?.trim();
+    const url = extractMarkdownImageUrl(m[2]);
     if (url && !url.startsWith("http://") && !url.startsWith("https://") && !isLocalFilePath(url)) {
       textWithoutImages = textWithoutImages.replace(m[0], "").trim();
     }
@@ -629,6 +674,9 @@ export async function sendPlainReply(
       replyToId: event.messageId,
       mediaUrls: localMediaToSend,
       mediaSender: deps.mediaSender,
+      mediaAccess: actx.mediaAccess,
+      mediaLocalRoots: actx.mediaLocalRoots,
+      mediaReadFile: actx.mediaReadFile,
       log,
       onSuccess: (mediaPath) => `Sent local media: ${mediaPath}`,
       onResultError: (mediaPath, error) => `sendMedia(auto) error for ${mediaPath}: ${error}`,
@@ -647,6 +695,9 @@ export async function sendPlainReply(
       replyToId: event.messageId,
       mediaUrls: toolMediaUrls,
       mediaSender: deps.mediaSender,
+      mediaAccess: actx.mediaAccess,
+      mediaLocalRoots: actx.mediaLocalRoots,
+      mediaReadFile: actx.mediaReadFile,
       log,
       onSuccess: (mediaUrl) => `Forwarded tool media: ${mediaUrl.slice(0, 80)}...`,
       onResultError: (_mediaUrl, error) => `Tool media forward error: ${error}`,
@@ -712,7 +763,11 @@ async function sendMarkdownReply(
   }
 
   // Handle public image URLs — format as markdown images with dimensions.
-  const existingMdUrls = new Set(mdMatches.map((m) => m[2]));
+  const existingMdUrls = new Set(
+    mdMatches
+      .map((m) => extractMarkdownImageUrl(m[2]))
+      .filter((url): url is string => Boolean(url)),
+  );
   const imagesToAppend: string[] = [];
 
   for (const url of httpImageUrls) {
@@ -734,9 +789,9 @@ async function sendMarkdownReply(
   let result = textWithoutImages;
   for (const m of mdMatches) {
     const fullMatch = m[0];
-    const imgUrl = m[2];
-    const isHttpUrl = imgUrl.startsWith("http://") || imgUrl.startsWith("https://");
-    if (isHttpUrl && !hasQQBotImageSize(fullMatch)) {
+    const imgUrl = extractMarkdownImageUrl(m[2]);
+    const isHttpUrl = imgUrl?.startsWith("http://") || imgUrl?.startsWith("https://");
+    if (imgUrl && isHttpUrl && !hasQQBotImageSize(fullMatch)) {
       try {
         const size = await getImageSize(imgUrl);
         result = result.replace(fullMatch, formatQQBotMarkdownImage(imgUrl, size));
@@ -796,7 +851,7 @@ async function sendPlainTextReply(
 ): Promise<void> {
   const { account, log } = actx;
 
-  const imgMediaTarget = resolveMediaTargetContext(event, account);
+  const imgMediaTarget = resolveMediaTargetContext(event, actx);
 
   let result = textWithoutImages;
   for (const m of mdMatches) {

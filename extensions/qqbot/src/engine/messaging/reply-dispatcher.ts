@@ -7,6 +7,7 @@
 
 import crypto from "node:crypto";
 import path from "node:path";
+import { resolveLocalPathFromRootsSync } from "openclaw/plugin-sdk/security-runtime";
 import { MediaFileType, type GatewayAccount } from "../types.js";
 import { formatFileSize, getImageMimeType, getMaxUploadSize } from "../utils/file-utils.js";
 import { formatErrorMessage } from "../utils/format.js";
@@ -21,6 +22,11 @@ import { normalizePath } from "../utils/platform.js";
 import { normalizeLowercaseStringOrEmpty } from "../utils/string-normalize.js";
 import { sanitizeFileName } from "../utils/string-normalize.js";
 import { openLocalFile } from "./media-source.js";
+import {
+  resolveOutboundMediaLocalRoots,
+  resolveWorkspacePathCandidates,
+} from "./outbound-media-path.js";
+import type { OutboundMediaAccessContext } from "./outbound-types.js";
 import {
   sendText as senderSendText,
   sendMedia as senderSendMedia,
@@ -67,7 +73,7 @@ interface MessageTarget {
   groupOpenid?: string;
 }
 
-interface ReplyContext {
+interface ReplyContext extends OutboundMediaAccessContext {
   target: MessageTarget;
   account: GatewayAccount;
   cfg: unknown;
@@ -208,9 +214,27 @@ function validateStructuredPayloadLocalPath(
   payloadPath: string,
   mediaType: StructuredPayloadMediaType,
 ): string | null {
-  const allowedPath = resolveTrustedOutboundMediaPath(payloadPath);
-  if (allowedPath) {
-    return allowedPath;
+  const candidatePaths = resolveWorkspacePathCandidates(
+    normalizePath(payloadPath),
+    ctx.mediaAccess?.workspaceDir,
+  );
+  const localRoots = resolveOutboundMediaLocalRoots(ctx);
+  for (const candidatePath of candidatePaths) {
+    const allowedPath = resolveTrustedOutboundMediaPath(candidatePath);
+    if (allowedPath) {
+      return allowedPath;
+    }
+
+    if (localRoots) {
+      const scopedPath = resolveLocalPathFromRootsSync({
+        filePath: candidatePath,
+        roots: localRoots,
+        label: "QQ Bot local roots",
+      })?.path;
+      if (scopedPath) {
+        return scopedPath;
+      }
+    }
   }
 
   ctx.log?.error(`Blocked ${mediaType} payload local path outside QQ Bot media storage`);
