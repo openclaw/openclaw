@@ -646,6 +646,18 @@ export function createOpenClawCodingTools(options?: {
     ...(providerProfileAlsoAllow ?? []),
     ...runtimeProfileAlsoAllow,
   ]);
+  // When a cron isolated session explicitly requests all tools via wildcard
+  // allowlist, override the static profile so that tools like exec remain
+  // available. This override is scoped to cron-triggered runs only — other
+  // embedded callers still respect static/provider profile caps. (#89228)
+  const runtimeHasWildcardAllowlist = options?.runtimeToolAllowlist?.some(
+    (entry) => normalizeToolName(entry) === "*",
+  );
+  const cronWildcardOverride = runtimeHasWildcardAllowlist && options?.trigger === "cron";
+  const effectiveProfilePolicy = cronWildcardOverride ? undefined : profilePolicyWithAlsoAllow;
+  const effectiveProviderProfilePolicy = cronWildcardOverride
+    ? undefined
+    : providerProfilePolicyWithAlsoAllow;
   // Prefer sessionKey for process isolation scope to prevent cross-session process visibility/killing.
   // Fallback to agentId if no sessionKey is available (e.g. legacy or global contexts).
   const scopeKey = resolveProcessToolScopeKey({
@@ -686,8 +698,8 @@ export function createOpenClawCodingTools(options?: {
     mergeToolSearchControlAllowlist(sandboxToolPolicy);
   const subagentPolicyWithToolSearchControls = mergeToolSearchControlAllowlist(subagentPolicy);
   const allowBackground = isToolAllowedByPolicies("process", [
-    profilePolicyWithAlsoAllow,
-    providerProfilePolicyWithAlsoAllow,
+    effectiveProfilePolicy,
+    effectiveProviderProfilePolicy,
     globalPolicyWithToolSearchControls,
     globalProviderPolicyWithToolSearchControls,
     agentPolicyWithToolSearchControls,
@@ -1136,11 +1148,11 @@ export function createOpenClawCodingTools(options?: {
     warn: logWarn,
     steps: [
       ...buildDefaultToolPolicyPipelineSteps({
-        profilePolicy: profilePolicyWithAlsoAllow,
-        profile,
+        profilePolicy: effectiveProfilePolicy,
+        profile: runtimeHasWildcardAllowlist ? undefined : profile,
         profileUnavailableCoreWarningAllowlist: profilePolicy?.allow,
-        providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
-        providerProfile,
+        providerProfilePolicy: effectiveProviderProfilePolicy,
+        providerProfile: runtimeHasWildcardAllowlist ? undefined : providerProfile,
         providerProfileUnavailableCoreWarningAllowlist: providerProfilePolicy?.allow,
         globalPolicy: globalPolicyWithToolSearchControls,
         globalProviderPolicy: globalProviderPolicyWithToolSearchControls,
