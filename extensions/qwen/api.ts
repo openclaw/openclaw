@@ -1,5 +1,13 @@
 // Qwen API module exposes the plugin public contract.
 export {
+  QWEN_TOKEN_PLAN_CN_BASE_URL,
+  QWEN_TOKEN_PLAN_DEFAULT_MODEL_ID,
+  QWEN_TOKEN_PLAN_DEFAULT_MODEL_REF,
+  QWEN_TOKEN_PLAN_GLOBAL_BASE_URL,
+  QWEN_TOKEN_PLAN_MODEL_CATALOG,
+  QWEN_TOKEN_PLAN_PROVIDER_ID,
+  type QwenTokenPlanRegion,
+  resolveQwenTokenPlanBaseUrl,
   applyQwenNativeStreamingUsageCompat,
   buildQwenDefaultModelDefinition,
   buildQwenModelDefinition,
@@ -31,5 +39,9 @@ export {
   MODELSTUDIO_STANDARD_GLOBAL_BASE_URL,
   MODELSTUDIO_MODEL_CATALOG,
 } from "./models.js";
-export { buildModelStudioProvider, buildQwenProvider } from "./provider-catalog.js";
+export {
+  buildQwenTokenPlanProvider,
+  buildModelStudioProvider,
+  buildQwenProvider,
+} from "./provider-catalog.js";
 export { createQwenThinkingWrapper, wrapQwenProviderStream } from "./stream.js";

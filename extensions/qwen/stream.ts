@@ -18,6 +18,7 @@ function isQwenProviderId(providerId: string): boolean {
     normalized === "qwen-oauth" ||
     normalized === "qwen-portal" ||
     normalized === "qwen-cli" ||
+    normalized === "qwen-token-plan" ||
     normalized === "modelstudio" ||
     normalized === "qwencloud" ||
     normalized === "dashscope"

@@ -208,6 +208,7 @@ export const pluginRegistrationContractCases = {
       "qwen-oauth",
       "qwen-portal",
       "qwen-cli",
+      "qwen-token-plan",
     ],
     mediaUnderstandingProviderIds: ["qwen"],
     videoGenerationProviderIds: ["qwen"],
