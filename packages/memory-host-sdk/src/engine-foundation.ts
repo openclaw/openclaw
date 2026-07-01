@@ -8,6 +8,7 @@ export {
   resolveSessionAgentId,
 } from "./host/openclaw-runtime-agent.js";
 export {
+  computeSharedScopeHash,
   resolveMemorySearchConfig,
   resolveMemorySearchSyncConfig,
   type ResolvedMemorySearchConfig,
