@@ -836,24 +836,24 @@ export async function startTelegramWebhook(opts: {
       res.end();
       return;
     }
-    // Apply the per-source limit before auth so invalid secret guesses consume budget
-    // in the same window as any later request from that source.
-    if (
-      !applyBasicWebhookRequestGuards({
-        req,
-        res,
-        rateLimiter: telegramWebhookRateLimiter,
-        rateLimitKey: resolveTelegramWebhookRateLimitKey(req, path, opts.config),
-      })
-    ) {
-      return;
-    }
     const startTime = Date.now();
     if (diagnosticsEnabled) {
       logWebhookReceived({ channel: "telegram", updateType: "telegram-post" });
     }
     const secretHeader = resolveSingleHeaderValue(req.headers["x-telegram-bot-api-secret-token"]);
     if (!hasValidTelegramWebhookSecret(secretHeader, secret)) {
+      // Authenticated Telegram delivery must not consume the abuse budget. Only
+      // failed secret guesses are rate-limited, before the body is read.
+      if (
+        !applyBasicWebhookRequestGuards({
+          req,
+          res,
+          rateLimiter: telegramWebhookRateLimiter,
+          rateLimitKey: resolveTelegramWebhookRateLimitKey(req, path, opts.config),
+        })
+      ) {
+        return;
+      }
       res.shouldKeepAlive = false;
       res.setHeader("Connection", "close");
       respondText(401, "unauthorized");

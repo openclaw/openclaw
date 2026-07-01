@@ -968,7 +968,7 @@ describe("startTelegramWebhook", () => {
     );
   });
 
-  it("rate limits repeated invalid secret guesses before authentication succeeds", async () => {
+  it("rate limits repeated invalid secret guesses without throttling authenticated delivery", async () => {
     handleUpdateSpy.mockClear();
     await withStartedWebhook(
       {
@@ -1002,9 +1002,30 @@ describe("startTelegramWebhook", () => {
           payload: JSON.stringify({ update_id: 999, message: { text: "hello" } }),
           secret: TELEGRAM_SECRET,
         });
-        expect(validResponse.status).toBe(429);
-        expect(await validResponse.text()).toBe("Too Many Requests");
-        expect(handleUpdateSpy).not.toHaveBeenCalled();
+        expect(validResponse.status).toBe(200);
+        expect(await validResponse.text()).toBe("");
+        await vi.waitFor(() => expect(handleUpdateSpy).toHaveBeenCalledTimes(1));
+      },
+    );
+  });
+
+  it("does not rate limit authenticated webhook request storms", async () => {
+    handleUpdateSpy.mockClear();
+    await withStartedWebhook(
+      {
+        secret: TELEGRAM_SECRET,
+        path: TELEGRAM_WEBHOOK_PATH,
+      },
+      async ({ port }) => {
+        for (let i = 0; i < TELEGRAM_WEBHOOK_RATE_LIMIT_BURST; i += 1) {
+          const response = await postWebhookJson({
+            url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
+            payload: JSON.stringify({ update_id: 10_000 + i, message: { text: `valid ${i}` } }),
+            secret: TELEGRAM_SECRET,
+          });
+          expect(response.status).toBe(200);
+        }
+        await vi.waitFor(() => expect(handleUpdateSpy).toHaveBeenCalled());
       },
     );
   });
