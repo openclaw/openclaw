@@ -135,6 +135,36 @@ describe("session lifecycle state", () => {
     });
   });
 
+  it("clears automatic recovery state when a normal lifecycle end completes", () => {
+    expectPersistedLifecyclePatch({
+      entry: {
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryAttempts: 3,
+        restartRecoveryQuarantinedAt: 1_700,
+        restartRecoveryQuarantineReason: "exceeded_restart_retry_budget",
+        subagentRecovery: {
+          automaticAttempts: 2,
+          lastAttemptAt: 1_600,
+          wedgedAt: 1_700,
+          wedgedReason: "automatic_attempt_budget_exceeded",
+        },
+      },
+      data: {
+        phase: "end",
+        startedAt: 1_200,
+        endedAt: 1_900,
+      },
+      expected: {
+        ...terminalPatch(1_200, 1_900, "done", false),
+        restartRecoveryAttempts: undefined,
+        restartRecoveryQuarantinedAt: undefined,
+        restartRecoveryQuarantineReason: undefined,
+        subagentRecovery: undefined,
+      },
+    });
+  });
+
   it("maps aborted stop reasons to killed", () => {
     expectPersistedLifecyclePatch({
       entry: { startedAt: 1_100 },

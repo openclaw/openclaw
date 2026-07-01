@@ -686,6 +686,142 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("clears automatic recovery state for a user-driven agent turn", async () => {
+    mockMainSessionEntry({
+      abortedLastRun: true,
+      restartRecoveryAttempts: 4,
+      restartRecoveryQuarantinedAt: 2,
+      restartRecoveryQuarantineReason: "exceeded_restart_retry_budget",
+      subagentRecovery: {
+        automaticAttempts: 2,
+        lastAttemptAt: 3,
+        wedgedAt: 4,
+        wedgedReason: "automatic_attempt_budget_exceeded",
+      },
+    });
+
+    const capturedEntry = await runMainAgentAndCaptureEntry("test-idem-clear-automatic-recovery");
+
+    expect(capturedEntry.abortedLastRun).toBe(false);
+    expect(capturedEntry.restartRecoveryAttempts).toBeUndefined();
+    expect(capturedEntry.restartRecoveryQuarantinedAt).toBeUndefined();
+    expect(capturedEntry.restartRecoveryQuarantineReason).toBeUndefined();
+    expect(capturedEntry.subagentRecovery).toBeUndefined();
+  });
+
+  it("preserves automatic recovery state for restart-recovery resume turns", async () => {
+    mockMainSessionEntry({
+      abortedLastRun: true,
+      restartRecoveryAttempts: 2,
+      lastInteractionAt: 1,
+    });
+    const loaded = mocks.loadSessionEntry();
+    const existingEntry = structuredClone(loaded?.entry ?? buildExistingMainStoreEntry());
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, Record<string, unknown>> = {
+        "agent:main:main": existingEntry,
+      };
+      const result = await updater(store);
+      capturedEntry = result as Record<string, unknown>;
+      return result;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "resume interrupted turn",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: "test-idem-restart-recovery-resume",
+        inputProvenance: {
+          kind: "internal_system",
+          sourceTool: "main_session_restart_recovery",
+        },
+      } as AgentParams,
+      { client: backendGatewayClient() },
+    );
+
+    const entry = requireValue(capturedEntry, "updated session entry missing");
+    expect(entry.abortedLastRun).toBe(true);
+    expect(entry.restartRecoveryAttempts).toBe(2);
+    expect(entry.lastInteractionAt).toBe(1);
+  });
+
+  it("clears automatic recovery state when a public request forges restart-recovery provenance", async () => {
+    mockMainSessionEntry({
+      abortedLastRun: true,
+      restartRecoveryAttempts: 2,
+      lastInteractionAt: 1,
+    });
+    const loaded = mocks.loadSessionEntry();
+    const existingEntry = structuredClone(loaded?.entry ?? buildExistingMainStoreEntry());
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, Record<string, unknown>> = {
+        "agent:main:main": existingEntry,
+      };
+      const result = await updater(store);
+      capturedEntry = result as Record<string, unknown>;
+      return result;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent({
+      message: "normal user turn",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      idempotencyKey: "test-idem-forged-restart-recovery-provenance",
+      inputProvenance: {
+        kind: "internal_system",
+        sourceTool: "main_session_restart_recovery",
+      },
+    } as AgentParams);
+
+    const entry = requireValue(capturedEntry, "updated session entry missing");
+    expect(entry.abortedLastRun).toBe(false);
+    expect(entry.restartRecoveryAttempts).toBeUndefined();
+    expect(entry.lastInteractionAt).not.toBe(1);
+  });
+
+  it("clears automatic recovery quarantine state when a user turn rotates the session id", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    dateOnlyFakeClockActive = true;
+    vi.setSystemTime(new Date("2026-05-07T12:00:00.000Z"));
+    const staleEntry = {
+      sessionId: "quarantined-session-id",
+      updatedAt: 0,
+      sessionStartedAt: 0,
+      lastInteractionAt: 0,
+      abortedLastRun: true,
+      restartRecoveryAttempts: 3,
+      restartRecoveryQuarantinedAt: 1,
+      restartRecoveryQuarantineReason: "exceeded_restart_retry_budget",
+      subagentRecovery: {
+        automaticAttempts: 2,
+        lastAttemptAt: 3,
+        wedgedAt: 4,
+        wedgedReason: "automatic_attempt_budget_exceeded",
+      },
+    };
+    mockMainSessionEntry(staleEntry);
+
+    const capturedEntry = await runMainAgentAndCaptureEntry("test-idem-rotated-recovery-clear");
+
+    expect(capturedEntry.sessionId).not.toBe("quarantined-session-id");
+    expect(capturedEntry.abortedLastRun).toBeUndefined();
+    expect(capturedEntry.restartRecoveryAttempts).toBeUndefined();
+    expect(capturedEntry.restartRecoveryQuarantinedAt).toBeUndefined();
+    expect(capturedEntry.restartRecoveryQuarantineReason).toBeUndefined();
+    expect(capturedEntry.subagentRecovery).toBeUndefined();
+  });
+
   it("disables single-entry persistence when admission prunes legacy store keys", async () => {
     mocks.loadConfigReturn = {
       session: { mainKey: "work" },

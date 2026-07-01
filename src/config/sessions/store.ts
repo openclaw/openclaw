@@ -70,6 +70,7 @@ import {
 } from "./store-maintenance.js";
 import { runExclusiveSessionStoreWrite } from "./store-writer.js";
 import {
+  clearAutomaticRestartRecoveryState,
   mergeSessionEntry,
   mergeSessionEntryPreserveActivity,
   type SessionEntry,
@@ -398,7 +399,10 @@ function updateSessionStoreWriteCaches(params: {
   writeSessionStoreCache({
     storePath: params.storePath,
     store: params.store,
+    ctimeMs: fileStat?.ctimeMs,
+    ctimeNs: fileStat?.ctimeNs,
     mtimeMs: fileStat?.mtimeMs,
+    mtimeNs: fileStat?.mtimeNs,
     sizeBytes: fileStat?.sizeBytes,
     serialized: params.serialized,
     serializedPromptRefs: params.serializedPromptRefs,
@@ -418,7 +422,10 @@ function restoreUnchangedSessionStoreCache(
   const loadedFileStat = writerStoreFileStats.get(store) ?? null;
   const currentFileStat = getFileStatSnapshot(storePath) ?? null;
   if (
+    loadedFileStat?.ctimeMs !== currentFileStat?.ctimeMs ||
+    loadedFileStat?.ctimeNs !== currentFileStat?.ctimeNs ||
     loadedFileStat?.mtimeMs !== currentFileStat?.mtimeMs ||
+    loadedFileStat?.mtimeNs !== currentFileStat?.mtimeNs ||
     loadedFileStat?.sizeBytes !== currentFileStat?.sizeBytes
   ) {
     invalidateSessionStoreCache(storePath);
@@ -430,7 +437,10 @@ function restoreUnchangedSessionStoreCache(
   writeSessionStoreCache({
     storePath,
     store,
+    ctimeMs: loadedFileStat?.ctimeMs,
+    ctimeNs: loadedFileStat?.ctimeNs,
     mtimeMs: loadedFileStat?.mtimeMs,
+    mtimeNs: loadedFileStat?.mtimeNs,
     sizeBytes: loadedFileStat?.sizeBytes,
     serialized,
     serializedPromptRefs,
@@ -630,7 +640,10 @@ function loadMutableSessionStoreForWriter(storePath: string): Record<string, Ses
   if (isSessionStoreCacheEnabled()) {
     const cached = takeMutableSessionStoreCache({
       storePath,
+      ctimeMs: currentFileStat?.ctimeMs,
+      ctimeNs: currentFileStat?.ctimeNs,
       mtimeMs: currentFileStat?.mtimeMs,
+      mtimeNs: currentFileStat?.mtimeNs,
       sizeBytes: currentFileStat?.sizeBytes,
     });
     if (cached) {
@@ -1871,6 +1884,7 @@ export async function recordSessionMetaFromInbound(params: {
   ctx: MsgContext;
   groupResolution?: import("./types.js").GroupKeyResolution | null;
   createIfMissing?: boolean;
+  clearAutomaticRecoveryState?: boolean;
 }): Promise<SessionEntry | null> {
   const { storePath, sessionKey, ctx } = params;
   const createIfMissing = params.createIfMissing ?? true;
@@ -1913,6 +1927,9 @@ export async function recordSessionMetaFromInbound(params: {
         // idle reset evaluation relies on updatedAt from actual session turns.
         mergeSessionEntryPreserveActivity(existing, patch)
       : mergeSessionEntry(existing, patch);
+    if (params.clearAutomaticRecoveryState ?? true) {
+      clearAutomaticRestartRecoveryState(next);
+    }
     return await persistResolvedSessionEntry({
       storePath,
       store,
@@ -2010,6 +2027,7 @@ export async function updateLastRoute(params: {
       existing,
       metaPatch ? { ...basePatch, ...metaPatch } : basePatch,
     );
+    clearAutomaticRestartRecoveryState(next);
     return await persistResolvedSessionEntry({
       storePath,
       store,

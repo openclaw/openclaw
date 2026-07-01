@@ -385,7 +385,10 @@ export function loadSessionStore(
     const currentFileStat = getFileStatSnapshot(storePath);
     const cached = readSessionStoreCache({
       storePath,
+      ctimeMs: currentFileStat?.ctimeMs,
+      ctimeNs: currentFileStat?.ctimeNs,
       mtimeMs: currentFileStat?.mtimeMs,
+      mtimeNs: currentFileStat?.mtimeNs,
       sizeBytes: currentFileStat?.sizeBytes,
       clone: opts.clone,
     });
@@ -493,7 +496,10 @@ export function loadSessionStore(
     writeSessionStoreCache({
       storePath,
       store,
+      ctimeMs: fileStat?.ctimeMs,
+      ctimeNs: fileStat?.ctimeNs,
       mtimeMs,
+      mtimeNs: fileStat?.mtimeNs,
       sizeBytes: fileStat?.sizeBytes,
       serialized: serializedFromDisk,
       cloneSerialized: serializedFromDisk,
@@ -510,7 +516,10 @@ export function readSessionStoreSnapshot(storePath: string): SessionStoreSnapsho
   if (cacheEnabled) {
     const cached = readSessionStoreSnapshotCache({
       storePath,
+      ctimeMs: currentFileStat?.ctimeMs,
+      ctimeNs: currentFileStat?.ctimeNs,
       mtimeMs: currentFileStat?.mtimeMs,
+      mtimeNs: currentFileStat?.mtimeNs,
       sizeBytes: currentFileStat?.sizeBytes,
     });
     if (cached) {
@@ -525,7 +534,10 @@ export function readSessionStoreSnapshot(storePath: string): SessionStoreSnapsho
   return writeSessionStoreSnapshotCache({
     storePath,
     store,
+    ctimeMs: currentFileStat?.ctimeMs,
+    ctimeNs: currentFileStat?.ctimeNs,
     mtimeMs: currentFileStat?.mtimeMs,
+    mtimeNs: currentFileStat?.mtimeNs,
     sizeBytes: currentFileStat?.sizeBytes,
   });
 }

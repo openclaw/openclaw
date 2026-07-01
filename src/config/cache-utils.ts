@@ -150,17 +150,23 @@ export function createExpiringMapCache<TKey, TValue>(options: {
 }
 
 type FileStatSnapshot = {
+  ctimeMs: number;
+  ctimeNs: bigint;
   mtimeMs: number;
+  mtimeNs: bigint;
   sizeBytes: number;
 };
 
 /** Captures the file attributes used by cache invalidation without exposing fs.Stats. */
 export function getFileStatSnapshot(filePath: string): FileStatSnapshot | undefined {
   try {
-    const stats = fs.statSync(filePath);
+    const stats = fs.statSync(filePath, { bigint: true });
     return {
-      mtimeMs: stats.mtimeMs,
-      sizeBytes: stats.size,
+      ctimeMs: Number(stats.ctimeMs),
+      ctimeNs: stats.ctimeNs,
+      mtimeMs: Number(stats.mtimeMs),
+      mtimeNs: stats.mtimeNs,
+      sizeBytes: Number(stats.size),
     };
   } catch {
     return undefined;

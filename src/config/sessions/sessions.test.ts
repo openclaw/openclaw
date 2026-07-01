@@ -755,6 +755,7 @@ describe("session store writer queue", () => {
     writeSessionStoreCache({
       storePath,
       store,
+      ctimeMs: 1,
       mtimeMs: 1,
       sizeBytes: serialized.length,
       serialized,
@@ -765,11 +766,45 @@ describe("session store writer queue", () => {
 
     const cached = readSessionStoreCache({
       storePath,
+      ctimeMs: 1,
       mtimeMs: 1,
       sizeBytes: serialized.length,
     });
 
     expect(cached?.[key]?.sessionId).toBe("s-serialized-cache");
+  });
+
+  it("invalidates session store cache when ctime nanoseconds change inside the same millisecond", () => {
+    const key = "agent:main:ctime-ns-cache";
+    const storePath = "/tmp/openclaw-ctime-ns-cache-test.json";
+    const store = {
+      [key]: {
+        sessionId: "s-ctime-ns-cache",
+        updatedAt: Date.now(),
+      },
+    } satisfies Record<string, SessionEntry>;
+    const serialized = JSON.stringify(store);
+    writeSessionStoreCache({
+      storePath,
+      store,
+      ctimeMs: 1,
+      mtimeMs: 1,
+      ctimeNs: 1_000_000n,
+      sizeBytes: serialized.length,
+      serialized,
+      cloneSerialized: serialized,
+      takeOwnership: true,
+    });
+
+    const cached = readSessionStoreCache({
+      storePath,
+      ctimeMs: 1,
+      mtimeMs: 1,
+      ctimeNs: 1_000_001n,
+      sizeBytes: serialized.length,
+    });
+
+    expect(cached).toBeNull();
   });
 
   it("returns an owned parsed store for fresh skip-cache loads without cloning again", async () => {
