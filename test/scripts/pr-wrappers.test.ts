@@ -16,10 +16,12 @@ describe("scripts/pr wrappers", () => {
     expect(script).toContain("OPENCLAW_GH_BIN=");
     expect(script).toContain("gh_plain");
     expect(script).toContain("scripts/pr review-init <PR>");
+    expect(script).toContain("scripts/pr prepare-push [--repair-ancestry] <PR>");
     expect(script).toContain("scripts/pr prepare-run <PR>");
     expect(script).toContain("scripts/pr merge-run <PR>");
     expect(script).toContain('review_init "$pr"');
     expect(script).toContain('prepare_run "$pr"');
+    expect(script).toContain('prepare_push_ancestry_repair "$pr"');
     expect(script).toContain('merge_run "$pr"');
   });
 

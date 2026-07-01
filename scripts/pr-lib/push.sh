@@ -21,15 +21,52 @@ resolve_head_push_url() {
 # Push to a fork PR branch via GitHub GraphQL createCommitOnBranch.
 # This uses the same permission model as the GitHub web editor, bypassing
 # the git-protocol 403 that occurs even when maintainer_can_modify is true.
-# Usage: graphql_push_to_fork <owner/repo> <branch> <expected_head_oid>
+# Usage: graphql_push_to_fork <owner/repo> <branch> <expected_head_oid> [mainline_ref]
 # Pushes the diff between expected_head_oid and local HEAD as file additions/deletions.
 # File bytes are read from git objects (not the working tree) to avoid
 # symlink/special-file dereference risks from untrusted fork content.
+require_graphql_push_preserves_ancestry() {
+  local expected_oid="$1"
+  local prepared_oid="$2"
+  local mainline_ref="${3:-origin/main}"
+
+  if ! git cat-file -e "${expected_oid}^{commit}" 2>/dev/null; then
+    echo "GraphQL push refused before mutation: remote lease $expected_oid is not available locally." >&2
+    echo "Refresh the PR head and retry so commit ancestry can be verified." >&2
+    return 1
+  fi
+  if ! git merge-base --is-ancestor "$expected_oid" "$prepared_oid" 2>/dev/null; then
+    echo "GraphQL push refused before mutation: prepared head $prepared_oid is not a descendant of remote lease $expected_oid." >&2
+    echo "createCommitOnBranch always parents the new commit to the remote branch head, so this push would discard the prepared topology." >&2
+    return 1
+  fi
+  local expected_mainline_base
+  local prepared_mainline_base
+  expected_mainline_base=$(git merge-base "$expected_oid" "$mainline_ref") || {
+    echo "GraphQL push refused before mutation: unable to resolve the remote lease mainline base." >&2
+    return 1
+  }
+  prepared_mainline_base=$(git merge-base "$prepared_oid" "$mainline_ref") || {
+    echo "GraphQL push refused before mutation: unable to resolve the prepared mainline base." >&2
+    return 1
+  }
+  if [ "$expected_mainline_base" != "$prepared_mainline_base" ]; then
+    echo "GraphQL push refused before mutation: publication would discard the prepared mainline merge-base." >&2
+    echo "createCommitOnBranch gives the published commit only the remote branch head as its parent." >&2
+    return 1
+  fi
+}
+
 graphql_push_to_fork() {
   local repo_nwo="$1"
   local branch="$2"
   local expected_oid="$3"
+  local mainline_ref="${4:-origin/main}"
   local max_blob_bytes=$((5 * 1024 * 1024))
+
+  # GitHub creates the commit on the remote branch head, not with the local
+  # commit's parents. Only a descendant local head can preserve that lineage.
+  require_graphql_push_preserves_ancestry "$expected_oid" HEAD "$mainline_ref" || return 1
 
   local additions="[]"
   local deletions="[]"
@@ -239,6 +276,113 @@ push_prep_head_once() {
   printf '%s\n' "$prep_head_sha"
 }
 
+repair_synced_ancestry_ref() {
+  local pr_head="$1"
+  local lease_sha="$2"
+  local prepared_head_sha="$3"
+  local synced_base_sha="$4"
+  local synced_tree="$5"
+  local verify_ref="refs/remotes/prhead/ancestry-repair"
+
+  local remote_sha
+  remote_sha=$(resolve_prhead_remote_sha "$pr_head")
+  if [ "$remote_sha" != "$lease_sha" ]; then
+    echo "Ancestry repair refused: remote lease changed (expected $lease_sha, got $remote_sha)." >&2
+    return 1
+  fi
+
+  if ! git fetch --no-tags prhead "+refs/heads/$pr_head:$verify_ref" >/dev/null 2>&1; then
+    echo "Ancestry repair refused: unable to fetch the remote lease for verification." >&2
+    return 1
+  fi
+  local fetched_sha
+  fetched_sha=$(git rev-parse "$verify_ref")
+  if [ "$fetched_sha" != "$lease_sha" ]; then
+    echo "Ancestry repair refused: fetched branch head differs from the verified lease." >&2
+    return 1
+  fi
+  if [ "$lease_sha" = "$prepared_head_sha" ] || git merge-base --is-ancestor "$lease_sha" "$prepared_head_sha" 2>/dev/null; then
+    echo "Ancestry repair refused: normal publication already preserves this topology." >&2
+    return 1
+  fi
+
+  local prepared_tree
+  local lease_tree
+  prepared_tree=$(git rev-parse "${prepared_head_sha}^{tree}")
+  lease_tree=$(git rev-parse "${lease_sha}^{tree}")
+  if [ "$prepared_tree" != "$synced_tree" ]; then
+    echo "Ancestry repair refused: local prepared tree no longer matches the verified sync artifact." >&2
+    return 1
+  fi
+  if [ "$lease_tree" != "$synced_tree" ]; then
+    echo "Ancestry repair refused: remote lease tree differs from the local prepared tree." >&2
+    return 1
+  fi
+  if ! git merge-base --is-ancestor "$synced_base_sha" "$prepared_head_sha" 2>/dev/null; then
+    echo "Ancestry repair refused: synced base is not an ancestor of the prepared head." >&2
+    return 1
+  fi
+  if ! git diff --quiet "$lease_sha" "$prepared_head_sha"; then
+    echo "Ancestry repair refused: lease and prepared commits contain different file changes." >&2
+    return 1
+  fi
+
+  # This mode is topology-only. The dry run proves git-protocol permission,
+  # and the second lease read closes the race before the only mutating command.
+  if ! git push --dry-run \
+    --force-with-lease="refs/heads/$pr_head:$lease_sha" \
+    prhead "$prepared_head_sha:refs/heads/$pr_head" >&2
+  then
+    echo "Ancestry repair refused: force-with-lease permission dry run failed." >&2
+    return 1
+  fi
+  remote_sha=$(resolve_prhead_remote_sha "$pr_head")
+  if [ "$remote_sha" != "$lease_sha" ]; then
+    echo "Ancestry repair refused: remote lease changed after the permission dry run." >&2
+    return 1
+  fi
+  if ! git push \
+    --force-with-lease="refs/heads/$pr_head:$lease_sha" \
+    prhead "$prepared_head_sha:refs/heads/$pr_head" >&2
+  then
+    echo "Ancestry repair publication failed." >&2
+    return 1
+  fi
+
+  remote_sha=$(resolve_prhead_remote_sha "$pr_head")
+  if [ "$remote_sha" != "$prepared_head_sha" ]; then
+    echo "Ancestry repair verification failed: expected remote $prepared_head_sha, got $remote_sha." >&2
+    return 1
+  fi
+  if ! git fetch --no-tags prhead "+refs/heads/$pr_head:$verify_ref" >/dev/null 2>&1; then
+    echo "Ancestry repair verification failed: unable to fetch the published ref." >&2
+    return 1
+  fi
+  fetched_sha=$(git rev-parse "$verify_ref")
+  local published_tree
+  published_tree=$(git rev-parse "${fetched_sha}^{tree}")
+  if [ "$fetched_sha" != "$prepared_head_sha" ] || [ "$published_tree" != "$synced_tree" ]; then
+    echo "Ancestry repair verification failed: published SHA or tree differs from the verified sync." >&2
+    return 1
+  fi
+  if ! git merge-base --is-ancestor "$synced_base_sha" "$fetched_sha" 2>/dev/null; then
+    echo "Ancestry repair verification failed: published head lost the synced base ancestry." >&2
+    return 1
+  fi
+  local published_merge_base
+  published_merge_base=$(git merge-base "$synced_base_sha" "$fetched_sha")
+  if [ "$published_merge_base" != "$synced_base_sha" ]; then
+    echo "Ancestry repair verification failed: published merge-base differs from the synced base." >&2
+    return 1
+  fi
+  if ! git diff --quiet "$lease_sha" "$fetched_sha"; then
+    echo "Ancestry repair verification failed: publication changed file content." >&2
+    return 1
+  fi
+
+  printf '%s\n' "$fetched_sha"
+}
+
 push_prep_head_to_pr_branch() {
   local pr="$1"
   local pr_head="$2"
@@ -259,8 +403,8 @@ push_prep_head_to_pr_branch() {
     echo "Remote branch already at local prep HEAD; skipping push."
   else
     if [ "$remote_sha" != "$lease_sha" ]; then
-      echo "Remote SHA $remote_sha differs from PR head SHA $lease_sha. Refreshing lease SHA from remote."
-      lease_sha="$remote_sha"
+      echo "Remote SHA $remote_sha differs from PR head lease $lease_sha. Re-run prepare from the refreshed head."
+      exit 1
     fi
     pushed_from_sha="$lease_sha"
     local push_output
@@ -268,6 +412,10 @@ push_prep_head_to_pr_branch() {
       echo "Push failed: $push_output"
 
       if printf '%s' "$push_output" | grep -qiE '(permission|denied|403|forbidden)'; then
+        if [ "${OPENCLAW_PR_PUSH_MODE:-graphql}" = "git" ]; then
+          echo "Explicit git push permission failed; refusing GraphQL fallback."
+          exit 1
+        fi
         echo "Permission denied on git push; trying GraphQL createCommitOnBranch fallback..."
         if [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ]; then
           local graphql_oid
@@ -296,6 +444,10 @@ push_prep_head_to_pr_branch() {
 
         if ! push_output=$(push_prep_head_once "$pr_head" "$lease_sha" "$prep_head_sha" 2>&1); then
           echo "Retry push failed: $push_output"
+          if [ "${OPENCLAW_PR_PUSH_MODE:-graphql}" = "git" ]; then
+            echo "Explicit git retry failed; refusing GraphQL fallback."
+            exit 1
+          fi
           if [ -n "${PR_HEAD_OWNER:-}" ] && [ -n "${PR_HEAD_REPO_NAME:-}" ]; then
             echo "Retry failed; trying GraphQL createCommitOnBranch fallback..."
             local graphql_oid

@@ -1,5 +1,22 @@
+artifact_path_is_tracked() {
+  local path="$1"
+  git ls-files --error-unmatch -- ":(icase,literal)$path" >/dev/null 2>&1
+}
+
 require_artifact() {
   local path="$1"
+  case "$path" in
+    .local/*)
+      if [ -L .local ] || [ ! -d .local ]; then
+        echo "Refusing untrusted local artifact directory: .local"
+        exit 1
+      fi
+      if [ -L "$path" ] || { [ -e "$path" ] && [ ! -f "$path" ]; } || artifact_path_is_tracked "$path"; then
+        echo "Refusing untrusted local artifact: $path"
+        exit 1
+      fi
+      ;;
+  esac
   if [ ! -s "$path" ]; then
     echo "Missing required artifact: $path"
     exit 1

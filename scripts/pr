@@ -40,7 +40,7 @@ Usage:
   scripts/pr prepare-init <PR>
   scripts/pr prepare-validate-commit <PR>
   scripts/pr prepare-gates <PR>
-  scripts/pr prepare-push <PR>
+  scripts/pr prepare-push [--repair-ancestry] <PR>
   scripts/pr prepare-sync-head <PR>
   scripts/pr prepare-run <PR>
   scripts/pr merge-verify <PR>
@@ -168,9 +168,18 @@ main() {
       prepare_gates "$pr"
       ;;
     prepare-push)
+      local repair_ancestry=false
+      if [ "${1-}" = "--repair-ancestry" ]; then
+        repair_ancestry=true
+        shift || true
+      fi
       local pr="${1-}"
       [ -n "$pr" ] || { usage; exit 2; }
-      prepare_push "$pr"
+      if [ "$repair_ancestry" = "true" ]; then
+        prepare_push_ancestry_repair "$pr"
+      else
+        prepare_push "$pr"
+      fi
       ;;
     prepare-sync-head)
       local pr="${1-}"
