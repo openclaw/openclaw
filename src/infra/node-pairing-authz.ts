@@ -1,4 +1,7 @@
 // Maps node pairing command declarations to required operator scopes.
+// system.run and system.execApprovals.* commands require operator.admin;
+// other commands require operator.write; nodes without declared commands
+// require only operator.pairing.
 import { NODE_EXEC_APPROVALS_COMMANDS, NODE_SYSTEM_RUN_COMMANDS } from "./node-commands.js";
 
 /** Operator scopes required to approve a pending node pairing surface. */
