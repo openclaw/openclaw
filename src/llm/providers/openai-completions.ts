@@ -499,14 +499,25 @@ export const streamOpenAICompletions: StreamFunction<
       if (output.stopReason === "error") {
         throw new Error(output.errorMessage || "Provider returned an error stop reason");
       }
-      if (!hasFinishReason) {
-        throw new Error("Stream ended without finish_reason");
-      }
-
       const hasToolCalls = output.content.some((block) => block.type === "toolCall");
       const hasVisibleText = output.content.some(
         (block) => block.type === "text" && block.text.trim().length > 0,
       );
+
+      // Some OpenAI-compatible providers end the stream with `data: [DONE]`
+      // without emitting a final `finish_reason`.  When that happens we still
+      // have the accumulated content blocks, so we can infer the stop reason
+      // instead of discarding everything with an error.
+      if (!hasFinishReason) {
+        if (hasToolCalls) {
+          output.stopReason = "toolUse";
+        } else if (hasVisibleText) {
+          output.stopReason = "stop";
+        } else {
+          output.stopReason = "stop";
+        }
+      }
+
       if (output.stopReason === "toolUse" && !hasToolCalls) {
         output.stopReason = "stop";
       }

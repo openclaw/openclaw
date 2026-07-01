@@ -1156,6 +1156,29 @@ describe("openai-completions stop-reason tool-call guard", () => {
     expect(toolCalls).toHaveLength(1);
   });
 
+  it("preserves toolCall blocks when stream ends without finish_reason (data: [DONE])", async () => {
+    // Some OpenAI-compatible providers (e.g., Evolink deepseek-v4-pro) send
+    // valid delta.tool_calls chunks but end with `data: [DONE]` without a
+    // final `finish_reason` chunk.  The tool calls should still be preserved.
+    mockChunksRef.chunks = [
+      makeToolCallChunk("call_1", "read", '{"path":"/tmp/foo.txt"}'),
+      // No finishChunk — stream ends naturally like `data: [DONE]`
+    ];
+
+    const stream = streamOpenAICompletions(model, context, {
+      apiKey: "***",
+    });
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("toolUse");
+    const toolCalls = result.content.filter((b) => b.type === "toolCall");
+    expect(toolCalls).toHaveLength(1);
+    expect(toolCalls[0]).toMatchObject({
+      id: "call_1",
+      name: "read",
+    });
+  });
+
   it("keeps buffered visible text before following tool calls", async () => {
     mockChunksRef.chunks = [
       makeTextChunk("Use <"),
