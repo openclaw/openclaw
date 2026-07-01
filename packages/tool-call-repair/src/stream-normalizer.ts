@@ -9,7 +9,13 @@ import {
   isPlainTextToolNameChar,
   isXmlishNameChar,
   matchesLiteralPrefix,
+  skipWhitespace,
+  stripXmlishAttributeQuotes,
+  XMLISH_FUNCTION_CALLS_OPEN_RE,
+  XMLISH_INVOKE_OPEN_RE,
+  XMLISH_INVOKE_SELF_CLOSE_RE,
 } from "./grammar.js";
+import { parseStandalonePlainTextToolCallBlocks } from "./payload.js";
 
 export type PlainTextToolCallNameMatcher = {
   /** True only when the candidate is a complete tool name this request may repair. */
@@ -61,6 +67,10 @@ function couldStillBeJsonPayload(text: string, start: number): boolean {
   return cursor >= text.length || text[cursor] === "{";
 }
 
+// Closed namespace allow-list for the attribute-dialect invoke recognizer; kept
+// in sync with the grammar regexes so partial streamed prefixes stay buffered.
+const XMLISH_INVOKE_NAMESPACES = ["", "antml:", "mm:"] as const;
+
 function couldStillBeXmlishParameterPayload(text: string, start: number): boolean {
   let cursor = start;
   while (cursor < text.length && /\s/.test(text[cursor] ?? "")) {
@@ -69,7 +79,238 @@ function couldStillBeXmlishParameterPayload(text: string, start: number): boolea
   if (cursor >= text.length) {
     return true;
   }
-  return matchesLiteralPrefix(text.slice(cursor).toLowerCase(), "<parameter=");
+  const rest = text.slice(cursor).toLowerCase();
+  // Parameter payload may arrive in the equals dialect (`<parameter=name>`) or
+  // the attribute dialect (`<parameter name="...">`), each optionally namespaced.
+  return XMLISH_INVOKE_NAMESPACES.some((ns) => matchesLiteralPrefix(rest, `<${ns}parameter`));
+}
+
+// True while streamed bytes after a complete invoke open could still become the
+// `</invoke>` close (bare or namespaced). A closed 0-param invoke has no parameter
+// payload, so accepting a partial/complete close keeps it buffered for scrub
+// instead of letting it fall through as visible text.
+function couldStillBeXmlishInvokeCloseTail(text: string, start: number): boolean {
+  let cursor = start;
+  while (cursor < text.length && /\s/.test(text[cursor] ?? "")) {
+    cursor += 1;
+  }
+  if (cursor >= text.length) {
+    return true;
+  }
+  const rest = text.slice(cursor).toLowerCase();
+  return XMLISH_INVOKE_NAMESPACES.some((ns) => matchesLiteralPrefix(rest, `</${ns}invoke`));
+}
+
+// Phase-scan result for an optional grammar token: either fully consumed (with the
+// offset after it), still a viable streaming prefix, or a definite mismatch.
+type XmlishPrefixScan = { kind: "complete"; cursor: number } | { kind: "viable" } | { kind: "no" };
+
+// Matches a fixed keyword case-insensitively (the grammar regexes use the `i` flag),
+// reporting a partial keyword still streaming as a viable prefix rather than a miss.
+function scanCaseInsensitiveLiteral(
+  text: string,
+  start: number,
+  literal: string,
+): XmlishPrefixScan {
+  const segment = text.slice(start, start + literal.length).toLowerCase();
+  if (segment === literal) {
+    return { kind: "complete", cursor: start + literal.length };
+  }
+  return literal.startsWith(segment) ? { kind: "viable" } : { kind: "no" };
+}
+
+// Matches the optional namespace plus the `invoke` keyword as one unit, since the
+// namespace is only legal when it leads into `invoke`. A partial of any allowed
+// `<ns>invoke` spelling keeps the streamed prefix viable.
+function scanNamespacedInvoke(text: string, start: number): XmlishPrefixScan {
+  let viable = false;
+  for (const ns of XMLISH_INVOKE_NAMESPACES) {
+    const scan = scanCaseInsensitiveLiteral(text, start, `${ns}invoke`);
+    if (scan.kind === "complete") {
+      return scan;
+    }
+    if (scan.kind === "viable") {
+      viable = true;
+    }
+  }
+  return viable ? { kind: "viable" } : { kind: "no" };
+}
+
+// Matches the optional namespace plus the `function_calls` keyword as one unit,
+// mirroring scanNamespacedInvoke for the wrapper open. A partial of any allowed
+// `<ns>function_calls` spelling keeps the streamed prefix viable.
+function scanNamespacedFunctionCalls(text: string, start: number): XmlishPrefixScan {
+  let viable = false;
+  for (const ns of XMLISH_INVOKE_NAMESPACES) {
+    const scan = scanCaseInsensitiveLiteral(text, start, `${ns}function_calls`);
+    if (scan.kind === "complete") {
+      return scan;
+    }
+    if (scan.kind === "viable") {
+      viable = true;
+    }
+  }
+  return viable ? { kind: "viable" } : { kind: "no" };
+}
+
+// Walks the optional `<function_calls>` wrapper open one grammar phase at a time,
+// mirroring XMLISH_FUNCTION_CALLS_OPEN_RE (`^<\s*(?:antml:|mm:)?function_calls\s*>`).
+// A streamed buffer that ends partway through any phase stays viable; we only reject
+// once the text definitively cannot become a legal wrapper open. This keeps
+// grammar-legal split forms (`< function_calls >`, extra whitespace) buffered
+// instead of leaking as visible text mid-stream, the same way
+// isViableXmlishInvokeOpenPrefix guards the invoke open one level down.
+function isViableXmlishFunctionCallsOpenPrefix(text: string): boolean {
+  const length = text.length;
+  // Phase: leading `<`.
+  if (length === 0) {
+    return true;
+  }
+  if (text[0] !== "<") {
+    return false;
+  }
+  // Phase: optional whitespace, then optional namespace + `function_calls`.
+  let cursor = skipWhitespace(text, 1);
+  if (cursor >= length) {
+    return true;
+  }
+  const wrapper = scanNamespacedFunctionCalls(text, cursor);
+  if (wrapper.kind === "no") {
+    return false;
+  }
+  if (wrapper.kind === "viable") {
+    return true;
+  }
+  // Phase: optional whitespace, then the closing `>`. A complete wrapper open would
+  // already have matched XMLISH_FUNCTION_CALLS_OPEN_RE, so only the partial remains.
+  cursor = skipWhitespace(text, wrapper.cursor);
+  if (cursor >= length) {
+    return true;
+  }
+  return text[cursor] === ">";
+}
+
+// Walks the attribute-dialect invoke open one grammar phase at a time, mirroring
+// XMLISH_INVOKE_OPEN_RE (`^<\s*(?:antml:|mm:)?invoke\s+name\s*=\s*(quoted)\s*>`). A
+// streamed buffer that ends partway through any phase stays viable; we only reject
+// once the text definitively cannot become a legal invoke-open for a repairable
+// name. This keeps grammar-legal split forms (`<invoke name = "x">`, leading or
+// extra whitespace) buffered instead of leaking as visible text mid-stream.
+function isViableXmlishInvokeOpenPrefix(
+  text: string,
+  matcher: PlainTextToolCallNameMatcher,
+): boolean {
+  const length = text.length;
+  // Phase: leading `<`.
+  if (length === 0) {
+    return true;
+  }
+  if (text[0] !== "<") {
+    return false;
+  }
+  // Phase: optional whitespace, then optional namespace + `invoke`.
+  let cursor = skipWhitespace(text, 1);
+  if (cursor >= length) {
+    return true;
+  }
+  const invoke = scanNamespacedInvoke(text, cursor);
+  if (invoke.kind === "no") {
+    return false;
+  }
+  if (invoke.kind === "viable") {
+    return true;
+  }
+  cursor = invoke.cursor;
+  if (cursor >= length) {
+    return true;
+  }
+  // Phase: required whitespace before `name`.
+  if (!/\s/.test(text[cursor] ?? "")) {
+    return false;
+  }
+  cursor = skipWhitespace(text, cursor);
+  if (cursor >= length) {
+    return true;
+  }
+  // Phase: `name`, then optional whitespace around `=`.
+  const name = scanCaseInsensitiveLiteral(text, cursor, "name");
+  if (name.kind === "no") {
+    return false;
+  }
+  if (name.kind === "viable") {
+    return true;
+  }
+  cursor = skipWhitespace(text, name.cursor);
+  if (cursor >= length) {
+    return true;
+  }
+  if (text[cursor] !== "=") {
+    return false;
+  }
+  cursor = skipWhitespace(text, cursor + 1);
+  if (cursor >= length) {
+    return true;
+  }
+  // Phase: opening quote, then the quoted tool name.
+  const quote = text[cursor];
+  if (quote !== '"' && quote !== "'") {
+    return false;
+  }
+  cursor += 1;
+  const close = text.indexOf(quote, cursor);
+  if (close === -1) {
+    // Name still streaming: gate the partial against repairable tool names.
+    return matcher.hasNamePrefix(text.slice(cursor));
+  }
+  if (!matcher.hasExactName(text.slice(cursor, close))) {
+    return false;
+  }
+  // After the closing quote only optional whitespace and the `>` remain, or a
+  // self-closing `/>` tail (`<invoke name="x"/>`); accept a partial of either so
+  // a streaming self-close stays buffered instead of leaking as visible text.
+  return /^\s*\/?\s*>?$/.test(text.slice(close + 1));
+}
+
+function couldStillBeXmlishInvokeOpen(
+  text: string,
+  matcher: PlainTextToolCallNameMatcher,
+): boolean {
+  if (text.length === 0) {
+    return true;
+  }
+  const complete = XMLISH_INVOKE_OPEN_RE.exec(text);
+  if (complete?.[1]) {
+    if (!matcher.hasExactName(stripXmlishAttributeQuotes(complete[1]))) {
+      return false;
+    }
+    // After a complete open, either a parameter payload or the `</invoke>` close
+    // keeps the buffer viable. Arbitrary non-close text (mixed prose) is neither,
+    // so it still falls through to visible text unaffected.
+    return (
+      couldStillBeXmlishParameterPayload(text, complete[0].length) ||
+      couldStillBeXmlishInvokeCloseTail(text, complete[0].length)
+    );
+  }
+  return isViableXmlishInvokeOpenPrefix(text, matcher);
+}
+
+function couldStillBeXmlishInvokeToolCall(
+  text: string,
+  matcher: PlainTextToolCallNameMatcher,
+): boolean {
+  // The attribute dialect may lead with an optional <function_calls> wrapper.
+  const wrapperComplete = XMLISH_FUNCTION_CALLS_OPEN_RE.exec(text);
+  if (wrapperComplete) {
+    const afterWrapper = text.slice(wrapperComplete[0].length).replace(/^\s+/, "");
+    return afterWrapper.length === 0 || couldStillBeXmlishInvokeOpen(afterWrapper, matcher);
+  }
+  // Still streaming the wrapper open tag itself keeps the buffer alive. Mirror the
+  // wrapper grammar's optional whitespace/namespace so a grammar-legal split such as
+  // `< function_calls` stays buffered instead of leaking as visible text.
+  if (isViableXmlishFunctionCallsOpenPrefix(text)) {
+    return true;
+  }
+  return couldStillBeXmlishInvokeOpen(text, matcher);
 }
 
 function couldStillBeBracketedStandaloneToolCall(
@@ -274,6 +515,22 @@ function couldStillBeHarmonyStandaloneToolCall(
   return text[cursor] === "{";
 }
 
+function matchXmlishInvokeOpenName(text: string): string | null {
+  let rest = text;
+  const wrapper = XMLISH_FUNCTION_CALLS_OPEN_RE.exec(rest);
+  if (wrapper) {
+    rest = rest.slice(wrapper[0].length).replace(/^\s+/, "");
+  }
+  // Recognize the self-closing form too so its strip extent is computed and
+  // mixed self-close content is not over-scrubbed.
+  const selfClose = XMLISH_INVOKE_SELF_CLOSE_RE.exec(rest);
+  if (selfClose?.[1]) {
+    return stripXmlishAttributeQuotes(selfClose[1]);
+  }
+  const invoke = XMLISH_INVOKE_OPEN_RE.exec(rest);
+  return invoke?.[1] ? stripXmlishAttributeQuotes(invoke[1]) : null;
+}
+
 function hasExactSerializedToolCallPrefix(
   text: string,
   matcher: PlainTextToolCallNameMatcher,
@@ -285,6 +542,10 @@ function hasExactSerializedToolCallPrefix(
   const xmlish = /^<function=([A-Za-z0-9_.:-]+)>/i.exec(text);
   if (xmlish?.[1]) {
     return matcher.hasExactName(xmlish[1]);
+  }
+  const invokeName = matchXmlishInvokeOpenName(text);
+  if (invokeName !== null) {
+    return matcher.hasExactName(invokeName);
   }
   const harmony =
     /^(?:<\|channel\|>)?(?:commentary|analysis|final)\s+to=([A-Za-z0-9_-]+)\s+code\b/.exec(text);
@@ -347,6 +608,7 @@ function getPlainTextToolCallBufferState(
   const toolCallLike =
     couldStillBeBracketedStandaloneToolCall(trimmed, matcher) ||
     couldStillBeXmlishFunctionToolCall(trimmed, matcher) ||
+    couldStillBeXmlishInvokeToolCall(trimmed, matcher) ||
     couldStillBeHarmonyStandaloneToolCall(trimmed, matcher);
   if (!toolCallLike) {
     return "impossible";
@@ -383,13 +645,19 @@ function hasSuppressedToolCallClosingMarker(text: string): boolean {
     return false;
   }
   const lowerText = text.toLowerCase();
+  // Bare closes (`</invoke>`, `</function_calls>`) and namespaced closes are both
+  // accepted regardless of the open prefix; degraded proxies often drop the
+  // prefix on the close, so the mixed/absent pairing is intentional.
   return (
     lowerText.includes("</parameter>") ||
     lowerText.includes("</function>") ||
+    lowerText.includes("</invoke>") ||
+    lowerText.includes("</function_calls>") ||
     text.includes(END_TOOL_REQUEST) ||
     text.includes("<|call|>") ||
     text.includes("}") ||
-    /\[\/[A-Za-z0-9_.:-]+\]/.test(text)
+    /\[\/[A-Za-z0-9_.:-]+\]/.test(text) ||
+    /<\s*\/\s*(?:antml:|mm:)(?:parameter|invoke|function_calls|function)\s*>/i.test(text)
   );
 }
 
@@ -952,7 +1220,10 @@ function scrubReclassifiedMixedTextFromError(
   };
 }
 
-/** Scrubs final messages whose streamed plain-text tool-call prefix exceeded the buffer cap. */
+/**
+ * Scrubs final messages whose streamed plain-text tool-call prefix exceeded the buffer cap,
+ * or that ended at `done` while a buffered tool-call prefix was still unclosed (truncated stream).
+ */
 export function scrubOverCapPlainTextToolCallMessage(params: {
   candidateText: string | undefined;
   matcher: PlainTextToolCallNameMatcher;
@@ -992,6 +1263,24 @@ export function scrubOverCapPlainTextToolCallMessage(params: {
       };
     }
     return undefined;
+  }
+  if (bufferState === "possible") {
+    // An incomplete (unclosed) buffered tool-call prefix reached `done`: there is no complete
+    // block to promote, yet the whole buffer is leaked tool-call markup. stripSerializedToolCall-
+    // Prefixes returns null only when no complete prefix can be consumed, which separates this
+    // truncated-stream case from a complete block (returns the trailing remainder, "" when fully
+    // consumed). A complete block still defers to promotion, but only when visible text follows
+    // it or it is actually promotable (has parameters); a pure closed or self-closing 0-param
+    // invoke is neither, so it falls through to scrub instead of flushing raw invoke XML (#97750).
+    const strippedRemainder = stripSerializedToolCallPrefixes(candidateText, params.matcher);
+    if (strippedRemainder !== null) {
+      const promotable = parseStandalonePlainTextToolCallBlocks(candidateText) !== null;
+      if (strippedRemainder.trim() || promotable) {
+        return undefined;
+      }
+    }
+    const scrubbed = scrubPlainTextToolCallContent(record.content, candidateText, params.matcher);
+    return scrubbed.changed ? { ...record, content: scrubbed.content } : undefined;
   }
   if (bufferState !== "over-cap") {
     return undefined;

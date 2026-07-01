@@ -29,8 +29,16 @@ const INTERNAL_CHANNEL_TRACE_LINE_RE =
  * This stateful pass hides content from an opening tag through the matching
  * closing tag, or to end-of-string if the stream was truncated mid-tag.
  */
-const TOOL_CALL_QUICK_RE =
-  /<\s*\/?\s*(?:antml:)?(?:tool_call|tool_result|function_calls?|function_response|function|tool_calls|invoke|parameter)\b/i;
+// Some proxies degrade native tool-call blocks into namespaced XML text using a
+// closed set of model prefixes (Anthropic, MiniMax). Accept only these known
+// prefixes so namespaced markup is recognized instead of leaking; do not widen
+// to arbitrary `ns:` tokens, which would swallow ordinary prose tags.
+const TOOL_CALL_TAG_NAMESPACE = "(?:antml:|mm:)";
+const TOOL_CALL_TAG_NAMESPACE_PREFIX_RE = /^(?:antml:|mm:)/i;
+const TOOL_CALL_QUICK_RE = new RegExp(
+  `<\\s*\\/?\\s*${TOOL_CALL_TAG_NAMESPACE}?(?:tool_call|tool_result|function_calls?|function_response|function|tool_calls|invoke)\\b`,
+  "i",
+);
 const TOOL_CALL_TAG_NAMES = new Set([
   "tool_call",
   "tool_result",
@@ -39,13 +47,13 @@ const TOOL_CALL_TAG_NAMES = new Set([
   "function_response",
   "function",
   "tool_calls",
-  "antml:invoke",
-  "antml:parameter",
 ]);
 const TOOL_CALL_JSON_PAYLOAD_START_RE =
   /^(?:\s+[A-Za-z_:][-A-Za-z0-9_:.]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))*\s*(?:\r?\n\s*)?[[{]/;
-const TOOL_CALL_XML_PAYLOAD_START_RE =
-  /^\s*(?:\r?\n\s*)?<(?:antml:)?(?:function_call|tool_call|function|invoke|parameters?|arguments?)\b/i;
+const TOOL_CALL_XML_PAYLOAD_START_RE = new RegExp(
+  `^\\s*(?:\\r?\\n\\s*)?<${TOOL_CALL_TAG_NAMESPACE}?(?:function_call|tool_call|function|invoke|parameters?|arguments?)\\b`,
+  "i",
+);
 const NESTED_JSON_TOOL_CALL_PAYLOAD_START_RE = /^\s*(?:\r?\n\s*)?<(?:function_call|tool_call)\b/i;
 
 type ToolCallPayloadKind = "json" | "xml" | null;
@@ -298,11 +306,19 @@ function parseToolCallTagAt(text: string, start: number): ParsedToolCallTag | nu
   }
 
   const nameStart = cursor;
-  while (cursor < text.length && /[A-Za-z_:]/.test(text[cursor])) {
+  // Skip a known model namespace prefix (e.g. `antml:`) so a namespaced
+  // `<invoke>` resolves to the local tag name "invoke". The closed
+  // allow-list keeps arbitrary `ns:` tokens from being treated as tool tags.
+  const namespacePrefix = TOOL_CALL_TAG_NAMESPACE_PREFIX_RE.exec(
+    text.slice(nameStart, nameStart + 6),
+  );
+  const tagNameStart = namespacePrefix ? nameStart + namespacePrefix[0].length : nameStart;
+  cursor = tagNameStart;
+  while (cursor < text.length && /[A-Za-z_]/.test(text[cursor])) {
     cursor += 1;
   }
 
-  const tagName = normalizeLowercaseStringOrEmpty(text.slice(nameStart, cursor));
+  const tagName = normalizeLowercaseStringOrEmpty(text.slice(tagNameStart, cursor));
   if (!TOOL_CALL_TAG_NAMES.has(tagName) || !isToolCallBoundary(text[cursor])) {
     return null;
   }
@@ -406,7 +422,6 @@ export function stripToolCallXmlTags(
       const shouldDetectXmlPayload =
         tag.tagName === "tool_call" ||
         tag.tagName === "function" ||
-        tag.tagName === "antml:invoke" ||
         ((options.stripFunctionCallsXmlPayloads === true ||
           shouldStripPluralWrapperBeforeResponse) &&
           isPluralToolCallWrapper);
@@ -904,7 +919,14 @@ function applyAssistantVisibleTextStagePipeline(
       cleaned = stripAssistantInternalTraceLines(cleaned);
     }
     cleaned = stripLegacyBracketToolCallBlocks(cleaned);
-    cleaned = stripPlainTextToolCallBlocks(cleaned);
+    // The code-aware XML pass above leaves a complete `invoke` block inside a
+    // code fence as text; pass the same code regions here so the plain-text
+    // strip does not delete it. Regions are recomputed against the current
+    // `cleaned` because earlier stages may have shifted offsets.
+    const plainTextToolCallCodeRegions = findCodeRegions(cleaned);
+    cleaned = stripPlainTextToolCallBlocks(cleaned, (offset) =>
+      isInsideCode(offset, plainTextToolCallCodeRegions),
+    );
     if (!options.preserveDowngradedToolText) {
       cleaned = stripDowngradedToolCallText(cleaned);
     }

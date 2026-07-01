@@ -23,6 +23,7 @@ import {
   stripMinimaxToolCallXml,
   stripToolCallXmlTags,
 } from "../../shared/text/assistant-visible-text.js";
+import { findCodeRegions, isInsideCode } from "../../shared/text/code-regions.js";
 import { stripFinalTags } from "../../shared/text/final-tags.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
@@ -441,8 +442,13 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
   const withoutInternalTraceLines = errorContext
     ? stripAssistantInternalTraceLines(withoutPlaceholder)
     : withoutPlaceholder;
-  const withoutToolCallBlocks = stripPlainTextToolCallBlocks(
-    stripLegacyBracketToolCallBlocks(withoutInternalTraceLines),
+  // The code-aware XML pass above leaves a complete invoke block inside a code
+  // fence intact; share the same code regions with the plain-text strip so it
+  // does not delete the fenced example. Mirrors the delivery sanitizer.
+  const beforeToolCallBlocks = stripLegacyBracketToolCallBlocks(withoutInternalTraceLines);
+  const toolCallBlockCodeRegions = findCodeRegions(beforeToolCallBlocks);
+  const withoutToolCallBlocks = stripPlainTextToolCallBlocks(beforeToolCallBlocks, (offset) =>
+    isInsideCode(offset, toolCallBlockCodeRegions),
   );
   const trimmed = withoutToolCallBlocks.trim();
   if (!trimmed) {

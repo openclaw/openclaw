@@ -514,6 +514,40 @@ describe("stripAssistantInternalScaffolding", () => {
     it("preserves inline code references to tool_call tags", () => {
       expectVisibleText("Use `<tool_call>` to invoke tools.", "Use `<tool_call>` to invoke tools.");
     });
+
+    it("hides truncated namespaced <function_calls openings before payloads", () => {
+      expectVisibleText('prefix\n<mm:function_calls id="x"\n[{"name":"find"}]', "prefix\n");
+    });
+
+    it("preserves namespaced tool-call tags inside inline code", () => {
+      expectVisibleText(
+        'Use `<mm:invoke name="find">` to invoke tools.',
+        'Use `<mm:invoke name="find">` to invoke tools.',
+      );
+    });
+
+    it("preserves a complete invoke block inside a fenced code block", () => {
+      // The code-blind plain-text strip pass must honor code regions the same way
+      // the XML pass does. `invoke` is not a recognized XML tag name, so the XML
+      // pass leaves this fenced example alone; the plain-text pass would delete
+      // it and silently lose visible content without the code-region guard.
+      const input = [
+        "```",
+        '<mm:invoke name="exec"><mm:parameter name="command">ls</mm:parameter></mm:invoke>',
+        "```",
+        "",
+        "Visible text",
+      ].join("\n");
+      expectVisibleText(input, input);
+      expect(sanitizeAssistantVisibleText(input)).toBe(input);
+    });
+
+    it("preserves a standalone invoke block inside inline code on its own line", () => {
+      const input =
+        '`<mm:invoke name="exec"><mm:parameter name="command">ls</mm:parameter></mm:invoke>`';
+      expectVisibleText(input, input);
+      expect(sanitizeAssistantVisibleText(input)).toBe(input);
+    });
   });
 
   describe("model special token stripping", () => {
@@ -764,21 +798,37 @@ describe("stripToolCallXmlTags", () => {
     );
   });
 
-  it("strips antml:invoke/parameter tool call XML from visible content", () => {
-    const input =
-      'before <antml:invoke name="exec"><antml:parameter name="command">ls</antml:parameter></antml:invoke> after';
-    expect(stripToolCallXmlTags(input)).toBe("before  after");
-  });
-
-  it("strips antml:invoke with function_call payload", () => {
-    const input =
-      'prefix <antml:invoke name="exec"><function_call>test</function_call></antml:invoke> suffix';
-    expect(stripToolCallXmlTags(input)).toBe("prefix  suffix");
-  });
-
-  it("does not strip non-namespaced invoke tags (unrelated XML)", () => {
-    const input = 'keep <invoke name="something">content</invoke> keep';
+  it("strips namespaced antml plural function-call wrapper XML only when opted in", () => {
+    const ns = "antml:";
+    const input = `prefix <${ns}function_calls><${ns}invoke name="find"><${ns}parameter name="query">secret</${ns}parameter></${ns}invoke></${ns}function_calls> suffix`;
     expect(stripToolCallXmlTags(input)).toBe(input);
+    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe(
+      "prefix  suffix",
+    );
+  });
+
+  it("strips namespaced mm plural function-call wrapper XML when opted in", () => {
+    const input =
+      'prefix <mm:function_calls><mm:invoke name="find"><mm:parameter name="query">secret</mm:parameter></mm:invoke></mm:function_calls> suffix';
+    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe(
+      "prefix  suffix",
+    );
+  });
+
+  it("preserves namespaced wrapper XML inside fenced code even when opted in", () => {
+    const ns = "antml:";
+    const input = [
+      "```xml",
+      `<${ns}function_calls><${ns}invoke name="find"><${ns}parameter name="query">secret</${ns}parameter></${ns}invoke></${ns}function_calls>`,
+      "```",
+    ].join("\n");
+    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe(input);
+  });
+
+  it("preserves namespaced wrapper XML inside inline code even when opted in", () => {
+    const ns = "antml:";
+    const input = `Use \`<${ns}function_calls><${ns}invoke name="find">secret</${ns}invoke></${ns}function_calls>\` literally.`;
+    expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe(input);
   });
 });
 
@@ -836,6 +886,47 @@ describe("sanitizeAssistantVisibleText", () => {
       'prefix <function_calls><invoke name="find">secret</invoke></function_calls> suffix';
 
     expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
+  it("preserves a line-leading invoke block followed by same-line prose on the delivery path", () => {
+    const input =
+      '<invoke name="find"><parameter name="query">x</parameter></invoke> is the attribute form.';
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
+  it("preserves a fenced standalone invoke block through the full delivery pipeline", () => {
+    // A bare/namespaced `invoke` is not an XML tool tag, so the code-aware pass
+    // leaves it inside the fence; the plain-text strip must not delete it.
+    const ns = "antml:";
+    const input = [
+      "Example tool call:",
+      "```xml",
+      `<${ns}invoke name="exec">`,
+      `<${ns}parameter name="command">`,
+      "ls",
+      `</${ns}parameter>`,
+      `</${ns}invoke>`,
+      "```",
+      "Done.",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe(input);
+  });
+
+  it("still strips an unfenced standalone invoke block on the delivery path", () => {
+    const ns = "antml:";
+    const input = [
+      "Before",
+      `<${ns}invoke name="exec">`,
+      `<${ns}parameter name="command">`,
+      "ls",
+      `</${ns}parameter>`,
+      `</${ns}invoke>`,
+      "After",
+    ].join("\n");
+
+    expect(sanitizeAssistantVisibleText(input)).toBe("Before\nAfter");
   });
 
   it("strips relevant-memories blocks on the canonical user-visible path", () => {

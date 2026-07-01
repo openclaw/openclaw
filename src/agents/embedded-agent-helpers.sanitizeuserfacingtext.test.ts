@@ -351,6 +351,32 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(input)).toBe("Before\n\nAfter");
   });
 
+  it("strips namespaced antml XML function-call wrappers before user-facing delivery", () => {
+    const ns = "antml:";
+    const input = [
+      "Before",
+      `<${ns}function_calls><${ns}invoke name="find"><${ns}parameter name="query">secret</${ns}parameter></${ns}invoke></${ns}function_calls>`,
+      "After",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Before\n\nAfter");
+  });
+
+  it("preserves a fenced attribute-dialect invoke block in user-facing text", () => {
+    // The code-aware XML pass leaves this fenced example intact; the plain-text
+    // strip must share the same code regions so it does not delete it. Built
+    // from a namespace variable so the literal tag sequence is not rewritten.
+    const ns = "";
+    const input = [
+      "Example:",
+      "```xml",
+      `<${ns}invoke name="exec"><${ns}parameter name="command">pwd</${ns}parameter></${ns}invoke>`,
+      "```",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe(input);
+  });
+
   it("strips workflow function response wrappers before user-facing delivery", () => {
     const input = [
       "Before",

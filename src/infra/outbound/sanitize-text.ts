@@ -1,6 +1,7 @@
 // Plain-text sanitization strips internal runtime scaffolding and converts a
 // conservative subset of model-produced HTML into channel-friendly text.
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
+import { findCodeRegions, isInsideCode } from "../../shared/text/code-regions.js";
 
 const INTERNAL_RUNTIME_SCAFFOLDING_TAGS = ["system-reminder", "previous_response"] as const;
 const INTERNAL_RUNTIME_SCAFFOLDING_TAG_PATTERN = INTERNAL_RUNTIME_SCAFFOLDING_TAGS.join("|");
@@ -105,7 +106,12 @@ export function stripInternalRuntimeScaffolding(text: string): string {
   for (const marker of INTERNAL_RUNTIME_MARKER_LINES) {
     stripped = stripStandaloneMarkerLine(stripped, marker);
   }
-  return stripPlainTextToolCallBlocks(stripped);
+  // Pass code regions so a complete invoke block inside a Markdown fence / inline
+  // span is treated as an example, not a #97750 leaked call, and survives.
+  const toolCallCodeRegions = findCodeRegions(stripped);
+  return stripPlainTextToolCallBlocks(stripped, (offset) =>
+    isInsideCode(offset, toolCallCodeRegions),
+  );
 }
 
 /**

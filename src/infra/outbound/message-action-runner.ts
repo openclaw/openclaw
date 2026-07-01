@@ -43,6 +43,7 @@ import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
+import { findCodeRegions, isInsideCode } from "../../shared/text/code-regions.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import {
@@ -961,7 +962,13 @@ async function buildSendPayloadParts(params: {
   mergedMediaUrls.length = 0;
   mergedMediaUrls.push(...normalizedMediaUrls);
 
-  message = stripPlainTextToolCallBlocks(stripUnsupportedCitationControlMarkers(parsed.text));
+  // Compute code regions on the post-citation-stripped text so a fenced / inline
+  // invoke example survives instead of being deleted as a #97750 leaked call.
+  const citationStripped = stripUnsupportedCitationControlMarkers(parsed.text);
+  const messageCodeRegions = findCodeRegions(citationStripped);
+  message = stripPlainTextToolCallBlocks(citationStripped, (offset) =>
+    isInsideCode(offset, messageCodeRegions),
+  );
   actionParams.message = message;
   if (!actionParams.replyTo && parsed.replyToId) {
     actionParams.replyTo = parsed.replyToId;

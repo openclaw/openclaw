@@ -107,6 +107,114 @@ async function nextEvent(iterator: AsyncIterator<unknown>, label: string): Promi
   return result.value as StreamEvent;
 }
 
+// Streams an attribute-dialect invoke open whose whitespace is split across chunks,
+// then asserts the buffered prefix is promoted to a tool call instead of leaking as
+// visible text. The intermediate chunks land on grammar-legal whitespace the literal
+// prefix recognizer used to reject (spaces around `=`, leading space after `<`).
+async function expectWhitespaceSplitInvokeOpenPromotes(params: {
+  ns: string;
+  quote: string;
+  openChunks: readonly string[];
+}): Promise<void> {
+  const { ns, quote, openChunks } = params;
+  const { source, stream } = createControlledPlainTextToolCallCompatStream();
+  const iterator = (await resolveStream(stream))[Symbol.asyncIterator]();
+  const openTag = openChunks.join("");
+  const rawToolText = [
+    openTag,
+    `<${ns}parameter name=${quote}path${quote}>`,
+    "src/index.ts",
+    `</${ns}parameter>`,
+    `</${ns}invoke>`,
+  ].join("\n");
+
+  try {
+    source.push({ type: "start", partial: { content: [] } } as never);
+    expect((await nextEvent(iterator, "start")).type).toBe("start");
+
+    for (const chunk of openChunks) {
+      source.push({ type: "text_delta", contentIndex: 0, delta: chunk } as never);
+    }
+    source.push({
+      type: "text_delta",
+      contentIndex: 0,
+      delta: rawToolText.slice(openTag.length),
+    } as never);
+    source.push({
+      type: "done",
+      reason: "stop",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: rawToolText }],
+        stopReason: "stop",
+      },
+    } as never);
+
+    // First event after `start` must be the promoted tool call, never a leaked
+    // text delta carrying the buffered invoke markup.
+    const event = await nextEvent(iterator, "converted whitespace-split invoke tool call");
+    expect(event.type).toBe("toolcall_start");
+  } finally {
+    source.end();
+    await iterator.return?.();
+  }
+}
+
+// Streams a `<function_calls>` wrapper open whose whitespace is split across chunks,
+// then asserts the buffered wrapper prefix is promoted to a tool call instead of
+// leaking as visible text. The intermediate chunks land on grammar-legal whitespace
+// (a space after `<` or before `>`) that the literal wrapper-prefix recognizer used
+// to reject one level above the invoke open.
+async function expectWhitespaceSplitFunctionCallsWrapperPromotes(params: {
+  ns: string;
+  wrapperOpenChunks: readonly string[];
+}): Promise<void> {
+  const { ns, wrapperOpenChunks } = params;
+  const { source, stream } = createControlledPlainTextToolCallCompatStream();
+  const iterator = (await resolveStream(stream))[Symbol.asyncIterator]();
+  const wrapperOpen = wrapperOpenChunks.join("");
+  const rawToolText = [
+    wrapperOpen,
+    `<${ns}invoke name="read">`,
+    `<${ns}parameter name="path">`,
+    "src/index.ts",
+    `</${ns}parameter>`,
+    `</${ns}invoke>`,
+    `</${ns}function_calls>`,
+  ].join("\n");
+
+  try {
+    source.push({ type: "start", partial: { content: [] } } as never);
+    expect((await nextEvent(iterator, "start")).type).toBe("start");
+
+    for (const chunk of wrapperOpenChunks) {
+      source.push({ type: "text_delta", contentIndex: 0, delta: chunk } as never);
+    }
+    source.push({
+      type: "text_delta",
+      contentIndex: 0,
+      delta: rawToolText.slice(wrapperOpen.length),
+    } as never);
+    source.push({
+      type: "done",
+      reason: "stop",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: rawToolText }],
+        stopReason: "stop",
+      },
+    } as never);
+
+    // First event after `start` must be the promoted tool call, never a leaked
+    // text delta carrying the buffered wrapper markup.
+    const event = await nextEvent(iterator, "converted whitespace-split function_calls wrapper");
+    expect(event.type).toBe("toolcall_start");
+  } finally {
+    source.end();
+    await iterator.return?.();
+  }
+}
+
 describe("defaultToolStreamExtraParams", () => {
   it("defaults tool_stream on when absent", () => {
     expect(defaultToolStreamExtraParams()).toEqual({ tool_stream: true });
@@ -385,6 +493,369 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     ]);
   });
 
+  it("promotes namespaced attribute-dialect tool calls into tool-call stream events", async () => {
+    const ns = "antml:";
+    const rawToolText = [
+      `<${ns}invoke name="read">`,
+      `<${ns}parameter name="path">`,
+      "/tmp/file.txt",
+      `</${ns}parameter>`,
+      `</${ns}invoke>`,
+    ].join("\n");
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_delta", delta: rawToolText },
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: rawToolText }],
+            stopReason: "stop",
+          },
+        },
+      ]);
+    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const events: unknown[] = [];
+
+    for await (const event of wrapped(
+      {} as never,
+      { tools: [{ name: "read" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>) {
+      events.push(event);
+    }
+
+    expect(events.map((event) => (event as { type?: string }).type)).toEqual([
+      "toolcall_start",
+      "toolcall_delta",
+      "done",
+    ]);
+    const done = events.at(-1) as { message?: { content?: unknown; stopReason?: unknown } };
+    expect(done.message?.stopReason).toBe("toolUse");
+    expect(done.message?.content).toEqual([
+      expect.objectContaining({
+        type: "toolCall",
+        name: "read",
+        arguments: { path: "/tmp/file.txt" },
+      }),
+    ]);
+    expect(JSON.stringify(events)).not.toContain(`${ns}invoke`);
+  });
+
+  it("scrubs over-cap namespaced attribute-dialect tool text from done messages", async () => {
+    const ns = "antml:";
+    const rawToolText = [
+      `<${ns}invoke name="read">`,
+      `<${ns}parameter name="path">`,
+      "x".repeat(256_001),
+      `</${ns}parameter>`,
+      `</${ns}invoke>`,
+    ].join("\n");
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: rawToolText }],
+            stopReason: "stop",
+          },
+        },
+      ]);
+    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const events: unknown[] = [];
+
+    for await (const event of wrapped(
+      {} as never,
+      { tools: [{ name: "read" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>) {
+      events.push(event);
+    }
+
+    expect(events.map((event) => (event as { type?: string }).type)).toEqual(["done"]);
+    const doneEvent = requireRecord(events[0], "done event");
+    expect(doneEvent.reason).toBe("stop");
+    expect(doneEvent.message).toMatchObject({
+      role: "assistant",
+      content: [],
+      stopReason: "stop",
+    });
+    expect(JSON.stringify(events)).not.toContain(`${ns}invoke`);
+  });
+
+  // Streams an UNWRAPPED (no <function_calls> wrapper) attribute-dialect invoke prefix that
+  // never receives its closing </parameter>/</invoke> before the stream ends at `done`. The
+  // buffered prefix cannot be promoted (no complete block) and is entirely leaked tool-call
+  // markup, so the done-message visible text must be scrubbed instead of flushed as raw XML.
+  async function expectIncompleteInvokeScrubbedAtDone(params: {
+    ns: string;
+    withParameter: boolean;
+  }): Promise<void> {
+    const { ns, withParameter } = params;
+    const rawToolText = withParameter
+      ? [`<${ns}invoke name="read">`, `<${ns}parameter name="path">`, "src/index.ts"].join("\n")
+      : `<${ns}invoke name="read">`;
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_delta", contentIndex: 0, delta: rawToolText },
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: rawToolText }],
+            stopReason: "stop",
+          },
+        },
+      ]);
+    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const events: unknown[] = [];
+
+    for await (const event of wrapped(
+      {} as never,
+      { tools: [{ name: "read" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>) {
+      events.push(event);
+    }
+
+    // No buffered invoke/parameter markup (or its arguments) may survive on any emitted event.
+    const serialized = JSON.stringify(events);
+    expect(serialized).not.toContain("invoke");
+    expect(serialized).not.toContain("parameter");
+    expect(serialized).not.toContain("src/index.ts");
+
+    const done = events.at(-1) as { type?: string; message?: { content?: unknown } };
+    expect(done.type).toBe("done");
+    // The unclosed prefix is scrubbed to an empty assistant message, never the raw markup.
+    expect(done.message?.content).toEqual([]);
+  }
+
+  for (const ns of ["", "antml:", "mm:"]) {
+    for (const withParameter of [false, true]) {
+      const shape = withParameter ? "with an unclosed parameter" : "open only";
+      const label = ns || "bare";
+      it(`scrubs an incomplete unwrapped ${label} invoke (${shape}) that reaches done`, async () => {
+        await expectIncompleteInvokeScrubbedAtDone({ ns, withParameter });
+      });
+    }
+  }
+
+  it("promotes a complete unwrapped bare invoke into tool-call stream events", async () => {
+    const rawToolText = [
+      `<invoke name="read">`,
+      `<parameter name="path">`,
+      "src/index.ts",
+      `</parameter>`,
+      `</invoke>`,
+    ].join("\n");
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_delta", contentIndex: 0, delta: rawToolText },
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: rawToolText }],
+            stopReason: "stop",
+          },
+        },
+      ]);
+    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const events: unknown[] = [];
+
+    for await (const event of wrapped(
+      {} as never,
+      { tools: [{ name: "read" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>) {
+      events.push(event);
+    }
+
+    expect(events.map((event) => (event as { type?: string }).type)).toEqual([
+      "toolcall_start",
+      "toolcall_delta",
+      "done",
+    ]);
+    const done = events.at(-1) as { message?: { content?: unknown; stopReason?: unknown } };
+    expect(done.message?.stopReason).toBe("toolUse");
+    expect(done.message?.content).toEqual([
+      expect.objectContaining({
+        type: "toolCall",
+        name: "read",
+        arguments: { path: "src/index.ts" },
+      }),
+    ]);
+    expect(JSON.stringify(events)).not.toContain("<invoke");
+  });
+
+  // #97750 P2: a COMPLETE closed/self-closing argument-less invoke must be scrubbed
+  // from the stream (strip path) while promotion still rejects it (never executed).
+  async function collectCompatEvents(baseStreamFn: StreamFn): Promise<unknown[]> {
+    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const events: unknown[] = [];
+    for await (const event of wrapped(
+      {} as never,
+      { tools: [{ name: "read" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>) {
+      events.push(event);
+    }
+    return events;
+  }
+
+  function hasToolCallStart(events: readonly unknown[]): boolean {
+    return events.some((event) => (event as { type?: string }).type === "toolcall_start");
+  }
+
+  it("scrubs a closed zero-parameter invoke split across text deltas without promoting it", async () => {
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_delta", contentIndex: 0, delta: '<invoke name="read">' },
+        { type: "text_delta", contentIndex: 0, delta: "</invoke>" },
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: '<invoke name="read"></invoke>' }],
+            stopReason: "stop",
+          },
+        },
+      ]);
+    const events = await collectCompatEvents(baseStreamFn);
+
+    expect(JSON.stringify(events)).not.toContain("invoke");
+    expect(hasToolCallStart(events)).toBe(false);
+    const done = events.at(-1) as { type?: string; message?: { content?: unknown } };
+    expect(done.type).toBe("done");
+    expect(done.message?.content).toEqual([]);
+  });
+
+  it("scrubs a self-closing invoke streamed across text deltas without promoting it", async () => {
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_delta", contentIndex: 0, delta: '<invoke name="read"' },
+        { type: "text_delta", contentIndex: 0, delta: "/>" },
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: '<invoke name="read"/>' }],
+            stopReason: "stop",
+          },
+        },
+      ]);
+    const events = await collectCompatEvents(baseStreamFn);
+
+    expect(JSON.stringify(events)).not.toContain("invoke");
+    expect(hasToolCallStart(events)).toBe(false);
+    expect((events.at(-1) as { message?: { content?: unknown } }).message?.content).toEqual([]);
+  });
+
+  it("scrubs a done-message-only closed zero-parameter invoke", async () => {
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: '<invoke name="read"></invoke>' }],
+            stopReason: "stop",
+          },
+        },
+      ]);
+    const events = await collectCompatEvents(baseStreamFn);
+
+    expect(events.map((event) => (event as { type?: string }).type)).toEqual(["done"]);
+    expect(JSON.stringify(events)).not.toContain("invoke");
+    expect((events.at(-1) as { message?: { content?: unknown } }).message?.content).toEqual([]);
+  });
+
+  it("scrubs an unclosed bare invoke at done via the incomplete path without promoting it", async () => {
+    // Boundary: an unclosed `<invoke name="read">` (no </invoke>, no />) is not a
+    // complete block, so it must never be greedily consumed/promoted; it scrubs via
+    // the existing incomplete-prefix path to an empty assistant message.
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_delta", contentIndex: 0, delta: '<invoke name="read">' },
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: '<invoke name="read">' }],
+            stopReason: "stop",
+          },
+        },
+      ]);
+    const events = await collectCompatEvents(baseStreamFn);
+
+    expect(JSON.stringify(events)).not.toContain("invoke");
+    expect(hasToolCallStart(events)).toBe(false);
+    expect((events.at(-1) as { message?: { content?: unknown } }).message?.content).toEqual([]);
+  });
+
+  it("promotes a with-parameters invoke while argument-less siblings are rejected", async () => {
+    const rawToolText =
+      '<invoke name="read"><parameter name="path">src/index.ts</parameter></invoke>';
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_delta", contentIndex: 0, delta: rawToolText },
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: rawToolText }],
+            stopReason: "stop",
+          },
+        },
+      ]);
+    const events = await collectCompatEvents(baseStreamFn);
+
+    expect(hasToolCallStart(events)).toBe(true);
+    const done = events.at(-1) as { message?: { content?: unknown; stopReason?: unknown } };
+    expect(done.message?.stopReason).toBe("toolUse");
+    expect(done.message?.content).toEqual([
+      expect.objectContaining({
+        type: "toolCall",
+        name: "read",
+        arguments: { path: "src/index.ts" },
+      }),
+    ]);
+  });
+
+  it("preserves visible text after a closed or self-closing zero-parameter invoke", async () => {
+    for (const invoke of ['<invoke name="read"></invoke>', '<invoke name="read"/>']) {
+      const raw = `${invoke}\nHello`;
+      const baseStreamFn: StreamFn = () =>
+        createEventStream([
+          { type: "text_delta", contentIndex: 0, delta: raw },
+          {
+            type: "done",
+            reason: "stop",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: raw }],
+              stopReason: "stop",
+            },
+          },
+        ]);
+      const events = await collectCompatEvents(baseStreamFn);
+
+      // The stream layer defers mixed content to the visible-text scrubber, but it
+      // must not over-scrub the trailing prose, and it must not promote a call.
+      expect(JSON.stringify(events)).toContain("Hello");
+      expect(hasToolCallStart(events)).toBe(false);
+    }
+  });
   it("does not promote complete-looking text tool calls after a length stop", async () => {
     const rawToolText = '[tool:read] {"path":"/tmp/file.txt"}';
     const baseStreamFn: StreamFn = () =>
@@ -2131,6 +2602,46 @@ describe("createPlainTextToolCallCompatWrapper", () => {
       source.end();
       await iterator.return?.();
     }
+  });
+
+  it("keeps whitespace-split attribute-dialect invoke opens buffered for conversion", async () => {
+    // `<invoke name = "read">` (spaces around `=`) split mid-whitespace: the prefix
+    // recognizer must stay viable across the split instead of flushing raw markup.
+    await expectWhitespaceSplitInvokeOpenPromotes({
+      ns: "",
+      quote: '"',
+      openChunks: ["<invoke name ", `= "read">`],
+    });
+    // Namespaced open with a leading space after `<` and the split landing inside
+    // the `invoke` keyword run.
+    await expectWhitespaceSplitInvokeOpenPromotes({
+      ns: "antml:",
+      quote: '"',
+      openChunks: ["< antml:invoke", ` name="read">`],
+    });
+  });
+
+  it("keeps single-quoted whitespace-split invoke opens buffered for conversion", async () => {
+    await expectWhitespaceSplitInvokeOpenPromotes({
+      ns: "",
+      quote: "'",
+      openChunks: ["<invoke name =", ` 'read'>`],
+    });
+  });
+
+  it("keeps whitespace-split function_calls wrappers buffered for conversion", async () => {
+    // `< function_calls >` (spaces inside the wrapper open) split mid-whitespace: the
+    // wrapper-prefix recognizer must stay viable across the split instead of flushing
+    // raw markup, the same grammar-drift class as the invoke open one level down.
+    await expectWhitespaceSplitFunctionCallsWrapperPromotes({
+      ns: "",
+      wrapperOpenChunks: ["< function_calls", " >"],
+    });
+    // Namespaced wrapper with a leading space after `<`, split inside the keyword run.
+    await expectWhitespaceSplitFunctionCallsWrapperPromotes({
+      ns: "antml:",
+      wrapperOpenChunks: ["< antml:function_calls", ">"],
+    });
   });
 
   it("does not buffer normal final prose until done", async () => {

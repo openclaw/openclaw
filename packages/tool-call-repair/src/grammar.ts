@@ -22,6 +22,64 @@ export function isXmlishNameChar(char: string | undefined): boolean {
   return Boolean(char && /[A-Za-z0-9_.:-]/.test(char));
 }
 
+// Some proxies degrade native Anthropic/MiniMax tool calls into namespaced XML
+// text (the attribute dialect: `<invoke name="..."><parameter name="...">`).
+// Accept only this closed prefix allow-list so namespaced markup is repaired
+// instead of leaking, without matching arbitrary `ns:` tokens in prose.
+const TOOL_CALL_TAG_NAMESPACE = "(?:antml:|mm:)?";
+// Open and close tags each carry the prefix independently, so a namespaced open
+// can legitimately pair with a bare close (e.g. `<invoke>` … `</invoke>`)
+// and vice versa. Degraded proxy output routinely drops the prefix on the close,
+// so accepting any open/close prefix combination is intentional, not a bug.
+/** Optional `<function_calls>` wrapper that brackets one or more invoke blocks. */
+export const XMLISH_FUNCTION_CALLS_OPEN_RE = new RegExp(
+  `^<\\s*${TOOL_CALL_TAG_NAMESPACE}function_calls\\s*>`,
+  "i",
+);
+export const XMLISH_FUNCTION_CALLS_CLOSE_RE = new RegExp(
+  `^<\\s*/\\s*${TOOL_CALL_TAG_NAMESPACE}function_calls\\s*>`,
+  "i",
+);
+/** Attribute-dialect invoke open carrying the tool name in a quoted attribute. */
+export const XMLISH_INVOKE_OPEN_RE = new RegExp(
+  `^<\\s*${TOOL_CALL_TAG_NAMESPACE}invoke\\s+name\\s*=\\s*("[^"]*"|'[^']*')\\s*>`,
+  "i",
+);
+// Self-closing invoke (`<invoke name="x"/>`), optionally namespaced. This is a
+// complete, argument-less block; kept narrow (not folded into the open recognizer,
+// which feeds promotion openings) so only strip/scrub paths treat it as complete.
+export const XMLISH_INVOKE_SELF_CLOSE_RE = new RegExp(
+  `^<\\s*${TOOL_CALL_TAG_NAMESPACE}invoke\\s+name\\s*=\\s*("[^"]*"|'[^']*')\\s*/\\s*>`,
+  "i",
+);
+export const XMLISH_INVOKE_CLOSE_RE = new RegExp(
+  `^<\\s*/\\s*${TOOL_CALL_TAG_NAMESPACE}invoke\\s*>`,
+  "i",
+);
+/** Parameter open in either the equals dialect (`<parameter=name>`) or the
+ * attribute dialect (`<parameter name="...">`), optionally namespaced. */
+export const XMLISH_PARAMETER_OPEN_RE = new RegExp(
+  `^<\\s*${TOOL_CALL_TAG_NAMESPACE}parameter(?:=([A-Za-z0-9_.:-]{1,120})|\\s+name\\s*=\\s*("[^"]*"|'[^']*'))\\s*>`,
+  "i",
+);
+export const XMLISH_PARAMETER_CLOSE_RE = new RegExp(
+  `<\\s*/\\s*${TOOL_CALL_TAG_NAMESPACE}parameter\\s*>`,
+  "i",
+);
+
+/** Removes the surrounding single or double quotes from a matched attribute value. */
+export function stripXmlishAttributeQuotes(value: string): string {
+  return value.slice(1, -1);
+}
+
+/** Returns the parameter name from a matched XMLISH_PARAMETER_OPEN_RE result. */
+export function xmlishParameterName(match: RegExpExecArray): string | null {
+  if (match[1]) {
+    return match[1];
+  }
+  return match[2] ? stripXmlishAttributeQuotes(match[2]) : null;
+}
+
 /** Skips spaces and tabs only, preserving line boundaries for grammar decisions. */
 export function skipHorizontalWhitespace(text: string, start: number): number {
   let index = start;
@@ -200,6 +258,11 @@ export function indexOfAsciiMarkerIgnoreCase(text: string, marker: string, start
 
 /** Returns the end offset for a complete XML-ish or bracketed plain-text tool call. */
 export function findXmlishToolCallEnd(text: string): number | null {
+  const invokeEnd = findXmlishInvokeToolCallEnd(text);
+  if (invokeEnd !== null) {
+    return invokeEnd;
+  }
+
   let cursor: number;
   const xmlFunction = /^<function=[A-Za-z0-9_.:-]+>/i.exec(text);
   if (xmlFunction) {
@@ -233,4 +296,65 @@ export function findXmlishToolCallEnd(text: string): number | null {
     }
   }
   return null;
+}
+
+/** Consumes one attribute/namespaced `<parameter ...>...</parameter>` child. */
+function consumeXmlishAttributeParameterEnd(text: string, start: number): number | null {
+  const openMatch = XMLISH_PARAMETER_OPEN_RE.exec(text.slice(start));
+  if (!openMatch) {
+    return null;
+  }
+  const payloadStart = start + openMatch[0].length;
+  const closeMatch = XMLISH_PARAMETER_CLOSE_RE.exec(text.slice(payloadStart));
+  if (!closeMatch) {
+    return null;
+  }
+  return payloadStart + closeMatch.index + closeMatch[0].length;
+}
+
+/** Consumes the optional `<function_calls>` wrapper close plus one trailing line break. */
+function finishXmlishInvokeToolCallEnd(text: string, invokeEnd: number): number {
+  // The wrapper close only follows the final invoke; leave it for the next
+  // prefix when more invoke blocks share one `<function_calls>` wrapper.
+  const afterInvoke = skipWhitespace(text, invokeEnd);
+  const wrapperClose = XMLISH_FUNCTION_CALLS_CLOSE_RE.exec(text.slice(afterInvoke));
+  const cursor = wrapperClose ? afterInvoke + wrapperClose[0].length : invokeEnd;
+  return skipSerializedToolCallTrailingLineBreak(text, cursor);
+}
+
+/** Returns the end offset for one complete attribute-dialect invoke tool call. */
+function findXmlishInvokeToolCallEnd(text: string): number | null {
+  let cursor = 0;
+  const wrapperOpen = XMLISH_FUNCTION_CALLS_OPEN_RE.exec(text);
+  if (wrapperOpen) {
+    cursor = skipWhitespace(text, wrapperOpen[0].length);
+  }
+  // A self-closing invoke (`<invoke name="x"/>`) is the whole block. 0-param and
+  // self-closing invokes are strippable here; promotion is gated separately in
+  // payload.ts so an argument-less call is never executed from text.
+  const selfClose = XMLISH_INVOKE_SELF_CLOSE_RE.exec(text.slice(cursor));
+  if (selfClose) {
+    return finishXmlishInvokeToolCallEnd(text, cursor + selfClose[0].length);
+  }
+  const invokeOpen = XMLISH_INVOKE_OPEN_RE.exec(text.slice(cursor));
+  if (!invokeOpen) {
+    return null;
+  }
+  cursor = skipWhitespace(text, cursor + invokeOpen[0].length);
+
+  while (true) {
+    const parameterEnd = consumeXmlishAttributeParameterEnd(text, cursor);
+    if (parameterEnd === null) {
+      break;
+    }
+    cursor = skipWhitespace(text, parameterEnd);
+  }
+
+  // A real `</invoke>` close is still required: an unclosed bare open stays
+  // incomplete (returns null) so it is deferred, never greedily consumed.
+  const invokeClose = XMLISH_INVOKE_CLOSE_RE.exec(text.slice(cursor));
+  if (!invokeClose) {
+    return null;
+  }
+  return finishXmlishInvokeToolCallEnd(text, cursor + invokeClose[0].length);
 }
