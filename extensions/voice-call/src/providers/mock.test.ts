@@ -14,6 +14,39 @@ function createWebhookContext(rawBody: string): WebhookContext {
 }
 
 describe("MockProvider", () => {
+  it("returns a stable verified request key for the same webhook payload", () => {
+    const provider = new MockProvider();
+    const ctxA = createWebhookContext(
+      JSON.stringify({ event: { type: "call.answered", callId: "c1" } }),
+    );
+    const ctxB = createWebhookContext(
+      JSON.stringify({ event: { type: "call.answered", callId: "c1" } }),
+    );
+
+    const resultA = provider.verifyWebhook(ctxA);
+    const resultB = provider.verifyWebhook(ctxB);
+
+    expect(resultA.ok).toBe(true);
+    expect(resultA.verifiedRequestKey).toBeDefined();
+    expect(resultA.verifiedRequestKey).toBe(resultB.verifiedRequestKey);
+    expect(resultA.verifiedRequestKey).toMatch(/^mock:/);
+  });
+
+  it("returns distinct verified request keys for different webhook payloads", () => {
+    const provider = new MockProvider();
+    const ctxA = createWebhookContext(
+      JSON.stringify({ event: { type: "call.answered", callId: "c1" } }),
+    );
+    const ctxB = createWebhookContext(
+      JSON.stringify({ event: { type: "call.ended", callId: "c2" } }),
+    );
+
+    const resultA = provider.verifyWebhook(ctxA);
+    const resultB = provider.verifyWebhook(ctxB);
+
+    expect(resultA.verifiedRequestKey).not.toBe(resultB.verifiedRequestKey);
+  });
+
   it("preserves explicit falsy event values", () => {
     const provider = new MockProvider();
     const beforeParse = Date.now();
