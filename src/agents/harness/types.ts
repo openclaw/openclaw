@@ -107,6 +107,8 @@ type AgentHarnessRunCapability = {
    */
   contextEngineHostCapabilities?: readonly import("../../context-engine/types.js").ContextEngineHostCapability[];
   deliveryDefaults?: AgentHarnessDeliveryDefaults;
+  /** True when this harness enforces `onBeforeToolCallingRound` before native tool execution. */
+  supportsIterationBudget?: boolean;
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
   runAttempt(params: AgentHarnessAttemptParams): Promise<AgentHarnessAttemptResult>;
 };

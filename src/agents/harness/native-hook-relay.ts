@@ -106,6 +106,7 @@ export type NativeHookRelayRegistration = {
   channelId?: string;
   allowedEvents: readonly NativeHookRelayEvent[];
   expiresAtMs: number;
+  onBeforeToolCallingRound?: (turnId?: string, toolUseId?: string) => boolean | Promise<boolean>;
   signal?: AbortSignal;
 };
 
@@ -133,6 +134,7 @@ export type RegisterNativeHookRelayParams = {
   channelId?: string;
   allowedEvents?: readonly NativeHookRelayEvent[];
   ttlMs?: number;
+  onBeforeToolCallingRound?: (turnId?: string, toolUseId?: string) => boolean | Promise<boolean>;
   command?: NativeHookRelayCommandOptions;
   signal?: AbortSignal;
 };
@@ -437,6 +439,9 @@ export function registerNativeHookRelay(
     ...(params.channelId ? { channelId: params.channelId } : {}),
     allowedEvents,
     expiresAtMs,
+    ...(params.onBeforeToolCallingRound
+      ? { onBeforeToolCallingRound: params.onBeforeToolCallingRound }
+      : {}),
     ...(params.signal ? { signal: params.signal } : {}),
   };
   relays.set(relayId, registration);
@@ -601,7 +606,11 @@ function nativeHookRelayEventHasLocalWork(
   if (event === "pre_tool_use") {
     // Avoid spawning a native hook relay for every Codex tool call when there
     // is no before_tool_call hook, trusted-tool policy, or loop detector work.
-    return hasBeforeToolCallPolicy() || nativePreToolUseMayRunLoopDetection(registration);
+    return (
+      registration.onBeforeToolCallingRound !== undefined ||
+      hasBeforeToolCallPolicy() ||
+      nativePreToolUseMayRunLoopDetection(registration)
+    );
   }
   if (event === "post_tool_use") {
     return hasGlobalHooks("after_tool_call");
@@ -1391,6 +1400,15 @@ async function runNativeHookRelayPreToolUse(params: {
   const toolInput = params.adapter.readToolInput(params.invocation.rawPayload);
   const originalToolInputFingerprint = stableStringify(toolInput);
   const approvalMode = readNativeHookRelayApprovalMode(params.invocation.rawPayload);
+  if (params.registration.onBeforeToolCallingRound) {
+    const shouldContinue = await params.registration.onBeforeToolCallingRound(
+      params.invocation.turnId,
+      params.invocation.toolUseId,
+    );
+    if (!shouldContinue) {
+      return params.adapter.renderPreToolUseBlockResponse("Iteration budget exhausted.");
+    }
+  }
   const outcome = await runBeforeToolCallHook({
     toolName,
     params: toolInput,

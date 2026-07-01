@@ -240,6 +240,8 @@ export class CoreAgentHarness<
   private followUpQueueMode: QueueMode;
   private nextTurnQueue: AgentMessage[] = [];
   private handlers = new Map<string, Set<AgentHarnessHandler>>();
+  /** Optional iteration budget callback: return false to stop. */
+  public onBeforeToolCallingRound?: (round: number) => boolean | Promise<boolean>;
 
   constructor(options: AgentHarnessOptions<TSkill, TPromptTemplate, TTool>) {
     this.env = options.env;
@@ -535,6 +537,7 @@ export class CoreAgentHarness<
           thinkingLevel: nextTurnState.thinkingLevel,
         };
       },
+      onBeforeToolCallingRound: this.onBeforeToolCallingRound,
       getSteeringMessages: async () =>
         this.drainQueuedMessages(this.steerQueue, this.steeringQueueMode),
       getFollowUpMessages: async () =>

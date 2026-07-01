@@ -1,9 +1,6 @@
 // Codex tests cover run attemptynamic tools plugin behavior.
 import path from "node:path";
-import {
-  onAgentEvent,
-  type AgentEventPayload,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { onAgentEvent, type AgentEventPayload } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   emitTrustedDiagnosticEvent,
   onInternalDiagnosticEvent,
@@ -214,6 +211,204 @@ describe("runCodexAppServerAttempt dynamic tools", () => {
       },
     ]);
     expect(activeDiagnosticToolKeys(diagnosticEvents)).toEqual(new Set());
+  });
+
+  it("blocks app-server dynamic tools when iteration budget is exhausted", async () => {
+    const harness = createStartedThreadHarness();
+    const onBeforeToolCallingRound = vi.fn(async () => false);
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.onBeforeToolCallingRound = onBeforeToolCallingRound;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("thread/start");
+
+    const toolResult = (await harness.handleServerRequest({
+      id: "request-tool-budget",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-budget",
+        namespace: null,
+        tool: "lookup",
+        arguments: { query: "hello" },
+      },
+    })) as {
+      contentItems?: Array<{ text?: string; type?: string }>;
+      success?: boolean;
+    };
+
+    expect(toolResult).toMatchObject({
+      contentItems: [{ type: "inputText", text: "Iteration budget exhausted." }],
+      success: false,
+    });
+    expect(onBeforeToolCallingRound).toHaveBeenCalledOnce();
+    expect(onBeforeToolCallingRound).toHaveBeenCalledWith(1);
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
+  it("shares one iteration budget decision across concurrent app-server dynamic tools in a turn", async () => {
+    const harness = createStartedThreadHarness();
+    let resolveBudget!: (allowed: boolean) => void;
+    const budgetDecision = new Promise<boolean>((resolve) => {
+      resolveBudget = resolve;
+    });
+    const onBeforeToolCallingRound = vi.fn(() => budgetDecision);
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.onBeforeToolCallingRound = onBeforeToolCallingRound;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("thread/start");
+
+    const firstToolResult = harness.handleServerRequest({
+      id: "request-tool-budget-1",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-budget-1",
+        namespace: null,
+        tool: "lookup",
+        arguments: { query: "hello" },
+      },
+    });
+    const secondToolResult = harness.handleServerRequest({
+      id: "request-tool-budget-2",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-budget-2",
+        namespace: null,
+        tool: "lookup",
+        arguments: { query: "again" },
+      },
+    });
+
+    await vi.waitFor(() => expect(onBeforeToolCallingRound).toHaveBeenCalledOnce());
+    resolveBudget(false);
+
+    await expect(firstToolResult).resolves.toMatchObject({
+      contentItems: [{ type: "inputText", text: "Iteration budget exhausted." }],
+      success: false,
+    });
+    await expect(secondToolResult).resolves.toMatchObject({
+      contentItems: [{ type: "inputText", text: "Iteration budget exhausted." }],
+      success: false,
+    });
+    expect(onBeforeToolCallingRound).toHaveBeenCalledWith(1);
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
+  it("shares one iteration budget decision for sequential app-server dynamic tools before tool output", async () => {
+    const harness = createStartedThreadHarness();
+    const onBeforeToolCallingRound = vi.fn(async () => true);
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.onBeforeToolCallingRound = onBeforeToolCallingRound;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("thread/start");
+
+    await harness.handleServerRequest({
+      id: "request-tool-budget-sequential-1",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-budget-sequential-1",
+        namespace: null,
+        tool: "lookup",
+        arguments: { query: "hello" },
+      },
+    });
+    await harness.handleServerRequest({
+      id: "request-tool-budget-sequential-2",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-budget-sequential-2",
+        namespace: null,
+        tool: "lookup",
+        arguments: { query: "again" },
+      },
+    });
+
+    expect(onBeforeToolCallingRound).toHaveBeenCalledOnce();
+    expect(onBeforeToolCallingRound).toHaveBeenNthCalledWith(1, 1);
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
+  it("consumes another iteration budget round after app-server dynamic tool output", async () => {
+    const harness = createStartedThreadHarness();
+    const onBeforeToolCallingRound = vi.fn(async () => true);
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.onBeforeToolCallingRound = onBeforeToolCallingRound;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("thread/start");
+
+    await harness.handleServerRequest({
+      id: "request-tool-budget-followup-1",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-budget-followup-1",
+        namespace: null,
+        tool: "lookup",
+        arguments: { query: "hello" },
+      },
+    });
+    await harness.notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "custom_tool_call_output",
+          call_id: "call-budget-followup-1",
+          output: "done",
+        },
+      },
+    });
+    await harness.handleServerRequest({
+      id: "request-tool-budget-followup-2",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-budget-followup-2",
+        namespace: null,
+        tool: "lookup",
+        arguments: { query: "again" },
+      },
+    });
+
+    expect(onBeforeToolCallingRound).toHaveBeenCalledTimes(2);
+    expect(onBeforeToolCallingRound).toHaveBeenNthCalledWith(1, 1);
+    expect(onBeforeToolCallingRound).toHaveBeenNthCalledWith(2, 2);
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
   });
 
   it("clears dynamic tool diagnostics after successful terminal responses", async () => {

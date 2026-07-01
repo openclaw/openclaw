@@ -45,6 +45,7 @@ import {
   retireSessionMcpRuntimeForSessionKey,
 } from "../agent-bundle-mcp-tools.js";
 import {
+  resolveAgentConfig,
   resolveAgentDir,
   resolveSessionAgentIds,
   resolveAgentWorkspaceDir,
@@ -99,6 +100,7 @@ import {
 } from "../fast-mode.js";
 import { ensureSelectedAgentHarnessPlugin } from "../harness/runtime-plugin.js";
 import { selectAgentHarness } from "../harness/selection.js";
+import { IterationBudget, resolveIterationBudgetConfig } from "../iteration-budget.js";
 import { LiveSessionModelSwitchError } from "../live-model-switch-error.js";
 import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../live-model-switch.js";
 import {
@@ -180,6 +182,11 @@ import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.
 import { createEmbeddedRunAuthController } from "./run/auth-controller.js";
 import { resolveAuthProfileFailureReason } from "./run/auth-profile-failure-policy.js";
 import { runEmbeddedAttemptWithBackend } from "./run/backend.js";
+import {
+  BUDGET_EXHAUSTION_SUMMARY_INSTRUCTION,
+  buildBudgetExhaustedResult,
+  shouldReturnBudgetExhausted,
+} from "./run/budget-exhaustion.js";
 import { resolveCodexAppServerRecoveryRetry } from "./run/codex-app-server-recovery.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./run/failover-policy.js";
@@ -1582,6 +1589,25 @@ async function runEmbeddedAgentInternal(
       let lastCompactionTokensAfter: number | undefined;
       let lastContextBudgetStatus: EmbeddedAgentMeta["contextBudgetStatus"];
       let runLoopIterations = 0;
+      // --- Iteration Budget ---
+      const resolvedBudgetConfig = resolveIterationBudgetConfig(
+        (params.config
+          ? resolveAgentConfig(params.config, sessionAgentId)?.iterationBudget
+          : undefined) ?? params.config?.agents?.defaults?.iterationBudget,
+      );
+      const isSubagentRun = Boolean(params.spawnedBy);
+      const iterationBudget = resolvedBudgetConfig?.enabled
+        ? new IterationBudget(
+            isSubagentRun
+              ? resolvedBudgetConfig.subagentMaxIterations
+              : resolvedBudgetConfig.maxIterations,
+          )
+        : undefined;
+      let budgetExhaustedSummaryPending = false;
+      let budgetExhaustedSummaryInstruction: string | null = null;
+      let budgetSummaryAttempt = false;
+      let budgetExhausted = false;
+      // --- End Iteration Budget ---
       let overloadProfileRotations = 0;
       let consecutiveSameModelRateLimitRetries = 0;
       let reasoningOnlyRetryAttempts = 0;
@@ -1984,6 +2010,7 @@ async function runEmbeddedAgentInternal(
             reasoningOnlyRetryInstruction,
             emptyResponseRetryInstruction,
             compactionContinuationRetryInstruction,
+            budgetExhaustedSummaryInstruction,
           ].filter(
             (value): value is string => typeof value === "string" && value.trim().length > 0,
           );
@@ -2187,6 +2214,15 @@ async function runEmbeddedAgentInternal(
             onRunProgress: notifyRunProgress,
             fastMode: attemptFastMode,
             fastModeAuto: params.fastMode === "auto",
+            onBeforeToolCallingRound: iterationBudget
+              ? (_round: number) => {
+                  const allowed = iterationBudget.consume();
+                  if (!allowed) {
+                    budgetExhausted = true;
+                  }
+                  return allowed;
+                }
+              : undefined,
             ...(params.fastMode === "auto"
               ? {
                   fastModeStartedAtMs: fastModeStarted,
@@ -3778,6 +3814,52 @@ async function runEmbeddedAgentInternal(
             timedOut,
             attempt,
           });
+          // --- Budget Exhaustion Detection ---
+          // Promote pending → active before normal terminal retry checks. A
+          // budget summary is a one-shot final model call, even if the model
+          // returns empty or reasoning-only output.
+          if (budgetExhaustedSummaryPending) {
+            budgetExhaustedSummaryPending = false;
+            budgetSummaryAttempt = true;
+          }
+          // Handle budget summary attempt completion.
+          if (budgetSummaryAttempt) {
+            budgetSummaryAttempt = false;
+            budgetExhaustedSummaryInstruction = null;
+            const summaryText = (attempt.assistantTexts ?? []).join("").trim() || undefined;
+            log.info(
+              `budget summary attempt completed: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `hasSummary=${summaryText ? "yes" : "no"}`,
+            );
+            setTerminalLifecycleMeta({
+              replayInvalid: true,
+              livenessState: "blocked",
+            });
+            return buildBudgetExhaustedResult({
+              message: "The agent exceeded its iteration budget.",
+              durationMs: Date.now() - started,
+              agentMeta,
+              aborted,
+              budgetUsed: iterationBudget?.used ?? 0,
+              budgetMax: iterationBudget?.maxTotal ?? 0,
+              summaryText,
+              systemPromptReport: attempt.systemPromptReport,
+              finalPromptText: attempt.finalPromptText,
+              finalAssistantVisibleText,
+              finalAssistantRawText,
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didDeliverSourceReplyViaMessageTool:
+                attempt.didDeliverSourceReplyViaMessageTool === true,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
+              heartbeatToolResponse: attempt.heartbeatToolResponse,
+              successfulCronAdds: attempt.successfulCronAdds,
+              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
+            });
+          }
           const nextReasoningOnlyRetryInstruction = emptyAssistantReplyIsSilent
             ? null
             : resolveReasoningOnlyRetryInstruction({
@@ -3870,6 +3952,75 @@ async function runEmbeddedAgentInternal(
           const terminalToolPresentation = incompleteTurnFallbackSafe
             ? readAttemptTerminalToolPresentation()
             : undefined;
+          if (
+            iterationBudget &&
+            shouldReturnBudgetExhausted({
+              budgetExhausted,
+              emptyAssistantReplyIsSilent,
+              hasClientToolCalls: Boolean(attempt.clientToolCalls),
+              budgetSummaryAttempt,
+              aborted,
+              hasPromptError: Boolean(promptError),
+              timedOut,
+              yieldDetected: Boolean(attempt.yieldDetected),
+            })
+          ) {
+            if (resolvedBudgetConfig?.forceSummaryOnExhaustion) {
+              // Do NOT refund the budget here. The summary attempt should be
+              // text-only (no tool calls). If the model ignores the no-tool
+              // instruction and requests tools, the exhausted budget causes
+              // onBeforeToolCallingRound -> consume() to return false, which
+              // makes agent-loop.ts stop cleanly without executing any tools.
+              // This ensures the budget is a hard cap that cannot be bypassed.
+              budgetExhaustedSummaryPending = true;
+              budgetExhaustedSummaryInstruction = BUDGET_EXHAUSTION_SUMMARY_INSTRUCTION;
+              // Clear stale retry instructions so the summary attempt's prompt
+              // contains only the budget summary instruction.
+              reasoningOnlyRetryInstruction = null;
+              emptyResponseRetryInstruction = null;
+              compactionContinuationRetryInstruction = null;
+              log.warn(
+                `iteration budget exhausted: runId=${params.runId} sessionId=${params.sessionId} ` +
+                  `used=${iterationBudget.used} max=${iterationBudget.maxTotal} — ` +
+                  `requesting summary before stopping`,
+              );
+              continue;
+            }
+            // No summary requested: return budget-exhausted result immediately.
+            log.error(
+              `iteration budget exhausted: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `used=${iterationBudget.used} max=${iterationBudget.maxTotal}`,
+            );
+            setTerminalLifecycleMeta({
+              replayInvalid: true,
+              livenessState: "blocked",
+            });
+            return buildBudgetExhaustedResult({
+              message: "The agent exceeded its iteration budget.",
+              durationMs: Date.now() - started,
+              agentMeta,
+              aborted,
+              budgetUsed: iterationBudget.used,
+              budgetMax: iterationBudget.maxTotal,
+              systemPromptReport: attempt.systemPromptReport,
+              finalPromptText: attempt.finalPromptText,
+              finalAssistantVisibleText,
+              finalAssistantRawText,
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didDeliverSourceReplyViaMessageTool:
+                attempt.didDeliverSourceReplyViaMessageTool === true,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
+              heartbeatToolResponse: attempt.heartbeatToolResponse,
+              successfulCronAdds: attempt.successfulCronAdds,
+              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
+            });
+          }
+          // --- End Budget Exhaustion Detection ---
+
           if (
             !emptyAssistantReplyIsSilent &&
             attemptCompactionCount > 0 &&

@@ -303,6 +303,7 @@ async function runLoop(
   };
 
   // Outer loop: continues when queued follow-up messages arrive after agent would stop
+  let toolCallingRound = 0;
   while (true) {
     let hasMoreToolCalls = true;
 
@@ -356,6 +357,16 @@ async function runLoop(
       const toolResults: ToolResultMessage[] = [];
       hasMoreToolCalls = false;
       if (message.stopReason === "toolUse" && toolCalls.length > 0) {
+        toolCallingRound += 1;
+        if (config.onBeforeToolCallingRound) {
+          const shouldContinue = await config.onBeforeToolCallingRound(toolCallingRound);
+          if (!shouldContinue) {
+            await emit({ type: "turn_end", message, toolResults: [] });
+            turnOpen = false;
+            await emit({ type: "agent_end", messages: newMessages });
+            return;
+          }
+        }
         const executedToolBatch = await executeToolCalls(
           currentContext,
           message,

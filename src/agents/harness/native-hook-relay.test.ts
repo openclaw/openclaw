@@ -1680,6 +1680,48 @@ describe("native hook relay registry", () => {
     });
   });
 
+  it("blocks native Codex tools before policy hooks when iteration budget is exhausted", async () => {
+    const beforeToolCall = vi.fn(async () => ({ block: false }));
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const onBeforeToolCallingRound = vi.fn(async () => false);
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+      onBeforeToolCallingRound,
+    });
+
+    expect(relay.shouldRelayEvent("pre_tool_use")).toBe(true);
+    expect(relay.commandForEvent("pre_tool_use")).not.toContain("--pre-tool-use-unavailable noop");
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        turn_id: "turn-1",
+        tool_name: "Bash",
+        tool_use_id: "native-call-1",
+        tool_input: { command: "pnpm test" },
+      },
+    });
+
+    expect(JSON.parse(response.stdout)).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse",
+        permissionDecision: "deny",
+        permissionDecisionReason: "Iteration budget exhausted.",
+      },
+    });
+    expect(onBeforeToolCallingRound).toHaveBeenCalledWith("turn-1", "native-call-1");
+    expect(beforeToolCall).not.toHaveBeenCalled();
+  });
+
   it("normalizes Codex exec_command cmd input before running OpenClaw policy", async () => {
     const beforeToolCall = vi.fn(async () => ({
       block: true,

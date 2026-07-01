@@ -2579,6 +2579,10 @@ export async function runEmbeddedAttempt(
         },
       });
       prepStages.mark("agent-session");
+      // Wire iteration budget callback through to the agent loop.
+      if (params.onBeforeToolCallingRound) {
+        activeSession.agent.onBeforeToolCallingRound = params.onBeforeToolCallingRound;
+      }
       if (isRawModelRun) {
         // Raw model probes should measure exactly the requested prompt against
         // the selected provider/model. Reset clears restored transcript state

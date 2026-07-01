@@ -40,6 +40,7 @@ vi.mock("./builtin-openclaw.js", () => ({
     id: "openclaw",
     label: "OpenClaw embedded agent",
     contextEngineHostCapabilities: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.capabilities,
+    supportsIterationBudget: true,
     supports: () => ({ supported: true, priority: 0 }),
     runAttempt: agentRunAttempt,
   }),
@@ -377,6 +378,52 @@ describe("runAgentHarnessAttempt", () => {
     });
     expect(result.sessionIdUsed).toBe("codex");
     expect(agentRunAttempt).not.toHaveBeenCalled();
+  });
+
+  it("rejects iteration budgets for plugin harnesses that cannot enforce them", async () => {
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("codex"));
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supports: (ctx) =>
+          ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt,
+      },
+      { ownerPluginId: "codex" },
+    );
+
+    await expect(
+      runAgentHarnessAttempt({
+        ...createAttemptParams(),
+        onBeforeToolCallingRound: () => true,
+      }),
+    ).rejects.toThrow('Agent harness "codex" does not support iteration budget enforcement.');
+    expect(runAttempt).not.toHaveBeenCalled();
+  });
+
+  it("allows iteration budgets for plugin harnesses that advertise enforcement", async () => {
+    const onBeforeToolCallingRound = vi.fn(() => true);
+    const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult("codex"));
+    registerAgentHarness(
+      {
+        id: "codex",
+        label: "Codex",
+        supportsIterationBudget: true,
+        supports: (ctx) =>
+          ctx.provider === "codex" ? { supported: true, priority: 100 } : { supported: false },
+        runAttempt,
+      },
+      { ownerPluginId: "codex" },
+    );
+
+    const result = await runAgentHarnessAttempt({
+      ...createAttemptParams(),
+      onBeforeToolCallingRound,
+    });
+
+    expect(result.sessionIdUsed).toBe("codex");
+    expect(runAttempt).toHaveBeenCalledWith(expect.objectContaining({ onBeforeToolCallingRound }));
   });
 
   it("falls back to OpenClaw when the implicit OpenAI Codex harness is unavailable", async () => {

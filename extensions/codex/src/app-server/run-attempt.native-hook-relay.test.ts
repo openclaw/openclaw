@@ -30,9 +30,7 @@ const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
   web_search: "disabled",
 });
 
-function writeCodexAppServerBinding(
-  ...args: Parameters<typeof writeRawCodexAppServerBinding>
-) {
+function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppServerBinding>) {
   const [sessionFile, binding, lookup] = args;
   return writeRawCodexAppServerBinding(
     sessionFile,
@@ -84,6 +82,75 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeDefined();
     testing.flushPendingCodexNativeHookRelayUnregistersForTests();
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("counts native hook relay budget rounds by tool use id", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    const onBeforeToolCallingRound = vi.fn(async () => true);
+    params.onBeforeToolCallingRound = onBeforeToolCallingRound;
+
+    const run = runCodexAppServerAttempt(params, {
+      nativeHookRelay: {
+        enabled: true,
+        events: ["pre_tool_use"],
+      },
+    });
+    await harness.waitForMethod("turn/start");
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_use_id: "native-tool-1",
+          tool_input: { command: "pwd" },
+          turn_id: "turn-1",
+        },
+      }),
+    ).resolves.toMatchObject({ exitCode: 0 });
+
+    await harness.notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "function_call_output",
+          call_id: "native-tool-1",
+          output: "done",
+        },
+      },
+    });
+    await expect(
+      invokeNativeHookRelay({
+        provider: "codex",
+        relayId,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_use_id: "native-tool-2",
+          tool_input: { command: "pwd" },
+          turn_id: "turn-1",
+        },
+      }),
+    ).resolves.toMatchObject({ exitCode: 0 });
+
+    expect(onBeforeToolCallingRound).toHaveBeenCalledTimes(2);
+    expect(onBeforeToolCallingRound).toHaveBeenNthCalledWith(1, 1);
+    expect(onBeforeToolCallingRound).toHaveBeenNthCalledWith(2, 2);
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    testing.flushPendingCodexNativeHookRelayUnregistersForTests();
   });
 
   it("forwards command approval requests through the active native hook relay", async () => {

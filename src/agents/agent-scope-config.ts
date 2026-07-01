@@ -39,6 +39,7 @@ export type ResolvedAgentConfig = {
   groupChat?: AgentEntry["groupChat"];
   subagents?: AgentEntry["subagents"];
   runRetries?: AgentEntry["runRetries"];
+  iterationBudget?: AgentDefaultsConfig["iterationBudget"];
   embeddedAgent?: AgentEntry["embeddedAgent"];
   sandbox?: AgentEntry["sandbox"];
   tools?: AgentEntry["tools"];
@@ -156,6 +157,10 @@ export function resolveAgentConfig(
       typeof entry.runRetries === "object" && entry.runRetries
         ? { ...agentDefaults?.runRetries, ...entry.runRetries }
         : agentDefaults?.runRetries,
+    iterationBudget:
+      typeof entry.iterationBudget === "object" && entry.iterationBudget
+        ? { ...agentDefaults?.iterationBudget, ...entry.iterationBudget }
+        : agentDefaults?.iterationBudget,
     embeddedAgent:
       typeof entry.embeddedAgent === "object" && entry.embeddedAgent
         ? entry.embeddedAgent

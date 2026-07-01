@@ -361,6 +361,9 @@ export async function runAgentHarnessAttempt(
     agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
   });
   const harness = selection.harness;
+  if (params.onBeforeToolCallingRound && !harness.supportsIterationBudget) {
+    throw new Error(`Agent harness "${harness.id}" does not support iteration budget enforcement.`);
+  }
   const attemptParams =
     harness.id === "openclaw" ? params : applyPluginHarnessDenyAllToolPolicy(params);
   logAgentHarnessSelection(selection, {
