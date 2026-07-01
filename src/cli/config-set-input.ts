@@ -138,12 +138,20 @@ export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] 
   if (!pathname) {
     throw new Error("--batch-file must not be empty.");
   }
-  const stat = fs.statSync(pathname);
-  if (stat.size > MAX_BATCH_FILE_BYTES) {
-    throw new Error(
-      `Batch file too large: ${pathname} (${stat.size} bytes, max ${MAX_BATCH_FILE_BYTES} bytes)`,
-    );
+  // Bounded read: allocate a buffer of MAX+1 so a full buffer means the
+  // file exceeds the limit.  This caps memory even for special files like
+  // /dev/zero whose stat.size is 0 but produce unbounded reads.
+  const fd = fs.openSync(pathname, "r");
+  const buf = Buffer.alloc(MAX_BATCH_FILE_BYTES + 1);
+  let bytesRead = 0;
+  try {
+    bytesRead = fs.readSync(fd, buf, 0, MAX_BATCH_FILE_BYTES + 1, 0);
+  } finally {
+    fs.closeSync(fd);
   }
-  const raw = fs.readFileSync(pathname, "utf8");
+  if (bytesRead > MAX_BATCH_FILE_BYTES) {
+    throw new Error(`Batch file too large: ${pathname} (max ${MAX_BATCH_FILE_BYTES} bytes)`);
+  }
+  const raw = buf.toString("utf8", 0, bytesRead);
   return parseBatchEntries(raw, "--batch-file");
 }

@@ -112,4 +112,22 @@ describe("config set input parsing", () => {
       expect(() => parseBatchSource({ batchFile: batchPath })).toThrow("Batch file too large");
     });
   });
+
+  it("accepts --batch-file payload at the exact size limit", () => {
+    const content = `[${"x".repeat(MAX_BATCH_FILE_BYTES - 2)}]`; // just under limit
+    withBatchFile("openclaw-config-set-input-at-limit-", content, (batchPath) => {
+      // Should not throw — at exactly the limit (minus closing bracket room)
+      expect(() => parseBatchSource({ batchFile: batchPath })).not.toThrow("Batch file too large");
+    });
+  });
+
+  it("rejects zero-size batch files with parse error, not size error", () => {
+    // A zero-size / empty file (stat.size === 0) should fail because it's
+    // not valid JSON, not because of a size check.  Special files such as
+    // /dev/zero present the same surface: stat appears small but read is
+    // unbounded if not capped at the read call itself.
+    withBatchFile("openclaw-config-set-input-empty-", "", (batchPath) => {
+      expect(() => parseBatchSource({ batchFile: batchPath })).toThrow("Failed to parse");
+    });
+  });
 });
