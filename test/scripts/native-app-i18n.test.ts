@@ -46,8 +46,10 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "false")).toBe(false);
     expect(entries.some((entry) => entry.source === "ws")).toBe(false);
     expect(entries.some((entry) => entry.source === '{"includeSecrets":true}')).toBe(false);
+    expect(entries.some((entry) => entry.source === "builtIn")).toBe(false);
     expect(entries.some((entry) => entry.source === "State:  \\(stateDir)")).toBe(true);
     expect(entries.some((entry) => entry.path.endsWith("Info.plist"))).toBe(true);
-    expect(NATIVE_I18N_LOCALES).toHaveLength(20);
+    expect(NATIVE_I18N_LOCALES).toHaveLength(21);
+    expect(NATIVE_I18N_LOCALES).toContain("sv");
   });
 });
