@@ -1,7 +1,7 @@
 // Signal plugin module implements identity behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
-import { looksLikeUuid } from "./uuid.js";
+import { isStrictUuid as isStrictUuidValue, looksLikeUuid } from "./uuid.js";
 
 export type SignalSender =
   | { kind: "phone"; raw: string; e164: string }
@@ -13,6 +13,11 @@ type SignalAllowEntry =
   | { kind: "uuid"; raw: string };
 
 export { looksLikeUuid } from "./uuid.js";
+
+/** Strict UUID check: only accepts canonical 8-4-4-4-12 or compact 32-hex formats. */
+export function isStrictUuid(value: string): boolean {
+  return isStrictUuidValue(value);
+}
 
 function stripSignalPrefix(value: string): string {
   return value.replace(/^signal:/i, "").trim();

@@ -12,6 +12,7 @@ import type { ReplyToOverride } from "./reply-policy.js";
  * Per-send overrides carried from outbound planning into channel delivery.
  */
 export type OutboundMessageSendOverrides = ReplyToOverride & {
+  quoteAuthor?: string | null;
   threadId?: string | number | null;
   audioAsVoice?: boolean;
   forceDocument?: boolean;

@@ -316,7 +316,7 @@ export async function buildReplyPayloads(params: {
         messagingToolSentTargets,
         originatingTo,
         originatingThreadId: params.originatingThreadId,
-        replyToId: payload.replyToId,
+        replyToId: payload.replyToId ?? undefined,
         replyToIsExplicit: Boolean(
           payloadMetadata?.replyToIdExplicit || payload.replyToTag || payload.replyToCurrent,
         ),

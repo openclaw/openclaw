@@ -52,6 +52,12 @@ import type {
   SignalReactionMessage,
   SignalReactionTarget,
 } from "./monitor/event-handler.types.js";
+import {
+  markSignalReplyConsumed,
+  resolveSignalReplyDelivery,
+  type SignalReplyDeliveryState,
+} from "./monitor/reply-delivery.js";
+import { isSignalGroupTarget } from "./reply-quote.js";
 import { sendMessageSignal } from "./send.js";
 import { runSignalSseLoop } from "./sse-reconnect.js";
 
@@ -369,10 +375,30 @@ export async function deliverReplies(params: {
   maxBytes: number;
   textLimit: number;
   chunkMode: "length" | "newline";
+  inheritedReplyToId?: string;
+  replyDeliveryState?: SignalReplyDeliveryState;
+  resolveQuoteAuthor?: (replyToId: string) => string | undefined;
 }) {
-  const { replies, target, baseUrl, account, accountId, runtime, maxBytes, textLimit, chunkMode } =
-    params;
+  const {
+    replies,
+    target,
+    baseUrl,
+    account,
+    accountId,
+    runtime,
+    maxBytes,
+    textLimit,
+    chunkMode,
+  } = params;
   for (const payload of replies) {
+    const { payload: resolvedPayload, effectiveReplyTo } = resolveSignalReplyDelivery({
+      payload,
+      inheritedReplyToId: params.inheritedReplyToId,
+      state: params.replyDeliveryState,
+    });
+    const effectiveQuoteAuthor = effectiveReplyTo
+      ? params.resolveQuoteAuthor?.(effectiveReplyTo)
+      : undefined;
     const deliveryResults: Array<{
       channel: "signal";
       messageId: string;
@@ -383,10 +409,21 @@ export async function deliverReplies(params: {
         cfg: params.cfg,
         accountId,
         to: target,
-        payload,
+        payload: resolvedPayload,
         targetAuthor: account,
-      }) ?? payload;
+      }) ?? resolvedPayload;
     const reply = resolveSendableOutboundReplyParts(deliveredPayload);
+    let firstDelivery = true;
+    const markFirstReplyConsumed = () => {
+      if (!firstDelivery) {
+        return;
+      }
+      markSignalReplyConsumed(params.replyDeliveryState, effectiveReplyTo, {
+        isGroup: isSignalGroupTarget(target),
+        quoteAuthor: effectiveQuoteAuthor,
+      });
+      firstDelivery = false;
+    };
     const recordDeliveryResult = (
       result: Awaited<ReturnType<typeof sendMessageSignal>>,
       visibleText: string,
@@ -408,6 +445,7 @@ export async function deliverReplies(params: {
       text: reply.text,
       chunkText: (value) => chunkTextWithMode(value, textLimit, chunkMode),
       sendText: async (chunk) => {
+        const useReply = firstDelivery;
         recordDeliveryResult(
           await sendMessageSignal(target, chunk, {
             cfg: params.cfg,
@@ -415,11 +453,15 @@ export async function deliverReplies(params: {
             account,
             maxBytes,
             accountId,
+            replyTo: useReply ? effectiveReplyTo : undefined,
+            quoteAuthor: useReply ? effectiveQuoteAuthor : undefined,
           }),
           chunk,
         );
+        markFirstReplyConsumed();
       },
       sendMedia: async ({ mediaUrl, caption }) => {
+        const useReply = firstDelivery;
         const visibleText = caption ?? "";
         recordDeliveryResult(
           await sendMessageSignal(target, visibleText, {
@@ -429,9 +471,12 @@ export async function deliverReplies(params: {
             mediaUrl,
             maxBytes,
             accountId,
+            replyTo: useReply ? effectiveReplyTo : undefined,
+            quoteAuthor: useReply ? effectiveQuoteAuthor : undefined,
           }),
           visibleText,
         );
+        markFirstReplyConsumed();
       },
     });
     if (delivered !== "empty") {

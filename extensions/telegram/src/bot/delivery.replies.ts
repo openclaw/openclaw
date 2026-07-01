@@ -833,9 +833,9 @@ export async function deliverReplies(params: {
     const telegramData = reply.channelData?.telegram as TelegramReplyChannelData | undefined;
     const reactionEmoji =
       typeof telegramData?.reaction?.emoji === "string" ? telegramData.reaction.emoji : undefined;
-    const replyToId =
+    const reactionReplyToId =
       params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
-    if (reactionEmoji && typeof replyToId !== "number") {
+    if (reactionEmoji && typeof reactionReplyToId !== "number") {
       params.runtime.error?.(danger("Telegram reaction requires a reply target"));
       continue;
     }
@@ -854,6 +854,10 @@ export async function deliverReplies(params: {
         ? reply.spokenText
         : undefined;
     const hookContent = spokenHookContent ?? rawContent;
+    const replyToId =
+      params.replyToMode === "off"
+        ? undefined
+        : resolveTelegramReplyId(reply.replyToId ?? undefined);
     const replyQuote = resolveReplyQuoteForSend({
       replyToId,
       replyQuoteByMessageId: params.replyQuoteByMessageId,

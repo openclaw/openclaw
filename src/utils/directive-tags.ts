@@ -112,7 +112,7 @@ function stripUnsafeReplyDirectiveChars(value: string): string {
   return chars.join("");
 }
 
-export function sanitizeReplyDirectiveId(rawReplyToId?: string): string | undefined {
+export function sanitizeReplyDirectiveId(rawReplyToId?: string | null): string | undefined {
   const trimmed = rawReplyToId?.trim();
   if (!trimmed) {
     return undefined;
