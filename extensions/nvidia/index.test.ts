@@ -255,7 +255,7 @@ describe("nvidia provider hooks", () => {
     expect(entries).toEqual([
       expect.objectContaining({
         id: "nvidia/nemotron-3-super-120b-a12b",
-        contextWindow: 1_048_576,
+        contextWindow: 1_000_000,
       }),
     ]);
   });
