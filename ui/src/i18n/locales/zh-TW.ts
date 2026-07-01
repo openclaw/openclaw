@@ -1341,6 +1341,11 @@ export const zh_TW: TranslationMap = {
       retrySend: "重新傳送",
       retryQueuedMessage: "重試佇列中的訊息",
     },
+    pairingQrExpired: {
+      title: "Pairing QR expired",
+      reason: "Run /pair qr again to generate a fresh setup code.",
+      badge: "Expired",
+    },
     composer: {
       placeholder: "Message {name} (Enter to send)",
       placeholderWithAttachments: "Add a message or paste more images...",

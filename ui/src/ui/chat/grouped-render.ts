@@ -2,6 +2,7 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
+import { t } from "../../i18n/index.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { AssistantIdentity } from "../assistant-identity.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
@@ -58,10 +59,6 @@ const assistantAttachmentRefreshTimers = new Map<string, ReturnType<typeof setTi
 const pairingQrExpiryRefreshTimers = new Map<string, PairingQrExpiryRefreshTimer>();
 const ASSISTANT_ATTACHMENT_UNAVAILABLE_RETRY_MS = 5_000;
 const ASSISTANT_ATTACHMENT_MEDIA_TICKET_REFRESH_SKEW_MS = 30_000;
-const PAIRING_QR_EXPIRED_NOTICE: PairingQrExpiryNotice = {
-  title: "Pairing QR expired",
-  reason: "Run /pair qr again to generate a fresh setup code.",
-};
 let assistantAttachmentAvailabilityRenderVersion = 0;
 
 export type ChatTimestampDisplay = {
@@ -388,7 +385,10 @@ function extractPairingQrExpiryNotices(
     }
     const b = block as Record<string, unknown>;
     if (b.type === "openclaw_pairing_qr" && isExpiredPairingQrBlock(b, nowMs)) {
-      notices.push(PAIRING_QR_EXPIRED_NOTICE);
+      notices.push({
+        title: t("chat.pairingQrExpired.title"),
+        reason: t("chat.pairingQrExpired.reason"),
+      });
     }
   }
   return notices;
@@ -1153,7 +1153,7 @@ function renderPairingQrExpiryNotices(notices: PairingQrExpiryNotice[]) {
               <span class="chat-assistant-attachment-card__icon">${icons.alertTriangle}</span>
               <span class="chat-assistant-attachment-card__title">${notice.title}</span>
               <span class="chat-assistant-attachment-badge chat-assistant-attachment-badge--muted"
-                >Expired</span
+                >${t("chat.pairingQrExpired.badge")}</span
               >
             </div>
             <div class="chat-assistant-attachment-card__reason">${notice.reason}</div>
