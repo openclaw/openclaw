@@ -138,16 +138,16 @@ enum ExecHostOutputLimiter {
     private static let truncationMarker = "... (truncated) "
 
     static func limit(_ text: String) -> String {
-        guard text.utf8.count > maxOutputFieldBytes else {
+        guard text.utf8.count > Self.maxOutputFieldBytes else {
             return text
         }
-        let markerBytes = truncationMarker.utf8.count
-        let tailBudget = max(0, maxOutputFieldBytes - markerBytes)
+        let markerBytes = Self.truncationMarker.utf8.count
+        let tailBudget = max(0, Self.maxOutputFieldBytes - markerBytes)
         var tail = text.suffix(tailBudget)
-        while truncationMarker.utf8.count + tail.utf8.count > maxOutputFieldBytes {
+        while Self.truncationMarker.utf8.count + tail.utf8.count > Self.maxOutputFieldBytes {
             tail.removeFirst()
         }
-        return truncationMarker + tail
+        return Self.truncationMarker + tail
     }
 }
 
