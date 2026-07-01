@@ -480,6 +480,9 @@ type SystemdServiceInfo = {
   mainPid?: number;
   execMainStatus?: number;
   execMainCode?: string;
+  result?: string;
+  nRestarts?: number;
+  startLimitBurst?: number;
   unit?: string;
   killMode?: string;
   tasksCurrent?: number;
@@ -514,6 +517,24 @@ export function parseSystemdShow(output: string): SystemdServiceInfo {
   const execMainCode = entries.execmaincode;
   if (execMainCode) {
     info.execMainCode = execMainCode;
+  }
+  const result = entries.result;
+  if (result) {
+    info.result = result;
+  }
+  const nRestartsValue = entries.nrestarts;
+  if (nRestartsValue) {
+    const nRestarts = parseStrictInteger(nRestartsValue);
+    if (nRestarts !== undefined) {
+      info.nRestarts = nRestarts;
+    }
+  }
+  const startLimitBurstValue = entries.startlimitburst;
+  if (startLimitBurstValue) {
+    const startLimitBurst = parseStrictInteger(startLimitBurstValue);
+    if (startLimitBurst !== undefined) {
+      info.startLimitBurst = startLimitBurst;
+    }
   }
   const unit = entries.id;
   if (unit) {
@@ -1184,6 +1205,13 @@ async function runSystemdServiceAction(params: {
         `${unitName} is a system-scope unit (${installed.unitPath}); run \`sudo systemctl ${params.action} ${unitName}\` to ${params.action} it`,
       );
     }
+    if (params.action === "restart") {
+      // systemd latches a unit into failed/start-limit-hit after it crashes faster
+      // than StartLimitBurst allows and then stops auto-restarting it. Clear the
+      // latch first so an operator restart can recover a crash-looped gateway;
+      // reset-failed is idempotent and a no-op on a healthy unit.
+      await execSystemctl(["reset-failed", unitName], env);
+    }
     const res = await execSystemctl([params.action, unitName], env);
     if (res.code !== 0) {
       throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
@@ -1192,6 +1220,11 @@ async function runSystemdServiceAction(params: {
     return;
   }
   await assertSystemdAvailable(env);
+  if (params.action === "restart") {
+    // Clear any failed/start-limit-hit latch before restart so a crash-looped
+    // gateway recovers (see system-scope branch above). Idempotent on healthy units.
+    await execSystemctlUser(env, ["reset-failed", unitName]);
+  }
   const res = await execSystemctlUser(env, [params.action, unitName]);
   if (res.code !== 0) {
     throw new Error(`systemctl ${params.action} failed: ${res.stderr || res.stdout}`.trim());
@@ -1264,7 +1297,7 @@ export async function readSystemdServiceRuntime(
     unitName,
     "--no-page",
     "--property",
-    "Id,ActiveState,SubState,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
+    "Id,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
   ];
   const res =
     installed?.scope === "system"
@@ -1294,6 +1327,9 @@ export async function readSystemdServiceRuntime(
       killMode: parsed.killMode,
       tasksCurrent: parsed.tasksCurrent,
       memoryCurrent: parsed.memoryCurrent,
+      result: parsed.result,
+      nRestarts: parsed.nRestarts,
+      startLimitBurst: parsed.startLimitBurst,
     },
   };
 }

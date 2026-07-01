@@ -53,6 +53,35 @@ describe("gateway --force helpers", () => {
     ]);
   });
 
+  it("skips malformed lsof 'p' lines (no digits after p)", () => {
+    const sample = ["p", "cnode", "p456", "cpython", ""].join("\n");
+    const parsed = parseLsofOutput(sample);
+    expect(parsed).toEqual<PortProcess[]>([{ pid: 456, command: "python" }]);
+  });
+
+  it("skips malformed lsof 'p' lines (non-numeric suffix)", () => {
+    const sample = ["pabc", "cnode", "p456", "cpython", ""].join("\n");
+    const parsed = parseLsofOutput(sample);
+    expect(parsed).toEqual<PortProcess[]>([{ pid: 456, command: "python" }]);
+  });
+
+  it("returns empty array when all lsof 'p' lines are malformed", () => {
+    const sample = ["p", "cnode", "pabc", "", ""].join("\n");
+    const parsed = parseLsofOutput(sample);
+    expect(parsed).toEqual<PortProcess[]>([]);
+  });
+
+  it("handles empty lsof output", () => {
+    expect(parseLsofOutput("")).toEqual<PortProcess[]>([]);
+  });
+
+  it("handles 'p' lines with negative-like tokens (zero)", () => {
+    const sample = ["p0", "cnode", "p456", "cpython", ""].join("\n");
+    const parsed = parseLsofOutput(sample);
+    // PID 0 is filtered out (> 0 check), only valid PIDs remain
+    expect(parsed).toEqual<PortProcess[]>([{ pid: 456, command: "python" }]);
+  });
+
   it("returns empty list when lsof finds nothing", () => {
     (execFileSync as unknown as Mock).mockImplementation(() => {
       const err = new Error("no matches") as NodeJS.ErrnoException & { status?: number };
