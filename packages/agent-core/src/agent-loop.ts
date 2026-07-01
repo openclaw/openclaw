@@ -482,64 +482,93 @@ async function streamAssistantResponse(
   let partialMessage: AssistantMessage | null = null;
   let addedPartial = false;
 
-  for await (const event of response) {
-    switch (event.type) {
-      case "start": {
-        const message = event.partial;
-        partialMessage = message;
-        context.messages.push(message);
-        addedPartial = true;
-        await emit({ type: "message_start", message: { ...message } });
-        break;
-      }
-
-      case "text_start":
-      case "text_delta":
-      case "text_end":
-      case "thinking_start":
-      case "thinking_delta":
-      case "thinking_end":
-      case "toolcall_start":
-      case "toolcall_delta":
-      case "toolcall_end":
-        if (partialMessage) {
-          const message = resolveAssistantMessageUpdate(event, partialMessage);
+  try {
+    for await (const event of response) {
+      switch (event.type) {
+        case "start": {
+          const message = event.partial;
           partialMessage = message;
-          context.messages[context.messages.length - 1] = message;
-          await emit({
-            type: "message_update",
-            assistantMessageEvent: event,
-            message: { ...message },
-          });
+          context.messages.push(message);
+          addedPartial = true;
+          await emit({ type: "message_start", message: { ...message } });
+          break;
         }
-        break;
 
-      case "done":
-      case "error": {
-        const finalMessage = removeNonExecutableToolCalls(await response.result());
-        if (addedPartial) {
-          context.messages[context.messages.length - 1] = finalMessage;
-        } else {
-          context.messages.push(finalMessage);
+        case "text_start":
+        case "text_delta":
+        case "text_end":
+        case "thinking_start":
+        case "thinking_delta":
+        case "thinking_end":
+        case "toolcall_start":
+        case "toolcall_delta":
+        case "toolcall_end":
+          if (partialMessage) {
+            const message = resolveAssistantMessageUpdate(event, partialMessage);
+            partialMessage = message;
+            context.messages[context.messages.length - 1] = message;
+            await emit({
+              type: "message_update",
+              assistantMessageEvent: event,
+              message: { ...message },
+            });
+          }
+          break;
+
+        case "done":
+        case "error": {
+          const finalMessage = removeNonExecutableToolCalls(
+            await response.result(),
+          );
+          if (addedPartial) {
+            context.messages[context.messages.length - 1] = finalMessage;
+          } else {
+            context.messages.push(finalMessage);
+          }
+          if (!addedPartial) {
+            await emit({ type: "message_start", message: { ...finalMessage } });
+          }
+          await emit({ type: "message_end", message: finalMessage });
+          return finalMessage;
         }
-        if (!addedPartial) {
-          await emit({ type: "message_start", message: { ...finalMessage } });
-        }
-        await emit({ type: "message_end", message: finalMessage });
-        return finalMessage;
       }
     }
-  }
 
-  const finalMessage = removeNonExecutableToolCalls(await response.result());
-  if (addedPartial) {
-    context.messages[context.messages.length - 1] = finalMessage;
-  } else {
-    context.messages.push(finalMessage);
-    await emit({ type: "message_start", message: { ...finalMessage } });
+    const finalMessage = removeNonExecutableToolCalls(
+      await response.result(),
+    );
+    if (addedPartial) {
+      context.messages[context.messages.length - 1] = finalMessage;
+    } else {
+      context.messages.push(finalMessage);
+      await emit({ type: "message_start", message: { ...finalMessage } });
+    }
+    await emit({ type: "message_end", message: finalMessage });
+    return finalMessage;
+  } catch (error) {
+    // When the stream iterator is interrupted mid-stream (idle timeout, transport
+    // abort), the partialMessage accumulated from text_delta events is never
+    // emitted as message_end and the caller's handleRunFailure would synthesize an
+    // empty-content failure message instead.
+    //
+    // Emit message_end with the already-streamed partial content and return it
+    // with stopReason "error" so runLoop processes it through its normal
+    // error/aborted turn-end path instead of letting the error propagate to
+    // handleRunFailure. This preserves the visible partial text in the session.
+    if (partialMessage && addedPartial) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      const terminalMessage: AssistantMessage = {
+        ...partialMessage,
+        stopReason: "error",
+        errorMessage,
+      };
+      context.messages[context.messages.length - 1] = terminalMessage;
+      await emit({ type: "message_end", message: terminalMessage });
+      return terminalMessage;
+    }
+    throw error;
   }
-  await emit({ type: "message_end", message: finalMessage });
-  return finalMessage;
 }
 
 /**

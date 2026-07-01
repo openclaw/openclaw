@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { agentLoop, agentLoopContinue, runAgentLoop } from "./agent-loop.js";
 import {
   type AssistantMessage,
+  type AssistantMessageEvent,
   createAssistantMessageEventStream,
   type Context,
   type Message,
@@ -1119,5 +1120,203 @@ describe("agentLoop thinking state", () => {
     await collectEvents(stream);
 
     expect(observedReasoning).toEqual(expected);
+  });
+});
+
+describe("streamAssistantResponse mid-stream iterator error", () => {
+  /** Async-iterable mock that emits preEvents then throws `error` on the next next(). */
+  function createFailingStream(
+    preEvents: Array<{ type: string; [key: string]: unknown }>,
+    error: Error,
+  ) {
+    let index = 0;
+    return {
+      async *[Symbol.asyncIterator]() {
+        while (index < preEvents.length) {
+          yield preEvents[index++] as AssistantMessageEvent;
+        }
+        throw error;
+      },
+      result: async () => {
+        throw error;
+      },
+    };
+  }
+
+  const START_MESSAGE: AssistantMessage = {
+    role: "assistant",
+    content: [],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: { ...TEST_USAGE },
+    stopReason: "stop",
+    timestamp: 1,
+  };
+
+  const TEXT_START_EVENT = {
+    type: "text_start" as const,
+    contentIndex: 0,
+    partial: { ...START_MESSAGE },
+  };
+  const TEXT_DELTA_EVENT = {
+    type: "text_delta" as const,
+    contentIndex: 0,
+    delta: "partial response",
+  };
+  const TEXT_END_EVENT = {
+    type: "text_end" as const,
+    contentIndex: 0,
+    content: "partial response",
+    partial: {
+      ...START_MESSAGE,
+      content: [{ type: "text" as const, text: "partial response" }],
+    },
+  };
+
+  it("emits message_end with partial content when the stream iterator throws mid-stream", async () => {
+    const timeoutError = new Error("LLM idle timeout (120s): no response from model");
+    const events: Array<{ type: string; message?: AgentMessage }> = [];
+    const streamFn: StreamFn = async () =>
+      createFailingStream(
+        [
+          { type: "start", partial: { ...START_MESSAGE } },
+          TEXT_START_EVENT,
+          TEXT_DELTA_EVENT,
+          TEXT_END_EVENT,
+        ],
+        timeoutError,
+      ) as unknown as Awaited<ReturnType<StreamFn>>;
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "hello", timestamp: 1 }],
+      { systemPrompt: "", messages: [] },
+      config,
+      (event) => {
+        if (event.type === "message_end" || event.type === "message_start") {
+          events.push({ type: event.type, message: event.message });
+        }
+      },
+      undefined,
+      streamFn,
+    );
+
+    // The run should complete (not throw) and return messages.
+    expect(messages).toHaveLength(2); // user prompt + assistant
+
+    const assistant = messages[1] as AssistantMessage;
+    expect(assistant.role).toBe("assistant");
+    expect(assistant.stopReason).toBe("error");
+    expect(assistant.errorMessage ?? "").toContain("LLM idle timeout");
+
+    // Partial text from the text_delta must be preserved in content.
+    expect(assistant.content).toContainEqual(
+      expect.objectContaining({ type: "text", text: "partial response" }),
+    );
+
+    // message_end must have been emitted for the assistant message.
+    const messageEnd = events.filter(
+      (e) => e.type === "message_end" && e.message?.role === "assistant",
+    );
+    expect(messageEnd).toHaveLength(1);
+    expect(messageEnd[0].message).toMatchObject({
+      role: "assistant",
+      stopReason: "error",
+    });
+  });
+
+  it("propagates the error when no partial content was received before the stream iterator throws", async () => {
+    const timeoutError = new Error("LLM idle timeout (120s): no response from model");
+    const streamFn: StreamFn = async () =>
+      createFailingStream([], timeoutError) as unknown as Awaited<ReturnType<StreamFn>>;
+
+    // No partial content → error should propagate through runAgentLoop.
+    await expect(
+      runAgentLoop(
+        [{ role: "user", content: "hello", timestamp: 1 }],
+        { systemPrompt: "", messages: [] },
+        config,
+        () => {},
+        undefined,
+        streamFn,
+      ),
+    ).rejects.toThrow("LLM idle timeout");
+  });
+
+  it("preserves multi-block partial content (text + thinking) on mid-stream error", async () => {
+    const timeoutError = new Error("stream aborted");
+    const thinkingBlock = {
+      type: "thinking" as const,
+      thinking: "Let me think...",
+    };
+    const textBlock = { type: "text" as const, text: "partial response" };
+    const streamFn: StreamFn = async () =>
+      createFailingStream(
+        [
+          { type: "start", partial: { ...START_MESSAGE } },
+          {
+            type: "thinking_start" as const,
+            contentIndex: 0,
+            partial: { ...START_MESSAGE },
+          },
+          {
+            type: "thinking_delta" as const,
+            contentIndex: 0,
+            delta: "Let me think...",
+          },
+          {
+            type: "thinking_end" as const,
+            contentIndex: 0,
+            thinking: "Let me think...",
+            partial: {
+              ...START_MESSAGE,
+              content: [thinkingBlock],
+            },
+          },
+          {
+            type: "text_start" as const,
+            contentIndex: 1,
+            partial: {
+              ...START_MESSAGE,
+              content: [thinkingBlock],
+            },
+          },
+          {
+            type: "text_delta" as const,
+            contentIndex: 1,
+            delta: "partial response",
+          },
+          {
+            type: "text_end" as const,
+            contentIndex: 1,
+            content: "partial response",
+            partial: {
+              ...START_MESSAGE,
+              content: [thinkingBlock, textBlock],
+            },
+          },
+        ],
+        timeoutError,
+      ) as unknown as Awaited<ReturnType<StreamFn>>;
+
+    const messages = await runAgentLoop(
+      [{ role: "user", content: "hello", timestamp: 1 }],
+      { systemPrompt: "", messages: [] },
+      config,
+      () => {},
+      undefined,
+      streamFn,
+    );
+
+    const assistant = messages[1] as AssistantMessage;
+    expect(assistant.role).toBe("assistant");
+    expect(assistant.stopReason).toBe("error");
+
+    expect(assistant.content).toContainEqual(
+      expect.objectContaining({ type: "thinking", thinking: "Let me think..." }),
+    );
+    expect(assistant.content).toContainEqual(
+      expect.objectContaining({ type: "text", text: "partial response" }),
+    );
   });
 });
