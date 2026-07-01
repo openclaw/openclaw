@@ -336,7 +336,7 @@ describeUnix("inspectPortUsage", () => {
     });
   });
 
-  it("deduplicates repeated lsof listener records for one process address", async () => {
+  it("ignores malformed lsof pid records in listener diagnostics", async () => {
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const command = argv[0];
       if (typeof command !== "string") {
@@ -344,7 +344,7 @@ describeUnix("inspectPortUsage", () => {
       }
       if (command.includes("lsof")) {
         return {
-          stdout: "p111\ncnode\nnTCP *:18789 (LISTEN)\nnTCP *:18789 (LISTEN)\n",
+          stdout: "p\ncnode\nnTCP *:18789 (LISTEN)\np111\ncbun\nnTCP 127.0.0.1:18789 (LISTEN)\n",
           stderr: "",
           code: 0,
         };
@@ -352,7 +352,7 @@ describeUnix("inspectPortUsage", () => {
       if (command === "ps") {
         if (argv.includes("command=")) {
           return {
-            stdout: "node /tmp/openclaw/dist/index.js gateway run\n",
+            stdout: "bun /tmp/openclaw/dist/index.js gateway run\n",
             stderr: "",
             code: 0,
           };
@@ -372,7 +372,8 @@ describeUnix("inspectPortUsage", () => {
     expect(result.listeners).toHaveLength(1);
     expect(result.listeners[0]).toMatchObject({
       pid: 111,
-      address: "TCP *:18789 (LISTEN)",
+      command: "bun",
+      address: "TCP 127.0.0.1:18789 (LISTEN)",
     });
   });
 
