@@ -15,6 +15,7 @@ import {
 import { resolveStorePath } from "../config/sessions/paths.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
 import { runCronCommandJob } from "../cron/command-runner.js";
 import { resolveCronStoredDeliveryContext } from "../cron/delivery-context.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
@@ -124,6 +125,10 @@ function toPluginCronJob(job: CronJob): PluginHookGatewayCronJob {
     createdAtMs: job.createdAtMs,
     updatedAtMs: job.updatedAtMs,
   };
+}
+
+function isCommandCronJob(job: CronJob | null | undefined): boolean {
+  return job?.payload?.kind === "command";
 }
 
 /** Build the cron service state used by Gateway startup and lazy cron loading. */
@@ -453,7 +458,9 @@ export function buildGatewayCronService(params: {
           delivery: deliveryTrace,
         };
       }
-      const message = result.summary;
+      const message = isCommandCronJob(job)
+        ? redactCronCommandSummaryForExternalDelivery(result.summary)
+        : result.summary;
       if (typeof message !== "string") {
         return {
           ...result,
@@ -582,6 +589,10 @@ export function buildGatewayCronService(params: {
       // when the job is known.
       const jobSnapshot = evt.job ?? cron.getJob(evt.jobId);
       const pluginJob = jobSnapshot ? toPluginCronJob(jobSnapshot) : undefined;
+      const hookSummary =
+        isCommandCronJob(jobSnapshot) && typeof evt.summary === "string"
+          ? redactCronCommandSummaryForExternalDelivery(evt.summary)
+          : evt.summary;
       const hookEvt: PluginHookCronChangedEvent = {
         action: evt.action,
         jobId: evt.jobId,
@@ -594,7 +605,6 @@ export function buildGatewayCronService(params: {
           "durationMs",
           "status",
           "error",
-          "summary",
           "delivered",
           "deliveryStatus",
           "deliveryError",
@@ -605,6 +615,7 @@ export function buildGatewayCronService(params: {
           "model",
           "provider",
         ]),
+        ...(hookSummary !== undefined ? { summary: hookSummary } : {}),
       };
       runCronChangedHook(hookEvt);
       if (evt.action === "finished") {

@@ -253,7 +253,7 @@ export async function start(state: CronServiceState) {
   if (state.stopped) {
     return;
   }
-  const deferredCatchupJobIds = await runMissedJobs(state, {
+  await runMissedJobs(state, {
     skipJobIds: interruptedJobIds.size > 0 ? interruptedJobIds : undefined,
     deferAgentTurnJobs: true,
   });
@@ -266,10 +266,7 @@ export async function start(state: CronServiceState) {
     if (state.stopped) {
       return;
     }
-    const changed = recomputeNextRunsForMaintenance(state, {
-      recomputeExpired: true,
-      skipFutureRepairJobIds: deferredCatchupJobIds,
-    });
+    const changed = recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
     if (changed) {
       await persist(state);
     }

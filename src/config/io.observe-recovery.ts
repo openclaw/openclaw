@@ -108,6 +108,50 @@ type ConfigStatMetadataSource =
     } & Record<string, unknown>)
   | null;
 
+function formatConfigPermissionHardeningWarning(params: {
+  configPath: string;
+  context: string;
+  error: unknown;
+}): string {
+  const detail = params.error instanceof Error ? params.error.message : String(params.error);
+  return `Config permission hardening failed (${params.context}): ${params.configPath}: ${detail}`;
+}
+
+async function chmodConfigBestEffort(params: {
+  deps: ObserveRecoveryDeps;
+  configPath: string;
+  context: string;
+}): Promise<void> {
+  try {
+    await params.deps.fs.promises.chmod?.(params.configPath, 0o600);
+  } catch (error) {
+    params.deps.logger.warn(
+      formatConfigPermissionHardeningWarning({
+        configPath: params.configPath,
+        context: params.context,
+        error,
+      }),
+    );
+  }
+}
+
+function chmodConfigBestEffortSync(params: {
+  deps: ObserveRecoveryDeps;
+  configPath: string;
+  context: string;
+}): void {
+  try {
+    params.deps.fs.chmodSync?.(params.configPath, 0o600);
+  } catch (error) {
+    params.deps.logger.warn(
+      formatConfigPermissionHardeningWarning({
+        configPath: params.configPath,
+        context: params.context,
+        error,
+      }),
+    );
+  }
+}
 type ConfigReadRecoveryParams = {
   deps: ObserveRecoveryDeps;
   configPath: string;
@@ -635,7 +679,11 @@ export async function maybeRecoverSuspiciousConfigRead(
       encoding: "utf-8",
       mode: 0o600,
     });
-    await params.deps.fs.promises.chmod?.(params.configPath, 0o600).catch(() => {});
+    await chmodConfigBestEffort({
+      deps: params.deps,
+      configPath: params.configPath,
+      context: "backup restore",
+    });
     restoredFromBackup = true;
   } catch (error) {
     restoreError = error;
@@ -745,9 +793,11 @@ export function maybeRecoverSuspiciousConfigReadSync(
       encoding: "utf-8",
       mode: 0o600,
     });
-    try {
-      params.deps.fs.chmodSync?.(params.configPath, 0o600);
-    } catch {}
+    chmodConfigBestEffortSync({
+      deps: params.deps,
+      configPath: params.configPath,
+      context: "backup restore",
+    });
     restoredFromBackup = true;
   } catch (error) {
     restoreError = error;
@@ -823,7 +873,11 @@ export async function promoteConfigSnapshotToLastKnownGood(params: {
     encoding: "utf-8",
     mode: 0o600,
   });
-  await deps.fs.promises.chmod?.(lastGoodPath, 0o600).catch(() => {});
+  await chmodConfigBestEffort({
+    deps,
+    configPath: lastGoodPath,
+    context: "last-known-good promotion",
+  });
   const healthState = await readConfigHealthState(deps);
   const entry = getConfigHealthEntry(healthState, snapshot.path);
   await writeConfigHealthState(
@@ -899,7 +953,11 @@ export async function recoverConfigFromLastKnownGood(params: {
     encoding: "utf-8",
     mode: 0o600,
   });
-  await deps.fs.promises.chmod?.(snapshot.path, 0o600).catch(() => {});
+  await chmodConfigBestEffort({
+    deps,
+    configPath: snapshot.path,
+    context: "last-known-good recovery",
+  });
   const issueSummary = formatConfigIssueSummary([...snapshot.issues, ...snapshot.legacyIssues]);
   deps.logger.warn(
     `Config auto-restored from last-known-good: ${snapshot.path} (${params.reason})${issueSummary ? `; Rejected validation details: ${issueSummary}.` : ""}`,

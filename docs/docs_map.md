@@ -1707,6 +1707,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Examples
   - H2: Locale
   - H3: Non-interactive Z.AI endpoint choices
+  - H2: Additional non-interactive flags
   - H2: Flow notes
   - H2: Common follow-up commands
 
@@ -7622,6 +7623,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Quick choice
   - H2: Naming map
+  - H2: GPT-5.6 limited preview
   - H2: OpenClaw feature coverage
   - H2: Memory embeddings
   - H2: Getting started

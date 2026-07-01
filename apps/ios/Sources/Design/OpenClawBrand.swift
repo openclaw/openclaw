@@ -29,6 +29,14 @@ enum AppAppearancePreference: String, CaseIterable, Identifiable {
         }
     }
 
+    var detail: String {
+        switch self {
+        case .system: "Matches the system appearance."
+        case .light: "Always uses light appearance."
+        case .dark: "Always uses dark appearance."
+        }
+    }
+
     var colorScheme: ColorScheme? {
         switch self {
         case .system: nil
@@ -47,36 +55,19 @@ enum AppAppearancePreference: String, CaseIterable, Identifiable {
 }
 
 enum OpenClawBrand {
-    static let uiAccent = UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 198 / 255.0, green: 62 / 255.0, blue: 56 / 255.0, alpha: 1)
-            : UIColor(red: 183 / 255.0, green: 56 / 255.0, blue: 51 / 255.0, alpha: 1)
-    }
+    static let uiAccent = adaptiveUIColor(light: (183, 56, 51), dark: (198, 62, 56))
+    static let uiOK = adaptiveUIColor(light: (19, 122, 62), dark: (48, 209, 88))
+    static let uiWarn = adaptiveUIColor(light: (154, 87, 0), dark: (255, 214, 10))
+    static let uiInfo = adaptiveUIColor(light: (0, 91, 196), dark: (100, 168, 255))
 
     static let accent = Color(uiColor: Self.uiAccent)
-    static let accentHot = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 232 / 255.0, green: 92 / 255.0, blue: 86 / 255.0, alpha: 1)
-            : UIColor(red: 204 / 255.0, green: 75 / 255.0, blue: 69 / 255.0, alpha: 1)
-    })
-    static let danger = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 252 / 255.0, green: 165 / 255.0, blue: 165 / 255.0, alpha: 1)
-            : UIColor(red: 185 / 255.0, green: 28 / 255.0, blue: 28 / 255.0, alpha: 1)
-    })
-    static let ok = Color(red: 34 / 255.0, green: 197 / 255.0, blue: 94 / 255.0)
-    static let warn = Color(red: 245 / 255.0, green: 158 / 255.0, blue: 11 / 255.0)
-    static let info = Color(red: 0 / 255.0, green: 122 / 255.0, blue: 255 / 255.0)
-    static let graphite = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 20 / 255.0, green: 22 / 255.0, blue: 24 / 255.0, alpha: 1)
-            : UIColor(red: 246 / 255.0, green: 247 / 255.0, blue: 249 / 255.0, alpha: 1)
-    })
-    static let graphiteElevated = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 34 / 255.0, green: 36 / 255.0, blue: 39 / 255.0, alpha: 1)
-            : UIColor.white
-    })
+    static let accentHot = Color(uiColor: adaptiveUIColor(light: (204, 75, 69), dark: (232, 92, 86)))
+    static let danger = Color(uiColor: adaptiveUIColor(light: (185, 28, 28), dark: (252, 165, 165)))
+    static let ok = Color(uiColor: Self.uiOK)
+    static let warn = Color(uiColor: Self.uiWarn)
+    static let info = Color(uiColor: Self.uiInfo)
+    static let graphite = Color(uiColor: adaptiveUIColor(light: (246, 247, 249), dark: (20, 22, 24)))
+    static let graphiteElevated = Color(uiColor: adaptiveUIColor(light: (255, 255, 255), dark: (34, 36, 39)))
 
     static var sheetBackground: LinearGradient {
         LinearGradient(
@@ -87,6 +78,20 @@ enum OpenClawBrand {
             ],
             startPoint: .topLeading,
             endPoint: .bottomTrailing)
+    }
+
+    private static func adaptiveUIColor(
+        light: (red: CGFloat, green: CGFloat, blue: CGFloat),
+        dark: (red: CGFloat, green: CGFloat, blue: CGFloat)) -> UIColor
+    {
+        UIColor { traits in
+            let components = traits.userInterfaceStyle == .dark ? dark : light
+            return UIColor(
+                red: components.red / 255,
+                green: components.green / 255,
+                blue: components.blue / 255,
+                alpha: 1)
+        }
     }
 }
 

@@ -793,6 +793,7 @@ function createMockState(now: number, opts?: { defaultAgentId?: string }): CronS
       nowMs: () => now,
       defaultAgentId: opts?.defaultAgentId,
     },
+    pendingCatchupDeferralJobIds: new Set<string>(),
   } as unknown as CronServiceState;
 }
 
@@ -1264,6 +1265,69 @@ describe("recomputeNextRuns", () => {
 
     expect(recomputeNextRunsForMaintenance(state)).toBe(false);
     expect(job.state.nextRunAtMs).toBe(deferred);
+  });
+
+  it("preserves pending startup catch-up deferrals until the deferred slot is reached", () => {
+    const now = Date.parse("2026-05-05T12:00:00.000Z");
+    const deferred = Date.parse("2026-05-05T12:02:00.000Z");
+    const job: CronJob = {
+      id: "daily-pending-startup-deferral",
+      name: "daily pending startup deferral",
+      enabled: true,
+      createdAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      updatedAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      schedule: { kind: "cron", expr: "0 0 21 * * *", tz: "Asia/Shanghai", staggerMs: 0 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: { nextRunAtMs: deferred },
+    };
+    const pendingCatchupDeferralJobIds = new Set([job.id]);
+    const state = {
+      ...createMockState(now),
+      pendingCatchupDeferralJobIds,
+      store: { version: 1 as const, jobs: [job] },
+    } as CronServiceState;
+
+    expect(recomputeNextRunsForMaintenance(state)).toBe(false);
+    expect(job.state.nextRunAtMs).toBe(deferred);
+    expect(pendingCatchupDeferralJobIds.has(job.id)).toBe(true);
+
+    expect(
+      recomputeNextRunsForMaintenance(state, {
+        nowMs: deferred,
+        repairFutureCronNextRunAtMs: true,
+      }),
+    ).toBe(true);
+    expect(pendingCatchupDeferralJobIds.has(job.id)).toBe(false);
+    expect(job.state.nextRunAtMs).toBe(deferred);
+  });
+
+  it("drops startup catch-up deferral ids for jobs no longer relevant to maintenance", () => {
+    const now = Date.parse("2026-05-05T12:00:00.000Z");
+    const deferred = Date.parse("2026-05-05T12:02:00.000Z");
+    const disabledJob: CronJob = {
+      id: "disabled-pending-startup-deferral",
+      name: "disabled pending startup deferral",
+      enabled: false,
+      createdAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      updatedAtMs: Date.parse("2026-05-05T00:00:00.000Z"),
+      schedule: { kind: "cron", expr: "0 0 21 * * *", tz: "Asia/Shanghai", staggerMs: 0 },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: { nextRunAtMs: deferred },
+    };
+    const pendingCatchupDeferralJobIds = new Set([disabledJob.id, "removed-deferral"]);
+    const state = {
+      ...createMockState(now),
+      pendingCatchupDeferralJobIds,
+      store: { version: 1 as const, jobs: [disabledJob] },
+    } as CronServiceState;
+
+    expect(recomputeNextRunsForMaintenance(state)).toBe(true);
+    expect([...pendingCatchupDeferralJobIds]).toEqual([]);
+    expect(disabledJob.state.nextRunAtMs).toBeUndefined();
   });
 
   it("preserves cron retry backoff nextRunAtMs values during maintenance", () => {

@@ -1384,6 +1384,11 @@ export const es: TranslationMap = {
       retrySend: "Reintentar envío",
       retryQueuedMessage: "Reintentar mensaje en cola",
     },
+    pairingQrExpired: {
+      title: "Código QR de emparejamiento caducado",
+      reason: "Ejecuta /pair qr de nuevo para generar un código de configuración nuevo.",
+      badge: "Caducado",
+    },
     composer: {
       placeholder: "Message {name} (Enter to send)",
       placeholderWithAttachments: "Add a message or paste more images...",

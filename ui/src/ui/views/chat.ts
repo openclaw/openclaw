@@ -27,8 +27,8 @@ import { exportChatMarkdown } from "../chat/export.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
   renderMessageGroup,
-  renderReadingIndicatorGroup,
-  renderStreamingGroup,
+  renderStreamGroup,
+  type StreamGroupPart,
 } from "../chat/grouped-render.ts";
 import { CHAT_HISTORY_RENDER_LIMIT } from "../chat/history-limits.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../chat/input-history.ts";
@@ -680,6 +680,37 @@ function buildCachedChatItems(input: BuildChatItemsProps): ReturnType<typeof bui
   cached.input = input;
   cached.items = items;
   return items;
+}
+
+type RenderChatItem = ReturnType<typeof buildChatItems>[number];
+type StreamRunRenderItem = { kind: "stream-run"; key: string; parts: StreamGroupPart[] };
+
+// Fold each contiguous run of in-flight stream/reading-indicator items into a
+// single group so segmented replies render under one assistant avatar instead
+// of one bubble per segment (#63956). Any message/group/divider breaks the run,
+// so interleaved tool calls keep their own groups.
+function coalesceStreamRuns(
+  items: ReturnType<typeof buildChatItems>,
+): Array<RenderChatItem | StreamRunRenderItem> {
+  const result: Array<RenderChatItem | StreamRunRenderItem> = [];
+  let run: StreamGroupPart[] = [];
+  const flush = () => {
+    const [first] = run;
+    if (first) {
+      result.push({ kind: "stream-run", key: `stream-run:${first.key}`, parts: run });
+      run = [];
+    }
+  };
+  for (const item of items) {
+    if (item.kind === "stream" || item.kind === "reading-indicator") {
+      run.push(item);
+      continue;
+    }
+    flush();
+    result.push(item);
+  }
+  flush();
+  return result;
 }
 
 function deletedChatItemsSignature(
@@ -2339,7 +2370,7 @@ export function renderChat(props: ChatProps) {
           ],
           () =>
             repeat(
-              chatItems,
+              coalesceStreamRuns(chatItems),
               (item) => item.key,
               (item) => {
                 if (item.kind === "divider") {
@@ -2376,23 +2407,13 @@ export function renderChat(props: ChatProps) {
                     </div>
                   `;
                 }
-                if (item.kind === "reading-indicator") {
-                  return renderReadingIndicatorGroup(
-                    assistantIdentity,
-                    props.basePath,
-                    props.assistantAttachmentAuthToken ?? null,
-                  );
-                }
-                if (item.kind === "stream") {
-                  return renderStreamingGroup(
-                    item.text,
-                    item.startedAt,
-                    item.isStreaming,
-                    props.onOpenSidebar,
-                    assistantIdentity,
-                    props.basePath,
-                    props.assistantAttachmentAuthToken ?? null,
-                  );
+                if (item.kind === "stream-run") {
+                  return renderStreamGroup(item.parts, {
+                    onOpenSidebar: props.onOpenSidebar,
+                    assistant: assistantIdentity,
+                    basePath: props.basePath,
+                    authToken: props.assistantAttachmentAuthToken ?? null,
+                  });
                 }
                 if (item.kind === "group") {
                   if (deleted.has(item.key)) {
