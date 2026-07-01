@@ -80,11 +80,16 @@ internal fun resolveGatewayConnectConfig(
   fallbackBootstrapToken: String,
   fallbackToken: String,
   fallbackPassword: String,
+  allowFallbackBootstrapTokenForSetupCode: Boolean = false,
+  allowBootstrapTokenForChangedEndpoint: Boolean = false,
 ): GatewayConnectConfig? {
   if (useSetupCode) {
     val setup = decodeGatewaySetupCode(setupCode) ?: return null
     val parsed = parseGatewayEndpointResult(setup.url).config ?: return null
-    val setupBootstrapToken = setup.bootstrapToken?.trim().orEmpty()
+    val setupBootstrapToken =
+      setup.bootstrapToken?.trim().orEmpty().ifEmpty {
+        if (allowFallbackBootstrapTokenForSetupCode) fallbackBootstrapToken.trim() else ""
+      }
     // Bootstrap setup codes intentionally suppress stale shared credentials;
     // the bootstrap token owns the first authenticated pairing exchange.
     val sharedToken =
@@ -121,15 +126,101 @@ internal fun resolveGatewayConnectConfig(
       savedManualEndpoint.tls == parsed.tls &&
       fallbackToken.isBlank() &&
       fallbackPassword.isBlank()
+  val useBootstrapToken =
+    fallbackBootstrapToken.trim().isNotEmpty() &&
+      fallbackToken.isBlank() &&
+      fallbackPassword.isBlank() &&
+      (preserveBootstrapToken || allowBootstrapTokenForChangedEndpoint)
   return GatewayConnectConfig(
     host = parsed.host,
     port = parsed.port,
     tls = parsed.tls,
-    bootstrapToken = if (preserveBootstrapToken) fallbackBootstrapToken.trim() else "",
+    bootstrapToken = if (useBootstrapToken) fallbackBootstrapToken.trim() else "",
     token = fallbackToken.trim(),
     password = fallbackPassword.trim(),
   )
 }
+
+/**
+ * Gateway Settings has one text box for each credential family. Blank auth
+ * fields mean "keep the current gateway access" only while the endpoint is the
+ * saved endpoint; endpoint changes must not carry old setup bootstrap auth.
+ */
+internal fun resolveGatewaySettingsConnectConfig(
+  setupCode: String,
+  savedManualHost: String,
+  savedManualPort: String,
+  savedManualTls: Boolean,
+  manualHostInput: String,
+  manualPortInput: String,
+  manualTlsInput: Boolean,
+  savedBootstrapToken: String,
+  savedGatewayToken: String,
+  tokenInput: String,
+  bootstrapTokenInput: String,
+  passwordInput: String,
+): GatewayConnectConfig? {
+  val trimmedSetupCode = setupCode.trim()
+  if (trimmedSetupCode.isNotEmpty()) {
+    return resolveGatewayConnectConfig(
+      useSetupCode = true,
+      setupCode = trimmedSetupCode,
+      savedManualHost = savedManualHost,
+      savedManualPort = savedManualPort,
+      savedManualTls = savedManualTls,
+      manualHostInput = manualHostInput,
+      manualPortInput = manualPortInput,
+      manualTlsInput = manualTlsInput,
+      fallbackBootstrapToken = bootstrapTokenInput.trim(),
+      fallbackToken = tokenInput.trim(),
+      fallbackPassword = passwordInput.trim(),
+      allowFallbackBootstrapTokenForSetupCode = bootstrapTokenInput.trim().isNotEmpty(),
+    )
+  }
+
+  val manualUrl = composeGatewayManualUrl(manualHostInput, manualPortInput, manualTlsInput) ?: return null
+  val parsedManual = parseGatewayEndpointResult(manualUrl).config ?: return null
+  val savedManualEndpoint =
+    composeGatewayManualUrl(savedManualHost, savedManualPort, savedManualTls)
+      ?.let { parseGatewayEndpointResult(it).config }
+  val endpointUnchanged =
+    savedManualEndpoint != null &&
+      savedManualEndpoint.host == parsedManual.host &&
+      savedManualEndpoint.port == parsedManual.port &&
+      savedManualEndpoint.tls == parsedManual.tls
+  val explicitToken = tokenInput.trim()
+  val explicitBootstrapToken = bootstrapTokenInput.trim()
+  val explicitPassword = passwordInput.trim()
+  val bootstrapToken =
+    explicitBootstrapToken.ifEmpty {
+      if (endpointUnchanged && explicitToken.isEmpty() && explicitPassword.isEmpty()) {
+        savedBootstrapToken
+      } else {
+        ""
+      }
+    }
+  val token =
+    explicitToken.ifEmpty {
+      if (endpointUnchanged && bootstrapToken.isEmpty()) savedGatewayToken else ""
+    }
+
+  return resolveGatewayConnectConfig(
+    useSetupCode = false,
+    setupCode = "",
+    savedManualHost = savedManualHost,
+    savedManualPort = savedManualPort,
+    savedManualTls = savedManualTls,
+    manualHostInput = manualHostInput,
+    manualPortInput = manualPortInput,
+    manualTlsInput = manualTlsInput,
+    fallbackBootstrapToken = bootstrapToken,
+    fallbackToken = token,
+    fallbackPassword = explicitPassword,
+    allowBootstrapTokenForChangedEndpoint = explicitBootstrapToken.isNotEmpty(),
+  )
+}
+
+internal fun gatewaySettingsRequiresSetupAuthReset(setupCode: String): Boolean = setupCode.trim().isNotEmpty()
 
 /** Parses an endpoint string and returns only the valid connection config. */
 internal fun parseGatewayEndpoint(rawInput: String): GatewayEndpointConfig? = parseGatewayEndpointResult(rawInput).config
