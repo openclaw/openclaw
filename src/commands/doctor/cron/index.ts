@@ -66,6 +66,22 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+// Count jobs the store still marks in-flight (`state.runningAtMs` is a number).
+// The scheduler sets this while a run is active and clears it on completion, so a
+// leftover marker (gateway killed mid-run) makes `cron list` show the job as
+// `running` while nothing executes it. Startup marks exactly these runs interrupted
+// (`src/cron/service/ops.ts` `start`), so doctor only reports the count here.
+function countInFlightCronJobs(jobs: Array<Record<string, unknown>>): number {
+  return jobs.filter((job) => {
+    const state = job.state;
+    return (
+      typeof state === "object" &&
+      state !== null &&
+      typeof (state as { runningAtMs?: unknown }).runningAtMs === "number"
+    );
+  }).length;
+}
+
 type LegacyCronRepairState = {
   storePath: string;
   quarantinePath: string;
@@ -386,6 +402,19 @@ export async function maybeRepairLegacyCronStore(params: {
     return;
   }
   noteCronModelOverrides({ cfg: params.cfg, jobs: rawJobs, storePath });
+
+  const inFlightCount = countInFlightCronJobs(rawJobs);
+  if (inFlightCount > 0) {
+    const subject = inFlightCount === 1 ? "it" : "them";
+    note(
+      [
+        `${pluralize(inFlightCount, "cron job")} ${inFlightCount === 1 ? "is" : "are"} still marked in-flight (\`state.runningAtMs\` is set), so ${formatCliCommand("openclaw cron list")} shows ${subject} as \`running\`.`,
+        `- If no gateway is currently executing ${subject}, the marker is left over from an interrupted run; the gateway marks such runs interrupted the next time it starts.`,
+        `- Review with ${formatCliCommand("openclaw cron list")} or ${formatCliCommand("openclaw cron show <id>")}.`,
+      ].join("\n"),
+      "Cron",
+    );
+  }
 
   const normalized = normalizeStoredCronJobs(rawJobs);
   const notifyCount = rawJobs.filter((job) => job.notify === true).length;

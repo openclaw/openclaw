@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { translateNativeEntries } from "./control-ui-i18n.ts";
 
 export type NativeI18nSurface = "android" | "apple";
 
@@ -39,10 +40,28 @@ export type NativeI18nEntry = {
 };
 
 type Candidate = Omit<NativeI18nEntry, "id">;
+type NativeTranslationArtifact = {
+  entries: Array<{ id: string; source: string; translated: string }>;
+  glossaryHash: string;
+  locale: string;
+  version: 1;
+};
+type NativeTranslator = typeof translateNativeEntries;
+type NativeLocaleSyncOptions = {
+  glossary?: Array<{ source: string; target: string }>;
+  translate?: NativeTranslator;
+  translationsDir?: string;
+};
+type NativeI18nCommand = {
+  command: "check" | "sync";
+  locale?: string;
+  write: boolean;
+};
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
 const OUTPUT_PATH = path.join(ROOT, "apps", ".i18n", "native-source.json");
+const TRANSLATIONS_DIR = path.join(ROOT, "apps", ".i18n", "native");
 const SOURCE_ROOTS: Record<NativeI18nSurface, string[]> = {
   android: [path.join(ROOT, "apps", "android", "app", "src", "main")],
   apple: [
@@ -54,6 +73,7 @@ const SOURCE_ROOTS: Record<NativeI18nSurface, string[]> = {
 
 const ANDROID_EXTENSIONS = new Set([".kt", ".kts"]);
 const APPLE_EXTENSIONS = new Set([".swift", ".plist"]);
+const NATIVE_FORMAT_RE = /%(?:\d+\$)?[@a-z]/giu;
 const APPLE_UI_MULTILINE_CALLS =
   /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*"""([\s\S]*?)"""/gu;
 const APPLE_CALL_START = /\b([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*/gu;
@@ -147,6 +167,7 @@ const GENERATED_PATH_RE = /(?:^|[\\/])(?:build|\.gradle|\.build|DerivedData)(?:$
 const EXCLUDED_PATH_RE = /(?:^|[\\/])(?:Tests?|UITests?|test|Preview(?:s)?)(?:$|[\\/])/u;
 const EXCLUDED_FILE_RE = /(?:Tests?|UITests?|Previews?|Testing)\.(?:swift|kt|kts)$/u;
 const BUILD_SETTING_RE = /\$\([A-Za-z0-9_.-]+\)/gu;
+const NATIVE_I18N_LOCALE_SET = new Set<string>(NATIVE_I18N_LOCALES);
 
 function isTranslatableCandidate(source: string, kind: string): boolean {
   if (BUILD_SETTING_RE.test(source)) {
@@ -506,6 +527,15 @@ function enclosingCallName(source: string, offset: number): string | null {
     return source.slice(0, index).match(/([A-Za-z_][A-Za-z0-9_]*)\s*$/u)?.[1] ?? null;
   }
   return null;
+}
+
+function structuralTokenSignature(source: string): string {
+  const swift = extractSwiftInterpolations(source)?.toSorted();
+  const kotlin = extractKotlinInterpolations(source)?.toSorted();
+  const nativeFormat = [...source.matchAll(NATIVE_FORMAT_RE)].map((match) => match[0]).toSorted();
+  const buildSettings = (source.match(BUILD_SETTING_RE) ?? []).toSorted();
+  const lineBreaks = (source.match(/\n/gu) ?? []).length;
+  return JSON.stringify({ swift, kotlin, nativeFormat, buildSettings, lineBreaks });
 }
 
 function addCandidate(
@@ -873,15 +903,143 @@ export async function syncNativeI18n(options: { checkOnly: boolean; write: boole
   process.stdout.write(`native-app-i18n: entries=${count} changed=${current !== expected}\n`);
 }
 
-async function main() {
-  const [command] = process.argv.slice(2);
-  if (command !== "check" && command !== "sync") {
-    throw new Error("usage: node --import tsx scripts/native-app-i18n.ts check|sync [--write]");
+async function loadGlossary(locale: string): Promise<Array<{ source: string; target: string }>> {
+  try {
+    return JSON.parse(
+      await readFile(
+        path.join(ROOT, "ui", "src", "i18n", ".i18n", `glossary.${locale}.json`),
+        "utf8",
+      ),
+    ) as Array<{ source: string; target: string }>;
+  } catch {
+    return [];
   }
+}
+
+export async function syncNativeLocale(
+  locale: string,
+  entries: NativeI18nEntry[],
+  options: NativeLocaleSyncOptions = {},
+) {
+  // Native runtime resources are owned by the Android and Apple slices; these
+  // artifacts keep the shared translation-memory handoff current between them.
+  const artifactPath = path.join(options.translationsDir ?? TRANSLATIONS_DIR, `${locale}.json`);
+  const glossary = options.glossary ?? (await loadGlossary(locale));
+  const glossaryHash = createHash("sha256").update(JSON.stringify(glossary)).digest("hex");
+  let previousRaw = "";
+  let previous: NativeTranslationArtifact = {
+    entries: [],
+    glossaryHash: "",
+    locale,
+    version: 1,
+  };
+  try {
+    previousRaw = await readFile(artifactPath, "utf8");
+    previous = JSON.parse(previousRaw) as NativeTranslationArtifact;
+  } catch {
+    // The first refresh creates the locale artifact.
+  }
+  const previousById = new Map(previous.entries.map((entry) => [entry.id, entry]));
+  const glossaryChanged = previous.glossaryHash !== glossaryHash;
+  const pending = entries
+    .filter((entry) => {
+      const current = previousById.get(entry.id);
+      return (
+        glossaryChanged || !current || current.source !== entry.source || !current.translated.trim()
+      );
+    })
+    .map((entry) => ({
+      id: entry.id,
+      source: entry.source,
+      sourcePath: entry.path,
+    }));
+  const translated = pending.length
+    ? await (options.translate ?? translateNativeEntries)(pending, locale, glossary)
+    : new Map<string, string>();
+  const artifact: NativeTranslationArtifact = {
+    version: 1,
+    locale,
+    glossaryHash,
+    entries: entries.map((entry) => ({
+      id: entry.id,
+      source: entry.source,
+      translated:
+        translated.get(entry.id) ?? previousById.get(entry.id)?.translated ?? entry.source,
+    })),
+  };
+  for (const entry of artifact.entries) {
+    if (structuralTokenSignature(entry.source) !== structuralTokenSignature(entry.translated)) {
+      throw new Error(
+        `native translation changed placeholders or line breaks for ${locale}:${entry.id}`,
+      );
+    }
+  }
+  const rendered = `${JSON.stringify(artifact, null, 2)}\n`;
+  const changed = previousRaw !== rendered;
+  if (changed) {
+    await mkdir(path.dirname(artifactPath), { recursive: true });
+    await writeFile(artifactPath, rendered, "utf8");
+  }
+  process.stdout.write(
+    `native-app-i18n: locale=${locale} entries=${entries.length} translated=${translated.size} changed=${changed}\n`,
+  );
+  return { changed, translated: translated.size };
+}
+
+export function parseNativeI18nCommand(argv: string[]): NativeI18nCommand {
+  const [command, ...args] = argv;
+  if (command !== "check" && command !== "sync") {
+    throw new Error(
+      "usage: node --import tsx scripts/native-app-i18n.ts check|sync [--write] [--locale <code>]",
+    );
+  }
+  let locale: string | undefined;
+  let write = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === "--write") {
+      write = true;
+      continue;
+    }
+    if (argument === "--locale") {
+      if (locale) {
+        throw new Error("native locale refresh accepts only one `--locale` value");
+      }
+      const value = args[index + 1];
+      if (!value || value.startsWith("-")) {
+        throw new Error("native locale refresh requires a locale value after `--locale`");
+      }
+      locale = value;
+      index += 1;
+      continue;
+    }
+    throw new Error(`unsupported native i18n argument: ${argument}`);
+  }
+  if (locale) {
+    if (command !== "sync" || !write) {
+      throw new Error("native locale refresh requires `sync --write --locale <code>`");
+    }
+    if (!NATIVE_I18N_LOCALE_SET.has(locale)) {
+      throw new Error(
+        `unsupported native locale "${locale}". Expected one of: ${NATIVE_I18N_LOCALES.join(", ")}`,
+      );
+    }
+  }
+  if (command === "check" && write) {
+    throw new Error("native i18n check does not accept `--write`");
+  }
+  return { command, locale, write };
+}
+
+async function main() {
+  const parsed = parseNativeI18nCommand(process.argv.slice(2));
   await syncNativeI18n({
-    checkOnly: command === "check",
-    write: command === "sync" && process.argv.includes("--write"),
+    checkOnly: parsed.command === "check",
+    write: parsed.command === "sync" && parsed.write,
   });
+  if (parsed.locale) {
+    await syncNativeLocale(parsed.locale, await collectNativeI18nEntries());
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
