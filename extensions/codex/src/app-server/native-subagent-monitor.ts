@@ -80,6 +80,7 @@ type MonitorOptions = {
   codexHome?: string;
   transcriptPollDelaysMs?: readonly number[];
   completionDeliveryRetryDelaysMs?: readonly number[];
+  completionDeliveryMaxAttempts?: number;
   taskRowReconcileIntervalMs?: number;
 };
 
@@ -89,6 +90,7 @@ const DEFAULT_TRANSCRIPT_POLL_DELAYS_MS = [
 const DEFAULT_COMPLETION_DELIVERY_RETRY_DELAYS_MS = [
   5_000, 15_000, 30_000, 60_000, 120_000, 300_000,
 ];
+const DEFAULT_MAX_COMPLETION_DELIVERY_ATTEMPTS = DEFAULT_COMPLETION_DELIVERY_RETRY_DELAYS_MS.length;
 const DEFAULT_TASK_ROW_RECONCILE_INTERVAL_MS = 10_000;
 const RECENT_TERMINAL_TASK_RECONCILE_GRACE_MS = 60_000;
 // Codex's recorder uses this filename contract; non-canonical names keep the
@@ -140,6 +142,7 @@ export class CodexNativeSubagentMonitor {
   private codexHome?: string;
   private transcriptPollDelaysMs: readonly number[];
   private completionDeliveryRetryDelaysMs: readonly number[];
+  private maxCompletionDeliveryAttempts: number;
   private taskRowReconcileTimer?: ReturnType<typeof setInterval>;
 
   constructor(
@@ -152,6 +155,8 @@ export class CodexNativeSubagentMonitor {
       options.transcriptPollDelaysMs ?? DEFAULT_TRANSCRIPT_POLL_DELAYS_MS;
     this.completionDeliveryRetryDelaysMs =
       options.completionDeliveryRetryDelaysMs ?? DEFAULT_COMPLETION_DELIVERY_RETRY_DELAYS_MS;
+    this.maxCompletionDeliveryAttempts =
+      options.completionDeliveryMaxAttempts ?? DEFAULT_MAX_COMPLETION_DELIVERY_ATTEMPTS;
     this.startTaskRowReconciler(
       options.taskRowReconcileIntervalMs ?? DEFAULT_TASK_ROW_RECONCILE_INTERVAL_MS,
     );
@@ -614,8 +619,39 @@ export class CodexNativeSubagentMonitor {
     });
   }
 
+  private markCompletionDeliveryFailed(
+    completion: CodexNativeSubagentCompletion,
+    error: string,
+  ): void {
+    const taskRuntime = this.getTaskRuntimeForChild(completion.childThreadId);
+    if (!taskRuntime) {
+      return;
+    }
+    taskRuntime.setDetachedTaskDeliveryStatusByRunId({
+      runId: codexNativeSubagentRunId(completion.childThreadId),
+      deliveryStatus: "failed",
+      error,
+    });
+  }
+
   private scheduleCompletionDeliveryRetry(childState: ChildState): void {
     if (!childState.pendingCompletion || childState.completionDeliveryTimer) {
+      return;
+    }
+    if (childState.completionDeliveryAttempt >= this.maxCompletionDeliveryAttempts - 1) {
+      const completion = childState.pendingCompletion;
+      childState.pendingCompletion = undefined;
+      childState.pendingCompletionEventAt = undefined;
+      childState.completionDeliveryAttempt = 0;
+      this.markCompletionDeliveryFailed(
+        completion,
+        `completion delivery abandoned after ${this.maxCompletionDeliveryAttempts} attempts`,
+      );
+      embeddedAgentLog.warn("Codex native subagent completion delivery abandoned", {
+        parentThreadId: childState.parentThreadId,
+        childThreadId: completion.childThreadId,
+        attempts: this.maxCompletionDeliveryAttempts,
+      });
       return;
     }
     const attempt = childState.completionDeliveryAttempt;

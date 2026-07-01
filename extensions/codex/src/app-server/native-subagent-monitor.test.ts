@@ -793,6 +793,64 @@ describe("CodexNativeSubagentMonitor", () => {
     );
   });
 
+  it("abandons completion delivery after max retry attempts", async () => {
+    vi.useFakeTimers();
+    const client = createClient();
+    const runtime = createRuntime();
+    // Permanently non-durable delivery
+    runtime.deliverAgentHarnessTaskCompletion.mockResolvedValue({
+      delivered: false,
+      path: "none",
+      error: "parent response silent",
+    });
+    const maxAttempts = 3;
+    const monitor = new CodexNativeSubagentMonitor(client, runtime, {
+      completionDeliveryRetryDelaysMs: [100, 200, 300],
+      completionDeliveryMaxAttempts: maxAttempts,
+    });
+    monitor.registerParent({
+      parentThreadId: "parent-thread",
+      requesterSessionKey: "agent:main:discord:channel:C123",
+      taskRuntimeScope: createTaskScope(),
+      agentId: "main",
+    });
+
+    const completion = nativeCompletionNotification({
+      agentPath: "child-thread",
+      statusLabel: "completed",
+      result: "child final result",
+    });
+
+    await notifyChildStarted(client);
+    await client.notify(completion);
+
+    // First delivery attempt happens immediately
+    expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(1);
+
+    // Advance through all retry delays
+    for (let i = 0; i < maxAttempts + 2; i++) {
+      await vi.advanceTimersByTimeAsync(500);
+    }
+
+    // Should have attempted exactly maxAttempts times (1 initial + maxAttempts-1 retries)
+    expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(maxAttempts);
+
+    // Should have marked delivery as failed
+    expect(runtime.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "codex-thread:child-thread",
+        deliveryStatus: "failed",
+        error: expect.stringContaining("abandoned after"),
+      }),
+    );
+
+    // No more retries after give-up
+    await vi.advanceTimersByTimeAsync(1_000_000);
+    expect(runtime.deliverAgentHarnessTaskCompletion).toHaveBeenCalledTimes(maxAttempts);
+
+    vi.useRealTimers();
+  });
+
   it("reconciles transcript final text before delivering empty Codex completion notifications", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-subagent-"));
     const codexHome = path.join(tempDir, "codex-home");
