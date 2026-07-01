@@ -3,7 +3,11 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
-import { resolvePluginApprovalTimeoutMs } from "../infra/plugin-approvals.js";
+import {
+  PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
+  PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
+  resolvePluginApprovalTimeoutMs,
+} from "../infra/plugin-approvals.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import type {
@@ -49,10 +53,15 @@ function findDangerousPluginNodeCommand(registry: PluginRegistry | null, command
   );
 }
 
+function normalizePolicyApprovalText(value: string, maxLength: number, fallback: string): string {
+  return (normalizeOptionalString(value) ?? fallback).slice(0, maxLength);
+}
+
 function createApprovalRuntime(params: {
   context: GatewayRequestContext;
   client: GatewayClient | null;
   pluginId: string;
+  command: string;
 }): OpenClawPluginNodeInvokePolicyContext["approvals"] | undefined {
   const manager = params.context.pluginApprovalManager;
   if (!manager) {
@@ -63,8 +72,16 @@ function createApprovalRuntime(params: {
       const timeoutMs = resolvePluginApprovalTimeoutMs(input.timeoutMs);
       const request: PluginApprovalRequestPayload = {
         pluginId: params.pluginId,
-        title: input.title.slice(0, 80),
-        description: input.description.slice(0, 256),
+        title: normalizePolicyApprovalText(
+          input.title,
+          PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
+          "Plugin approval required",
+        ),
+        description: normalizePolicyApprovalText(
+          input.description,
+          PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
+          `Plugin policy for ${params.command} requires approval.`,
+        ),
         severity: input.severity ?? "warning",
         toolName: normalizeOptionalString(input.toolName) ?? null,
         toolCallId: normalizeOptionalString(input.toolCallId) ?? null,
@@ -196,6 +213,7 @@ export async function applyPluginNodeInvokePolicy(params: {
       context: params.context,
       client: params.client,
       pluginId: entry.pluginId,
+      command: params.command,
     }),
     invokeNode,
   });
