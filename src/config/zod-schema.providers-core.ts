@@ -950,6 +950,13 @@ const ReplyToModeByChatTypeSchema = z
   })
   .strict();
 
+const DirectGroupReplyToModeByChatTypeSchema = z
+  .object({
+    direct: ReplyToModeSchema.optional(),
+    group: ReplyToModeSchema.optional(),
+  })
+  .strict();
+
 export const SlackSocketModeSchema = z
   .object({
     clientPingTimeout: z.number().int().positive().optional(),
@@ -1210,7 +1217,7 @@ export const SignalAccountSchemaBase = z
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     mediaMaxMb: z.number().int().positive().optional(),
     replyToMode: ReplyToModeSchema.optional(),
-    replyToModeByChatType: ReplyToModeByChatTypeSchema.optional(),
+    replyToModeByChatType: DirectGroupReplyToModeByChatTypeSchema.optional(),
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
     reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
     actions: z

@@ -208,9 +208,9 @@ function resolveSignalQuoteParams(opts: SignalSendOpts):
   return {
     replyToId: String(timestamp),
     params: {
-      "quote-timestamp": timestamp,
-      "quote-author": author,
-      "quote-message": opts.replyToBody ?? "",
+      quoteTimestamp: timestamp,
+      quoteAuthor: author,
+      quoteMessage: opts.replyToBody ?? "",
     },
   };
 }

@@ -21,7 +21,11 @@ import {
 } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
-import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js";
+import {
+  resolveSignalAccount,
+  resolveSignalReplyToMode,
+  type ResolvedSignalAccount,
+} from "./accounts.js";
 import { listSignalAliasDirectoryEntries, resolveSignalTarget } from "./aliases.js";
 import {
   shouldSuppressLocalSignalExecApprovalPrompt,
@@ -325,7 +329,7 @@ async function registerDeliveredSignalApprovalPayloadForReactions(
     await loadSignalApprovalReactionsModule();
   registerSignalApprovalReactionTargetForDeliveredPayload({
     cfg: params.cfg,
-    target: params.target,
+    target: { ...params.target, accountId: account.accountId },
     payload: params.payload,
     results: params.results,
     targetAuthor: account.config.account,
@@ -509,6 +513,9 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
       },
     },
     security: signalSecurityAdapter,
+    threading: {
+      resolveReplyToMode: (params) => resolveSignalReplyToMode(params),
+    },
     outbound: {
       base: {
         deliveryMode: "direct",
@@ -594,6 +601,8 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
             deps,
             abortSignal,
           }),
+        renderPresentation: (params) => renderSignalApprovalPayloadForReactions(params),
+        afterDeliverPayload: (params) => registerDeliveredSignalApprovalPayloadForReactions(params),
       },
       attachedResults: {
         channel: "signal",

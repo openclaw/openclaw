@@ -80,6 +80,9 @@ export type SignalNativeReplyContext = {
   replyToId?: string;
   author?: string;
   body?: string;
+  state?: {
+    hasReplied: boolean;
+  };
 };
 
 export type SignalEventHandlerDeps = {

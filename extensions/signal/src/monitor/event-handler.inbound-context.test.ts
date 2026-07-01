@@ -225,6 +225,7 @@ describe("signal createSignalEventHandler inbound context", () => {
       createSignalReceiveEvent({
         sourceNumber: "+15550002222",
         sourceName: "Bob",
+        timestamp: undefined,
         dataMessage: {
           timestamp: 1700000000002,
           message: "hello",
@@ -252,7 +253,10 @@ describe("signal createSignalEventHandler inbound context", () => {
     });
     const handler = createSignalEventHandler(
       createBaseSignalEventHandlerDeps({
-        cfg: { messages: { inbound: { debounceMs: 10 } } } as any,
+        cfg: {
+          messages: { inbound: { debounceMs: 10 } },
+          channels: { signal: { replyToMode: "batched" } },
+        } as any,
         deliverReplies: deliverRepliesMock,
         historyLimit: 0,
       }),
@@ -288,6 +292,7 @@ describe("signal createSignalEventHandler inbound context", () => {
       const context = requireCapturedContext();
       expect(context.BodyForAgent).toBe("first debounced message\\nsecond debounced message");
       expect(context.ReplyToId).toBe("1700000000002");
+      expect(context.ReplyThreading).toEqual({ implicitCurrentMessage: "allow" });
       expect(deliverRepliesMock.mock.calls[0]?.[0]).toMatchObject({
         replyContext: {
           replyToId: "1700000000002",

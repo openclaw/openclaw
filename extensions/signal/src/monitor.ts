@@ -41,7 +41,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
-import { resolveSignalAccount } from "./accounts.js";
+import { resolveSignalAccount, resolveSignalReplyToMode } from "./accounts.js";
 import { isSignalNativeApprovalHandlerConfigured } from "./approval-native.js";
 import {
   addSignalApprovalReactionHintToStructuredPayload,
@@ -493,6 +493,10 @@ function resolveSignalNativeReplyOptions(params: {
   };
 }
 
+function isSignalStatusNoticePayload(payload: ReplyPayload): boolean {
+  return Boolean(payload.isCompactionNotice || payload.isFallbackNotice || payload.isStatusNotice);
+}
+
 function createSignalNativeReplyResolver(params: {
   payload: ReplyPayload;
   replyContext?: SignalNativeReplyContext;
@@ -507,64 +511,28 @@ function createSignalNativeReplyResolver(params: {
   }
   const isExplicitReply =
     params.payload.replyToTag === true || params.payload.replyToCurrent === true;
+  const isStatusNotice = isSignalStatusNoticePayload(params.payload);
+  if (isStatusNotice && params.replyToMode === "off") {
+    return () => ({});
+  }
   if (isExplicitReply) {
+    return () => nativeReply;
+  }
+  if (isStatusNotice) {
     return () => nativeReply;
   }
   const planner = createReplyReferencePlanner({
     replyToMode: params.replyToMode,
     existingId: nativeReply.replyToId,
+    hasReplied: params.replyContext?.state?.hasReplied,
   });
   return () => {
     const replyToId = planner.use();
+    if (params.replyContext?.state && !isStatusNotice) {
+      params.replyContext.state.hasReplied = planner.hasReplied();
+    }
     return replyToId ? { ...nativeReply, replyToId } : {};
   };
-}
-
-function normalizeSignalReplyToMode(value: unknown): ReplyToMode | undefined {
-  return value === "off" || value === "first" || value === "all" || value === "batched"
-    ? value
-    : undefined;
-}
-
-function resolveSignalReplyToMode(params: {
-  cfg: OpenClawConfig;
-  accountId?: string;
-  chatType?: "direct" | "group";
-}): ReplyToMode {
-  const signalConfig = params.cfg.channels?.signal as
-    | {
-        replyToMode?: unknown;
-        replyToModeByChatType?: Partial<Record<"direct" | "group" | "channel", unknown>>;
-        accounts?: Record<
-          string,
-          {
-            replyToMode?: unknown;
-            replyToModeByChatType?: Partial<Record<"direct" | "group" | "channel", unknown>>;
-          }
-        >;
-      }
-    | undefined;
-  const accountConfig = params.accountId ? signalConfig?.accounts?.[params.accountId] : undefined;
-  const chatType = params.chatType;
-  if (chatType) {
-    const accountScoped = normalizeSignalReplyToMode(
-      accountConfig?.replyToModeByChatType?.[chatType],
-    );
-    if (accountScoped) {
-      return accountScoped;
-    }
-    const channelScoped = normalizeSignalReplyToMode(
-      signalConfig?.replyToModeByChatType?.[chatType],
-    );
-    if (channelScoped) {
-      return channelScoped;
-    }
-  }
-  return (
-    normalizeSignalReplyToMode(accountConfig?.replyToMode) ??
-    normalizeSignalReplyToMode(signalConfig?.replyToMode) ??
-    "all"
-  );
 }
 
 export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promise<void> {

@@ -21,6 +21,10 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   };
 });
 
+const {
+  clearSignalApprovalReactionTargetsForTest,
+  resolveSignalApprovalReactionTargetWithPersistence,
+} = await import("./approval-reactions.js");
 const { sendMessageSignal } = await import("./send.js");
 
 const SIGNAL_TEST_CFG = {
@@ -209,12 +213,13 @@ describe("sendMessageSignal receipts", () => {
       replyToBody: "original",
     });
 
+    expect(signalRpcRequestMock).toHaveBeenCalledTimes(1);
     expect(signalRpcRequestMock).toHaveBeenCalledWith(
       "send",
       expect.objectContaining({
-        "quote-timestamp": 1700000000001,
-        "quote-author": "+15550002222",
-        "quote-message": "original",
+        quoteTimestamp: 1700000000001,
+        quoteAuthor: "+15550002222",
+        quoteMessage: "original",
       }),
       expect.any(Object),
     );
@@ -225,6 +230,86 @@ describe("sendMessageSignal receipts", () => {
       replyToId: "1700000000001",
       nativeReplyStatus: "sent",
     });
+  });
+
+  it("does not treat ordinary approval-looking text as a reaction approval prompt", async () => {
+    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567894 });
+
+    await sendMessageSignal(
+      "+15551234567",
+      "Here is the command: /approve exec-live-approval allow-once|deny",
+      {
+        cfg: {
+          channels: {
+            signal: {
+              accounts: {
+                default: {
+                  httpUrl: "http://signal.test",
+                  account: "+15550001111",
+                  allowFrom: ["+15551234567"],
+                },
+              },
+            },
+          },
+          approvals: { exec: { enabled: true, mode: "targets", targets: [] } },
+        },
+      },
+    );
+
+    expect(signalRpcRequestMock).toHaveBeenCalledTimes(1);
+    expect(signalRpcRequestMock.mock.calls[0]?.[1]).toMatchObject({
+      message: "Here is the command: /approve exec-live-approval allow-once|deny",
+    });
+  });
+
+  it("adds reaction approval hints for non-presentation approval payload text", async () => {
+    clearSignalApprovalReactionTargetsForTest();
+    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567895 });
+
+    const cfg = {
+      channels: {
+        signal: {
+          accounts: {
+            default: {
+              httpUrl: "http://signal.test",
+              account: "+15550001111",
+              allowFrom: ["+15551234567"],
+            },
+          },
+        },
+      },
+      approvals: {
+        plugin: {
+          enabled: true,
+          mode: "targets" as const,
+          targets: [{ channel: "signal", to: "+15551234567" }],
+        },
+      },
+    };
+
+    await sendMessageSignal(
+      "+15551234567",
+      "Plugin approval required\nID: plugin:abc\n\nReply with: /approve plugin:abc allow-once|deny",
+      { cfg },
+    );
+
+    expect(signalRpcRequestMock.mock.calls[0]?.[1]).toMatchObject({
+      message: expect.stringContaining("React with:\n\n👍 Allow Once\n👎 Deny"),
+    });
+    await expect(
+      resolveSignalApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        conversationKey: "+15551234567",
+        messageId: "1234567895",
+        reactionKey: "👍",
+        targetAuthor: "+15550001111",
+      }),
+    ).resolves.toMatchObject({
+      approvalId: "plugin:abc",
+      approvalKind: "plugin",
+      decision: "allow-once",
+    });
+    clearSignalApprovalReactionTargetsForTest();
   });
 
   it("falls back to an ordinary send when native quote metadata is rejected", async () => {
@@ -242,11 +327,13 @@ describe("sendMessageSignal receipts", () => {
     expect(signalRpcRequestMock).toHaveBeenCalledTimes(2);
     expect(signalRpcRequestMock.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({
-        "quote-timestamp": 1700000000001,
-        "quote-author": "+15550002222",
+        quoteTimestamp: 1700000000001,
+        quoteAuthor: "+15550002222",
       }),
     );
-    expect(signalRpcRequestMock.mock.calls[1]?.[1]).not.toHaveProperty("quote-timestamp");
+    expect(signalRpcRequestMock.mock.calls[1]?.[1]).not.toHaveProperty("quoteTimestamp");
+    expect(signalRpcRequestMock.mock.calls[1]?.[1]).not.toHaveProperty("quoteAuthor");
+    expect(signalRpcRequestMock.mock.calls[1]?.[1]).not.toHaveProperty("quoteMessage");
     expect(result.messageId).toBe("1234567893");
     expect(result.receipt.replyToId).toBe("1700000000001");
     expect(result.receipt.parts[0]?.replyToId).toBe("1700000000001");
