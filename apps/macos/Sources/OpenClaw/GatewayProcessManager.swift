@@ -118,6 +118,9 @@ final class GatewayProcessManager {
         Task { [weak self] in
             guard let self else { return }
             if await self.attachExistingGatewayIfAvailable() {
+                if case .attachedExisting = self.status {
+                    await self.ensureLaunchAgentEnabledIfNeeded()
+                }
                 return
             }
             await self.enableLaunchdGateway()
@@ -437,6 +440,10 @@ extension GatewayProcessManager {
 
     func setTestingLastFailureReason(_ reason: String?) {
         self.lastFailureReason = reason
+    }
+
+    func setTestingStatus(_ status: Status) {
+        self.status = status
     }
 
     func _testAttachExistingGatewayIfAvailable() async -> Bool {
