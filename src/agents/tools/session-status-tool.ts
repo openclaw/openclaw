@@ -783,7 +783,7 @@ export function createSessionStatusTool(opts?: {
         (resolved.entry.providerOverride?.trim() || resolved.entry.modelOverride?.trim()),
       );
       const runtimeProviderForCard = runtimeModelIdentity.provider?.trim();
-      const runtimeModelForCard = runtimeModelIdentity.model.trim();
+      const runtimeModelForCard = typeof runtimeModelIdentity.model === "string" ? runtimeModelIdentity.model.trim() : "";
       const defaultProviderForCard = hasExplicitModelOverride
         ? configured.provider
         : (runtimeProviderForCard ?? "");
