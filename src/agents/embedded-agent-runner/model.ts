@@ -1330,6 +1330,11 @@ function resolveConfiguredFallbackModel(params: {
     compat: fallbackCompat,
     reasoning: metadataModel?.reasoning,
   });
+  const resolvedFallbackMaxTokens =
+    configuredModel?.maxTokens ??
+    providerConfig?.maxTokens ??
+    providerConfig?.models?.[0]?.maxTokens ??
+    staticCatalogModel?.maxTokens;
   return normalizeResolvedModel({
     provider,
     cfg,
@@ -1365,12 +1370,17 @@ function resolveConfiguredFallbackModel(params: {
             providerConfig?.contextTokens ??
             providerConfig?.models?.[0]?.contextTokens ??
             staticCatalogModel?.contextTokens,
-          maxTokens:
-            configuredModel?.maxTokens ??
-            providerConfig?.maxTokens ??
-            providerConfig?.models?.[0]?.maxTokens ??
-            staticCatalogModel?.maxTokens ??
-            DEFAULT_CONTEXT_TOKENS,
+          // Do NOT synthesize a `maxTokens` fallback from DEFAULT_CONTEXT_TOKENS.
+          // For strict OpenAI-compatible providers, `model.maxTokens` becomes
+          // the request `max_completion_tokens` (see openai-transport-stream);
+          // fabricating an unrelated wire-level cap when the user configured
+          // no output limit produces HTTP 400 ("Param Incorrect") on providers
+          // whose ceiling is lower than 200k tokens. When nothing is known,
+          // leave it undefined so the transport omits the field and the
+          // provider applies its own default (regression: #98295).
+          ...(resolvedFallbackMaxTokens !== undefined
+            ? { maxTokens: resolvedFallbackMaxTokens }
+            : {}),
           ...(resolvedParams ? { params: resolvedParams } : {}),
           ...(requestTimeoutMs !== undefined ? { requestTimeoutMs } : {}),
           headers: requestConfig.headers,
