@@ -1442,4 +1442,59 @@ describe("tui command handlers", () => {
 
     expect(openOverlay).toHaveBeenCalledTimes(1);
   });
+
+  it("/usage reset clears the stale local responseUsage after the gateway patch", async () => {
+    // Regression: after /usage reset sends responseUsage: null and the gateway deletes
+    // the field, applySessionInfoFromPatch skips absent fields. The command handler must
+    // explicitly clear the stale local value so no-arg cycles and subsequent refreshes
+    // start from the correct effective mode.
+    const patchSession = vi.fn().mockResolvedValue({
+      entry: {
+        // Gateway returns the updated entry without the responseUsage field (it was deleted).
+        sessionId: "sess-reset",
+        updatedAt: Date.now(),
+      },
+    });
+    const { handleCommand, addSystem, state } = createHarness({ patchSession });
+    const sessionInfo = state.sessionInfo as {
+      responseUsage?: string;
+      effectiveResponseUsage?: string;
+    };
+    sessionInfo.responseUsage = "tokens";
+    sessionInfo.effectiveResponseUsage = "tokens";
+
+    await handleCommand("/usage reset");
+
+    expect(patchSession).toHaveBeenCalledWith(
+      expect.objectContaining({ responseUsage: null }),
+    );
+    expect(addSystem).toHaveBeenCalledWith("usage footer: reset to default");
+    // Both stale local values must be cleared so the toggle/display is not stale
+    // until refreshSessionInfo() repopulates the inherited default.
+    expect(sessionInfo.responseUsage).toBeUndefined();
+    expect(sessionInfo.effectiveResponseUsage).toBeUndefined();
+  });
+
+  it("/usage no-arg toggle cycles from effectiveResponseUsage when the session override is unset", async () => {
+    // Regression: when the session has no explicit responseUsage but the config default
+    // is "tokens", the toggle should cycle tokens→full, not off→tokens.
+    const patchSession = vi.fn().mockResolvedValue({
+      entry: { sessionId: "sess-toggle", updatedAt: Date.now(), responseUsage: "full" },
+    });
+    const { handleCommand, addSystem, state } = createHarness({ patchSession });
+    // No raw responseUsage on session, but effective (from config default) is "tokens".
+    const sessionInfo = state.sessionInfo as {
+      responseUsage?: string;
+      effectiveResponseUsage?: string;
+    };
+    sessionInfo.responseUsage = undefined;
+    sessionInfo.effectiveResponseUsage = "tokens";
+
+    await handleCommand("/usage");
+
+    expect(patchSession).toHaveBeenCalledWith(
+      expect.objectContaining({ responseUsage: "full" }),
+    );
+    expect(addSystem).toHaveBeenCalledWith("usage footer: full");
+  });
 });

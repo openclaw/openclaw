@@ -6,6 +6,7 @@ import { t } from "../../i18n/index.ts";
 import { resolveCanvasIframeUrl } from "../canvas-url.ts";
 import { resolveEmbedSandbox, type EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
+import { isMarkdownBlockArtText } from "../markdown.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { formatToolDetail, resolveToolDisplay } from "../tool-display.ts";
 import type { ToolCard } from "../types/chat-types.ts";
@@ -550,6 +551,7 @@ function renderToolDataBlock(params: {
   empty?: boolean;
 }) {
   const { label, text, expanded, empty } = params;
+  const codeClass = isMarkdownBlockArtText(text) ? "markdown-block-art" : "";
   return html`
     <div class="chat-tool-card__block ${expanded ? "chat-tool-card__block--expanded" : ""}">
       <div class="chat-tool-card__block-header">
@@ -559,7 +561,9 @@ function renderToolDataBlock(params: {
       ${empty
         ? html`<div class="chat-tool-card__block-empty muted">${text}</div>`
         : expanded
-          ? html`<pre class="chat-tool-card__block-content"><code>${text}</code></pre>`
+          ? html`<pre
+              class="chat-tool-card__block-content"
+            ><code class=${codeClass}>${text}</code></pre>`
           : html`<div class="chat-tool-card__block-preview mono">
               ${getTruncatedPreview(text)}
             </div>`}

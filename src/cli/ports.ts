@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveLsofCommandSync } from "../infra/ports-lsof.js";
-import { tryListenOnPort } from "../infra/ports-probe.js";
+import { probePortUsage } from "../infra/ports-probe.js";
 import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import { resolvePositiveTimerTimeoutMs, resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { sleep } from "../utils.js";
@@ -131,16 +131,12 @@ function killPortWithFuser(port: number, signal: "SIGTERM" | "SIGKILL"): PortPro
 }
 
 async function isPortBusy(port: number): Promise<boolean> {
-  try {
-    await tryListenOnPort({ port, exclusive: true });
-    return false;
-  } catch (err: unknown) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "EADDRINUSE") {
-      return true;
-    }
-    throw err instanceof Error ? err : new Error(String(err));
-  }
+  // Route through probePortUsage which probes all four endpoints
+  // (127.0.0.1, 0.0.0.0, ::1, ::) instead of a single hostless bind
+  // that defaults to IPv6 wildcard and misses IPv4-only occupants.
+  // Treat "unknown" as busy — inconclusive probe failures must not cause
+  // forceFreePortAndWait to exit early before lsof/fuser can inspect.
+  return (await probePortUsage(port)) !== "free";
 }
 
 export function parseLsofOutput(output: string): PortProcess[] {
@@ -152,7 +148,8 @@ export function parseLsofOutput(output: string): PortProcess[] {
       if (current.pid) {
         results.push(current as PortProcess);
       }
-      current = { pid: Number.parseInt(line.slice(1), 10) };
+      const rawPid = Number.parseInt(line.slice(1), 10);
+      current = Number.isFinite(rawPid) && rawPid > 0 ? { pid: rawPid } : {};
     } else if (line.startsWith("c")) {
       current.command = line.slice(1);
     }

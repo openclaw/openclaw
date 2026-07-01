@@ -1336,6 +1336,8 @@ export const it: TranslationMap = {
     settings: "Impostazioni chat",
     thinkingToggle: "Attiva/disattiva output di pensiero/elaborazione dell'assistente",
     toolCallsToggle: "Attiva/disattiva chiamate agli strumenti e risultati strumenti",
+    commentaryToggle: "Mantieni il commento dopo la risposta finale",
+    commentaryLabel: "Commento",
     autoScrollMode: "Modalità di scorrimento automatico",
     autoScrollAlways: "Sempre",
     autoScrollNearBottom: "Vicino al fondo",
@@ -1448,6 +1450,7 @@ export const it: TranslationMap = {
     jaJP: "日本語 (Giapponese)",
     ko: "한국어 (Coreano)",
     fr: "Français (Francese)",
+    hi: "हिन्दी (Hindi)",
     ar: "العربية (Arabo)",
     it: "Italiano (Italiano)",
     tr: "Türkçe (Turco)",
@@ -1458,6 +1461,7 @@ export const it: TranslationMap = {
     vi: "Tiếng Việt (Vietnamita)",
     nl: "Nederlands (Olandese)",
     fa: "فارسی (Persiano)",
+    ru: "Русский (Russian)",
   },
   cron: {
     quickCreate: {

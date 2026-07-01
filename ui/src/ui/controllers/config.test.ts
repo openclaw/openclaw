@@ -1143,6 +1143,29 @@ describe("runUpdate", () => {
     });
   });
 
+  it("surfaces managed-service handoff command when the gateway cannot start it", async () => {
+    const request = vi.fn().mockResolvedValue({
+      ok: false,
+      result: { status: "skipped", reason: "managed-service-handoff-unavailable" },
+      handoff: {
+        status: "unavailable",
+        command: "openclaw update --yes",
+        message:
+          "OpenClaw updates cannot safely run inside the live gateway process without a managed-service handoff.",
+      },
+    });
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+
+    await runUpdate(state);
+
+    expect(state.updateStatusBanner).toEqual({
+      tone: "warn",
+      text: "Update skipped: managed-service-handoff-unavailable. Run `openclaw update --yes` from a shell outside the Gateway process.",
+    });
+  });
+
   it("stores the expected post-update version when update.run succeeds", async () => {
     const request = vi.fn().mockResolvedValue({
       ok: true,

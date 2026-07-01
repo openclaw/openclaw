@@ -31,18 +31,20 @@ openclaw skills install git:owner/repo
 openclaw skills install git:owner/repo@main
 openclaw skills install ./path/to/skill --as custom-name
 openclaw skills install @owner/<slug> --force
+openclaw skills install @owner/<slug> --acknowledge-clawhub-risk
 openclaw skills install @owner/<slug> --agent <id>
 openclaw skills install @owner/<slug> --global
 openclaw skills update @owner/<slug>
+openclaw skills update @owner/<slug> --acknowledge-clawhub-risk
 openclaw skills update @owner/<slug> --global
 openclaw skills update --all
 openclaw skills update --all --agent <id>
 openclaw skills update --all --global
-openclaw skills verify <slug>
-openclaw skills verify <slug> --version <version>
-openclaw skills verify <slug> --tag <tag>
-openclaw skills verify <slug> --card
-openclaw skills verify <slug> --global
+openclaw skills verify @owner/<slug>
+openclaw skills verify @owner/<slug> --version <version>
+openclaw skills verify @owner/<slug> --tag <tag>
+openclaw skills verify @owner/<slug> --card
+openclaw skills verify @owner/<slug> --global
 openclaw skills list
 openclaw skills list --eligible
 openclaw skills list --json
@@ -97,6 +99,14 @@ Notes:
 - `install --version <version>` applies only to ClawHub skill refs.
 - `install --force` overwrites an existing workspace skill folder for the same
   slug.
+- Community ClawHub skill installs and updates check trust before downloading.
+  Versioned community archive releases use exact-release trust metadata.
+  Resolver-backed GitHub skills rely on ClawHub's install resolver to enforce
+  scan and force-install policy before it returns a pinned commit. Malicious or
+  blocked community releases are refused. Risky community releases require
+  review and `--acknowledge-clawhub-risk` when a non-interactive command should
+  continue after that review. Official ClawHub skill publishers and bundled
+  OpenClaw skill sources bypass this release-trust prompt.
 - `--global` targets the shared managed skills directory and cannot be combined
   with `--agent <id>`.
 - `--agent <id>` targets one configured agent workspace and overrides current
@@ -105,8 +115,11 @@ Notes:
   target the shared managed skills directory instead of the workspace.
 - `update --all` updates tracked ClawHub installs in the selected workspace, or
   in the shared managed skills directory when combined with `--global`.
-- `verify <slug>` prints ClawHub's `clawhub.skill.verify.v1` JSON envelope by
-  default. There is no `--json` flag because JSON is already the default.
+- `verify @owner/<slug>` prints ClawHub's `clawhub.skill.verify.v1` JSON
+  envelope by default. There is no `--json` flag because JSON is already the
+  default. Bare slugs remain accepted for compatibility when the skill is
+  already installed or unambiguous, but owner-qualified refs avoid publisher
+  ambiguity.
 - When ClawHub returns server-resolved source provenance, verify JSON also
   includes a commit-pinned `openclaw.verifiedSourceUrl`. Unavailable or
   self-declared source URLs stay only in the raw provenance envelope and are not

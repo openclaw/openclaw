@@ -1,6 +1,7 @@
 // Qa Lab tests cover suite plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { CRABLINE_SERVER_CHANNELS } from "@openclaw/crabline";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { QA_EVIDENCE_FILENAME, QA_EVIDENCE_SUMMARY_KIND } from "./evidence-summary.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
@@ -167,6 +168,32 @@ describe("qa suite", () => {
     expect(qaSuiteProgressTesting.sanitizeQaSuiteProgressValue("\u0000\u0001")).toBe("<empty>");
   });
 
+  it("includes effective channel driver in run start progress logs", () => {
+    expect(
+      qaSuiteProgressTesting.formatQaSuiteRunStartProgress({
+        selectedScenarioCount: 80,
+        concurrency: 8,
+        transportId: "qa-channel",
+      }),
+    ).toBe("run start: scenarios=80 concurrency=8 transport=qa-channel");
+
+    expect(
+      qaSuiteProgressTesting.formatQaSuiteRunStartProgress({
+        selectedScenarioCount: 80,
+        concurrency: 1,
+        transportId: "qa-channel",
+        channelDriverSelection: {
+          capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+          channel: "telegram",
+          channelDriver: "crabline",
+          smokeArtifactPath: "crabline-fake-provider-smoke.json",
+        },
+      }),
+    ).toBe(
+      "run start: scenarios=80 concurrency=1 transport=qa-channel channelDriver=crabline channel=telegram",
+    );
+  });
+
   it("records gateway RSS peak and trace samples", () => {
     expect(
       qaSuiteProgressTesting.buildQaSuiteRuntimeMetrics({
@@ -274,6 +301,36 @@ describe("qa suite", () => {
     }
   });
 
+  it("can return evidence without writing duplicate child evidence files", async () => {
+    const outputDir = await tempDirs.makeTempDir("qa-suite-artifacts-memory-evidence-");
+    try {
+      const artifacts = await qaSuiteProgressTesting.writeQaSuiteArtifacts({
+        outputDir,
+        startedAt: new Date("2026-04-11T00:00:00.000Z"),
+        finishedAt: new Date("2026-04-11T00:01:00.000Z"),
+        scenarios: [{ name: "Baseline", status: "pass", steps: [] }],
+        scenarioDefinitions: [makeQaSuiteTestScenario("baseline")],
+        transport: {
+          id: "qa-channel",
+          createReportNotes: () => [],
+        } as unknown as QaTransportAdapter,
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.5",
+        alternateModel: "mock-openai/gpt-5.5-alt",
+        fastMode: true,
+        concurrency: 1,
+        writeEvidenceFile: false,
+      });
+
+      expect(artifacts.evidence?.kind).toBe(QA_EVIDENCE_SUMMARY_KIND);
+      await expect(fs.access(artifacts.evidencePath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(artifacts.reportPath)).resolves.toBeUndefined();
+      await expect(fs.access(artifacts.summaryPath)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(outputDir, { recursive: true, force: true });
+    }
+  });
+
   it("writes Crabline channel-driver smoke artifacts when selected", async () => {
     const outputDir = await tempDirs.makeTempDir("qa-suite-crabline-");
     try {
@@ -330,7 +387,7 @@ describe("qa suite", () => {
       };
       expect(matrix.report?.result).toMatchObject({
         selectedChannel: "telegram",
-        supportedChannels: ["telegram"],
+        supportedChannels: [...CRABLINE_SERVER_CHANNELS].toSorted(),
       });
       const smoke = JSON.parse(
         await fs.readFile(path.join(outputDir, "crabline-fake-provider-smoke.json"), "utf8"),
@@ -433,6 +490,7 @@ describe("qa suite", () => {
           enabledPluginIds: ["acpx"],
           transportReadyTimeoutMs: 180_000,
           forcedRuntime: "codex",
+          writeEvidenceFile: false,
         },
       }),
     ).toMatchObject({
@@ -445,6 +503,7 @@ describe("qa suite", () => {
       enabledPluginIds: ["acpx"],
       transportReadyTimeoutMs: 180_000,
       forcedRuntime: "codex",
+      writeEvidenceFile: false,
     });
   });
 

@@ -297,6 +297,7 @@ const SESSION_EVENT_ROW_FIELDS = [
   "compactionCheckpointCount",
   "contextTokens",
   "displayName",
+  "effectiveResponseUsage",
   "endedAt",
   "elevatedLevel",
   "effectiveFastMode",

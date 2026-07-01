@@ -17,6 +17,7 @@ import {
   type OpenAICompletionsToolChoice,
   type OpenAIToolProjection,
 } from "../../agents/openai-tool-projection.js";
+import { buildGuardedModelFetch } from "../../agents/provider-transport-fetch.js";
 import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
@@ -51,6 +52,7 @@ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copi
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { mapOpenAIStopReason } from "./openai-stop-reason.js";
 import { buildBaseOptions } from "./simple-options.js";
+import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 /**
@@ -88,6 +90,13 @@ function isToolCallBlock(block: { type: string }): block is ToolCall {
 
 function isImageContentBlock(block: { type: string }): block is ImageContent {
   return block.type === "image";
+}
+
+const EMPTY_TOOL_RESULT_TEXT = "(no output)";
+
+function sanitizeToolResultText(text: string, fallback: string): string {
+  const sanitized = sanitizeSurrogates(text);
+  return sanitized.trim().length > 0 ? sanitized : fallback;
 }
 
 export interface OpenAICompletionsOptions extends StreamOptions {
@@ -608,6 +617,7 @@ function createClient(
     baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model) : model.baseUrl,
     dangerouslyAllowBrowser: true,
     defaultHeaders,
+    fetch: buildGuardedModelFetch(model),
   });
 }
 
@@ -1128,18 +1138,19 @@ export function convertMessages(
         const toolMsg = transformedMessages[j] as ToolResultMessage;
 
         // Extract text and image content
-        const textResult = toolMsg.content
-          .filter(isTextContentBlock)
-          .map((block) => block.text)
-          .join("\n");
+        const textResult = extractToolResultText(toolMsg.content);
+        const mediaPlaceholder = describeToolResultMediaPlaceholder(toolMsg.content);
         const hasImages = toolMsg.content.some((c) => c.type === "image");
 
         // Always send tool result with text (or placeholder if only images)
-        const hasText = textResult.length > 0;
+        const content = sanitizeToolResultText(
+          textResult,
+          mediaPlaceholder ?? EMPTY_TOOL_RESULT_TEXT,
+        );
         // Some providers require the 'name' field in tool results
         const toolResultMsg: ChatCompletionToolMessageParam = {
           role: "tool",
-          content: sanitizeSurrogates(hasText ? textResult : "(see attached image)"),
+          content,
           tool_call_id: toolMsg.toolCallId,
         };
         if (compat.requiresToolResultName && toolMsg.toolName) {

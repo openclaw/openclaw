@@ -206,12 +206,19 @@ function readRequiredFlagValue(argv: string[], index: number, flag: string): str
 }
 
 function validateCliArgs(argv: string[]): void {
+  const seenSingleValueFlags = new Set<string>();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? "";
     if (BOOLEAN_FLAGS.has(arg)) {
       continue;
     }
     if (VALUE_FLAGS.has(arg)) {
+      if (arg !== "--case") {
+        if (seenSingleValueFlags.has(arg)) {
+          throw new CliArgumentError(`${arg} was provided more than once`);
+        }
+        seenSingleValueFlags.add(arg);
+      }
       readRequiredFlagValue(argv, index, arg);
       index += 1;
       continue;
@@ -281,6 +288,13 @@ function resolveOutputPath(raw: string | undefined): string | undefined {
 function resolveCases(caseIds: string[]): GatewayBenchCase[] {
   if (caseIds.length === 0) {
     return [...GATEWAY_CASES];
+  }
+  const seenIds = new Set<string>();
+  for (const id of caseIds) {
+    if (seenIds.has(id)) {
+      throw new CliArgumentError(`Duplicate --case "${id}"`);
+    }
+    seenIds.add(id);
   }
   const byId = new Map(GATEWAY_CASES.map((benchCase) => [benchCase.id, benchCase]));
   return caseIds.map((id) => {

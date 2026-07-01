@@ -2,7 +2,9 @@
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
-describe("docs-i18n behavior baselines", () => {
+const hasGoToolchain = spawnSync("go", ["version"], { encoding: "utf8" }).status === 0;
+
+describe.skipIf(!hasGoToolchain)("docs-i18n behavior baselines", () => {
   it("keeps behavior fixtures passing", () => {
     const result = spawnSync(
       "go",

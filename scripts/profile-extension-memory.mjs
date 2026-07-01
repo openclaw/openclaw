@@ -3,6 +3,7 @@
 // Profiles peak RSS for built bundled plugin entrypoints and emits a JSON
 // report suitable for extension memory budget review.
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -27,6 +28,13 @@ const activeCaseChildren = new Set();
 const parentSignalHandlers = new Map();
 let parentSignalHandlersInstalled = false;
 let parentSignalShutdownStarted = false;
+
+function defaultJsonReportPath() {
+  return path.join(
+    os.tmpdir(),
+    `openclaw-extension-memory-${process.pid}-${Date.now()}-${randomUUID()}.json`,
+  );
+}
 
 function printHelp() {
   console.log(`Usage: node scripts/profile-extension-memory.mjs [options]
@@ -429,7 +437,7 @@ async function main() {
 
   const tmpHome = mkdtempSync(path.join(os.tmpdir(), "openclaw-extension-memory-"));
   const hookPath = path.join(tmpHome, "measure-rss.mjs");
-  const jsonPath = options.jsonPath ?? path.join(os.tmpdir(), "openclaw-extension-memory.json");
+  const jsonPath = options.jsonPath ?? defaultJsonReportPath();
 
   writeFileSync(
     hookPath,

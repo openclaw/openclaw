@@ -63,6 +63,45 @@ export function updateActiveTurnItemIds(
   activeItemIds.delete(itemId);
 }
 
+export function updateActiveCompletionBlockerItemIds(
+  notification: CodexServerNotification,
+  activeItemIds: Set<string>,
+): void {
+  if (notification.method !== "item/started" && notification.method !== "item/completed") {
+    return;
+  }
+  const itemId = readNotificationItemId(notification);
+  if (!itemId) {
+    return;
+  }
+  if (notification.method === "item/completed") {
+    activeItemIds.delete(itemId);
+    return;
+  }
+  const item = readCodexNotificationItem(notification.params);
+  if (item && isCompletionBlockingItem(item)) {
+    activeItemIds.add(itemId);
+  }
+}
+
+function isCompletionBlockingItem(item: CodexThreadItem): boolean {
+  // Codex emits paired item/started and item/completed notifications for these
+  // execution items. Completion must not time out while any pair is still open.
+  switch (item.type) {
+    case "collabAgentToolCall":
+    case "commandExecution":
+    case "dynamicToolCall":
+    case "fileChange":
+    case "imageGeneration":
+    case "imageView":
+    case "mcpToolCall":
+    case "webSearch":
+      return true;
+    default:
+      return false;
+  }
+}
+
 function isCompletedAssistantNotification(notification: CodexServerNotification): boolean {
   if (!isJsonObject(notification.params)) {
     return false;

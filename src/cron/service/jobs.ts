@@ -40,6 +40,9 @@ const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 const STAGGER_OFFSET_CACHE_MAX = 4096;
 const staggerOffsetCache = new Map<string, number>();
 
+type CronAgentTurnPayload = Extract<CronPayload, { kind: "agentTurn" }>;
+type CronAgentTurnPayloadPatch = Extract<CronPayloadPatch, { kind: "agentTurn" }>;
+
 /** Default retry delays applied after consecutive cron execution errors. */
 export const DEFAULT_ERROR_BACKOFF_SCHEDULE_MS = [
   30_000,
@@ -176,7 +179,13 @@ function isStaggeredCronRunAtMs(job: CronJob, runAtMs: number): boolean {
   if (job.schedule.kind !== "cron" || !isFiniteTimestamp(runAtMs)) {
     return false;
   }
-  const previous = computeStaggeredCronPreviousRunAtMs(job, runAtMs + 1);
+  // Probe past the candidate second. Croner-style second-granular schedules
+  // normalize a 1ms probe back to the candidate's second, so
+  // `previousRuns(1, runAtMs + 1)` returns the slot before the candidate
+  // rather than the candidate itself and exact-second slots get misclassified
+  // as stale. A 1s probe lands past the candidate second, matching the cursor
+  // step used elsewhere in this file (cf. #81691).
+  const previous = computeStaggeredCronPreviousRunAtMs(job, runAtMs + 1_000);
   return previous === runAtMs;
 }
 
@@ -897,6 +906,42 @@ export function applyJobPatch(
   }
 }
 
+function applyAgentTurnToolsAllowPatch(
+  payload: CronAgentTurnPayload,
+  patch: CronAgentTurnPayloadPatch,
+  existing?: CronAgentTurnPayload,
+): void {
+  if (Array.isArray(patch.toolsAllow)) {
+    payload.toolsAllow = patch.toolsAllow;
+    // Same-kind edits keep the marker only when the default list is unchanged;
+    // kind replacements carry the cron-tool-stamped marker into persistence.
+    if (
+      patch.toolsAllowIsDefault === true &&
+      (!existing || (existing.toolsAllowIsDefault === true && toolsAllowEqual(existing, patch)))
+    ) {
+      payload.toolsAllowIsDefault = true;
+    } else {
+      delete payload.toolsAllowIsDefault;
+    }
+  } else if (patch.toolsAllow === null) {
+    delete payload.toolsAllow;
+    delete payload.toolsAllowIsDefault;
+  }
+}
+
+function toolsAllowEqual(
+  left: Pick<CronAgentTurnPayload, "toolsAllow">,
+  right: Pick<CronAgentTurnPayloadPatch, "toolsAllow">,
+): boolean {
+  const rightToolsAllow = right.toolsAllow;
+  return (
+    Array.isArray(left.toolsAllow) &&
+    Array.isArray(rightToolsAllow) &&
+    left.toolsAllow.length === rightToolsAllow.length &&
+    left.toolsAllow.every((toolName, index) => toolName === rightToolsAllow[index])
+  );
+}
+
 function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronPayload {
   if (patch.kind !== existing.kind) {
     return buildPayloadFromPatch(patch);
@@ -943,7 +988,7 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
     return buildPayloadFromPatch(patch);
   }
 
-  const next: Extract<CronPayload, { kind: "agentTurn" }> = { ...existing };
+  const next: CronAgentTurnPayload = { ...existing };
   if (typeof patch.message === "string") {
     next.message = patch.message;
   }
@@ -957,13 +1002,11 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   } else if (patch.fallbacks === null) {
     delete next.fallbacks;
   }
-  if (Array.isArray(patch.toolsAllow)) {
-    next.toolsAllow = patch.toolsAllow;
-  } else if (patch.toolsAllow === null) {
-    delete next.toolsAllow;
-  }
+  applyAgentTurnToolsAllowPatch(next, patch, existing);
   if (typeof patch.thinking === "string") {
     next.thinking = patch.thinking;
+  } else if (patch.thinking === null) {
+    delete next.thinking;
   }
   if (typeof patch.timeoutSeconds === "number") {
     next.timeoutSeconds = patch.timeoutSeconds;
@@ -1005,17 +1048,18 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     throw new Error('cron.update payload.kind="agentTurn" requires message');
   }
 
-  return {
+  const next: CronAgentTurnPayload = {
     kind: "agentTurn",
     message: patch.message,
     model: typeof patch.model === "string" ? patch.model : undefined,
     fallbacks: Array.isArray(patch.fallbacks) ? patch.fallbacks : undefined,
-    toolsAllow: Array.isArray(patch.toolsAllow) ? patch.toolsAllow : undefined,
-    thinking: patch.thinking,
+    thinking: typeof patch.thinking === "string" ? patch.thinking : undefined,
     timeoutSeconds: patch.timeoutSeconds,
     lightContext: patch.lightContext,
     allowUnsafeExternalContent: patch.allowUnsafeExternalContent,
   };
+  applyAgentTurnToolsAllowPatch(next, patch);
+  return next;
 }
 
 function mergeCronDelivery(

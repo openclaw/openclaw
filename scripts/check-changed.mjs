@@ -49,10 +49,19 @@ const RUNTIME_SIDECAR_BASELINE_PATH_RE =
 const CANVAS_A2UI_NATIVE_RESOURCE_PATH_RE =
   /^(?:pnpm-lock\.yaml$|apps\/shared\/OpenClawKit\/Sources\/OpenClawKit\/Resources\/CanvasA2UI\/|extensions\/canvas\/(?:package\.json$|scripts\/bundle-a2ui\.mjs$|src\/host\/a2ui(?:\/(?:index\.html|a2ui\.bundle\.js|\.bundle\.hash)$|-app\/))|scripts\/(?:bundle-a2ui|sync-native-a2ui)\.mjs$)/u;
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
-const TARGETED_CORE_LINT_PATH_LIMIT = 8;
+const EXTENSIONS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.extensions.json";
+const SCRIPTS_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.scripts.json";
+const TARGETED_LINT_PATH_LIMIT = 8;
 const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
+const LINTABLE_EXTENSION_PATH_RE = /^extensions\/[^/]+\/.+\.[cm]?[jt]sx?$/u;
+const LINTABLE_SCRIPT_PATH_RE = /^scripts\/.+\.[cm]?[jt]sx?$/u;
+const MARKDOWN_LINT_OPTIMIZATION_NEUTRAL_PATH_RE = /^(?:docs\/|README\.md$|.*\.mdx?$)/u;
 const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$/u;
+const EXTENSION_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
+  /^(?:test\/scripts\/|\.github\/workflows\/ci\.yml$)/u;
+const SCRIPT_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
+  /^(?:test\/scripts\/|\.github\/workflows\/ci\.yml$)/u;
 const ANDROID_VERSION_SYNC_PATHS = new Set([
   "apps/android/CHANGELOG.md",
   "apps/android/Config/Version.properties",
@@ -413,10 +422,32 @@ export function createChangedCheckPlan(result, options = {}) {
     addLint("lint core", ["lint:core"]);
   }
   if (lanes.extensions || lanes.extensionTests) {
-    addLint("lint extensions", ["lint:extensions"]);
+    const extensionLintCommand = createTargetedExtensionLintCommand(result.paths, baseEnv);
+    if (extensionLintCommand) {
+      addCommand(
+        extensionLintCommand.name,
+        extensionLintCommand.bin,
+        extensionLintCommand.args,
+        extensionLintCommand.env,
+      );
+    } else {
+      addLint("lint extensions", ["lint:extensions"]);
+    }
   }
   if (lanes.tooling || lanes.liveDockerTooling) {
-    addLint("lint scripts", ["lint:scripts"]);
+    const scriptLintCommand = createTargetedScriptLintCommand(result.paths, baseEnv);
+    if (scriptLintCommand) {
+      addLint("lint docker-e2e", ["lint:docker-e2e"]);
+      addLint("raw HTTP/2 import guard", ["lint:tmp:no-raw-http2-imports"]);
+      addCommand(
+        scriptLintCommand.name,
+        scriptLintCommand.bin,
+        scriptLintCommand.args,
+        scriptLintCommand.env,
+      );
+    } else {
+      addLint("lint scripts", ["lint:scripts"]);
+    }
   }
   if (lanes.apps && shouldSkipAppLintForMissingSwiftlint({ ...options, env: baseEnv })) {
     addCommand(
@@ -466,29 +497,73 @@ export function createChangedCheckPlan(result, options = {}) {
 }
 
 export function createTargetedCoreLintCommand(paths, env = process.env, options = {}) {
+  return createTargetedOxlintCommand({
+    env,
+    label: "core",
+    lintablePathRe: LINTABLE_CORE_PATH_RE,
+    neutralPathRe: CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
+    paths,
+    tsconfig: CORE_OXLINT_TS_CONFIG,
+    ...options,
+  });
+}
+
+export function createTargetedExtensionLintCommand(paths, env = process.env, options = {}) {
+  return createTargetedOxlintCommand({
+    env,
+    label: "extension",
+    lintablePathRe: LINTABLE_EXTENSION_PATH_RE,
+    neutralPathRe: EXTENSION_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
+    paths,
+    tsconfig: EXTENSIONS_OXLINT_TS_CONFIG,
+    ...options,
+  });
+}
+
+export function createTargetedScriptLintCommand(paths, env = process.env, options = {}) {
+  return createTargetedOxlintCommand({
+    env,
+    label: "script",
+    lintablePathRe: LINTABLE_SCRIPT_PATH_RE,
+    neutralPathRe: SCRIPT_LINT_OPTIMIZATION_NEUTRAL_PATH_RE,
+    paths,
+    tsconfig: SCRIPTS_OXLINT_TS_CONFIG,
+    ...options,
+  });
+}
+
+function createTargetedOxlintCommand({
+  env = process.env,
+  fileExists = existsSync,
+  label,
+  lintablePathRe,
+  neutralPathRe,
+  paths,
+  tsconfig,
+}) {
   if (
     paths.some(
       (changedPath) =>
-        !LINTABLE_CORE_PATH_RE.test(changedPath) &&
-        !CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath),
+        !lintablePathRe.test(changedPath) &&
+        !neutralPathRe.test(changedPath) &&
+        !MARKDOWN_LINT_OPTIMIZATION_NEUTRAL_PATH_RE.test(changedPath),
     )
   ) {
     return null;
   }
   const targets = paths
-    .filter((changedPath) => LINTABLE_CORE_PATH_RE.test(changedPath))
+    .filter((changedPath) => lintablePathRe.test(changedPath))
     .toSorted((left, right) => left.localeCompare(right));
-  if (targets.length === 0 || targets.length > TARGETED_CORE_LINT_PATH_LIMIT) {
+  if (targets.length === 0 || targets.length > TARGETED_LINT_PATH_LIMIT) {
     return null;
   }
-  const fileExists = options.fileExists ?? existsSync;
   if (!targets.every((target) => fileExists(target))) {
     return null;
   }
   return {
-    name: targets.length === 1 ? "lint core changed file" : "lint core changed files",
+    name: targets.length === 1 ? `lint ${label} changed file` : `lint ${label} changed files`,
     bin: "node",
-    args: ["scripts/run-oxlint.mjs", "--tsconfig", CORE_OXLINT_TS_CONFIG, ...targets],
+    args: ["scripts/run-oxlint.mjs", "--tsconfig", tsconfig, ...targets],
     env,
   };
 }
@@ -544,6 +619,11 @@ function printPlan(result, plan, options) {
   for (const reason of result.reasons) {
     console.error(`${prefix} ${reason}`);
   }
+  if (options.dryRun) {
+    for (const command of plan.commands) {
+      console.error(`${prefix} would run: ${formatPlanCommand(command)}`);
+    }
+  }
 }
 
 async function runPnpm(command, timings) {
@@ -555,6 +635,15 @@ async function runPlanCommand(command, timings) {
     return await runCommand(command, timings);
   }
   return await runPnpm(command, timings);
+}
+
+function formatPlanCommand(command) {
+  const argv = command.bin ? [command.bin, ...command.args] : ["pnpm", ...command.args];
+  return argv.map(formatShellToken).join(" ");
+}
+
+function formatShellToken(token) {
+  return /^[A-Za-z0-9_./:@=-]+$/u.test(token) ? token : `'${token.replaceAll("'", "'\\''")}'`;
 }
 
 export function createPnpmManagedCommand(command, env = process.env) {

@@ -28,23 +28,19 @@ async function makeTempRepo(prefix: string) {
   return repoRoot;
 }
 
-async function writeEvidence(pathLocal: string) {
-  await fs.mkdir(path.dirname(pathLocal), { recursive: true });
-  await fs.writeFile(
-    pathLocal,
-    `${JSON.stringify(
-      {
-        kind: "openclaw.qa.evidence-summary",
-        schemaVersion: 2,
-        generatedAt: "2026-06-14T00:00:00.000Z",
-        evidenceMode: "full",
-        entries: [],
-      },
-      null,
-      2,
-    )}\n`,
-    "utf8",
-  );
+async function writeEvidence(pathLocal: string, writeFile = true) {
+  const evidence = {
+    kind: "openclaw.qa.evidence-summary",
+    schemaVersion: 2,
+    generatedAt: "2026-06-14T00:00:00.000Z",
+    evidenceMode: "full",
+    entries: [],
+  };
+  if (writeFile) {
+    await fs.mkdir(path.dirname(pathLocal), { recursive: true });
+    await fs.writeFile(pathLocal, `${JSON.stringify(evidence, null, 2)}\n`, "utf8");
+  }
+  return evidence;
 }
 
 describe("qa suite runtime launcher", () => {
@@ -52,12 +48,17 @@ describe("qa suite runtime launcher", () => {
     runQaFlowSuite.mockReset();
     runQaTestFileScenarios.mockReset();
     runQaFlowSuite.mockImplementation(
-      async (params: { outputDir?: string; scenarioIds?: string[] } | undefined) => {
+      async (
+        params:
+          | { outputDir?: string; scenarioIds?: string[]; writeEvidenceFile?: boolean }
+          | undefined,
+      ) => {
         const outputDir = params?.outputDir ?? "/tmp/qa-flow";
         const evidencePath = path.join(outputDir, "qa-evidence.json");
-        await writeEvidence(evidencePath);
+        const evidence = await writeEvidence(evidencePath, params?.writeEvidenceFile);
         const scenarioIds = params?.scenarioIds ?? ["channel-chat-baseline"];
         return {
+          evidence,
           outputDir,
           evidencePath,
           reportPath: path.join(outputDir, "qa-suite-report.md"),
@@ -76,14 +77,16 @@ describe("qa suite runtime launcher", () => {
       async (params: {
         outputDir: string;
         scenarios: Array<{ id: string; execution: { kind: "script" | "vitest" | "playwright" } }>;
+        writeEvidenceFile?: boolean;
       }) => {
         const [scenario] = params.scenarios;
         if (!scenario) {
           throw new Error("expected scenario");
         }
         const evidencePath = path.join(params.outputDir, "qa-evidence.json");
-        await writeEvidence(evidencePath);
+        const evidence = await writeEvidence(evidencePath, params.writeEvidenceFile);
         return {
+          evidence,
           outputDir: params.outputDir,
           executionKind: scenario.execution.kind,
           evidencePath,
@@ -247,15 +250,27 @@ describe("qa suite runtime launcher", () => {
       expect.objectContaining({
         outputDir: path.join(outputDir, "flow"),
         scenarioIds: ["channel-chat-baseline"],
+        writeEvidenceFile: false,
       }),
     );
     expect(runQaTestFileScenarios).toHaveBeenCalledWith(
       expect.objectContaining({
         outputDir: path.join(outputDir, "playwright"),
+        writeEvidenceFile: false,
       }),
     );
     await expect(fs.access(path.join(outputDir, "qa-suite-summary.json"))).resolves.toBeUndefined();
     await expect(fs.access(path.join(outputDir, "qa-evidence.json"))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(outputDir, "flow", "qa-evidence.json"))).rejects.toMatchObject(
+      {
+        code: "ENOENT",
+      },
+    );
+    await expect(
+      fs.access(path.join(outputDir, "playwright", "qa-evidence.json")),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     const summary = JSON.parse(
       await fs.readFile(path.join(outputDir, "qa-suite-summary.json"), "utf8"),
     ) as {
@@ -452,6 +467,94 @@ describe("qa suite runtime launcher", () => {
 
     expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
     expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts native suite proof before isolated flow work fills the weighted queue", async () => {
+    const repoRoot = await makeTempRepo("qa-suite-native-before-isolated-");
+    let releaseShared!: () => void;
+    let markSharedStarted!: () => void;
+    const sharedStarted = new Promise<void>((resolve) => {
+      markSharedStarted = resolve;
+    });
+    const sharedBlocked = new Promise<void>((resolve) => {
+      releaseShared = resolve;
+    });
+    let releaseTestFile!: () => void;
+    let markTestFileStarted!: () => void;
+    const testFileStarted = new Promise<void>((resolve) => {
+      markTestFileStarted = resolve;
+    });
+    const testFileBlocked = new Promise<void>((resolve) => {
+      releaseTestFile = resolve;
+    });
+    runQaFlowSuite.mockImplementationOnce(
+      async (params: { outputDir?: string; scenarioIds?: string[] } | undefined) => {
+        markSharedStarted();
+        await sharedBlocked;
+        const outputDir = params?.outputDir ?? "/tmp/qa-flow";
+        const evidencePath = path.join(outputDir, "qa-evidence.json");
+        await writeEvidence(evidencePath);
+        const scenarioIds = params?.scenarioIds ?? ["channel-chat-baseline"];
+        return {
+          outputDir,
+          evidencePath,
+          reportPath: path.join(outputDir, "qa-suite-report.md"),
+          summaryPath: path.join(outputDir, "qa-suite-summary.json"),
+          report: "# QA Suite Report\n",
+          scenarios: scenarioIds.map((scenarioId) => ({
+            name: scenarioId,
+            status: "pass",
+            steps: [],
+          })),
+          watchUrl: "http://127.0.0.1:43124",
+        };
+      },
+    );
+    runQaTestFileScenarios.mockImplementationOnce(
+      async (params: {
+        outputDir: string;
+        scenarios: Array<{ id: string; execution: { kind: "script" | "vitest" | "playwright" } }>;
+      }) => {
+        markTestFileStarted();
+        await testFileBlocked;
+        const evidencePath = path.join(params.outputDir, "qa-evidence.json");
+        await writeEvidence(evidencePath);
+        return {
+          outputDir: params.outputDir,
+          executionKind: params.scenarios[0]?.execution.kind ?? "playwright",
+          evidencePath,
+          results: params.scenarios.map((scenarioItem) => ({
+            durationMs: 1,
+            logPath: path.join(params.outputDir, `${scenarioItem.id}.log`),
+            scenario: scenarioItem,
+            status: "pass",
+          })),
+        };
+      },
+    );
+
+    const runPromise = runQaSuite({
+      repoRoot,
+      outputDir: ".artifacts/qa-e2e/native-before-isolated",
+      concurrency: 2,
+      scenarioIds: [
+        "channel-chat-baseline",
+        "group-visible-reply-tool",
+        "control-ui-chat-flow-playwright",
+      ],
+    });
+    await sharedStarted;
+    await testFileStarted;
+    await Promise.resolve();
+
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
+    expect(runQaTestFileScenarios).toHaveBeenCalledTimes(1);
+
+    releaseTestFile();
+    releaseShared();
+    await runPromise;
+
+    expect(runQaFlowSuite).toHaveBeenCalledTimes(2);
   });
 
   it("waits for already-started partitions before rejecting a unified suite", async () => {

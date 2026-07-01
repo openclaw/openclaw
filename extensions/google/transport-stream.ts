@@ -15,6 +15,8 @@ import {
   coerceTransportToolCallArguments,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
@@ -647,24 +649,17 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
     }
 
     if (msg.role === "toolResult") {
-      const textResult = msg.content
-        .filter(
-          (item): item is Extract<(typeof msg.content)[number], { type: "text" }> =>
-            item.type === "text",
-        )
-        .map((item) => item.text)
-        .join("\n");
+      const textResult = extractToolResultText(msg.content);
       const imageContent = model.input.includes("image")
         ? msg.content.filter(
             (item): item is Extract<(typeof msg.content)[number], { type: "image" }> =>
               item.type === "image",
           )
         : [];
+      const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const responseValue = textResult
         ? sanitizeTransportPayloadText(textResult)
-        : imageContent.length > 0
-          ? "(see attached image)"
-          : "";
+        : (mediaPlaceholder ?? "");
       const imageParts = imageContent.map((imageBlock) => ({
         inlineData: {
           mimeType: imageBlock.mimeType,
@@ -1404,7 +1399,12 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           }
           if (typeof candidate?.finishReason === "string") {
             output.stopReason = mapStopReasonString(candidate.finishReason);
-            if (output.content.some((block) => block.type === "toolCall")) {
+            // MAX_TOKENS can leave a complete-looking partial call. Only a normal
+            // Google stop may promote parsed calls into an executable tool-use turn.
+            if (
+              output.stopReason === "stop" &&
+              output.content.some((block) => block.type === "toolCall")
+            ) {
               output.stopReason = "toolUse";
             }
           }

@@ -6,6 +6,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import { updateSessionStoreEntry } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
@@ -117,6 +118,115 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
     return event;
   }
+
+  it("uses configured session.store when storePath is omitted", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-config-store-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    try {
+      setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempDir, "default-state"));
+      const sessionsDir = path.join(tempDir, "configured", "sessions");
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const configuredSessionKey = "agent:main:configured-store";
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify({
+          [configuredSessionKey]: {
+            sessionId: "configured-session-id",
+            chatType: "direct",
+          },
+        }),
+        "utf-8",
+      );
+
+      const result = await appendAssistantMessageToSessionTranscript({
+        agentId: "main",
+        sessionKey: configuredSessionKey,
+        text: "mirrored configured store reply",
+        config: { session: { store: storePath } },
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        throw new Error(result.reason);
+      }
+      expect(path.basename(result.sessionFile)).toBe("configured-session-id.jsonl");
+      expect(fs.realpathSync.native(path.dirname(result.sessionFile))).toBe(
+        fs.realpathSync.native(sessionsDir),
+      );
+      await expect(fs.promises.readFile(result.sessionFile, "utf-8")).resolves.toContain(
+        "mirrored configured store reply",
+      );
+    } finally {
+      if (previousStateDir === undefined) {
+        deleteTestEnvValue("OPENCLAW_STATE_DIR");
+      } else {
+        setTestEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the session key agent for configured session.store templates", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-agent-store-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+    try {
+      setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempDir, "default-state"));
+      const storeTemplate = path.join(tempDir, "agents", "{agentId}", "sessions", "sessions.json");
+      const sessionsDir = path.join(tempDir, "agents", "worker", "sessions");
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const configuredSessionKey = "agent:worker:configured-store";
+      fs.writeFileSync(
+        storePath,
+        JSON.stringify({
+          [configuredSessionKey]: {
+            sessionId: "worker-session-id",
+            chatType: "direct",
+          },
+        }),
+        "utf-8",
+      );
+      const beforeMessageWrite = vi.fn(({ message }: BeforeMessageWriteParams) => message);
+
+      const result = await appendAssistantMessageToSessionTranscript({
+        sessionKey: configuredSessionKey,
+        text: "mirrored worker store reply",
+        config: { session: { store: storeTemplate } },
+        beforeMessageWrite,
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        throw new Error(result.reason);
+      }
+      expect(path.basename(result.sessionFile)).toBe("worker-session-id.jsonl");
+      expect(fs.realpathSync.native(path.dirname(result.sessionFile))).toBe(
+        fs.realpathSync.native(sessionsDir),
+      );
+      await expect(fs.promises.readFile(result.sessionFile, "utf-8")).resolves.toContain(
+        "mirrored worker store reply",
+      );
+      expect(beforeMessageWrite).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "worker",
+          sessionKey: configuredSessionKey,
+        }),
+      );
+      const event = requireTranscriptUpdateCall(emitSpy);
+      expect(event.agentId).toBe("worker");
+      expect(event.sessionKey).toBe(configuredSessionKey);
+    } finally {
+      emitSpy.mockRestore();
+      if (previousStateDir === undefined) {
+        deleteTestEnvValue("OPENCLAW_STATE_DIR");
+      } else {
+        setTestEnvValue("OPENCLAW_STATE_DIR", previousStateDir);
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 
   it("creates transcript file and appends message for valid session", async () => {
     writeTranscriptStore();

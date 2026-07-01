@@ -277,7 +277,6 @@ describe("checkQmdBinaryAvailability", () => {
 
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
   });
-
   it("kills timed-out availability probes by process group on POSIX", async () => {
     platformSpy?.mockReturnValue("linux");
     const killProcess = vi.spyOn(process, "kill").mockImplementation(() => true);
@@ -427,6 +426,52 @@ describe("runCliCommand", () => {
     }).catch(() => undefined);
 
     expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
+  });
+
+  it("kills aborted cli command process groups on POSIX and rejects with the abort reason", async () => {
+    platformSpy?.mockReturnValue("linux");
+    const killProcess = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const child = createMockChild({ pid: 7654 });
+    spawnMock.mockReturnValueOnce(child);
+    const controller = new AbortController();
+
+    try {
+      const pending = runCliCommand({
+        commandSummary: "qmd query slow",
+        spawnInvocation: { command: "qmd", argv: ["query", "slow", "--json"] },
+        env: process.env,
+        cwd: tempDir,
+        maxOutputChars: 10_000,
+        timeoutMs: 60_000,
+        signal: controller.signal,
+      });
+
+      controller.abort(new Error("memory_search timed out after 15s"));
+
+      await expect(pending).rejects.toThrow("memory_search timed out after 15s");
+      expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({ detached: true });
+      expect(killProcess).toHaveBeenCalledWith(-7654, "SIGKILL");
+      expect(child.kill).not.toHaveBeenCalledWith("SIGKILL");
+    } finally {
+      killProcess.mockRestore();
+    }
+  });
+
+  it("rejects immediately without spawning when the signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("memory_search timed out after 15s"));
+
+    await expect(
+      runCliCommand({
+        commandSummary: "qmd query test",
+        spawnInvocation: { command: "qmd", argv: ["query", "test", "--json"] },
+        env: process.env,
+        cwd: tempDir,
+        maxOutputChars: 10_000,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("memory_search timed out after 15s");
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("kills timed-out cli command process groups on POSIX", async () => {

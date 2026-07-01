@@ -62,6 +62,7 @@ const QA_RUN_PROFILE_ONLY_OPTIONS = [
 ] as const;
 
 const QA_RUN_SELF_CHECK_ONLY_OPTIONS = [{ optionName: "output", flag: "--output" }] as const;
+const MAX_QA_CLI_TCP_PORT = 65_535;
 
 type QaSuiteCliOptions = QaScenarioRunCliOptions & {
   channelDriver?: QaSuiteCommandOptions["channelDriver"];
@@ -101,6 +102,14 @@ function parseQaCliPositiveIntegerOption(value: string, flag: string): number {
   const parsed = parseStrictPositiveInteger(value);
   if (parsed === undefined) {
     throw invalidQaCliArgument(`${flag} must be a positive integer.`);
+  }
+  return parsed;
+}
+
+function parseQaCliTcpPortOption(value: string, flag: string): number {
+  const parsed = parseQaCliPositiveIntegerOption(value, flag);
+  if (parsed > MAX_QA_CLI_TCP_PORT) {
+    throw invalidQaCliArgument(`${flag} must be a TCP port between 1 and 65535.`);
   }
   return parsed;
 }
@@ -867,11 +876,11 @@ export function registerQaLabCli(program: Command) {
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--host <host>", "Bind host", "127.0.0.1")
     .option("--port <port>", "Bind port", (value: string) =>
-      parseQaCliPositiveIntegerOption(value, "--port"),
+      parseQaCliTcpPortOption(value, "--port"),
     )
     .option("--advertise-host <host>", "Optional public host to advertise in bootstrap payloads")
     .option("--advertise-port <port>", "Optional public port to advertise", (value: string) =>
-      parseQaCliPositiveIntegerOption(value, "--advertise-port"),
+      parseQaCliTcpPortOption(value, "--advertise-port"),
     )
     .option("--control-ui-url <url>", "Optional Control UI URL to embed beside the QA panel")
     .option(
@@ -909,10 +918,10 @@ export function registerQaLabCli(program: Command) {
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .requiredOption("--output-dir <path>", "Output directory for docker-compose + state files")
     .option("--gateway-port <port>", "Gateway host port", (value: string) =>
-      parseQaCliPositiveIntegerOption(value, "--gateway-port"),
+      parseQaCliTcpPortOption(value, "--gateway-port"),
     )
     .option("--qa-lab-port <port>", "QA lab host port", (value: string) =>
-      parseQaCliPositiveIntegerOption(value, "--qa-lab-port"),
+      parseQaCliTcpPortOption(value, "--qa-lab-port"),
     )
     .option("--provider-base-url <url>", "Provider base URL for the QA gateway")
     .option("--image <name>", "Prebaked image name", "openclaw:qa-local-prebaked")
@@ -950,10 +959,10 @@ export function registerQaLabCli(program: Command) {
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option("--output-dir <path>", "Output directory for docker-compose + state files")
     .option("--gateway-port <port>", "Gateway host port", (value: string) =>
-      parseQaCliPositiveIntegerOption(value, "--gateway-port"),
+      parseQaCliTcpPortOption(value, "--gateway-port"),
     )
     .option("--qa-lab-port <port>", "QA lab host port", (value: string) =>
-      parseQaCliPositiveIntegerOption(value, "--qa-lab-port"),
+      parseQaCliTcpPortOption(value, "--qa-lab-port"),
     )
     .option("--provider-base-url <url>", "Provider base URL for the QA gateway")
     .option("--image <name>", "Image tag", "openclaw:qa-local-prebaked")
@@ -985,7 +994,7 @@ export function registerQaLabCli(program: Command) {
       .description(providerCommand.description)
       .option("--host <host>", "Bind host", "127.0.0.1")
       .option("--port <port>", "Bind port", (value: string) =>
-        parseQaCliPositiveIntegerOption(value, "--port"),
+        parseQaCliTcpPortOption(value, "--port"),
       )
       .action(async (opts: { host?: string; port?: number }) => {
         await runQaProviderServer(providerCommand.providerMode, opts);

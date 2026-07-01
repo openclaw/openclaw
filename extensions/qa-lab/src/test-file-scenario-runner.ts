@@ -42,6 +42,7 @@ export type QaTestFileScenarioRunParams = {
   repoRoot: string;
   runCommand?: QaScenarioCommandRunner;
   scenarios: readonly QaSeedScenarioWithSource[];
+  writeEvidenceFile?: boolean;
 };
 
 export type QaScenarioCommandExecution = {
@@ -80,6 +81,7 @@ type QaTestFileScenarioResult = {
 };
 
 export type QaTestFileScenarioRunResult = {
+  evidence: QaEvidenceSummaryJson;
   evidencePath: string;
   executionKind: QaTestFileExecutionKind;
   outputDir: string;
@@ -119,7 +121,7 @@ function playwrightSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[] 
   return [
     {
       command: process.execPath,
-      args: ["scripts/ensure-playwright-chromium.mjs"],
+      args: ["scripts/ensure-playwright-chromium.mjs", "--skip-ffmpeg"],
     },
     {
       command: process.execPath,
@@ -428,7 +430,9 @@ async function runScenarioCommandSteps(params: {
     logChunks.push(`$ ${formatCommand(step)}\n`);
     try {
       const timeoutMs =
-        params.scenario.execution.kind === "script" ? params.commandTimeoutMs : undefined;
+        params.scenario.execution.kind === "script"
+          ? (params.scenario.execution.timeoutMs ?? params.commandTimeoutMs)
+          : undefined;
       const result = await params.runCommand({
         command: step.command,
         args: step.args,
@@ -553,6 +557,7 @@ function buildTestFileEvidence(params: {
   kind: QaTestFileExecutionKind;
   primaryModel: string;
   providerMode: QaProviderMode;
+  repoRoot: string;
   results: readonly QaTestFileScenarioResult[];
   evidenceMode?: QaScorecardEvidenceMode;
   env?: NodeJS.ProcessEnv;
@@ -579,6 +584,7 @@ function buildTestFileEvidence(params: {
             generatedAt: params.generatedAt,
             primaryModel: params.primaryModel,
             providerMode: params.providerMode,
+            repoRoot: params.repoRoot,
             targets: fallbackResults.map((result) => buildScenarioEvidenceTarget(result.scenario)),
             results: fallbackResults.map((result) => ({
               id: result.scenario.id,
@@ -614,6 +620,7 @@ function buildTestFileEvidence(params: {
     generatedAt: params.generatedAt,
     primaryModel: params.primaryModel,
     providerMode: params.providerMode,
+    repoRoot: params.repoRoot,
     targets: params.results.map((result) => buildScenarioEvidenceTarget(result.scenario)),
     results: params.results.map((result) => ({
       id: result.scenario.id,
@@ -746,10 +753,13 @@ function buildScenarioArtifactPaths(params: {
 async function writeTestFileEvidenceFile(params: {
   evidence: unknown;
   outputDir: string;
+  writeEvidenceFile?: boolean;
 }): Promise<Pick<QaTestFileScenarioRunResult, "evidencePath">> {
   const evidencePath = path.join(params.outputDir, QA_EVIDENCE_FILENAME);
-  await fs.writeFile(evidencePath, `${JSON.stringify(params.evidence, null, 2)}\n`, "utf8");
-  await assertQaSuiteArtifactWritten("evidence", evidencePath);
+  if (params.writeEvidenceFile ?? true) {
+    await fs.writeFile(evidencePath, `${JSON.stringify(params.evidence, null, 2)}\n`, "utf8");
+    await assertQaSuiteArtifactWritten("evidence", evidencePath);
+  }
   return { evidencePath };
 }
 
@@ -797,14 +807,17 @@ export async function runQaTestFileScenarios(
     kind,
     primaryModel: params.primaryModel,
     providerMode: params.providerMode,
+    repoRoot: params.repoRoot,
     results,
   });
   const paths = await writeTestFileEvidenceFile({
     evidence,
     outputDir: params.outputDir,
+    writeEvidenceFile: params.writeEvidenceFile,
   });
   return {
     ...paths,
+    evidence,
     executionKind: kind,
     outputDir: params.outputDir,
     results,

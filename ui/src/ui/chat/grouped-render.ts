@@ -13,6 +13,7 @@ import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import { resolveToolDisplay } from "../tool-display.ts";
 import type {
+  ChatItem,
   MessageContentItem,
   MessageGroup,
   NormalizedMessage,
@@ -318,6 +319,14 @@ function extractImages(message: unknown): ImageBlock[] {
             }),
           });
         }
+      } else if (b.type === "openclaw_pairing_qr") {
+        const imageUrl = b.image_url;
+        if (typeof imageUrl === "string") {
+          appendImageBlock(images, {
+            url: imageUrl,
+            alt: typeof b.alt === "string" ? b.alt : undefined,
+          });
+        }
       }
     }
   }
@@ -356,54 +365,61 @@ function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
   return attachments;
 }
 
-export function renderReadingIndicatorGroup(
-  assistant?: AssistantIdentity,
-  basePath?: string,
-  authToken?: string | null,
-) {
+/** A contiguous run of in-flight streaming items rendered under one assistant group. */
+export type StreamGroupPart = Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" }>;
+
+type StreamGroupOptions = {
+  onOpenSidebar?: (content: SidebarContent) => void;
+  assistant?: AssistantIdentity;
+  basePath?: string;
+  authToken?: string | null;
+};
+
+function renderReadingIndicatorBubble() {
   return html`
-    <div class="chat-group assistant">
-      ${renderChatAvatar("assistant", assistant, undefined, basePath, authToken)}
-      <div class="chat-group-messages">
-        <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
-          <span class="chat-reading-indicator__dots">
-            <span></span><span></span><span></span>
-          </span>
-        </div>
-      </div>
+    <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
+      <span class="chat-reading-indicator__dots"> <span></span><span></span><span></span> </span>
     </div>
   `;
 }
 
-export function renderStreamingGroup(
-  text: string,
-  startedAt: number,
-  isStreaming = true,
-  onOpenSidebar?: (content: SidebarContent) => void,
-  assistant?: AssistantIdentity,
-  basePath?: string,
-  authToken?: string | null,
-) {
+// One assistant group per contiguous run of streaming items: a reply that
+// arrives as several stream segments renders under a single avatar/footer
+// instead of flashing a separate avatar+bubble per segment (#63956).
+export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOptions = {}) {
+  const { onOpenSidebar, assistant, basePath, authToken } = opts;
   const name = assistant?.name ?? "Assistant";
+  // Footer (sender + time) anchors to the earliest streamed segment; a run that
+  // is only the reading indicator has no timestamp and therefore no footer.
+  const streamStarts = parts.flatMap((part) => (part.kind === "stream" ? [part.startedAt] : []));
+  const footerStartedAt = streamStarts.length > 0 ? Math.min(...streamStarts) : null;
 
   return html`
     <div class="chat-group assistant">
       ${renderChatAvatar("assistant", assistant, undefined, basePath, authToken)}
       <div class="chat-group-messages">
-        ${renderGroupedMessage(
-          {
-            role: "assistant",
-            content: [{ type: "text", text }],
-            timestamp: startedAt,
-          },
-          `stream:${startedAt}`,
-          { isStreaming, showReasoning: false },
-          onOpenSidebar,
+        ${parts.map((part) =>
+          part.kind === "reading-indicator"
+            ? renderReadingIndicatorBubble()
+            : renderGroupedMessage(
+                {
+                  role: "assistant",
+                  content: [{ type: "text", text: part.text }],
+                  timestamp: part.startedAt,
+                },
+                part.key,
+                { isStreaming: part.isStreaming, showReasoning: false },
+                onOpenSidebar,
+              ),
         )}
-        <div class="chat-group-footer">
-          <span class="chat-sender-name">${name}</span>
-          ${renderChatTimestamp(startedAt)}
-        </div>
+        ${footerStartedAt !== null
+          ? html`
+              <div class="chat-group-footer">
+                <span class="chat-sender-name">${name}</span>
+                ${renderChatTimestamp(footerStartedAt)}
+              </div>
+            `
+          : nothing}
       </div>
     </div>
   `;
@@ -421,6 +437,7 @@ type RenderMessageGroupOptions = {
   isToolExpanded?: (toolCardId: string) => boolean;
   onToggleToolExpanded?: (toolCardId: string) => void;
   onRequestUpdate?: () => void;
+  onAssistantAttachmentLoaded?: () => void;
   assistantName?: string;
   assistantAvatar?: string | null;
   userName?: string | null;
@@ -450,12 +467,14 @@ function buildGroupedMessageRenderOptions(
     duplicateCount: item.duplicateCount ?? 1,
     showReasoning: opts.showReasoning,
     showToolCalls: opts.showToolCalls ?? true,
+    turnSucceeded: group.turnSucceeded,
     autoExpandToolCalls: opts.autoExpandToolCalls ?? false,
     isToolMessageExpanded: opts.isToolMessageExpanded,
     onToggleToolMessageExpanded: opts.onToggleToolMessageExpanded,
     isToolExpanded: opts.isToolExpanded,
     onToggleToolExpanded: opts.onToggleToolExpanded,
     onRequestUpdate: opts.onRequestUpdate,
+    onAssistantAttachmentLoaded: opts.onAssistantAttachmentLoaded,
     canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
     basePath: opts.basePath,
     localMediaPreviewRoots: opts.localMediaPreviewRoots,
@@ -518,7 +537,9 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
         : toolLabels.length <= 3
           ? toolLabels.join(", ")
           : `${toolLabels.slice(0, 2).join(", ")} +${toolLabels.length - 2} more`;
-    const hasError = cards.some(isToolCardError);
+    // Non-terminal internal tool failures (turn produced a clean reply) stay
+    // collapsed and unstyled; detail remains available on expand. #89683
+    const hasError = cards.some(isToolCardError) && group.turnSucceeded !== true;
     const activityDisclosureId = `activity:${group.key}`;
     const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? hasError;
 
@@ -1373,6 +1394,7 @@ function renderAssistantAttachments(
   basePath?: string,
   authToken?: string | null,
   onRequestUpdate?: () => void,
+  onAssistantAttachmentLoaded?: () => void,
 ) {
   if (attachments.length === 0) {
     return nothing;
@@ -1424,7 +1446,12 @@ function renderAssistantAttachments(
                     : nothing}
               </div>
               ${attachmentUrl
-                ? html`<audio controls preload="metadata" src=${attachmentUrl}></audio>`
+                ? html`<audio
+                    controls
+                    preload="metadata"
+                    src=${attachmentUrl}
+                    @loadedmetadata=${() => onAssistantAttachmentLoaded?.()}
+                  ></audio>`
                 : availability.status === "unavailable"
                   ? html`<div class="chat-assistant-attachment-card__reason">
                       ${availability.reason}
@@ -1444,7 +1471,12 @@ function renderAssistantAttachments(
           }
           return html`
             <div class="chat-assistant-attachment-card chat-assistant-attachment-card--video">
-              <video controls preload="metadata" src=${attachmentUrl}></video>
+              <video
+                controls
+                preload="metadata"
+                src=${attachmentUrl}
+                @loadedmetadata=${() => onAssistantAttachmentLoaded?.()}
+              ></video>
               <a
                 class="chat-assistant-attachment-card__link"
                 href=${attachmentUrl}
@@ -1605,6 +1637,9 @@ function renderGroupedMessage(
     duplicateCount?: number;
     showReasoning: boolean;
     showToolCalls?: boolean;
+    // True when the tool's turn still produced a clean assistant reply: a failed
+    // internal tool then renders collapsed, not as a primary error banner. #89683
+    turnSucceeded?: boolean;
     autoExpandToolCalls?: boolean;
     isToolMessageExpanded?: (messageId: string) => boolean | undefined;
     onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
@@ -1615,6 +1650,7 @@ function renderGroupedMessage(
     basePath?: string;
     localMediaPreviewRoots?: readonly string[];
     assistantAttachmentAuthToken?: string | null;
+    onAssistantAttachmentLoaded?: () => void;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
   },
@@ -1716,7 +1752,7 @@ function renderGroupedMessage(
   const toolMessageExpanded = opts.isToolMessageExpanded?.(toolMessageDisclosureId) ?? false;
   const toolNames = [...new Set(toolCards.map((c) => c.name))];
   const singleToolCard = toolCards.length === 1 ? toolCards[0] : null;
-  const toolMessageHasError = toolCards.some(isToolCardError);
+  const toolMessageHasError = toolCards.some(isToolCardError) && opts.turnSucceeded !== true;
   const singleToolDisplay = singleToolCard
     ? resolveToolDisplay({
         name: singleToolCard.name,
@@ -1758,7 +1794,11 @@ function renderGroupedMessage(
   const duplicateCount = Math.max(1, Math.floor(opts.duplicateCount ?? 1));
 
   return html`
-    <div class="${bubbleClasses}">
+    <div
+      class="${bubbleClasses}"
+      data-message-id=${messageKey}
+      data-message-text=${extractedText || nothing}
+    >
       ${renderReplyPill(normalizedMessage.replyTarget)}
       ${hasActions
         ? html`<div class="chat-bubble-actions">
@@ -1812,6 +1852,7 @@ function renderGroupedMessage(
                         opts.basePath,
                         opts.assistantAttachmentAuthToken,
                         opts.onRequestUpdate,
+                        opts.onAssistantAttachmentLoaded,
                       )}
                       ${reasoningMarkdown
                         ? html`<div class="chat-thinking">
@@ -1869,6 +1910,7 @@ function renderGroupedMessage(
               opts.basePath,
               opts.assistantAttachmentAuthToken,
               opts.onRequestUpdate,
+              opts.onAssistantAttachmentLoaded,
             )}
             ${reasoningMarkdown
               ? html`<div class="chat-thinking">

@@ -13,6 +13,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { createIMessageRpcClient } from "./client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import {
@@ -158,7 +159,7 @@ function parseStatusPayload(stdout: string): {
   // No JSONL line parsed. Surface a small snippet of the first non-empty
   // line so the operator can grep imsg release notes if the status output
   // schema has shifted.
-  const snippet = lines[0]?.slice(0, 120);
+  const snippet = lines[0] ? truncateUtf16Safe(lines[0], 120) : undefined;
   return { payload: null, firstLineSnippet: snippet };
 }
 

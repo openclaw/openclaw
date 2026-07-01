@@ -16,6 +16,7 @@ import {
 // raw messages are projected for display, paginated by transcript seq, then
 // incrementally updated until cursor/window semantics require a full refresh.
 type SessionHistoryTranscriptMeta = {
+  idempotencyKey?: string;
   seq?: number;
 };
 
@@ -55,6 +56,14 @@ type SessionHistoryRawSnapshot = {
   totalRawMessages?: number;
   transcriptPath?: string;
 };
+
+function readMessageIdempotencyKey(message: unknown): string | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const value = (message as Record<string, unknown>).idempotencyKey;
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
 
 /** Computes an oversized raw transcript tail window for projected chat history. */
 export function resolveSessionHistoryTailReadOptions(limit: number): {
@@ -258,8 +267,10 @@ export class SessionHistorySseState {
     } else {
       this.rawTranscriptSeq += 1;
     }
+    const idempotencyKey = readMessageIdempotencyKey(update.message);
     const nextMessage = attachOpenClawTranscriptMeta(update.message, {
       ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
+      ...(idempotencyKey ? { idempotencyKey } : {}),
       seq: this.rawTranscriptSeq,
     });
     // Projection can split, drop, or rewrite raw transcript messages. When one

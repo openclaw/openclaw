@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 import { collectClawHubPublishablePluginPackages } from "./lib/plugin-clawhub-release.ts";
 import { collectPublishablePluginPackages } from "./lib/plugin-npm-release.ts";
 
-const DEFAULT_CLAWHUB_CLI_PACKAGE = "clawhub@0.21.0";
+const DEFAULT_CLAWHUB_CLI_PACKAGE = "clawhub@0.23.1";
 
 export type PluginReleasePretagPackTarget = {
   packageDir: string;

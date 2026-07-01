@@ -18,7 +18,7 @@ on:
       qa_profile:
         description: Taxonomy QA profile id to run (for example release or all)
         required: true
-        default: release
+        default: all
         type: string
   workflow_call:
     inputs:
@@ -89,6 +89,13 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
+            // Reusable workflow jobs inherit the caller event but run as
+            // github-actions[bot]; selected ref validation still gates secrets.
+            if (context.actor === "github-actions[bot]") {
+              core.info("Skipping manual actor permission check for a reusable workflow call.");
+              core.setOutput("authorized", "true");
+              return;
+            }
             if (context.eventName !== "workflow_dispatch") {
               core.info(`Skipping manual actor permission check for ${context.eventName}.`);
               core.setOutput("authorized", "true");

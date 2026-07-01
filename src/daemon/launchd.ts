@@ -5,10 +5,12 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { probePortUsage } from "../infra/ports-probe.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import { getWindowsCmdExePath } from "../infra/windows-install-roots.js";
+import { sleep } from "../utils.js";
 import {
   GATEWAY_LAUNCH_AGENT_LABEL,
   GATEWAY_SERVICE_KIND,
@@ -21,6 +23,7 @@ import { execFileUtf8 } from "./exec-file.js";
 import { isCurrentProcessLaunchdServiceLabel } from "./launchd-current-service.js";
 import {
   buildLaunchAgentPlist as buildLaunchAgentPlistImpl,
+  LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
   readLaunchAgentProgramArgumentsFromFile,
 } from "./launchd-plist.js";
 import { scheduleDetachedLaunchdRestartHandoff } from "./launchd-restart-handoff.js";
@@ -48,6 +51,8 @@ const LAUNCH_AGENT_ENV_DIR_NAME = "service-env";
 const LAUNCH_AGENT_STDERR_PATH = "/dev/null";
 const OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX = "ai.openclaw.update.";
 const OPENCLAW_MANUAL_UPDATE_LAUNCHD_LABEL_PATTERN = /^ai\.openclaw\.manual-update\.\d+$/;
+const LAUNCH_AGENT_STOP_PORT_RELEASE_TIMEOUT_MS = LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000;
+const LAUNCH_AGENT_STOP_PORT_RELEASE_POLL_MS = 100;
 
 export type StaleOpenClawUpdateLaunchdJob = {
   label: string;
@@ -811,6 +816,18 @@ async function waitForLaunchAgentStopped(serviceTarget: string): Promise<LaunchA
   return lastUnknown ?? { state: "running" };
 }
 
+async function waitForGatewayPortRelease(port: number): Promise<boolean> {
+  const deadline = Date.now() + LAUNCH_AGENT_STOP_PORT_RELEASE_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    await sleep(Math.min(LAUNCH_AGENT_STOP_PORT_RELEASE_POLL_MS, deadline - Date.now()));
+    const status = await probePortUsage(port);
+    if (status === "free") {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function assertGatewayPortReleasedAfterStop(env: GatewayServiceEnv): Promise<void> {
   const port = await resolveLaunchAgentGatewayPort(env);
   if (port === null) {
@@ -819,6 +836,9 @@ async function assertGatewayPortReleasedAfterStop(env: GatewayServiceEnv): Promi
   cleanStaleGatewayProcessesSync(port);
   const diagnostics = await inspectPortUsage(port).catch(() => null);
   if (diagnostics?.status !== "busy") {
+    return;
+  }
+  if (await waitForGatewayPortRelease(port)) {
     return;
   }
   throw new Error(

@@ -90,8 +90,13 @@ data class GatewayConnectionProblem(
   val recommendedNextStep: String?,
   val pauseReconnect: Boolean,
   val retryable: Boolean,
+  val clientMinProtocol: Int? = null,
+  val clientMaxProtocol: Int? = null,
+  val expectedProtocol: Int? = null,
+  val minimumProbeProtocol: Int? = null,
 ) {
   val isPairingRequired: Boolean = code == "PAIRING_REQUIRED"
+  val isProtocolMismatch: Boolean = code == "PROTOCOL_MISMATCH"
   val canAutoRetry: Boolean =
     isPairingRequired &&
       (
@@ -765,6 +770,10 @@ class NodeRuntime(
         recommendedNextStep = details?.recommendedNextStep,
         pauseReconnect = pauseReconnect || details?.pauseReconnect == true,
         retryable = details?.retryable == true,
+        clientMinProtocol = details?.clientMinProtocol,
+        clientMaxProtocol = details?.clientMaxProtocol,
+        expectedProtocol = details?.expectedProtocol,
+        minimumProbeProtocol = details?.minimumProbeProtocol,
       )
   }
 
@@ -1676,6 +1685,8 @@ class NodeRuntime(
     when (failure) {
       GatewayTlsProbeFailure.TLS_UNAVAILABLE ->
         "Failed: this host requires wss:// or Tailscale Serve. No TLS endpoint detected."
+      GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT ->
+        "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry."
       GatewayTlsProbeFailure.ENDPOINT_UNREACHABLE, null ->
         "Failed: couldn't reach the secure gateway endpoint for this host."
     }

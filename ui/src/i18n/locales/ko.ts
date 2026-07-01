@@ -1320,6 +1320,8 @@ export const ko: TranslationMap = {
     settings: "채팅 설정",
     thinkingToggle: "어시스턴트 생각/작업 출력 전환",
     toolCallsToggle: "도구 호출 및 도구 결과 전환",
+    commentaryToggle: "최종 답변 후에도 해설 유지",
+    commentaryLabel: "해설",
     autoScrollMode: "자동 스크롤 모드",
     autoScrollAlways: "항상",
     autoScrollNearBottom: "하단 근처",
@@ -1431,6 +1433,7 @@ export const ko: TranslationMap = {
     jaJP: "日本語 (일본어)",
     ko: "한국어 (한국어)",
     fr: "Français (프랑스어)",
+    hi: "हिन्दी (Hindi)",
     ar: "العربية (아랍어)",
     it: "Italiano (이탈리아어)",
     tr: "Türkçe (터키어)",
@@ -1441,6 +1444,7 @@ export const ko: TranslationMap = {
     vi: "Tiếng Việt (베트남어)",
     nl: "Nederlands (네덜란드어)",
     fa: "فارسی (페르시아어)",
+    ru: "Русский (Russian)",
   },
   cron: {
     quickCreate: {

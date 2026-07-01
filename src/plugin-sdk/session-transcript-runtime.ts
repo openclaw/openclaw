@@ -9,6 +9,15 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { runSessionTranscriptAppendTransaction } from "../config/sessions/transcript-append.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
+import {
+  appendAssistantMessageToSessionTranscript,
+  readLatestAssistantTextFromSessionTranscript,
+  type LatestAssistantTranscriptText,
+  type SessionTranscriptAppendResult,
+  type SessionTranscriptDeliveryMirror,
+  type SessionTranscriptUpdateMode,
+} from "../config/sessions/transcript.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   formatSessionTranscriptMemoryHitKey,
@@ -51,8 +60,27 @@ export type SessionTranscriptTarget = SessionTranscriptIdentity & {
   targetKind: "active-session-file" | "runtime-session";
 };
 
+/**
+ * @deprecated Use SessionTranscriptTarget with `{ agentId, sessionKey,
+ * sessionId }`. Active transcript file targets are transitional only and will
+ * be removed with the SQLite session/transcript storage flip.
+ */
+export type SessionTranscriptLegacyFileTarget = SessionTranscriptTarget & {
+  /** Deprecated transitional file path for active transcript artifact callers. */
+  sessionFile: string;
+};
+
 export type SessionTranscriptAppendMessageParams<TMessage> = SessionTranscriptTargetParams &
   TranscriptMessageAppendOptions<TMessage>;
+
+export type SessionTranscriptAssistantMirrorAppendParams = SessionTranscriptReadParams & {
+  config?: OpenClawConfig;
+  deliveryMirror?: SessionTranscriptDeliveryMirror;
+  idempotencyKey?: string;
+  mediaUrls?: string[];
+  text?: string;
+  updateMode?: SessionTranscriptUpdateMode;
+};
 
 export type SessionTranscriptWriteLockParams = SessionTranscriptTargetParams & {
   config?: TranscriptMessageAppendOptions<unknown>["config"];
@@ -98,6 +126,24 @@ export async function resolveSessionTranscriptTarget(
 }
 
 /**
+ * @deprecated Use resolveSessionTranscriptTarget with `{ agentId, sessionKey,
+ * sessionId }`. This persists an active transcript file target only for legacy
+ * plugin command calls that still require `sessionFile`.
+ */
+export async function resolveSessionTranscriptLegacyFileTarget(
+  params: SessionTranscriptTargetParams,
+): Promise<SessionTranscriptLegacyFileTarget> {
+  const target = await resolveSessionTranscriptRuntimeTarget(params);
+  return {
+    ...projectPublicTarget({
+      ...target,
+      targetKind: params.sessionFile?.trim() ? "active-session-file" : "runtime-session",
+    }),
+    sessionFile: target.sessionFile,
+  };
+}
+
+/**
  * Reads transcript events by public session identity instead of file path.
  */
 export async function readSessionTranscriptEvents(
@@ -113,6 +159,38 @@ export async function readSessionTranscriptEvents(
     }
   }
   return events;
+}
+
+/**
+ * Reads the latest visible assistant text by scoped identity using the
+ * bounded reverse transcript reader.
+ */
+export async function readLatestAssistantTextByIdentity(
+  params: SessionTranscriptTargetParams,
+): Promise<LatestAssistantTranscriptText | undefined> {
+  const target = await resolveSessionTranscriptRuntimeReadTarget(params);
+  return await readLatestAssistantTextFromSessionTranscript(target.sessionFile);
+}
+
+/**
+ * Appends a delivery-mirror assistant message through the guarded session
+ * append facade.
+ */
+export async function appendAssistantMirrorMessageByIdentity(
+  params: SessionTranscriptAssistantMirrorAppendParams,
+): Promise<SessionTranscriptAppendResult> {
+  return await appendAssistantMessageToSessionTranscript({
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    expectedSessionId: params.sessionId,
+    ...(params.text !== undefined ? { text: params.text } : {}),
+    ...(params.mediaUrls !== undefined ? { mediaUrls: params.mediaUrls } : {}),
+    ...(params.idempotencyKey !== undefined ? { idempotencyKey: params.idempotencyKey } : {}),
+    ...(params.deliveryMirror !== undefined ? { deliveryMirror: params.deliveryMirror } : {}),
+    ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
+    ...(params.updateMode !== undefined ? { updateMode: params.updateMode } : {}),
+    ...(params.config !== undefined ? { config: params.config } : {}),
+  });
 }
 
 /**

@@ -44,38 +44,44 @@ function runChecked(command, args) {
   return null;
 }
 
+function exitWithFailure(failure) {
+  if (failure.message) {
+    console.error(failure.message);
+  }
+  process.exit(failure.status);
+}
+
 function runPreCommitFromTempVenv(hook, hookArgs) {
   if (!commandExists("python3", ["--version"])) {
     return false;
   }
   const venvDir = mkdtempSync(join(tmpdir(), "openclaw-check-workflows-pre-commit-"));
   const python = join(venvDir, process.platform === "win32" ? "Scripts/python.exe" : "bin/python");
-  let failure;
+  let postVenvFailure;
   try {
-    failure = runChecked("python3", ["-m", "venv", venvDir]);
-    if (!failure) {
-      failure = runChecked(python, [
-        "-m",
-        "pip",
-        "install",
-        "--disable-pip-version-check",
-        `pre-commit==${PRE_COMMIT_VERSION}`,
-      ]);
+    const venvFailure = runChecked("python3", ["-m", "venv", venvDir]);
+    if (venvFailure) {
+      return false;
     }
-    if (!failure) {
-      failure = runChecked(python, ["-m", "pre_commit", ...hookArgs]);
+    postVenvFailure = runChecked(python, [
+      "-m",
+      "pip",
+      "install",
+      "--disable-pip-version-check",
+      `pre-commit==${PRE_COMMIT_VERSION}`,
+    ]);
+    if (postVenvFailure) {
+      return false;
     }
-    if (failure) {
+    postVenvFailure = runChecked(python, ["-m", "pre_commit", ...hookArgs]);
+    if (postVenvFailure) {
       return false;
     }
     return true;
   } finally {
     rmSync(venvDir, { force: true, recursive: true });
-    if (failure) {
-      if (failure.message) {
-        console.error(failure.message);
-      }
-      process.exit(failure.status);
+    if (postVenvFailure) {
+      exitWithFailure(postVenvFailure);
     }
   }
 }

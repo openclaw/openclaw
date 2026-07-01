@@ -18,6 +18,21 @@ let lifecycleHandler:
     }) => void)
   | undefined;
 
+const sessionStore = vi.hoisted(
+  () =>
+    new Proxy<Record<string, { sessionId: string; updatedAt: number }>>(
+      {},
+      {
+        get(target, prop, receiver) {
+          if (typeof prop !== "string" || prop in target) {
+            return Reflect.get(target, prop, receiver);
+          }
+          return { sessionId: `sess-${prop}`, updatedAt: 1 };
+        },
+      },
+    ),
+);
+
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(async (opts: unknown) => {
     const request = opts as { method?: string };
@@ -42,18 +57,6 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", () => {
-  const sessionStore = new Proxy<Record<string, { sessionId: string; updatedAt: number }>>(
-    {},
-    {
-      get(target, prop, receiver) {
-        if (typeof prop !== "string" || prop in target) {
-          return Reflect.get(target, prop, receiver);
-        }
-        return { sessionId: `sess-${prop}`, updatedAt: 1 };
-      },
-    },
-  );
-
   return {
     loadSessionStore: vi.fn(() => sessionStore),
     resolveAgentIdFromSessionKey: (key: string) => {
@@ -65,6 +68,11 @@ vi.mock("../config/sessions.js", () => {
     updateSessionStore: vi.fn(),
   };
 });
+
+vi.mock("../config/sessions/session-accessor.js", () => ({
+  loadSessionEntry: (scope: { sessionKey: string }) => sessionStore[scope.sessionKey],
+  patchSessionEntry: async () => null,
+}));
 
 const announceSpy = vi.fn(async (_params: unknown) => true);
 const runSubagentEndedHookMock = vi.fn(async (_eventValue?: unknown, _ctx?: unknown) => {});
