@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import runpy
 import shutil
@@ -123,6 +124,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--fixture", choices=("malicious", "benign"), default="malicious")
     parser.add_argument("--engine", action="append", choices=ENGINES, dest="engines")
+    parser.add_argument(
+        "--parser-fixtures",
+        action="store_true",
+        help="Run deterministic autoreview output parser fixtures without invoking review engines.",
+    )
     return parser.parse_args(argv)
 
 
@@ -158,6 +164,79 @@ def validate_prompt_policy(repo: Path, autoreview: Path) -> None:
     missing = [needle for needle in required if needle not in prompt]
     if missing:
         raise RuntimeError(f"autoreview prompt missing scope policy: {missing}")
+
+
+def parser_report(explanation: str, *, correctness: str = "patch is correct") -> str:
+    return json.dumps(
+        {
+            "findings": [],
+            "overall_correctness": correctness,
+            "overall_explanation": explanation,
+            "overall_confidence": 0.9,
+        }
+    )
+
+
+def parser_jsonl(*contents: str) -> str:
+    events = [{"type": "session.info", "data": {"fixture": True}}]
+    events.extend({"type": "assistant.message", "data": {"content": content}} for content in contents)
+    events.append({"type": "result", "exitCode": 0})
+    return "\n".join(json.dumps(event) for event in events)
+
+
+def expect_system_exit(label: str, action: Callable[[], object], needle: str) -> None:
+    try:
+        action()
+    except SystemExit as exc:
+        if needle not in str(exc):
+            raise RuntimeError(f"{label}: expected SystemExit containing {needle!r}, got {exc!r}") from exc
+        return
+    raise RuntimeError(f"{label}: expected SystemExit")
+
+
+def run_parser_reviewer(namespace: dict[str, object], engine: str, raw: str) -> dict[str, object]:
+    reviewer = namespace["run_reviewer"]
+    globals_dict = reviewer.__globals__
+    original_run_engine = globals_dict["run_engine"]
+    # Patch the loaded script's globals so parser fixtures exercise run_reviewer's
+    # engine gate without invoking any live review CLI.
+    globals_dict["run_engine"] = lambda _args, _repo, _prompt: raw
+    try:
+        args = argparse.Namespace(engine=engine)
+        return reviewer(args, Path.cwd(), "", set(), [])
+    finally:
+        globals_dict["run_engine"] = original_run_engine
+
+
+def run_parser_fixtures(autoreview: Path) -> None:
+    namespace = runpy.run_path(str(autoreview))
+
+    prose_wrapped = parser_jsonl(f"Here is the review:\n\n{parser_report('copilot recovered')}")
+    recovered = run_parser_reviewer(namespace, "copilot", prose_wrapped)
+    if recovered["overall_explanation"] != "copilot recovered":
+        raise RuntimeError(f"copilot prose recovery returned wrong report: {recovered}")
+
+    for engine in ("codex", "claude", "droid"):
+        expect_system_exit(
+            f"{engine} prose output",
+            lambda engine=engine: run_parser_reviewer(namespace, engine, prose_wrapped),
+            "non-JSON output",
+        )
+
+    first = parser_report("draft verdict")
+    second = parser_report("final verdict", correctness="patch is incorrect")
+    ambiguous = parser_jsonl(f"Draft: {first}\nFinal: {second}")
+    expect_system_exit(
+        "single-message multiple findings objects",
+        lambda: run_parser_reviewer(namespace, "copilot", ambiguous),
+        "refusing to guess",
+    )
+
+    ordered = parser_jsonl(f"Preliminary: {first}", f"Final answer:\n\n{second}")
+    final = run_parser_reviewer(namespace, "copilot", ordered)
+    if final["overall_explanation"] != "final verdict":
+        raise RuntimeError(f"JSONL final-message precedence selected wrong report: {final}")
+    print("parser fixtures passed")
 
 
 def run_reviews(repo: Path, script_dir: Path, fixture: str, engines: list[str]) -> None:
@@ -199,6 +278,9 @@ def cleanup_repo(repo: Path) -> None:
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     script_dir = Path(__file__).resolve().parent
+    if args.parser_fixtures:
+        run_parser_fixtures(script_dir / "autoreview")
+        return 0
     engines = args.engines or list(DEFAULT_ENGINES)
     repo = Path(tempfile.mkdtemp(prefix="autoreview-fixture."))
     try:

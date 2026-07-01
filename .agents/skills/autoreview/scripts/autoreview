@@ -797,36 +797,40 @@ def claude_allowed_tools(args: argparse.Namespace) -> str:
     return ",".join(tools)
 
 
-def extract_json(text: str) -> dict[str, Any]:
+def extract_json(text: str, *, allow_prose_recovery: bool = False) -> dict[str, Any]:
     stripped = text.strip()
     if not stripped:
         raise SystemExit("review engine returned empty output")
     try:
         parsed = json.loads(stripped)
     except json.JSONDecodeError as exc:
-        fenced_report = parse_json_candidate(stripped)
-        if isinstance(fenced_report, dict) and "findings" in fenced_report:
-            return fenced_report
-        jsonl_report = extract_json_from_jsonl(stripped)
+        # Prefer per-event JSONL extraction first: it scans assistant messages in
+        # reverse to honor the final verdict. Only fall back to scanning the whole
+        # blob for an embedded object when the output is not an event stream, so a
+        # findings object echoed in an earlier event cannot override the last one.
+        jsonl_report = extract_json_from_jsonl(stripped, allow_prose_recovery=allow_prose_recovery)
         if jsonl_report:
             return jsonl_report
+        fenced_report = parse_json_candidate(stripped, allow_prose_recovery=allow_prose_recovery)
+        if isinstance(fenced_report, dict) and "findings" in fenced_report:
+            return fenced_report
         raise SystemExit(f"review engine returned non-JSON output: {exc}\n{stripped[:2000]}")
     if isinstance(parsed, dict) and "findings" in parsed:
         return parsed
     if isinstance(parsed, dict) and isinstance(parsed.get("structured_output"), dict):
         return parsed["structured_output"]
     if isinstance(parsed, dict) and isinstance(parsed.get("result"), str):
-        result_json = parse_json_candidate(parsed["result"])
+        result_json = parse_json_candidate(parsed["result"], allow_prose_recovery=allow_prose_recovery)
         if isinstance(result_json, dict) and "findings" in result_json:
             return result_json
         raise SystemExit(f"review engine result was not structured JSON:\n{parsed['result'][:2000]}")
-    jsonl_report = extract_json_from_jsonl(stripped)
+    jsonl_report = extract_json_from_jsonl(stripped, allow_prose_recovery=allow_prose_recovery)
     if jsonl_report:
         return jsonl_report
     raise SystemExit(f"review engine returned unexpected JSON shape:\n{json.dumps(parsed)[:2000]}")
 
 
-def extract_json_from_jsonl(text: str) -> dict[str, Any] | None:
+def extract_json_from_jsonl(text: str, *, allow_prose_recovery: bool = False) -> dict[str, Any] | None:
     candidates: list[str | dict[str, Any]] = []
     for line in text.splitlines():
         line = line.strip()
@@ -853,13 +857,13 @@ def extract_json_from_jsonl(text: str) -> dict[str, Any] | None:
             if "findings" in candidate:
                 return candidate
             continue
-        parsed = parse_json_candidate(candidate)
+        parsed = parse_json_candidate(candidate, allow_prose_recovery=allow_prose_recovery)
         if isinstance(parsed, dict) and "findings" in parsed:
             return parsed
     return None
 
 
-def parse_json_candidate(text: str) -> Any | None:
+def parse_json_candidate(text: str, *, allow_prose_recovery: bool = False) -> Any | None:
     stripped = text.strip()
     if stripped.startswith("```"):
         lines = stripped.splitlines()
@@ -868,11 +872,52 @@ def parse_json_candidate(text: str) -> Any | None:
     try:
         parsed = json.loads(stripped)
     except json.JSONDecodeError:
+        # Models occasionally ignore "return only JSON" and wrap the object in prose
+        # ("Here is the review:\n{...}") or a partial fence, which json.loads rejects.
+        # Recover the embedded object so a chatty reply does not fail the whole review.
+        # Gated to engines that lack a structured-output contract (copilot): for engines
+        # invoked with a JSON schema, prose-wrapped output is a contract violation that
+        # should fail loudly rather than be silently recovered.
+        if allow_prose_recovery:
+            return find_embedded_json_object(stripped)
         return None
     if isinstance(parsed, str) and parsed != text:
-        nested = parse_json_candidate(parsed)
+        nested = parse_json_candidate(parsed, allow_prose_recovery=allow_prose_recovery)
         return nested if nested is not None else parsed
     return parsed
+
+
+def find_embedded_json_object(text: str) -> dict[str, Any] | None:
+    decoder = json.JSONDecoder()
+    fallback: dict[str, Any] | None = None
+    matches: list[dict[str, Any]] = []
+    index = 0
+    while True:
+        start = text.find("{", index)
+        if start == -1:
+            break
+        try:
+            obj, end = decoder.raw_decode(text, start)
+        except json.JSONDecodeError:
+            index = start + 1
+            continue
+        if isinstance(obj, dict):
+            if "findings" in obj:
+                matches.append(obj)
+            elif fallback is None:
+                fallback = obj
+        index = end if end > start else start + 1
+    # More than one verdict-shaped object in a single message is ambiguous: fail loudly
+    # instead of guessing which is authoritative. (Cross-message precedence is handled
+    # earlier by extract_json_from_jsonl's reverse scan; this guards one message/blob.)
+    if len(matches) > 1:
+        raise SystemExit(
+            f"review engine output contained {len(matches)} JSON objects with a 'findings' "
+            "key in one message; refusing to guess which verdict is authoritative"
+        )
+    if matches:
+        return matches[0]
+    return fallback
 
 
 def validate_report(report: dict[str, Any], repo: Path, changed_paths: set[str], required: list[str]) -> None:
@@ -1149,7 +1194,10 @@ def reviewer_label(args: argparse.Namespace) -> str:
 
 def run_reviewer(args: argparse.Namespace, repo: Path, prompt: str, changed_paths: set[str], required: list[str]) -> dict[str, Any]:
     raw = run_engine(args, repo, prompt)
-    report = extract_json(raw)
+    # copilot has no structured-output/JSON-schema flag and sometimes wraps the verdict
+    # in prose; allow embedded-object recovery only for it. Other engines are invoked
+    # with a JSON schema, so prose output should fail loudly instead of being recovered.
+    report = extract_json(raw, allow_prose_recovery=args.engine == "copilot")
     validate_report(report, repo, changed_paths, required)
     return report
 
