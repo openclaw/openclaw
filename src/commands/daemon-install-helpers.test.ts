@@ -485,6 +485,7 @@ describe("buildGatewayInstallPlan", () => {
         models: {
           providers: {
             openai: {
+              baseUrl: "https://api.openai.com/v1",
               apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
               models: [],
             },
@@ -1282,7 +1283,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
                   source: "env",
                   provider: "default",
                   id: "TELEGRAM_DEFAULT_BOTTOKEN",
-                },
+                } as unknown as string,
               },
             },
           },
