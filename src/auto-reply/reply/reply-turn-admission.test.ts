@@ -2,6 +2,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createReplyOperation,
+  REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+  replyRunRegistry,
   runAfterReplyOperationClear,
   testing,
 } from "./reply-run-registry.js";
@@ -68,6 +70,88 @@ describe("reply turn admission", () => {
 
       await vi.advanceTimersByTimeAsync(15_000);
       expect(settled).toBe(false);
+
+      active.complete();
+      const result = await admitted;
+      expect(result.status).toBe("owned");
+      if (result.status === "owned") {
+        result.operation.complete();
+      }
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("takes over a superseded active run instead of wedging a new visible turn", async () => {
+    vi.useFakeTimers();
+    try {
+      // Two quick messages in the same Telegram topic: the first run is
+      // superseded, but its registry slot never reaches normal completion.
+      const supersede = new AbortController();
+      const active = createReplyOperation({
+        sessionKey: "agent:main:telegram:topic:99",
+        sessionId: "active-session",
+        resetTriggered: false,
+        upstreamAbortSignal: supersede.signal,
+      });
+      active.setPhase("running");
+      supersede.abort();
+      expect(replyRunRegistry.isActive("agent:main:telegram:topic:99")).toBe(true);
+
+      const admitted = admitReplyTurn({
+        sessionKey: "agent:main:telegram:topic:99",
+        sessionId: "second-message-session",
+        kind: "visible",
+        resetTriggered: false,
+      });
+
+      let settled = false;
+      void admitted.then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS - 100);
+      expect(settled).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(100);
+      const result = await admitted;
+
+      expect(result.status).toBe("owned");
+      if (result.status === "owned") {
+        expect(result.operation.sessionId).toBe("active-session");
+        result.operation.complete();
+      }
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not reclaim a healthy active run for a visible turn", async () => {
+    vi.useFakeTimers();
+    try {
+      const active = createReplyOperation({
+        sessionKey: "agent:main:telegram:topic:100",
+        sessionId: "healthy-session",
+        resetTriggered: false,
+      });
+      active.setPhase("running");
+
+      const admitted = admitReplyTurn({
+        sessionKey: "agent:main:telegram:topic:100",
+        sessionId: "waiting-session",
+        kind: "visible",
+        resetTriggered: false,
+      });
+
+      let settled = false;
+      void admitted.then(() => {
+        settled = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS * 2);
+      expect(settled).toBe(false);
+      expect(replyRunRegistry.isActive("agent:main:telegram:topic:100")).toBe(true);
 
       active.complete();
       const result = await admitted;
