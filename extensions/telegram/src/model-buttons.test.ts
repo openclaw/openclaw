@@ -89,6 +89,28 @@ describe("resolveModelSelection", () => {
     expect(result.kind).toBe("ambiguous");
   });
 
+  it("rejects stale fingerprinted callback on same-count different-model list (#98221)", () => {
+    // ["a", "bc"] and ["ab", "c"] have the same concatenated character
+    // stream but different models. The delimiter in the fingerprint must
+    // distinguish them so a button from the first list is rejected when
+    // the provider's models change to the second list.
+    const modelsA = new Set(["a", "bc"]);
+    const result = resolveModelSelection({
+      callback: {
+        type: "select",
+        provider: "p",
+        page: 1,
+        modelIndex: 1,
+        totalCount: 2,
+        fingerprint: "dead",
+      },
+      providers: ["p"],
+      byProvider: new Map([["p", modelsA]]),
+    });
+    // Real fingerprint of modelsA ≠ "dead" → rejected as stale
+    expect(result.kind).toBe("ambiguous");
+  });
+
   it("returns ambiguous result when provider has no models", () => {
     const result = resolveModelSelection({
       callback: { type: "select", provider: "missing", page: 1, modelIndex: 1, totalCount: 0 },
@@ -137,6 +159,32 @@ describe("buildModelSelectionCallbackData", () => {
       models: ["x"],
     });
     expect(cb3.length).toBeLessThan(64);
+  });
+});
+
+describe("fingerprint delimiter disambiguation (#98221)", () => {
+  it("produces different callback_data for same-character-stream model lists", () => {
+    // ["a", "bc"] and ["ab", "c"] both concatenate to "abc" but represent
+    // different model sets. The delimiter in computeModelListFingerprint
+    // must produce different fingerprints for these two lists.
+    const cb1 = buildModelSelectionCallbackData({
+      provider: "p",
+      page: 1,
+      modelIndex: 1,
+      totalCount: 2,
+      models: ["a", "bc"],
+    });
+    const cb2 = buildModelSelectionCallbackData({
+      provider: "p",
+      page: 1,
+      modelIndex: 1,
+      totalCount: 2,
+      models: ["ab", "c"],
+    });
+    expect(cb1).not.toBe(cb2);
+    // Both still under 64 bytes
+    expect(Buffer.byteLength(cb1, "utf8")).toBeLessThanOrEqual(64);
+    expect(Buffer.byteLength(cb2, "utf8")).toBeLessThanOrEqual(64);
   });
 });
 
