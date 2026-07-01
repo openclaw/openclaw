@@ -448,7 +448,8 @@ function rewriteLegacyMemorySearchAutoProvider(
   }
   // "auto" is now resolved at runtime via the auto-selection loop in
   // createEmbeddingProvider, so we keep it in the config instead of
-  // migrating to a specific provider.
+  // migrating to a specific provider. Normalize whitespace.
+  memorySearch.provider = "auto";
   changes.push(`Preserved ${pathLabel}.provider="auto" (resolved at runtime).`);
 }
 
