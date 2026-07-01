@@ -1,6 +1,7 @@
 // Tests ACP dispatch delivery routing and visible reply handoff.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { markReplyPayloadAsTtsSupplement } from "../reply-payload.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import { createReplyDispatcher, type ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -942,5 +943,243 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(coordinator.hasDeliveredVisibleText()).toBe(true);
     expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
     expect(coordinator.getRoutedCounts().block).toBe(0);
+  });
+
+  it("does not mark final TTS media as delivered when a routed final media reply is hook-suppressed", async () => {
+    deliveryMocks.routeReply.mockResolvedValueOnce({
+      ok: true,
+      suppressed: true,
+      reason: "cancelled_by_reply_payload_sending_hook",
+    });
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:chat-1",
+    });
+
+    const delivered = await coordinator.deliver(
+      "final",
+      markReplyPayloadAsTtsSupplement(
+        {
+          text: "spoken caption",
+          mediaUrls: ["https://example.com/audio.ogg"],
+        },
+        "spoken caption",
+      ),
+      { skipTts: true },
+    );
+
+    // The hook cancelled the send, so nothing reached the user: the final reply
+    // is still "handled", but no TTS media was delivered, so the text fallback
+    // downstream must remain eligible to fire.
+    expect(delivered).toBe(true);
+    expect(coordinator.hasDeliveredFinalReply()).toBe(true);
+    expect(coordinator.hasDeliveredFinalTtsMedia()).toBe(false);
+    // Suppression is handled but NOT delivered-to-user, so the text fallback gate
+    // (which keys off this predicate) must still be allowed to fire.
+    expect(coordinator.hasDeliveredFinalReplyToUser()).toBe(false);
+  });
+
+  it("marks final reply as delivered to user when a routed final media reply genuinely succeeds", async () => {
+    deliveryMocks.routeReply.mockResolvedValueOnce({ ok: true, messageId: "final-1" });
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:chat-1",
+    });
+
+    const delivered = await coordinator.deliver(
+      "final",
+      markReplyPayloadAsTtsSupplement(
+        {
+          text: "spoken caption",
+          mediaUrls: ["https://example.com/audio.ogg"],
+        },
+        "spoken caption",
+      ),
+      { skipTts: true },
+    );
+
+    // A genuine (non-suppressed) routed final reached the user: handled, media
+    // delivered, and delivered-to-user are all true so the fallback stays blocked.
+    expect(delivered).toBe(true);
+    expect(coordinator.hasDeliveredFinalReply()).toBe(true);
+    expect(coordinator.hasDeliveredFinalTtsMedia()).toBe(true);
+    expect(coordinator.hasDeliveredFinalReplyToUser()).toBe(true);
+  });
+
+  it("does not mark final TTS media for an ordinary (non-supplement) routed media final", async () => {
+    // Defensive invariant: ACP only emits text finals plus the genuine synthesized
+    // voice supplement today. An ordinary media-only final (no TTS supplement
+    // marker) must never satisfy the TTS-media gate, or it would wrongly suppress
+    // the downstream block-text fallback.
+    deliveryMocks.routeReply.mockResolvedValueOnce({ ok: true, messageId: "final-1" });
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:chat-1",
+    });
+
+    const delivered = await coordinator.deliver(
+      "final",
+      { mediaUrls: ["https://example.com/photo.png"] },
+      { skipTts: true },
+    );
+
+    expect(delivered).toBe(true);
+    expect(coordinator.hasDeliveredFinalReply()).toBe(true);
+    // Ordinary media final reached the user, but it is not synthesized TTS media.
+    expect(coordinator.hasDeliveredFinalTtsMedia()).toBe(false);
+    expect(coordinator.hasDeliveredFinalReplyToUser()).toBe(true);
+  });
+
+  it("delivers media blocks with text stripped when suppressBlockUserDelivery is set", async () => {
+    deliveryMocks.routeReply.mockResolvedValueOnce({ ok: true });
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      suppressBlockUserDelivery: true,
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:chat-1",
+    });
+
+    const delivered = await coordinator.deliver(
+      "block",
+      {
+        text: "caption text",
+        mediaUrls: ["https://example.com/image.png"],
+      },
+      { skipTts: true },
+    );
+
+    expect(delivered).toBe(true);
+    expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(1);
+    const [[routeParams]] = deliveryMocks.routeReply.mock.calls as unknown as Array<
+      [{ payload: { mediaUrls?: string[]; text?: string } }]
+    >;
+    const routedPayload = routeParams.payload;
+    expect(routedPayload.mediaUrls).toEqual(["https://example.com/image.png"]);
+    expect(routedPayload.text).toBeUndefined();
+  });
+
+  it("strips text from tool-result media when suppressBlockUserDelivery is set", async () => {
+    deliveryMocks.routeReply.mockResolvedValueOnce({ ok: true });
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      suppressBlockUserDelivery: true,
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:chat-1",
+    });
+
+    const delivered = await coordinator.deliver(
+      "tool",
+      {
+        text: "tool caption",
+        mediaUrls: ["https://example.com/tool-image.png"],
+      },
+      { skipTts: true },
+    );
+
+    expect(delivered).toBe(true);
+    expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(1);
+    const [[routeParams]] = deliveryMocks.routeReply.mock.calls as unknown as Array<
+      [{ payload: { mediaUrls?: string[]; text?: string } }]
+    >;
+    const routedPayload = routeParams.payload;
+    expect(routedPayload.mediaUrls).toEqual(["https://example.com/tool-image.png"]);
+    expect(routedPayload.text).toBeUndefined();
+  });
+
+  it("preserves text-only tool results when suppressBlockUserDelivery is set", async () => {
+    deliveryMocks.routeReply.mockResolvedValueOnce({ ok: true });
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      suppressBlockUserDelivery: true,
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:chat-1",
+    });
+
+    const delivered = await coordinator.deliver(
+      "tool",
+      { text: "Searching..." },
+      { skipTts: true },
+    );
+
+    expect(delivered).toBe(true);
+    expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(1);
+    const [[routeParams]] = deliveryMocks.routeReply.mock.calls as unknown as Array<
+      [{ payload: { text?: string } }]
+    >;
+    const routedPayload = routeParams.payload;
+    expect(routedPayload.text).toBe("Searching...");
+  });
+
+  it("suppresses text-only blocks when suppressBlockUserDelivery is set", async () => {
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      suppressBlockUserDelivery: true,
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:chat-1",
+    });
+
+    const delivered = await coordinator.deliver("block", { text: "text only" }, { skipTts: true });
+
+    expect(delivered).toBe(false);
+    expect(deliveryMocks.routeReply).not.toHaveBeenCalled();
   });
 });

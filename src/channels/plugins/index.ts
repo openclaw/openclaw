@@ -18,6 +18,7 @@ export {
   type ChannelEntryMatch,
   type ChannelMatchSource,
 } from "./channel-config.js";
+export { resolveChannelTtsVoiceDelivery } from "./tts-capabilities.js";
 export {
   formatAllowlistMatchMeta,
   type AllowlistMatch,

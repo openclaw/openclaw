@@ -764,6 +764,61 @@ Reply -> TTS enabled?
                             yes -> summarize -> TTS -> attach audio
 ```
 
+## Captioned final text (`captionedFinalText`)
+
+Channel plugins can opt in to **captioned final text** delivery by declaring
+`captionedFinalText: true` on their `capabilities.tts.voice` object. When
+enabled, core changes how text and audio are delivered during an auto-TTS
+reply **only when the resolved auto mode is not `tagged`** (i.e. `always` or
+`inbound` final-mode TTS):
+
+1. **Live text suppression.** Instead of streaming block text to the channel
+   while TTS synthesis runs, core accumulates the text internally.
+2. **Bundled caption.** When synthesis completes, the accumulated text is
+   attached as a caption on the final voice-note message, so the user sees
+   text and audio together.
+3. **Text-only fallback.** If TTS synthesis fails, core delivers the
+   accumulated text as a plain text reply so the user still sees the content.
+
+### When to opt in
+
+Only channels whose voice-note send path supports captions should opt in.
+Telegram is the primary example — its `sendVoice` API accepts a `caption`
+parameter. Channels that cannot attach text to voice messages (or where
+clients do not render voice-note captions) should not enable this.
+
+### Tagged mode behavior
+
+In `auto: "tagged"` mode, captioned-final deferral of ordinary block text is
+**not** engaged even on caption-capable channels: plain block replies that
+carry visible text are delivered normally and stay visible — declaring
+`captionedFinalText` does not hide them. Caption-capable channels still
+suppress the live partial-reply preview during a captioned-final TTS reply, and a
+directive-only final reply (one whose visible text is entirely consumed by
+`[[tts:text]]...[[/tts:text]]` directives) has its resolved directive text
+attached as the final voice-note caption rather than sent as separate visible
+text.
+
+### How to opt in (channel plugin)
+
+Declare `captionedFinalText: true` inside `capabilities.tts.voice` in your
+channel plugin's account capabilities:
+
+```ts
+capabilities: {
+  tts: {
+    voice: {
+      synthesisTarget: "voice-note",
+      captionedFinalText: true,
+    },
+  },
+  // ...other capabilities
+}
+```
+
+Core reads this via `resolveChannelTtsVoiceDelivery` at runtime — channel
+plugins should not override that resolver directly.
+
 ## Output formats by channel
 
 | Target                                | Format                                                                                                                                |
