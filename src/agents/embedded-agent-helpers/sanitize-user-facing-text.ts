@@ -73,6 +73,8 @@ const MODEL_CAPACITY_ERROR_USER_MESSAGE =
 const OVERLOADED_ERROR_USER_MESSAGE =
   "The AI service is temporarily overloaded. Please try again in a moment.";
 const TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE = /^[ \t]*\[tool calls omitted\][ \t]*$/i;
+const TRUNCATION_SENTINEL_LINE_RE =
+  /^[ \t]*(?:\.\.\.\(truncated\)\.\.\.|\.\.\.\[[^\]]*truncated[^\]]*\]\.\.\.|\.\.\.<truncated>|…\(truncated(?:\s[^)]*)?\)…|…\d+\s+(?:tokens?|chars?)\s+truncated…|\[\.\.\.,?\s*\d+\s+more\s+characters?\s+truncated(?:;[^\]]+)?\]|\[…truncated(?:\s[^\]]*)?\]|\[\.\.\.truncated,\s*read\s+\S+\s+for\s+full\s+content\.\.\.\])[ \t]*$/i;
 const ERROR_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
@@ -380,6 +382,42 @@ function stripToolCallsOmittedPlaceholderLines(text: string): string {
   return result;
 }
 
+function stripTruncationSentinelLines(text: string): string {
+  let result = "";
+  let start = 0;
+  let fence: { char: "`" | "~"; length: number } | null = null;
+  while (start < text.length) {
+    const newlineIndex = text.indexOf("\n", start);
+    const end = newlineIndex === -1 ? text.length : newlineIndex + 1;
+    const chunk = text.slice(start, end);
+    const line = chunk.endsWith("\n") ? chunk.slice(0, -1).replace(/\r$/, "") : chunk;
+    const insideFence = Boolean(fence);
+    if (!TRUNCATION_SENTINEL_LINE_RE.test(line) || insideFence) {
+      result += chunk;
+    }
+    fence = updateMarkdownFenceState(line, fence);
+    start = end;
+  }
+  return result;
+}
+
+function updateMarkdownFenceState(
+  line: string,
+  fence: { char: "`" | "~"; length: number } | null,
+): { char: "`" | "~"; length: number } | null {
+  const match = /^(?: {0,3})(`{3,}|~{3,})/.exec(line);
+  if (!match) {
+    return fence;
+  }
+
+  const marker = match[1] ?? "";
+  const char = marker[0] as "`" | "~";
+  if (fence) {
+    return fence.char === char && marker.length >= fence.length ? null : fence;
+  }
+  return { char, length: marker.length };
+}
+
 function collapseConsecutiveDuplicateBlocks(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -438,9 +476,10 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
   // It is internal scaffolding, so drop standalone placeholder lines before delivery
   // while preserving ordinary inline mentions a user may be discussing.
   const withoutPlaceholder = stripToolCallsOmittedPlaceholderLines(withoutToolCallXml);
+  const withoutTruncationSentinels = stripTruncationSentinelLines(withoutPlaceholder);
   const withoutInternalTraceLines = errorContext
-    ? stripAssistantInternalTraceLines(withoutPlaceholder)
-    : withoutPlaceholder;
+    ? stripAssistantInternalTraceLines(withoutTruncationSentinels)
+    : withoutTruncationSentinels;
   const withoutToolCallBlocks = stripPlainTextToolCallBlocks(
     stripLegacyBracketToolCallBlocks(withoutInternalTraceLines),
   );
