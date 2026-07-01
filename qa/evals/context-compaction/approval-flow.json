@@ -1,0 +1,50 @@
+{
+  "id": "approval-flow",
+  "title": "Gateway config approval flow",
+  "transcript": [
+    "Task 09ffc53b audited gateway PATH drift.",
+    "Finding: user systemd service PATH is stale and service env version is 2026.4.25 while CLI/package is 2026.4.29.",
+    "Artifact written to shared/projects/system/reliability/2026-05-01-openclaw-gateway-path-drift-audit.md.",
+    "Approval boundary: do not mutate service config or restart gateway without Martins approval.",
+    "Next action: wait for approval, then patch service env and use the safe gateway restart path."
+  ],
+  "summary": "Task 09ffc53b produced a read-only gateway PATH drift audit. Artifact: shared/projects/system/reliability/2026-05-01-openclaw-gateway-path-drift-audit.md. Finding: the user systemd service PATH is stale/non-minimal and service env still reports 2026.4.25 while CLI/package is 2026.4.29. Approval/constraint: no production service config mutation and no gateway restart without Martins approval. Next step after approval: patch the service environment and restart through the approved gateway restart lane; until then the task stays blocked.",
+  "probes": [
+    {
+      "id": "task",
+      "category": "Recall",
+      "question": "What task was being handled?",
+      "mustIncludeAny": [["09ffc53b"], ["PATH drift"]]
+    },
+    {
+      "id": "artifact",
+      "category": "Artifact",
+      "question": "Where is the audit artifact?",
+      "mustIncludeAny": [
+        ["shared/projects/system/reliability/2026-05-01-openclaw-gateway-path-drift-audit.md"]
+      ]
+    },
+    {
+      "id": "finding",
+      "category": "Recall",
+      "question": "What drift was found?",
+      "mustIncludeAny": [["stale"], ["2026.4.25"], ["2026.4.29"]]
+    },
+    {
+      "id": "approval",
+      "category": "Approval",
+      "question": "What must not happen without approval?",
+      "mustIncludeAny": [
+        ["no production service config mutation", "config mutation"],
+        ["no gateway restart", "restart"],
+        ["Martins approval"]
+      ]
+    },
+    {
+      "id": "next",
+      "category": "Continuation",
+      "question": "What is the next step after approval?",
+      "mustIncludeAny": [["patch the service environment"], ["approved gateway restart lane"]]
+    }
+  ]
+}

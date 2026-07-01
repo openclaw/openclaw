@@ -1,0 +1,51 @@
+{
+  "id": "research-handoff",
+  "title": "Amber-to-Rex context compaction source pack",
+  "transcript": [
+    "Amber source pack says OpenClaw needs functional quality probes for compaction summaries, not a new compaction algorithm.",
+    "Evidence references: Factory compression eval, Letta Context-Bench, Anthropic context engineering, LOCA-bench.",
+    "Scope: 3 synthetic transcripts, 8-12 deterministic probes across Recall, Artifact, Continuation, Decision, Approval/constraint.",
+    "Do not build a broad LOCA/Context-Bench clone; optional LLM judge can come later.",
+    "Task e3619804 should produce a small harness and pass/fail report with missing fields."
+  ],
+  "summary": "Rex task e3619804 is to build a small OpenClaw context-compaction quality probe harness. Scope is intentionally narrow: use 3 synthetic transcripts and 8-12 deterministic probes covering Recall, Artifact, Continuation, Decision, and Approval/constraint. The report should show pass/fail and missing fields. Evidence/source pack references Factory compression eval, Letta Context-Bench, Anthropic context engineering, and LOCA-bench. Decision/constraint: this is not a broad LOCA/Context-Bench clone and does not require a new compaction algorithm; optional LLM judging can be added later.",
+  "probes": [
+    {
+      "id": "task",
+      "category": "Recall",
+      "question": "What is Rex supposed to build?",
+      "mustIncludeAny": [["e3619804"], ["context-compaction quality probe harness"]]
+    },
+    {
+      "id": "scope",
+      "category": "Decision",
+      "question": "What is the minimal scope?",
+      "mustIncludeAny": [
+        ["3 synthetic transcripts"],
+        ["8-12 deterministic probes", "deterministic probes"]
+      ]
+    },
+    {
+      "id": "categories",
+      "category": "Artifact",
+      "question": "Which probe categories are required?",
+      "mustIncludeAny": [["Recall"], ["Artifact"], ["Continuation"], ["Decision"], ["Approval"]]
+    },
+    {
+      "id": "evidence",
+      "category": "Recall",
+      "question": "Which references motivated this?",
+      "mustIncludeAny": [["Factory"], ["Letta Context-Bench"], ["Anthropic"], ["LOCA-bench"]]
+    },
+    {
+      "id": "constraint",
+      "category": "Approval",
+      "question": "What should not be overbuilt?",
+      "mustIncludeAny": [
+        ["not a broad LOCA/Context-Bench clone"],
+        ["not", "new compaction algorithm"],
+        ["optional LLM"]
+      ]
+    }
+  ]
+}
