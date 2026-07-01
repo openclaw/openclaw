@@ -11,6 +11,36 @@ import {
   loadManifestMetadataSnapshot,
 } from "./manifest-contract-eligibility.js";
 
+type ManifestModelCatalogSuppressionPlugin = Parameters<
+  typeof planManifestModelCatalogSuppressions
+>[0]["registry"]["plugins"][number];
+type ManifestMetadataSnapshot = ReturnType<typeof loadManifestMetadataSnapshot>;
+
+function readAvailableManifestModelCatalogSuppressionPlugin(params: {
+  snapshot: ManifestMetadataSnapshot;
+  plugin: ManifestMetadataSnapshot["plugins"][number];
+  config?: OpenClawConfig;
+}): ManifestModelCatalogSuppressionPlugin | undefined {
+  try {
+    if (
+      !isManifestPluginAvailableForControlPlane({
+        snapshot: params.snapshot,
+        plugin: params.plugin,
+        config: params.config,
+      })
+    ) {
+      return undefined;
+    }
+    return {
+      id: params.plugin.id,
+      providers: params.plugin.providers,
+      modelCatalog: params.plugin.modelCatalog,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 function listManifestModelCatalogSuppressions(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -21,15 +51,17 @@ function listManifestModelCatalogSuppressions(params: {
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
+  const plugins = snapshot.plugins.flatMap((plugin) => {
+    const readable = readAvailableManifestModelCatalogSuppressionPlugin({
+      snapshot,
+      plugin,
+      config: params.config,
+    });
+    return readable ? [readable] : [];
+  });
   const registry = {
     diagnostics: snapshot.diagnostics,
-    plugins: snapshot.plugins.filter((plugin) =>
-      isManifestPluginAvailableForControlPlane({
-        snapshot,
-        plugin,
-        config: params.config,
-      }),
-    ),
+    plugins,
   };
   const planned = planManifestModelCatalogSuppressions({ registry });
   return planned.suppressions;

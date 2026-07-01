@@ -24,6 +24,38 @@ function createMetadataSnapshot(plugins: Record<string, unknown>[]) {
   };
 }
 
+function createRawMetadataSnapshot(plugins: Record<string, unknown>[]) {
+  return {
+    index: { plugins: [] },
+    diagnostics: [],
+    plugins,
+  };
+}
+
+function poisonedAvailabilityPlugin(): Record<string, unknown> {
+  return Object.defineProperty({ id: "poisoned-availability" }, "origin", {
+    get() {
+      throw new Error("model suppression availability exploded");
+    },
+  });
+}
+
+function poisonedModelCatalogPlugin(): Record<string, unknown> {
+  return Object.defineProperty(
+    {
+      id: "poisoned-model-catalog",
+      origin: "bundled",
+      providers: ["poisoned-model-catalog"],
+    },
+    "modelCatalog",
+    {
+      get() {
+        throw new Error("model suppression catalog exploded");
+      },
+    },
+  );
+}
+
 describe("manifest model suppression", () => {
   beforeEach(() => {
     mocks.loadPluginMetadataSnapshot.mockReset();
@@ -105,6 +137,63 @@ describe("manifest model suppression", () => {
         env: process.env,
       }),
     ).toBeUndefined();
+  });
+
+  it("skips unreadable manifest model suppression plugin metadata", () => {
+    mocks.loadPluginMetadataSnapshot.mockReturnValue(
+      createRawMetadataSnapshot([
+        {
+          id: "openai",
+          origin: "bundled",
+          providers: ["openai"],
+          modelCatalog: {
+            aliases: {
+              "azure-openai-responses": {
+                provider: "openai",
+              },
+            },
+            suppressions: [
+              {
+                provider: "azure-openai-responses",
+                model: "gpt-5.3-codex-spark",
+                reason: "Use openai/gpt-5.5.",
+              },
+            ],
+          },
+        },
+        poisonedAvailabilityPlugin(),
+        poisonedModelCatalogPlugin(),
+        {
+          id: "qwen",
+          origin: "bundled",
+          providers: ["qwen"],
+          modelCatalog: {
+            suppressions: [
+              {
+                provider: "qwen",
+                model: "qwen3.6-plus",
+                reason: "Use qwen/qwen3.5-plus.",
+              },
+            ],
+          },
+        },
+      ]),
+    );
+
+    expect(
+      resolveManifestBuiltInModelSuppression({
+        provider: "azure-openai-responses",
+        id: "gpt-5.3-codex-spark",
+        env: process.env,
+      })?.suppress,
+    ).toBe(true);
+    expect(
+      resolveManifestBuiltInModelSuppression({
+        provider: "qwen",
+        id: "qwen3.6-plus",
+        env: process.env,
+      })?.suppress,
+    ).toBe(true);
   });
 
   it("reads planned manifest suppressions fresh per lookup", () => {
