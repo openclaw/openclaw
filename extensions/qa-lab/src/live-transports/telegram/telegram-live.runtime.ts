@@ -2188,6 +2188,7 @@ export async function runTelegramQaLive(params: {
     generatedAt: finishedAt,
     primaryModel,
     providerMode,
+    repoRoot,
     checks: scenarioResults,
     transportId: "telegram",
   });

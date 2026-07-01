@@ -579,7 +579,7 @@ When `imsg launch` is running and `openclaw channels status --probe` reports `pr
   </Accordion>
 
   <Accordion title="Read receipts and typing">
-    When the private API bridge is up, accepted inbound chats are marked read before dispatch and a typing bubble is shown to the sender while the agent generates. Disable read-marking with:
+    When the private API bridge is up, accepted inbound chats are marked read and direct chats show a typing bubble as soon as the turn is accepted, while the agent prepares context and generates. Disable read-marking with:
 
     ```json5
     {

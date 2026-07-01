@@ -105,6 +105,19 @@ describe("package-openclaw-for-docker", () => {
     }
   });
 
+  it("rejects duplicate package artifact CLI options", () => {
+    const duplicateCases = [
+      ["--output-dir", ["--output-dir", "one", "--output-dir=two"]],
+      ["--output-name", ["--output-name", "one.tgz", "--output-name=two.tgz"]],
+      ["--source-dir", ["--source-dir", "/repo-a", "--source-dir=/repo-b"]],
+      ["--skip-build", ["--skip-build", "--skip-build"]],
+    ] satisfies Array<[string, string[]]>;
+
+    for (const [flag, args] of duplicateCases) {
+      expect(() => parseArgs(args), flag).toThrow(`${flag} was provided more than once`);
+    }
+  });
+
   it("rejects package artifact output names that escape the output directory", () => {
     for (const outputName of [
       "../openclaw-current.tgz",

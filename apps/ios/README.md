@@ -68,9 +68,9 @@ Release behavior:
 - App Store release uses manual `Apple Distribution` signing with profile names pinned in `apps/ios/Config/AppStoreSigning.json`.
 - Fastlane owns one-time Developer Portal setup, encrypted `match` signing sync to the repo/branch pinned in `apps/ios/Config/AppStoreSigning.json`, and release handling.
 - App Store release also switches the app to `OpenClawPushMode=appStore`, which derives relay transport, official distribution, the canonical production relay, production APNs, production relay profile, `appleStrict` proof, and the App-Attest-capable entitlement file.
-- `pnpm ios:release:upload` generates App Store screenshots and uploads release notes before archiving and uploading the IPA.
+- `pnpm ios:release:upload` generates App Store screenshots, uploads release notes, and attaches `apps/ios/APP-REVIEW-NOTES.md` as a rendered PDF before archiving and uploading the IPA.
 - The release archive is validated before upload by inspecting the exported IPA's signed entitlements, embedded App Store profile, and push mode. The upload fails if the IPA is not an App Store production relay build.
-- App Review submission is manual in App Store Connect. The release lane uploads a build and metadata, but does not submit for review.
+- App Review submission is manual in App Store Connect. The release lane uploads a build, public metadata, and the App Review PDF attachment, but it does not submit for review or upload the App Store Connect `Notes` field.
 - The release flow does not modify `apps/ios/.local-signing.xcconfig` or `apps/ios/LocalSigning.xcconfig`.
 - `apps/ios/version.json` is the pinned iOS release version source.
 - `apps/ios/CHANGELOG.md` is the iOS-only changelog and release-note source.
@@ -178,7 +178,7 @@ pnpm ios:release:upload
    - verifies synced iOS versioning artifacts
    - resolves the next App Store Connect build number for that short version
    - generates deterministic App Store screenshots
-   - uploads release notes and screenshots to the editable App Store version
+   - uploads release notes, screenshots, and the App Review PDF attachment to the editable App Store version
    - generates `apps/ios/build/AppStoreRelease.xcconfig`
    - archives `OpenClaw`
    - validates the exported IPA's push mode, signed entitlements, and embedded App Store profile

@@ -1194,6 +1194,117 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.reason).toBe("dm-blocked");
   });
 
+  it("resolves heartbeat reserved targets through directory before session routing", async () => {
+    const listGroups = vi
+      .fn()
+      .mockResolvedValue([{ kind: "group", id: "-1002458651455", name: "current" }]);
+    const listGroupsLive = vi.fn().mockResolvedValue([]);
+    setActivePluginRegistry(
+      createTargetsTestRegistry([
+        {
+          ...createTestChannelPlugin({
+            id: "telegram",
+            label: "Telegram",
+            outbound: {
+              deliveryMode: "direct",
+              resolveTarget: ({ to }) =>
+                to
+                  ? { ok: true as const, to: to.trim() }
+                  : { ok: false as const, error: new Error("target required") },
+            },
+            messaging: {
+              targetPrefixes: ["telegram", "tg"],
+              targetResolver: {
+                reservedLiterals: ["current", "self", "this", "me"],
+                hint: "<chatId>",
+              },
+              resolveOutboundSessionRoute: ({ target, resolvedTarget }) => ({
+                sessionKey: `main:telegram:group:${target}`,
+                baseSessionKey: `main:telegram:group:${target}`,
+                peer: { kind: resolvedTarget?.kind === "user" ? "direct" : "group", id: target },
+                chatType: resolvedTarget?.kind === "user" ? "direct" : "group",
+                from: `telegram:group:${target}`,
+                to: target,
+              }),
+            },
+          }),
+          directory: {
+            listGroups,
+            listGroupsLive,
+          },
+        },
+      ]),
+    );
+
+    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+      cfg: {},
+      agentId: "main",
+      heartbeat: {
+        target: "telegram",
+        to: "current",
+      },
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("-1002458651455");
+    expect(listGroups).toHaveBeenCalled();
+  });
+
+  it("fails closed when a heartbeat reserved target misses the directory", async () => {
+    const listGroups = vi.fn().mockResolvedValue([]);
+    const listGroupsLive = vi.fn().mockResolvedValue([]);
+    setActivePluginRegistry(
+      createTargetsTestRegistry([
+        {
+          ...createTestChannelPlugin({
+            id: "telegram",
+            label: "Telegram",
+            outbound: {
+              deliveryMode: "direct",
+              resolveTarget: ({ to }) =>
+                to
+                  ? { ok: true as const, to: to.trim() }
+                  : { ok: false as const, error: new Error("target required") },
+            },
+            messaging: {
+              targetPrefixes: ["telegram", "tg"],
+              targetResolver: {
+                reservedLiterals: ["current", "self", "this", "me"],
+                hint: "<chatId>",
+              },
+              resolveOutboundSessionRoute: ({ target }) => ({
+                sessionKey: `main:telegram:group:${target}`,
+                baseSessionKey: `main:telegram:group:${target}`,
+                peer: { kind: "group", id: target },
+                chatType: "group",
+                from: `telegram:group:${target}`,
+                to: target,
+              }),
+            },
+          }),
+          directory: {
+            listGroups,
+            listGroupsLive,
+          },
+        },
+      ]),
+    );
+
+    const resolved = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+      cfg: {},
+      agentId: "main",
+      heartbeat: {
+        target: "telegram",
+        to: "current",
+      },
+    });
+
+    expect(resolved.channel).toBe("none");
+    expect(resolved.reason).toBe("no-target");
+    expect(listGroups).toHaveBeenCalled();
+    expect(listGroupsLive).toHaveBeenCalled();
+  });
+
   it("keeps heartbeat route canonicalization best-effort when target resolution fails", async () => {
     setActivePluginRegistry(
       createTargetsTestRegistry([

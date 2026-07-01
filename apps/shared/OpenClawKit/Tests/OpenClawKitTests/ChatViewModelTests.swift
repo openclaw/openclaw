@@ -3,12 +3,30 @@ import OpenClawKit
 import Testing
 @testable import OpenClawChatUI
 
-private func chatTextMessage(role: String, text: String, timestamp: Double) -> AnyCodable {
-    AnyCodable([
+private func chatTextMessage(role: String, text: String, timestamp: Double, contentId: String? = nil) -> AnyCodable {
+    var content: [String: Any] = ["type": "text", "text": text]
+    if let contentId {
+        content["id"] = contentId
+    }
+    return AnyCodable([
         "role": role,
-        "content": [["type": "text", "text": text]],
+        "content": [content],
         "timestamp": timestamp,
     ])
+}
+
+private func chatTextModelMessage(role: String, text: String, timestamp: Double) -> OpenClawChatMessage {
+    OpenClawChatMessage(
+        role: role,
+        content: [
+            OpenClawChatMessageContent(
+                type: "text",
+                text: text,
+                mimeType: nil,
+                fileName: nil,
+                content: nil),
+        ],
+        timestamp: timestamp)
 }
 
 private func chatErrorMessage(role: String, errorMessage: String, timestamp: Double) -> AnyCodable {
@@ -799,6 +817,175 @@ struct ChatViewModelTests {
         }
     }
 
+    @Test func `session message adopts provisional final event reply`() async throws {
+        let sessionId = "sess-main"
+        let now = Date().timeIntervalSince1970 * 1000
+        let finalRefreshGate = SessionSubscribeGate()
+        let historyCount = AsyncCounter()
+        let history = historyPayload(sessionId: sessionId)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history, history],
+            requestHistoryHook: { _ in
+                let count = await historyCount.increment()
+                if count == 2 {
+                    await finalRefreshGate.wait()
+                }
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "hello")
+        try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
+        let runId = try await waitForLastSentRunId(transport)
+
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: runId,
+                    sessionKey: "main",
+                    state: "final",
+                    message: chatTextMessage(
+                        role: "assistant",
+                        text: "dedupe me",
+                        timestamp: now + 1,
+                        contentId: "live-final-content"),
+                    errorMessage: nil)))
+
+        try await waitUntil("provisional final visible once") {
+            await MainActor.run {
+                vm.messages.count(where: { msg in
+                    msg.role == "assistant" && msg.content.first?.text == "dedupe me"
+                }) == 1
+            }
+        }
+
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: chatTextModelMessage(role: "assistant", text: "dedupe me", timestamp: now + 2),
+                    messageId: "msg-assistant-final",
+                    messageSeq: 2)))
+
+        try await waitUntil("canonical session message adopted final event row") {
+            await MainActor.run {
+                let matches = vm.messages.filter { msg in
+                    msg.role == "assistant" && msg.content.first?.text == "dedupe me"
+                }
+                return matches.count == 1 && matches.first?.timestamp == now + 2
+            }
+        }
+
+        await finalRefreshGate.release()
+    }
+
+    @Test func `final event does not duplicate canonical assistant session message`() async throws {
+        let sessionId = "sess-main"
+        let now = Date().timeIntervalSince1970 * 1000
+        let finalRefreshGate = SessionSubscribeGate()
+        let historyCount = AsyncCounter()
+        let history = historyPayload(sessionId: sessionId)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history, history],
+            requestHistoryHook: { _ in
+                let count = await historyCount.increment()
+                if count == 2 {
+                    await finalRefreshGate.wait()
+                }
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "hello")
+        try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
+        let runId = try await waitForLastSentRunId(transport)
+
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: chatTextModelMessage(role: "assistant", text: "canonical first", timestamp: now + 2),
+                    messageId: "msg-assistant-first",
+                    messageSeq: 2)))
+
+        try await waitUntil("canonical assistant visible once") {
+            await MainActor.run {
+                vm.messages.count(where: { msg in
+                    msg.role == "assistant" && msg.content.first?.text == "canonical first"
+                }) == 1
+            }
+        }
+
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: runId,
+                    sessionKey: "main",
+                    state: "final",
+                    message: chatTextMessage(role: "assistant", text: "canonical first", timestamp: now + 1),
+                    errorMessage: nil)))
+
+        try await Task.sleep(nanoseconds: 50_000_000)
+        #expect(await MainActor.run {
+            let matches = vm.messages.filter { msg in
+                msg.role == "assistant" && msg.content.first?.text == "canonical first"
+            }
+            return matches.count == 1 && matches.first?.timestamp == now + 2
+        })
+
+        await finalRefreshGate.release()
+    }
+
+    @Test func `later identical session reply does not adopt prior turn provisional final`() async throws {
+        let sessionId = "sess-main"
+        let now = Date().timeIntervalSince1970 * 1000
+        let history = historyPayload(sessionId: sessionId)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history, history],
+            sendMessageHook: { runId in
+                OpenClawChatSendResponse(runId: runId, status: "pending")
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "first turn")
+        try await waitUntil("first pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
+        let firstRunId = try await waitForLastSentRunId(transport)
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: firstRunId,
+                    sessionKey: "main",
+                    state: "final",
+                    message: chatTextMessage(role: "assistant", text: "OK", timestamp: now + 1),
+                    errorMessage: nil)))
+
+        try await waitUntil("first provisional final visible") {
+            await MainActor.run {
+                vm.messages.count(where: { msg in
+                    msg.role == "assistant" && msg.content.first?.text == "OK"
+                }) == 1
+            }
+        }
+
+        await sendUserMessage(vm, text: "second turn")
+        try await waitUntil("second pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
+
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: chatTextModelMessage(role: "assistant", text: "OK", timestamp: now + 4),
+                    messageId: "msg-second-assistant",
+                    messageSeq: 4)))
+
+        try await waitUntil("second identical reply appends after second user") {
+            await MainActor.run {
+                let okReplies = vm.messages.filter { msg in
+                    msg.role == "assistant" && msg.content.first?.text == "OK"
+                }
+                return okReplies.count == 2 && vm.messages.last?.timestamp == now + 4
+            }
+        }
+    }
+
     @Test func `completion wait refreshes history and clears pending run`() async throws {
         let sessionId = "sess-main"
         let now = (Date().timeIntervalSince1970 * 1000) + 10000
@@ -1455,7 +1642,11 @@ struct ChatViewModelTests {
     }
 
     @Test func `dedupes gateway echo of local user message`() async throws {
-        let (transport, vm) = await makeViewModel(historyResponses: [historyPayload()])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sendMessageHook: { runId in
+                OpenClawChatSendResponse(runId: runId, status: "pending")
+            })
 
         await MainActor.run { vm.load() }
         try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }

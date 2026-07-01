@@ -917,6 +917,12 @@ describe("test-projects args", () => {
         watchMode: false,
       },
       {
+        config: "test/vitest/vitest.runtime-config.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["src/config/sessions/entry-freshness.test.ts"],
+        watchMode: false,
+      },
+      {
         config: "test/vitest/vitest.commands.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/commands/status.scan.shared.test.ts"],
@@ -926,6 +932,9 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.agents.config.ts",
         forwardedArgs: [],
         includePatterns: [
+          "src/agents/agent-bundle-mcp-runtime.test.ts",
+          "src/agents/agent-tools-agent-config.exec.test.ts",
+          "src/agents/bash-tools.exec-foreground-failures.test.ts",
           "src/agents/models-config.file-mode.test.ts",
           "src/agents/sandbox/ssh.test.ts",
         ],

@@ -1497,6 +1497,7 @@ describe("gateway server cron", () => {
       const notifyBody = notifyCall.body;
       expect(notifyBody.action).toBe("finished");
       expect(notifyBody.jobId).toBe(notifyJobId);
+      expect(notifyBody.summary).toBe("send webhook");
 
       const legacyFinished = waitForCronEvent(
         ws,
@@ -1532,6 +1533,7 @@ describe("gateway server cron", () => {
       expect(completionCall.init.headers?.Authorization).toBe("Bearer cron-webhook-token");
       expect(completionCall.body.action).toBe("finished");
       expect(completionCall.body.jobId).toBe(completionJobId);
+      expect(completionCall.body.summary).toBe("ok");
 
       const silentRes = await rpcReq(ws, "cron.add", {
         name: "webhook disabled",
@@ -1627,6 +1629,110 @@ describe("gateway server cron", () => {
       await cleanupCronTestRun({ ws, server, prevSkipCron });
     }
   }, 60_000);
+
+  test("omits raw summaries from failed cron webhook payloads", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-webhook-failure-summary-",
+      cronEnabled: false,
+    });
+
+    await writeCronConfig({
+      cron: {
+        webhookToken: "cron-webhook-token",
+      },
+    });
+
+    fetchWithSsrFGuardMock.mockClear();
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const rawSummary = [
+        "stdout:",
+        "To sign in, use a web browser to open https://microsoft.com/devicelogin",
+        "and enter the code ABCD-1234 to authenticate.",
+      ].join("\n");
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "error",
+        error: "command exited with code 7",
+        summary: rawSummary,
+        diagnostics: {
+          summary: rawSummary,
+          entries: [
+            {
+              ts: 123,
+              source: "exec",
+              severity: "error",
+              message: rawSummary,
+            },
+          ],
+        },
+      });
+      const directJobId = await addWebhookCronJob({
+        ws,
+        name: "failed direct webhook",
+        sessionTarget: "isolated",
+        delivery: { mode: "webhook", to: "https://example.invalid/failed-direct" },
+      });
+      await runCronJobAndWaitForFinished(ws, directJobId);
+      const directCall = getWebhookCall(0);
+      expect(directCall.url).toBe("https://example.invalid/failed-direct");
+      expect(directCall.init.headers?.Authorization).toBe("Bearer cron-webhook-token");
+      expect(directCall.body).toMatchObject({
+        action: "finished",
+        jobId: directJobId,
+        status: "error",
+        error: "command exited with code 7",
+      });
+      expect(directCall.body).not.toHaveProperty("summary");
+      expect(directCall.body).not.toHaveProperty("diagnostics");
+      expect(JSON.stringify(directCall.body)).not.toContain("ABCD-1234");
+
+      const completionSummary = `${rawSummary}\nstderr:\nSECRET_TOKEN=super-secret-value`;
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "error",
+        error: "command exited with code 9",
+        summary: completionSummary,
+        diagnostics: {
+          summary: completionSummary,
+          entries: [
+            {
+              ts: 456,
+              source: "exec",
+              severity: "error",
+              message: completionSummary,
+            },
+          ],
+        },
+      });
+      const completionJobId = await addWebhookCronJob({
+        ws,
+        name: "failed completion webhook",
+        sessionTarget: "isolated",
+        delivery: {
+          mode: "announce",
+          completionDestination: {
+            mode: "webhook",
+            to: "https://example.invalid/failed-completion",
+          },
+        },
+      });
+      await runCronJobAndWaitForFinished(ws, completionJobId);
+      const completionCall = getWebhookCall(1);
+      expect(completionCall.url).toBe("https://example.invalid/failed-completion");
+      expect(completionCall.body).toMatchObject({
+        action: "finished",
+        jobId: completionJobId,
+        status: "error",
+        error: "command exited with code 9",
+      });
+      expect(completionCall.body).not.toHaveProperty("summary");
+      expect(completionCall.body).not.toHaveProperty("diagnostics");
+      expect(JSON.stringify(completionCall.body)).not.toContain("SECRET_TOKEN");
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  }, 45_000);
 
   test("falls back to the primary delivery channel on job failure and preserves sessionKey", async () => {
     const { prevSkipCron } = await setupCronTestRun({

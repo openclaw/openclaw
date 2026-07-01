@@ -1321,6 +1321,8 @@ export const vi: TranslationMap = {
     settings: "Cài đặt trò chuyện",
     thinkingToggle: "Bật/tắt đầu ra suy nghĩ/đang xử lý của trợ lý",
     toolCallsToggle: "Bật/tắt lượt gọi công cụ và kết quả công cụ",
+    commentaryToggle: "Giữ lại bình luận sau câu trả lời cuối cùng",
+    commentaryLabel: "Bình luận",
     autoScrollMode: "Chế độ tự động cuộn",
     autoScrollAlways: "Luôn luôn",
     autoScrollNearBottom: "Gần cuối",
@@ -1432,6 +1434,7 @@ export const vi: TranslationMap = {
     jaJP: "日本語 (Tiếng Nhật)",
     ko: "한국어 (Tiếng Hàn)",
     fr: "Français (Tiếng Pháp)",
+    hi: "हिन्दी (Tiếng Hindi)",
     ar: "العربية (Tiếng Ả Rập)",
     it: "Italiano (Tiếng Ý)",
     tr: "Türkçe (Tiếng Thổ Nhĩ Kỳ)",
@@ -1442,6 +1445,7 @@ export const vi: TranslationMap = {
     vi: "Tiếng Việt (Tiếng Việt)",
     nl: "Nederlands (Tiếng Hà Lan)",
     fa: "فارسی (Tiếng Ba Tư)",
+    ru: "Русский (Tiếng Nga)",
   },
   cron: {
     quickCreate: {

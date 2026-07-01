@@ -132,12 +132,17 @@ function parseNonNegativeInt(flag: string, fallback: number, args = process.argv
 }
 
 function validateCliArgs(args = process.argv.slice(2)): void {
+  const seenValueFlags = new Set<string>();
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index] ?? "";
     if (BOOLEAN_FLAGS.has(arg)) {
       continue;
     }
     if (VALUE_FLAGS.has(arg)) {
+      if (seenValueFlags.has(arg)) {
+        throw new CliArgumentError(`${arg} was provided more than once`);
+      }
+      seenValueFlags.add(arg);
       const value = args[index + 1];
       if (!value || value.startsWith("-")) {
         throw new CliArgumentError(`${arg} requires a value`);

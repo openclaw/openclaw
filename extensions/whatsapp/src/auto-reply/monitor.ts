@@ -329,6 +329,9 @@ export async function monitorWebChannel(
                 statusController.noteInbound(inboundAt);
                 await onMessage(normalized);
               },
+              onPendingWorkChanged: (pendingWorkCount, at) => {
+                statusController.noteBusy(pendingWorkCount > 0, at);
+              },
               sock,
             })) as ManagedWhatsAppListener;
           },

@@ -111,6 +111,7 @@ const TALK_PTT_COMMANDS = new Set([
   "talk.ptt.cancel",
   "talk.ptt.once",
 ]);
+const BROWSER_PROXY_REQUIRED_SCOPE = "operator.admin";
 const talkPttEventSeqBySessionId = new Map<string, number>();
 
 type NodeWakeNudgeAttempt = {
@@ -207,6 +208,11 @@ function isForbiddenBrowserProxyMutation(params: unknown): boolean {
   const method = (normalizeOptionalString(candidate.method) ?? "").toUpperCase();
   const path = normalizeOptionalString(candidate.path) ?? "";
   return Boolean(method && path && isPersistentBrowserProxyMutation(method, path));
+}
+
+function clientHasOperatorAdminScope(client: GatewayClient | null): boolean {
+  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+  return scopes.includes(BROWSER_PROXY_REQUIRED_SCOPE);
 }
 
 function normalizePluginSurfaceRefreshParams(params: unknown): { surface: string } | undefined {
@@ -1322,7 +1328,14 @@ export const nodeHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-
+    if (command === "browser.proxy" && !clientHasOperatorAdminScope(client)) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${BROWSER_PROXY_REQUIRED_SCOPE}`),
+      );
+      return;
+    }
     await respondUnavailableOnThrow(respond, async () => {
       const cfg = context.getRuntimeConfig();
       let nodeSession = context.nodeRegistry.get(nodeId);

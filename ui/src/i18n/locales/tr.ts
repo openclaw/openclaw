@@ -1335,6 +1335,8 @@ export const tr: TranslationMap = {
     settings: "Sohbet ayarları",
     thinkingToggle: "Asistanın düşünme/çalışma çıktısını aç/kapat",
     toolCallsToggle: "Araç çağrılarını ve araç sonuçlarını aç/kapat",
+    commentaryToggle: "Nihai yanıttan sonra yorumu koru",
+    commentaryLabel: "Yorum",
     autoScrollMode: "Otomatik kaydırma modu",
     autoScrollAlways: "Her zaman",
     autoScrollNearBottom: "Alta yakın",
@@ -1447,6 +1449,7 @@ export const tr: TranslationMap = {
     jaJP: "日本語 (Japonca)",
     ko: "한국어 (Korece)",
     fr: "Français (Fransızca)",
+    hi: "हिन्दी (Hintçe)",
     ar: "العربية (Arapça)",
     it: "Italiano (İtalyanca)",
     tr: "Türkçe (Türkçe)",
@@ -1457,6 +1460,7 @@ export const tr: TranslationMap = {
     vi: "Tiếng Việt (Vietnamca)",
     nl: "Nederlands (Felemenkçe)",
     fa: "فارسی (Farsça)",
+    ru: "Русский (Rusça)",
   },
   cron: {
     quickCreate: {

@@ -190,7 +190,7 @@ extension SettingsProTab {
                     Text(title)
                         .font(.subheadline.weight(.semibold))
                     Text(detail)
-                        .font(.caption2)
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }

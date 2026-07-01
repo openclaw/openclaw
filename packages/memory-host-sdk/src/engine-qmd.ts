@@ -4,6 +4,7 @@ export { extractKeywords, isQueryStopWordToken } from "./host/query-expansion.js
 export {
   buildSessionEntry,
   listSessionFilesForAgent,
+  listSessionTranscriptCorpusEntriesForAgent,
   loadDreamingNarrativeTranscriptPathSetForAgent,
   loadSessionTranscriptClassificationForAgent,
   normalizeSessionTranscriptPathForComparison,
@@ -16,6 +17,7 @@ export {
   type ResolvedSessionTranscriptIdentity,
   type SessionFileEntry,
   type SessionTranscriptClassification,
+  type SessionTranscriptCorpusEntry,
 } from "./host/session-files.js";
 export {
   isSessionArchiveArtifactName,

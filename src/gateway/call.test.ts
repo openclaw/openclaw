@@ -72,6 +72,7 @@ let lastClientOptions: {
   clientDisplayName?: string;
   mode?: string;
   approvalRuntimeToken?: string;
+  agentRuntimeIdentityToken?: string;
   scopes?: string[];
   deviceIdentity?: unknown;
   onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
@@ -170,6 +171,7 @@ vi.mock("./client.js", () => ({
       clientDisplayName?: string;
       mode?: string;
       approvalRuntimeToken?: string;
+      agentRuntimeIdentityToken?: string;
       scopes?: string[];
       onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
       onClose?: (code: number, reason: string, info?: StubGatewayClientCloseInfo) => void;
@@ -222,6 +224,8 @@ class StubGatewayClient {
     clientName?: string;
     clientDisplayName?: string;
     mode?: string;
+    approvalRuntimeToken?: string;
+    agentRuntimeIdentityToken?: string;
     scopes?: string[];
     onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
     onClose?: (code: number, reason: string, info?: StubGatewayClientCloseInfo) => void;
@@ -1509,6 +1513,27 @@ describe("callGateway error details", () => {
 
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toBe("device private key invalid");
+    expect(lastRequestOptions).toBeNull();
+  });
+
+  it("surfaces agent runtime identity connect request errors", async () => {
+    startMode = "connect-error";
+    connectError = new Error(
+      "gateway rejected required agent runtime identity auth field; refusing to retry without it",
+    );
+    setLocalLoopbackGatewayConfig();
+
+    await expect(
+      callGateway({
+        method: "cron.remove",
+        token: "explicit-token",
+        agentRuntimeIdentityToken: "identity-token",
+      }),
+    ).rejects.toThrow(
+      "gateway rejected required agent runtime identity auth field; refusing to retry without it",
+    );
+
+    expect(lastClientOptions?.agentRuntimeIdentityToken).toBe("identity-token");
     expect(lastRequestOptions).toBeNull();
   });
 

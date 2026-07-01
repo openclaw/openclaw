@@ -326,6 +326,7 @@ extension SettingsProTab {
             self.setupStatusText = "Tailscale is off on this device. Turn it on, then try again."
             return false
         }
+        self.gatewayController.requestLocalNetworkAccess(reason: "settings_preflight")
         self.setupStatusText = "Checking gateway reachability..."
         let ok = await TCPProbe.probe(host: trimmed, port: port, timeoutSeconds: 3, queueLabel: "gateway.preflight")
         if !ok {
@@ -359,9 +360,11 @@ extension SettingsProTab {
         }
     }
 
-    func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String {
-        if problem.suggestsOnboardingReset { return "Reset onboarding" }
-        return problem.canTrustRotatedCertificate ? "Trust certificate" : "Retry connection"
+    func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String? {
+        GatewayProblemPrimaryAction.title(
+            for: problem,
+            retryTitle: "Retry connection",
+            resetTitle: "Reset onboarding")
     }
 
     func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) async {
@@ -373,6 +376,10 @@ extension SettingsProTab {
             _ = await self.gatewayController.trustRotatedGatewayCertificate(from: problem)
             return
         }
+        if GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem) {
+            return
+        }
+        guard problem.retryable else { return }
         await self.retryGatewayConnectionFromProblem()
     }
 

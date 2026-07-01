@@ -15,6 +15,7 @@ import type { CrestodianConfig } from "./types.crestodian.js";
 import type { CronConfig } from "./types.cron.js";
 import type { DiscoveryConfig, GatewayConfig, TalkConfig } from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
+import type { MarketplacesConfig } from "./types.marketplaces.js";
 import type { McpConfig } from "./types.mcp.js";
 import type { MemoryConfig } from "./types.memory.js";
 import type {
@@ -126,6 +127,8 @@ export type OpenClawConfig = {
     lastRunCommand?: string;
     /** Whether the last wizard run configured a local or remote install. */
     lastRunMode?: "local" | "remote";
+    /** ISO timestamp when the setup security acknowledgement was accepted on this config. */
+    securityAcknowledgedAt?: string;
   };
   /** Diagnostics, tracing, and stability debugging settings. */
   diagnostics?: DiagnosticsConfig;
@@ -176,6 +179,8 @@ export type OpenClawConfig = {
   };
   /** Secret providers, defaults, and ref-resolution settings. */
   secrets?: SecretsConfig;
+  /** Marketplace feed and local package source profile configuration. */
+  marketplaces?: MarketplacesConfig;
   /** Skill loading and bundled skill configuration. */
   skills?: SkillsConfig;
   /** Plugin registry/install/runtime configuration. */
@@ -298,6 +303,7 @@ export type ConfigFileSnapshot = {
   /** @deprecated Prefer runtimeConfig. */
   config: RuntimeConfig;
   hash?: string;
+  readError?: { code: string | null };
   issues: ConfigValidationIssue[];
   warnings: ConfigValidationIssue[];
   legacyIssues: LegacyConfigIssue[];

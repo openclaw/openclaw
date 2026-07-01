@@ -7,12 +7,15 @@ import { loadSessionStore } from "../config/sessions/store.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import * as transcriptEvents from "../sessions/transcript-events.js";
 import {
+  appendAssistantMirrorMessageByIdentity,
   appendSessionTranscriptMessageByIdentity,
   formatSessionTranscriptMemoryHitKey,
   parseSessionTranscriptMemoryHitKey,
   publishSessionTranscriptUpdateByIdentity,
+  readLatestAssistantTextByIdentity,
   readSessionTranscriptEvents,
   resolveSessionTranscriptIdentity,
+  resolveSessionTranscriptLegacyFileTarget,
   resolveSessionTranscriptTarget,
   resolveSessionTranscriptMemoryHitKeyToSessionKeys,
   withSessionTranscriptWriteLock,
@@ -71,6 +74,72 @@ describe("session transcript runtime SDK", () => {
     });
     await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([]);
     expect(loadSessionStore(storePath)[scope.sessionKey]?.sessionFile).toBeUndefined();
+  });
+
+  it("persists and returns a file target for legacy command callers", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "legacy-command-session",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+
+    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+
+    const target = await resolveSessionTranscriptLegacyFileTarget(scope);
+
+    expect(target).toMatchObject({
+      agentId: "main",
+      memoryKey: "transcript:main:legacy-command-session",
+      sessionId: "legacy-command-session",
+      sessionKey: "agent:main:main",
+      targetKind: "runtime-session",
+    });
+    expect(target.sessionFile).toContain("legacy-command-session");
+    expect(loadSessionStore(storePath)[scope.sessionKey]?.sessionFile).toBe(target.sessionFile);
+  });
+
+  it("appends assistant mirrors through the guarded session facade", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "guarded-mirror-session",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+
+    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+
+    await expect(
+      appendAssistantMirrorMessageByIdentity({
+        ...scope,
+        deliveryMirror: { kind: "channel-final", sourceMessageId: "delivery-1" },
+        idempotencyKey: "delivery-1",
+        text: "visible assistant reply",
+      }),
+    ).resolves.toMatchObject({ ok: true, messageId: expect.any(String) });
+    await expect(
+      appendAssistantMirrorMessageByIdentity({
+        ...scope,
+        deliveryMirror: { kind: "channel-final", sourceMessageId: "delivery-2" },
+        idempotencyKey: "delivery-2",
+        text: "visible assistant reply",
+      }),
+    ).resolves.toMatchObject({ ok: true, messageId: expect.any(String) });
+    await expect(readLatestAssistantTextByIdentity(scope)).resolves.toBeUndefined();
+    const assistantMessages = (await readSessionTranscriptEvents(scope)).filter((event) => {
+      const message = (event as { message?: { role?: unknown } }).message;
+      return message?.role === "assistant";
+    });
+    expect(assistantMessages).toHaveLength(2);
+
+    await upsertSessionEntry(scope, { sessionId: "new-session", updatedAt: 20 });
+
+    await expect(
+      appendAssistantMirrorMessageByIdentity({
+        ...scope,
+        text: "stale assistant reply",
+      }),
+    ).resolves.toMatchObject({ ok: false, code: "session-rebound" });
   });
 
   it("skips malformed transcript lines when reading by scoped identity", async () => {
@@ -151,6 +220,10 @@ describe("session transcript runtime SDK", () => {
 
     expect(appended).toBeDefined();
     expect(appended?.message).toMatchObject(message);
+    await expect(readLatestAssistantTextByIdentity(scope)).resolves.toMatchObject({
+      text: "hello",
+      timestamp: 1,
+    });
     await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([
       expect.objectContaining({ type: "session" }),
       expect.objectContaining({ message: expect.objectContaining({ role: "assistant" }) }),
@@ -181,6 +254,11 @@ describe("session transcript runtime SDK", () => {
       messageId: "message-from-direct-publish",
       sessionFile: scope.sessionFile,
       sessionKey: "agent:main:main",
+      target: {
+        agentId: "main",
+        sessionId: "publish-session",
+        sessionKey: "agent:main:main",
+      },
     });
   });
 

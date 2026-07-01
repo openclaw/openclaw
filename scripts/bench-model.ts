@@ -40,12 +40,17 @@ function readValue(argv: string[], index: number, flag: string): string {
 }
 
 function validateCliArgs(argv: string[]): void {
+  const seenValueFlags = new Set<string>();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? "";
     if (BOOLEAN_FLAGS.has(arg)) {
       continue;
     }
     if (VALUE_FLAGS.has(arg)) {
+      if (seenValueFlags.has(arg)) {
+        throw new CliArgumentError(`${arg} was provided more than once`);
+      }
+      seenValueFlags.add(arg);
       readValue(argv, index, arg);
       index += 1;
       continue;

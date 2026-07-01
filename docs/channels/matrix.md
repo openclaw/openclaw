@@ -499,6 +499,8 @@ openclaw matrix devices prune-stale
 
     Encrypted runtime state lives under `~/.openclaw/matrix/accounts/<account>/<homeserver>__<user>/<token-hash>/` and includes the sync store, crypto store, recovery key, IDB snapshot, thread bindings, and startup verification state. When the token changes but the account identity stays the same, OpenClaw reuses the best existing root so prior state remains visible.
 
+    A single older token-hash root can be a normal token-rotation continuity path. If OpenClaw logs `matrix: multiple populated token-hash storage roots detected`, inspect the account directory and archive stale sibling roots only after confirming the selected active root is healthy. Prefer moving stale roots into an `_archive/` directory over deleting them immediately.
+
   </Accordion>
 </AccordionGroup>
 

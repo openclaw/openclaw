@@ -10,6 +10,8 @@ import {
 import * as bootstrapCache from "../../agents/bootstrap-cache.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
+import { readSessionStoreForTest } from "../../config/sessions/test-helpers.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.ts";
 import {
   testing as sessionBindingTesting,
@@ -31,6 +33,7 @@ import { createSessionConversationTestRegistry } from "../../test-utils/session-
 import { drainFormattedSystemEvents } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { initSessionState } from "./session.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 
 const sessionForkMocks = vi.hoisted(() => ({
   forkSessionFromParent: vi.fn(),
@@ -50,6 +53,97 @@ type ForkSessionParamsForTest = {
 };
 
 vi.mock("./session-fork.js", () => ({
+  forkSessionEntryFromParent: async (params: {
+    fallbackEntry?: SessionEntry;
+    parentSessionKey: string;
+    storePath: string;
+    patch?: (patchParams: {
+      entry: SessionEntry;
+      parentEntry: SessionEntry;
+      fork: { sessionId: string; sessionFile: string };
+      decision: { status: "fork"; maxTokens: number; parentTokens?: number };
+    }) => Partial<SessionEntry>;
+    decisionSkipPatch?: (patchParams: {
+      decision: {
+        status: "skip";
+        reason: "parent-too-large";
+        maxTokens: number;
+        parentTokens: number;
+        message: string;
+      };
+      entry: SessionEntry;
+      parentEntry: SessionEntry;
+    }) => Partial<SessionEntry>;
+    sessionsDir: string;
+  }) => {
+    const store = JSON.parse(await fs.readFile(params.storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    const parentEntry = store[params.parentSessionKey];
+    if (!parentEntry?.sessionId) {
+      return { status: "missing-parent" };
+    }
+    const maxTokens = 100_000;
+    const parentTokens = await sessionForkMocks.resolveParentForkTokenCount({
+      parentEntry,
+      storePath: params.storePath,
+    });
+    if (typeof parentTokens === "number" && parentTokens > maxTokens) {
+      const entry = params.fallbackEntry ?? { sessionId: "", updatedAt: Date.now() };
+      const decision = {
+        status: "skip" as const,
+        reason: "parent-too-large" as const,
+        maxTokens,
+        parentTokens,
+        message: `Parent context is too large to fork (${parentTokens}/${maxTokens} tokens); starting with isolated context instead.`,
+      };
+      return {
+        status: "skipped",
+        reason: "decision-skip",
+        parentEntry,
+        sessionEntry: {
+          ...entry,
+          ...params.decisionSkipPatch?.({ decision, entry, parentEntry }),
+        },
+        decision,
+      };
+    }
+    const fork = await sessionForkMocks.forkSessionFromParent({
+      parentEntry,
+      sessionsDir: params.sessionsDir,
+    });
+    if (!fork) {
+      return { status: "failed" };
+    }
+    const entry = params.fallbackEntry ?? { sessionId: "", updatedAt: Date.now() };
+    return {
+      status: "forked",
+      fork,
+      parentEntry,
+      sessionEntry: {
+        ...entry,
+        ...params.patch?.({
+          entry,
+          parentEntry,
+          fork,
+          decision: {
+            status: "fork",
+            maxTokens,
+            ...(typeof parentTokens === "number" ? { parentTokens } : {}),
+          },
+        }),
+        sessionId: fork.sessionId,
+        sessionFile: fork.sessionFile,
+        forkedFromParent: true,
+      },
+      decision: {
+        status: "fork",
+        maxTokens,
+        ...(typeof parentTokens === "number" ? { parentTokens } : {}),
+      },
+    };
+  },
   forkSessionFromParent: (...args: [ForkSessionParamsForTest]) =>
     sessionForkMocks.forkSessionFromParent(...args),
   resolveParentForkTokenCount: (...args: [{ parentEntry: SessionEntry; storePath: string }]) =>
@@ -377,6 +471,49 @@ afterEach(async () => {
   resetSystemEventsForTest();
   await sessionMcpTesting.resetSessionMcpRuntimeManager();
 });
+describe("initSessionState guarded initialization", () => {
+  it("serializes concurrent initializers before reading the guarded snapshot", async () => {
+    const storePath = await createStorePath("openclaw-session-init-race-");
+    const sessionKey = "agent:main:telegram:chat:42";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "existing-session",
+        updatedAt: 100,
+      },
+    });
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    let releaseWriter = () => {};
+    const writerReleased = new Promise<void>((resolve) => {
+      releaseWriter = resolve;
+    });
+    let markWriterStarted = () => {};
+    const writerStarted = new Promise<void>((resolve) => {
+      markWriterStarted = resolve;
+    });
+    const heldWriter = runExclusiveSessionStoreWrite(storePath, async () => {
+      markWriterStarted();
+      await writerReleased;
+    });
+    await writerStarted;
+
+    const turns = Array.from({ length: 8 }, (_, index) =>
+      initSessionState({
+        ctx: {
+          Body: `turn ${index}`,
+          SessionKey: sessionKey,
+        },
+        cfg,
+        commandAuthorized: true,
+      }),
+    );
+
+    releaseWriter();
+    await heldWriter;
+
+    await expect(Promise.all(turns)).resolves.toHaveLength(8);
+  });
+});
+
 describe("initSessionState thread forking", () => {
   it("forks a new session from the parent session file", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -2021,13 +2158,14 @@ describe("initSessionState reset policy", () => {
       expectNewSession: true,
     },
     {
-      name: "failed main terminal rows reuse when the transcript exists",
+      name: "failed main terminal rows recover on visible turns when the transcript exists",
       sessionKey: "agent:main:main",
       status: "failed" as const,
       updatedAtOffsetMs: -10_000,
       endedAtOffsetMs: -11_000,
       transcriptMtimeOffsetMs: 0,
       expectNewSession: false,
+      expectRecovered: true,
     },
     {
       name: "main terminal rows reuse when updatedAt already reflects the transcript",
@@ -2092,11 +2230,67 @@ describe("initSessionState reset policy", () => {
       expect(entry?.startedAt).toBeUndefined();
       expect(entry?.endedAt).toBeUndefined();
       expect(entry?.runtimeMs).toBeUndefined();
+    } else if (scenario.expectRecovered) {
+      // Visible turns recover recoverable terminal rows in place: the session id
+      // is reused, but the terminal lifecycle fields are cleared (#86827).
+      expect(result.sessionId).toBe(existingSessionId);
+      expect(entry?.status).toBeUndefined();
+      expect(entry?.startedAt).toBeUndefined();
+      expect(entry?.endedAt).toBeUndefined();
+      expect(entry?.runtimeMs).toBeUndefined();
     } else {
       expect(result.sessionId).toBe(existingSessionId);
       expect(entry?.status).toBe(scenario.status ?? "done");
       expect(entry?.endedAt).toBe(terminalEndedAt);
     }
+  });
+
+  it("recovers failed group sessions without rotating the transcript", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 30, 0));
+    const root = await makeCaseDir("openclaw-reset-failed-entry-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:telegram:group:-1001";
+    const existingSessionId = "failed-entry-old";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: Date.now(),
+        startedAt: Date.now() - 10_000,
+        endedAt: Date.now() - 1_000,
+        runtimeMs: 9_000,
+        status: "failed",
+        abortedLastRun: true,
+        chatType: "group",
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "@openclaw hello",
+        RawBody: "@openclaw hello",
+        CommandBody: "@openclaw hello",
+        SessionKey: sessionKey,
+        ChatType: "group",
+        Provider: "telegram",
+        BotUsername: "openclaw",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+    expect(result.abortedLastRun).toBe(false);
+    expect(result.sessionEntry.abortedLastRun).toBeUndefined();
+
+    const persisted = readSessionStoreForTest(storePath);
+    expect(persisted[sessionKey]?.sessionId).toBe(existingSessionId);
+    expect(persisted[sessionKey]?.status).toBeUndefined();
+    expect(persisted[sessionKey]?.startedAt).toBeUndefined();
+    expect(persisted[sessionKey]?.endedAt).toBeUndefined();
+    expect(persisted[sessionKey]?.runtimeMs).toBeUndefined();
+    expect(persisted[sessionKey]?.abortedLastRun).toBeUndefined();
   });
 
   it("keeps the existing stale session for /reset soft", async () => {
@@ -3570,6 +3764,177 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       );
       expect(archived).toHaveLength(1);
     } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("defers implicit daily rollover while the same session has an active run", async () => {
+    vi.useFakeTimers();
+    const existingSessionId = "active-stale-session";
+    let operation: ReturnType<typeof replyRunRegistry.begin> | undefined;
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const storePath = await createStorePath("openclaw-active-stale-archive-");
+      const sessionKey = "agent:main:telegram:dm:active-stale-user";
+      const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
+      const sessionStartedAt = new Date(2026, 0, 18, 3, 0, 0).getTime();
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: sessionStartedAt,
+          sessionStartedAt,
+        },
+      });
+      await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
+      operation = replyRunRegistry.begin({
+        sessionKey,
+        sessionId: existingSessionId,
+        resetTriggered: false,
+      });
+      operation.setPhase("running");
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "hello while active",
+          RawBody: "hello while active",
+          CommandBody: "hello while active",
+          From: "user-active-stale",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(false);
+      expect(result.resetTriggered).toBe(false);
+      expect(result.sessionId).toBe(existingSessionId);
+      expect(result.previousSessionEntry).toBeUndefined();
+      expect(result.sessionEntry.sessionStartedAt).toBe(sessionStartedAt);
+      expect(await fs.stat(transcriptPath).catch(() => null)).not.toBeNull();
+      const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
+        entry.startsWith(`${existingSessionId}.jsonl.reset.`),
+      );
+      expect(archived).toHaveLength(0);
+    } finally {
+      operation?.complete();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not defer stale archival for the current turn's queued reservation", async () => {
+    vi.useFakeTimers();
+    let operation: ReturnType<typeof replyRunRegistry.begin> | undefined;
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const storePath = await createStorePath("openclaw-queued-stale-archive-");
+      const sessionKey = "agent:main:telegram:dm:queued-stale-user";
+      const existingSessionId = "queued-stale-session";
+      const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        },
+      });
+      await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
+      operation = replyRunRegistry.begin({
+        sessionKey,
+        sessionId: existingSessionId,
+        resetTriggered: false,
+      });
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "hello after boundary",
+          RawBody: "hello after boundary",
+          CommandBody: "hello after boundary",
+          From: "user-queued-stale",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(operation.phase).toBe("queued");
+      expect(result.isNewSession).toBe(true);
+      expect(result.resetTriggered).toBe(false);
+      expect(result.sessionId).not.toBe(existingSessionId);
+      expect(result.previousSessionEntry?.sessionId).toBe(existingSessionId);
+      expect(await fs.stat(transcriptPath).catch(() => null)).toBeNull();
+      const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
+        entry.startsWith(`${existingSessionId}.jsonl.reset.`),
+      );
+      expect(archived).toHaveLength(1);
+    } finally {
+      operation?.complete();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not defer stale archival for a different active session id", async () => {
+    vi.useFakeTimers();
+    let operation: ReturnType<typeof replyRunRegistry.begin> | undefined;
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const storePath = await createStorePath("openclaw-active-other-stale-archive-");
+      const sessionKey = "agent:main:telegram:dm:active-other-stale-user";
+      const existingSessionId = "inactive-stale-session";
+      const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        },
+      });
+      await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
+      operation = replyRunRegistry.begin({
+        sessionKey,
+        sessionId: "different-active-session",
+        resetTriggered: false,
+      });
+      operation.setPhase("running");
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "hello after boundary",
+          RawBody: "hello after boundary",
+          CommandBody: "hello after boundary",
+          From: "user-active-other-stale",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(true);
+      expect(result.resetTriggered).toBe(false);
+      expect(result.sessionId).not.toBe(existingSessionId);
+      expect(result.previousSessionEntry?.sessionId).toBe(existingSessionId);
+      expect(await fs.stat(transcriptPath).catch(() => null)).toBeNull();
+      const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
+        entry.startsWith(`${existingSessionId}.jsonl.reset.`),
+      );
+      expect(archived).toHaveLength(1);
+    } finally {
+      operation?.complete();
       vi.useRealTimers();
     }
   });

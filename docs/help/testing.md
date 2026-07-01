@@ -20,6 +20,7 @@ of Docker runners. This doc is a "how we test" guide:
 
 - [QA overview](/concepts/qa-e2e-automation) - architecture, command surface, scenario authoring.
 - [Matrix QA](/concepts/qa-matrix) - reference for `pnpm openclaw qa matrix`.
+- [Maturity scorecard](/maturity/scorecard) - how release QA evidence supports stability and LTS decisions.
 - [QA channel](/channels/qa-channel) - the synthetic transport plugin used by repo-backed scenarios.
 
 This page covers running the regular test suites and Docker/Parallels runners. The QA-specific runners section below ([QA-specific runners](#qa-specific-runners)) lists the concrete `qa` invocations and points back at the references above.
@@ -740,17 +741,20 @@ Native dependency policy:
 - Command: `pnpm test:e2e:openshell`
 - File: `extensions/openshell/src/backend.e2e.test.ts`
 - Scope:
-  - Starts an isolated OpenShell gateway on the host via Docker
+  - Reuses an active local OpenShell gateway
   - Creates a sandbox from a temporary local Dockerfile
   - Exercises OpenClaw's OpenShell backend over real `sandbox ssh-config` + SSH exec
   - Verifies remote-canonical filesystem behavior through the sandbox fs bridge
 - Expectations:
   - Opt-in only; not part of the default `pnpm test:e2e` run
   - Requires a local `openshell` CLI plus a working Docker daemon
-  - Uses isolated `HOME` / `XDG_CONFIG_HOME`, then destroys the test gateway and sandbox
+  - Requires an active local OpenShell gateway and its config source
+  - Uses isolated `HOME` / `XDG_CONFIG_HOME`, then destroys the test sandbox
 - Useful overrides:
   - `OPENCLAW_E2E_OPENSHELL=1` to enable the test when running the broader e2e suite manually
   - `OPENCLAW_E2E_OPENSHELL_COMMAND=/path/to/openshell` to point at a non-default CLI binary or wrapper script
+  - `OPENCLAW_E2E_OPENSHELL_CONFIG_HOME=/path/to/config` to expose the registered gateway config to the isolated test
+  - `OPENCLAW_E2E_OPENSHELL_HOST_IP=172.18.0.1` to override the Docker gateway IP used by the host policy fixture
 
 ### Live (real providers + real models)
 
