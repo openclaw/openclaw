@@ -213,24 +213,22 @@ describe("web fetch runtime", () => {
     expect(resolveWebFetchDefinition({ config: {} })).toBeNull();
   });
 
-  it("caches provider resolution misses for the same config snapshot", () => {
-    const config = {
-      tools: {
-        web: {
-          fetch: {
-            cacheTtlMinutes: 0,
-          },
-        },
-      },
-    } as OpenClawConfig;
+  it("retries provider discovery after an empty plugin snapshot", () => {
+    const provider = createFirecrawlProvider({
+      getConfiguredCredentialValue: () => "firecrawl-key",
+    });
+    const config = createFirecrawlPluginConfig("firecrawl-key");
+    resolvePluginWebFetchProvidersMock.mockReturnValueOnce([]).mockReturnValueOnce([provider]);
 
     expect(resolveWebFetchDefinition({ config })).toBeNull();
-    expect(resolveWebFetchDefinition({ config })).toBeNull();
+    expect(requireResolvedWebFetch(resolveWebFetchDefinition({ config })).provider.id).toBe(
+      "firecrawl",
+    );
 
-    expect(resolvePluginWebFetchProvidersMock).toHaveBeenCalledTimes(1);
+    expect(resolvePluginWebFetchProvidersMock).toHaveBeenCalledTimes(2);
   });
 
-  it("caches provider definitions for the same config and runtime selection", () => {
+  it("reuses provider discovery for the same config snapshot", () => {
     const createTool = vi.fn(() => ({
       description: "firecrawl",
       parameters: {},
@@ -246,12 +244,12 @@ describe("web fetch runtime", () => {
     const first = requireResolvedWebFetch(resolveWebFetchDefinition({ config }));
     const second = requireResolvedWebFetch(resolveWebFetchDefinition({ config }));
 
-    expect(first).toBe(second);
+    expect(first.provider).toBe(second.provider);
     expect(resolvePluginWebFetchProvidersMock).toHaveBeenCalledTimes(1);
-    expect(createTool).toHaveBeenCalledTimes(1);
+    expect(createTool).toHaveBeenCalledTimes(2);
   });
 
-  it("keys provider definition cache by runtime-selected provider", () => {
+  it("reuses runtime provider discovery across runtime-selected providers", () => {
     const firecrawl = createFirecrawlProvider({
       getConfiguredCredentialValue: () => "firecrawl-key",
     });
@@ -286,7 +284,7 @@ describe("web fetch runtime", () => {
 
     expect(first.provider.id).toBe("firecrawl");
     expect(second.provider.id).toBe("thirdparty");
-    expect(resolveRuntimeWebFetchProvidersMock).toHaveBeenCalledTimes(2);
+    expect(resolveRuntimeWebFetchProvidersMock).toHaveBeenCalledTimes(1);
   });
 
   it("auto-detects providers from configured fallback credentials", () => {

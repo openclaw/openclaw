@@ -41,9 +41,9 @@ type WebFetchDefinitionResolution = {
   definition: WebFetchProviderToolDefinition;
 } | null;
 
-let webFetchDefinitionCache = new WeakMap<
+let webFetchProviderCache = new WeakMap<
   OpenClawConfig,
-  Map<string, WebFetchDefinitionResolution>
+  Map<string, PluginWebFetchProviderEntry[]>
 >();
 
 /** Resolves whether web_fetch is enabled for the current config/sandbox. */
@@ -190,55 +190,70 @@ function resolveConfiguredWebFetchProviderId(params: {
   return params.providers.find((provider) => provider.id === raw)?.id;
 }
 
-function resolveWebFetchDefinitionCacheKey(
+function resolveWebFetchProviderCacheKey(
   options: ResolveWebFetchDefinitionParams | undefined,
 ): string {
-  const runtimeWebFetch = options?.runtimeWebFetch;
-  return JSON.stringify([
-    options?.sandboxed === true,
-    options?.preferRuntimeProviders === true,
-    options?.providerId ?? "",
-    runtimeWebFetch?.providerConfigured ?? "",
-    runtimeWebFetch?.providerSource ?? "",
-    runtimeWebFetch?.selectedProvider ?? "",
-    runtimeWebFetch?.selectedProviderKeySource ?? "",
-  ]);
+  return JSON.stringify([options?.sandboxed === true, options?.preferRuntimeProviders === true]);
 }
 
-function resolveCachedWebFetchDefinition(params: {
+function resolveCachedWebFetchProviders(params: {
   cacheKey: string;
   config: OpenClawConfig;
-  load: () => WebFetchDefinitionResolution;
-}): WebFetchDefinitionResolution {
-  let configCache = webFetchDefinitionCache.get(params.config);
+  load: () => PluginWebFetchProviderEntry[];
+}): PluginWebFetchProviderEntry[] {
+  let configCache = webFetchProviderCache.get(params.config);
   if (!configCache) {
     configCache = new Map();
-    webFetchDefinitionCache.set(params.config, configCache);
+    webFetchProviderCache.set(params.config, configCache);
   }
-  if (configCache.has(params.cacheKey)) {
-    return configCache.get(params.cacheKey) ?? null;
+  const cached = configCache.get(params.cacheKey);
+  if (cached) {
+    return cached;
   }
   const loaded = params.load();
-  configCache.set(params.cacheKey, loaded);
+  if (loaded.length > 0) {
+    configCache.set(params.cacheKey, loaded);
+  }
   return loaded;
 }
 
 export function clearWebFetchRuntimeCachesForTest(): void {
-  webFetchDefinitionCache = new WeakMap();
+  webFetchProviderCache = new WeakMap();
 }
 
 /** Resolves the executable web_fetch provider tool definition. */
 export function resolveWebFetchDefinition(
   options?: ResolveWebFetchDefinitionParams,
 ): WebFetchDefinitionResolution {
+  return resolveWebFetchDefinitionUncached(options);
+}
+
+function resolveWebFetchProvidersForOptions(
+  options?: ResolveWebFetchDefinitionParams,
+): PluginWebFetchProviderEntry[] {
+  const load = () =>
+    sortWebFetchProvidersForAutoDetect(
+      options?.sandboxed
+        ? resolvePluginWebFetchProviders({
+            config: options?.config,
+            sandboxed: true,
+          })
+        : options?.preferRuntimeProviders
+          ? resolveRuntimeWebFetchProviders({
+              config: options?.config,
+            })
+          : resolvePluginWebFetchProviders({
+              config: options?.config,
+            }),
+    );
   if (options?.config) {
-    return resolveCachedWebFetchDefinition({
+    return resolveCachedWebFetchProviders({
       config: options.config,
-      cacheKey: resolveWebFetchDefinitionCacheKey(options),
-      load: () => resolveWebFetchDefinitionUncached(options),
+      cacheKey: resolveWebFetchProviderCacheKey(options),
+      load,
     });
   }
-  return resolveWebFetchDefinitionUncached(options);
+  return load();
 }
 
 function resolveWebFetchDefinitionUncached(
@@ -247,21 +262,11 @@ function resolveWebFetchDefinitionUncached(
   const fetch = resolveWebProviderConfig(options?.config, "fetch") as
     | NonNullable<WebFetchConfig>
     | undefined;
+  if (!resolveWebFetchEnabled({ fetch, sandboxed: options?.sandboxed })) {
+    return null;
+  }
   const runtimeWebFetch = options?.runtimeWebFetch ?? getActiveRuntimeWebToolsMetadata()?.fetch;
-  const providers = sortWebFetchProvidersForAutoDetect(
-    options?.sandboxed
-      ? resolvePluginWebFetchProviders({
-          config: options?.config,
-          sandboxed: true,
-        })
-      : options?.preferRuntimeProviders
-        ? resolveRuntimeWebFetchProviders({
-            config: options?.config,
-          })
-        : resolvePluginWebFetchProviders({
-            config: options?.config,
-          }),
-  );
+  const providers = resolveWebFetchProvidersForOptions(options);
   return resolveWebProviderDefinition({
     config: options?.config,
     toolConfig: fetch as Record<string, unknown> | undefined,

@@ -107,6 +107,7 @@ const SHELL_HTML = `<!doctype html>
 
 const TEXT_BODY = "OpenClaw web_fetch direct text benchmark body.".repeat(160);
 const MARKDOWN_BODY = "# Web Fetch Benchmark\n\n" + "- markdown list item\n".repeat(220);
+const OFFLINE_PROVIDER_ENV_VARS = ["FIRECRAWL_API_KEY"] as const;
 
 const lookupFn: LookupFn = async () => [{ address: "93.184.216.34", family: 4 }];
 const toolConfig: OpenClawConfig = {
@@ -270,6 +271,25 @@ function installMockFetch(params: { body: string; contentType: string }) {
   globalThis.fetch = fetchImpl;
 }
 
+async function withOfflineProviderEnv<T>(run: () => Promise<T>): Promise<T> {
+  const previous = new Map<string, string | undefined>();
+  for (const name of OFFLINE_PROVIDER_ENV_VARS) {
+    previous.set(name, process.env[name]);
+    process.env[name] = "";
+  }
+  try {
+    return await run();
+  } finally {
+    for (const [name, value] of previous) {
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
+    }
+  }
+}
+
 function createTool() {
   const tool = createWebFetchTool({
     config: toolConfig,
@@ -387,22 +407,24 @@ async function main(): Promise<void> {
     return;
   }
   const options = parseOptions(args);
-  const casesById = createCases();
-  const cases: CaseReport[] = [];
-  for (const caseId of options.cases) {
-    cases.push(await measureCase(casesById[caseId], options));
-  }
-  const report: BenchmarkReport = {
-    cases,
-    node: process.version,
-    options: {
-      cases: options.cases,
-      output: options.output,
-      runs: options.runs,
-      warmup: options.warmup,
-    },
-    rssMb: Math.round((process.memoryUsage().rss / 1024 / 1024) * 10) / 10,
-  };
+  const report = await withOfflineProviderEnv(async () => {
+    const casesById = createCases();
+    const cases: CaseReport[] = [];
+    for (const caseId of options.cases) {
+      cases.push(await measureCase(casesById[caseId], options));
+    }
+    return {
+      cases,
+      node: process.version,
+      options: {
+        cases: options.cases,
+        output: options.output,
+        runs: options.runs,
+        warmup: options.warmup,
+      },
+      rssMb: Math.round((process.memoryUsage().rss / 1024 / 1024) * 10) / 10,
+    };
+  });
   if (options.output) {
     await mkdir(path.dirname(options.output), { recursive: true });
     await writeFile(options.output, `${JSON.stringify(report, null, 2)}\n`);
