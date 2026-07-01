@@ -365,12 +365,16 @@ export function renderChatControls(state: AppViewState) {
   const disableThinkingToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
+  const persistCommentary = state.settings.chatPersistCommentary === true;
   const thinkingLabel = disableThinkingToggle
     ? t("chat.onboardingDisabled")
     : t("chat.thinkingToggle");
   const toolCallsLabel = disableThinkingToggle
     ? t("chat.onboardingDisabled")
     : t("chat.toolCallsToggle");
+  const commentaryLabel = disableThinkingToggle
+    ? t("chat.onboardingDisabled")
+    : t("chat.commentaryToggle");
   const refreshDisabled =
     !state.connected ||
     state.chatManualRefreshInFlight ||
@@ -504,6 +508,28 @@ export function renderChatControls(state: AppViewState) {
               <span class="chat-settings-action__text">${t("agents.tabs.tools")}</span>
             </button>
             <button
+              class="btn btn--sm btn--icon chat-settings-action ${persistCommentary
+                ? "active"
+                : ""}"
+              ?disabled=${disableThinkingToggle}
+              @click=${() => {
+                if (disableThinkingToggle) {
+                  return;
+                }
+                state.applySettings({
+                  ...state.settings,
+                  chatPersistCommentary: !persistCommentary,
+                });
+              }}
+              aria-pressed=${persistCommentary}
+              title=${commentaryLabel}
+              aria-label=${commentaryLabel}
+              data-tooltip=${commentaryLabel}
+            >
+              ${persistCommentary ? icons.pin : icons.pinOff}
+              <span class="chat-settings-action__text">${t("chat.commentaryLabel")}</span>
+            </button>
+            <button
               class="btn btn--sm btn--icon chat-settings-action ${hideCron ? "active" : ""}"
               @click=${() => {
                 state.sessionsHideCron = !hideCron;
@@ -534,6 +560,7 @@ export function renderChatMobileToggle(state: AppViewState) {
   const disableThinkingToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
+  const persistCommentary = state.settings.chatPersistCommentary === true;
   const hideCron = state.sessionsHideCron ?? true;
   const hiddenCronCount = hideCron ? countHiddenCronSessions(state, state.sessionsResult) : 0;
   const toolCallsIcon = html`
@@ -626,6 +653,22 @@ export function renderChatMobileToggle(state: AppViewState) {
               title=${t("chat.toolCallsToggle")}
             >
               ${toolCallsIcon}
+            </button>
+            <button
+              class="btn btn--sm btn--icon ${persistCommentary ? "active" : ""}"
+              ?disabled=${disableThinkingToggle}
+              @click=${() => {
+                if (!disableThinkingToggle) {
+                  state.applySettings({
+                    ...state.settings,
+                    chatPersistCommentary: !persistCommentary,
+                  });
+                }
+              }}
+              aria-pressed=${persistCommentary}
+              title=${t("chat.commentaryToggle")}
+            >
+              ${persistCommentary ? icons.pin : icons.pinOff}
             </button>
             <button
               class="btn btn--sm btn--icon ${hideCron ? "active" : ""}"

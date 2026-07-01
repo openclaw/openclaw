@@ -105,6 +105,10 @@ export function isProviderConversationStateErrorMessage(message: string): boolea
       lower.includes("tooluse") &&
       lower.includes("exceeds the number") &&
       lower.includes("previous turn")) ||
+    // Anthropic/Bedrock orphaned tool-call replay: "`tool_use` ids were found
+    // without `tool_result` blocks immediately after: ...". Same broken-turn
+    // shape as the toolResult/toolUse count mismatch above, just snake_case.
+    (lower.includes("tool_use") && lower.includes("tool_result") && lower.includes("without")) ||
     lower.includes("function call turn comes immediately after") ||
     lower.includes("incorrect role information") ||
     lower.includes("roles must alternate") ||

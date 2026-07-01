@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { HookStatusEntry, HookStatusReport } from "../hooks/hooks-status.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { setupInternalHooks } from "./onboard-hooks.js";
+import { enableDefaultOnboardingInternalHooks, setupInternalHooks } from "./onboard-hooks.js";
 
 // Mock hook discovery modules
 vi.mock("../hooks/hooks-status.js", () => ({
@@ -20,6 +20,62 @@ describe("onboard-hooks", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     delete process.env.OPENCLAW_LOCALE;
+  });
+
+  describe("enableDefaultOnboardingInternalHooks", () => {
+    it("enables only the bundled session-memory entry by default", () => {
+      const result = enableDefaultOnboardingInternalHooks({});
+
+      expect(result.hooks?.internal?.enabled).toBeUndefined();
+      expect(result.hooks?.internal?.entries).toEqual({
+        "session-memory": { enabled: true },
+      });
+    });
+
+    it("preserves explicit internal hook disablement", () => {
+      const cfg: OpenClawConfig = {
+        hooks: {
+          internal: {
+            enabled: false,
+          },
+        },
+      };
+
+      expect(enableDefaultOnboardingInternalHooks(cfg)).toBe(cfg);
+    });
+
+    it("preserves an explicit session-memory disablement", () => {
+      const cfg: OpenClawConfig = {
+        hooks: {
+          internal: {
+            entries: {
+              "session-memory": { enabled: false },
+            },
+          },
+        },
+      };
+
+      expect(enableDefaultOnboardingInternalHooks(cfg)).toBe(cfg);
+    });
+
+    it("preserves existing per-hook settings when enabling session-memory", () => {
+      const result = enableDefaultOnboardingInternalHooks({
+        hooks: {
+          internal: {
+            entries: {
+              "session-memory": {
+                messages: 25,
+              },
+            },
+          },
+        },
+      });
+
+      expect(result.hooks?.internal?.entries?.["session-memory"]).toEqual({
+        enabled: true,
+        messages: 25,
+      });
+    });
   });
 
   const createMockPrompter = (multiselectValue: string[]): WizardPrompter => ({

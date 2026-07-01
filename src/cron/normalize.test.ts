@@ -154,6 +154,20 @@ describe("normalizeCronJobCreate", () => {
     expect(normalized.payload?.model).toBeNull();
   });
 
+  it("preserves explicit null thinking clear in payload patches", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        kind: "agentTurn",
+        thinking: null,
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.thinking).toBeNull();
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
+  });
+
   it("coerces ISO schedule.at to normalized ISO (UTC)", () => {
     expectNormalizedAtSchedule({ kind: "at", at: "2026-01-12T18:00:00" });
   });

@@ -113,6 +113,10 @@ describe("provider request error classifier", () => {
       "local replay invariant guard",
       "invalid_replay_transcript: OpenAI Responses replay contains dangling_tool_call toolCallId=call_1 at message index 4",
     ],
+    [
+      "Anthropic orphaned tool_use replay",
+      "messages.1: `tool_use` ids were found without `tool_result` blocks immediately after: toolu_01A09q90qw90lq917835lq9. Each `tool_use` block must have a corresponding `tool_result` block in the next message.",
+    ],
   ])("classifies %s as provider conversation-state errors", (_label, message) => {
     expect(classifyProviderRequestError(new Error(message))).toEqual({
       code: "provider_conversation_state_error",
@@ -123,6 +127,16 @@ describe("provider request error classifier", () => {
 
   it("leaves bare no-body 400 provider failures unclassified", () => {
     expect(classifyProviderRequestError(new Error("400 status code (no body)"))).toBeUndefined();
+  });
+
+  it("does not classify generic tool_use/tool_result mentions without the orphan signal", () => {
+    // Both block names appear but there is no "without" orphan signal, so this
+    // generic guidance text must not trip the conversation-state classifier.
+    expect(
+      classifyProviderRequestError(
+        new Error("Each tool_use block must have a corresponding tool_result block."),
+      ),
+    ).toBeUndefined();
   });
 
   it("leaves explicit HTTP 429 rate-limit failures on the existing rate-limit path", () => {

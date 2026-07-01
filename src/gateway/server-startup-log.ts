@@ -2,6 +2,7 @@
 // Produces the compact ready banner with resolved model and safety state.
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import chalk from "chalk";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveDefaultAgentId, resolveAgentConfig } from "../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { formatFastModeValue, resolveFastModeState } from "../agents/fast-mode.js";
@@ -29,6 +30,7 @@ type StartupThinkLevel =
 /** Emit startup summary lines after Gateway bind and plugin loading complete. */
 export async function logGatewayStartup(params: {
   cfg: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
   bindHost: string;
   bindHosts?: string[];
   port: number;
@@ -62,6 +64,13 @@ export async function logGatewayStartup(params: {
   params.log.info(`log file: ${getResolvedLoggerSettings().file}`);
   if (params.isNixMode) {
     params.log.info("gateway: running in Nix mode (config managed externally)");
+  }
+
+  for (const warning of await collectConfiguredChannelStartupWarnings({
+    cfg: params.cfg,
+    activationSourceConfig: params.activationSourceConfig,
+  })) {
+    params.log.warn(warning);
   }
 
   const enabledDangerousFlags =
@@ -163,6 +172,53 @@ export function formatAgentModelStartupDetails(params: {
   });
 
   return `thinking=${thinking}, fast=${formatFastModeValue(fast.mode)}`;
+}
+
+async function collectConfiguredChannelStartupWarnings(params: {
+  cfg: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
+}): Promise<string[]> {
+  const [blockerModule, presencePolicyModule, pluginRegistryModule] = await Promise.all([
+    import("../commands/doctor/shared/channel-plugin-blockers.js"),
+    import("../plugins/channel-presence-policy.js"),
+    import("../plugins/plugin-registry.js"),
+  ]);
+  const manifestRegistry = pluginRegistryModule.loadPluginManifestRegistryForPluginRegistry({
+    config: params.cfg,
+    env: process.env,
+    includeDisabled: true,
+  });
+  const hits = blockerModule.scanConfiguredChannelPluginBlockers(
+    params.cfg,
+    process.env,
+    params.activationSourceConfig,
+  );
+  const blockerWarnings = blockerModule
+    .collectConfiguredChannelPluginBlockerWarnings(hits)
+    .map((warning) => `configured channel warning: ${warning.replace(/^[-]\s*/u, "")}`);
+  const missingOwnerWarnings = presencePolicyModule
+    .resolveConfiguredChannelPresencePolicy({
+      config: params.cfg,
+      activationSourceConfig: params.activationSourceConfig,
+      includePersistedAuthState: false,
+      manifestRecords: manifestRegistry.plugins,
+    })
+    .filter((entry) => !entry.effective && entry.blockedReasons.includes("no-channel-owner"))
+    .map(formatConfiguredChannelMissingOwnerStartupWarning);
+  return [...blockerWarnings, ...missingOwnerWarnings];
+}
+
+function formatConfiguredChannelMissingOwnerStartupWarning(entry: {
+  channelId: string;
+  blockedReasons: readonly string[];
+}): string {
+  const channelId = sanitizeForLog(entry.channelId);
+  const reasons = normalizeSortedUniqueStringEntries(entry.blockedReasons).join(", ");
+  return (
+    `configured channel warning: channels.${channelId} is configured but no channel plugin ` +
+    `is installed or loadable (${reasons}). Run \`openclaw doctor --fix\` or install the ` +
+    "channel plugin before relying on this channel."
+  );
 }
 
 /** Format plugin count/list and optional startup duration for the ready log line. */

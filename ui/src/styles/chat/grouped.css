@@ -283,7 +283,9 @@ img.chat-avatar {
   pointer-events: auto;
 }
 
-@media (hover: none), (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+@media (hover: none),
+  (max-width: 768px),
+  (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .chat-bubble-actions {
     opacity: 1;
     pointer-events: auto;

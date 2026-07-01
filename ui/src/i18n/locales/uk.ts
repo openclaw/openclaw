@@ -1333,6 +1333,8 @@ export const uk: TranslationMap = {
     settings: "Налаштування чату",
     thinkingToggle: "Перемкнути показ мислення/роботи асистента",
     toolCallsToggle: "Перемкнути виклики інструментів і результати інструментів",
+    commentaryToggle: "Зберігати коментар після остаточної відповіді",
+    commentaryLabel: "Коментар",
     autoScrollMode: "Режим автопрокручування",
     autoScrollAlways: "Завжди",
     autoScrollNearBottom: "Біля низу",

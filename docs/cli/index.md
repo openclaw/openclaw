@@ -13,8 +13,8 @@ apply across the CLI.
 
 Use the setup commands by intent:
 
-- `openclaw setup` creates the baseline config and workspace without walking the full guided onboarding flow.
-- `openclaw onboard` is the full guided first-run path for gateway, model auth, workspace, channels, skills, and health.
+- `openclaw setup` and `openclaw onboard` run the full guided first-run path for gateway, model auth, workspace, channels, skills, and health.
+- `openclaw setup --baseline` creates the baseline config and workspace without walking the guided onboarding flow.
 - `openclaw configure` changes targeted parts of an existing setup, such as model auth, gateway, channels, plugins, or skills.
 - `openclaw channels add` configures channel accounts after the baseline exists; run it without flags for guided channel setup or with channel-specific flags for scripts.
 

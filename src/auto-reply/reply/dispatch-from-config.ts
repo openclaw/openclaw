@@ -104,6 +104,7 @@ import {
   shouldAttemptTtsPayload,
 } from "../../tts/tts-config.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import { resolveCommandAuthorization } from "../command-auth.js";
 import {
   isNativeCommandTurn,
   resolveCommandTurnContext,
@@ -2051,6 +2052,7 @@ export async function dispatchReplyFromConfig(
     suppressHookReplyLifecycle,
   } = sourceReplyPolicy;
   const reasoningPayloadsEnabled = params.replyOptions?.reasoningPayloadsEnabled === true;
+  const commentaryPayloadsEnabled = params.replyOptions?.commentaryPayloadsEnabled === true;
   const attachSourceReplyDeliveryMode = (
     result: DispatchFromConfigResult,
   ): DispatchFromConfigResult =>
@@ -2148,12 +2150,23 @@ export async function dispatchReplyFromConfig(
       logVerbose(
         `plugin-bound inbound routed to ${pluginOwnedBinding.pluginId} conversation=${pluginOwnedBinding.conversationId}`,
       );
+      // Bound native runtimes need the current owner decision, not stale bind-time identity.
+      // The resolver folds internal operator.admin authority into this owner decision.
+      const bindingAuthorization = resolveCommandAuthorization({
+        ctx,
+        cfg,
+        commandAuthorized: ctx.CommandAuthorized,
+      });
       const targetedClaimOutcome = hookRunner?.runInboundClaimForPluginOutcome
         ? await (async () => {
             await prepareHookMediaMetadata();
+            const authorizedInboundClaimEvent = {
+              ...inboundClaimEvent,
+              senderIsOwner: bindingAuthorization.senderIsOwner,
+            };
             return hookRunner.runInboundClaimForPluginOutcome(
               pluginOwnedBinding.pluginId,
-              inboundClaimEvent,
+              authorizedInboundClaimEvent,
               { ...inboundClaimContext, pluginBinding: pluginOwnedBinding },
             );
           })()
@@ -2483,7 +2496,7 @@ export async function dispatchReplyFromConfig(
         finalReplyDeliveryStarted = true;
       }
       const ttsPayload =
-        payload.isReasoning === true
+        payload.isReasoning === true || payload.isCommentary === true
           ? payload
           : await maybeApplyTtsToReplyPayload({
               payload,
@@ -3061,6 +3074,8 @@ export async function dispatchReplyFromConfig(
             suppressTyping: typing.suppressTyping,
             onPartialReply: wrapProgressCallback(params.replyOptions?.onPartialReply),
             onReasoningStream: wrapProgressCallback(params.replyOptions?.onReasoningStream),
+            streamReasoningInNonStreamModes:
+              params.replyOptions?.streamReasoningInNonStreamModes,
             onReasoningEnd: wrapProgressCallback(params.replyOptions?.onReasoningEnd),
             onAssistantMessageStart: wrapProgressCallback(
               params.replyOptions?.onAssistantMessageStart,
@@ -3083,6 +3098,7 @@ export async function dispatchReplyFromConfig(
               canForwardSuppressedSourceItemEvents ||
               params.replyOptions?.commentaryProgressEnabled,
             reasoningPayloadsEnabled,
+            commentaryPayloadsEnabled,
             onCommandOutput: wrapProgressCallback(params.replyOptions?.onCommandOutput, {
               forwardWhenSourceDeliverySuppressed: true,
               requiresToolSummaryVisibility: true,
@@ -3302,6 +3318,7 @@ export async function dispatchReplyFromConfig(
                 }
                 if (
                   payload.isReasoning !== true &&
+                  payload.isCommentary !== true &&
                   hasOutboundReplyContent(payload, { trimText: true })
                 ) {
                   markInboundDedupeReplayUnsafe();
@@ -3316,11 +3333,22 @@ export async function dispatchReplyFromConfig(
                 if (payload.isReasoning === true && !reasoningPayloadsEnabled) {
                   return;
                 }
+                // Durable commentary is a channel-owned lane; generic channels keep the
+                // historical suppression unless they explicitly opt in.
+                if (payload.isCommentary === true && !commentaryPayloadsEnabled) {
+                  return;
+                }
                 // Accumulate block text for TTS generation after streaming.
                 // Exclude status notices — they are informational UI signals
-                // and must not be synthesised into the spoken reply.
+                // and must not be synthesised into the spoken reply. Display
+                // lanes stay out too: they are presentation, never final text.
                 const isStatusNotice = isReplyPayloadStatusNotice(payload);
-                if (payload.text && !isStatusNotice && payload.isReasoning !== true) {
+                if (
+                  payload.text &&
+                  !isStatusNotice &&
+                  payload.isReasoning !== true &&
+                  payload.isCommentary !== true
+                ) {
                   const joinsBufferedTtsDirective =
                     cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;
                   if (accumulatedBlockText.length > 0) {
@@ -3337,7 +3365,8 @@ export async function dispatchReplyFromConfig(
                   payload.text &&
                   cleanBlockTtsDirectiveText &&
                   !isStatusNotice &&
-                  payload.isReasoning !== true
+                  payload.isReasoning !== true &&
+                  payload.isCommentary !== true
                     ? (() => {
                         const text = cleanBlockTtsDirectiveText.push(payload.text);
                         return copyReplyPayloadMetadata(payload, {
@@ -3367,7 +3396,7 @@ export async function dispatchReplyFromConfig(
                   return;
                 }
                 const ttsPayload =
-                  payload.isReasoning === true
+                  payload.isReasoning === true || payload.isCommentary === true
                     ? visiblePayload
                     : await maybeApplyTtsToReplyPayload({
                         payload: visiblePayload,
@@ -3492,6 +3521,9 @@ export async function dispatchReplyFromConfig(
       // Durable reasoning is a channel-owned lane; generic channels keep the
       // historical suppression unless they explicitly opt in.
       if (reply.isReasoning === true && !reasoningPayloadsEnabled) {
+        continue;
+      }
+      if (reply.isCommentary === true && !commentaryPayloadsEnabled) {
         continue;
       }
       if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply)) {

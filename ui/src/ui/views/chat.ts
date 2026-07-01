@@ -60,6 +60,7 @@ import {
   renderCompactionIndicator,
   renderFallbackIndicator,
 } from "../chat/status-indicators.ts";
+import type { ChatStreamSegment } from "../chat/stream-text.ts";
 import { getExpandedToolCards, syncToolCardExpansionState } from "../chat/tool-expansion-state.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
@@ -117,7 +118,7 @@ export type ChatProps = {
   messages: unknown[];
   sideResult?: ChatSideResult | null;
   toolMessages: unknown[];
-  streamSegments: Array<{ text: string; ts: number }>;
+  streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
   assistantAvatarUrl?: string | null;
