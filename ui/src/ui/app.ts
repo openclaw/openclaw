@@ -1413,14 +1413,15 @@ export class OpenClawApp extends LitElement {
 
   async handleExecApprovalDecision(decision: "allow-once" | "allow-always" | "deny") {
     const active = this.execApprovalQueue[0];
-    if (!active || !this.client || this.execApprovalBusy) {
+    const client = this.client;
+    if (!active || !client || this.execApprovalBusy) {
       return;
     }
     this.execApprovalBusy = true;
     this.execApprovalError = null;
     try {
       const method = active.kind === "plugin" ? "plugin.approval.resolve" : "exec.approval.resolve";
-      await this.client.request(method, {
+      await client.request(method, {
         id: active.id,
         decision,
       });
@@ -1431,7 +1432,7 @@ export class OpenClawApp extends LitElement {
         await refreshPendingApprovalQueue(this);
         return;
       }
-      if (!this.execApprovalQueue.some((entry) => entry.id === active.id)) {
+      if (this.client !== client || this.execApprovalQueue[0]?.id !== active.id) {
         return;
       }
       this.execApprovalError = `Approval failed: ${String(err)}`;
