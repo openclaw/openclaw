@@ -64,6 +64,7 @@ import {
 import type { CodexNativeWebSearchSupport } from "./web-search.js";
 
 const CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS = 3;
+const CODEX_APP_SERVER_INITIALIZE_TIMEOUT_HEAD_START_MS = 150;
 
 type CodexSandboxContext = Awaited<ReturnType<typeof resolveSandboxContext>>;
 
@@ -121,6 +122,7 @@ export async function startCodexAttemptThread(params: {
   let startupClientForAbandonedRequestCleanup: CodexAppServerClient | undefined;
   let releaseStartupResourcesOnTimeout: (() => Promise<void>) | undefined;
   let startupAbandoned = false;
+  const startupDeadlineMs = Date.now() + params.startupTimeoutMs;
   const startupAbandonController = new AbortController();
   const abandonStartupAcquire = () => startupAbandonController.abort();
   params.signal.addEventListener("abort", abandonStartupAcquire, { once: true });
@@ -191,6 +193,8 @@ export async function startCodexAttemptThread(params: {
                   }
                 },
                 abandonSignal: startupAbandonController.signal,
+                initializeTimeoutDeadlineMs:
+                  startupDeadlineMs - CODEX_APP_SERVER_INITIALIZE_TIMEOUT_HEAD_START_MS,
               },
             );
             const activeStartupClient = startupClient;
@@ -419,7 +423,11 @@ export async function startCodexAttemptThread(params: {
           try {
             return await startupAttempt();
           } catch (error) {
-            if (params.signal.aborted || !isCodexAppServerConnectionClosedError(error)) {
+            if (
+              startupAbandoned ||
+              params.signal.aborted ||
+              !isCodexAppServerConnectionClosedError(error)
+            ) {
               throw error;
             }
             const failedClient = attemptedClient;
