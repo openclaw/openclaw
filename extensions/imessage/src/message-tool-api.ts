@@ -6,7 +6,10 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import { resolveIMessageAccount } from "./accounts.js";
 import { IMESSAGE_ACTION_NAMES, IMESSAGE_ACTIONS } from "./actions-contract.js";
-import { getCachedIMessagePrivateApiStatus } from "./private-api-status.js";
+import {
+  getCachedIMessagePrivateApiStatus,
+  imessageRpcSupportsMethod,
+} from "./private-api-status.js";
 import { inferIMessageTargetChatType } from "./targets.js";
 
 const PRIVATE_API_ACTIONS = new Set<ChannelMessageActionName>([
@@ -72,6 +75,14 @@ export function describeIMessageMessageTool({
       (action === "poll" || action === "poll-vote") &&
       privateApiStatus?.selectors?.pollPayloadMessage !== true
     ) {
+      continue;
+    }
+    // Voting is a newer CLI/RPC capability than poll-send: released imsg builds
+    // that already carry the pollPayloadMessage selector (poll create) may lack
+    // the `poll.vote` command. Gate poll-vote on the advertised rpc method so
+    // this plugin can ship ahead of the imsg release without offering a vote
+    // action that the CLI would reject.
+    if (action === "poll-vote" && !imessageRpcSupportsMethod(privateApiStatus, "poll.vote")) {
       continue;
     }
     actions.add(action);
