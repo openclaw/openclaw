@@ -129,6 +129,7 @@ describe("ci workflow guards", () => {
 
     expect(refresh.if).toContain("github.ref == 'refs/heads/main'");
     expect(refresh.strategy.matrix.locale).toContain("sv");
+    expect(workflow.on.push.paths).toContain("ui/src/i18n/.i18n/glossary.*.json");
     expect(commitStep.run).toContain("for attempt in 1 2 3 4 5");
     expect(commitStep.run).toContain('git fetch origin "${TARGET_BRANCH}"');
     expect(commitStep.run).toContain('git rebase --autostash "origin/${TARGET_BRANCH}"');

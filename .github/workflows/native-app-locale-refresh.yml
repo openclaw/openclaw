@@ -13,6 +13,7 @@ on:
       - apps/.i18n/native-source.json
       - scripts/control-ui-i18n.ts
       - scripts/native-app-i18n.ts
+      - ui/src/i18n/.i18n/glossary.*.json
       - .github/workflows/native-app-locale-refresh.yml
   workflow_dispatch:
 
