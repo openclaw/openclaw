@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { NATIVE_I18N_LOCALES } from "./native-app-i18n.ts";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -11,6 +11,17 @@ const APPLE_LOCALE_DIRECTORIES: Record<string, string> = {
   "ja-JP": "ja",
   "zh-CN": "zh-Hans",
   "zh-TW": "zh-Hant",
+};
+const LOCALIZED_WRAPPER_CONTRACTS: Record<string, string[]> = {
+  "apps/ios/Sources/Gateway/GatewayQuickSetupSheet.swift": [
+    "fullRowToggle(_ title: LocalizedStringKey",
+  ],
+  "apps/ios/WatchApp/Sources/WatchInboxView.swift": [
+    "private struct WatchPrimaryLabel: View {\n    let title: LocalizedStringKey",
+    "private struct WatchSecondaryLabel: View {\n    let title: LocalizedStringKey",
+    "private struct WatchSecondaryButton: View {\n    let title: LocalizedStringKey",
+    "private struct WatchDecisionButton: View {\n    let title: LocalizedStringKey",
+  ],
 };
 
 const CATALOGS = [
@@ -100,6 +111,15 @@ function stringsLiteral(value: string): string {
 
 export async function checkAppleAppI18n() {
   let checked = 0;
+  for (const [sourcePath, contracts] of Object.entries(LOCALIZED_WRAPPER_CONTRACTS)) {
+    const source = await readFile(path.join(ROOT, sourcePath), "utf8");
+    const missing = contracts.filter((contract) => !source.includes(contract));
+    if (missing.length) {
+      throw new Error(
+        `Apple i18n wrapper ${sourcePath} bypasses localized string lookup: ${missing.join(", ")}`,
+      );
+    }
+  }
   for (const spec of CATALOGS) {
     const catalogPath = path.join(ROOT, spec.path);
     const catalog = JSON.parse(await readFile(catalogPath, "utf8")) as Catalog;
@@ -185,7 +205,7 @@ export async function compileMacosLocalizations(outputDir: string) {
   }
 }
 
-if (process.argv[1] && import.meta.url === `file://${path.resolve(process.argv[1])}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const [command, flag, value] = process.argv.slice(2);
   if (command === "check") {
     await checkAppleAppI18n();
