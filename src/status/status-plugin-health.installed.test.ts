@@ -9,7 +9,10 @@ import {
 } from "../config/runtime-snapshot.js";
 import { resolveGatewayStartupPluginActivationConfig } from "../gateway/plugin-activation-runtime-config.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
-import { loadGatewayStartupPluginPlan } from "../plugins/gateway-startup-plugin-ids.js";
+import {
+  collectUnregisteredConfiguredMemoryEmbeddingProviders,
+  loadGatewayStartupPluginPlan,
+} from "../plugins/gateway-startup-plugin-ids.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
@@ -36,7 +39,14 @@ vi.mock("../plugins/status.js", async (importOriginal) => {
 // eager importer in the graph keeps working.
 vi.mock("../plugins/gateway-startup-plugin-ids.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/gateway-startup-plugin-ids.js")>();
-  return { ...actual, loadGatewayStartupPluginPlan: vi.fn() } as typeof actual;
+  return {
+    ...actual,
+    loadGatewayStartupPluginPlan: vi.fn(),
+    // Default to no unregistered providers so the should-run tests are unaffected; the
+    // memory-provider tests below override per case. collectRegisteredEmbeddingProviderIds
+    // stays real (it just reads the seeded registry + core embedding registry).
+    collectUnregisteredConfiguredMemoryEmbeddingProviders: vi.fn(() => []),
+  } as typeof actual;
 });
 // The startup-plan activation assembly is the gateway's own shared helper; mock it to
 // identity (return the runtime config) so the status wiring stays deterministic. The helper's
@@ -62,11 +72,17 @@ const loadGatewayStartupPluginPlanMock = vi.mocked(loadGatewayStartupPluginPlan)
 const resolveGatewayStartupPluginActivationConfigMock = vi.mocked(
   resolveGatewayStartupPluginActivationConfig,
 );
+const collectUnregisteredConfiguredMemoryEmbeddingProvidersMock = vi.mocked(
+  collectUnregisteredConfiguredMemoryEmbeddingProviders,
+);
 
 afterEach(() => {
   resolveReadOnlyChannelPluginsForConfigMock.mockReset();
   loadGatewayStartupPluginPlanMock.mockReset();
   resolveGatewayStartupPluginActivationConfigMock.mockClear();
+  collectUnregisteredConfiguredMemoryEmbeddingProvidersMock.mockReset();
+  // Re-establish the empty default so the next test starts with no unregistered providers.
+  collectUnregisteredConfiguredMemoryEmbeddingProvidersMock.mockReturnValue([]);
   clearRuntimeConfigSnapshot();
   resetPluginRuntimeStateForTest();
   resetPluginStateStoreForTests();
@@ -163,6 +179,90 @@ describe("installed plugin health should-run drift", () => {
       expect(formatDetailedPluginHealth(snapshot)).not.toContain(
         "Configured to run but not loaded:",
       );
+    });
+  });
+});
+
+describe("installed plugin health unregistered memory embedding providers", () => {
+  it("surfaces configured memory embedding providers the runtime registry does not register", async () => {
+    await withStateDirEnv("openclaw-status-memory-embed-", async () => {
+      resolveReadOnlyChannelPluginsForConfigMock.mockReturnValue({
+        loadFailures: [],
+        missingConfiguredChannelIds: [],
+      } as never);
+      loadGatewayStartupPluginPlanMock.mockReturnValue({
+        channelPluginIds: [],
+        configuredDeferredChannelPluginIds: [],
+        pluginIds: [],
+      });
+      collectUnregisteredConfiguredMemoryEmbeddingProvidersMock.mockReturnValue([
+        { configuredId: "custom-embed", source: "provider" },
+      ]);
+      setActivePluginRegistry(createEmptyPluginRegistry(), "empty", "default", "/tmp/ws");
+
+      const snapshot = await collectInstalledPluginHealthSnapshot({
+        config: {} as never,
+        workspaceDir: "/tmp/ws",
+      });
+
+      expect(snapshot.unregisteredMemoryEmbeddingProviders).toEqual([
+        { configuredId: "custom-embed", source: "provider" },
+      ]);
+      // The mismatch is checked against the live registry's embedding providers (collected
+      // into a Set), so a CLI/empty-registry process can never false-report "unregistered".
+      expect(collectUnregisteredConfiguredMemoryEmbeddingProvidersMock).toHaveBeenCalledWith(
+        expect.objectContaining({ registeredProviderIds: expect.any(Set) }),
+      );
+      expect(formatDetailedPluginHealth(snapshot)).toContain(
+        "Configured memory provider not registered: 1 (custom-embed (memorySearch.provider))",
+      );
+    });
+  });
+
+  it("skips the check and renders no line when no runtime registry is active", async () => {
+    await withStateDirEnv("openclaw-status-memory-embed-no-registry-", async () => {
+      // No active runtime registry (a fresh CLI process that never started a gateway).
+      resetPluginRuntimeStateForTest();
+      resolveReadOnlyChannelPluginsForConfigMock.mockReturnValue({
+        loadFailures: [],
+        missingConfiguredChannelIds: [],
+      } as never);
+      loadGatewayStartupPluginPlanMock.mockReturnValue({
+        channelPluginIds: [],
+        configuredDeferredChannelPluginIds: [],
+        pluginIds: [],
+      });
+      // Even if the resolver would report something, the null-registry guard must skip it
+      // (a CLI/empty-registry process must never false-report "unregistered").
+      collectUnregisteredConfiguredMemoryEmbeddingProvidersMock.mockReturnValue([
+        { configuredId: "custom-embed", source: "provider" },
+      ]);
+
+      const snapshot = await collectInstalledPluginHealthSnapshot({
+        config: {} as never,
+        workspaceDir: "/tmp/ws",
+      });
+
+      expect(snapshot.unregisteredMemoryEmbeddingProviders).toBeUndefined();
+      expect(collectUnregisteredConfiguredMemoryEmbeddingProvidersMock).not.toHaveBeenCalled();
+      expect(formatDetailedPluginHealth(snapshot)).not.toContain(
+        "Configured memory provider not registered:",
+      );
+    });
+  });
+
+  it("omits the check when no config is provided", async () => {
+    await withStateDirEnv("openclaw-status-memory-embed-no-config-", async () => {
+      resolveReadOnlyChannelPluginsForConfigMock.mockReturnValue({
+        loadFailures: [],
+        missingConfiguredChannelIds: [],
+      } as never);
+      setActivePluginRegistry(createEmptyPluginRegistry(), "empty", "default", "/tmp/ws");
+
+      const snapshot = await collectInstalledPluginHealthSnapshot({ workspaceDir: "/tmp/ws" });
+
+      expect(snapshot.unregisteredMemoryEmbeddingProviders).toBeUndefined();
+      expect(collectUnregisteredConfiguredMemoryEmbeddingProvidersMock).not.toHaveBeenCalled();
     });
   });
 });
