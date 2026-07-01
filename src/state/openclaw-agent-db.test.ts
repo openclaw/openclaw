@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -51,6 +51,17 @@ function listRegisteredAgentDatabasesForTest(options: { env?: NodeJS.ProcessEnv 
     schemaVersion: row.schema_version,
     sizeBytes: row.size_bytes,
   }));
+}
+
+function readRegisteredAgentDatabaseLastSeenAt(params: {
+  agentId: string;
+  env?: NodeJS.ProcessEnv;
+  path: string;
+}): number | undefined {
+  const row = openOpenClawStateDatabase({ env: params.env })
+    .db.prepare("SELECT last_seen_at FROM agent_databases WHERE agent_id = ? AND path = ?")
+    .get(params.agentId, params.path) as { last_seen_at?: unknown } | undefined;
+  return typeof row?.last_seen_at === "number" ? row.last_seen_at : undefined;
 }
 
 afterAll(() => {
@@ -157,6 +168,43 @@ describe("openclaw agent database", () => {
         .filter((entry) => entry.agentId === "worker-1")
         .map((entry) => entry.path),
     ).toEqual([defaultDatabase.path, relocated.path].toSorted());
+  });
+
+  it("does not refresh global registry metadata on cached opens", () => {
+    const stateDir = createTempStateDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+
+    try {
+      const first = openOpenClawAgentDatabase({
+        agentId: "worker-1",
+        env,
+      });
+      expect(
+        readRegisteredAgentDatabaseLastSeenAt({
+          agentId: "worker-1",
+          env,
+          path: first.path,
+        }),
+      ).toBe(1_000);
+
+      nowSpy.mockReturnValue(2_000);
+      const second = openOpenClawAgentDatabase({
+        agentId: "worker-1",
+        env,
+      });
+
+      expect(second).toBe(first);
+      expect(
+        readRegisteredAgentDatabaseLastSeenAt({
+          agentId: "worker-1",
+          env,
+          path: first.path,
+        }),
+      ).toBe(1_000);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("rejects the legacy agent registry primary key with a doctor repair hint", () => {

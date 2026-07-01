@@ -30,6 +30,7 @@ import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-age
 import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
+  runOpenClawAgentWriteTransactionAsync,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
@@ -73,7 +74,11 @@ import type {
   TranscriptUpdatePayload,
 } from "./session-accessor.sqlite-contract.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
-import { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
+import {
+  foldedSessionKeyAliasCandidates,
+  normalizeStoreSessionKey,
+  resolveSessionStoreEntry,
+} from "./store-entry.js";
 import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
@@ -94,6 +99,7 @@ import { serializeJsonlLines } from "./transcript-jsonl.js";
 import {
   isSessionTranscriptLeafControl,
   mergeSessionTranscriptVisiblePathWithOpaqueAppendPath,
+  parseSessionTranscriptTreeEntry,
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
@@ -354,32 +360,19 @@ export async function patchSqliteSessionEntry(
 ): Promise<SessionEntry | null> {
   const resolved = resolveSqliteScope(scope);
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-    const existing = (
-      options.replaceEntry
-        ? readExactSessionEntryRow(database, resolved.sessionKey)
-        : readSessionEntryRow(database, resolved.sessionKey)
-    )?.entry;
-    const base = existing ?? options.fallbackEntry;
-    if (!base) {
-      return null;
-    }
-    const patch = await update(cloneSessionEntry(base), {
-      existingEntry: existing ? cloneSessionEntry(existing) : undefined,
-    });
-    if (!patch) {
-      return cloneSessionEntry(base);
-    }
-
-    let result: SessionEntry | null = null;
-    runOpenClawAgentWriteTransaction((writeDatabase) => {
+    return await runOpenClawAgentWriteTransactionAsync(async (writeDatabase) => {
       const fresh = options.replaceEntry
         ? readExactSessionEntryRow(writeDatabase, resolved.sessionKey)
         : readSessionEntryRow(writeDatabase, resolved.sessionKey);
       const writeBase = fresh?.entry ?? options.fallbackEntry;
       if (!writeBase) {
-        result = null;
-        return;
+        return null;
+      }
+      const patch = await update(cloneSessionEntry(writeBase), {
+        existingEntry: fresh?.entry ? cloneSessionEntry(fresh.entry) : undefined,
+      });
+      if (!patch) {
+        return cloneSessionEntry(writeBase);
       }
       const next = options.replaceEntry
         ? cloneSessionEntry(patch as SessionEntry)
@@ -394,9 +387,8 @@ export async function patchSqliteSessionEntry(
         maintenanceConfig: options.maintenanceConfig,
         skipMaintenance: options.skipMaintenance,
       });
-      result = cloneSessionEntry(next);
+      return cloneSessionEntry(next);
     }, toDatabaseOptions(resolved));
-    return result;
   });
 }
 
@@ -411,26 +403,17 @@ export async function patchSqliteSessionEntryTarget(
 ): Promise<SessionEntry | null> {
   const resolved = resolveSqliteStoreScope(scope.storePath);
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-    const existing = resolveSqliteLifecyclePrimaryEntry(database, scope.target)?.entry;
-    const base = existing ?? options.fallbackEntry;
-    if (!base) {
-      return null;
-    }
-    const patch = await update(cloneSessionEntry(base), {
-      existingEntry: existing ? cloneSessionEntry(existing) : undefined,
-    });
-    if (!patch) {
-      return cloneSessionEntry(base);
-    }
-
-    let result: SessionEntry | null = null;
-    runOpenClawAgentWriteTransaction((writeDatabase) => {
+    return await runOpenClawAgentWriteTransactionAsync(async (writeDatabase) => {
       const fresh = resolveSqliteLifecyclePrimaryEntry(writeDatabase, scope.target);
       const writeBase = fresh?.entry ?? options.fallbackEntry;
       if (!writeBase) {
-        result = null;
-        return;
+        return null;
+      }
+      const patch = await update(cloneSessionEntry(writeBase), {
+        existingEntry: fresh?.entry ? cloneSessionEntry(fresh.entry) : undefined,
+      });
+      if (!patch) {
+        return cloneSessionEntry(writeBase);
       }
       const next = options.replaceEntry
         ? cloneSessionEntry(patch as SessionEntry)
@@ -445,9 +428,8 @@ export async function patchSqliteSessionEntryTarget(
         maintenanceConfig: options.maintenanceConfig,
         skipMaintenance: options.skipMaintenance,
       });
-      result = cloneSessionEntry(next);
+      return cloneSessionEntry(next);
     }, toDatabaseOptions(resolved));
-    return result;
   });
 }
 
@@ -628,22 +610,14 @@ export async function updateSqliteSessionEntry(
 ): Promise<SessionEntry | null> {
   const resolved = resolveSqliteScope(scope);
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-    const existing = readSessionEntryRow(database, resolved.sessionKey)?.entry;
-    if (!existing) {
-      return null;
-    }
-    const patch = await update(cloneSessionEntry(existing));
-    if (!patch) {
-      return cloneSessionEntry(existing);
-    }
-
-    let result: SessionEntry | null = null;
-    runOpenClawAgentWriteTransaction((writeDatabase) => {
+    return await runOpenClawAgentWriteTransactionAsync(async (writeDatabase) => {
       const fresh = readSessionEntryRow(writeDatabase, resolved.sessionKey);
       if (!fresh) {
-        result = null;
-        return;
+        return null;
+      }
+      const patch = await update(cloneSessionEntry(fresh.entry));
+      if (!patch) {
+        return cloneSessionEntry(fresh.entry);
       }
       const next = mergeSessionEntry(fresh.entry, patch);
       writeSessionEntry(writeDatabase, resolved.sessionKey, next);
@@ -653,9 +627,8 @@ export async function updateSqliteSessionEntry(
         archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
         skipMaintenance: options.skipMaintenance,
       });
-      result = cloneSessionEntry(next);
+      return cloneSessionEntry(next);
     }, toDatabaseOptions(resolved));
-    return result;
   });
 }
 
@@ -791,11 +764,7 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
     storePath: params.storePath,
   });
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-    const store = readSqliteSessionEntryStore(database);
     const removedSessionKeys: string[] = [];
-    const removedEntriesToArchive: SessionEntry[] = [];
-    const upsertedEntries: Array<{ sessionKey: string; entry: SessionEntry }> = [];
     const archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
     let artifactCleanupError: unknown;
     let afterCount = 0;
@@ -806,49 +775,52 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
       }
       throw error;
     };
-    for (const removal of params.removals ?? []) {
-      const sessionKey = removal.sessionKey.trim();
-      if (!sessionKey) {
-        continue;
+    await runOpenClawAgentWriteTransactionAsync(async (transactionDb) => {
+      const store = readSqliteSessionEntryStore(transactionDb);
+      const removedEntriesToArchive: SessionEntry[] = [];
+      const upsertedEntries: Array<{ sessionKey: string; entry: SessionEntry }> = [];
+      for (const removal of params.removals ?? []) {
+        const sessionKey = removal.sessionKey.trim();
+        if (!sessionKey) {
+          continue;
+        }
+        const entry = store[sessionKey];
+        if (!shouldRemoveSqliteSessionEntry(entry, removal)) {
+          continue;
+        }
+        if (removal.archiveRemovedTranscript === true) {
+          removedEntriesToArchive.push(entry);
+        }
+        delete store[sessionKey];
+        removedSessionKeys.push(sessionKey);
       }
-      const entry = store[sessionKey];
-      if (!shouldRemoveSqliteSessionEntry(entry, removal)) {
-        continue;
+      for (const upsert of params.upserts ?? []) {
+        const sessionKey = upsert.sessionKey.trim();
+        if (!sessionKey) {
+          continue;
+        }
+        const entry =
+          upsert.buildEntry === undefined
+            ? upsert.entry
+            : await upsert.buildEntry({
+                currentEntry: store[sessionKey] ? cloneSessionEntry(store[sessionKey]) : undefined,
+                sessionKey,
+                store,
+              });
+        if (!entry) {
+          continue;
+        }
+        const cloned = cloneSessionEntry(entry);
+        store[sessionKey] = cloned;
+        upsertedEntries.push({ sessionKey, entry: cloned });
       }
-      if (removal.archiveRemovedTranscript === true) {
-        removedEntriesToArchive.push(entry);
-      }
-      delete store[sessionKey];
-      removedSessionKeys.push(sessionKey);
-    }
-    for (const upsert of params.upserts ?? []) {
-      const sessionKey = upsert.sessionKey.trim();
-      if (!sessionKey) {
-        continue;
-      }
-      const entry =
-        upsert.buildEntry === undefined
-          ? upsert.entry
-          : await upsert.buildEntry({
-              currentEntry: store[sessionKey] ? cloneSessionEntry(store[sessionKey]) : undefined,
-              sessionKey,
-              store,
-            });
-      if (!entry) {
-        continue;
-      }
-      const cloned = cloneSessionEntry(entry);
-      store[sessionKey] = cloned;
-      upsertedEntries.push({ sessionKey, entry: cloned });
-    }
-    runOpenClawAgentWriteTransaction((transactionDb) => {
       for (const sessionKey of removedSessionKeys) {
         deleteSqliteSessionEntryRows(transactionDb, sessionKey);
       }
       for (const { sessionKey, entry } of upsertedEntries) {
         writeSessionEntry(transactionDb, sessionKey, entry);
       }
-      applySqliteSessionEntryMaintenance(database, {
+      applySqliteSessionEntryMaintenance(transactionDb, {
         activeSessionKey: params.activeSessionKey ?? "",
         archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
         forceMaintenance: params.maintenanceOverride !== undefined,
@@ -875,7 +847,7 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
           }
         }
       }
-      afterCount = Object.keys(readSqliteSessionEntryStore(database)).length;
+      afterCount = Object.keys(readSqliteSessionEntryStore(transactionDb)).length;
     }, toDatabaseOptions(resolved));
     emitArchivedSqliteTranscriptUpdates(archivedTranscripts);
     const archivedTranscriptDirectories = uniqueStrings(
@@ -1356,48 +1328,31 @@ export async function appendSqliteExpectedSessionTranscriptTurn(
     sessionId: options.expectedSessionId,
   });
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
-    const initialResult: SqliteExpectedSessionTranscriptTurnResult = {
-      appendedMessages: [],
-      rejectedReason: "session-rebound",
-      sessionEntry: undefined,
-      sessionFile: options.sessionFile,
-    };
-    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-    const freshBeforeAppend = readSessionEntryRow(database, resolved.sessionKey);
-    if (!freshBeforeAppend || freshBeforeAppend.entry.sessionId !== options.expectedSessionId) {
-      return {
-        ...initialResult,
-        sessionEntry: freshBeforeAppend?.entry,
-      };
-    }
-    const messages = await selectAppendableSqliteTranscriptTurnMessages(
-      {
-        agentId: resolved.agentId,
-        sessionFile: options.sessionFile,
-        sessionId: options.expectedSessionId,
-        sessionKey: resolved.sessionKey,
-        ...(scope.storePath ? { storePath: scope.storePath } : {}),
-      },
-      options.messages,
-    );
-
-    let result = initialResult;
-    runOpenClawAgentWriteTransaction((transactionDb) => {
+    return await runOpenClawAgentWriteTransactionAsync(async (transactionDb) => {
       const fresh = readSessionEntryRow(transactionDb, resolved.sessionKey);
       if (!fresh || fresh.entry.sessionId !== options.expectedSessionId) {
-        result = {
+        return {
           appendedMessages: [],
           rejectedReason: "session-rebound",
           sessionEntry: fresh?.entry,
           sessionFile: options.sessionFile,
         };
-        return;
       }
+      const messages = await selectAppendableSqliteTranscriptTurnMessages(
+        {
+          agentId: resolved.agentId,
+          sessionFile: options.sessionFile,
+          sessionId: options.expectedSessionId,
+          sessionKey: resolved.sessionKey,
+          ...(scope.storePath ? { storePath: scope.storePath } : {}),
+        },
+        options.messages,
+      );
 
       const appendedMessages: TranscriptMessageAppendResult<unknown>[] = [];
       for (const append of messages) {
         const { shouldAppend: _shouldAppend, ...appendOptions } = append;
-        const appended = appendSqliteTranscriptMessageInTransaction(database, resolved, {
+        const appended = appendSqliteTranscriptMessageInTransaction(transactionDb, resolved, {
           ...appendOptions,
           ...((append.cwd ?? options.cwd) ? { cwd: append.cwd ?? options.cwd } : {}),
           ...((append.config ?? options.config) ? { config: append.config ?? options.config } : {}),
@@ -1423,16 +1378,15 @@ export async function appendSqliteExpectedSessionTranscriptTurn(
           ? mergeSessionEntry(fresh.entry, sessionPatch)
           : fresh.entry;
       if (next !== fresh.entry) {
-        writeSessionEntry(database, resolved.sessionKey, next);
-        deleteLegacySessionEntryRows(database, fresh.legacyKeys, resolved.sessionKey);
+        writeSessionEntry(transactionDb, resolved.sessionKey, next);
+        deleteLegacySessionEntryRows(transactionDb, fresh.legacyKeys, resolved.sessionKey);
       }
-      result = {
+      return {
         appendedMessages,
         sessionEntry: cloneSessionEntry(next),
         sessionFile: options.sessionFile,
       };
     }, toDatabaseOptions(resolved));
-    return result;
   });
 }
 
@@ -1926,9 +1880,17 @@ function readSessionEntryRow(
   sessionKey: string,
 ): ResolvedSessionEntryRow | undefined {
   const db = getSessionKysely(database.db);
+  const lookupKeys = collectSessionEntryLookupKeys(database, sessionKey);
+  if (lookupKeys.length === 0) {
+    return undefined;
+  }
   const rows = executeSqliteQuerySync(
     database.db,
-    db.selectFrom("session_entries").selectAll().orderBy("session_key", "asc"),
+    db
+      .selectFrom("session_entries")
+      .selectAll()
+      .where("session_key", "in", lookupKeys)
+      .orderBy("session_key", "asc"),
   ).rows;
   const entries = new Map<string, ResolvedSessionEntryRow>();
   const store: Record<string, SessionEntry> = {};
@@ -1950,6 +1912,33 @@ function readSessionEntryRow(
     }
   }
   return undefined;
+}
+
+function collectSessionEntryLookupKeys(
+  database: OpenClawAgentDatabase,
+  sessionKey: string,
+): string[] {
+  const trimmedKey = sessionKey.trim();
+  if (!trimmedKey) {
+    return [];
+  }
+  const normalizedKey = normalizeStoreSessionKey(trimmedKey);
+  const lookupKeys = new Set([
+    trimmedKey,
+    normalizedKey,
+    ...foldedSessionKeyAliasCandidates(normalizedKey),
+  ]);
+  const db = getSessionKysely(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    db.selectFrom("session_entries").select("session_key").orderBy("session_key", "asc"),
+  ).rows;
+  for (const row of rows) {
+    if (normalizeStoreSessionKey(row.session_key) === normalizedKey) {
+      lookupKeys.add(row.session_key);
+    }
+  }
+  return [...lookupKeys].filter(Boolean);
 }
 
 function collectSqliteSessionMaintenanceBaseKeys(
@@ -2108,6 +2097,34 @@ function readSqliteSessionEntryStore(
   return store;
 }
 
+function readSqliteSessionEntryCount(database: OpenClawAgentDatabase): number {
+  const db = getSessionKysely(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db.selectFrom("session_entries").select((eb) => eb.fn.countAll<number>().as("entry_count")),
+  );
+  const count = row?.entry_count;
+  return count === undefined || count === null ? 0 : normalizeSqliteNumber(count);
+}
+
+function hasStaleSqliteSessionEntryCandidate(
+  database: OpenClawAgentDatabase,
+  pruneAfterMs: number,
+  preserveKeys: ReadonlySet<string> | undefined,
+): boolean {
+  const cutoffMs = Date.now() - pruneAfterMs;
+  const db = getSessionKysely(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("session_entries")
+      .select("session_key")
+      .where("updated_at", "<", cutoffMs)
+      .orderBy("updated_at", "asc"),
+  ).rows;
+  return rows.some((row) => !preserveKeys?.has(normalizeStoreSessionKey(row.session_key)));
+}
+
 function resolveSqliteLifecyclePrimaryEntry(
   database: OpenClawAgentDatabase,
   target: { canonicalKey: string; storeKeys: string[] },
@@ -2224,6 +2241,31 @@ function applySqliteSessionEntryMaintenance(
     return;
   }
 
+  const entryCount = readSqliteSessionEntryCount(database);
+  const preserveCandidateKeys = collectSessionMaintenancePreserveKeys([params.activeSessionKey]);
+  const hasStaleCandidate = hasStaleSqliteSessionEntryCandidate(
+    database,
+    maintenance.pruneAfterMs,
+    preserveCandidateKeys,
+  );
+  const shouldLoadStore =
+    params.forceMaintenance === true ||
+    entryCount > maintenance.maxEntries ||
+    hasStaleCandidate ||
+    shouldRunModelRunPrune({
+      maintenance,
+      entryCount,
+      force: params.forceMaintenance,
+    }) ||
+    shouldRunSessionEntryMaintenance({
+      entryCount,
+      maxEntries: maintenance.maxEntries,
+      force: params.forceMaintenance,
+    });
+  if (!shouldLoadStore) {
+    return;
+  }
+
   const db = getSessionKysely(database.db);
   const rows = executeSqliteQuerySync(
     database.db,
@@ -2262,11 +2304,17 @@ function applySqliteSessionEntryMaintenance(
       preserveKeys,
     });
   }
-  pruneStaleEntries(store, maintenance.pruneAfterMs, {
-    log: false,
-    onPruned: rememberRemovedEntry,
-    preserveKeys,
-  });
+  if (
+    params.forceMaintenance === true ||
+    hasStaleCandidate ||
+    Object.keys(store).length > maintenance.maxEntries
+  ) {
+    pruneStaleEntries(store, maintenance.pruneAfterMs, {
+      log: false,
+      onPruned: rememberRemovedEntry,
+      preserveKeys,
+    });
+  }
   if (
     shouldRunSessionEntryMaintenance({
       entryCount: Object.keys(store).length,
@@ -3659,6 +3707,58 @@ function appendTranscriptEventInTransaction(
   return true;
 }
 
+function appendTranscriptEventRowInTransaction(
+  database: OpenClawAgentDatabase,
+  scope: ResolvedTranscriptScope,
+  event: TranscriptEvent,
+  seq: number,
+  state: {
+    seenEventIds: Set<string>;
+    seenMessageIdempotencyKeys: Set<string>;
+  },
+): boolean {
+  const db = getSessionKysely(database.db);
+  const createdAt = readEventTimestamp(event) ?? Date.now();
+  const identity = readTranscriptEventIdentity(event);
+  if (identity && state.seenEventIds.has(identity.eventId)) {
+    return false;
+  }
+  executeSqliteQuerySync(
+    database.db,
+    db.insertInto("transcript_events").values({
+      session_id: scope.sessionId,
+      seq,
+      event_json: JSON.stringify(event),
+      created_at: createdAt,
+    }),
+  );
+  if (!identity) {
+    return true;
+  }
+  state.seenEventIds.add(identity.eventId);
+  const indexedMessageIdempotencyKey =
+    identity.messageIdempotencyKey &&
+    !state.seenMessageIdempotencyKeys.has(identity.messageIdempotencyKey)
+      ? identity.messageIdempotencyKey
+      : undefined;
+  if (indexedMessageIdempotencyKey) {
+    state.seenMessageIdempotencyKeys.add(indexedMessageIdempotencyKey);
+  }
+  executeSqliteQuerySync(
+    database.db,
+    db.insertInto("transcript_event_identities").values({
+      session_id: scope.sessionId,
+      event_id: identity.eventId,
+      seq,
+      event_type: identity.eventType,
+      parent_id: identity.parentId,
+      message_idempotency_key: indexedMessageIdempotencyKey,
+      created_at: createdAt,
+    }),
+  );
+  return true;
+}
+
 function ensureTranscriptHeader(
   database: OpenClawAgentDatabase,
   scope: ResolvedTranscriptScope,
@@ -3692,8 +3792,57 @@ function readActiveTranscriptAppendParentId(
   database: OpenClawAgentDatabase,
   sessionId: string,
 ): string | null {
+  const db = getSessionKysely(database.db);
+  const latest = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("transcript_event_identities as ti")
+      .innerJoin("transcript_events as te", (join) =>
+        join.onRef("te.session_id", "=", "ti.session_id").onRef("te.seq", "=", "ti.seq"),
+      )
+      .select(["ti.event_type", "te.event_json"])
+      .where("ti.session_id", "=", sessionId)
+      .orderBy("ti.seq", "desc")
+      .limit(1),
+  );
+  if (!latest) {
+    return null;
+  }
+  try {
+    const event = JSON.parse(latest.event_json) as unknown;
+    const treeEntry = parseSessionTranscriptTreeEntry(event);
+    if (!treeEntry) {
+      return resolveVisibleTranscriptAppendParentId(
+        loadSqliteTranscriptEventsFromDatabase(database, sessionId),
+      );
+    }
+    if (latest.event_type !== "leaf") {
+      return treeEntry.appendParentId;
+    }
+    const leafReferencesKnown =
+      treeEntry.leafId !== undefined &&
+      transcriptTreeReferenceExists(database, sessionId, treeEntry.leafId) &&
+      transcriptTreeReferenceExists(database, sessionId, treeEntry.appendParentId);
+    if (isSessionTranscriptLeafControl(event) && leafReferencesKnown) {
+      return treeEntry.appendParentId;
+    }
+  } catch {
+    return resolveVisibleTranscriptAppendParentId(
+      loadSqliteTranscriptEventsFromDatabase(database, sessionId),
+    );
+  }
   return resolveVisibleTranscriptAppendParentId(
     loadSqliteTranscriptEventsFromDatabase(database, sessionId),
+  );
+}
+
+function transcriptTreeReferenceExists(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+  eventId: string | null,
+): boolean {
+  return (
+    eventId === null || readTranscriptIdentityByEventId(database, sessionId, eventId) !== undefined
   );
 }
 
@@ -3703,8 +3852,21 @@ function replaceSqliteTranscriptEventsInTransaction(
   events: readonly TranscriptEvent[],
 ): void {
   deleteSqliteTranscriptEventsInTransaction(database, resolved.sessionId);
+  if (events.length === 0) {
+    return;
+  }
+  ensureTranscriptSessionRoot(database, resolved, readEventTimestamp(events[0]) ?? Date.now());
+  let seq = 0;
+  const seenEventIds = new Set<string>();
+  const seenMessageIdempotencyKeys = new Set<string>();
   for (const event of events) {
-    appendTranscriptEventInTransaction(database, resolved, event);
+    const appended = appendTranscriptEventRowInTransaction(database, resolved, event, seq, {
+      seenEventIds,
+      seenMessageIdempotencyKeys,
+    });
+    if (appended) {
+      seq += 1;
+    }
   }
 }
 

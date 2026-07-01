@@ -668,6 +668,64 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       });
     });
 
+    it("does not parse unrelated SQLite entry blobs for keyed loads", async () => {
+      const scope = sqliteAdapter.entryScope(paths);
+      for (let index = 0; index < 20; index += 1) {
+        await upsertSqliteSessionEntry(
+          {
+            ...scope,
+            sessionKey: `agent:main:unrelated-${index}`,
+          },
+          {
+            model: `model-${index}`,
+            sessionId: `unrelated-session-${index}`,
+            updatedAt: index + 1,
+          },
+        );
+      }
+      await upsertSqliteSessionEntry(scope, {
+        model: "target",
+        sessionId: "target-session",
+        updatedAt: 100,
+      });
+      const parseSpy = vi.spyOn(JSON, "parse");
+
+      try {
+        expect(loadSqliteSessionEntry(scope)).toMatchObject({
+          model: "target",
+          sessionId: "target-session",
+        });
+        expect(parseSpy.mock.calls.length).toBeLessThanOrEqual(2);
+      } finally {
+        parseSpy.mockRestore();
+      }
+    });
+
+    it("prunes stale SQLite entries below the entry cap without parsing on every write", async () => {
+      const scope = sqliteAdapter.entryScope(paths);
+      const staleScope = {
+        ...scope,
+        sessionKey: "agent:main:stale-under-cap",
+      };
+      await replaceSqliteSessionEntry(staleScope, {
+        model: "stale",
+        sessionId: "stale-under-cap",
+        updatedAt: Date.now() - 31 * 24 * 60 * 60 * 1000,
+      });
+
+      await upsertSqliteSessionEntry(scope, {
+        model: "fresh",
+        sessionId: "fresh-session",
+        updatedAt: Date.now(),
+      });
+
+      expect(loadSqliteSessionEntry(staleScope)).toBeUndefined();
+      expect(loadSqliteSessionEntry(scope)).toMatchObject({
+        model: "fresh",
+        sessionId: "fresh-session",
+      });
+    });
+
     it("serializes concurrent SQLite entry patches and updates", async () => {
       const scope = sqliteAdapter.entryScope(paths);
 
@@ -758,6 +816,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
         event,
         expect.objectContaining({
           message: expect.objectContaining({ idempotencyKey: "keyed-once" }),
+          parentId: null,
           type: "message",
         }),
       ]);

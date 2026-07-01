@@ -1,7 +1,9 @@
-// Provides synchronous SQLite transaction helpers with nested savepoints.
+// Provides SQLite transaction helpers with nested savepoints.
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { DatabaseSync } from "node:sqlite";
 
 const transactionDepthByDatabase = new WeakMap<DatabaseSync, number>();
+const transactionContext = new AsyncLocalStorage<{ depths: Map<DatabaseSync, number> }>();
 
 const RETRYABLE_COMMIT_ERROR_CODES = new Set(["SQLITE_BUSY", "SQLITE_LOCKED"]);
 const MAX_COMMIT_ATTEMPTS = 8;
@@ -58,10 +60,23 @@ function abortImmediateTransaction(db: DatabaseSync): void {
 }
 
 function getTransactionDepth(db: DatabaseSync): number {
+  const contextDepth = transactionContext.getStore()?.depths.get(db);
+  if (contextDepth !== undefined) {
+    return contextDepth;
+  }
   return transactionDepthByDatabase.get(db) ?? 0;
 }
 
 function setTransactionDepth(db: DatabaseSync, depth: number): void {
+  const contextDepths = transactionContext.getStore()?.depths;
+  if (contextDepths?.has(db)) {
+    if (depth <= 0) {
+      contextDepths.delete(db);
+      return;
+    }
+    contextDepths.set(db, depth);
+    return;
+  }
   if (depth <= 0) {
     transactionDepthByDatabase.delete(db);
     return;
@@ -99,6 +114,75 @@ export function runSqliteImmediateTransactionSync<T>(db: DatabaseSync, operation
   try {
     result = operation();
     assertSyncTransactionResult(result);
+  } catch (error) {
+    try {
+      abortImmediateTransaction(db);
+      transactionStillActive = false;
+    } catch {
+      // Preserve the original error; rollback failure is secondary.
+    }
+    throw error;
+  } finally {
+    if (!transactionStillActive) {
+      setTransactionDepth(db, 0);
+    }
+  }
+
+  try {
+    commitImmediateTransaction(db);
+    transactionStillActive = false;
+    return result;
+  } catch (error) {
+    try {
+      abortImmediateTransaction(db);
+      transactionStillActive = false;
+    } catch {
+      // Preserve the original error; rollback failure is secondary.
+    }
+    throw error;
+  } finally {
+    if (!transactionStillActive) {
+      setTransactionDepth(db, 0);
+    }
+  }
+}
+
+/** Run an async callback inside a SQLite immediate transaction. */
+export async function runSqliteImmediateTransactionAsync<T>(
+  db: DatabaseSync,
+  operation: () => Promise<T> | T,
+): Promise<T> {
+  const depth = getTransactionDepth(db);
+  if (depth > 0) {
+    const savepointName = nextSavepointName();
+    db.exec(`SAVEPOINT ${savepointName}`);
+    setTransactionDepth(db, depth + 1);
+    try {
+      const result = await operation();
+      db.exec(`RELEASE SAVEPOINT ${savepointName}`);
+      return result;
+    } catch (error) {
+      try {
+        db.exec(`ROLLBACK TO SAVEPOINT ${savepointName}`);
+      } finally {
+        db.exec(`RELEASE SAVEPOINT ${savepointName}`);
+      }
+      throw error;
+    } finally {
+      setTransactionDepth(db, depth);
+    }
+  }
+
+  db.exec("BEGIN IMMEDIATE");
+  let transactionStillActive = true;
+  let result: T;
+  const parentContext = transactionContext.getStore();
+  const transactionDepths = new Map(parentContext?.depths);
+  transactionDepths.set(db, 1);
+  try {
+    result = await transactionContext.run({ depths: transactionDepths }, async () => {
+      return await operation();
+    });
   } catch (error) {
     try {
       abortImmediateTransaction(db);

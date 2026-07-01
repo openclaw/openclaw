@@ -1,7 +1,10 @@
 // Covers synchronous SQLite transaction helpers.
 import { afterEach, describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
+import {
+  runSqliteImmediateTransactionAsync,
+  runSqliteImmediateTransactionSync,
+} from "./sqlite-transaction.js";
 
 const openDatabases: Array<import("node:sqlite").DatabaseSync> = [];
 
@@ -120,5 +123,78 @@ describe("runSqliteImmediateTransactionSync", () => {
 
     expect(result).toBe("committed later");
     expect(execCalls).toEqual(["BEGIN IMMEDIATE", "COMMIT"]);
+  });
+});
+
+describe("runSqliteImmediateTransactionAsync", () => {
+  it("keeps outer async writes when a nested savepoint rolls back", async () => {
+    const db = createDatabase();
+
+    await runSqliteImmediateTransactionAsync(db, async () => {
+      db.prepare("INSERT INTO entries(id, value) VALUES (?, ?)").run("outer", "kept");
+      await expect(
+        runSqliteImmediateTransactionAsync(db, async () => {
+          db.prepare("INSERT INTO entries(id, value) VALUES (?, ?)").run("inner", "rolled back");
+          throw new Error("nested failure");
+        }),
+      ).rejects.toThrow("nested failure");
+    });
+
+    expect(readEntries(db)).toEqual(["outer"]);
+  });
+
+  it("retries retryable async commit failures", async () => {
+    const execCalls: string[] = [];
+    let commitAttempts = 0;
+    const db = {
+      exec(sql: string) {
+        execCalls.push(sql);
+        if (sql === "COMMIT") {
+          commitAttempts += 1;
+          if (commitAttempts === 1) {
+            throw Object.assign(new Error("database is busy"), { code: "SQLITE_BUSY" });
+          }
+        }
+      },
+    } as import("node:sqlite").DatabaseSync;
+
+    const result = await runSqliteImmediateTransactionAsync(db, async () => "committed");
+
+    expect(result).toBe("committed");
+    expect(execCalls).toEqual(["BEGIN IMMEDIATE", "COMMIT", "COMMIT"]);
+  });
+
+  it("does not treat unrelated same-handle writes as nested savepoints", async () => {
+    const db = createDatabase();
+    let releaseOuter: (() => void) | undefined;
+    const outerReady = new Promise<void>((resolve) => {
+      releaseOuter = resolve;
+    });
+    let outerEntered: (() => void) | undefined;
+    const outerStarted = new Promise<void>((resolve) => {
+      outerEntered = resolve;
+    });
+    const outer = runSqliteImmediateTransactionAsync(db, async () => {
+      db.prepare("INSERT INTO entries(id, value) VALUES (?, ?)").run("outer", "rolled back");
+      outerEntered?.();
+      await outerReady;
+      throw new Error("outer failure");
+    });
+
+    await outerStarted;
+    expect(() =>
+      runSqliteImmediateTransactionSync(db, () => {
+        db.prepare("INSERT INTO entries(id, value) VALUES (?, ?)").run("unrelated", "blocked");
+      }),
+    ).toThrow();
+    releaseOuter?.();
+    await expect(outer).rejects.toThrow("outer failure");
+    await expect(
+      runSqliteImmediateTransactionAsync(db, async () => {
+        db.prepare("INSERT INTO entries(id, value) VALUES (?, ?)").run("after", "works");
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(readEntries(db)).toEqual(["after"]);
   });
 });

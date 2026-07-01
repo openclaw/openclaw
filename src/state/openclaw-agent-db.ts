@@ -9,7 +9,10 @@ import {
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
-import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import {
+  runSqliteImmediateTransactionAsync,
+  runSqliteImmediateTransactionSync,
+} from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   configureSqliteConnectionPragmas,
@@ -55,6 +58,7 @@ type OpenClawAgentMetadataDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_m
 type OpenClawAgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_databases">;
 
 const cachedDatabases = new Map<string, OpenClawAgentDatabase>();
+const registeredDatabasePaths = new Set<string>();
 
 type ExistingSchemaMeta = {
   agentId: string | null;
@@ -549,7 +553,6 @@ export function openOpenClawAgentDatabase(
         `OpenClaw agent database ${pathname} is already open for agent ${cached.agentId}; requested agent ${agentId}.`,
       );
     }
-    registerAgentDatabase({ agentId, path: pathname, env: options.env });
     return cached;
   }
   if (cached) {
@@ -583,7 +586,10 @@ export function openOpenClawAgentDatabase(
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
   const database = { agentId, db, path: pathname, walMaintenance };
   cachedDatabases.set(pathname, database);
-  registerAgentDatabase({ agentId, path: pathname, env: options.env });
+  if (!registeredDatabasePaths.has(pathname)) {
+    registerAgentDatabase({ agentId, path: pathname, env: options.env });
+    registeredDatabasePaths.add(pathname);
+  }
   return database;
 }
 
@@ -598,6 +604,22 @@ export function runOpenClawAgentWriteTransaction<T>(
   return result;
 }
 
+/** Run an async immediate transaction against an agent database. */
+export async function runOpenClawAgentWriteTransactionAsync<T>(
+  operation: (database: OpenClawAgentDatabase) => Promise<T> | T,
+  options: OpenClawAgentDatabaseOptions,
+): Promise<T> {
+  const database = openOpenClawAgentDatabase(options);
+  // Async session-entry callbacks derive their patch from the fresh row; keep
+  // that derivation inside BEGIN IMMEDIATE so other processes cannot interleave.
+  const result = await runSqliteImmediateTransactionAsync(
+    database.db,
+    async () => await operation(database),
+  );
+  ensureOpenClawAgentDatabasePermissions(database.path, options);
+  return result;
+}
+
 /** Close cached agent databases so tests can remove temp dirs and reopen cleanly. */
 export function closeOpenClawAgentDatabasesForTest(): void {
   for (const database of cachedDatabases.values()) {
@@ -606,4 +628,5 @@ export function closeOpenClawAgentDatabasesForTest(): void {
     database.db.close();
   }
   cachedDatabases.clear();
+  registeredDatabasePaths.clear();
 }
