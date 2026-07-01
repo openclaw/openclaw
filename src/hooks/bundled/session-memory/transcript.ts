@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { sanitizeModelSpecialTokens } from "../../../security/external-content.js";
 import { hasInterSessionUserProvenance } from "../../../sessions/input-provenance.js";
-import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 
 const SESSION_MEMORY_TOOL_DIRECTIVE_PREFIX = String.raw`(?:(?:\|DSML\|)|(?:\uFF5CDSML\uFF5C))?`;
 const SESSION_MEMORY_TOOL_DIRECTIVE_KIND = String.raw`(?:tool_calls?|function_calls?|tool_use_error)`;
@@ -87,10 +87,9 @@ export async function getRecentSessionContent(
             }
             const text = extractTextMessageContent(msg.content);
             const sanitized = text ? sanitizeSessionMemoryTranscriptText(text) : null;
-            // Skip delivery-mirror rows only when they duplicate the preceding
-            // assistant text. Delivery-mirror rows with unique visible content
-            // (e.g., message-tool replies) are preserved.
-            if (isOpenClawDeliveryMirrorAssistantMessage(msg)) {
+            // Skip OpenClaw-authored assistant bookkeeping only when it repeats
+            // the previous visible reply; unique mirror/injected rows can be the reply.
+            if (role === "assistant" && isTranscriptOnlyOpenClawAssistantMessage(msg)) {
               if (sanitized && sanitized === lastAssistantText) {
                 continue;
               }
