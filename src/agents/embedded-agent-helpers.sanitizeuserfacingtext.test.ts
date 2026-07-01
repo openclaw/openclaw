@@ -47,6 +47,64 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
+  it("strips bracketed truncation sentinels from final replies (#82121)", () => {
+    expect(sanitizeUserFacingText("[... 5000 more characters truncated]")).toBe("");
+    expect(
+      sanitizeUserFacingText("Here is the result.\n[... 1000 more characters truncated]"),
+    ).toBe("Here is the result.");
+    expect(sanitizeUserFacingText("Answer.\n...[truncated]...")).toBe("Answer.");
+    expect(
+      sanitizeUserFacingText("Recent memory.\n...[additional startup memory truncated]..."),
+    ).toBe("Recent memory.");
+    expect(sanitizeUserFacingText("data \u2026[truncated]")).toBe("data");
+  });
+
+  it("strips parenthesized truncation sentinels from final replies (#82121)", () => {
+    expect(sanitizeUserFacingText("Partial tool output...(truncated)...")).toBe(
+      "Partial tool output",
+    );
+    expect(sanitizeUserFacingText("line1\n...(truncated)...\nline2")).toBe("line1\n\nline2");
+  });
+
+  it("preserves prose and code that merely mentions truncation (#82121)", () => {
+    const prose = "The response was truncated for brevity.";
+    expect(sanitizeUserFacingText(prose)).toBe(prose);
+    const code = "Use `arr.slice(0, n)` to get a truncated copy.";
+    expect(sanitizeUserFacingText(code)).toBe(code);
+    const link = "See the [docs](https://example.com) for details.";
+    expect(sanitizeUserFacingText(link)).toBe(link);
+    const bracketProse = "Status: [draft truncated by user]";
+    expect(sanitizeUserFacingText(bracketProse)).toBe(bracketProse);
+  });
+
+  it("preserves truncation markers embedded in code, JSON, and inline spans (#82121)", () => {
+    const inlineCode = "The literal marker is `...(truncated)...`.";
+    expect(sanitizeUserFacingText(inlineCode)).toBe(inlineCode);
+    const codeString = 'const s = "...(truncated)...";';
+    expect(sanitizeUserFacingText(codeString)).toBe(codeString);
+    const json = '{"message":"[... 5000 more characters truncated]","source":"fixture"}';
+    expect(sanitizeUserFacingText(json)).toBe(json);
+    const comment = "// output: [... response truncated by SDK]";
+    expect(sanitizeUserFacingText(comment)).toBe(comment);
+    const crossLine = "The excerpt continues...\n[quote truncated by editor]";
+    expect(sanitizeUserFacingText(crossLine)).toBe(crossLine);
+  });
+
+  it("strips a sentinel with mixed unicode/ascii ellipsis without a remnant (#82121)", () => {
+    expect(sanitizeUserFacingText("...[truncated]\u2026")).toBe("");
+    expect(sanitizeUserFacingText("Done.\n[... 0 more characters truncated]")).toBe("Done.");
+  });
+
+  it("matches truncation sentinels case-insensitively (#82121)", () => {
+    expect(sanitizeUserFacingText("...[TRUNCATED]...")).toBe("");
+    expect(sanitizeUserFacingText("Out.\n[... 12 MORE CHARACTERS TRUNCATED]")).toBe("Out.");
+  });
+
+  it("leaves whitespace-heavy non-sentinel text unchanged (#82121)", () => {
+    const big = `${" ".repeat(20_000)}not a sentinel`;
+    expect(sanitizeUserFacingText(big)).toBe(big);
+  });
+
   it.each(["202 results found", "400 days left"])(
     "does not clobber normal numeric prefix: %s",
     (text) => {
