@@ -29,19 +29,23 @@ is intentionally a local-first, opt-in runtime substrate:
 
 ## Validation Checklist
 
-Update this section immediately before opening the PR with exact command output:
+Focused validation observed on the PR2 branch:
 
-- durable unit tests;
-- gateway durable/context-ref tests;
-- shared state upgrade/schema tests;
-- `node scripts/generate-kysely-types.mjs --verify`;
-- `node scripts/check-kysely-guardrails.mjs`;
-- `npm run tsgo:core`;
-- `npm run tsgo:core:test`;
-- `npm run build`;
-- `git diff --check`;
-- isolated enabled-runtime proof for timeline/projection/recovery;
-- disabled-runtime proof that read paths do not create durable state.
+- `node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/durable`
+  - 14 files, 53 tests passed.
+- `node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server-methods/durable.test.ts`
+  - 2 files, 4 tests passed.
+- `node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/state/openclaw-state-db.test.ts src/state/openclaw-agent-db.test.ts src/durable/sqlite-store.test.ts src/durable/recovery.test.ts`
+  - 4 files, 47 tests passed, 2 skipped.
+- `node scripts/generate-kysely-types.mjs --verify`
+  - passed.
+- `node scripts/check-kysely-guardrails.mjs`
+  - passed with `Kysely guardrails OK`.
+- `git diff --check`
+  - passed.
+
+Full stack typecheck proof is recorded on the stacked PR3 branch, which includes
+this PR2 foundation plus agent/session wiring.
 
 ## Known Follow-Ups
 
