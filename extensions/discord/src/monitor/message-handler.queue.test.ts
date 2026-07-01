@@ -1,6 +1,10 @@
 // Discord tests cover message handler.queue plugin behavior.
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DiscordRetryableInboundError } from "./inbound-dedupe.js";
 import {
   createDiscordMessageHandler,
@@ -11,6 +15,32 @@ import {
   createDiscordHandlerParams,
   createDiscordPreflightContext,
 } from "./message-handler.test-helpers.js";
+
+// Inbound replay dedupe is now persistent (SQLite). These tests reuse fixed
+// message ids across cases, so give each test a fresh state dir; otherwise a
+// committed id from one test would dedupe (drop) the same id in the next.
+const dedupeTempDirs: string[] = [];
+let previousDedupeStateDir: string | undefined;
+
+beforeEach(() => {
+  previousDedupeStateDir = process.env.OPENCLAW_STATE_DIR;
+  const dir = mkdtempSync(path.join(tmpdir(), "openclaw-discord-queue-state-"));
+  dedupeTempDirs.push(dir);
+  process.env.OPENCLAW_STATE_DIR = dir;
+  resetPluginStateStoreForTests({ closeDatabase: false });
+});
+
+afterEach(() => {
+  resetPluginStateStoreForTests();
+  if (previousDedupeStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = previousDedupeStateDir;
+  }
+  for (const dir of dedupeTempDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 type SetStatusFn = (patch: Record<string, unknown>) => void;
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
