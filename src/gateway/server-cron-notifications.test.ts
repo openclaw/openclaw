@@ -5,7 +5,7 @@ import type { CliDeps } from "../cli/deps.types.js";
 import type { CronJob } from "../cron/types.js";
 
 const mocks = vi.hoisted(() => ({
-  fetchWithSsrFGuard: vi.fn(async () => ({ release: vi.fn() })),
+  fetchWithSsrFGuard: vi.fn<(...args: any[]) => any>(async () => ({ release: vi.fn() })),
   sendFailureNotificationAnnounce: vi.fn(),
 }));
 

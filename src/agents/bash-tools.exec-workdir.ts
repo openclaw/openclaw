@@ -7,6 +7,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ExecHost } from "../infra/exec-approvals.js";
+import { expandHomePrefix, resolveRequiredOsHomeDir } from "../infra/home-dir.js";
 import { safeStatSync } from "../infra/path-guards.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
@@ -328,7 +329,7 @@ async function resolveSandboxWorkdir(params: {
 export function formatUnavailableWorkdirFailure(workdir: string): string {
   return [
     `workdir "${workdir}" is unavailable or not a directory: command was not executed.`,
-    'workdir is treated as a literal path; shell expansions such as "~" are not applied.',
+    'Leading "~" is expanded to the home directory for local execution.',
     "Use an existing directory, omit an explicit workdir to use the default cwd, or update the configured default cwd.",
   ].join(" ");
 }
@@ -376,6 +377,9 @@ export async function resolveExecWorkdir(params: {
   if (!requestedCwd) {
     return unavailable("current working directory");
   }
-  const resolved = resolveExistingHostWorkdir(requestedCwd);
-  return resolved ? { kind: "local", hostCwd: resolved } : unavailable(requestedCwd);
+  // Expand leading ~ only for local (gateway) execution.
+  const hostCwd = resolveExistingHostWorkdir(
+    expandHomePrefix(requestedCwd, { home: resolveRequiredOsHomeDir() }),
+  );
+  return hostCwd ? { kind: "local", hostCwd } : unavailable(requestedCwd);
 }
