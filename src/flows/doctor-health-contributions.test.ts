@@ -1044,6 +1044,101 @@ describe("doctor health contributions", () => {
     });
   });
 
+  it("renders default-account-routing findings in gateway-services repair mode", async () => {
+    // default-account-routing is a detection-only check: it reports through
+    // `findings`, so repair mode must render findings or the warning is dropped.
+    mocks.runDoctorHealthRepairs.mockResolvedValue({
+      config: { gateway: { mode: "local" } },
+      findings: [
+        {
+          checkId: "core/doctor/default-account-routing",
+          severity: "warning",
+          message: "telegram has multiple accounts but no explicit default",
+          path: "openclaw.json",
+          line: 7,
+        },
+      ],
+      remainingFindings: [],
+      changes: [],
+      warnings: [],
+      diffs: [],
+      effects: [],
+      checksRun: 1,
+      checksRepaired: 0,
+      checksValidated: 1,
+    });
+
+    const contribution = requireDoctorContribution("doctor:gateway-services");
+    const ctx = {
+      cfg: { gateway: { mode: "local" } },
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      configPath: "/tmp/fake-openclaw.json",
+    } as unknown as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(mocks.runDoctorHealthRepairs).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "fix" }),
+      expect.objectContaining({
+        checks: expect.arrayContaining([
+          expect.objectContaining({ id: "core/doctor/default-account-routing" }),
+        ]),
+      }),
+    );
+    // The finding text must reach output; asserting the call alone would pass
+    // even when repair mode silently dropped the warning (the original defect).
+    expect(ctx.runtime.log).toHaveBeenCalledWith(
+      "[warning] core/doctor/default-account-routing openclaw.json:7 - telegram has multiple accounts but no explicit default",
+    );
+  });
+
+  it("does not re-render a repairable check's pre-repair findings in fix mode", async () => {
+    // browser-clawd-profile-residue owns a repair: after --fix archives the
+    // residue, its detected finding stays in `result.findings` but must not be
+    // re-printed as a fresh warning (the repair outcome is reported via changes).
+    mocks.runDoctorHealthRepairs.mockResolvedValue({
+      config: {},
+      findings: [
+        {
+          checkId: "core/doctor/browser-clawd-profile-residue",
+          severity: "warning",
+          message: "Legacy managed browser profile residue was found.",
+          path: "/tmp/legacy-profile",
+        },
+      ],
+      remainingFindings: [],
+      changes: ["Would archive legacy clawd managed browser profile residue."],
+      warnings: [],
+      diffs: [],
+      effects: [],
+      checksRun: 1,
+      checksRepaired: 1,
+      checksValidated: 1,
+    });
+
+    const contribution = requireDoctorContribution("doctor:browser");
+    const ctx = {
+      cfg: {},
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      configPath: "/tmp/fake-openclaw.json",
+    } as unknown as Parameters<(typeof contribution)["run"]>[0];
+
+    await contribution.run(ctx);
+
+    expect(ctx.runtime.log).not.toHaveBeenCalledWith(
+      expect.stringContaining("browser-clawd-profile-residue"),
+    );
+    expect(ctx.runtime.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("browser-clawd-profile-residue"),
+    );
+  });
+
   it("skips Gateway health probes for exec SecretRefs unless allow-exec is set", async () => {
     const contribution = requireDoctorContribution("doctor:gateway-health");
     mocks.gatewaySecretInputPathCanWin.mockImplementation(

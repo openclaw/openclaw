@@ -504,6 +504,15 @@ async function runCoreContributionHealthRepair(
     { checks },
   );
   ctx.cfg = result.config;
+  // Detection-only checks (no repair, e.g. default-account-routing) report through
+  // `findings`; surface those so `doctor --fix` keeps printing the warning the
+  // direct doctor-config-flow path used to. Repairable checks (browser-clawd
+  // residue) report via `changes`/`warnings`, and their pre-repair `findings`
+  // linger after a successful fix — rendering those would warn about something
+  // `--fix` just repaired, so skip findings whenever the batch can repair.
+  if (checks.every((check) => check.repair === undefined)) {
+    renderStructuredHealthFindings(ctx, result.findings);
+  }
   if (result.changes.length > 0) {
     note(result.changes.join("\n"), "Doctor changes");
   }
@@ -694,6 +703,7 @@ async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<v
     noteMacLaunchctlGatewayEnvOverrides,
     noteMacStaleOpenClawUpdateLaunchdJobs,
   } = await import("../commands/doctor-platform-notes.js");
+  await runCoreContributionHealthRepair(ctx, ["core/doctor/default-account-routing"]);
   await maybeScanExtraGatewayServices(ctx.options, ctx.runtime, ctx.prompter);
   await maybeRepairGatewayServiceConfig(
     ctx.cfg,
@@ -1630,6 +1640,7 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:gateway-services",
       label: "Gateway services",
       healthCheckIds: [
+        "core/doctor/default-account-routing",
         "core/doctor/gateway-services/extra",
         "core/doctor/gateway-services/platform-notes",
       ],
