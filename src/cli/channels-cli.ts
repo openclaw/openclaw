@@ -6,7 +6,7 @@ import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
-import { runChannelLogin, runChannelLogout } from "./channel-auth.js";
+import { runChannelLogin, runChannelLogout, runChannelRuntimeCommand } from "./channel-auth.js";
 import { formatCliChannelOptions } from "./channel-options.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { hasExplicitOptions } from "./command-options.js";
@@ -111,6 +111,7 @@ export async function registerChannelsCli(
             "Add or update a channel account non-interactively.",
           ],
           ["openclaw channels login --channel whatsapp", "Link a WhatsApp Web account."],
+          ["openclaw channels restart --channel whatsapp", "Restart a linked channel listener."],
         ])}\n\n${theme.muted("Docs:")} ${formatDocsLink(
           "/cli/channels",
           "docs.openclaw.ai/cli/channels",
@@ -251,6 +252,60 @@ export async function registerChannelsCli(
         const hasFlags = hasExplicitOptions(command, optionNamesRemove);
         await channelsRemoveCommand(opts, defaultRuntime, { hasFlags });
       });
+    });
+
+  channels
+    .command("start")
+    .description("Start a linked channel listener without relinking")
+    .option("--channel <channel>", "Channel alias (auto when only one is configured)")
+    .option("--account <id>", "Account id (accountId)")
+    .action(async (opts) => {
+      await runChannelsCommandWithDanger(async () => {
+        await runChannelRuntimeCommand(
+          {
+            channel: opts.channel as string | undefined,
+            account: opts.account as string | undefined,
+          },
+          "start",
+          defaultRuntime,
+        );
+      }, "Channel start failed");
+    });
+
+  channels
+    .command("stop")
+    .description("Stop a linked channel listener without clearing auth")
+    .option("--channel <channel>", "Channel alias (auto when only one is configured)")
+    .option("--account <id>", "Account id (accountId)")
+    .action(async (opts) => {
+      await runChannelsCommandWithDanger(async () => {
+        await runChannelRuntimeCommand(
+          {
+            channel: opts.channel as string | undefined,
+            account: opts.account as string | undefined,
+          },
+          "stop",
+          defaultRuntime,
+        );
+      }, "Channel stop failed");
+    });
+
+  channels
+    .command("restart")
+    .description("Restart a linked channel listener without relinking")
+    .option("--channel <channel>", "Channel alias (auto when only one is configured)")
+    .option("--account <id>", "Account id (accountId)")
+    .action(async (opts) => {
+      await runChannelsCommandWithDanger(async () => {
+        await runChannelRuntimeCommand(
+          {
+            channel: opts.channel as string | undefined,
+            account: opts.account as string | undefined,
+          },
+          "restart",
+          defaultRuntime,
+        );
+      }, "Channel restart failed");
     });
 
   channels
