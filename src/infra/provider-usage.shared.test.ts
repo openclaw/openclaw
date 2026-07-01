@@ -28,7 +28,10 @@ describe("provider-usage.shared", () => {
   it("maps canonical OpenAI subscription profiles to Codex usage windows", () => {
     expect(resolveUsageProviderId("openai", { credentialType: "oauth" })).toBe("openai");
     expect(resolveUsageProviderId("openai", { credentialType: "token" })).toBe("openai");
+    expect(resolveUsageProviderId("openai-codex", { credentialType: "oauth" })).toBe("openai");
+    expect(resolveUsageProviderId("openai-codex", { credentialType: "token" })).toBe("openai");
     expect(resolveUsageProviderId("openai", { credentialType: "api_key" })).toBeUndefined();
+    expect(resolveUsageProviderId("openai-codex", { credentialType: "api_key" })).toBeUndefined();
   });
 
   it.each([
