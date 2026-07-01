@@ -119,15 +119,16 @@ export function resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(
 /** Resolves the long terminal turn idle timeout. */
 export function resolveCodexTurnTerminalIdleTimeoutMs(
   value: number | undefined,
-  effectiveRunTimeoutMs?: number,
+  runTimeoutOverrideMs?: number,
 ): number {
   // The terminal watchdog is wrapper-owned; Codex turn options do not carry a
-  // timeout budget. Follow the effective run budget without shortening the floor.
-  const effectiveRunBudgetMs = resolvePositiveIntegerTimeoutMs(
-    effectiveRunTimeoutMs,
+  // timeout budget. Follow explicit per-run intent without replacing the floor
+  // with the implicit 48-hour agent default.
+  const explicitRunBudgetMs = resolvePositiveIntegerTimeoutMs(
+    runTimeoutOverrideMs,
     CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
   );
-  const defaultMs = Math.max(CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS, effectiveRunBudgetMs);
+  const defaultMs = Math.max(CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS, explicitRunBudgetMs);
   return resolvePositiveIntegerTimeoutMs(value, defaultMs);
 }
 

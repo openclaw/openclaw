@@ -122,6 +122,42 @@ describe("createCodexAttemptTurnWatchController", () => {
 });
 
 describe("runCodexAppServerAttempt turn watches", () => {
+  it.each([
+    {
+      name: "keeps the 30-minute floor for the implicit 48-hour run timeout",
+      runTimeoutOverrideMs: undefined,
+      expectedTerminalIdleTimeoutMs: 30 * 60_000,
+    },
+    {
+      name: "follows an explicit 45-minute run timeout",
+      runTimeoutOverrideMs: 45 * 60_000,
+      expectedTerminalIdleTimeoutMs: 45 * 60_000,
+    },
+  ])("$name", async ({ runTimeoutOverrideMs, expectedTerminalIdleTimeoutMs }) => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 48 * 60 * 60_000;
+    params.runTimeoutOverrideMs = runTimeoutOverrideMs;
+    const run = runCodexAppServerAttempt(params);
+
+    await harness.waitForMethod("turn/start");
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), expectedTerminalIdleTimeoutMs);
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed", items: [] },
+      },
+    });
+
+    await expect(run).resolves.toMatchObject({ aborted: false, timedOut: false });
+  });
+
   it("releases the session when Codex never completes after a dynamic tool response", async () => {
     let handleRequest:
       | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
