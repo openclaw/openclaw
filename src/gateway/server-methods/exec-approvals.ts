@@ -129,12 +129,14 @@ async function respondWithExecApprovalsNodePayload<TParams extends { nodeId: str
       // isNodeCommandAllowed checks allowlist before declaredCommands, so
       // "command not allowlisted" can mean either the node genuinely lacks the
       // command in its effective surface, or the operator explicitly blocked it
-      // via gateway.nodes.denyCommands.  Check the node's declared commands to
-      // decide which remediation to show.
+      // via gateway.nodes.denyCommands.  Check the node's original declared
+      // commands to decide which remediation to show — declaredCommands holds
+      // what the node actually supports, while commands is the resolved set
+      // after allowlist/denyCommands filtering.
       const isPolicyDenial =
         allowed.reason === "command not allowlisted" &&
-        Array.isArray(nodeSession.commands) &&
-        nodeSession.commands.includes(params.command);
+        Array.isArray(nodeSession.declaredCommands) &&
+        nodeSession.declaredCommands.includes(params.command);
       const message = isPolicyDenial
         ? `Node ${nodeId} does not allow ${params.command}: blocked by gateway node command policy.`
         : `Node ${nodeId} does not support ${params.command}. ` +
