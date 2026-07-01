@@ -109,6 +109,7 @@ export function registerControlUiAndPairingSuite(): void {
       platform: string;
       mode: "node";
       deviceFamily: string;
+      modelIdentifier?: string;
     };
   }) => {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
@@ -264,6 +265,7 @@ export function registerControlUiAndPairingSuite(): void {
     clientMode: string;
     displayName: string;
     platform: string;
+    deviceFamily?: string;
     scopes?: string[];
   }): Promise<{ identityPath: string; identity: { deviceId: string } }> => {
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
@@ -281,6 +283,7 @@ export function registerControlUiAndPairingSuite(): void {
       clientMode: params.clientMode,
       displayName: params.displayName,
       platform: params.platform,
+      deviceFamily: params.deviceFamily,
     });
     await approveDevicePairing(seeded.request.requestId, {
       callerScopes: ["operator.admin"],
@@ -1008,6 +1011,59 @@ export function registerControlUiAndPairingSuite(): void {
     restoreGatewayToken(prevToken);
   });
 
+  test("requires approval when an Even Hub node id reconnects as UI for metadata upgrade", async () => {
+    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
+    const evenHubNodeClient = {
+      id: "openclaw-even-g2-node",
+      version: "2026.6.2",
+      platform: "even-hub",
+      mode: GATEWAY_CLIENT_MODES.NODE,
+      deviceFamily: "glasses",
+    };
+    const { identity, identityPath } = await seedApprovedOperatorReadPairing({
+      identityPrefix: "openclaw-even-hub-ui-metadata-",
+      clientId: evenHubNodeClient.id,
+      clientMode: evenHubNodeClient.mode,
+      displayName: "even-hub-node",
+      platform: evenHubNodeClient.platform,
+      deviceFamily: evenHubNodeClient.deviceFamily,
+    });
+
+    const { server, port, prevToken } = await startControlUiServer("secret");
+    let ws: WebSocket | undefined;
+    try {
+      ws = await openWs(port);
+      const result = await connectReq(ws, {
+        token: "secret",
+        scopes: ["operator.read"],
+        client: {
+          ...evenHubNodeClient,
+          platform: "even-hub beta",
+          mode: GATEWAY_CLIENT_MODES.UI,
+        },
+        deviceIdentityPath: identityPath,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.error?.message ?? "").toContain("pairing required");
+      expect((result.error?.details as { reason?: string } | undefined)?.reason).toBe(
+        "metadata-upgrade",
+      );
+
+      const pending = (await listDevicePairing()).pending.filter(
+        (entry) => entry.deviceId === identity.deviceId,
+      );
+      expect(pending).toHaveLength(1);
+      const paired = await getPairedDevice(identity.deviceId);
+      expect(paired?.platform).toBe(evenHubNodeClient.platform);
+      expect(paired?.deviceFamily).toBe(evenHubNodeClient.deviceFamily);
+    } finally {
+      ws?.close();
+      await server.close();
+      restoreGatewayToken(prevToken);
+    }
+  });
+
   test("returns pairing-required for malformed persisted access lists", async () => {
     const { identity, identityPath } = await seedApprovedOperatorReadPairing({
       identityPrefix: "openclaw-device-malformed-access-",
@@ -1314,6 +1370,17 @@ export function registerControlUiAndPairingSuite(): void {
 
   test.each([
     {
+      name: "Even Hub glasses",
+      identityPrefix: "openclaw-bootstrap-even-hub-glasses-node-",
+      client: {
+        id: "openclaw-even-g2-node",
+        version: "2026.6.2",
+        platform: "even-hub",
+        mode: "node" as const,
+        deviceFamily: "glasses",
+      },
+    },
+    {
       name: "Android",
       identityPrefix: "openclaw-bootstrap-android-node-",
       client: {
@@ -1336,7 +1403,7 @@ export function registerControlUiAndPairingSuite(): void {
       },
     },
   ])(
-    "qr setup code auto-approves $name clients when mobile metadata matches",
+    "qr setup code auto-approves $name clients when native metadata matches",
     async ({ client, identityPrefix }) => {
       const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
       const { identity, initial } = await connectSetupCodeBootstrapNode({
@@ -1389,8 +1456,8 @@ export function registerControlUiAndPairingSuite(): void {
 
   test.each([
     {
-      name: "mobile client id with mismatched platform metadata",
-      identityPrefix: "openclaw-bootstrap-mobile-spoof-",
+      name: "native client id with mismatched platform metadata",
+      identityPrefix: "openclaw-bootstrap-native-spoof-",
       client: {
         id: "openclaw-android",
         version: "2026.6.2",
@@ -1400,7 +1467,7 @@ export function registerControlUiAndPairingSuite(): void {
       },
     },
     {
-      name: "valid non-mobile client id with mobile metadata",
+      name: "valid non-native client id with native metadata",
       identityPrefix: "openclaw-bootstrap-node-host-spoof-",
       client: {
         id: "node-host",
@@ -1408,6 +1475,18 @@ export function registerControlUiAndPairingSuite(): void {
         platform: "Android 16",
         mode: "node" as const,
         deviceFamily: "Android",
+      },
+    },
+    {
+      name: "Even G2 node id with mismatched runtime metadata",
+      identityPrefix: "openclaw-bootstrap-even-hub-spoof-",
+      client: {
+        id: "openclaw-even-g2-node",
+        version: "2026.6.2",
+        platform: "even-hub",
+        mode: "node" as const,
+        deviceFamily: "watch",
+        modelIdentifier: "Even G2",
       },
     },
   ])(
