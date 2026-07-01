@@ -1259,15 +1259,17 @@ describe("shouldRecoverAnthropicThinkingError — broadened candidate set", () =
     // the actionable Anthropic detail is stored on .errorBody as a JSON
     // string. Without the broadened candidate set, the recovery detector
     // returns false and the session gets bricked.
-    const err = new Error(
-      "LLM request failed: provider rejected the request schema or tool payload.",
-    );
-    err.errorBody = JSON.stringify({
-      error: {
-        message: "messages.12.content.3: Invalid `signature` in `thinking` block",
-        type: "invalid_request_error",
+    const err = Object.assign(
+      new Error("LLM request failed: provider rejected the request schema or tool payload."),
+      {
+        errorBody: JSON.stringify({
+          error: {
+            message: "messages.12.content.3: Invalid `signature` in `thinking` block",
+            type: "invalid_request_error",
+          },
+        }),
       },
-    });
+    );
     expect(shouldRecoverAnthropicThinkingError(err, sessionMeta)).toBe(true);
   });
 
@@ -1275,28 +1277,32 @@ describe("shouldRecoverAnthropicThinkingError — broadened candidate set", () =
     // Generic SDK wrappers sometimes surface the provider response as a
     // parsed object rather than a JSON string. The detector must serialize
     // the object and pattern-match the serialized form.
-    const err = new Error("LLM request failed.");
-    err.data = {
-      error: { message: "Invalid signature on thinking block" },
-    };
+    const err = Object.assign(new Error("LLM request failed."), {
+      data: {
+        error: { message: "Invalid signature on thinking block" },
+      },
+    });
     expect(shouldRecoverAnthropicThinkingError(err, sessionMeta)).toBe(true);
   });
 
   it("does NOT recover for a rate-limit error (negative)", () => {
-    const err = new Error("rate_limit_error: too many requests");
-    err.errorBody = JSON.stringify({ error: { message: "rate_limit_error: too many requests" } });
+    const err = Object.assign(new Error("rate_limit_error: too many requests"), {
+      errorBody: JSON.stringify({ error: { message: "rate_limit_error: too many requests" } }),
+    });
     expect(shouldRecoverAnthropicThinkingError(err, sessionMeta)).toBe(false);
   });
 
   it("does NOT recover for a context-overflow error (negative)", () => {
-    const err = new Error("context length exceeded");
-    err.errorBody = JSON.stringify({ error: { message: "context length exceeded" } });
+    const err = Object.assign(new Error("context length exceeded"), {
+      errorBody: JSON.stringify({ error: { message: "context length exceeded" } }),
+    });
     expect(shouldRecoverAnthropicThinkingError(err, sessionMeta)).toBe(false);
   });
 
   it("does NOT recover for an auth error (negative)", () => {
-    const err = new Error("invalid api key");
-    err.errorBody = JSON.stringify({ error: { message: "invalid api key" } });
+    const err = Object.assign(new Error("invalid api key"), {
+      errorBody: JSON.stringify({ error: { message: "invalid api key" } }),
+    });
     expect(shouldRecoverAnthropicThinkingError(err, sessionMeta)).toBe(false);
   });
 
@@ -1304,16 +1310,17 @@ describe("shouldRecoverAnthropicThinkingError — broadened candidate set", () =
     // Generic .message with empty .errorBody — must NOT trigger, since
     // this is the failure shape that the broadened candidate set could
     // accidentally over-match if pattern was too loose.
-    const err = new Error(
-      "LLM request failed: provider rejected the request schema or tool payload.",
+    const err = Object.assign(
+      new Error("LLM request failed: provider rejected the request schema or tool payload."),
+      { errorBody: "" },
     );
-    err.errorBody = "";
     expect(shouldRecoverAnthropicThinkingError(err, sessionMeta)).toBe(false);
   });
 
   it("does NOT recover for an unrelated use of the word 'invalid' (negative)", () => {
-    const err = new Error("LLM request failed: invalid model name");
-    err.errorBody = JSON.stringify({ error: { message: "invalid model name 'foo-bar'" } });
+    const err = Object.assign(new Error("LLM request failed: invalid model name"), {
+      errorBody: JSON.stringify({ error: { message: "invalid model name 'foo-bar'" } }),
+    });
     expect(shouldRecoverAnthropicThinkingError(err, sessionMeta)).toBe(false);
   });
 
@@ -1334,12 +1341,14 @@ describe("shouldRecoverAnthropicThinkingError — broadened candidate set", () =
     // null from safeJsonStringifyForPattern and never reaches the pattern
     // matcher.
     const huge = "thinking or redacted_thinking blocks ".repeat(1500); // ~52 KiB
-    const err = new Error(
-      "LLM request failed: provider rejected the request schema or tool payload.",
+    const err = Object.assign(
+      new Error("LLM request failed: provider rejected the request schema or tool payload."),
+      {
+        errorBody: JSON.stringify({
+          error: { message: huge },
+        }),
+      },
     );
-    err.errorBody = JSON.stringify({
-      error: { message: huge },
-    });
     expect(shouldRecoverAnthropicThinkingError(err, sessionMeta)).toBe(false);
   });
 
