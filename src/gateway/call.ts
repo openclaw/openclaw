@@ -1153,9 +1153,15 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
   const token = useStoredDeviceAuth ? undefined : resolvedCredentials.token;
   const password = useStoredDeviceAuth ? undefined : resolvedCredentials.password;
+  // auth mode "none" satisfies the local-backend shared-auth requirement without
+  // token / password credentials.  It also triggers device-identity omission so
+  // the server-side device-less self-pairing bypass (shouldSkipLocalBackendSelfPairing)
+  // preserves requested scopes — pairing the two concerns keeps the auth-none
+  // path safe.
   const allowAuthNone =
     opts.requireLocalBackendSharedAuth === true &&
     resolveGatewayCallAuth(context.config).mode === "none";
+  const hasLocalBackendSharedAuth = Boolean(token || password) || allowAuthNone;
   const omitDeviceIdentity = shouldOmitDeviceIdentityForGatewayCall({
     opts,
     url,
@@ -1163,7 +1169,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     password,
     allowAuthNone,
   });
-  if (opts.requireLocalBackendSharedAuth && !omitDeviceIdentity) {
+  if (opts.requireLocalBackendSharedAuth && !hasLocalBackendSharedAuth) {
     throw new GatewayLocalBackendSharedAuthUnavailableError(
       "local backend shared auth requires a loopback gateway with token/password credentials or auth mode none",
     );
