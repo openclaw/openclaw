@@ -470,6 +470,17 @@ function normalizeModelStringPathForWrite(config: unknown, path: string[]): unkn
   return normalized !== value ? setPathValue(config, path, normalized) : config;
 }
 
+function normalizeModelStringArrayPathForWrite(config: unknown, path: string[]): unknown {
+  const value = getPathValue(config, path);
+  if (!Array.isArray(value)) {
+    return config;
+  }
+  const normalized = value.map((entry) =>
+    typeof entry === "string" ? normalizeAgentModelRefForConfig(entry) : entry,
+  );
+  return isDeepStrictEqual(normalized, value) ? config : setPathValue(config, path, normalized);
+}
+
 function normalizeAgentModelRefsAtPathForWrite(config: unknown, path: string[]): unknown {
   const agent = getPathValue(config, path);
   if (!isRecord(agent)) {
@@ -481,6 +492,7 @@ function normalizeAgentModelRefsAtPathForWrite(config: unknown, path: string[]):
     next = normalizeModelConfigPathForWrite(next, [...path, key]);
   }
   next = normalizeModelStringPathForWrite(next, [...path, "heartbeat", "model"]);
+  next = normalizeModelStringArrayPathForWrite(next, [...path, "heartbeat", "fallbacks"]);
   next = normalizeModelConfigPathForWrite(next, [...path, "subagents", "model"]);
   next = normalizeModelStringPathForWrite(next, [...path, "compaction", "model"]);
   next = normalizeModelStringPathForWrite(next, [...path, "compaction", "memoryFlush", "model"]);

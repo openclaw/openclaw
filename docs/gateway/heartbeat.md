@@ -226,6 +226,9 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 <ParamField path="model" type="string">
   Optional model override for heartbeat runs (`provider/model`).
 </ParamField>
+<ParamField path="fallbacks" type="string[]">
+  Optional heartbeat-specific fallback chain. Leave unset to use normal model fallback behavior; set `[]` to fail fast on the selected heartbeat model.
+</ParamField>
 <ParamField path="includeReasoning" type="boolean" default="false">
   When enabled, also deliver the separate `Thinking` message when available (same shape as `/reasoning on`).
 </ParamField>

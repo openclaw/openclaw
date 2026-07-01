@@ -12,6 +12,7 @@ import {
 const EXPECTED_HEARTBEAT_KEYS = [
   "every",
   "model",
+  "fallbacks",
   "prompt",
   "includeSystemPromptSection",
   "ackMaxChars",

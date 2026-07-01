@@ -1924,6 +1924,9 @@ export async function runHeartbeatOnce(opts: {
   try {
     await heartbeatTyping?.onReplyStart();
     const heartbeatModelOverride = normalizeOptionalString(heartbeat?.model);
+    const heartbeatFallbacksOverride = Array.isArray(heartbeat?.fallbacks)
+      ? heartbeat.fallbacks
+      : undefined;
     const suppressToolErrorWarnings = heartbeat?.suppressToolErrorWarnings === true;
     const timeoutOverrideSeconds = resolveHeartbeatTimeoutOverrideSeconds(cfg, heartbeat);
     const bootstrapContextMode: "lightweight" | undefined =
@@ -1934,6 +1937,7 @@ export async function runHeartbeatOnce(opts: {
       [HEARTBEAT_RUN_SCOPE]: runScope,
       [REPLY_OPERATION_RUN_STATE]: replyOperationRunState,
       ...(heartbeatModelOverride ? { heartbeatModelOverride } : {}),
+      ...(heartbeatFallbacksOverride !== undefined ? { heartbeatFallbacksOverride } : {}),
       suppressToolErrorWarnings,
       ...(usesHeartbeatResponseTool ? { enableHeartbeatTool: true, forceHeartbeatTool: true } : {}),
       ...(usesHeartbeatResponseTool

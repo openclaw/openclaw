@@ -63,6 +63,7 @@ The same `provider/model` can mean different things depending on where it came f
 - User session selections are exact. `/model`, the model picker, `session_status(model=...)`, and `sessions.patch` store `modelOverrideSource: "user"`; if that selected provider/model is unreachable, OpenClaw fails visibly instead of falling through to another configured model.
 - Changing `agents.defaults.model.primary` does not rewrite existing session selections. If status says `This session is pinned to X; config primary Y will apply to new/unpinned sessions.`, clear the current session selection with `/model default` so it inherits the configured primary again.
 - Cron `--model` / payload `model` is a per-job primary. It still uses configured fallbacks unless the job supplies explicit payload `fallbacks` (use `fallbacks: []` for a strict cron run).
+- Heartbeat `model` uses normal fallback behavior unless `heartbeat.fallbacks` is set. Use `heartbeat.fallbacks: []` for strict fail-fast heartbeat runs.
 - CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing explicit `models.providers.*.models` instead of loading the full built-in catalog.
 - The Control UI model picker asks the Gateway for its configured model view: `agents.defaults.models` when present, including provider-wide `provider/*` entries, otherwise explicit `models.providers.*.models` plus providers with usable auth. The full built-in catalog is reserved for explicit browse views such as `models.list` with `view: "all"` or `openclaw models list --all`.
 
@@ -85,6 +86,7 @@ It can set up model + auth for common providers, including **OpenAI Code (Codex)
 ## Config keys (overview)
 
 - `agents.defaults.model.primary` and `agents.defaults.model.fallbacks`
+- `agents.defaults.heartbeat.model` and `agents.defaults.heartbeat.fallbacks`
 - `agents.defaults.imageModel.primary` and `agents.defaults.imageModel.fallbacks`
 - `agents.defaults.pdfModel.primary` and `agents.defaults.pdfModel.fallbacks`
 - `agents.defaults.imageGenerationModel.primary` and `agents.defaults.imageGenerationModel.fallbacks`

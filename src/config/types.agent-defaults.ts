@@ -411,6 +411,8 @@ export type AgentDefaultsConfig = {
     };
     /** Heartbeat model override (provider/model). */
     model?: string;
+    /** Heartbeat model fallbacks (provider/model). Set [] for strict no-fallback heartbeats. */
+    fallbacks?: string[];
     /** Session key for heartbeat runs ("main" or explicit session key). */
     session?: string;
     /** Delivery target ("last", "none", or a channel id). */

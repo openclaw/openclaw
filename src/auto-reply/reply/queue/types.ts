@@ -120,6 +120,8 @@ export type FollowupRun = {
     skillsSnapshot?: SkillSnapshot;
     provider: string;
     model: string;
+    /** Per-run fallback override. An explicit empty array disables model fallback. */
+    modelFallbacksOverride?: string[];
     hasSessionModelOverride?: boolean;
     modelOverrideSource?: "auto" | "user";
     hasAutoFallbackProvenance?: boolean;
