@@ -271,15 +271,15 @@ export function nativeApprovalTargetsMatch(params: {
   });
 }
 
-/** Decide whether a channel-native exec approval route replaces the local text prompt. */
+/** Decide whether a channel-native approval route replaces the local text prompt. */
 export function shouldSuppressLocalNativeExecApprovalPrompt(params: {
   /** Full config containing top-level or channel-specific approval settings. */
   cfg: OpenClawConfig;
   /** Optional channel account id for account-scoped native delivery checks. */
   accountId?: string | null;
-  /** Reply payload that may already contain exec approval metadata. */
+  /** Reply payload that may already contain approval metadata. */
   payload: ReplyPayload;
-  /** Outbound payload hint proving an active native exec approval route. */
+  /** Outbound payload hint proving an active native approval route. */
   hint?: ChannelOutboundPayloadHint;
   /** Legacy transport gate for native delivery. */
   isTransportEnabled?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => boolean;
@@ -306,14 +306,14 @@ export function shouldSuppressLocalNativeExecApprovalPrompt(params: {
   /** Whether agent filters may fall back to the agent segment in sessionKey. */
   fallbackAgentIdFromSessionKey?: boolean;
 }): boolean {
-  if (params.hint?.kind !== "approval-pending" || params.hint.approvalKind !== "exec") {
+  if (params.hint?.kind !== "approval-pending") {
     return false;
   }
   if (params.hint.nativeRouteActive !== true) {
     return false;
   }
   const metadata = getExecApprovalReplyMetadata(params.payload);
-  if (!metadata || metadata.approvalKind !== "exec") {
+  if (!metadata || metadata.approvalKind !== params.hint.approvalKind) {
     return false;
   }
   const isDeliveryEnabled = params.isNativeDeliveryEnabled ?? params.isTransportEnabled;
@@ -325,7 +325,10 @@ export function shouldSuppressLocalNativeExecApprovalPrompt(params: {
       cfg: params.cfg,
       accountId: params.accountId,
       metadata,
-    }) ?? params.cfg.approvals?.exec;
+    }) ??
+    (metadata.approvalKind === "plugin"
+      ? params.cfg.approvals?.plugin
+      : params.cfg.approvals?.exec);
   const requireConfigEnabled =
     params.requireApprovalConfigEnabled ?? params.resolveApprovalConfig === undefined;
   if (requireConfigEnabled && !config?.enabled) {

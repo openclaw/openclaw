@@ -590,6 +590,23 @@ describe("shouldSuppressLocalNativeExecApprovalPrompt", () => {
     approvalKind: "exec",
     nativeRouteActive: true,
   } as const;
+  const pluginPayload = {
+    text: "Approval required.",
+    channelData: {
+      execApproval: {
+        approvalId: "plugin:12345678-1234-1234-1234-123456789012",
+        approvalSlug: "plugin:12345678",
+        approvalKind: "plugin",
+        agentId: "main",
+        sessionKey: "agent:main:discord:direct:123",
+      },
+    },
+  };
+  const activePluginHint = {
+    kind: "approval-pending",
+    approvalKind: "plugin",
+    nativeRouteActive: true,
+  } as const;
 
   it("supports strict top-level native exec suppression", () => {
     expect(
@@ -653,6 +670,56 @@ describe("shouldSuppressLocalNativeExecApprovalPrompt", () => {
         }),
         enforceForwardingMode: false,
         fallbackAgentIdFromSessionKey: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("supports strict top-level native plugin suppression", () => {
+    expect(
+      shouldSuppressLocalNativeExecApprovalPrompt({
+        cfg: {
+          approvals: {
+            plugin: {
+              enabled: true,
+              agentFilter: ["main"],
+            },
+          },
+        },
+        payload: pluginPayload,
+        hint: activePluginHint,
+        isTransportEnabled: () => true,
+      }),
+    ).toBe(true);
+
+    expect(
+      shouldSuppressLocalNativeExecApprovalPrompt({
+        cfg: {
+          approvals: {
+            exec: {
+              enabled: true,
+              agentFilter: ["main"],
+            },
+          },
+        },
+        payload: pluginPayload,
+        hint: activePluginHint,
+        isTransportEnabled: () => true,
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldSuppressLocalNativeExecApprovalPrompt({
+        cfg: {
+          approvals: {
+            plugin: {
+              enabled: true,
+              agentFilter: ["main"],
+            },
+          },
+        },
+        payload: pluginPayload,
+        hint: activeExecHint,
+        isTransportEnabled: () => true,
       }),
     ).toBe(false);
   });
