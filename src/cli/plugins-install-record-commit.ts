@@ -350,12 +350,16 @@ export async function commitPluginInstallRecordsWithConfig(params: {
 export async function commitPluginInstallRecordsOnly(params: {
   previousInstallRecords?: Record<string, PluginInstallRecord>;
   nextInstallRecords: Record<string, PluginInstallRecord>;
+  verifyConfigFresh?: () => Promise<void>;
 }): Promise<void> {
   await commitPluginInstallRecordsWithWriter({
     previousInstallRecords: params.previousInstallRecords,
     nextInstallRecords: params.nextInstallRecords,
     nextConfig: {},
-    commit: async () => undefined,
+    commit: async () => {
+      await params.verifyConfigFresh?.();
+      return undefined;
+    },
   });
 }
 
