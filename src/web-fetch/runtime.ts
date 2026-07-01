@@ -36,6 +36,15 @@ type ResolveWebFetchDefinitionParams = {
   providerId?: string;
   preferRuntimeProviders?: boolean;
 };
+type WebFetchDefinitionResolution = {
+  provider: PluginWebFetchProviderEntry;
+  definition: WebFetchProviderToolDefinition;
+} | null;
+
+let webFetchDefinitionCache = new WeakMap<
+  OpenClawConfig,
+  Map<string, WebFetchDefinitionResolution>
+>();
 
 /** Resolves whether web_fetch is enabled for the current config/sandbox. */
 function resolveWebFetchEnabled(params: { fetch?: WebFetchConfig; sandboxed?: boolean }): boolean {
@@ -181,10 +190,60 @@ function resolveConfiguredWebFetchProviderId(params: {
   return params.providers.find((provider) => provider.id === raw)?.id;
 }
 
+function resolveWebFetchDefinitionCacheKey(
+  options: ResolveWebFetchDefinitionParams | undefined,
+): string {
+  const runtimeWebFetch = options?.runtimeWebFetch;
+  return JSON.stringify([
+    options?.sandboxed === true,
+    options?.preferRuntimeProviders === true,
+    options?.providerId ?? "",
+    runtimeWebFetch?.providerConfigured ?? "",
+    runtimeWebFetch?.providerSource ?? "",
+    runtimeWebFetch?.selectedProvider ?? "",
+    runtimeWebFetch?.selectedProviderKeySource ?? "",
+  ]);
+}
+
+function resolveCachedWebFetchDefinition(params: {
+  cacheKey: string;
+  config: OpenClawConfig;
+  load: () => WebFetchDefinitionResolution;
+}): WebFetchDefinitionResolution {
+  let configCache = webFetchDefinitionCache.get(params.config);
+  if (!configCache) {
+    configCache = new Map();
+    webFetchDefinitionCache.set(params.config, configCache);
+  }
+  if (configCache.has(params.cacheKey)) {
+    return configCache.get(params.cacheKey) ?? null;
+  }
+  const loaded = params.load();
+  configCache.set(params.cacheKey, loaded);
+  return loaded;
+}
+
+export function clearWebFetchRuntimeCachesForTest(): void {
+  webFetchDefinitionCache = new WeakMap();
+}
+
 /** Resolves the executable web_fetch provider tool definition. */
 export function resolveWebFetchDefinition(
   options?: ResolveWebFetchDefinitionParams,
-): { provider: PluginWebFetchProviderEntry; definition: WebFetchProviderToolDefinition } | null {
+): WebFetchDefinitionResolution {
+  if (options?.config) {
+    return resolveCachedWebFetchDefinition({
+      config: options.config,
+      cacheKey: resolveWebFetchDefinitionCacheKey(options),
+      load: () => resolveWebFetchDefinitionUncached(options),
+    });
+  }
+  return resolveWebFetchDefinitionUncached(options);
+}
+
+function resolveWebFetchDefinitionUncached(
+  options?: ResolveWebFetchDefinitionParams,
+): WebFetchDefinitionResolution {
   const fetch = resolveWebProviderConfig(options?.config, "fetch") as
     | NonNullable<WebFetchConfig>
     | undefined;
