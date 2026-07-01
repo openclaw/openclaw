@@ -1782,7 +1782,7 @@ internal fun gatewaySummary(
   return when {
     status.contains("connecting") || status.contains("reconnecting") -> "Connecting..."
     status.contains("pairing") -> "Waiting for pairing"
-    status.contains("auth") -> gatewayAuthNeededSummary(gatewayConnectionProblem)
+    status.contains("auth") || status.contains("device identity") -> gatewayAuthNeededSummary(gatewayConnectionProblem)
     status.contains("fingerprint verification timed out") -> "TLS timed out"
     status.contains("no tls endpoint") -> "No TLS endpoint"
     status.contains("certificate") || status.contains("tls") -> "Certificate review needed"

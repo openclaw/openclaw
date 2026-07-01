@@ -522,6 +522,29 @@ class ShellScreenLogicTest {
   }
 
   @Test
+  fun gatewaySummaryMatchesRealGatewayDeviceIdentityFailureText() {
+    // Device-identity handshake rejections (message-handler.ts) say "device identity
+    // required" / "control ui requires device identity...", which do not contain "auth" —
+    // the status gate needs a second substring for these two codes to be reachable.
+    assertEquals(
+      "Device identity required",
+      gatewaySummary(
+        "Gateway error: device identity required",
+        isConnected = false,
+        gatewayConnectionProblem = authProblem("DEVICE_IDENTITY_REQUIRED"),
+      ),
+    )
+    assertEquals(
+      "Device identity required",
+      gatewaySummary(
+        "Gateway error: control ui requires device identity (use https or localhost secure context)",
+        isConnected = false,
+        gatewayConnectionProblem = authProblem("CONTROL_UI_DEVICE_IDENTITY_REQUIRED"),
+      ),
+    )
+  }
+
+  @Test
   fun gatewaySummaryFallsBackToGenericAuthLabelWithoutAKnownReason() {
     assertEquals("Authentication needed", gatewaySummary("auth failed", isConnected = false, gatewayConnectionProblem = null))
     assertEquals("Authentication needed", gatewaySummary("auth failed", isConnected = false, gatewayConnectionProblem = authProblem("SOME_UNMAPPED_CODE")))
