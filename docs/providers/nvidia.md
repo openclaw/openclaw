@@ -75,11 +75,6 @@ therefore appear in setup and model-selection surfaces without waiting for an
 OpenClaw release. When the live feed is available, the first returned model is
 the default option shown during NVIDIA setup.
 
-OpenClaw normalizes
-[`nvidia/nemotron-3-super-120b-a12b`](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b?nim=hosted)
-to its hosted 1,000,000-token context specification when the featured feed
-returns the older 262,144-token value.
-
 The fetch uses a fixed HTTPS host policy for `assets.ngc.nvidia.com`. If no
 NVIDIA API key is configured, or if that public catalog is unavailable or
 malformed, OpenClaw falls back to the bundled catalog and bundled default below.

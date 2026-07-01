@@ -28,7 +28,6 @@ function mockFeaturedCatalogResponse(payload: unknown, status = 200) {
   const release = vi.fn();
   ssrfRuntimeMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
     response: Response.json(payload, { status }),
-    finalUrl: NVIDIA_FEATURED_MODELS_URL,
     release,
   });
   return release;
@@ -99,11 +98,6 @@ describe("nvidia provider catalog", () => {
       maxTokens: 8192,
       compat: { requiresStringContent: true },
     });
-    expect(provider.models[1]).toMatchObject({
-      id: "nvidia/nemotron-3-super-120b-a12b",
-      contextWindow: 1_000_000,
-      maxTokens: 8192,
-    });
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
       auditContext: "nvidia-featured-model-catalog",
       init: { headers: expect.any(Headers) },
@@ -115,26 +109,6 @@ describe("nvidia provider catalog", () => {
       requireHttps: true,
     });
     expect(release).toHaveBeenCalledOnce();
-  });
-
-  it("preserves non-stale Super context from NVIDIA's featured catalog", async () => {
-    mockFeaturedCatalogResponse({
-      "featured-models": [
-        {
-          model: "nemotron-3-super-120b-a12b",
-          "model-name": "Nemotron 3 Super 120B",
-          context: 524288,
-          "max-output": 8192,
-        },
-      ],
-    });
-
-    const provider = await buildLiveNvidiaProvider();
-
-    expect(provider.models[0]).toMatchObject({
-      id: "nvidia/nemotron-3-super-120b-a12b",
-      contextWindow: 524_288,
-    });
   });
 
   it("falls back to the bundled catalog when the featured catalog is unavailable", async () => {
