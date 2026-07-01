@@ -1,4 +1,3 @@
-// Tests channel-native Codex login command routing and pairing-code delivery.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelsAuthLoginFlowOptions } from "../../commands/models/auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

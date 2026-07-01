@@ -991,7 +991,6 @@ function maybeLogOpenAICodexNativeSearchTip(runtime: RuntimeEnv, providerId: str
   );
 }
 
-/** Runs interactive provider auth login and persists returned profiles. */
 export async function runModelsAuthLoginFlow(
   opts: ModelsAuthLoginFlowOptions,
 ): Promise<ModelsAuthLoginFlowResult> {
@@ -1099,7 +1098,6 @@ export async function runModelsAuthLoginFlow(
   };
 }
 
-/** Runs interactive provider auth login and persists returned profiles. */
 export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: RuntimeEnv) {
   if (!process.stdin.isTTY) {
     throw new Error(
