@@ -3,6 +3,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { killProcessTree } from "../shell-utils.js";
 import { waitForChildProcess } from "../utils/child-process.js";
 
 const DEFAULT_OUTPUT_LIMIT_CHARS = 16 * 1024 * 1024;
@@ -83,6 +84,9 @@ export async function execCommand(
       cwd,
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
+      // Spawn as a separate process group so killProcessTree can reach
+      // descendants that were forked by the direct child (e.g. wrappers).
+      ...(process.platform === "win32" ? {} : { detached: true }),
     });
 
     let stdout: OutputCapture = { text: "", truncatedChars: 0 };
@@ -136,10 +140,10 @@ export async function execCommand(
     const killProcess = () => {
       if (!killed) {
         killed = true;
-        proc.kill("SIGTERM");
+        if (proc.pid) killProcessTree(proc.pid);
         forceKillTimer = setTimeout(() => {
-          if (!settled) {
-            proc.kill("SIGKILL");
+          if (!settled && proc.pid) {
+            killProcessTree(proc.pid);
           }
         }, FORCE_KILL_GRACE_MS);
         forceKillTimer.unref?.();
