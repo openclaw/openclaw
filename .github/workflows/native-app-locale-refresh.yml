@@ -52,6 +52,7 @@ jobs:
             nl,
             fa,
             ru,
+            sv,
           ]
     runs-on: ubuntu-latest
     name: Refresh native ${{ matrix.locale }}

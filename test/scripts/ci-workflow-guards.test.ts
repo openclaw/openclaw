@@ -9,6 +9,7 @@ const CACHE_V5 = "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae
 const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
 const OPENGREP_FULL_WORKFLOW = ".github/workflows/opengrep-precise-full.yml";
+const NATIVE_APP_LOCALE_REFRESH_WORKFLOW = ".github/workflows/native-app-locale-refresh.yml";
 
 function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
@@ -116,6 +117,22 @@ describe("ci workflow guards", () => {
 
   it("pins every external GitHub Action reference to a full commit SHA", () => {
     expect(findUnpinnedExternalActions()).toEqual([]);
+  });
+
+  it("keeps native locale refreshes main-only and rebases before retrying pushes", () => {
+    const source = readFileSync(NATIVE_APP_LOCALE_REFRESH_WORKFLOW, "utf8");
+    const workflow = parse(source);
+    const refresh = workflow.jobs.refresh;
+    const commitStep = refresh.steps.find(
+      (step: { name?: string }) => step.name === "Commit and push locale artifact",
+    );
+
+    expect(refresh.if).toContain("github.ref == 'refs/heads/main'");
+    expect(refresh.strategy.matrix.locale).toContain("sv");
+    expect(commitStep.run).toContain("for attempt in 1 2 3 4 5");
+    expect(commitStep.run).toContain('git fetch origin "${TARGET_BRANCH}"');
+    expect(commitStep.run).toContain('git rebase --autostash "origin/${TARGET_BRANCH}"');
+    expect(commitStep.run).toContain('git push origin HEAD:"${TARGET_BRANCH}"');
   });
 
   it("fails OpenGrep SARIF artifact uploads when reports are missing", () => {
