@@ -22,8 +22,15 @@ const APPROVAL_NOT_FOUND_DETAILS = {
   remediation: "Re-request the action; pending approvals are cleared after expiry or restart.",
 } as const;
 
+const APPROVAL_EXPIRED_DETAILS = {
+  reason: "APPROVAL_EXPIRED",
+  remediation:
+    "The approval window elapsed before a decision was submitted. Re-run the command to request a fresh approval.",
+} as const;
+
 const APPROVAL_ALREADY_RESOLVED_DETAILS = {
   reason: "APPROVAL_ALREADY_RESOLVED",
+  remediation: "This approval was already decided. Re-run the command if you need to run it again.",
 } as const;
 
 function resolveRecordedApprovalDecision<TPayload>(
@@ -94,6 +101,26 @@ function respondUnknownOrExpiredApproval(respond: RespondFn): void {
     undefined,
     errorShape(ErrorCodes.INVALID_REQUEST, "unknown or expired approval id", {
       details: APPROVAL_NOT_FOUND_DETAILS,
+    }),
+  );
+}
+
+function respondApprovalExpired(respond: RespondFn): void {
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.INVALID_REQUEST, "approval expired", {
+      details: APPROVAL_EXPIRED_DETAILS,
+    }),
+  );
+}
+
+function respondApprovalAlreadyResolved(respond: RespondFn): void {
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.INVALID_REQUEST, "approval already resolved", {
+      details: APPROVAL_ALREADY_RESOLVED_DETAILS,
     }),
   );
 }
@@ -575,22 +602,44 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
       exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
     });
     if (resolvedRepeat.ok) {
+      const recordedDecision = resolveRecordedApprovalDecision(resolvedRepeat.snapshot);
       // Treat repeated identical resolves as successful retries; a conflicting
       // retry is rejected so stale operators cannot overwrite the first choice.
-      if (resolveRecordedApprovalDecision(resolvedRepeat.snapshot) === params.decision) {
+      if (recordedDecision === params.decision) {
         params.respond(true, { ok: true }, undefined);
         return;
       }
-      params.respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "approval already resolved", {
-          details: APPROVAL_ALREADY_RESOLVED_DETAILS,
-        }),
-      );
+      // A terminated record still in the grace window with no recorded decision
+      // expired rather than being resolved; tell the operator so, not "already
+      // resolved".
+      if (recordedDecision === undefined) {
+        respondApprovalExpired(params.respond);
+        return;
+      }
+      respondApprovalAlreadyResolved(params.respond);
       return;
     }
-    respondPendingApprovalLookupError({ respond: params.respond, response: resolved.response });
+    // The id was not pending and not in the resolved grace window. Preserve the
+    // ambiguous-prefix error as-is; otherwise consult the terminal archive so an
+    // expired or already-resolved id is reported distinctly instead of always
+    // collapsing to "unknown or expired approval id".
+    if (resolved.response !== "missing") {
+      respondPendingApprovalLookupError({ respond: params.respond, response: resolved.response });
+      return;
+    }
+    const terminalState = params.manager.classifyApprovalId(params.inputId, {
+      filter: (record) =>
+        isApprovalRecordVisibleToClient({ record, client: params.client ?? null }),
+    });
+    if (terminalState === "expired") {
+      respondApprovalExpired(params.respond);
+      return;
+    }
+    if (terminalState === "resolved") {
+      respondApprovalAlreadyResolved(params.respond);
+      return;
+    }
+    respondUnknownOrExpiredApproval(params.respond);
     return;
   }
 
