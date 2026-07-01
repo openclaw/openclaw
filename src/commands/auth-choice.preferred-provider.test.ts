@@ -132,4 +132,38 @@ describe("resolvePreferredProviderForAuthChoice", () => {
     expect(pluginProviderOptions?.mode).toBe("setup");
     expect(pluginProviderOptions?.includeUntrustedWorkspacePlugins).toBe(false);
   });
+
+  it("skips unreadable plugin provider ids during setup-provider fallback lookup", async () => {
+    const poisonedProvider = Object.defineProperty(
+      {
+        label: "Poisoned Provider",
+        auth: [{ id: "api-key", label: "API key", kind: "api_key" }],
+      },
+      "id",
+      {
+        enumerable: true,
+        get() {
+          throw new Error("auth choice preferred provider id exploded");
+        },
+      },
+    );
+    const healthyProvider = {
+      id: "healthy",
+      label: "Healthy Provider",
+      auth: [{ id: "api-key", label: "API key", kind: "api_key" }],
+    };
+    resolvePluginProviders.mockReturnValue([poisonedProvider, healthyProvider] as never);
+    resolveProviderPluginChoice.mockImplementation(({ providers, choice }) => {
+      for (const provider of providers) {
+        if (provider.id === choice && provider.auth[0]) {
+          return { provider, method: provider.auth[0] };
+        }
+      }
+      return null;
+    });
+
+    await expect(resolvePreferredProviderForAuthChoice({ choice: "healthy" })).resolves.toBe(
+      "healthy",
+    );
+  });
 });
