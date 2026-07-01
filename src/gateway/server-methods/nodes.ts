@@ -1463,6 +1463,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         nodeSession,
         command,
         params: forwardedParams.params,
+        rawParams: p.params,
         timeoutMs: p.timeoutMs,
         idempotencyKey: p.idempotencyKey,
       });
