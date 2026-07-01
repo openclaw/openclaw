@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 // Gateway config hot-reload watcher.
 // Diffs config/plugin install snapshots and dispatches hot reload or restart plans.
 import chokidar from "chokidar";
@@ -7,6 +8,7 @@ import { resolveConfigWriteFollowUp } from "../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
+  clearLoadInstalledPluginIndexInstallRecordsCache,
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
 } from "../plugins/installed-plugin-index-records.js";
@@ -110,6 +112,11 @@ function asPluginInstallConfig(records: PluginInstallRecords): OpenClawConfig {
   };
 }
 
+async function loadFreshInstalledPluginIndexInstallRecords(): Promise<PluginInstallRecords> {
+  clearLoadInstalledPluginIndexInstallRecordsCache();
+  return await loadInstalledPluginIndexInstallRecords();
+}
+
 export function startGatewayConfigReloader(opts: {
   initialConfig: OpenClawConfig;
   initialCompareConfig?: OpenClawConfig;
@@ -147,7 +154,7 @@ export function startGatewayConfigReloader(opts: {
   let currentPluginInstallRecords =
     opts.initialPluginInstallRecords ?? loadInstalledPluginIndexInstallRecordsSync();
   const readPluginInstallRecords =
-    opts.readPluginInstallRecords ?? loadInstalledPluginIndexInstallRecords;
+    opts.readPluginInstallRecords ?? loadFreshInstalledPluginIndexInstallRecords;
 
   const scheduleAfter = (wait: number) => {
     if (stopped) {
@@ -343,6 +350,16 @@ export function startGatewayConfigReloader(opts: {
     }
   };
 
+  const pluginInstallRecordsChangedSinceCurrent = async (): Promise<boolean> => {
+    try {
+      const nextPluginInstallRecords = await readPluginInstallRecords();
+      return !isDeepStrictEqual(currentPluginInstallRecords, nextPluginInstallRecords);
+    } catch (err) {
+      opts.log.warn(`config reload plugin install record dedupe check failed: ${String(err)}`);
+      return true;
+    }
+  };
+
   const runReload = async () => {
     if (stopped) {
       return;
@@ -372,7 +389,9 @@ export function startGatewayConfigReloader(opts: {
       const snapshot = await opts.readSnapshot();
       if (lastAppliedWriteHash && typeof snapshot.hash === "string") {
         if (snapshot.hash === lastAppliedWriteHash) {
-          return;
+          if (!(await pluginInstallRecordsChangedSinceCurrent())) {
+            return;
+          }
         }
         lastAppliedWriteHash = null;
       }

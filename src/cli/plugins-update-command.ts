@@ -1,4 +1,5 @@
 // `openclaw plugins update` command implementation for tracked npm plugins and hook packs.
+import { utimes } from "node:fs/promises";
 import { isDeepStrictEqual } from "node:util";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
@@ -165,6 +166,12 @@ async function assertRecordsOnlyUpdateConfigFresh(params: {
       prepared.snapshot.path,
       formatInvalidConfigDetails(prepared.snapshot.issues),
     );
+  }
+  if (prepared.snapshot.exists) {
+    const now = new Date();
+    // Preserve the authored config bytes while still waking external gateway
+    // watchers so they can reload the updated persisted plugin index.
+    await utimes(prepared.snapshot.path, now, now);
   }
 }
 

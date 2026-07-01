@@ -1,5 +1,6 @@
 // Plugins CLI update tests cover plugin update command behavior and output.
 import fs from "node:fs";
+import * as fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
@@ -23,6 +24,14 @@ import {
   writeConfigFile,
   writePersistedInstalledPluginIndexInstallRecords,
 } from "./plugins-cli-test-helpers.js";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    utimes: vi.fn(async () => undefined),
+  };
+});
 
 const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
 const ORIGINAL_STDIN_TTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
@@ -151,6 +160,8 @@ function primeBlockedUpdateConfig(section: "hooks" | "plugins", config: OpenClaw
 describe("plugins cli update", () => {
   beforeEach(() => {
     resetPluginsCliTestState();
+    vi.mocked(fsPromises.utimes).mockClear();
+    vi.mocked(fsPromises.utimes).mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -572,7 +583,7 @@ describe("plugins cli update", () => {
         resolvedVersion: "2026.6.11",
       },
     } as const;
-    primeUpdateConfigSnapshot({ config: cfg });
+    const initialSnapshot = primeUpdateConfigSnapshot({ config: cfg });
     setInstalledPluginIndexInstallRecords(previousRecords);
     updateNpmInstalledPlugins.mockResolvedValue({
       config: {
@@ -592,6 +603,11 @@ describe("plugins cli update", () => {
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(nextRecords);
     expect(writeConfigFile).not.toHaveBeenCalled();
     expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(fsPromises.utimes).toHaveBeenCalledWith(
+      initialSnapshot.snapshot.path,
+      expect.any(Date),
+      expect.any(Date),
+    );
     expect(refreshPluginRegistry).toHaveBeenCalledWith({
       config: cfg,
       installRecords: nextRecords,
@@ -680,6 +696,7 @@ describe("plugins cli update", () => {
     );
     expect(writeConfigFile).not.toHaveBeenCalled();
     expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(fsPromises.utimes).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
   });
 
@@ -763,6 +780,7 @@ describe("plugins cli update", () => {
     );
     expect(writeConfigFile).not.toHaveBeenCalled();
     expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(fsPromises.utimes).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
   });
 
@@ -840,6 +858,7 @@ describe("plugins cli update", () => {
     );
     expect(writeConfigFile).not.toHaveBeenCalled();
     expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(fsPromises.utimes).not.toHaveBeenCalled();
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
   });
 
