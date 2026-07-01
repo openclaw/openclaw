@@ -91,4 +91,20 @@ struct GatewayLaunchAgentManagerTests {
         #expect(envDict["OPENCLAW_PROFILE"] == nil)
         #expect(envDict["PATH"] != nil)
     }
+
+    @Test func `plist contents escapes XML-special characters in profile env values`() throws {
+        let env = [
+            "OPENCLAW_CONFIG_PATH": "/tmp/test & demo/<config>.json",
+            "OPENCLAW_STATE_DIR": "/tmp/state\"dir",
+            "OPENCLAW_PROFILE": "work's profile",
+        ]
+        let xml = LaunchAgentManager.plistContents(bundlePath: "/Applications/OpenClaw.app", environment: env)
+        let data = try #require(xml.data(using: .utf8))
+        let root = try #require(try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+        let envDict = try #require(root["EnvironmentVariables"] as? [String: String])
+
+        #expect(envDict["OPENCLAW_CONFIG_PATH"] == "/tmp/test & demo/<config>.json")
+        #expect(envDict["OPENCLAW_STATE_DIR"] == "/tmp/state\"dir")
+        #expect(envDict["OPENCLAW_PROFILE"] == "work's profile")
+    }
 }

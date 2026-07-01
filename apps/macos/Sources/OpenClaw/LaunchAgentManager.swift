@@ -71,9 +71,19 @@ enum LaunchAgentManager {
         for key in keys {
             guard let value = env[key]?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !value.isEmpty else { continue }
-            entries += "            <key>\(key)</key>\n            <string>\(value)</string>\n"
+            entries += "            <key>\(key)</key>\n            <string>\(escapeXML(value))</string>\n"
         }
         return entries
+    }
+
+    /// Escapes XML-special characters so plist string values remain valid.
+    private static func escapeXML(_ string: String) -> String {
+        string
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&apos;")
     }
 
     @discardableResult
