@@ -1,5 +1,6 @@
 // Skills CLI for workspace status, install/update, ClawHub verification, and workshop proposals.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { Command } from "commander";
 import {
   GATEWAY_CLIENT_MODES,
@@ -172,7 +173,7 @@ async function runSkillsAction(
     const report = await loadSkillsStatusReport(options);
     defaultRuntime.writeStdout(render(report));
   } catch (err) {
-    defaultRuntime.error(String(err));
+    defaultRuntime.error(formatErrorMessage(err));
     defaultRuntime.exit(1);
   }
 }
@@ -343,7 +344,7 @@ export function registerSkillsCli(program: Command) {
           defaultRuntime.log(`${entry.slug}${version}  ${entry.displayName}${summary}`);
         }
       } catch (err) {
-        defaultRuntime.error(String(err));
+        defaultRuntime.error(formatErrorMessage(err));
         defaultRuntime.exit(1);
       }
     });
@@ -448,7 +449,7 @@ export function registerSkillsCli(program: Command) {
           }
           defaultRuntime.log(`Installed ${result.slug}@${result.version} -> ${result.targetDir}`);
         } catch (err) {
-          defaultRuntime.error(String(err));
+          defaultRuntime.error(formatErrorMessage(err));
           defaultRuntime.exit(1);
         }
       },
@@ -539,7 +540,7 @@ export function registerSkillsCli(program: Command) {
             defaultRuntime.exit(1);
           }
         } catch (err) {
-          defaultRuntime.error(String(err));
+          defaultRuntime.error(formatErrorMessage(err));
           defaultRuntime.exit(1);
         }
       },
@@ -607,7 +608,7 @@ export function registerSkillsCli(program: Command) {
             }
           }
         } catch (err) {
-          defaultRuntime.error(String(err));
+          defaultRuntime.error(formatErrorMessage(err));
           defaultRuntime.exit(1);
           return;
         }
@@ -639,7 +640,7 @@ export function registerSkillsCli(program: Command) {
         }
         defaultRuntime.writeStdout(formatSkillProposalList(manifest));
       } catch (err) {
-        defaultRuntime.error(String(err));
+        defaultRuntime.error(formatErrorMessage(err));
         defaultRuntime.exit(1);
       }
     });
@@ -664,7 +665,7 @@ export function registerSkillsCli(program: Command) {
         }
         defaultRuntime.writeStdout(formatSkillProposalInspect(proposal));
       } catch (err) {
-        defaultRuntime.error(String(err));
+        defaultRuntime.error(formatErrorMessage(err));
         defaultRuntime.exit(1);
       }
     });
@@ -716,7 +717,7 @@ export function registerSkillsCli(program: Command) {
           }
           defaultRuntime.writeStdout(`${proposal.record.id}\n`);
         } catch (err) {
-          defaultRuntime.error(String(err));
+          defaultRuntime.error(formatErrorMessage(err));
           defaultRuntime.exit(1);
         }
       },
@@ -773,7 +774,7 @@ export function registerSkillsCli(program: Command) {
           }
           defaultRuntime.writeStdout(`${proposal.record.id}\n`);
         } catch (err) {
-          defaultRuntime.error(String(err));
+          defaultRuntime.error(formatErrorMessage(err));
           defaultRuntime.exit(1);
         }
       },
@@ -827,7 +828,7 @@ export function registerSkillsCli(program: Command) {
             `Revised ${proposal.record.id} ${proposal.record.proposedVersion}\n`,
           );
         } catch (err) {
-          defaultRuntime.error(String(err));
+          defaultRuntime.error(formatErrorMessage(err));
           defaultRuntime.exit(1);
         }
       },
@@ -851,7 +852,7 @@ export function registerSkillsCli(program: Command) {
             `Applied ${applied.record.id} -> ${applied.targetSkillFile}\n`,
           );
         } catch (err) {
-          defaultRuntime.error(String(err));
+          defaultRuntime.error(formatErrorMessage(err));
           defaultRuntime.exit(1);
         }
       },
@@ -882,7 +883,7 @@ export function registerSkillsCli(program: Command) {
           }
           defaultRuntime.writeStdout(`Rejected ${record.id}\n`);
         } catch (err) {
-          defaultRuntime.error(String(err));
+          defaultRuntime.error(formatErrorMessage(err));
           defaultRuntime.exit(1);
         }
       },
@@ -913,7 +914,7 @@ export function registerSkillsCli(program: Command) {
           }
           defaultRuntime.writeStdout(`Quarantined ${record.id}\n`);
         } catch (err) {
-          defaultRuntime.error(String(err));
+          defaultRuntime.error(formatErrorMessage(err));
           defaultRuntime.exit(1);
         }
       },
