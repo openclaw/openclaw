@@ -172,3 +172,49 @@ describe("feishu bitable create app cleanup", () => {
     expect(client.bitable.appTableRecord.list).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("feishu bitable write tool schemas (#94547)", () => {
+  afterAll(() => {
+    vi.doUnmock("./client.js");
+    vi.resetModules();
+  });
+
+  beforeEach(() => {
+    createFeishuClientMock.mockReset();
+  });
+
+  function patternValueSchemaOf(
+    schema: Record<string, unknown> | undefined,
+  ): Record<string, unknown> | undefined {
+    const pattern = schema?.patternProperties as Record<string, unknown> | undefined;
+    if (!pattern) {
+      return undefined;
+    }
+    const keys = Object.keys(pattern);
+    return keys.length > 0 ? (pattern[keys[0]] as Record<string, unknown>) : undefined;
+  }
+
+  // Bedrock's strict tool-schema validation rejects empty nested schemas
+  // (`patternProperties: { "^(.*)$": {} }`). Each bitable write tool must emit a
+  // non-empty value schema for its free-form field map.
+  it.each([
+    ["feishu_bitable_create_record", "fields"],
+    ["feishu_bitable_update_record", "fields"],
+    ["feishu_bitable_create_field", "property"],
+  ])("%s emits a non-empty value schema for %s", (toolName, propName) => {
+    const { client } = createBitableClient([]);
+    createFeishuClientMock.mockReturnValue(client);
+    const { api, resolveTool } = createToolFactoryHarness(createConfig());
+    registerFeishuBitableTools(api);
+
+    const tool = resolveTool(toolName) as unknown as {
+      parameters?: { properties?: Record<string, Record<string, unknown>> };
+    };
+    const fieldSchema = tool.parameters?.properties?.[propName];
+    expect(fieldSchema).toBeDefined();
+
+    const valueSchema = patternValueSchemaOf(fieldSchema);
+    expect(valueSchema).toBeDefined();
+    expect(Object.keys(valueSchema as Record<string, unknown>).length).toBeGreaterThan(0);
+  });
+});
