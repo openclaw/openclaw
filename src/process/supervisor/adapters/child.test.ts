@@ -424,6 +424,24 @@ describe("createChildAdapter", () => {
     expect(spawnArgs.fallbacks).toStrictEqual([]);
   });
 
+  it("wraps Windows npm-global CLI backends (gemini) through trusted cmd.exe", async () => {
+    setPlatform("win32");
+
+    await createAdapterHarness({
+      pid: 3336,
+      argv: ["gemini", "--help"],
+    });
+
+    const spawnArgs = firstSpawnWithFallbackParams();
+    expect(spawnArgs.argv).toEqual([
+      expectedTrustedCmdExe(),
+      "/d",
+      "/s",
+      "/c",
+      "gemini.cmd --help",
+    ]);
+  });
+
   it("wraps Linux child spawns and strips shell-init env", async () => {
     const originalBashEnv = process.env.BASH_ENV;
     const originalEnv = process.env.ENV;

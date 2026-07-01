@@ -20,7 +20,8 @@ const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
 function resolveCommand(command: string): string {
   return resolveWindowsCommandShim({
     command,
-    cmdCommands: ["npm", "pnpm", "yarn", "npx"],
+    // npm global CLIs (gemini, claude, codex, etc.) are exposed as .cmd shims on Windows.
+    cmdCommands: ["npm", "pnpm", "yarn", "npx", "gemini", "claude", "codex"],
   });
 }
 
