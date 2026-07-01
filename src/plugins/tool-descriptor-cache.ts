@@ -2,7 +2,12 @@
 import fs from "node:fs";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
-import type { JsonObject, ToolDescriptor } from "../tools/types.js";
+import { evaluateToolAvailability } from "../tools/availability.js";
+import type {
+  JsonObject,
+  ToolAvailabilityExpression,
+  ToolDescriptor,
+} from "../tools/types.js";
 import type { PluginLoadOptions } from "./loader.js";
 import type { OpenClawPluginToolContext } from "./types.js";
 
@@ -144,6 +149,46 @@ function asJsonObject(value: unknown): JsonObject {
   return value as JsonObject;
 }
 
+/**
+ * Recursively validates that every {@code allOf} / {@code anyOf} group in
+ * a plugin-authored availability expression is an array.  Plugin-authored
+ * data is untyped at this boundary; a non-array group value at any nesting
+ * level reaches {@code evaluateExpression} and throws on
+ * {@code .flatMap} / {@code .map}, crashing tool registration.
+ */
+function hasValidAvailabilityGroupShape(
+  expr: ToolAvailabilityExpression,
+): boolean {
+  if ("allOf" in expr) {
+    if (!Array.isArray(expr.allOf)) {
+      return false;
+    }
+    return expr.allOf.every((entry) => {
+      // Plugin-authored data is untyped — null and non-object primitives
+      // (string, number, boolean) crash the evaluator (TypeError on
+      // "kind" in expr).  Reject them so the whole expression is stripped
+      // with a warning instead of crashing tool registration.
+      if (entry === null || typeof entry !== "object") {
+        return false;
+      }
+      return hasValidAvailabilityGroupShape(entry as ToolAvailabilityExpression);
+    });
+  }
+  if ("anyOf" in expr) {
+    if (!Array.isArray(expr.anyOf)) {
+      return false;
+    }
+    return expr.anyOf.every((entry) => {
+      if (entry === null || typeof entry !== "object") {
+        return false;
+      }
+      return hasValidAvailabilityGroupShape(entry as ToolAvailabilityExpression);
+    });
+  }
+  // kind-based expressions don't have group fields — always valid
+  return true;
+}
+
 export function capturePluginToolDescriptor(params: {
   pluginId: string;
   tool: AnyAgentTool;
@@ -151,17 +196,66 @@ export function capturePluginToolDescriptor(params: {
 }): CachedPluginToolDescriptor {
   const label = (params.tool as { label?: unknown }).label;
   const title = typeof label === "string" && label.trim() ? label.trim() : undefined;
+
+  // Preserve tool-authored availability expressions so descriptor-driven
+  // planning can enforce them.  Read through a narrowed record so the
+  // descriptor cache stays decoupled from the agent-tool type contract.
+  const rawAvailability = (params.tool as { availability?: unknown })
+    .availability;
+  let availability: ToolAvailabilityExpression | undefined =
+    rawAvailability !== undefined &&
+    typeof rawAvailability === "object" &&
+    rawAvailability !== null &&
+    !Array.isArray(rawAvailability) &&
+    ("kind" in rawAvailability ||
+      "allOf" in rawAvailability ||
+      "anyOf" in rawAvailability)
+      ? (rawAvailability as ToolAvailabilityExpression)
+      : undefined;
+
+  // Defensive shape guard: plugin-authored availability is untyped at this
+  // boundary.  Non-array allOf / anyOf values and null/non-object entries
+  // would reach the evaluator and throw (TypeError on .flatMap / .map or
+  // "kind" in expr), crashing tool registration.  Diagnose and strip the
+  // malformed expression so the evaluator stays pure.
+  if (availability && !hasValidAvailabilityGroupShape(availability)) {
+    console.warn(
+      `[plugins] tool descriptor authoring error (${params.pluginId}/${params.tool.name}): ` +
+        `Malformed availability group — allOf/anyOf must be arrays of valid expression objects`,
+    );
+    availability = undefined;
+  }
+
+  const descriptor: ToolDescriptor = {
+    name: params.tool.name,
+    ...(title ? { title } : {}),
+    description: params.tool.description,
+    inputSchema: asJsonObject(params.tool.parameters),
+    owner: { kind: "plugin", pluginId: params.pluginId },
+    executor: { kind: "plugin", pluginId: params.pluginId, toolName: params.tool.name },
+    ...(availability ? { availability } : {}),
+  };
+
+  // Surface malformed availability at descriptor-registration time
+  // (once per captured descriptor) so plugin authors see authoring
+  // errors immediately.  Only unsupported-signal diagnostics are
+  // authoring-time concerns; runtime conditions (auth, config, env)
+  // are evaluated later with a real context.
+  if (availability) {
+    const diagnostics = evaluateToolAvailability({ descriptor });
+    for (const diag of diagnostics) {
+      if (diag.reason === "unsupported-signal") {
+        console.warn(
+          `[plugins] tool descriptor authoring error (${params.pluginId}/${params.tool.name}): ${diag.message}`,
+        );
+      }
+    }
+  }
+
   return {
     ...(params.tool.displaySummary ? { displaySummary: params.tool.displaySummary } : {}),
     optional: params.optional,
-    descriptor: {
-      name: params.tool.name,
-      ...(title ? { title } : {}),
-      description: params.tool.description,
-      inputSchema: asJsonObject(params.tool.parameters),
-      owner: { kind: "plugin", pluginId: params.pluginId },
-      executor: { kind: "plugin", pluginId: params.pluginId, toolName: params.tool.name },
-    },
+    descriptor,
   };
 }
 
