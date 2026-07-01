@@ -1,4 +1,5 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -6,6 +7,7 @@ import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 const spawnSyncMock = vi.hoisted(() => vi.fn());
+const GITHUB_RELEASE_JSON_MAX_BYTES = 1024 * 1024;
 
 vi.mock("../../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
@@ -18,6 +20,27 @@ vi.mock("node:child_process", async (importOriginal) => ({
 
 let originalAgentDir: string | undefined;
 let tempAgentDir: string | undefined;
+
+async function listenLoopbackServer(server: Server): Promise<number> {
+  return await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        reject(new Error("expected loopback TCP address"));
+        return;
+      }
+      resolve(address.port);
+    });
+  });
+}
+
+async function closeServer(server: Server): Promise<void> {
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+}
 
 beforeEach(() => {
   originalAgentDir = process.env.OPENCLAW_AGENT_DIR;
@@ -58,7 +81,7 @@ describe("ensureTool", () => {
       finalUrl: "https://api.github.com/repos/sharkdp/fd/releases/latest",
     });
 
-    await expect(ensureTool("fd", true)).resolves.toBeUndefined();
+    await expect(ensureTool("fd", true)).rejects.toThrow("GitHub API error: 503");
 
     expect(cancel).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
@@ -82,7 +105,7 @@ describe("ensureTool", () => {
         finalUrl: "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/archive",
       });
 
-    await expect(ensureTool("rg", true)).resolves.toBeUndefined();
+    await expect(ensureTool("rg", true)).rejects.toThrow("Failed to download: 404");
 
     expect(cancel).toHaveBeenCalledOnce();
     expect(releaseCheckRelease).toHaveBeenCalledOnce();
@@ -156,40 +179,131 @@ describe("ensureTool", () => {
     );
   });
 
-  it("fails closed when the GitHub releases response exceeds the size cap", async () => {
+  it.each([
+    { body: "{not json", error: "GitHub release response is malformed JSON" },
+    {
+      body: JSON.stringify({ tag_name: 42 }),
+      error: "GitHub release response has no valid tag_name",
+    },
+  ])("rejects corrupt release metadata: $error", async ({ body, error }) => {
     const { ensureTool } = await import("./tools-manager.js");
     const release = vi.fn(async () => {});
-
-    // Stream ~18 MiB so it exceeds the 16 MiB readResponseWithLimit cap.
-    let sent = 0;
-    const TOTAL = 18 * 1024 * 1024;
-    let canceled = false;
-    const body = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        if (sent >= TOTAL) {
-          controller.close();
-          return;
-        }
-        const chunkSize = Math.min(64 * 1024, TOTAL - sent);
-        controller.enqueue(new Uint8Array(chunkSize));
-        sent += chunkSize;
-      },
-      cancel() {
-        canceled = true;
-      },
-    });
-    const response = new Response(body, { status: 200 });
-
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response,
+      response: new Response(body, { status: 200 }),
       release,
       finalUrl: "https://api.github.com/repos/sharkdp/fd/releases/latest",
     });
 
-    // ensureTool catches the overflow error and returns undefined (fail-closed).
-    await expect(ensureTool("fd", true)).resolves.toBeUndefined();
+    await expect(ensureTool("fd", true)).rejects.toThrow(error);
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
-    expect(canceled).toBe(true);
+  });
+
+  it("releases the guarded response when the release stream aborts", async () => {
+    const { ensureTool } = await import("./tools-manager.js");
+    const release = vi.fn(async () => {});
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        const error = new Error("release lookup aborted");
+        error.name = "AbortError";
+        controller.error(error);
+      },
+    });
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(body, { status: 200 }),
+      release,
+      finalUrl: "https://api.github.com/repos/sharkdp/fd/releases/latest",
+    });
+
+    await expect(ensureTool("fd", true)).rejects.toThrow("release lookup aborted");
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("surfaces download failures through non-silent logging", async () => {
+    const { ensureTool } = await import("./tools-manager.js");
+    const release = vi.fn(async () => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response("server error", { status: 503 }),
+      release,
+      finalUrl: "https://api.github.com/repos/sharkdp/fd/releases/latest",
+    });
+
+    try {
+      await expect(ensureTool("fd")).resolves.toBeUndefined();
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("GitHub API error: 503"));
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("uses the fdfind system fallback without starting a download", async () => {
+    const { ensureTool } = await import("./tools-manager.js");
+    spawnSyncMock
+      .mockReturnValueOnce({
+        error: new Error("ENOENT"),
+        status: null,
+        stderr: Buffer.alloc(0),
+        stdout: Buffer.alloc(0),
+      })
+      .mockReturnValueOnce({
+        error: undefined,
+        status: 0,
+        stderr: Buffer.alloc(0),
+        stdout: Buffer.from("fd 10.4.2"),
+      });
+
+    await expect(ensureTool("fd", true)).resolves.toBe("fdfind");
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("bounds the real tool-resolution path against streamed HTTP release metadata", async () => {
+    const totalBytes = 16 * 1024 * 1024;
+    const chunk = Buffer.alloc(64 * 1024, 0x78);
+    let streamedBytes = 0;
+    let requestUrl: string | undefined;
+    const server = createServer((req, res) => {
+      requestUrl = req.url;
+      res.writeHead(200, { "content-type": "application/json" });
+      res.write('{"tag_name":"v');
+
+      const writeMore = () => {
+        while (streamedBytes < totalBytes && !res.destroyed) {
+          streamedBytes += chunk.byteLength;
+          if (!res.write(chunk)) {
+            res.once("drain", writeMore);
+            return;
+          }
+        }
+        if (!res.destroyed) {
+          res.end('"}');
+        }
+      };
+      writeMore();
+    });
+    const port = await listenLoopbackServer(server);
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockImplementationOnce(async () => ({
+      response: await fetch(`http://127.0.0.1:${port}/release/latest`),
+      release,
+      finalUrl: `http://127.0.0.1:${port}/release/latest`,
+    }));
+
+    try {
+      const { ensureTool } = await import("./tools-manager.js");
+      await expect(ensureTool("fd", true)).rejects.toThrow(
+        `GitHub release response exceeds ${GITHUB_RELEASE_JSON_MAX_BYTES} bytes`,
+      );
+
+      expect(requestUrl).toBe("/release/latest");
+      expect(streamedBytes).toBeLessThan(totalBytes);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+      expect(release).toHaveBeenCalledOnce();
+    } finally {
+      await closeServer(server);
+    }
   });
 });
 

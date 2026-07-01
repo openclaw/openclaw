@@ -31,7 +31,7 @@ import { APP_NAME, getBinDir } from "../config.js";
 const TOOLS_DIR = getBinDir();
 const NETWORK_TIMEOUT_MS = 10_000;
 const DOWNLOAD_TIMEOUT_MS = 120_000;
-const GITHUB_RELEASE_JSON_MAX_BYTES = 16 * 1024 * 1024; // 16 MiB
+const GITHUB_RELEASE_JSON_MAX_BYTES = 1024 * 1024;
 
 async function cancelUnreadResponseBody(response: Response): Promise<void> {
   if (!response.bodyUsed) {
@@ -160,8 +160,18 @@ async function getLatestVersion(repo: string): Promise<string> {
       onOverflow: ({ size, maxBytes }) =>
         new Error(`GitHub release response exceeds ${maxBytes} bytes (got ${size})`),
     });
-    const data = JSON.parse(new TextDecoder().decode(bytes)) as { tag_name: string };
-    return data.tag_name.replace(/^v/, "");
+    let data: unknown;
+    try {
+      data = JSON.parse(bytes.toString("utf8")) as unknown;
+    } catch (cause) {
+      throw new Error("GitHub release response is malformed JSON", { cause });
+    }
+    const tagName =
+      data && typeof data === "object" && "tag_name" in data ? data.tag_name : undefined;
+    if (typeof tagName !== "string" || !tagName.trim()) {
+      throw new Error("GitHub release response has no valid tag_name");
+    }
+    return tagName.replace(/^v/, "");
   } finally {
     await guarded.release();
   }
@@ -437,13 +447,13 @@ export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<str
     }
     return path;
   } catch (e) {
-    if (!silent) {
-      console.log(
-        chalk.yellow(
-          `Failed to download ${config.name}: ${e instanceof Error ? e.message : String(e)}`,
-        ),
-      );
+    const error = e instanceof Error ? e : new Error(String(e));
+    // Silent callers surface the failure through their tool result instead of
+    // replacing actionable release/download corruption with a generic message.
+    if (silent) {
+      throw error;
     }
+    console.log(chalk.yellow(`Failed to download ${config.name}: ${error.message}`));
     return undefined;
   }
 }
