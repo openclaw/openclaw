@@ -60,7 +60,17 @@ export function stripReasoningTagsFromText(
   if (!text) {
     return text;
   }
-  if (!QUICK_TAG_RE.test(text)) {
+  // Normalize CJK/fullwidth quotation marks in tag delimiters before pattern matching.
+  // Fullwidth quotes (U+300C 「, U+300D 」, U+300E ❲, U+300F ❳) are commonly inserted
+  // by models at stream boundaries; the ASCII variants (<, >) are used in the regex.
+  // ASCII-opening brackets already match the QUICK_TAG_RE pattern.
+  const normalizedText = text
+    .replace(/\u300C/g, "<")
+    .replace(/\u300D/g, ">")
+    .replace(/\u300E/g, "<")
+    .replace(/\u300F/g, ">");
+  const quickTagMatch = normalizedText.match(QUICK_TAG_RE);
+  if (!quickTagMatch) {
     return text;
   }
 
@@ -68,7 +78,7 @@ export function stripReasoningTagsFromText(
   const trimMode = options?.trim ?? "both";
   const scope = options?.scope ?? "all";
 
-  let cleaned = text;
+  let cleaned = normalizedText;
   const matches = findFinalTagMatches(cleaned);
   THINKING_TAG_RE.lastIndex = 0;
   const hasThinkingTag = THINKING_TAG_RE.test(cleaned);
