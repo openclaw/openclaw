@@ -184,7 +184,7 @@ struct AgentProTab: View {
     private func directDestination(for route: AgentRoute) -> some View {
         self.destination(for: route)
             .toolbar(
-                self.directHeaderLeadingAction(for: route) == nil ? .visible : .hidden,
+                route == .agents || self.directHeaderLeadingAction(for: route) != nil ? .hidden : .visible,
                 for: .navigationBar)
     }
 }
