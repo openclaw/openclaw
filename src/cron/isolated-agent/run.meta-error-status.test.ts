@@ -97,6 +97,11 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     expect(result.error).toBe("cron: job execution timed out");
     expect(result.error).not.toContain("CommandLaneTaskTimeoutError");
     expect(result.error).not.toContain("cron-nested");
+    // The timeout row must keep the already-resolved run attribution so
+    // cron_run_logs does not show an un-attributed cron timeout (#95873).
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-5.4");
+    expect(result.sessionId).toBe("test-session-id");
   });
 
   it("keeps cron timeout result when executor rejects after the cron abort signal fires", async () => {
