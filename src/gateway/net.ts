@@ -353,7 +353,14 @@ export async function resolveGatewayListenHosts(
   bindHost: string,
   opts?: { canBindToHost?: (host: string) => Promise<boolean> },
 ): Promise<string[]> {
+  const canBind = opts?.canBindToHost ?? canBindToHost;
   if (bindHost !== "127.0.0.1") {
+    if (bindHost === "0.0.0.0" || bindHost === "::") {
+      return [bindHost];
+    }
+    if (await canBind("127.0.0.1")) {
+      return [bindHost, "127.0.0.1"];
+    }
     return [bindHost];
   }
   // Windows: uv_tcp_bind6 creates a dual-stack socket (no UV_TCP_IPV6ONLY), which
@@ -362,7 +369,6 @@ export async function resolveGatewayListenHosts(
   if (process.platform === "win32") {
     return [bindHost];
   }
-  const canBind = opts?.canBindToHost ?? canBindToHost;
   if (await canBind("::1")) {
     return [bindHost, "::1"];
   }

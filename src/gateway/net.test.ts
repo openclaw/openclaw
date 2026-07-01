@@ -358,6 +358,18 @@ describe("resolveGatewayListenHosts", () => {
       expected: ["0.0.0.0"],
     },
     {
+      name: "specific non-loopback host with loopback alias available",
+      host: "100.64.0.1",
+      canBindToHost: async (host) => host === "127.0.0.1",
+      expected: ["100.64.0.1", "127.0.0.1"],
+    },
+    {
+      name: "specific non-loopback host without loopback alias",
+      host: "100.64.0.1",
+      canBindToHost: async () => false,
+      expected: ["100.64.0.1"],
+    },
+    {
       name: "loopback with IPv6 available",
       host: "127.0.0.1",
       canBindToHost: async () => true,
