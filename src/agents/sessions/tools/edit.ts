@@ -10,7 +10,9 @@ import {
   writeFile as fsWriteFile,
 } from "node:fs/promises";
 import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
+import * as Diff from "diff";
 import { Type } from "typebox";
+import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
 import { renderDiff } from "../../modes/interactive/components/diff.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { textResult } from "../../tools/common.js";
@@ -76,8 +78,17 @@ type LegacyEditToolInput = Record<string, unknown> & {
   newText?: unknown;
 };
 
+type EditMismatchPhase = "validation" | "apply";
+
 const EDIT_MISMATCH_MESSAGE = "Could not find the exact text in";
+const EDIT_INDEXED_MISMATCH_MESSAGE = "Could not find edits[";
 const EDIT_MISMATCH_HINT_LIMIT = 800;
+const EDIT_MISMATCH_CANDIDATE_LIMIT = 3;
+const EDIT_MISMATCH_PREFILTER_LIMIT = 24;
+const EDIT_MISMATCH_CANDIDATE_DIFF_LIMIT = 600;
+const EDIT_MISMATCH_LINE_TEXT_LIMIT = 240;
+const EDIT_MISMATCH_SCORE_TEXT_LIMIT = 240;
+const EDIT_MISMATCH_SCAN_LINE_LIMIT = 1000;
 
 /**
  * Pluggable operations for the edit tool.
@@ -173,12 +184,224 @@ function didEditLikelyApply(params: {
   );
 }
 
-function appendMismatchHint(error: Error, currentContent: string): Error {
+function splitDiagnosticLines(text: string): string[] {
+  const lines = normalizeToLF(text).split("\n");
+  if (lines.length > 1 && lines[lines.length - 1] === "") {
+    lines.pop();
+  }
+  return lines;
+}
+
+function truncateDiagnosticLine(line: string): string {
+  return line.length <= EDIT_MISMATCH_LINE_TEXT_LIMIT
+    ? line
+    : `${line.slice(0, EDIT_MISMATCH_LINE_TEXT_LIMIT)}... (line truncated)`;
+}
+
+function splitBoundedDiagnosticLines(text: string): string[] {
+  return splitDiagnosticLines(text).map(truncateDiagnosticLine);
+}
+
+function truncateForScore(text: string): string {
+  return text.length <= EDIT_MISMATCH_SCORE_TEXT_LIMIT
+    ? text
+    : text.slice(0, EDIT_MISMATCH_SCORE_TEXT_LIMIT);
+}
+
+function similarityScore(a: string, b: string): number {
+  const left = truncateForScore(a);
+  const right = truncateForScore(b);
+  const maxLength = Math.max(left.length, right.length, 1);
+  return 1 - levenshteinDistance(left, right) / maxLength;
+}
+
+function scoreCandidate(target: string, candidate: string): number {
+  const rawScore = similarityScore(target, candidate);
+  const trimmedTarget = target.trim();
+  const trimmedCandidate = candidate.trim();
+  const trimmedScore = similarityScore(trimmedTarget, trimmedCandidate);
+  const containmentBonus =
+    trimmedTarget.length > 0 && trimmedCandidate.includes(trimmedTarget) ? 0.25 : 0;
+  return trimmedScore * 2 + rawScore + containmentBonus;
+}
+
+function cheapCandidateScore(target: string, candidate: string): number {
+  const trimmedTarget = target.trim();
+  const trimmedCandidate = candidate.trim();
+  const lengthPenalty = Math.abs(trimmedTarget.length - trimmedCandidate.length) / 1000;
+  if (trimmedTarget.length === 0 || trimmedCandidate.length === 0) {
+    return -lengthPenalty;
+  }
+  const targetTerms = new Set(trimmedTarget.split(/\s+/).filter(Boolean));
+  let sharedTerms = 0;
+  for (const term of trimmedCandidate.split(/\s+/)) {
+    if (targetTerms.has(term)) {
+      sharedTerms++;
+    }
+  }
+  return sharedTerms / targetTerms.size - lengthPenalty;
+}
+
+function leadingWhitespaceDescription(line: string): string {
+  const match = line.match(/^[\t ]*/);
+  const value = match?.[0] ?? "";
+  let spaces = 0;
+  let tabs = 0;
+  for (const char of value) {
+    if (char === " ") {
+      spaces += 1;
+    } else {
+      tabs += 1;
+    }
+  }
+  const parts: string[] = [];
+  if (spaces > 0) {
+    parts.push(`${spaces} spaces`);
+  }
+  if (tabs > 0) {
+    parts.push(`${tabs} tabs`);
+  }
+  return parts.join(", ") || "none";
+}
+
+function firstChangedLinePair(
+  targetText: string,
+  candidateText: string,
+): { targetLine: string; candidateLine: string } | undefined {
+  const targetLines = splitDiagnosticLines(targetText);
+  const candidateLines = splitDiagnosticLines(candidateText);
+  const count = Math.max(targetLines.length, candidateLines.length);
+  for (let i = 0; i < count; i++) {
+    const targetLine = targetLines[i] ?? "";
+    const candidateLine = candidateLines[i] ?? "";
+    if (targetLine !== candidateLine) {
+      return { targetLine, candidateLine };
+    }
+  }
+  return undefined;
+}
+
+function formatEscapedLineDiff(targetText: string, candidateText: string): string {
+  const output: string[] = [];
+  for (const part of Diff.diffLines(targetText, candidateText)) {
+    const rawLines = part.value.split("\n");
+    if (rawLines[rawLines.length - 1] === "") {
+      rawLines.pop();
+    }
+    const prefix = part.added ? "+" : part.removed ? "-" : " ";
+    for (const line of rawLines) {
+      output.push(`${prefix} ${JSON.stringify(line)}`);
+    }
+  }
+  const diff = output.join("\n");
+  return diff.length <= EDIT_MISMATCH_CANDIDATE_DIFF_LIMIT
+    ? diff
+    : `${diff.slice(0, EDIT_MISMATCH_CANDIDATE_DIFF_LIMIT)}\n... (candidate diff truncated)`;
+}
+
+function formatCandidateBlock(params: {
+  index: number;
+  startLine: number;
+  targetText: string;
+  candidateText: string;
+}): string {
+  const lines = [`Candidate ${params.index + 1} (line ${params.startLine}):`];
+  const changed = firstChangedLinePair(params.targetText, params.candidateText);
+  if (changed) {
+    const targetIndent = leadingWhitespaceDescription(changed.targetLine);
+    const candidateIndent = leadingWhitespaceDescription(changed.candidateLine);
+    if (targetIndent !== candidateIndent) {
+      lines.push(`  indentation: expected ${targetIndent}, candidate ${candidateIndent}`);
+    }
+  }
+  lines.push(formatEscapedLineDiff(params.targetText, params.candidateText));
+  return lines.join("\n");
+}
+
+function findNearestEditCandidates(
+  content: string,
+  oldText: string,
+): Array<{ startLine: number; text: string; score: number }> {
+  const targetLines = splitBoundedDiagnosticLines(oldText);
+  if (targetLines.length === 0 || (targetLines.length === 1 && targetLines[0] === "")) {
+    return [];
+  }
+
+  const contentLines = splitDiagnosticLines(stripBom(content).text)
+    .slice(0, EDIT_MISMATCH_SCAN_LINE_LIMIT)
+    .map(truncateDiagnosticLine);
+  if (contentLines.length === 0) {
+    return [];
+  }
+
+  const targetText = targetLines.join("\n");
+  const windowSize = Math.max(1, targetLines.length);
+  const seen = new Set<string>();
+  const prefiltered: Array<{ startLine: number; text: string; cheapScore: number }> = [];
+  for (let start = 0; start <= contentLines.length - windowSize; start++) {
+    const text = contentLines.slice(start, start + windowSize).join("\n");
+    if (seen.has(text)) {
+      continue;
+    }
+    seen.add(text);
+    prefiltered.push({
+      startLine: start + 1,
+      text,
+      cheapScore: cheapCandidateScore(targetText, text),
+    });
+  }
+
+  return prefiltered
+    .toSorted((a, b) => b.cheapScore - a.cheapScore || a.startLine - b.startLine)
+    .slice(0, EDIT_MISMATCH_PREFILTER_LIMIT)
+    .map((candidate) => ({
+      startLine: candidate.startLine,
+      text: candidate.text,
+      score: scoreCandidate(targetText, candidate.text),
+    }))
+    .toSorted((a, b) => b.score - a.score || a.startLine - b.startLine)
+    .slice(0, EDIT_MISMATCH_CANDIDATE_LIMIT);
+}
+
+function selectMismatchEdits(error: Error, edits: Edit[]): Edit[] {
+  const indexedMatch = error.message.match(/Could not find edits\[(\d+)\]/);
+  if (indexedMatch) {
+    const index = Number.parseInt(indexedMatch[1], 10);
+    const edit = Number.isInteger(index) ? edits[index] : undefined;
+    return edit ? [edit] : [];
+  }
+  return edits.length === 1 ? edits : [];
+}
+
+function formatMismatchCandidates(currentContent: string, edits: Edit[]): string {
+  const blocks: string[] = [];
+  for (const edit of edits) {
+    const candidates = findNearestEditCandidates(currentContent, edit.oldText);
+    for (const candidate of candidates) {
+      blocks.push(
+        formatCandidateBlock({
+          index: blocks.length,
+          startLine: candidate.startLine,
+          targetText: splitBoundedDiagnosticLines(edit.oldText).join("\n"),
+          candidateText: candidate.text,
+        }),
+      );
+      if (blocks.length >= EDIT_MISMATCH_CANDIDATE_LIMIT) {
+        return `Nearest candidate lines:\n${blocks.join("\n\n")}`;
+      }
+    }
+  }
+  return blocks.length > 0 ? `Nearest candidate lines:\n${blocks.join("\n\n")}` : "";
+}
+
+function appendMismatchHint(error: Error, currentContent: string, edits: Edit[]): Error {
   const snippet =
     currentContent.length <= EDIT_MISMATCH_HINT_LIMIT
       ? currentContent
       : `${currentContent.slice(0, EDIT_MISMATCH_HINT_LIMIT)}\n... (truncated)`;
-  const enhanced = new Error(`${error.message}\nCurrent file contents:\n${snippet}`, {
+  const candidateHint = formatMismatchCandidates(currentContent, selectMismatchEdits(error, edits));
+  const suffix = candidateHint ? `\n${candidateHint}` : "";
+  const enhanced = new Error(`${error.message}\nCurrent file contents:\n${snippet}${suffix}`, {
     cause: error,
   });
   enhanced.stack = error.stack;
@@ -419,6 +642,7 @@ export function createEditToolDefinition(
 
         const buffer = await ops.readFile(absolutePath);
         const rawContent = buffer.toString("utf-8");
+        let mismatchPhase: EditMismatchPhase = "validation";
         try {
           if (signal?.aborted) {
             throw new Error("Operation aborted");
@@ -440,6 +664,7 @@ export function createEditToolDefinition(
               terminate: true,
             };
           }
+          mismatchPhase = "apply";
           const { baseContent, newContent } = applyEditsToNormalizedContent(
             normalizedContent,
             realEdits,
@@ -489,8 +714,12 @@ export function createEditToolDefinition(
               details: { diff: "", patch: "" },
             };
           }
-          if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
-            throw appendMismatchHint(normalizedError, currentContent);
+          if (
+            normalizedError.message.includes(EDIT_MISMATCH_MESSAGE) ||
+            normalizedError.message.includes(EDIT_INDEXED_MISMATCH_MESSAGE)
+          ) {
+            const matchedEdits = mismatchPhase === "apply" ? realEdits : [];
+            throw appendMismatchHint(normalizedError, currentContent, matchedEdits);
           }
           // Terminal no-op: the edit matched but produced identical content.
           if (normalizedError instanceof EditNoChangeError) {
