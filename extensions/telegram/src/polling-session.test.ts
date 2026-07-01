@@ -477,9 +477,10 @@ async function waitForTestReplyFenceAbort(params: { key: string; laneKey: string
 async function writeSpooledTestUpdates(
   spoolDir: string,
   updates: readonly TestTelegramUpdate[],
+  options?: { now?: number },
 ): Promise<void> {
   for (const update of updates) {
-    await writeTelegramSpooledUpdate({ spoolDir, update });
+    await writeTelegramSpooledUpdate({ spoolDir, update, now: options?.now });
   }
 }
 
@@ -829,6 +830,47 @@ describe("TelegramPollingSession", () => {
         1_999,
       ),
     ).toBe(0);
+    expect(
+      pollingSessionTesting.resolveSpooledUpdateRetryDelayMs(
+        {
+          updateId: 44,
+          path: "/tmp/44.json",
+          update: { update_id: 44 },
+          receivedAt: 0,
+          attempts: pollingSessionTesting.spooledRetryMaxAttempts,
+          lastAttemptAt: 1_000,
+          lastError: "state store outage",
+        },
+        1_999,
+      ),
+    ).toBeGreaterThan(0);
+  });
+
+  it("keeps generic retryable failures pending until they are old enough to dead-letter", () => {
+    const update = {
+      updateId: 42,
+      path: "/tmp/42.json",
+      update: { update_id: 42 },
+      receivedAt: 1_000,
+      attempts: pollingSessionTesting.spooledRetryMaxAttempts - 1,
+      lastAttemptAt: 2_000,
+      lastError: "state store outage",
+    };
+
+    expect(
+      pollingSessionTesting.shouldDeadLetterRetryableSpooledUpdate(
+        update,
+        pollingSessionTesting.spooledRetryMaxAttempts,
+        1_000 + pollingSessionTesting.spooledRetryDeadLetterMinAgeMs - 1,
+      ),
+    ).toBe(false);
+    expect(
+      pollingSessionTesting.shouldDeadLetterRetryableSpooledUpdate(
+        update,
+        pollingSessionTesting.spooledRetryMaxAttempts,
+        1_000 + pollingSessionTesting.spooledRetryDeadLetterMinAgeMs,
+      ),
+    ).toBe(true);
   });
 
   it("does not call getUpdates for offset confirmation (avoiding 409 conflicts)", async () => {
@@ -2093,10 +2135,13 @@ describe("TelegramPollingSession", () => {
         const log = vi.fn();
         const events: string[] = [];
         let poisonAttempts = 0;
-        await writeSpooledTestUpdates(tempDir, [
-          topicUpdate(42, 10, "poison"),
-          topicUpdate(44, 10, "after poison"),
-        ]);
+        await writeSpooledTestUpdates(
+          tempDir,
+          [topicUpdate(42, 10, "poison"), topicUpdate(44, 10, "after poison")],
+          {
+            now: Date.now() - pollingSessionTesting.spooledRetryDeadLetterMinAgeMs,
+          },
+        );
 
         const { runPromise, stopWorker } = startIsolatedIngressSession({
           abort,

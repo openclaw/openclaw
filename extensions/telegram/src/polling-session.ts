@@ -138,6 +138,7 @@ const TELEGRAM_SPOOLED_CLAIM_HEALTH_GRACE_MS = 2 * TELEGRAM_SPOOLED_CLAIM_REFRES
 const TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS = 8;
 const TELEGRAM_SPOOLED_RETRY_BASE_MS = 1_000;
 const TELEGRAM_SPOOLED_RETRY_MAX_MS = 3 * 60_000;
+const TELEGRAM_SPOOLED_RETRY_DEAD_LETTER_MIN_AGE_MS = 24 * 60 * 60 * 1000;
 const TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS = Math.ceil(
   TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS / 1000,
 );
@@ -178,12 +179,7 @@ function resolveNonRetryableSpooledUpdateFailure(
 
 function resolveSpooledUpdateRetryDelayMs(update: TelegramSpooledUpdate, now = Date.now()): number {
   const attempts = update.attempts ?? 0;
-  if (
-    !update.lastError ||
-    update.lastAttemptAt === undefined ||
-    attempts <= 0 ||
-    attempts >= TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS
-  ) {
+  if (!update.lastError || update.lastAttemptAt === undefined || attempts <= 0) {
     return 0;
   }
   const exponent = Math.min(attempts - 1, 8);
@@ -196,6 +192,17 @@ function resolveSpooledUpdateRetryDelayMs(update: TelegramSpooledUpdate, now = D
 
 function resolveSpooledUpdateAttemptNumber(update: TelegramSpooledUpdate): number {
   return (update.attempts ?? 0) + 1;
+}
+
+function shouldDeadLetterRetryableSpooledUpdate(
+  update: TelegramSpooledUpdate,
+  attempt: number,
+  now = Date.now(),
+): boolean {
+  return (
+    attempt >= TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS &&
+    now - update.receivedAt >= TELEGRAM_SPOOLED_RETRY_DEAD_LETTER_MIN_AGE_MS
+  );
 }
 
 type TelegramBot = ReturnType<typeof createTelegramBot>;
@@ -843,7 +850,7 @@ export class TelegramPollingSession {
       }
     }
     const attempt = resolveSpooledUpdateAttemptNumber(params.update);
-    if (attempt >= TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS) {
+    if (shouldDeadLetterRetryableSpooledUpdate(params.update, attempt)) {
       const message = formatErrorMessage(params.err);
       try {
         const failed = await failTelegramSpooledUpdateClaim({
@@ -857,8 +864,8 @@ export class TelegramPollingSession {
           );
           return;
         }
-        // Retryable poison updates must eventually become tombstones so the
-        // lowest update id stops blocking every later turn in the same lane.
+        // Retryable poison updates must eventually become tombstones, but not
+        // during ordinary transient provider or state-store outages.
         this.opts.log(
           `[telegram][warn] spooled update ${params.update.updateId} on lane ${laneKey} reached retry limit after ${attempt} attempts; dead-lettered: ${message}`,
         );
@@ -1718,7 +1725,9 @@ export const testing = {
   resetTelegramRestartBackoffState,
   resolveTelegramRestartDelayMs,
   resolveSpooledUpdateRetryDelayMs,
+  shouldDeadLetterRetryableSpooledUpdate,
   spooledRetryMaxAttempts: TELEGRAM_SPOOLED_RETRY_MAX_ATTEMPTS,
+  spooledRetryDeadLetterMinAgeMs: TELEGRAM_SPOOLED_RETRY_DEAD_LETTER_MIN_AGE_MS,
   isolatedIngressBacklogStallMs: ISOLATED_INGRESS_BACKLOG_STALL_MS,
   spooledClaimRefreshIntervalMs: TELEGRAM_SPOOLED_CLAIM_REFRESH_INTERVAL_MS,
   resolveSpooledUpdateHandlerAbortGraceMs: (valueMs: unknown): number =>
