@@ -583,7 +583,6 @@ export function filterHeartbeatTranscriptArtifacts<T extends { role: string; con
           }
 
           if (cleanTrimmed) {
-            const summaryContent = `[Heartbeat summary: ${cleanTrimmed}]`;
             const msgObj = lastAssistantMessage as unknown as Record<string, unknown>;
             const {
               tool_calls: _tc,
@@ -598,10 +597,10 @@ export function filterHeartbeatTranscriptArtifacts<T extends { role: string; con
               ...rest,
               content:
                 typeof lastAssistantMessage.content === "string"
-                  ? summaryContent
+                  ? cleanTrimmed
                   : Array.isArray(lastAssistantMessage.content)
-                    ? [{ type: "text", text: summaryContent }]
-                    : summaryContent,
+                    ? [{ type: "text", text: cleanTrimmed }]
+                    : cleanTrimmed,
               ...(msgObj.stopReason !== undefined ? { stopReason: "stop" } : {}),
             } as T);
           }

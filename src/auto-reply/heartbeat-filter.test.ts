@@ -1036,7 +1036,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
         filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT, "keep-result"),
       ).toEqual([
         { role: "user", content: "Hello" },
-        { role: "assistant", content: "[Heartbeat summary: Checked mail. Found nothing.]" },
+        { role: "assistant", content: "Checked mail. Found nothing." },
         { role: "user", content: "Hi" },
       ]);
     });
@@ -1054,7 +1054,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
       ).toEqual([
         {
           role: "assistant",
-          content: [{ type: "text", text: "[Heartbeat summary: Report: All clear.]" }],
+          content: [{ type: "text", text: "Report: All clear." }],
         },
       ]);
     });
@@ -1080,9 +1080,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
       ).toEqual([
         {
           role: "assistant",
-          content: [
-            { type: "text", text: "[Heartbeat summary: Sync completed. No errors found.]" },
-          ],
+          content: [{ type: "text", text: "Sync completed. No errors found." }],
         },
       ]);
     });
@@ -1123,7 +1121,7 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
       ).toEqual([
         {
           role: "assistant",
-          content: [{ type: "text", text: "[Heartbeat summary: Clean summary.]" }],
+          content: [{ type: "text", text: "Clean summary." }],
           timestamp: 123456789,
           model: "gpt-4o",
           provider: "openai",
