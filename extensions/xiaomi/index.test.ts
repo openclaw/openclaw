@@ -291,10 +291,25 @@ describe("xiaomi provider plugin", () => {
     expect(catalogProvider.baseUrl).toBe("https://api.xiaomimimo.com/v1");
 
     const modelIds = catalogProvider.models?.map((m) => m.id);
-    expect(modelIds).toContain("mimo-v2-pro");
-    expect(modelIds).toContain("mimo-v2-omni");
-    expect(modelIds).toContain("mimo-v2-flash");
+    // Pay-as-you-go now serves the V2.5 reasoning stack, listed ahead of the legacy V2 rows.
+    expect(modelIds).toEqual([
+      "mimo-v2.5-pro",
+      "mimo-v2.5",
+      "mimo-v2-flash",
+      "mimo-v2-pro",
+      "mimo-v2-omni",
+    ]);
 
+    expect(catalogProvider.models?.find((m) => m.id === "mimo-v2.5-pro")?.reasoning).toBe(true);
+    expect(catalogProvider.models?.find((m) => m.id === "mimo-v2.5")?.reasoning).toBe(true);
+    // The manifest modelCatalog path only supports text/image inputs (MODEL_CATALOG_INPUTS in
+    // @openclaw/model-catalog-core), so mimo-v2.5 advertises text+image here even though the model
+    // is natively omni; audio/video would require extending the catalog input set in core.
+    expect(catalogProvider.models?.find((m) => m.id === "mimo-v2.5")?.input).toEqual([
+      "text",
+      "image",
+    ]);
+    expect(catalogProvider.models?.find((m) => m.id === "mimo-v2.5-pro")?.input).toEqual(["text"]);
     expect(catalogProvider.models?.find((m) => m.id === "mimo-v2-pro")?.reasoning).toBe(true);
     expect(catalogProvider.models?.find((m) => m.id === "mimo-v2-omni")?.reasoning).toBe(true);
     expect(catalogProvider.models?.find((m) => m.id === "mimo-v2-flash")?.reasoning).toBeFalsy();
