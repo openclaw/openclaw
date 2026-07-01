@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { buildSessionStartupContextPrelude } from "../../../auto-reply/reply/startup-context.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
@@ -289,6 +290,70 @@ describe("session-memory hook", () => {
     expect(memoryContent).not.toContain("<tool_call>");
     expect(memoryContent).not.toContain("secret.md");
     expect(memoryContent).not.toContain("NO_REPLY");
+  });
+
+  it("keeps leaked role scaffolding out of saved and next-session memory context", async () => {
+    const timestamp = new Date("2026-06-30T12:00:00.000Z");
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "Keep this example:\n```text\nuser\nassistant:\n```" },
+      {
+        role: "assistant",
+        content: [
+          "Visible answer.",
+          "user",
+          "I need",
+          "assistant:",
+          "Incomplete.",
+          "",
+          "The word below is intentional prose:",
+          "system",
+          "Keep it.",
+          "",
+          "```text",
+          "user",
+          "assistant:",
+          "system",
+          "```",
+        ].join("\n"),
+      },
+    ]);
+    const { tempDir, sessionFile } = await writeSessionTranscript({
+      name: "role-leak.jsonl",
+      content: sessionContent,
+    });
+    const cfg = {
+      agents: { defaults: { workspace: tempDir, userTimezone: "UTC" } },
+    } satisfies OpenClawConfig;
+    const { memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir,
+      cfg,
+      timestamp,
+      previousSessionEntry: { sessionId: "role-leak", sessionFile },
+    });
+
+    const nextSessionContext = await buildSessionStartupContextPrelude({
+      workspaceDir: tempDir,
+      cfg,
+      nowMs: timestamp.getTime(),
+    });
+
+    expect(memoryContent).toContain(
+      "**assistant:**\n\n> Visible answer.\n> user\n> I need\n> assistant:\n> Incomplete.",
+    );
+    expect(memoryContent).not.toContain("\nuser\nI need");
+    expect(memoryContent).not.toContain("\nassistant:\nIncomplete");
+    expect(memoryContent).toContain("The word below is intentional prose:\n> system\n> Keep it.");
+    expect(memoryContent).toContain("> ```text\n> user\n> assistant:\n> system\n> ```");
+    expect(nextSessionContext).toContain("[Startup context loaded by runtime]");
+    expect(nextSessionContext).toContain(
+      "**assistant:**\n\n> Visible answer.\n> user\n> I need\n> assistant:\n> Incomplete.",
+    );
+    expect(nextSessionContext).not.toContain("\nuser\nI need");
+    expect(nextSessionContext).not.toContain("\nassistant:\nIncomplete");
+    expect(nextSessionContext).toContain(
+      "The word below is intentional prose:\n> system\n> Keep it.",
+    );
+    expect(nextSessionContext).toContain("> user\n> assistant:\n> system");
   });
 
   it("does not call the model provider for a filename slug by default", async () => {

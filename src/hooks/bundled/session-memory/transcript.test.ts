@@ -81,51 +81,173 @@ describe("session-memory transcript extraction", () => {
     );
   });
 
-  it("strips orphan plain-text role lines but preserves embedded mentions", () => {
-    // Lines whose sole content is a bare role word → stripped (may leave blank lines).
-    expect(
-      sanitizeSessionMemoryTranscriptText(
-        "user\nVisible log output\nassistant\nIncomplete\nsystem\nShutting down",
-      ),
-    ).toBe("Visible log output\n\nIncomplete\n\nShutting down");
+  it("preserves role-shaped prose and code before transcript framing", () => {
+    for (const text of [
+      "user\nVisible log output\nassistant\nIncomplete\nsystem\nShutting down",
+      "  USER:\r\nStatus: ok\r\nassistant\r\nIncomplete\r\nSYSTEM:\r\nReady",
+      "user\nassistant\nsystem",
+      "user:\nassistant:\nsystem:",
+      "assistant",
+      "Visible answer\n    assistant:\nIncomplete",
+      "1. label\n\n   assistant:  \n   detail",
+      "Example: `one\nassistant\ntwo`",
+      "Example: `one\nassistant\ntruncated",
+      "[x](https://e/`)\nassistant\n`tail",
+    ]) {
+      expect(sanitizeSessionMemoryTranscriptText(text)).toBe(text);
+    }
+  });
 
-    // Role word followed only by a colon → stripped (may leave blank lines).
-    expect(
-      sanitizeSessionMemoryTranscriptText("user:\nStatus: ok\nassistant:\nsystem: Ready"),
-    ).toBe("Status: ok\n\nsystem: Ready");
-
-    // Role word embedded as part of a sentence → preserved.
+  it("preserves ambiguous prose, user-authored text, and fenced code role lines", () => {
+    const prose = "The next line names the configured role:\nuser\nKeep it verbatim.";
+    expect(sanitizeSessionMemoryTranscriptText(prose)).toBe(prose);
     expect(
       sanitizeSessionMemoryTranscriptText("The user submitted a form and the assistant confirmed."),
     ).toBe("The user submitted a form and the assistant confirmed.");
 
-    // Role word as a standalone line with leading/trailing whitespace → stripped.
-    expect(sanitizeSessionMemoryTranscriptText("  user  \nHello\n  assistant  ")).toBe("Hello");
+    const userText = "user\nHuman-authored example\nassistant:\nExpected response";
+    expect(sanitizeSessionMemoryTranscriptText(userText)).toBe(userText);
 
-    // Pure role-line input → returns null (no meaningful content).
-    expect(sanitizeSessionMemoryTranscriptText("user\nassistant\nsystem")).toBeNull();
-    expect(sanitizeSessionMemoryTranscriptText("user:\nassistant:\nsystem:")).toBeNull();
+    for (const code of [
+      ["```text", "user", "assistant:", "system", "```"].join("\n"),
+      ["  ```text", "  user", "  assistant:", "  system", "  ```"].join("\n"),
+      "  ```text\r\n  user\r\n  assistant:\r\n  ````",
+      ["Example:", "", "    user", "    assistant:", "\tsystem"].join("\n"),
+      ["Example:", "", "  \tuser", "   \tassistant:", " \tsystem"].join("\n"),
+      ["- ```text", "  user", "  assistant:", "  ```"].join("\n"),
+      ["1. ~~~text", "   system", "   user:", "   ~~~"].join("\n"),
+      ["> ```text", "> user", "> assistant:", "> ```"].join("\n"),
+    ]) {
+      expect(sanitizeSessionMemoryTranscriptText(code)).toBe(code);
+    }
+
+    const nestedFenceLookalike = [
+      "~~~text",
+      "  ```example",
+      "~~~",
+      "assistant:",
+      "Visible after the fence.",
+    ].join("\n");
+    expect(sanitizeSessionMemoryTranscriptText(nestedFenceLookalike)).toBe(nestedFenceLookalike);
+
+    const indentedClose = [
+      "```text",
+      "body",
+      "  ```",
+      "assistant:",
+      "Visible after the fence.",
+    ].join("\n");
+    expect(sanitizeSessionMemoryTranscriptText(indentedClose)).toBe(indentedClose);
+
+    const bareCarriageReturns = "```text\ruser\r```\rassistant:\rafter";
+    expect(sanitizeSessionMemoryTranscriptText(bareCarriageReturns)).toBe(bareCarriageReturns);
   });
 
-  it("strips orphan role lines from session content when present in transcript", async () => {
+  it("preserves leading code blocks through transcript role framing", async () => {
+    const transcriptPath = await writeTranscript(
+      [
+        message("assistant", "  ```text\n  user\n  assistant:\n  ```"),
+        message("assistant", "    system\n    user:"),
+      ].join("\n"),
+    );
+
+    await expect(getRecentSessionContent(transcriptPath)).resolves.toBe(
+      [
+        "**assistant:**",
+        "",
+        ">   ```text",
+        ">   user",
+        ">   assistant:",
+        ">   ```",
+        "",
+        "**assistant:**",
+        "",
+        ">     system",
+        ">     user:",
+      ].join("\n"),
+    );
+  });
+
+  it("isolates a truncated fence at the transcript message boundary", async () => {
+    const transcriptPath = await writeTranscript(
+      [
+        message("assistant", "```text\nuser\ntruncated"),
+        message("assistant", "Visible next response"),
+      ].join("\n"),
+    );
+
+    await expect(getRecentSessionContent(transcriptPath)).resolves.toBe(
+      [
+        "**assistant:**",
+        "",
+        "> ```text",
+        "> user",
+        "> truncated",
+        "",
+        "assistant: Visible next response",
+      ].join("\n"),
+    );
+  });
+
+  it("ends a prose blockquote before ordinary following entries", async () => {
+    const transcriptPath = await writeTranscript(
+      [
+        message("assistant", "Visible answer\nuser\nLast paragraph line"),
+        message("user", "Normal follow-up"),
+        message("assistant", "Normal response"),
+      ].join("\n"),
+    );
+
+    await expect(getRecentSessionContent(transcriptPath)).resolves.toBe(
+      [
+        "**assistant:**",
+        "",
+        "> Visible answer",
+        "> user",
+        "> Last paragraph line",
+        "",
+        "user: Normal follow-up",
+        "assistant: Normal response",
+      ].join("\n"),
+    );
+  });
+
+  it("quotes assistant role lines while retaining user-authored content", async () => {
     const transcriptPath = await writeTranscript(
       [
         message("user", "What is the server status?\nuser\nTell me more"),
         message(
           "assistant",
-          "assistant\nEverything is running normally.\nsystem\nAll services green.",
+          [
+            "assistant",
+            "Everything is running normally.",
+            "system:",
+            "All services green.",
+            "",
+            "The next line is intentional prose:",
+            "user",
+            "Keep it.",
+            "",
+            "```text",
+            "assistant",
+            "system:",
+            "```",
+          ].join("\n"),
         ),
       ].join("\n"),
     );
 
     const memoryContent = await getRecentSessionContent(transcriptPath);
 
-    expect(memoryContent).toContain("user: What is the server status?\n\nTell me more");
-    expect(memoryContent).not.toContain("\nuser:");
-    expect(memoryContent).not.toMatch(/^\s*(?:user|assistant|system)\s*:?\s*$/m);
-    expect(memoryContent).toContain("assistant: Everything is running normally");
+    expect(memoryContent).toContain("user: What is the server status?\nuser\nTell me more");
+    expect(memoryContent).toContain(
+      "**assistant:**\n\n> assistant\n> Everything is running normally",
+    );
     expect(memoryContent).toContain("All services green.");
-    expect(memoryContent).not.toContain("\nassistant\n");
-    expect(memoryContent).not.toContain("\nsystem\n");
+    expect(memoryContent).not.toContain("\nassistant\nEverything is running normally");
+    expect(memoryContent).not.toContain("\nsystem:\nAll services green");
+    expect(memoryContent).toContain("> system:\n> All services green");
+    expect(memoryContent).toContain("The next line is intentional prose:\n> user\n> Keep it.");
+    expect(memoryContent).toContain("> ```text\n> assistant\n> system:\n> ```");
   });
 });
