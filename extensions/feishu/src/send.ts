@@ -49,8 +49,13 @@ function shouldFallbackFromReplyTarget(response: { code?: number; msg?: string }
   return msg.includes("withdrawn") || msg.includes("not found");
 }
 
+// Exported so sibling modules (e.g. media.ts) can route image/file replies
+// through the same withdrawn/not-found fallback that text/card replies
+// already use. No behavior change at this call site.
+export { shouldFallbackFromReplyTarget };
+
 /** Check whether a thrown error indicates a withdrawn/not-found reply target. */
-function isWithdrawnReplyError(err: unknown): boolean {
+export function isWithdrawnReplyError(err: unknown): boolean {
   if (typeof err !== "object" || err === null) {
     return false;
   }
@@ -143,7 +148,7 @@ async function sendFallbackDirect(
   return toFeishuSendResult(response, params.receiveId, resolveFeishuReceiptKind(params.msgType));
 }
 
-async function sendReplyOrFallbackDirect(
+export async function sendReplyOrFallbackDirect(
   client: FeishuCreateMessageClient,
   params: {
     replyToMessageId?: string;

@@ -24,12 +24,8 @@ import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { getFeishuRuntime } from "./runtime.js";
-import {
-  assertFeishuMessageApiSuccess,
-  resolveFeishuReceiptKind,
-  toFeishuSendResult,
-} from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
+import { sendReplyOrFallbackDirect } from "./send.js";
 
 const FEISHU_MEDIA_HTTP_TIMEOUT_MS = 120_000;
 const FEISHU_VOICE_FILE_NAME = "voice.ogg";
@@ -520,49 +516,38 @@ export async function sendImageFeishu(params: {
   imageKey: string;
   replyToMessageId?: string;
   replyInThread?: boolean;
+  /** When true (and a reply target is unavailable), fall back to a top-level
+   *  create() instead of raising a thread-boundary error. Mirrors the
+   *  allowTopLevelReplyFallback option on the text/card reply path. */
+  allowTopLevelReplyFallback?: boolean;
   accountId?: string;
 }): Promise<SendMediaResult> {
-  const { cfg, to, imageKey, replyToMessageId, replyInThread, accountId } = params;
+  const {
+    cfg,
+    to,
+    imageKey,
+    replyToMessageId,
+    replyInThread,
+    allowTopLevelReplyFallback,
+    accountId,
+  } = params;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
     cfg,
     to,
     accountId,
   });
   const content = JSON.stringify({ image_key: imageKey });
-
-  if (replyToMessageId) {
-    const response = await requestFeishuApi(
-      () =>
-        client.im.message.reply({
-          path: { message_id: replyToMessageId },
-          data: {
-            content,
-            msg_type: "image",
-            ...(replyInThread ? { reply_in_thread: true } : {}),
-          },
-        }),
-      "Feishu image reply failed",
-      { includeNestedErrorLogId: true },
-    );
-    assertFeishuMessageApiSuccess(response, "Feishu image reply failed");
-    return toFeishuSendResult(response, receiveId, "media");
-  }
-
-  const response = await requestFeishuApi(
-    () =>
-      client.im.message.create({
-        params: { receive_id_type: receiveIdType },
-        data: {
-          receive_id: receiveId,
-          content,
-          msg_type: "image",
-        },
-      }),
-    "Feishu image send failed",
-    { includeNestedErrorLogId: true },
-  );
-  assertFeishuMessageApiSuccess(response, "Feishu image send failed");
-  return toFeishuSendResult(response, receiveId, "media");
+  const directParams = { receiveId, receiveIdType, content, msgType: "image" };
+  return sendReplyOrFallbackDirect(client, {
+    replyToMessageId,
+    replyInThread,
+    allowTopLevelReplyFallback,
+    content,
+    msgType: "image",
+    directParams,
+    directErrorPrefix: "Feishu image send failed",
+    replyErrorPrefix: "Feishu image reply failed",
+  });
 }
 
 /**
@@ -576,9 +561,21 @@ export async function sendFileFeishu(params: {
   msgType?: "file" | "audio" | "media";
   replyToMessageId?: string;
   replyInThread?: boolean;
+  /** When true (and a reply target is unavailable), fall back to a top-level
+   *  create() instead of raising a thread-boundary error. Mirrors the
+   *  allowTopLevelReplyFallback option on the text/card reply path. */
+  allowTopLevelReplyFallback?: boolean;
   accountId?: string;
 }): Promise<SendMediaResult> {
-  const { cfg, to, fileKey, replyToMessageId, replyInThread, accountId } = params;
+  const {
+    cfg,
+    to,
+    fileKey,
+    replyToMessageId,
+    replyInThread,
+    allowTopLevelReplyFallback,
+    accountId,
+  } = params;
   const msgType = params.msgType ?? "file";
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
     cfg,
@@ -586,40 +583,17 @@ export async function sendFileFeishu(params: {
     accountId,
   });
   const content = JSON.stringify({ file_key: fileKey });
-
-  if (replyToMessageId) {
-    const response = await requestFeishuApi(
-      () =>
-        client.im.message.reply({
-          path: { message_id: replyToMessageId },
-          data: {
-            content,
-            msg_type: msgType,
-            ...(replyInThread ? { reply_in_thread: true } : {}),
-          },
-        }),
-      "Feishu file reply failed",
-      { includeNestedErrorLogId: true },
-    );
-    assertFeishuMessageApiSuccess(response, "Feishu file reply failed");
-    return toFeishuSendResult(response, receiveId, resolveFeishuReceiptKind(msgType));
-  }
-
-  const response = await requestFeishuApi(
-    () =>
-      client.im.message.create({
-        params: { receive_id_type: receiveIdType },
-        data: {
-          receive_id: receiveId,
-          content,
-          msg_type: msgType,
-        },
-      }),
-    "Feishu file send failed",
-    { includeNestedErrorLogId: true },
-  );
-  assertFeishuMessageApiSuccess(response, "Feishu file send failed");
-  return toFeishuSendResult(response, receiveId, resolveFeishuReceiptKind(msgType));
+  const directParams = { receiveId, receiveIdType, content, msgType };
+  return sendReplyOrFallbackDirect(client, {
+    replyToMessageId,
+    replyInThread,
+    allowTopLevelReplyFallback,
+    content,
+    msgType,
+    directParams,
+    directErrorPrefix: "Feishu file send failed",
+    replyErrorPrefix: "Feishu file reply failed",
+  });
 }
 
 /**
@@ -863,6 +837,10 @@ export async function sendMediaFeishu(params: {
   mediaLocalRoots?: readonly string[];
   /** When true, transcode compatible audio to Feishu native Ogg/Opus voice bubbles. */
   audioAsVoice?: boolean;
+  /** When true (and a reply target is unavailable), fall back to a top-level
+   *  create() instead of raising a thread-boundary error. Mirrors the
+   *  allowTopLevelReplyFallback option on the text/card reply path. */
+  allowTopLevelReplyFallback?: boolean;
 }): Promise<SendMediaResult> {
   const {
     cfg,
@@ -875,6 +853,7 @@ export async function sendMediaFeishu(params: {
     accountId,
     mediaLocalRoots,
     audioAsVoice,
+    allowTopLevelReplyFallback,
   } = params;
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   if (!account.configured) {
@@ -923,6 +902,7 @@ export async function sendMediaFeishu(params: {
       imageKey,
       replyToMessageId,
       replyInThread,
+      allowTopLevelReplyFallback,
       accountId,
     });
     return {
@@ -946,6 +926,7 @@ export async function sendMediaFeishu(params: {
     msgType: routing.msgType,
     replyToMessageId,
     replyInThread,
+    allowTopLevelReplyFallback,
     accountId,
   });
   return {
