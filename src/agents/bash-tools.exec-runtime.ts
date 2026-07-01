@@ -13,6 +13,7 @@ import {
 } from "../infra/event-session-routing.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
+  formatAllowAlwaysUnavailableMessage,
   resolveExecApprovalAllowedDecisions,
   type ExecHost,
   type ExecApprovalDecision,
@@ -440,19 +441,7 @@ export function buildApprovalPendingMessage(params: {
   );
   lines.push(`Reply with: /approve ${params.approvalSlug} ${decisionText}`);
   if (!allowedDecisions.includes("allow-always")) {
-    if (params.ask === "always") {
-      lines.push(
-        "The effective approval policy requires approval every time, so Allow Always is unavailable.",
-      );
-    } else if (params.ask != null) {
-      lines.push(
-        "Allow Always is unavailable for this command. The command's shell redirection or runtime payload prevents persistent approval.",
-      );
-    } else {
-      lines.push(
-        "The effective approval policy requires approval every time, so Allow Always is unavailable.",
-      );
-    }
+    lines.push(formatAllowAlwaysUnavailableMessage(params.ask));
   }
   lines.push("If the short code is ambiguous, use the full id in /approve.");
   return lines.join("\n");

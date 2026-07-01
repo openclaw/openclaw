@@ -1663,6 +1663,16 @@ export function isExecApprovalDecisionAllowed(params: {
   return resolveExecApprovalAllowedDecisions({ ask: params.ask }).includes(params.decision);
 }
 
+/** Returns the user-facing reason "Allow Always is unavailable" for a given ask mode. */
+export function formatAllowAlwaysUnavailableMessage(ask?: string | null): string {
+  // ask=always → policy requires every-time approval
+  // ask=null/undefined → plugin approval or unset (conservatively assume policy)
+  // any other ask (on-miss, off) → one-shot command (shell redirection/runtime payload)
+  return ask != null && ask !== "always"
+    ? "Allow Always is unavailable for this command. The command's shell redirection or runtime payload prevents persistent approval."
+    : "Allow Always is unavailable because the effective policy requires approval every time.";
+}
+
 export async function requestExecApprovalViaSocket(params: {
   socketPath: string;
   token: string;
