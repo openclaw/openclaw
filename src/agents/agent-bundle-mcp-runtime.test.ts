@@ -1036,6 +1036,136 @@ process.on("SIGINT", shutdown);`,
     }
   });
 
+  it("marks the MCP session disconnected and fails tool calls fast after the child process is killed mid-session", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-kill-mid-session-"));
+    const serverPath = path.join(tempDir, "kill-mid-session.mjs");
+    const pidPath = path.join(tempDir, "server.pid");
+    await writeExecutable(
+      serverPath,
+      `#!/usr/bin/env node
+import fs from "node:fs/promises";
+
+const pidPath = ${JSON.stringify(pidPath)};
+await fs.writeFile(pidPath, String(process.pid), "utf8");
+
+let buffer = "";
+function send(message) {
+  process.stdout.write(JSON.stringify(message) + "\\n");
+}
+function handle(message) {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  if (message.method === "initialize") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+        capabilities: { tools: {} },
+        serverInfo: { name: "kill-mid-session", version: "1.0.0" },
+      },
+    });
+    return;
+  }
+  if (message.method === "notifications/initialized") {
+    return;
+  }
+  if (message.method === "tools/list") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: { tools: [{ name: "ok_tool", inputSchema: { type: "object", properties: {} } }] },
+    });
+    return;
+  }
+  if (message.method === "tools/call") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: { isError: false, content: [{ type: "text", text: "still connected" }] },
+    });
+  }
+}
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const newline = buffer.indexOf("\\n");
+    if (newline < 0) {
+      return;
+    }
+    const line = buffer.slice(0, newline).replace(/\\r$/, "");
+    buffer = buffer.slice(newline + 1);
+    if (line.trim()) {
+      handle(JSON.parse(line));
+    }
+  }
+});`,
+    );
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-kill-mid-session",
+      sessionKey: "agent:test:session-kill-mid-session",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            killable: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const firstCatalog = await runtime.getCatalog();
+      expect(firstCatalog.tools.map((tool) => tool.toolName)).toEqual(["ok_tool"]);
+
+      const firstResult = await runtime.callTool("killable", "ok_tool", {});
+      expect(firstResult.content[0]).toEqual({ type: "text", text: "still connected" });
+
+      await waitForFileText(pidPath, "", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+      const pid = Number.parseInt((await fs.readFile(pidPath, "utf8")).trim(), 10);
+      expect(Number.isInteger(pid)).toBe(true);
+      process.kill(pid, "SIGKILL");
+
+      // Poll instead of a fixed delay: the child's close event races the test.
+      // Once it lands, `connected` flips and every subsequent call fails fast
+      // with the attributable reason instead of a generic/timeout error.
+      let sawDisconnectedMessage = "";
+      const deadline = Date.now() + LIST_TOOLS_SERVER_LOG_TIMEOUT_MS;
+      while (Date.now() < deadline && !sawDisconnectedMessage) {
+        try {
+          await runtime.callTool("killable", "ok_tool", {});
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (message.includes("is disconnected")) {
+            sawDisconnectedMessage = message;
+            break;
+          }
+        }
+        await new Promise((resolve) => {
+          setTimeout(resolve, 10);
+        });
+      }
+      expect(sawDisconnectedMessage).toBe(
+        `bundle-mcp server "killable" is disconnected: mcp transport closed`,
+      );
+
+      const start = Date.now();
+      await expect(runtime.callTool("killable", "ok_tool", {})).rejects.toThrow(
+        `bundle-mcp server "killable" is disconnected: mcp transport closed`,
+      );
+      expect(Date.now() - start).toBeLessThan(200);
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not cache a catalog invalidated while discovery is in flight", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-inflight-invalidated-"));
     const serverPath = path.join(tempDir, "inflight-invalidated.mjs");
