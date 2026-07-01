@@ -586,7 +586,21 @@ terminal summary, and sanitized error text. `agentId` identifies the agent
 executing the task; `sessionKey` and `ownerKey` preserve requester and control
 context.
 
-## Operator helper methods
+### Durable coordination RPCs
+
+Operator clients may inspect native Durable Runtime coordination state through a
+bounded projection instead of reading the shared OpenClaw state database
+directly. These methods are disabled unless `OPENCLAW_DURABLE_RUNTIME` is
+explicitly enabled.
+
+- `durable.coordination.get` requires `operator.read`.
+  - Params: `{ "runtimeRunId": string }`.
+  - Result: `{ "projection": DurableCoordinationProjection }`.
+  - The projection includes runtime identity, status, recovery state, current
+    step, waiting reason, external task/session/run bindings, child counts, ref
+    summaries, and supported controls.
+
+### Operator helper methods
 
 - `commands.list` (`operator.read`) fetches the runtime command inventory for
   an agent.

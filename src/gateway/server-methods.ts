@@ -130,6 +130,10 @@ const loadDoctorHandlers = lazyHandlerModule(
   () => import("./server-methods/doctor.js"),
   (module) => module.doctorHandlers,
 );
+const loadDurableHandlers = lazyHandlerModule(
+  () => import("./server-methods/durable.js"),
+  (module) => module.durableHandlers,
+);
 const loadEnvironmentsHandlers = lazyHandlerModule(
   () => import("./server-methods/environments.js"),
   (module) => module.environmentsHandlers,
@@ -497,6 +501,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...createLazyCoreHandlers({
     methods: ["tasks.list", "tasks.get", "tasks.cancel"],
     loadHandlers: loadTasksHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["durable.coordination.get"],
+    loadHandlers: loadDurableHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["tools.catalog"],
