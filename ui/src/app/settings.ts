@@ -102,6 +102,19 @@ export type UiSettings = {
 
 export type { LocalUserIdentity } from "./user-identity.ts";
 
+type LastActiveSessionHost = {
+  settings: UiSettings;
+  applySettings(next: UiSettings): void;
+};
+
+export function setLastActiveSessionKey(host: LastActiveSessionHost, next: string) {
+  const trimmed = next.trim();
+  if (!trimmed || host.settings.lastActiveSessionKey === trimmed) {
+    return;
+  }
+  host.applySettings({ ...host.settings, lastActiveSessionKey: trimmed });
+}
+
 export type ApplicationStartupLocation = {
   pathname: string;
   search: string;

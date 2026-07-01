@@ -7,6 +7,7 @@ import {
 } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { SessionsListResult } from "../../api/types.ts";
+import { setLastActiveSessionKey } from "../../app/settings.ts";
 import type {
   ChatAttachment,
   ChatQueueItem,
@@ -80,8 +81,6 @@ import {
   type ChatInputHistoryKeyResult,
   type ChatInputHistoryState,
 } from "./input-history.ts";
-// Control UI module implements app chat behavior.
-import { setLastActiveSessionKey } from "./last-active-session.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { scheduleChatScroll, resetChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache, type ChatMessageCache } from "./session-message-cache.ts";

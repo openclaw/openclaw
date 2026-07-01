@@ -23,7 +23,7 @@ import {
   parsePluginApprovalRequested,
   pruneExecApprovalQueue,
 } from "../app/exec-approval.ts";
-import type { UiSettings } from "../app/settings.ts";
+import { setLastActiveSessionKey, type UiSettings } from "../app/settings.ts";
 import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -58,7 +58,6 @@ import {
   type ChatEventPayload,
   type ChatState,
 } from "../pages/chat/gateway.ts";
-import { setLastActiveSessionKey } from "../pages/chat/last-active-session.ts";
 import { reconcileChatRunLifecycle } from "../pages/chat/run-lifecycle.ts";
 import { scheduleChatScroll } from "../pages/chat/scroll.ts";
 import { scopedAgentParamsForSession } from "../pages/chat/session-scope.ts";

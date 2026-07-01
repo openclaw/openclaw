@@ -24,7 +24,7 @@ const { executeSlashCommandMock, setLastActiveSessionKeyMock } = vi.hoisted(() =
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
-vi.mock("./last-active-session.ts", () => ({
+vi.mock("../../app/settings.ts", () => ({
   setLastActiveSessionKey: (...args: unknown[]) => setLastActiveSessionKeyMock(...args),
 }));
 
@@ -3203,6 +3203,6 @@ describe("handleAbortChat", () => {
 });
 
 afterAll(() => {
-  vi.doUnmock("./last-active-session.ts");
+  vi.doUnmock("../../app/settings.ts");
   vi.resetModules();
 });

@@ -153,7 +153,7 @@ vi.mock("../pages/chat/scroll.ts", () => ({
   scheduleChatScroll: scheduleChatScrollMock,
 }));
 
-vi.mock("../pages/chat/last-active-session.ts", () => ({
+vi.mock("../app/settings.ts", () => ({
   setLastActiveSessionKey: vi.fn(),
 }));
 
