@@ -27,13 +27,13 @@ import "../../components/tooltip.ts";
 import { extractThinkingCached, formatReasoningMarkdown } from "../../lib/chat/message-extract.ts";
 import { isToolResultMessage, normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
-import { formatCompactTokenCount } from "../../lib/chat/token-format.ts";
 import {
   extractToolCardsCached,
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolCardError,
 } from "../../lib/chat/tool-cards.ts";
+import { formatCompactTokenCount } from "../../lib/format.ts";
 import { renderChatAvatar } from "./chat-avatar.ts";
 import {
   renderExpandedToolCardContent,

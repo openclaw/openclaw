@@ -1,12 +1,20 @@
+// Control UI chat module implements stream reconciliation behavior.
+import {
+  isToolCallContentType,
+  isToolResultContentType,
+  resolveToolUseId,
+} from "../../../../src/chat/tool-content.js";
 import {
   streamSegmentHasItemId,
   streamSegmentUsesAccumulatedText,
   trimAccumulatedStreamPrefix,
 } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import { extractToolMessageRefs } from "../../lib/chat/tool-message-refs.ts";
-// Control UI chat module implements stream reconciliation behavior.
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
+import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../lib/string-coerce.ts";
 import { resetToolStream } from "../../ui/app-tool-stream.ts";
 
 export type StreamReconciliationState = {
@@ -34,6 +42,73 @@ type VisibleAssistantStreamPart = {
   itemId?: string;
   toolCallId?: string;
 };
+
+type ToolMessageRef = {
+  id: string;
+};
+
+const TOOL_NAME_FIELDS = ["toolName", "tool_name"] as const;
+
+function asToolRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function addToolRef(refs: ToolMessageRef[], seen: Set<string>, id: string | undefined) {
+  if (!id || seen.has(id)) {
+    return;
+  }
+  seen.add(id);
+  refs.push({ id });
+}
+
+function isToolLikeRole(role: unknown): boolean {
+  return typeof role === "string" && normalizeRoleForGrouping(role).toLowerCase() === "tool";
+}
+
+function hasToolName(message: Record<string, unknown>): boolean {
+  return TOOL_NAME_FIELDS.some((field) => Boolean(normalizeOptionalString(message[field])));
+}
+
+function toolContentBlocks(message: Record<string, unknown>): Record<string, unknown>[] {
+  return Array.isArray(message.content)
+    ? message.content.filter(
+        (block): block is Record<string, unknown> => Boolean(block) && typeof block === "object",
+      )
+    : [];
+}
+
+function isToolContentBlock(block: Record<string, unknown>): boolean {
+  return isToolCallContentType(block.type) || isToolResultContentType(block.type);
+}
+
+function extractToolMessageRefs(message: unknown): ToolMessageRef[] {
+  const record = asToolRecord(message);
+  if (!record) {
+    return [];
+  }
+
+  const refs: ToolMessageRef[] = [];
+  const seen = new Set<string>();
+  const blocks = toolContentBlocks(record);
+  const topLevelToolId = resolveToolUseId(record);
+  const messageHasToolShape =
+    isToolLikeRole(record.role) || hasToolName(record) || blocks.some(isToolContentBlock);
+
+  if (messageHasToolShape) {
+    addToolRef(refs, seen, topLevelToolId);
+  }
+
+  for (const block of blocks) {
+    if (!isToolContentBlock(block)) {
+      continue;
+    }
+    addToolRef(refs, seen, resolveToolUseId(block) ?? topLevelToolId);
+  }
+
+  return refs;
+}
 
 export type AssistantMessageVisibility = (message: unknown) => boolean;
 export type StreamVisibility = (stream: string) => boolean;

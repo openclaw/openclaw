@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   formatDateTimeMs,
   formatDateMs,
+  formatCompactTokenCount,
   formatMs,
   formatRelativeTimestamp,
   formatTimeMs,
@@ -216,6 +217,46 @@ describe("parseSessionKeyParts", () => {
     expect(parseSessionKeyParts("agent:main")).toBeNull();
     expect(parseSessionKeyParts("agent:main:")).toBeNull();
     expect(parseSessionKeyParts("agent:main:telegram")).toBeNull();
+  });
+});
+
+describe("formatCompactTokenCount", () => {
+  it("formats values under 1,000 as-is", () => {
+    expect(formatCompactTokenCount(0)).toBe("0");
+    expect(formatCompactTokenCount(999)).toBe("999");
+  });
+
+  it("formats thousands with one decimal, trimming a trailing .0", () => {
+    expect(formatCompactTokenCount(1_000)).toBe("1k");
+    expect(formatCompactTokenCount(214_500)).toBe("214.5k");
+    expect(formatCompactTokenCount(99_950)).toBe("100k");
+  });
+
+  it("formats millions with one decimal, trimming a trailing .0", () => {
+    expect(formatCompactTokenCount(1_000_000)).toBe("1M");
+    expect(formatCompactTokenCount(1_500_000)).toBe("1.5M");
+  });
+
+  it("rolls values that round up to 1000.0k into the M branch", () => {
+    expect(formatCompactTokenCount(999_999)).toBe("1M");
+    expect(formatCompactTokenCount(999_950)).toBe("1M");
+    expect(formatCompactTokenCount(999_500)).toBe("999.5k");
+  });
+
+  it("does not roll over values just below the rounding boundary", () => {
+    expect(formatCompactTokenCount(999_949)).toBe("999.9k");
+    expect(formatCompactTokenCount(999_499)).toBe("999.5k");
+  });
+
+  it("supports uppercase thousands labels for Usage surfaces", () => {
+    expect(formatCompactTokenCount(12_500, { thousandsSuffix: "K" })).toBe("12.5K");
+  });
+
+  it("can preserve trailing decimals for Usage surfaces", () => {
+    expect(formatCompactTokenCount(1_000, { thousandsSuffix: "K", trimTrailingZero: false })).toBe(
+      "1.0K",
+    );
+    expect(formatCompactTokenCount(1_000_000, { trimTrailingZero: false })).toBe("1.0M");
   });
 });
 

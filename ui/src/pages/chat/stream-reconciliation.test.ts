@@ -111,6 +111,58 @@ describe("stream reconciliation", () => {
     expect(state.toolStreamOrder).toEqual([]);
   });
 
+  it("prunes persisted tool messages across current tool id shapes", () => {
+    const messages = [
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "shell",
+      },
+      {
+        role: "tool",
+        tool_call_id: "call_2",
+        tool_name: "shell",
+      },
+      {
+        role: "assistant",
+        content: [{ type: "toolcall", id: "call_3", name: "shell", arguments: {} }],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "tool_result", tool_use_id: "call_4", name: "shell", content: "ok" }],
+      },
+      { role: "assistant", content: "hello" },
+      { role: "user", content: "hello" },
+    ];
+    const state = {
+      chatStream: null,
+      chatStreamStartedAt: null,
+      chatToolMessages: messages,
+      toolStreamById: new Map<string, unknown>([
+        ["call_1", {}],
+        ["call_2", {}],
+        ["call_3", {}],
+        ["call_4", {}],
+      ]),
+      toolStreamOrder: ["call_1", "call_2", "call_3", "call_4"],
+      chatStreamSegments: [],
+    } satisfies StreamReconciliationState & {
+      chatToolMessages: unknown[];
+      toolStreamById: Map<string, unknown>;
+      toolStreamOrder: string[];
+      chatStreamSegments: Array<never>;
+    };
+
+    prunePersistedToolStreamMessages(state, new Set(["call_1", "call_2", "call_3", "call_4"]));
+
+    expect(state.chatToolMessages).toEqual([
+      { role: "assistant", content: "hello" },
+      { role: "user", content: "hello" },
+    ]);
+    expect(state.toolStreamById.size).toBe(0);
+    expect(state.toolStreamOrder).toEqual([]);
+  });
+
   it("keeps materialized keyed preambles before terminal messages that share their prefix", () => {
     const state = {
       chatStream: null,

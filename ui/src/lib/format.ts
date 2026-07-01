@@ -175,6 +175,27 @@ export function formatTokens(tokens: number | null | undefined, fallback = "0"):
   return m < 10 ? `${m.toFixed(1)}M` : `${Math.round(m)}M`;
 }
 
+export function formatCompactTokenCount(
+  tokens: number,
+  options: { thousandsSuffix?: string; millionsSuffix?: string; trimTrailingZero?: boolean } = {},
+): string {
+  const thousandsSuffix = options.thousandsSuffix ?? "k";
+  const millionsSuffix = options.millionsSuffix ?? "M";
+  const trimTrailingZero = options.trimTrailingZero ?? true;
+  const trim = (value: string) => (trimTrailingZero ? value.replace(/\.0$/, "") : value);
+  if (tokens >= 1_000_000) {
+    return `${trim((tokens / 1_000_000).toFixed(1))}${millionsSuffix}`;
+  }
+  if (tokens >= 1_000) {
+    const thousands = (tokens / 1_000).toFixed(1);
+    if (Number(thousands) >= 1_000) {
+      return `${trim((tokens / 1_000_000).toFixed(1))}${millionsSuffix}`;
+    }
+    return `${trim(thousands)}${thousandsSuffix}`;
+  }
+  return String(tokens);
+}
+
 export function parseSessionKeyParts(
   key: string,
 ): { agentId: string; channel: string; accountId: string } | null {

@@ -27,7 +27,7 @@ import {
   normalizeThinkLevel,
   resolveThinkingDefaultForModel,
 } from "../../lib/chat/thinking.ts";
-import { formatCompactTokenCount } from "../../lib/chat/token-format.ts";
+import { formatCompactTokenCount } from "../../lib/format.ts";
 import { sessionModelMatchesDefaults } from "../../lib/session-model-defaults.ts";
 import type { SessionCapability, SessionPatch } from "../../lib/sessions/index.ts";
 import {
