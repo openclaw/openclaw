@@ -7,6 +7,7 @@ import {
   archiveLegacyCronStoreForMigration,
   loadLegacyCronStoreForMigration,
 } from "../commands/doctor/cron/legacy-store-migration.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   loadCronJobsStoreWithConfigJobs,
@@ -664,6 +665,26 @@ describe("cron store", () => {
       expect(typeof loadedThreadId).toBe("string");
     },
   );
+
+  it("recovers a numeric thread id from stored config when the split column is null", async () => {
+    const { storePath } = await makeStorePath();
+    const job = makeStore("sqlite-early-row-thread-id-job", true).jobs[0];
+    job.delivery = {
+      mode: "announce",
+      channel: "telegram",
+      to: "telegram:chat-1",
+      threadId: 1008013,
+    };
+
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    openOpenClawStateDatabase()
+      .db.prepare("UPDATE cron_jobs SET delivery_thread_id = NULL WHERE job_id = ?")
+      .run(job.id);
+
+    const loadedThreadId = (await loadCronStore(storePath)).jobs[0]?.delivery?.threadId;
+    expect(loadedThreadId).toBe(1008013);
+    expect(typeof loadedThreadId).toBe("number");
+  });
 
   it("disambiguates identical thread id text into number and string by stored config", async () => {
     const { storePath } = await makeStorePath();
