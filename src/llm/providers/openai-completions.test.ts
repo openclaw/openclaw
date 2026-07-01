@@ -19,7 +19,10 @@ const mockChunksRef: {
   chunks: OpenAICompatibleChatCompletionChunk[];
   stream?: AsyncIterable<OpenAICompatibleChatCompletionChunk>;
 } = { chunks: [] };
-const mockOpenAIOptionsRef: { options: unknown[] } = { options: [] };
+const mockOpenAIOptionsRef: { options: unknown[]; requests: unknown[] } = {
+  options: [],
+  requests: [],
+};
 
 vi.mock("openai", () => {
   class MockOpenAI {
@@ -29,25 +32,28 @@ vi.mock("openai", () => {
 
     chat = {
       completions: {
-        create: () => ({
-          withResponse: async () => {
-            if (mockChunksRef.stream) {
+        create: (_params: unknown, requestOptions: unknown) => {
+          mockOpenAIOptionsRef.requests.push(requestOptions);
+          return {
+            withResponse: async () => {
+              if (mockChunksRef.stream) {
+                return {
+                  data: mockChunksRef.stream,
+                  response: { status: 200, headers: new Headers() },
+                };
+              }
+              async function* generate() {
+                for (const chunk of mockChunksRef.chunks) {
+                  yield chunk;
+                }
+              }
               return {
-                data: mockChunksRef.stream,
+                data: generate(),
                 response: { status: 200, headers: new Headers() },
               };
-            }
-            async function* generate() {
-              for (const chunk of mockChunksRef.chunks) {
-                yield chunk;
-              }
-            }
-            return {
-              data: generate(),
-              response: { status: 200, headers: new Headers() },
-            };
-          },
-        }),
+            },
+          };
+        },
       },
     };
   }
@@ -59,6 +65,7 @@ import { streamOpenAICompletions, streamSimpleOpenAICompletions } from "./openai
 beforeEach(() => {
   mockChunksRef.chunks = [];
   mockChunksRef.stream = undefined;
+  mockOpenAIOptionsRef.requests = [];
 });
 
 const model = {
@@ -190,6 +197,10 @@ describe("OpenAI-compatible completions params", () => {
       expect(result.errorMessage).toContain("provider=openai");
       expect(result.errorMessage).toContain("api=openai-completions");
       expect(result.errorMessage).toContain("model=gpt-5.5");
+      const signal = (mockOpenAIOptionsRef.requests[0] as { signal?: AbortSignal } | undefined)
+        ?.signal;
+      expect(signal?.aborted).toBe(true);
+      expect(signal?.reason).toBeInstanceOf(Error);
     } finally {
       vi.useRealTimers();
     }

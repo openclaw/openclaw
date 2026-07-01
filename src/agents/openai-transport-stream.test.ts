@@ -143,29 +143,53 @@ function expectRecordFields(record: unknown, expected: Record<string, unknown>) 
 
 describe("openai transport stream", () => {
   it("fails Azure Responses streams when headers arrive but no first event follows", async () => {
-    const model = createAzureResponsesModel();
-    await expect(
-      testing.processResponsesStream(
+    vi.useFakeTimers();
+    try {
+      const model = createAzureResponsesModel();
+      const abortFirstEventStream = vi.fn();
+      const resultPromise = testing.processResponsesStream(
         neverYieldsStream(),
         createResponsesAssistantOutput(model),
         { push: vi.fn() },
         model,
-        { firstEventTimeoutMs: 1 },
-      ),
-    ).rejects.toThrow(/did not deliver a first SSE event within 1ms after streaming headers/);
+        { firstEventTimeoutMs: 5, abortFirstEventStream },
+      );
+      const rejection = expect(resultPromise).rejects.toThrow(
+        /did not deliver a first SSE event within 5ms after streaming headers/,
+      );
+
+      await vi.advanceTimersByTimeAsync(5);
+      await rejection;
+      expect(abortFirstEventStream).toHaveBeenCalledTimes(1);
+      expect(abortFirstEventStream.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("fails OpenAI completions streams when headers arrive but no first event follows", async () => {
-    const model = createDeepSeekCompletionsModel();
-    await expect(
-      testing.processOpenAICompletionsStream(
+    vi.useFakeTimers();
+    try {
+      const model = createDeepSeekCompletionsModel();
+      const abortFirstEventStream = vi.fn();
+      const resultPromise = testing.processOpenAICompletionsStream(
         neverYieldsStream() as AsyncIterable<ChatCompletionChunk>,
         createAssistantOutput(model),
         model,
         { push: vi.fn() },
-        { firstEventTimeoutMs: 1 },
-      ),
-    ).rejects.toThrow(/did not deliver a first SSE event within 1ms after streaming headers/);
+        { firstEventTimeoutMs: 5, abortFirstEventStream },
+      );
+      const rejection = expect(resultPromise).rejects.toThrow(
+        /did not deliver a first SSE event within 5ms after streaming headers/,
+      );
+
+      await vi.advanceTimersByTimeAsync(5);
+      await rejection;
+      expect(abortFirstEventStream).toHaveBeenCalledTimes(1);
+      expect(abortFirstEventStream.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("observes detail-less Responses failures without leaking request ids", async () => {

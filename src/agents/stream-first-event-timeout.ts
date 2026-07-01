@@ -7,6 +7,13 @@ export type FirstStreamEventTimeoutContext = {
   timeoutMs: number;
   stage?: StreamStage;
   hint?: string;
+  abort?: (reason: Error) => void;
+};
+
+export type FirstStreamEventAbortController = {
+  signal: AbortSignal;
+  abort: (reason: Error) => void;
+  dispose: () => void;
 };
 
 function formatOptionalField(name: string, value: string | undefined): string {
@@ -24,6 +31,33 @@ export function createFirstStreamEventTimeoutError(context: FirstStreamEventTime
     `${stage}HTTP stream opened but did not deliver a first SSE event within ${context.timeoutMs}ms after streaming headers.${details}` +
       (context.hint ? ` ${context.hint}` : ""),
   );
+}
+
+export function createFirstStreamEventAbortController(
+  parentSignal?: AbortSignal,
+): FirstStreamEventAbortController {
+  const controller = new AbortController();
+  const abortFromParent = () => {
+    if (!controller.signal.aborted) {
+      controller.abort(parentSignal?.reason);
+    }
+  };
+  if (parentSignal?.aborted) {
+    abortFromParent();
+  } else {
+    parentSignal?.addEventListener("abort", abortFromParent, { once: true });
+  }
+  return {
+    signal: controller.signal,
+    abort(reason: Error) {
+      if (!controller.signal.aborted) {
+        controller.abort(reason);
+      }
+    },
+    dispose() {
+      parentSignal?.removeEventListener("abort", abortFromParent);
+    },
+  };
 }
 
 export function withFirstStreamEventTimeout<T>(
@@ -45,10 +79,11 @@ export function withFirstStreamEventTimeout<T>(
       };
       try {
         const first = await new Promise<IteratorResult<T>>((resolve, reject) => {
-          timer = setTimeout(
-            () => reject(createFirstStreamEventTimeoutError(context)),
-            context.timeoutMs,
-          );
+          timer = setTimeout(() => {
+            const timeoutError = createFirstStreamEventTimeoutError(context);
+            context.abort?.(timeoutError);
+            reject(timeoutError);
+          }, context.timeoutMs);
           timer.unref?.();
           iterator.next().then(resolve, reject);
         }).finally(clear);

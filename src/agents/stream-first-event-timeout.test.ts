@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { withFirstStreamEventTimeout } from "./stream-first-event-timeout.js";
+import {
+  createFirstStreamEventAbortController,
+  withFirstStreamEventTimeout,
+} from "./stream-first-event-timeout.js";
 
 function createNeverYieldingStream(onReturn?: () => void): AsyncIterable<unknown> {
   return {
@@ -57,6 +60,38 @@ describe("withFirstStreamEventTimeout", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("aborts the underlying request on first-event timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const abort = vi.fn();
+      const stream = withFirstStreamEventTimeout(createNeverYieldingStream(), {
+        timeoutMs: 5,
+        abort,
+      });
+      const iterator = stream[Symbol.asyncIterator]();
+      const next = iterator.next().catch((error: unknown) => error);
+
+      await vi.advanceTimersByTimeAsync(5);
+      const error = await next;
+
+      expect(error).toBeInstanceOf(Error);
+      expect(abort).toHaveBeenCalledWith(error);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("propagates parent aborts through derived first-event signals", () => {
+    const parent = new AbortController();
+    const firstEventAbort = createFirstStreamEventAbortController(parent.signal);
+
+    parent.abort("run-timeout");
+
+    expect(firstEventAbort.signal.aborted).toBe(true);
+    expect(firstEventAbort.signal.reason).toBe("run-timeout");
+    firstEventAbort.dispose();
   });
 
   it("passes through events after the first event without adding inter-event timing", async () => {

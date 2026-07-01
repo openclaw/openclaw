@@ -11,6 +11,7 @@ import {
   type OpenAIResponsesStreamEvent,
   processResponsesStream,
   resolveResponsesReasoningEffort,
+  runResponsesStreamLifecycle,
 } from "./openai-responses-shared.js";
 import { convertResponsesTools } from "./openai-responses-tools.js";
 
@@ -761,17 +762,57 @@ describe("convertResponsesMessages", () => {
 });
 
 describe("processResponsesStream", () => {
+  it("aborts the Responses request signal when the first SSE event never arrives", async () => {
+    vi.useFakeTimers();
+    try {
+      let requestSignal: AbortSignal | undefined;
+      const output = createAssistantOutput();
+      const stream = new AssistantMessageEventStream();
+      const resultPromise = runResponsesStreamLifecycle({
+        stream,
+        model: nativeOpenAIModel,
+        output,
+        options: { firstEventTimeoutMs: 5 },
+        createClient: () => ({
+          responses: {
+            create: (_params, requestOptions) => {
+              requestSignal = requestOptions.signal;
+              return {
+                withResponse: async () => ({
+                  data: createNeverYieldingResponsesStream(),
+                  response: new Response(null, { status: 200 }),
+                }),
+              };
+            },
+          },
+        }),
+        buildParams: () => ({ model: nativeOpenAIModel.id, input: [], stream: true }),
+        formatError: (error) => (error instanceof Error ? error.message : String(error)),
+      });
+
+      await vi.advanceTimersByTimeAsync(5);
+      await resultPromise;
+
+      expect(output.stopReason).toBe("error");
+      expect(requestSignal?.aborted).toBe(true);
+      expect(requestSignal?.reason).toBeInstanceOf(Error);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fails when streaming headers arrive but no first SSE event follows", async () => {
     vi.useFakeTimers();
     try {
       const output = createAssistantOutput();
       const stream = new AssistantMessageEventStream();
+      const abortFirstEventStream = vi.fn();
       const resultPromise = processResponsesStream(
         createNeverYieldingResponsesStream(),
         output,
         stream,
         nativeOpenAIModel,
-        { firstEventTimeoutMs: 5 },
+        { firstEventTimeoutMs: 5, abortFirstEventStream },
       );
       const rejection = expect(resultPromise).rejects.toThrow(
         /responses HTTP stream opened but did not deliver a first SSE event within 5ms/,
@@ -779,6 +820,8 @@ describe("processResponsesStream", () => {
 
       await vi.advanceTimersByTimeAsync(5);
       await rejection;
+      expect(abortFirstEventStream).toHaveBeenCalledTimes(1);
+      expect(abortFirstEventStream.mock.calls[0]?.[0]).toBeInstanceOf(Error);
     } finally {
       vi.useRealTimers();
     }
