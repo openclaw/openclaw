@@ -28,6 +28,7 @@ import type { ResolvedTheme, ThemeMode, ThemeName } from "../app/theme.ts";
 // Control UI module implements app view state behavior.
 import type { ActivityEntry, ActivityStatus } from "../pages/activity/data.ts";
 import type { NostrProfileFormState } from "../pages/channels/view.nostr-profile-form.ts";
+import type { SidebarContent } from "../pages/chat/components/chat-sidebar.ts";
 import type { ChatAbortOptions, ChatSendOptions } from "../pages/chat/data.ts";
 import type {
   ChatInputHistoryKeyInput,
@@ -56,7 +57,6 @@ import type { SessionLogEntry } from "../pages/usage/view.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { EmbedSandboxMode } from "./embed-sandbox.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
-import type { SidebarContent } from "./sidebar-content.ts";
 
 export type AppViewState = {
   settings: UiSettings;

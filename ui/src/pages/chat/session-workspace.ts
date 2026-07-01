@@ -7,7 +7,7 @@ import {
 } from "../../lib/sessions/index.ts";
 import { resolveAgentIdFromSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
-import type { SidebarContent } from "../../ui/sidebar-content.ts";
+import type { SidebarContent } from "./components/chat-sidebar.ts";
 import type { ChatProps } from "./view.ts";
 
 type SessionWorkspaceProps = NonNullable<ChatProps["sessionWorkspace"]>;

@@ -2,17 +2,16 @@
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
-import { t } from "../../i18n/index.ts";
 import { resolveLocalUserName } from "../../app/user-identity.ts";
 import { icons } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../../components/markdown.ts";
+import { t } from "../../i18n/index.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
 import { resolveUiHourCycleOptions } from "../../lib/format.ts";
 import { detectTextDirection } from "../../lib/text-direction.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { EmbedSandboxMode } from "../../ui/embed-sandbox.ts";
 import { openExternalUrlSafe } from "../../ui/open-external-url.ts";
-import type { SidebarContent } from "../../ui/sidebar-content.ts";
 import { resolveToolDisplay } from "../../ui/tool-display.ts";
 import type {
   ChatItem,
@@ -21,6 +20,7 @@ import type {
   NormalizedMessage,
   ToolCard,
 } from "./chat-types.ts";
+import type { SidebarContent } from "./components/chat-sidebar.ts";
 export { resolveAssistantTextAvatar } from "../../ui/views/agents-utils.ts";
 import { renderCopyAsMarkdownButton } from "../../components/copy-button.ts";
 import "../../components/tooltip.ts";

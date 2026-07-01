@@ -68,6 +68,7 @@ import {
   handleWhatsAppWait as handleWhatsAppWaitInternal,
 } from "../pages/channels/actions.ts";
 import type { NostrProfileFormState } from "../pages/channels/view.nostr-profile-form.ts";
+import type { SidebarContent } from "../pages/chat/components/chat-sidebar.ts";
 import { restoreChatComposerState } from "../pages/chat/composer-persistence.ts";
 import {
   handleAbortChat as handleAbortChatInternal,
@@ -153,7 +154,6 @@ import {
 import type { AppViewState } from "./app-view-state.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
-import type { SidebarContent } from "./sidebar-content.ts";
 
 declare global {
   interface Window {

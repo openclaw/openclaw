@@ -28,7 +28,6 @@ import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
 import { detectTextDirection } from "../../lib/text-direction.ts";
 import type { CompactionStatus, FallbackStatus } from "../../ui/app-tool-stream.ts";
 import type { EmbedSandboxMode } from "../../ui/embed-sandbox.ts";
-import type { SidebarContent } from "../../ui/sidebar-content.ts";
 import {
   getChatAttachmentPreviewUrl,
   registerChatAttachmentPayload,
@@ -38,6 +37,7 @@ import { CHAT_ATTACHMENT_ACCEPT, isSupportedChatAttachmentFile } from "./attachm
 import { buildChatItems, type BuildChatItemsProps } from "./build-chat-items.ts";
 import { renderChatQueue } from "./chat-queue.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
+import type { SidebarContent } from "./components/chat-sidebar.ts";
 import { renderContextNotice } from "./context-notice.ts";
 import { DeletedMessages } from "./deleted-messages.ts";
 import { exportChatMarkdown } from "./export.ts";
@@ -47,7 +47,7 @@ import {
   renderStreamGroup,
   type StreamGroupPart,
 } from "./grouped-render.ts";
-import "./chat-detail-panel.ts";
+import "./components/chat-sidebar.ts";
 import { CHAT_HISTORY_RENDER_LIMIT } from "./history-limits.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
 import { PinnedMessages } from "./pinned-messages.ts";

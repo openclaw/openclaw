@@ -58,10 +58,10 @@ import {
 } from "../../ui/app-tool-stream.ts";
 import { applyModelCatalogResult, loadModels } from "../../ui/controllers/models.ts";
 import type { EmbedSandboxMode } from "../../ui/embed-sandbox.ts";
-import type { SidebarContent } from "../../ui/sidebar-content.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
 import { renderChatQuotaPill, renderChatModelSelect } from "./components/chat-model-controls.ts";
+import type { SidebarContent } from "./components/chat-sidebar.ts";
 import {
   CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS,
   persistChatComposerState,

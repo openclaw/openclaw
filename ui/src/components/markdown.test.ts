@@ -2,7 +2,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import { renderMarkdownSidebar } from "../ui/views/markdown-sidebar.ts";
+import { renderMarkdownSidebar } from "../pages/chat/components/chat-sidebar.ts";
 import {
   blockArtCodeBlockCopyPayloadEncoding,
   decodeCodeBlockCopyPayload,
