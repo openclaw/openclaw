@@ -20,6 +20,7 @@ import {
 } from "../gateway/gateway-config-prompts.shared.js";
 import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../gateway/node-command-policy.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
+import { parseTcpPort } from "../infra/tcp-port.js";
 import { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-mode.js";
 import { promptSecretRefForSetup } from "../plugins/provider-auth-ref.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -62,8 +63,7 @@ function normalizeWizardTextInput(value: unknown): string {
 }
 
 function validateGatewayPortInput(value: unknown): string | undefined {
-  const port = Number(normalizeWizardTextInput(value));
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+  if (parseTcpPort(value) === null) {
     return formatPortRangeHint();
   }
   return undefined;
@@ -75,19 +75,16 @@ export async function configureGatewayForSetup(
   const { flow, localPort, quickstartGateway, prompter } = opts;
   let { nextConfig } = opts;
 
-  const port =
+  const portInput =
     flow === "quickstart"
-      ? quickstartGateway.port
-      : Number.parseInt(
-          normalizeWizardTextInput(
-            await prompter.text({
-              message: t("wizard.gateway.port"),
-              initialValue: String(localPort),
-              validate: validateGatewayPortInput,
-            }),
-          ),
-          10,
-        );
+      ? undefined
+      : await prompter.text({
+          message: t("wizard.gateway.port"),
+          initialValue: String(localPort),
+          validate: validateGatewayPortInput,
+        });
+  const port =
+    flow === "quickstart" ? quickstartGateway.port : (parseTcpPort(portInput) ?? localPort);
 
   let bind: GatewayWizardSettings["bind"] =
     flow === "quickstart"

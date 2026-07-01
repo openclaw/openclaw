@@ -100,6 +100,42 @@ describe("configureGatewayForSetup", () => {
     expect(result.nextConfig.gateway?.nodes?.denyCommands).toContain("screen.record");
   });
 
+  it("rejects loose numeric gateway port syntax without storing a partial parse", async () => {
+    mocks.randomToken.mockReturnValue("generated-token");
+    const selectQueue = ["loopback", "token", "off"];
+    const textQueue: Array<string | undefined> = ["1e3", undefined];
+    const validationMessages: Array<string | undefined> = [];
+    const select = vi.fn(async (params: WizardSelectParams<unknown>) => {
+      const next = selectQueue.shift();
+      if (next !== undefined) {
+        return next;
+      }
+      return params.initialValue ?? params.options[0]?.value;
+    }) as unknown as WizardPrompter["select"];
+    const text = vi.fn(async (params: Parameters<WizardPrompter["text"]>[0]) => {
+      const next = textQueue.shift();
+      if (next === "1e3") {
+        validationMessages.push(params.validate?.(next));
+      }
+      return next as string;
+    }) as unknown as WizardPrompter["text"];
+    const prompter = buildWizardPrompter({ select, text });
+
+    const result = await configureGatewayForSetup({
+      flow: "advanced",
+      baseConfig: {},
+      nextConfig: {},
+      localPort: 18789,
+      quickstartGateway: createQuickstartGateway("token"),
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(validationMessages).toEqual(["Use a port number from 1 to 65535, for example 18789."]);
+    expect(result.nextConfig.gateway?.port).toBe(18789);
+    expect(result.nextConfig.gateway?.port).not.toBe(1);
+  });
+
   it("prefers OPENCLAW_GATEWAY_TOKEN during quickstart token setup", async () => {
     const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
     process.env.OPENCLAW_GATEWAY_TOKEN = "token-from-env";
