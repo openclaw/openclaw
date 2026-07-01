@@ -53,6 +53,28 @@ describe("registerFeishuChatTools", () => {
     return factory(context);
   }
 
+  function multiAccountConfig(chat: { a?: boolean; b?: boolean } = {}) {
+    return {
+      channels: {
+        feishu: {
+          enabled: true,
+          accounts: {
+            a: {
+              appId: "app-a",
+              appSecret: "sec-a", // pragma: allowlist secret
+              tools: { chat: chat.a ?? true },
+            },
+            b: {
+              appId: "app-b",
+              appSecret: "sec-b", // pragma: allowlist secret
+              tools: { chat: chat.b ?? true },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawPluginApi["config"];
+  }
+
   beforeAll(async () => {
     ({ registerFeishuChatTools } = await import("./chat.js"));
   });
@@ -265,25 +287,7 @@ describe("registerFeishuChatTools", () => {
     const registerTool = vi.fn();
     registerFeishuChatTools(
       createChatToolApi({
-        config: {
-          channels: {
-            feishu: {
-              enabled: true,
-              accounts: {
-                a: {
-                  appId: "app-a",
-                  appSecret: "sec-a", // pragma: allowlist secret
-                  tools: { chat: true },
-                },
-                b: {
-                  appId: "app-b",
-                  appSecret: "sec-b", // pragma: allowlist secret
-                  tools: { chat: true },
-                },
-              },
-            },
-          },
-        },
+        config: multiAccountConfig(),
         registerTool,
       }),
     );
@@ -304,25 +308,7 @@ describe("registerFeishuChatTools", () => {
     const registerTool = vi.fn();
     registerFeishuChatTools(
       createChatToolApi({
-        config: {
-          channels: {
-            feishu: {
-              enabled: true,
-              accounts: {
-                a: {
-                  appId: "app-a",
-                  appSecret: "sec-a", // pragma: allowlist secret
-                  tools: { chat: true },
-                },
-                b: {
-                  appId: "app-b",
-                  appSecret: "sec-b", // pragma: allowlist secret
-                  tools: { chat: true },
-                },
-              },
-            },
-          },
-        },
+        config: multiAccountConfig(),
         registerTool,
       }),
     );
@@ -346,25 +332,7 @@ describe("registerFeishuChatTools", () => {
     const registerTool = vi.fn();
     registerFeishuChatTools(
       createChatToolApi({
-        config: {
-          channels: {
-            feishu: {
-              enabled: true,
-              accounts: {
-                a: {
-                  appId: "app-a",
-                  appSecret: "sec-a", // pragma: allowlist secret
-                  tools: { chat: false },
-                },
-                b: {
-                  appId: "app-b",
-                  appSecret: "sec-b", // pragma: allowlist secret
-                  tools: { chat: true },
-                },
-              },
-            },
-          },
-        },
+        config: multiAccountConfig({ a: false }),
         registerTool,
       }),
     );
@@ -376,34 +344,14 @@ describe("registerFeishuChatTools", () => {
     });
 
     expect(createFeishuClientMock).not.toHaveBeenCalled();
-    expect((result.details as { error?: string }).error).toContain(
-      'Feishu Chat tools are disabled for account \\"a\\"',
-    );
+    expect(result.details.error).toContain('Feishu Chat tools are disabled for account \\"a\\"');
   });
 
   it("registers chat when only a later account enables chat", async () => {
     const registerTool = vi.fn();
     registerFeishuChatTools(
       createChatToolApi({
-        config: {
-          channels: {
-            feishu: {
-              enabled: true,
-              accounts: {
-                a: {
-                  appId: "app-a",
-                  appSecret: "sec-a", // pragma: allowlist secret
-                  tools: { chat: false },
-                },
-                b: {
-                  appId: "app-b",
-                  appSecret: "sec-b", // pragma: allowlist secret
-                  tools: { chat: true },
-                },
-              },
-            },
-          },
-        },
+        config: multiAccountConfig({ a: false }),
         registerTool,
       }),
     );
