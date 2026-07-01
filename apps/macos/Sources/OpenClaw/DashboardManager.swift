@@ -15,32 +15,33 @@ final class DashboardManager {
     private init() {}
 
     @discardableResult
-    func showConfiguredWindowIfPossible() -> Bool {
+    func showConfiguredWindowIfPossible() async -> Bool {
         let mode = AppStateStore.shared.connectionMode
-        guard let config = self.immediateDashboardConfig(mode: mode),
-              let url = try? GatewayEndpointStore.dashboardURL(
-                  for: config,
-                  mode: mode,
-                  authToken: config.token)
+        guard let config = self.immediateDashboardConfig(mode: mode) else {
+            return false
+        }
+        let token = await GatewayConnection.shared.controlUiAutoAuthToken(config: config)
+        guard let presentation = try? Self.makeDashboardPresentation(
+            config: config,
+            mode: mode,
+            authToken: token),
+            presentation.auth.hasCredential
         else {
             return false
         }
-        let auth = DashboardWindowAuth(
-            gatewayUrl: Self.websocketURLString(for: url),
-            token: config.token,
-            password: config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty)
-        guard auth.hasCredential else {
-            return false
-        }
-        if let controller {
-            controller.show(url: url, auth: auth)
-        } else {
-            let controller = DashboardWindowController(url: url, auth: auth)
-            self.controller = controller
-            controller.show(url: url, auth: auth)
-        }
+        self.show(presentation: presentation)
         Task { _ = try? await ControlChannel.shared.health(timeout: 3) }
         return true
+    }
+
+    private func show(presentation: (url: URL, auth: DashboardWindowAuth)) {
+        if let controller {
+            controller.show(url: presentation.url, auth: presentation.auth)
+        } else {
+            let controller = DashboardWindowController(url: presentation.url, auth: presentation.auth)
+            self.controller = controller
+            controller.show(url: presentation.url, auth: presentation.auth)
+        }
     }
 
     func show() async throws {
@@ -49,22 +50,18 @@ final class DashboardManager {
         let config = try await self.dashboardConfig(mode: mode)
         dashboardManagerLogger.info("dashboard config url=\(config.url.absoluteString, privacy: .public)")
         let token = await GatewayConnection.shared.controlUiAutoAuthToken(config: config)
-        let url = try GatewayEndpointStore.dashboardURL(for: config, mode: mode, authToken: token)
-        let auth = DashboardWindowAuth(
-            gatewayUrl: Self.websocketURLString(for: url),
-            token: token,
-            password: config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty)
+        let presentation = try Self.makeDashboardPresentation(config: config, mode: mode, authToken: token)
 
         if let controller {
-            dashboardManagerLogger.info("dashboard reuse window url=\(url.absoluteString, privacy: .public)")
-            controller.show(url: url, auth: auth)
+            dashboardManagerLogger.info("dashboard reuse window url=\(presentation.url.absoluteString, privacy: .public)")
+            controller.show(url: presentation.url, auth: presentation.auth)
             return
         }
 
-        dashboardManagerLogger.info("dashboard create window url=\(url.absoluteString, privacy: .public)")
-        let controller = DashboardWindowController(url: url, auth: auth)
+        dashboardManagerLogger.info("dashboard create window url=\(presentation.url.absoluteString, privacy: .public)")
+        let controller = DashboardWindowController(url: presentation.url, auth: presentation.auth)
         self.controller = controller
-        controller.show(url: url, auth: auth)
+        controller.show(url: presentation.url, auth: presentation.auth)
 
         // Refresh the cached hello payload without blocking window creation.
         Task { _ = try? await ControlChannel.shared.health(timeout: 3) }
@@ -100,6 +97,25 @@ final class DashboardManager {
         components.queryItems = nil
         components.fragment = nil
         return components.url?.absoluteString ?? dashboardURL.absoluteString
+    }
+
+    static func makeDashboardPresentation(
+        config: GatewayConnection.Config,
+        mode: AppState.ConnectionMode,
+        authToken: String?,
+        localBasePath: String? = nil) throws -> (url: URL, auth: DashboardWindowAuth)
+    {
+        let url = try GatewayEndpointStore.dashboardURL(
+            for: config,
+            mode: mode,
+            localBasePath: localBasePath,
+            authToken: authToken)
+        return (
+            url,
+            DashboardWindowAuth(
+                gatewayUrl: Self.websocketURLString(for: url),
+                token: authToken,
+                password: config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty))
     }
 
     private func dashboardConfig(mode: AppState.ConnectionMode) async throws -> GatewayConnection.Config {

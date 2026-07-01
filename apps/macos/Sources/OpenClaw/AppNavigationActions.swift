@@ -4,11 +4,8 @@ import AppKit
 enum AppNavigationActions {
     static func openDashboard() {
         NSApp.activate(ignoringOtherApps: true)
-        if DashboardManager.shared.showConfiguredWindowIfPossible() {
-            return
-        }
         Task { @MainActor in
-            if DashboardManager.shared.showConfiguredWindowIfPossible() {
+            if await DashboardManager.shared.showConfiguredWindowIfPossible() {
                 return
             }
             do {
