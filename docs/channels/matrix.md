@@ -221,9 +221,9 @@ The full object form accepts `{ mode, preview, progress }`:
       streaming: {
         mode: "progress",
         progress: {
-          label: "Working", // optional custom label (false to hide)
-          labels: ["Thinking", "Writing", "Searching"], // auto-rotate pool
-          maxLines: 8, // max compact progress lines (default: 8)
+          label: "auto", // pick from configured or built-in labels (false to hide)
+          labels: ["Thinking", "Writing", "Searching"], // candidates for label: "auto"
+          maxLines: 8, // max rolling progress lines (default: 8)
           maxLineChars: 120, // max chars per line before truncation (default: 120)
           toolProgress: true, // show tool/progress activity (default: true)
         },
@@ -233,9 +233,9 @@ The full object form accepts `{ mode, preview, progress }`:
 }
 ```
 
-- `progress.label`: a custom label, `"auto"` for built-in single-word labels, or `false` to hide the title.
-- `progress.labels`: candidate labels for `label: "auto"` rotation. Leave unset for built-in defaults.
-- `progress.maxLines`: maximum compact progress lines kept below the draft label. After this limit, older lines are trimmed.
+- `progress.label`: a custom label, `"auto"` or unset to choose from configured or built-in labels, or `false` to hide the label line.
+- `progress.labels`: candidate labels used only when `label` is `"auto"` or unset. Leave unset for built-in defaults.
+- `progress.maxLines`: maximum rolling progress lines kept in the draft. After this limit, older lines are trimmed.
 - `progress.maxLineChars`: maximum characters per compact progress line before truncation.
 - `progress.toolProgress`: when `true` (default), live tool/progress activity appears in the draft.
 
