@@ -44,6 +44,11 @@ export type BridgeMemoryWikiResult = {
   pagePaths: string[];
 };
 
+type SyncMemoryWikiBridgeSourcesParams = {
+  config: ResolvedMemoryWikiConfig;
+  appConfig?: OpenClawConfig;
+};
+
 function shouldImportArtifact(
   artifact: MemoryPluginPublicArtifact,
   bridgeConfig: ResolvedMemoryWikiConfig["bridge"],
@@ -215,10 +220,9 @@ async function writeBridgeSourcePage(params: {
   });
 }
 
-export async function syncMemoryWikiBridgeSources(params: {
-  config: ResolvedMemoryWikiConfig;
-  appConfig?: OpenClawConfig;
-}): Promise<BridgeMemoryWikiResult> {
+export async function syncMemoryWikiBridgeSources(
+  params: SyncMemoryWikiBridgeSourcesParams,
+): Promise<BridgeMemoryWikiResult> {
   await initializeMemoryWikiVault(params.config);
   if (
     params.config.vaultMode !== "bridge" ||
