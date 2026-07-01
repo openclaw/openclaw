@@ -39,7 +39,7 @@ describe("native app i18n inventory", () => {
         ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "QR Scanner Unavailable")).toBe(true);
-    expect(entries.some((entry) => entry.source === "Request ID: \\(requestId)")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Request ID: \\(value)")).toBe(true);
     expect(entries.some((entry) => entry.source === "Open ${row.title}")).toBe(true);
     expect(entries.some((entry) => entry.source === "$deviceModel · $appVersion")).toBe(true);
     expect(entries.some((entry) => entry.source === "Approval command copied")).toBe(true);
@@ -54,8 +54,25 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "DIARY")).toBe(true);
     expect(entries.some((entry) => entry.source === "ask OpenClaw $prompt")).toBe(true);
     expect(entries.some((entry) => entry.source === "OpenClaw is paused")).toBe(true);
-    expect(entries.some((entry) => entry.source === "Last issue")).toBe(true);
-    expect(entries.some((entry) => entry.source === "Agent chat and recent work.")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Connected services and message routing")).toBe(
+      true,
+    );
+    expect(
+      entries.some(
+        (entry) =>
+          entry.path === "apps/ios/Sources/Design/TalkRuntimeIssueBanner.swift" &&
+          entry.kind === "ui-named-argument" &&
+          entry.source === "Details",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.path === "apps/ios/Sources/Design/TalkRuntimeIssueBanner.swift" &&
+          entry.kind === "ui-named-argument" &&
+          entry.source === "Open Settings",
+      ),
+    ).toBe(true);
     expect(entries.some((entry) => entry.source === "No sessions yet")).toBe(true);
     expect(entries.some((entry) => entry.source === "Don’t show this again")).toBe(true);
     expect(entries.some((entry) => entry.source === "Use Manual Gateway")).toBe(true);

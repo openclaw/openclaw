@@ -111,6 +111,19 @@ const mocks = vi.hoisted(() => ({
   ),
 }));
 
+vi.mock("../../channels/plugins/bundled.js", async () => {
+  const actual = await vi.importActual<typeof import("../../channels/plugins/bundled.js")>(
+    "../../channels/plugins/bundled.js",
+  );
+  // This unit suite installs minimal loaded plugins when it exercises channel actions.
+  // Bundled source entry loading belongs to the loader integration suites.
+  return {
+    ...actual,
+    getBundledChannelPlugin: vi.fn(() => undefined),
+    getBundledChannelSetupPlugin: vi.fn(() => undefined),
+  };
+});
+
 type RunMessageActionInput = {
   agentId?: string;
   cfg?: unknown;
@@ -457,6 +470,7 @@ describe("message tool gateway timeout", () => {
           timeoutMs,
         }),
       ).rejects.toThrow("timeoutMs must be a positive integer");
+      expect(mocks.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
       expect(mocks.runMessageAction).not.toHaveBeenCalled();
     },
   );

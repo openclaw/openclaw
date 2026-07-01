@@ -1,7 +1,7 @@
 // Resolves interactive plugin entries from registry metadata.
 import {
   resolvePluginInteractiveNamespaceMatch,
-  restorePluginInteractiveHandlers,
+  resolvePluginInteractiveRegistrationsMatch,
 } from "./interactive-registry.js";
 import {
   claimPluginInteractiveCallbackDedupe,
@@ -36,26 +36,23 @@ export type { InteractiveRegistrationResult } from "./interactive-registry.js";
 
 function resolveLivePluginInteractiveNamespaceMatch(channel: string, data: string) {
   const existing = resolvePluginInteractiveNamespaceMatch(channel, data);
-  if (existing) {
+  if (existing && existing.registration.registryOwned !== true) {
     return existing;
   }
 
-  const registrationsByKey = new Map<string, RegisteredInteractiveHandler>();
+  // Registry membership is lifecycle-owned. Resolve registry registrations only
+  // through live owners so a replaced or released registry cannot keep executing.
   for (const registry of collectLivePluginRegistries()) {
-    for (const registration of registry.interactiveHandlers ?? []) {
-      const key = `${registration.channel.toLowerCase()}:${registration.namespace}`;
-      if (!registrationsByKey.has(key)) {
-        registrationsByKey.set(key, registration);
-      }
+    const match = resolvePluginInteractiveRegistrationsMatch(
+      registry.interactiveHandlers ?? [],
+      channel,
+      data,
+    );
+    if (match) {
+      return match;
     }
   }
-  const registrations = [...registrationsByKey.values()];
-  if (registrations.length === 0) {
-    return null;
-  }
-
-  restorePluginInteractiveHandlers(registrations);
-  return resolvePluginInteractiveNamespaceMatch(channel, data);
+  return null;
 }
 
 /** Dispatches one interactive callback payload to a matching plugin handler. */
