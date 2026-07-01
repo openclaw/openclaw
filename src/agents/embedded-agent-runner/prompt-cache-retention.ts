@@ -47,6 +47,12 @@ export function resolveCacheRetention(
   }
 
   const newVal = extraParams?.cacheRetention;
+  // Treat "standard" as an alias for "short" only in the Anthropic/Bedrock
+  // cache family. Google and prompt-cache-key providers do not accept this
+  // alias — issue #94482.
+  if (newVal === "standard" && family) {
+    return "short";
+  }
   if (newVal === "none" || newVal === "short" || newVal === "long") {
     return newVal;
   }
