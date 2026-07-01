@@ -122,11 +122,7 @@ export async function listWhatsAppDirectoryGroupsLive(
     return listWhatsAppDirectoryGroupsFromConfig(params);
   } finally {
     if (standaloneSock) {
-      try {
-        standaloneSock.end?.(new Error("OpenClaw WhatsApp standalone directory socket close"));
-      } catch {
-        // best-effort cleanup
-      }
+      void standaloneSock.end?.(new Error("OpenClaw WhatsApp standalone directory socket close"));
     }
   }
 }
