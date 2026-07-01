@@ -1378,6 +1378,39 @@ function renderMemoryPalaceSection(props: DreamingProps) {
   `;
 }
 
+function renderDiaryDayChips(content: string | null, props: DreamingProps) {
+  if (typeof content !== "string") {
+    return nothing;
+  }
+  const entries = parseDiaryEntries(content);
+  if (entries.length === 0) {
+    return nothing;
+  }
+
+  const reversed = buildDiaryNavigation(entries);
+  const page = Math.max(0, Math.min(_diaryPage, reversed.length - 1));
+
+  return html`
+    <div class="dreams-diary__daychips">
+      ${reversed.map(
+        (e) => html`
+          <button
+            class="dreams-diary__day-chip ${e.page === page
+              ? "dreams-diary__day-chip--active"
+              : ""}"
+            @click=${() => {
+              setDiaryPage(e.page);
+              props.onRequestUpdate?.();
+            }}
+          >
+            ${formatDiaryChipLabel(e.date)}
+          </button>
+        `,
+      )}
+    </div>
+  `;
+}
+
 function renderDreamDiaryEntries(props: DreamingProps) {
   if (typeof props.dreamDiaryContent !== "string") {
     return html`
@@ -1411,23 +1444,6 @@ function renderDreamDiaryEntries(props: DreamingProps) {
   const entry = reversed[page];
 
   return html`
-    <div class="dreams-diary__daychips">
-      ${reversed.map(
-        (e) => html`
-          <button
-            class="dreams-diary__day-chip ${e.page === page
-              ? "dreams-diary__day-chip--active"
-              : ""}"
-            @click=${() => {
-              setDiaryPage(e.page);
-              props.onRequestUpdate?.();
-            }}
-          >
-            ${formatDiaryChipLabel(e.date)}
-          </button>
-        `,
-      )}
-    </div>
     <article class="dreams-diary__entry" key="${page}">
       <div class="dreams-diary__accent"></div>
       ${entry.date ? html`<time class="dreams-diary__date">${entry.date}</time>` : nothing}
@@ -1547,6 +1563,7 @@ function renderDiarySection(props: DreamingProps) {
           </button>
         </div>
         ${renderDiarySubtabExplainer()}
+        ${_diarySubTab === "dreams" ? renderDiaryDayChips(props.dreamDiaryContent, props) : nothing}
       </div>
 
       ${memoryWikiUnavailable
