@@ -1963,9 +1963,18 @@ describe("isUndiciSocketError", () => {
 describe("undici socket retry transport simulation (#97608)", () => {
   const baseModel: Model = {
     id: "claude-sonnet-4-6",
+    name: "Claude Sonnet 4.6",
     provider: "anthropic",
     api: "messages",
     baseUrl: "https://api.anthropic.com/v1",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: {
+      input: 3,
+      output: 15,
+      cacheRead: 0.3,
+      cacheWrite: 3.75,
+    },
     contextWindow: 200_000,
     maxTokens: 8192,
   };
@@ -2013,6 +2022,54 @@ describe("undici socket retry transport simulation (#97608)", () => {
     expect(response.status).toBe(200);
     const text = await response.text();
     expect(text).toContain("Hello from retry");
+  });
+
+  it("preserves local service lease until successful retry response cleanup", async () => {
+    const socketError = Object.assign(new Error("socket hang up"), { code: "UND_ERR_SOCKET" });
+    const localServiceRelease = vi.fn();
+    const guardedFetchRelease = vi.fn(async () => undefined);
+    ensureModelProviderLocalServiceMock.mockResolvedValue({ release: localServiceRelease });
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(socketError).mockResolvedValueOnce({
+      response: new Response('data: {"type":"message","content":[{"text":"retry ok"}]}\n\n', {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      }),
+      release: guardedFetchRelease,
+    });
+
+    const response = await buildGuardedModelFetch(baseModel)(
+      "https://api.anthropic.com/v1/messages",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ stream: true, model: "claude-sonnet-4-6", messages: [] }),
+      },
+    );
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+    expect(localServiceRelease).not.toHaveBeenCalled();
+
+    await expect(response.text()).resolves.toContain("retry ok");
+    expect(guardedFetchRelease).toHaveBeenCalledTimes(1);
+    expect(localServiceRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry UND_ERR_SOCKET when the request body is not replay-safe", async () => {
+    const socketError = Object.assign(new Error("socket hang up"), { code: "UND_ERR_SOCKET" });
+    const localServiceRelease = vi.fn();
+    ensureModelProviderLocalServiceMock.mockResolvedValue({ release: localServiceRelease });
+    fetchWithSsrFGuardMock.mockRejectedValueOnce(socketError);
+
+    await expect(
+      buildGuardedModelFetch(baseModel)("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        body: responseStreamText("streaming request body"),
+        duplex: "half",
+      } as RequestInit & { duplex: "half" }),
+    ).rejects.toThrow("socket hang up");
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    expect(localServiceRelease).toHaveBeenCalledTimes(1);
   });
 
   it("throws after UND_ERR_SOCKET retry also fails", async () => {

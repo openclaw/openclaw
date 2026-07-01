@@ -668,6 +668,21 @@ export function isUndiciSocketError(error: unknown): boolean {
   return cause?.code === "UND_ERR_SOCKET";
 }
 
+function isReplaySafeRequestBody(init: RequestInit | undefined): boolean {
+  const body = init?.body;
+  if (body == null) {
+    return true;
+  }
+  return (
+    typeof body === "string" ||
+    body instanceof URLSearchParams ||
+    body instanceof Blob ||
+    body instanceof FormData ||
+    body instanceof ArrayBuffer ||
+    ArrayBuffer.isView(body)
+  );
+}
+
 export function resolveModelRequestTimeoutMs(
   model: Model,
   timeoutMs: number | undefined,
@@ -895,13 +910,12 @@ export function buildGuardedModelFetch(
       // Retry once on undici keep-alive socket reuse failure (UND_ERR_SOCKET).
       // A stale pooled socket can fail on first use; a fresh connection almost
       // always succeeds. Only retry once to avoid infinite loops (#87407).
-      if (isUndiciSocketError(error)) {
+      if (isUndiciSocketError(error) && isReplaySafeRequestBody(baseInit)) {
         log.warn(
           `[model-fetch] undici socket error, retrying once provider=${model.provider} ` +
             `api=${model.api} model=${model.id} elapsedMs=${Date.now() - fetchStartedAt} ` +
-            `${summarizeError(error)}`,
+            summarizeError(error),
         );
-        localServiceLease?.release();
         try {
           result = await fetchWithSsrFGuard(
             useEnvProxy
