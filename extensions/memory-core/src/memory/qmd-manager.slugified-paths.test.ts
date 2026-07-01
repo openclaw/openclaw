@@ -227,7 +227,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
           "stdout",
           JSON.stringify([
             {
-              file: "qmd://workspace-main/extra-docs/category/sub-category/topic-name/topic-name.md",
+              file: "qmd://workspace/extra-docs/category/sub-category/topic-name/topic-name.md",
               score: 0.73,
               snippet: "@@ -2,1\nline-2",
             },
@@ -241,7 +241,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
     const { manager } = await createManager();
     installIndexedPathStub({
       manager,
-      collection: "workspace-main",
+      collection: "workspace",
       normalizedPath: "extra-docs/category/sub-category/topic-name/topic-name.md",
       actualPath: actualRelative,
     });
@@ -357,7 +357,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
           "stdout",
           JSON.stringify([
             {
-              file: "qmd://workspace-main/notes/topic-name.md",
+              file: "qmd://workspace/notes/topic-name.md",
               score: 0.79,
               snippet: "@@ -1,1\nexact slugified path",
             },
@@ -371,7 +371,7 @@ describe("QmdMemoryManager slugified path resolution", () => {
     const { manager } = await createManager();
     installIndexedPathStub({
       manager,
-      collection: "workspace-main",
+      collection: "workspace",
       normalizedPath: exactRelative,
       exactPaths: [exactRelative],
       allPaths: [exactRelative, slugCollisionRelative],

@@ -1,4 +1,3 @@
-// Memory Host SDK module implements backend config behavior.
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -18,7 +17,6 @@ import {
   type SessionSendPolicyConfig,
   splitShellArgs,
 } from "./config-utils.js";
-import { isPathInside } from "./fs-utils.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
@@ -158,36 +156,6 @@ function sanitizeName(input: string): string {
   return trimmed || "collection";
 }
 
-function scopeCollectionBase(base: string, agentId: string): string {
-  return `${base}-${sanitizeName(agentId)}`;
-}
-
-function canonicalizePathForContainment(rawPath: string): string {
-  const resolved = path.resolve(rawPath);
-  let current = resolved;
-  const suffix: string[] = [];
-  while (true) {
-    try {
-      const canonical = path.normalize(fs.realpathSync.native(current));
-      return path.normalize(path.join(canonical, ...suffix));
-    } catch {
-      const parent = path.dirname(current);
-      if (parent === current) {
-        return path.normalize(resolved);
-      }
-      suffix.unshift(path.basename(current));
-      current = parent;
-    }
-  }
-}
-
-function isPathInsideRoot(candidatePath: string, rootPath: string): boolean {
-  return isPathInside(
-    canonicalizePathForContainment(rootPath),
-    canonicalizePathForContainment(candidatePath),
-  );
-}
-
 function ensureUniqueName(base: string, existing: Set<string>): string {
   const name = sanitizeName(base);
   if (!existing.has(name)) {
@@ -322,7 +290,6 @@ function resolveCustomPaths(
   rawPaths: MemoryQmdIndexPath[] | undefined,
   workspaceDir: string,
   existing: Set<string>,
-  agentId: string,
 ): ResolvedQmdCollection[] {
   if (!rawPaths?.length) {
     return [];
@@ -361,11 +328,7 @@ function resolveCustomPaths(
     }
     seenRoots.add(dedupeKey);
     const explicitName = entry.name?.trim();
-    const baseName =
-      explicitName && !isPathInsideRoot(collectionPath, workspaceDir)
-        ? explicitName
-        : scopeCollectionBase(explicitName || `custom-${index + 1}`, agentId);
-    const name = ensureUniqueName(baseName, existing);
+    const name = ensureUniqueName(explicitName || `custom-${index + 1}`, existing);
     collections.push({
       name,
       path: collectionPath,
@@ -401,7 +364,6 @@ function resolveDefaultCollections(
   include: boolean,
   workspaceDir: string,
   existing: Set<string>,
-  agentId: string,
 ): ResolvedQmdCollection[] {
   if (!include) {
     return [];
@@ -411,7 +373,7 @@ function resolveDefaultCollections(
     { path: path.join(workspaceDir, "memory"), pattern: "**/*.md", base: "memory-dir" },
   ];
   return entries.map((entry) => ({
-    name: ensureUniqueName(scopeCollectionBase(entry.base, agentId), existing),
+    name: ensureUniqueName(entry.base, existing),
     path: entry.path,
     pattern: entry.pattern,
     kind: "memory",
@@ -462,8 +424,8 @@ export function resolveMemoryBackendConfig(params: {
   ];
 
   const collections = [
-    ...resolveDefaultCollections(includeDefaultMemory, workspaceDir, nameSet, normalizedAgentId),
-    ...resolveCustomPaths(allQmdPaths, workspaceDir, nameSet, normalizedAgentId),
+    ...resolveDefaultCollections(includeDefaultMemory, workspaceDir, nameSet),
+    ...resolveCustomPaths(allQmdPaths, workspaceDir, nameSet),
   ];
 
   const rawCommand = qmdCfg?.command?.trim() || "qmd";
