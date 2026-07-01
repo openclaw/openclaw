@@ -717,6 +717,64 @@ describe("plugin sdk alias helpers", () => {
     expect(subpaths).toEqual(["core", "qa-channel", "qa-channel-protocol", "qa-lab", "qa-runtime"]);
   });
 
+  it("resolves public QA plugin-sdk aliases without enabling private QA mode", () => {
+    const fixture = createPluginSdkAliasFixture({
+      packageExports: {
+        "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
+        "./plugin-sdk/qa-live-transport-scenarios": {
+          default: "./dist/plugin-sdk/qa-live-transport-scenarios.js",
+        },
+        "./plugin-sdk/qa-runner-runtime": { default: "./dist/plugin-sdk/qa-runner-runtime.js" },
+      },
+    });
+    const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
+    const sourceQaRunnerPath = path.join(fixture.root, "src", "plugin-sdk", "qa-runner-runtime.ts");
+    const distQaLiveTransportScenariosPath = path.join(
+      fixture.root,
+      "dist",
+      "plugin-sdk",
+      "qa-live-transport-scenarios.js",
+    );
+    const sourcePrivateQaRuntimePath = path.join(
+      fixture.root,
+      "src",
+      "plugin-sdk",
+      "qa-runtime.ts",
+    );
+    fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
+    fs.writeFileSync(sourceQaRunnerPath, "export const qaRunnerRuntime = true;\n", "utf-8");
+    fs.writeFileSync(
+      distQaLiveTransportScenariosPath,
+      "export const qaLiveTransportScenarios = true;\n",
+      "utf-8",
+    );
+    fs.writeFileSync(sourcePrivateQaRuntimePath, "export const qaRuntime = true;\n", "utf-8");
+    const sourcePluginEntry = writePluginEntry(
+      fixture.root,
+      bundledPluginFile("demo", "src/index.ts"),
+    );
+
+    const subpaths = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined }, () =>
+      listPluginSdkExportedSubpaths({ modulePath: sourcePluginEntry }),
+    );
+    const aliases = withEnv(
+      { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
+      () => buildPluginLoaderAliasMap(sourcePluginEntry),
+    );
+
+    expect(subpaths).toEqual(["core", "qa-live-transport-scenarios", "qa-runner-runtime"]);
+    expect(fs.realpathSync(aliases["openclaw/plugin-sdk"] ?? "")).toBe(
+      fs.realpathSync(sourceRootAlias),
+    );
+    expect(fs.realpathSync(aliases["openclaw/plugin-sdk/qa-runner-runtime"] ?? "")).toBe(
+      fs.realpathSync(sourceQaRunnerPath),
+    );
+    expect(fs.realpathSync(aliases["openclaw/plugin-sdk/qa-live-transport-scenarios"] ?? "")).toBe(
+      fs.realpathSync(distQaLiveTransportScenariosPath),
+    );
+    expect(aliases["openclaw/plugin-sdk/qa-runtime"]).toBeUndefined();
+  });
+
   it("adds non-QA private Codex helper subpaths only for trusted Codex plugins", () => {
     const fixture = createPluginSdkAliasFixture({
       packageExports: {
@@ -1187,6 +1245,125 @@ describe("plugin sdk alias helpers", () => {
     expect(installedOtherAliases["openclaw/plugin-sdk/codex-native-task-runtime"]).toBeUndefined();
     expect(shadowCodexAliases["openclaw/plugin-sdk/codex-mcp-projection"]).toBeUndefined();
     expect(shadowCodexAliases["openclaw/plugin-sdk/codex-native-task-runtime"]).toBeUndefined();
+  });
+
+  it("aliases provider transport replay runtime only for trusted Google provider plugins", () => {
+    const fixture = createPluginSdkAliasFixture({
+      packageExports: {
+        "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
+      },
+    });
+    const sourceRootAlias = path.join(fixture.root, "src", "plugin-sdk", "root-alias.cjs");
+    const sourceReplayRuntimePath = path.join(
+      fixture.root,
+      "src",
+      "plugin-sdk",
+      "provider-transport-replay-runtime.ts",
+    );
+    const distReplayRuntimePath = path.join(
+      fixture.root,
+      "dist",
+      "plugin-sdk",
+      "provider-transport-replay-runtime.js",
+    );
+    fs.writeFileSync(sourceRootAlias, "module.exports = {};\n", "utf-8");
+    fs.writeFileSync(
+      path.join(fixture.root, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
+      JSON.stringify(["provider-transport-replay-runtime"], null, 2),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      sourceReplayRuntimePath,
+      "export const providerReplayRuntime = true;\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      distReplayRuntimePath,
+      "export const providerReplayRuntime = true;\n",
+      "utf-8",
+    );
+    const sourceGoogleEntry = writePluginEntry(
+      fixture.root,
+      bundledPluginFile("google", "src/index.ts"),
+    );
+    const distGoogleEntry = writePluginEntry(
+      fixture.root,
+      bundledDistPluginFile("google", "index.js"),
+    );
+    const sourceOtherPluginEntry = writePluginEntry(
+      fixture.root,
+      bundledPluginFile("demo", "src/index.ts"),
+    );
+    const { packageRoot: installedGoogleRoot, pluginEntry: installedGoogleEntry } =
+      writeInstalledPluginEntry({
+        installRoot: path.join(makeTempDir(), ".openclaw", "npm"),
+        packageName: "@openclaw/google-plugin",
+      });
+    const { packageRoot: installedOtherRoot, pluginEntry: installedOtherEntry } =
+      writeInstalledPluginEntry({
+        installRoot: path.join(makeTempDir(), ".openclaw", "npm"),
+        packageName: "@openclaw/demo",
+      });
+
+    const sourceSubpaths = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined }, () =>
+      listPluginSdkExportedSubpaths({ modulePath: sourceGoogleEntry }),
+    );
+    const otherSubpathsWithPrivateQa = withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1" }, () =>
+      listPluginSdkExportedSubpaths({ modulePath: sourceOtherPluginEntry }),
+    );
+    const sourceAliases = withEnv(
+      { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
+      () => buildPluginLoaderAliasMap(sourceGoogleEntry),
+    );
+    const distAliases = withEnv(
+      { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
+      () => buildPluginLoaderAliasMap(distGoogleEntry, undefined, undefined, "dist"),
+    );
+    const otherAliases = withEnv(
+      { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
+      () => buildPluginLoaderAliasMap(sourceOtherPluginEntry),
+    );
+    const installedGoogleAliases = withCwd(installedGoogleRoot, () =>
+      withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined }, () =>
+        buildPluginLoaderAliasMap(
+          installedGoogleEntry,
+          path.join(fixture.root, "openclaw.mjs"),
+          undefined,
+          "dist",
+        ),
+      ),
+    );
+    const installedOtherAliases = withCwd(installedOtherRoot, () =>
+      withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined }, () =>
+        buildPluginLoaderAliasMap(
+          installedOtherEntry,
+          path.join(fixture.root, "openclaw.mjs"),
+          undefined,
+          "dist",
+        ),
+      ),
+    );
+
+    expect(sourceSubpaths).toEqual(["core", "provider-transport-replay-runtime"]);
+    expect(otherSubpathsWithPrivateQa).toEqual(["core"]);
+    expect(fs.realpathSync(sourceAliases["openclaw/plugin-sdk"] ?? "")).toBe(
+      fs.realpathSync(sourceRootAlias),
+    );
+    expect(
+      fs.realpathSync(sourceAliases["openclaw/plugin-sdk/provider-transport-replay-runtime"] ?? ""),
+    ).toBe(fs.realpathSync(sourceReplayRuntimePath));
+    expect(
+      fs.realpathSync(distAliases["openclaw/plugin-sdk/provider-transport-replay-runtime"] ?? ""),
+    ).toBe(fs.realpathSync(distReplayRuntimePath));
+    expect(
+      fs.realpathSync(
+        installedGoogleAliases["openclaw/plugin-sdk/provider-transport-replay-runtime"] ?? "",
+      ),
+    ).toBe(fs.realpathSync(distReplayRuntimePath));
+    expect(otherAliases["openclaw/plugin-sdk/provider-transport-replay-runtime"]).toBeUndefined();
+    expect(
+      installedOtherAliases["openclaw/plugin-sdk/provider-transport-replay-runtime"],
+    ).toBeUndefined();
   });
 
   it("aliases the SSRF internal helper only for bundled local IPC owner plugins", async () => {

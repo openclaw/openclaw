@@ -476,6 +476,7 @@ const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"]
 const CODEX_NATIVE_TASK_RUNTIME_PLUGIN_SDK_SUBPATH = "codex-native-task-runtime";
 const CODEX_MCP_PROJECTION_PLUGIN_SDK_SUBPATH = "codex-mcp-projection";
 const OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH = "ssrf-runtime-internal";
+const PROVIDER_TRANSPORT_REPLAY_RUNTIME_PLUGIN_SDK_SUBPATH = "provider-transport-replay-runtime";
 type PrivatePluginSdkSubpathOwner = {
   bundledPluginId: string;
   officialInstalledPackageName?: string;
@@ -501,6 +502,12 @@ const PRIVATE_PLUGIN_SDK_SUBPATH_OWNERS: readonly PrivatePluginSdkSubpathOwner[]
     bundledPluginId: "browser",
     allowPrivateQaCli: false,
     subpaths: [OLLAMA_CONFIGURED_LOCAL_ORIGIN_RUNTIME_PLUGIN_SDK_SUBPATH],
+  },
+  {
+    bundledPluginId: "google",
+    officialInstalledPackageName: "@openclaw/google-plugin",
+    allowPrivateQaCli: false,
+    subpaths: [PROVIDER_TRANSPORT_REPLAY_RUNTIME_PLUGIN_SDK_SUBPATH],
   },
 ];
 const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
