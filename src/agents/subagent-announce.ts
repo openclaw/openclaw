@@ -258,6 +258,7 @@ export async function runSubagentAnnounceFlow(params: {
   expectsCompletionMessage?: boolean;
   spawnMode?: SpawnSubagentMode;
   wakeOnDescendantSettle?: boolean;
+  requesterPausedForYield?: boolean;
   signal?: AbortSignal;
   bestEffortDeliver?: boolean;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
@@ -389,6 +390,18 @@ export async function runSubagentAnnounceFlow(params: {
         shouldDeleteChildSession = false;
         return true;
       }
+      // Failed wake must not become a successful yield skip; keep cleanup retryable.
+      if (params.requesterPausedForYield) {
+        shouldDeleteChildSession = false;
+        return false;
+      }
+    }
+
+    // sessions_yield: parent resume turn owns delivery via its own session output path, so skip
+    // the announce/text-direct fallback. Placed after both descendant phases (pending-deferral and
+    // wakeOnDescendantSettle) so a yielded run still defers/retries and synthesizes settled findings first.
+    if (params.requesterPausedForYield) {
+      return true;
     }
 
     if (!childCompletionFindings) {

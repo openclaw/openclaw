@@ -113,6 +113,8 @@ export type SubagentRunRecord = {
   expectsCompletionMessage?: boolean;
   endedReason?: SubagentLifecycleEndedReason;
   pauseReason?: "sessions_yield";
+  // pauseReason is cleared at completion; this survives so announce retry paths can still skip text-direct fallback.
+  completedFromYieldPause?: boolean;
   wakeOnDescendantSettle?: boolean;
   execution?: SubagentExecutionState;
   completion?: SubagentCompletionState;
