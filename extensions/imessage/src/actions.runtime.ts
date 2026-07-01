@@ -549,6 +549,33 @@ export const imessageActionsRuntime = {
     return { messageId: resolveMessageId(result) };
   },
 
+  async sendPollVote(params: {
+    chatGuid: string;
+    pollGuid: string;
+    // Exactly one selector; the CLI resolves index/text to the option UUID.
+    optionIndex?: number;
+    optionId?: string;
+    optionText?: string;
+    options: IMessageBridgeActionOptions;
+  }): Promise<IMessageBridgeSendResult & { optionText?: string }> {
+    const selector = params.optionId
+      ? ["--option-id", params.optionId]
+      : params.optionIndex !== undefined
+        ? ["--option-index", String(params.optionIndex)]
+        : params.optionText
+          ? ["--option", params.optionText]
+          : [];
+    const result = await runIMessageCliJson(
+      ["poll", "vote", "--chat", params.chatGuid, "--poll", params.pollGuid, ...selector],
+      params.options,
+    );
+    // imsg resolves the option index/text to the canonical option label and
+    // echoes it back; the message tool uses it to drop a redundant text reply
+    // that just restates the vote.
+    const optionText = typeof result.optionText === "string" ? result.optionText.trim() : "";
+    return { messageId: resolveMessageId(result), ...(optionText ? { optionText } : {}) };
+  },
+
   async sendAttachment(params: {
     chatGuid: string;
     buffer: Uint8Array;

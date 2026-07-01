@@ -12,6 +12,7 @@ export const IMESSAGE_ACTIONS = {
   leaveGroup: { gate: "leaveGroup", groupOnly: true },
   sendAttachment: { gate: "sendAttachment" },
   poll: { gate: "polls" },
+  "poll-vote": { gate: "polls" },
 } as const;
 
 type IMessageActionSpecs = typeof IMESSAGE_ACTIONS;

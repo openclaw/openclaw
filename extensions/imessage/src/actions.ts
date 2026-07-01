@@ -421,6 +421,10 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       aliases: ["chatGuid", "chatIdentifier", "chatId"],
       deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
     },
+    "poll-vote": {
+      aliases: ["chatGuid", "chatIdentifier", "chatId", "pollId", "messageId"],
+      deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+    },
     "upload-file": {
       aliases: ["chatGuid", "chatIdentifier", "chatId"],
       deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
@@ -767,6 +771,71 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         chatGuid: resolvedChatGuid,
       });
       return jsonResult({ ok: true, messageId: result.messageId });
+    }
+
+    if (action === "poll-vote") {
+      await assertPrivateApiEnabled();
+      // The poll being voted on is an inbound message; the agent references it
+      // by the shared `pollId` param or a message id, which we resolve to the
+      // poll's full GUID through the same reply cache the react path uses.
+      const pollRef =
+        readStringParam(params, "pollId") ??
+        readStringParam(params, "pollGuid") ??
+        readStringParam(params, "messageId");
+      if (!pollRef) {
+        throw new Error("iMessage poll-vote requires the poll message id (pollId or messageId).");
+      }
+      const chatContext = buildChatContextFromActionParams({
+        actionParams: params,
+        currentChannelId: toolContext?.currentChannelId,
+      });
+      const pollGuid = runtime.resolveIMessageMessageId(pollRef, {
+        requireKnownShortId: true,
+        chatContext,
+      });
+      // Option selection: 1-based index, explicit UUID, or option text — imsg
+      // resolves index/text to the stable optionIdentifier from the decoded poll.
+      // Require exactly one selector so a conflicting pair can't silently vote
+      // by precedence (which would also seed the wrong echo label).
+      const optionIndex = readPositiveIntegerParam(params, "pollOptionIndex");
+      const optionId = readStringParam(params, "pollOptionId");
+      const optionText = readStringParam(params, "pollOption") ?? readStringParam(params, "option");
+      const selectorCount = [
+        optionIndex !== undefined,
+        Boolean(optionId),
+        Boolean(optionText),
+      ].filter(Boolean).length;
+      if (selectorCount === 0) {
+        throw new Error(
+          "iMessage poll-vote requires pollOptionIndex, pollOptionId, or pollOption.",
+        );
+      }
+      if (selectorCount > 1) {
+        throw new Error(
+          "iMessage poll-vote requires exactly one of pollOptionIndex, pollOptionId, or pollOption.",
+        );
+      }
+      const resolvedChatGuid = await chatGuid();
+      const result = await runtime.sendPollVote({
+        chatGuid: resolvedChatGuid,
+        pollGuid,
+        optionIndex,
+        optionId: optionId ?? undefined,
+        optionText: optionText ?? undefined,
+        options: { ...opts, chatGuid: resolvedChatGuid },
+      });
+      rememberOutboundBridgeMessage({
+        accountId: account.accountId,
+        messageId: result.messageId,
+        chatGuid: resolvedChatGuid,
+      });
+      // Surface the resolved option label so the message tool can suppress a
+      // redundant follow-up text that merely restates the vote (poll_vote_echo).
+      return jsonResult({
+        ok: true,
+        messageId: result.messageId,
+        ...(result.optionText ? { pollVotedOption: result.optionText } : {}),
+      });
     }
 
     throw new Error(`Action ${action} is not supported for provider ${providerId}.`);

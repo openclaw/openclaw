@@ -22,6 +22,7 @@ const PRIVATE_API_ACTIONS = new Set<ChannelMessageActionName>([
   "leaveGroup",
   "sendAttachment",
   "poll",
+  "poll-vote",
 ]);
 
 function isGroupTarget(raw?: string | null): boolean {
@@ -67,7 +68,10 @@ export function describeIMessageMessageTool({
     // poll-payload IMMessage initializer. Older bridges report the action gate
     // open but cannot construct the balloon, so hide poll unless the selector
     // probe confirms it (mirrors the edit/unsend selector gates above).
-    if (action === "poll" && privateApiStatus?.selectors?.pollPayloadMessage !== true) {
+    if (
+      (action === "poll" || action === "poll-vote") &&
+      privateApiStatus?.selectors?.pollPayloadMessage !== true
+    ) {
       continue;
     }
     actions.add(action);
