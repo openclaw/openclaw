@@ -1254,6 +1254,53 @@ describe("handleDiscordMessagingAction", () => {
     expect(sendOptions.mediaReadFile).toBe(mediaReadFile);
   });
 
+  it("forwards mediaUrls arrays into sendMessageDiscord", async () => {
+    sendMessageDiscord.mockClear();
+    await handleMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:123",
+        content: "gallery",
+        mediaUrls: ["/tmp/one.png", "/tmp/two.png"],
+      },
+      enableAllActions,
+      DISCORD_TEST_CFG,
+      { mediaLocalRoots: ["/tmp/agent-root"] },
+    );
+
+    expect(sendMessageDiscord).toHaveBeenCalledTimes(1);
+    const call = mockCall(sendMessageDiscord, "sendMessageDiscord");
+    const sendOptions = mockObjectArg(sendMessageDiscord, "sendMessageDiscord", 0, 2);
+    expect(call[0]).toBe("channel:123");
+    expect(call[1]).toBe("gallery");
+    expect(sendOptions.mediaUrls).toEqual(["/tmp/one.png", "/tmp/two.png"]);
+    expect(sendOptions.mediaUrl).toBeUndefined();
+    expect(sendOptions.mediaLocalRoots).toEqual(["/tmp/agent-root"]);
+  });
+
+  it("rejects multiple mediaUrls with component messages instead of dropping attachments", async () => {
+    sendDiscordComponentMessage.mockClear();
+    sendMessageDiscord.mockClear();
+
+    await expect(
+      handleMessagingAction(
+        "sendMessage",
+        {
+          to: "channel:123",
+          content: "gallery",
+          mediaUrls: ["/tmp/one.png", "/tmp/two.png"],
+          components: {
+            blocks: [{ type: "text", text: "Pick one" }],
+          },
+        },
+        enableAllActions,
+      ),
+    ).rejects.toThrow("Discord component messages support a single media file reference.");
+
+    expect(sendDiscordComponentMessage).not.toHaveBeenCalled();
+    expect(sendMessageDiscord).not.toHaveBeenCalled();
+  });
+
   it("allows media-only message sends", async () => {
     sendMessageDiscord.mockClear();
     await handleMessagingAction(

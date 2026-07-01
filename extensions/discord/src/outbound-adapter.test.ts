@@ -726,6 +726,90 @@ describe("discordOutbound", () => {
     expect(options.replyTo).toBe("reply-1");
   });
 
+  it("sends plain mediaUrls as one Discord multi-attachment message", async () => {
+    const result = await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      payload: {
+        text: "gallery",
+        mediaUrls: ["https://example.com/1.png", "https://example.com/2.png"],
+      },
+      accountId: "default",
+      mediaLocalRoots: ["/tmp/media"],
+      replyToId: "reply-1",
+    });
+
+    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    const call = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord");
+    expect(call[0]).toBe("channel:123456");
+    expect(call[1]).toBe("gallery");
+    const options = mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2);
+    expect(options.mediaUrls).toEqual(["https://example.com/1.png", "https://example.com/2.png"]);
+    expect(options.mediaUrl).toBeUndefined();
+    expect(options.mediaLocalRoots).toEqual(["/tmp/media"]);
+    expect(options.accountId).toBe("default");
+    expect(typeof options.replyTo).toBe("function");
+    const resolveReplyTo = options.replyTo as () => string | undefined;
+    expect(resolveReplyTo()).toBe("reply-1");
+    expect(resolveReplyTo()).toBe("reply-1");
+    expect(result).toEqual({
+      channel: "discord",
+      messageId: "msg-1",
+      channelId: "ch-1",
+    });
+  });
+
+  it("passes single-use reply fanout into plain mediaUrls sends", async () => {
+    await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      payload: {
+        text: "gallery",
+        mediaUrls: ["https://example.com/1.png", "https://example.com/2.png"],
+      },
+      accountId: "default",
+      replyToId: "reply-1",
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+    });
+
+    const options = mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2);
+    expect(typeof options.replyTo).toBe("function");
+    const resolveReplyTo = options.replyTo as () => string | undefined;
+    expect(resolveReplyTo()).toBe("reply-1");
+    expect(resolveReplyTo()).toBeUndefined();
+  });
+
+  it("does not retry an entire plain mediaUrls delivery after the send boundary fails", async () => {
+    hoisted.sendMessageDiscordMock.mockRejectedValueOnce(new Error("overflow batch failed"));
+
+    await expect(
+      discordOutbound.sendPayload?.({
+        cfg: {
+          channels: {
+            discord: {
+              retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+            },
+          },
+        },
+        to: "channel:123456",
+        text: "",
+        payload: {
+          text: "gallery",
+          mediaUrls: Array.from({ length: 11 }, (_, index) => `https://example.com/${index}.png`),
+        },
+        accountId: "default",
+        replyToId: "reply-1",
+      }),
+    ).rejects.toThrow("overflow batch failed");
+
+    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    const options = mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2);
+    expect(options.mediaUrls).toHaveLength(11);
+  });
+
   it("preserves explicit component payload replies when replyToMode is off", async () => {
     const payload = await discordOutbound.renderPresentation?.({
       payload: {

@@ -28,6 +28,7 @@ import {
   resolveDiscordSendComponents,
   resolveDiscordSendEmbeds,
   sendDiscordMedia,
+  sendDiscordMediaBatch,
   sendDiscordText,
   type DiscordSendComponents,
   type DiscordSendEmbeds,
@@ -38,13 +39,14 @@ type DiscordSendOpts = {
   token?: string;
   accountId?: string;
   mediaUrl?: string;
+  mediaUrls?: readonly string[];
   filename?: string;
   mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   verbose?: boolean;
   rest?: RequestClient;
-  replyTo?: string;
+  replyTo?: string | (() => string | undefined);
   retry?: RetryConfig;
   textLimit?: number;
   maxLinesPerMessage?: number;
@@ -113,6 +115,18 @@ function deriveForumThreadName(text: string): string {
 /** Forum/Media channels cannot receive regular messages; detect them here. */
 function isForumLikeType(channelType?: number): boolean {
   return channelType === ChannelType.GuildForum || channelType === ChannelType.GuildMedia;
+}
+
+function resolveDiscordSendMediaUrls(opts: Pick<DiscordSendOpts, "mediaUrl" | "mediaUrls">) {
+  const candidates = opts.mediaUrls?.length ? opts.mediaUrls : opts.mediaUrl ? [opts.mediaUrl] : [];
+  return candidates.flatMap((mediaUrl) => {
+    const normalized = normalizeOptionalString(mediaUrl);
+    return normalized ? [normalized] : [];
+  });
+}
+
+function resolveDiscordSendReplyTo(replyTo: DiscordSendOpts["replyTo"]): string | undefined {
+  return typeof replyTo === "function" ? replyTo() : replyTo;
 }
 
 function toDiscordSendResult(
@@ -184,6 +198,7 @@ export async function sendMessageDiscord(
     accountId: accountInfo.accountId,
     mentionAliases: accountInfo.config.mentionAliases,
   });
+  const mediaUrls = resolveDiscordSendMediaUrls(opts);
   const { token, rest, request } = createDiscordClient({ ...opts, cfg });
   const recipient = await parseAndResolveChannelRecipient(to, cfg, opts.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
@@ -237,7 +252,7 @@ export async function sendMessageDiscord(
         cfg,
         rest,
         token,
-        hasMedia: Boolean(opts.mediaUrl),
+        hasMedia: mediaUrls.length > 0,
       });
     }
 
@@ -247,13 +262,13 @@ export async function sendMessageDiscord(
     const remainingChunks = chunks.slice(1);
 
     try {
-      if (opts.mediaUrl) {
+      if (mediaUrls.length > 0) {
         const [mediaCaption, ...afterMediaChunks] = remainingChunks;
-        await sendDiscordMedia(
+        await sendDiscordMediaBatch(
           rest,
           threadId,
           mediaCaption ?? "",
-          opts.mediaUrl,
+          mediaUrls,
           opts.filename,
           opts.mediaAccess,
           opts.mediaLocalRoots,
@@ -299,7 +314,7 @@ export async function sendMessageDiscord(
         cfg,
         rest,
         token,
-        hasMedia: Boolean(opts.mediaUrl),
+        hasMedia: mediaUrls.length > 0,
       });
     }
 
@@ -314,18 +329,39 @@ export async function sendMessageDiscord(
         channel_id: resultChannelId,
       },
       channelId,
-      { kind: opts.mediaUrl ? "media" : "text", threadId },
+      { kind: mediaUrls.length > 0 ? "media" : "text", threadId },
     );
   }
 
   let result: DiscordChannelMessageResult;
   try {
-    if (opts.mediaUrl) {
+    if (mediaUrls.length > 1) {
+      result = await sendDiscordMediaBatch(
+        rest,
+        channelId,
+        textWithMentions,
+        mediaUrls,
+        opts.filename,
+        opts.mediaAccess,
+        opts.mediaLocalRoots,
+        opts.mediaReadFile,
+        mediaMaxBytes,
+        opts.replyTo,
+        request,
+        maxLinesPerMessage,
+        opts.components,
+        opts.embeds,
+        chunkMode,
+        opts.silent,
+        suppressEmbeds,
+        textLimit,
+      );
+    } else if (mediaUrls.length === 1) {
       result = await sendDiscordMedia(
         rest,
         channelId,
         textWithMentions,
-        opts.mediaUrl,
+        mediaUrls[0],
         opts.filename,
         opts.mediaAccess,
         opts.mediaLocalRoots,
@@ -346,7 +382,7 @@ export async function sendMessageDiscord(
         rest,
         channelId,
         textWithMentions,
-        opts.replyTo,
+        resolveDiscordSendReplyTo(opts.replyTo),
         request,
         maxLinesPerMessage,
         opts.components,
@@ -363,7 +399,7 @@ export async function sendMessageDiscord(
       cfg,
       rest,
       token,
-      hasMedia: Boolean(opts.mediaUrl),
+      hasMedia: mediaUrls.length > 0,
     });
   }
 
@@ -373,8 +409,8 @@ export async function sendMessageDiscord(
     direction: "outbound",
   });
   return toDiscordSendResult(result, channelId, {
-    kind: opts.mediaUrl ? "media" : opts.components || opts.embeds ? "card" : "text",
-    replyToId: opts.replyTo,
+    kind: mediaUrls.length > 0 ? "media" : opts.components || opts.embeds ? "card" : "text",
+    replyToId: typeof opts.replyTo === "string" ? opts.replyTo : undefined,
   });
 }
 

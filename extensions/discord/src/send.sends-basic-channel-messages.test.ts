@@ -1,6 +1,7 @@
 // Discord tests cover send.sends basic channel messages plugin behavior.
 import { ChannelType, MessageFlags, PermissionFlagsBits, Routes } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { DiscordApiError } from "./api.js";
 import { discordWebMediaMockFactory, makeDiscordRest } from "./send.test-harness.js";
 
 vi.mock("openclaw/plugin-sdk/web-media", () => discordWebMediaMockFactory());
@@ -119,6 +120,21 @@ function expectBodyFileName(body: unknown, expectedName: string) {
   const files = requireArray(requireRecord(body, "Discord REST body").files, "Discord files");
   expect(files).toHaveLength(1);
   expectRecordFields(files[0], "Discord file", { name: expectedName });
+}
+
+function expectBodyFileNames(body: unknown, expectedNames: readonly string[]) {
+  const files = requireArray(requireRecord(body, "Discord REST body").files, "Discord files");
+  expect(files).toHaveLength(expectedNames.length);
+  expect(files.map((file) => requireRecord(file, "Discord file").name)).toEqual(expectedNames);
+}
+
+function queueLoadedDiscordMedia(fileName: string) {
+  vi.mocked(loadWebMedia).mockResolvedValueOnce({
+    buffer: Buffer.from(fileName),
+    fileName,
+    contentType: "image/jpeg",
+    kind: "image",
+  } as never);
 }
 
 describe("resolveDiscordTargetChannelId", () => {
@@ -572,6 +588,128 @@ describe("sendMessageDiscord", () => {
     expect(loadWebMedia).toHaveBeenCalledWith("file:///tmp/photo.jpg", {
       maxBytes: 100 * 1024 * 1024,
     });
+  });
+
+  it("uploads ten media attachments in one Discord message", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    const urls = Array.from({ length: 10 }, (_, index) => `file:///tmp/photo-${index}.jpg`);
+    const fileNames = urls.map((_, index) => `photo-${index}.jpg`);
+    for (const fileName of fileNames) {
+      queueLoadedDiscordMedia(fileName);
+    }
+    postMock.mockResolvedValue({ id: "msg", channel_id: "789" });
+
+    const res = await sendMessageDiscord("channel:789", "gallery", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      mediaUrls: urls,
+      replyTo: "orig-123",
+    });
+
+    expect(res.messageId).toBe("msg");
+    expect(res.receipt.platformMessageIds).toEqual(["msg"]);
+    expect(postMock).toHaveBeenCalledTimes(1);
+    expectRestRoute(postMock, 0, Routes.channelMessages("789"));
+    const body = requireRestBody(postMock);
+    expect(body.content).toBe("gallery");
+    expect(body.message_reference).toEqual({
+      message_id: "orig-123",
+      fail_if_not_exists: false,
+    });
+    expectBodyFileNames(body, fileNames);
+    expect(vi.mocked(loadWebMedia).mock.calls.map((call) => call[0])).toEqual(urls);
+  });
+
+  it("splits media attachments over Discord's ten-file message limit", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    const urls = Array.from({ length: 11 }, (_, index) => `file:///tmp/photo-${index}.jpg`);
+    const fileNames = urls.map((_, index) => `photo-${index}.jpg`);
+    for (const fileName of fileNames) {
+      queueLoadedDiscordMedia(fileName);
+    }
+    postMock
+      .mockResolvedValueOnce({ id: "msg1", channel_id: "789" })
+      .mockResolvedValueOnce({ id: "msg2", channel_id: "789" });
+
+    const res = await sendMessageDiscord("channel:789", "gallery", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      mediaUrls: urls,
+    });
+
+    expect(res.messageId).toBe("msg2");
+    expect(res.receipt.platformMessageIds).toEqual(["msg1", "msg2"]);
+    expect(postMock).toHaveBeenCalledTimes(2);
+    const firstBody = requireRestBody(postMock, 0);
+    expect(firstBody.content).toBe("gallery");
+    expectBodyFileNames(firstBody, fileNames.slice(0, 10));
+    const secondBody = requireRestBody(postMock, 1);
+    expect(secondBody).not.toHaveProperty("content");
+    expectBodyFileNames(secondBody, fileNames.slice(10));
+  });
+
+  it("consumes reply fanout once across overflow media attachment batches", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    const urls = Array.from({ length: 11 }, (_, index) => `file:///tmp/photo-${index}.jpg`);
+    const fileNames = urls.map((_, index) => `photo-${index}.jpg`);
+    for (const fileName of fileNames) {
+      queueLoadedDiscordMedia(fileName);
+    }
+    let nextReplyTo: string | undefined = "orig-123";
+    postMock
+      .mockResolvedValueOnce({ id: "msg1", channel_id: "789" })
+      .mockResolvedValueOnce({ id: "msg2", channel_id: "789" });
+
+    await sendMessageDiscord("channel:789", "gallery", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      mediaUrls: urls,
+      replyTo: () => {
+        const value = nextReplyTo;
+        nextReplyTo = undefined;
+        return value;
+      },
+    });
+
+    const firstBody = requireRestBody(postMock, 0);
+    expect(firstBody.message_reference).toEqual({
+      message_id: "orig-123",
+      fail_if_not_exists: false,
+    });
+    expectBodyFileNames(firstBody, fileNames.slice(0, 10));
+    const secondBody = requireRestBody(postMock, 1);
+    expect(secondBody).not.toHaveProperty("message_reference");
+    expectBodyFileNames(secondBody, fileNames.slice(10));
+  });
+
+  it("retries only the failed overflow media attachment batch", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    const urls = Array.from({ length: 11 }, (_, index) => `file:///tmp/photo-${index}.jpg`);
+    const fileNames = urls.map((_, index) => `photo-${index}.jpg`);
+    for (const fileName of [...fileNames, fileNames[10]]) {
+      queueLoadedDiscordMedia(fileName);
+    }
+    postMock
+      .mockResolvedValueOnce({ id: "msg1", channel_id: "789" })
+      .mockRejectedValueOnce(new DiscordApiError("transient overflow failure", 429, 0))
+      .mockResolvedValueOnce({ id: "msg2", channel_id: "789" });
+
+    const res = await sendMessageDiscord("channel:789", "gallery", {
+      rest,
+      token: "t",
+      cfg: DISCORD_TEST_CFG,
+      mediaUrls: urls,
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
+
+    expect(res.receipt.platformMessageIds).toEqual(["msg1", "msg2"]);
+    expect(postMock).toHaveBeenCalledTimes(3);
+    expectBodyFileNames(requireRestBody(postMock, 0), fileNames.slice(0, 10));
+    expectBodyFileNames(requireRestBody(postMock, 1), fileNames.slice(10));
+    expectBodyFileNames(requireRestBody(postMock, 2), fileNames.slice(10));
   });
 
   it("passes mediaAccess workspaceDir when loading relative media attachments", async () => {

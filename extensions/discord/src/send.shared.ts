@@ -24,12 +24,14 @@ import {
   createUserDmChannel,
   getChannel,
   RequestClient,
+  type MessagePayloadFile,
 } from "./internal/discord.js";
 import { parseAndResolveRecipient } from "./recipient-resolution.js";
 import { fetchChannelPermissionsDiscord, isThreadChannelType } from "./send.permissions.js";
 import { DiscordSendError } from "./send.types.js";
 
 const DISCORD_TEXT_LIMIT = 2000;
+const DISCORD_MAX_FILES_PER_MESSAGE = 10;
 const DISCORD_MAX_STICKERS = 3;
 const DISCORD_POLL_MAX_ANSWERS = 10;
 const DISCORD_POLL_MAX_DURATION_HOURS = 32 * 24;
@@ -37,6 +39,7 @@ const DISCORD_MISSING_PERMISSIONS = 50013;
 const DISCORD_CANNOT_DM = 50007;
 
 type DiscordRequest = RetryRunner;
+type DiscordReplyToInput = string | (() => string | undefined) | undefined;
 
 export {
   buildDiscordMessagePayload,
@@ -363,7 +366,7 @@ async function sendDiscordMedia(
   mediaLocalRoots: readonly string[] | undefined,
   mediaReadFile: ((filePath: string) => Promise<Buffer>) | undefined,
   maxBytes: number | undefined,
-  replyTo: string | undefined,
+  replyTo: DiscordReplyToInput,
   request: DiscordRequest,
   maxLinesPerMessage?: number,
   components?: DiscordSendComponents,
@@ -373,49 +376,136 @@ async function sendDiscordMedia(
   suppressEmbeds?: boolean,
   maxChars?: number,
 ) {
-  const media = await loadWebMedia(
-    mediaUrl,
-    buildOutboundMediaLoadOptions({ maxBytes, mediaAccess, mediaLocalRoots, mediaReadFile }),
+  return await sendDiscordMediaBatch(
+    rest,
+    channelId,
+    text,
+    [mediaUrl],
+    filename,
+    mediaAccess,
+    mediaLocalRoots,
+    mediaReadFile,
+    maxBytes,
+    replyTo,
+    request,
+    maxLinesPerMessage,
+    components,
+    embeds,
+    chunkMode,
+    silent,
+    suppressEmbeds,
+    maxChars,
   );
-  const requestedFileName = filename?.trim();
-  const resolvedFileName =
-    requestedFileName ||
-    media.fileName ||
-    (media.contentType ? `upload${extensionForMime(media.contentType) ?? ""}` : "") ||
-    "upload";
+}
+
+async function loadDiscordMediaFiles(params: {
+  mediaUrls: readonly string[];
+  filename?: string;
+  mediaAccess?: OutboundMediaAccess;
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  maxBytes?: number;
+}): Promise<MessagePayloadFile[]> {
+  const files: MessagePayloadFile[] = [];
+  for (const [index, mediaUrl] of params.mediaUrls.entries()) {
+    const media = await loadWebMedia(
+      mediaUrl,
+      buildOutboundMediaLoadOptions({
+        maxBytes: params.maxBytes,
+        mediaAccess: params.mediaAccess,
+        mediaLocalRoots: params.mediaLocalRoots,
+        mediaReadFile: params.mediaReadFile,
+      }),
+    );
+    const requestedFileName = index === 0 ? params.filename?.trim() : undefined;
+    const resolvedFileName =
+      requestedFileName ||
+      media.fileName ||
+      (media.contentType ? `upload${extensionForMime(media.contentType) ?? ""}` : "") ||
+      "upload";
+    files.push({
+      data: toDiscordFileBlob(media.buffer),
+      name: resolvedFileName,
+    });
+  }
+  return files;
+}
+
+function chunkDiscordMediaUrls(mediaUrls: readonly string[]): string[][] {
+  const chunks: string[][] = [];
+  for (let index = 0; index < mediaUrls.length; index += DISCORD_MAX_FILES_PER_MESSAGE) {
+    chunks.push(mediaUrls.slice(index, index + DISCORD_MAX_FILES_PER_MESSAGE));
+  }
+  return chunks;
+}
+
+async function sendDiscordMediaBatch(
+  rest: RequestClient,
+  channelId: string,
+  text: string,
+  mediaUrls: readonly string[],
+  filename: string | undefined,
+  mediaAccess: OutboundMediaAccess | undefined,
+  mediaLocalRoots: readonly string[] | undefined,
+  mediaReadFile: ((filePath: string) => Promise<Buffer>) | undefined,
+  maxBytes: number | undefined,
+  replyTo: DiscordReplyToInput,
+  request: DiscordRequest,
+  maxLinesPerMessage?: number,
+  components?: DiscordSendComponents,
+  embeds?: DiscordSendEmbeds,
+  chunkMode?: ChunkMode,
+  silent?: boolean,
+  suppressEmbeds?: boolean,
+  maxChars?: number,
+) {
+  const normalizedMediaUrls = normalizeStringEntries(mediaUrls);
+  if (normalizedMediaUrls.length === 0) {
+    throw new Error("At least one media attachment is required for Discord media sends");
+  }
   const chunks = text
     ? buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode, maxChars })
     : [];
   const caption = chunks[0] ?? "";
-  const fileData = toDiscordFileBlob(media.buffer);
-  const captionComponents = resolveDiscordSendComponents({
-    components,
-    text: caption,
-    isFirst: true,
-  });
-  const captionEmbeds = resolveDiscordSendEmbeds({ embeds, isFirst: true });
-  const flags = resolveDiscordMessageFlags({
-    silent,
-    suppressEmbeds: suppressEmbeds && !captionEmbeds?.length,
-  });
-  const body = buildDiscordMessageRequest({
-    text: caption,
-    components: captionComponents,
-    embeds: captionEmbeds,
-    flags,
-    replyTo,
-    files: [
-      {
-        data: fileData,
-        name: resolvedFileName,
-      },
-    ],
-  });
-  const res = (await request(
-    () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
-    "media",
-  )) as { id: string; channel_id: string };
-  const platformMessageIds = res.id ? [res.id] : [];
+  const platformMessageIds: string[] = [];
+  let res: { id: string; channel_id: string } | undefined;
+  const resolveReplyTo = () => (typeof replyTo === "function" ? replyTo() : replyTo);
+  for (const [batchIndex, batch] of chunkDiscordMediaUrls(normalizedMediaUrls).entries()) {
+    const isFirstBatch = batchIndex === 0;
+    const captionComponents = resolveDiscordSendComponents({
+      components,
+      text: isFirstBatch ? caption : "",
+      isFirst: isFirstBatch,
+    });
+    const captionEmbeds = resolveDiscordSendEmbeds({ embeds, isFirst: isFirstBatch });
+    const flags = resolveDiscordMessageFlags({
+      silent,
+      suppressEmbeds: suppressEmbeds && !captionEmbeds?.length,
+    });
+    const files = await loadDiscordMediaFiles({
+      mediaUrls: batch,
+      filename: isFirstBatch ? filename : undefined,
+      mediaAccess,
+      mediaLocalRoots,
+      mediaReadFile,
+      maxBytes,
+    });
+    const body = buildDiscordMessageRequest({
+      text: isFirstBatch ? caption : "",
+      components: captionComponents,
+      embeds: captionEmbeds,
+      flags,
+      replyTo: resolveReplyTo(),
+      files,
+    });
+    res = (await request(
+      () => createChannelMessage<{ id: string; channel_id: string }>(rest, channelId, { body }),
+      "media",
+    )) as { id: string; channel_id: string };
+    if (res.id) {
+      platformMessageIds.push(res.id);
+    }
+  }
   for (const chunk of chunks.slice(1)) {
     if (!chunk.trim()) {
       continue;
@@ -424,7 +514,7 @@ async function sendDiscordMedia(
       rest,
       channelId,
       chunk,
-      replyTo,
+      resolveReplyTo(),
       request,
       maxLinesPerMessage,
       undefined,
@@ -439,6 +529,9 @@ async function sendDiscordMedia(
         platformMessageIds.push(id);
       }
     }
+  }
+  if (!res) {
+    throw new Error("Discord media send failed (empty media batch result)");
   }
   return { ...res, platformMessageIds };
 }
@@ -467,5 +560,6 @@ export {
   resolveDiscordTargetChannelId,
   resolveDiscordRest,
   sendDiscordMedia,
+  sendDiscordMediaBatch,
   sendDiscordText,
 };
