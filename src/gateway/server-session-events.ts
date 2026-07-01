@@ -38,6 +38,18 @@ function readMessageIdempotencyKey(message: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+function readMessageSenderIsOwner(message: unknown): boolean | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const openclaw = (message as Record<string, unknown>)["__openclaw"];
+  if (!openclaw || typeof openclaw !== "object" || Array.isArray(openclaw)) {
+    return undefined;
+  }
+  const value = (openclaw as Record<string, unknown>).senderIsOwner;
+  return typeof value === "boolean" ? value : undefined;
+}
+
 function resolveSessionMessageBroadcastKeys(sessionKey: string, agentId?: string): string[] {
   // Global sessions can be subscribed through either the raw global key or the
   // default-agent scoped key; non-default agent global sessions stay scoped.
@@ -182,6 +194,7 @@ async function handleTranscriptUpdateBroadcast(
     hasActiveRun,
   });
   const idempotencyKey = readMessageIdempotencyKey(update.message);
+  const senderIsOwner = readMessageSenderIsOwner(update.message);
   const rawMessage = attachOpenClawTranscriptMeta(update.message, {
     ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
     ...(idempotencyKey ? { idempotencyKey } : {}),
@@ -193,6 +206,7 @@ async function handleTranscriptUpdateBroadcast(
       "session.message",
       {
         sessionKey,
+        ...(senderIsOwner === undefined ? {} : { senderIsOwner }),
         ...(visibleAgentId ? { agentId: visibleAgentId } : {}),
         message,
         ...(typeof update.messageId === "string" ? { messageId: update.messageId } : {}),

@@ -1388,13 +1388,13 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Reactions are enabled for Telegram in MINIMAL mode.");
   });
 
-  it("keeps stable project context before all channel/identity-varying guidance for prefix-cache reuse", () => {
-    const prompt = buildAgentSystemPrompt({
+  it("keeps exec-approval and authorized-sender guidance below the stable prefix", () => {
+    const baseParams = {
       workspaceDir: "/tmp/openclaw",
       toolNames: ["message"],
       ownerNumbers: ["+123"],
       runtimeInfo: {
-        channel: "telegram",
+        channel: "webchat",
         capabilities: ["inlineButtons"],
       },
       contextFiles: [
@@ -1406,7 +1406,8 @@ describe("buildAgentSystemPrompt", () => {
       extraSystemPrompt: "Current group-chat facts",
       reactionGuidance: { level: "minimal", channel: "Telegram" },
       ttsHint: "Use short voice-friendly replies.",
-    });
+    } satisfies Parameters<typeof buildAgentSystemPrompt>[0];
+    const prompt = buildAgentSystemPrompt(baseParams);
 
     const projectContextPos = prompt.indexOf("# Project Context");
     const boundaryPos = prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
@@ -1414,9 +1415,8 @@ describe("buildAgentSystemPrompt", () => {
     const groupChatPos = prompt.lastIndexOf("## Group Chat Context");
     const reactionsPos = prompt.lastIndexOf("## Reactions");
     const voicePos = prompt.lastIndexOf("## Voice (TTS)");
-    // Exec-approval guidance (channel-varying) and Authorized Senders (owner/identity-varying,
-    // dropped when minimal) previously leaked ABOVE the boundary, forking the cacheable prefix
-    // at ~token 1,460; they must sit below it like the other channel-varying sections.
+    // These sections vary with approval UI capabilities and owner identity, so
+    // both must stay below the stable prefix boundary.
     const approvalPos = prompt.lastIndexOf("use native approval card");
     const authorizedSendersPos = prompt.lastIndexOf("## Authorized Senders");
 
@@ -1428,6 +1428,23 @@ describe("buildAgentSystemPrompt", () => {
     expect(voicePos).toBeGreaterThan(boundaryPos);
     expect(approvalPos).toBeGreaterThan(boundaryPos);
     expect(authorizedSendersPos).toBeGreaterThan(boundaryPos);
+
+    const stablePrefix = prompt.slice(0, boundaryPos);
+    const otherOwnerPrompt = buildAgentSystemPrompt({
+      ...baseParams,
+      ownerNumbers: ["+456"],
+    });
+    const manualApprovalPrompt = buildAgentSystemPrompt({
+      ...baseParams,
+      runtimeInfo: { channel: "webchat", capabilities: [] },
+    });
+    expect(otherOwnerPrompt).toContain("Authorized senders: +456");
+    expect(otherOwnerPrompt).not.toContain("Authorized senders: +123");
+    expect(manualApprovalPrompt).toContain("send the exact /approve command");
+    expect(manualApprovalPrompt).not.toContain("use native approval card");
+    for (const variant of [otherOwnerPrompt, manualApprovalPrompt]) {
+      expect(variant.slice(0, variant.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY))).toBe(stablePrefix);
+    }
   });
 });
 

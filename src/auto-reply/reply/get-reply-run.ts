@@ -1247,6 +1247,7 @@ export async function runPreparedReply(
     userTurnTranscriptText !== undefined || userTurnMediaForPersistence.length > 0
       ? {
           text: userTurnTranscriptText,
+          senderIsOwner: command.senderIsOwner,
           ...(inputProvenance ? { provenance: inputProvenance } : {}),
           ...(userTurnMediaForPersistence.length > 0
             ? {

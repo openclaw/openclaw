@@ -1013,13 +1013,10 @@ export function buildAgentSystemPrompt(params: {
     nativeCommandGuidanceLines,
     providerSectionOverrides,
     providerStablePrefix,
-    ownerLine,
     reasoningHint,
     reasoningLevel,
     userTimezone,
     runtimeChannel,
-    runtimeCapabilities,
-    inlineButtonsEnabled,
     threadBoundAcpSpawnEnabled,
     sourceMessageToolOnly,
     silentReplyPromptMode,
@@ -1285,11 +1282,8 @@ export function buildAgentSystemPrompt(params: {
   // Channel/session-specific guidance lives below the cache boundary so large
   // stable workspace context can remain a byte-identical prefix across turns.
   lines.push(
-    // Exec-approval guidance varies by channel (CLI /approve vs native approval UI)
-    // and Authorized Senders varies by owner/identity (and is dropped when minimal),
-    // so both must sit below the boundary to keep the static prefix byte-identical.
-    // Still suppressed when `tool_call_style` is provider-overridden, preserving the
-    // original contract where that override replaces the whole section (incl. this line).
+    // Approval UI and owner identity vary by turn, so keep both below the stable prefix.
+    // A tool_call_style override owns the complete section and suppresses default guidance.
     ...(providerSectionOverrides.tool_call_style
       ? []
       : [

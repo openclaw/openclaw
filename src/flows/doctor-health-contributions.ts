@@ -1222,6 +1222,19 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:auth-profiles",
       label: "Auth profiles",
+      healthChecks: {
+        id: "core/doctor/auth-profiles",
+        kind: "core",
+        description: "Auth profile cooldown, expiry, missing credential, and legacy override state",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { collectAuthProfileHealthFindings } = await import("../commands/doctor-auth.js");
+          return collectAuthProfileHealthFindings({
+            cfg: ctx.cfg,
+            allowKeychainPrompt: false,
+          });
+        },
+      },
       run: runAuthProfileHealth,
     }),
     createDoctorHealthContribution({
