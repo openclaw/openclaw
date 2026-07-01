@@ -46,13 +46,18 @@ import {
   resolveSingletonManagedCache,
 } from "./manager-cache.js";
 import { closeMemoryDatabase } from "./manager-db.js";
-import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
+import {
+  MemoryManagerEmbeddingOps,
+  resolveEmbeddingTimeoutMs,
+  runEmbeddingOperationWithTimeout,
+} from "./manager-embedding-ops.js";
 import { isLocalEmbeddingWorkerFailure } from "./manager-local-worker-errors.js";
 import {
   createDegradedMemoryProviderLifecycle,
   createPendingMemoryProviderLifecycle,
   resolveMemoryPrimaryProviderRequest,
   resolveMemoryProviderState,
+  shouldAttemptPrimaryProviderRecovery,
   type MemoryProviderLifecycleState,
 } from "./manager-provider-state.js";
 import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
@@ -241,6 +246,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private providerInitialized = false;
   protected override fallbackFrom?: EmbeddingProviderId;
   protected override fallbackReason?: string;
+  // Throttles primary-provider recovery attempts so a latched fallback does
+  // not bring the network path back online every search call. Without this,
+  // a transient remote outage permanently downgrades the in-gateway tool even
+  // after the primary is reachable again (only a full process restart clears
+  // the latch). See issue #96534.
+  private lastPrimaryRecoveryAttemptMs = 0;
   protected providerUnavailableReason?: string;
   protected override providerLifecycle: MemoryProviderLifecycleState;
   protected override providerRuntime?: EmbeddingProviderRuntime;
@@ -513,6 +524,120 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.providerLifecycle = createPendingMemoryProviderLifecycle(this.requestedProvider);
   }
 
+  /**
+   * Attempts to restore the configured primary embedding provider after a
+   * fallback was activated. Returns true when the primary is reachable again
+   * and the manager has switched back.
+   *
+   * Without this, a single transient outage permanently latches the in-gateway
+   * memory tool onto the fallback provider (see issue #96534): the index is
+   * keyed by the original model identity, so subsequent searches fail with
+   * "index was built for model X, expected Y" until the gateway process is
+   * fully restarted. SIGUSR1 in-process restarts and config soft-reloads do
+   * not clear the latch because the singleton manager instance is reused.
+   */
+  private async attemptPrimaryProviderRecovery(params: {
+    force?: boolean;
+    signal?: AbortSignal;
+  }): Promise<boolean> {
+    const nowMs = Date.now();
+    if (
+      !shouldAttemptPrimaryProviderRecovery({
+        fallbackFrom: this.fallbackFrom,
+        lastAttemptMs: this.lastPrimaryRecoveryAttemptMs,
+        nowMs,
+        throttleMs: EMBEDDING_PROBE_CACHE_TTL_MS,
+        force: params.force,
+      })
+    ) {
+      return false;
+    }
+    this.lastPrimaryRecoveryAttemptMs = nowMs;
+    // Track a freshly-loaded provider that this attempt has not yet adopted
+    // into manager state. Closed on any failure path so a sustained primary
+    // outage does not leak a fresh worker each throttle window.
+    let pendingProvider: EmbeddingProvider | null = null;
+    const discardPending = (label: string): void => {
+      const provider = pendingProvider;
+      pendingProvider = null;
+      if (provider && provider !== this.provider) {
+        void Promise.resolve(provider.close?.()).catch((err: unknown) => {
+          log.debug(`memory embeddings: failed to close ${label}: ${String(err)}`);
+        });
+      }
+    };
+    try {
+      const primaryResult = await MemoryIndexManager.loadProviderResult({
+        cfg: this.cfg,
+        agentId: this.agentId,
+        settings: this.settings,
+      });
+      if (!primaryResult.provider || primaryResult.fallbackFrom) {
+        // Primary still unavailable; loadProviderResult may have instantiated
+        // the configured fallback to probe it. Close the discarded provider
+        // unless it is the one this manager already holds.
+        pendingProvider = primaryResult.provider;
+        discardPending("discarded recovery probe");
+        return false;
+      }
+      pendingProvider = primaryResult.provider;
+      // Probe the freshly-built primary with a ping before adopting it so a
+      // provider that resolved but cannot reach its backend does not evict a
+      // working fallback. Bound the probe with the same batch timeout the
+      // index path uses and the caller's cancellation signal so a slow or
+      // hung recovered primary cannot stall the user search that triggered
+      // recovery.
+      const pingProvider = primaryResult.provider;
+      const pingRuntime = primaryResult.runtime;
+      const pingTimeoutMs = resolveEmbeddingTimeoutMs({
+        kind: "batch",
+        providerId: pingProvider.id,
+        providerRuntime: pingRuntime
+          ? {
+              inlineQueryTimeoutMs: pingRuntime.inlineQueryTimeoutMs,
+              inlineBatchTimeoutMs: pingRuntime.inlineBatchTimeoutMs,
+            }
+          : undefined,
+        // Honor the operator-configured inline batch timeout for the recovery
+        // probe, matching the normal batch embedding path. Otherwise operators
+        // who shortened `sync.embeddingBatchTimeoutSeconds` to bound user-facing
+        // search latency would see recovery wait on provider/runtime defaults.
+        configuredBatchTimeoutSeconds: this.settings.sync.embeddingBatchTimeoutSeconds,
+      });
+      await runEmbeddingOperationWithTimeout({
+        timeoutMs: pingTimeoutMs,
+        message: `memory embeddings recovery ping timed out after ${Math.round(pingTimeoutMs / 1000)}s`,
+        signal: params.signal,
+        run: async (signal) => await pingProvider.embedBatch(["ping"], { signal }),
+      });
+      const previousProvider = this.provider;
+      this.applyProviderResult(primaryResult);
+      this.providerKey = this.computeProviderKey();
+      this.batch = this.resolveBatchConfig();
+      this.lastPrimaryRecoveryAttemptMs = 0;
+      // Ownership of pendingProvider transferred to this.provider.
+      pendingProvider = null;
+      if (previousProvider && previousProvider !== this.provider) {
+        void Promise.resolve(previousProvider.close?.()).catch((err: unknown) => {
+          log.debug(
+            `memory embeddings: failed to close fallback provider during recovery: ${String(err)}`,
+          );
+        });
+      }
+      EMBEDDING_PROBE_CACHE.delete(this.cacheKey);
+      log.info(
+        `memory embeddings: recovered primary provider (${primaryResult.provider.id}) from fallback`,
+      );
+      return true;
+    } catch (err) {
+      discardPending("failed recovery probe");
+      log.debug(
+        `memory embeddings: primary recovery attempted but failed: ${formatErrorMessage(err)}`,
+      );
+      return false;
+    }
+  }
+
   protected markLocalEmbeddingProviderDegraded(err: unknown): void {
     if (this.provider?.id !== "local") {
       return;
@@ -677,9 +802,27 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         });
       }
     }
-    const indexIdentity = this.refreshIndexIdentityDirty({
+    let indexIdentity = this.refreshIndexIdentityDirty({
       providerKeyKnown: this.providerInitialized,
     });
+    // If we latched onto the fallback and the on-disk index no longer matches
+    // the active provider, try restoring the primary before giving up. This
+    // clears the "transient remote outage permanently pins the tool to a
+    // fallback" state from issue #96534. Skipped when the index is already
+    // valid for the fallback (e.g. an explicit identity repair rebuilt it).
+    if (this.fallbackFrom && indexIdentity.status !== "valid" && !opts?.signal?.aborted) {
+      const recovered = await this.attemptPrimaryProviderRecovery({
+        signal: opts?.signal,
+      }).catch((err: unknown) => {
+        log.debug(`memory search: primary provider recovery failed: ${formatErrorMessage(err)}`);
+        return false;
+      });
+      if (recovered) {
+        indexIdentity = this.refreshIndexIdentityDirty({
+          providerKeyKnown: this.providerInitialized,
+        });
+      }
+    }
     if (indexIdentity.status !== "valid") {
       return [];
     }

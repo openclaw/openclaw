@@ -370,6 +370,7 @@ describe("memory index", () => {
     minScore?: number;
     onSearch?: boolean;
     hybrid?: { enabled: boolean; vectorWeight?: number; textWeight?: number };
+    embeddingBatchTimeoutSeconds?: number;
   }): TestCfg {
     return {
       agents: {
@@ -383,7 +384,14 @@ describe("memory index", () => {
             store: { vector: { enabled: params.vectorEnabled ?? false } },
             // Perf: keep test indexes to a single chunk to reduce sqlite work.
             chunking: { tokens: 4000, overlap: 0 },
-            sync: { watch: false, onSessionStart: false, onSearch: params.onSearch ?? true },
+            sync: {
+              watch: false,
+              onSessionStart: false,
+              onSearch: params.onSearch ?? true,
+              ...(params.embeddingBatchTimeoutSeconds !== undefined
+                ? { embeddingBatchTimeoutSeconds: params.embeddingBatchTimeoutSeconds }
+                : {}),
+            },
             remote: params.batchEnabled
               ? {
                   nonBatchConcurrency: 1,
@@ -1999,19 +2007,85 @@ describe("memory index", () => {
       error: expect.stringContaining("Local embedding worker exited"),
     });
 
-    const results = await manager.search("alpha");
+    await manager.search("alpha");
 
-    expect(results).toStrictEqual([]);
+    // Fallback must be activated during the search flow (probe-time
+    // degradation triggers fallback). Search itself either returns []
+    // when the index identity is still mismatched, or returns results
+    // after primary-provider recovery restores the originally-indexed
+    // provider (see issue #96534); both are acceptable post-fix outcomes.
     expect(providerCalls.slice(callsBeforeSearch).map((call) => call.provider)).toContain(
       "fallback-provider",
     );
-    expect(
-      (
-        manager as unknown as {
-          provider: { id: string } | null;
-        }
-      ).provider?.id,
-    ).toBe("fallback-provider");
+  });
+
+  it("recovers primary provider on next search after fallback activation (issue #96534)", async () => {
+    // End-to-end regression proof for the recovery flow:
+    //   1. Working primary indexes content
+    //   2. Primary fails -> search activates fallback (latch bug pre-fix)
+    //   3. Primary recovers -> next search auto-restores primary
+    // The test infrastructure's createEmbeddingProvider mock returns a working
+    // primary on every call, so the recovery ping always succeeds here.
+    const cfg = createCfg({
+      fallback: "fallback-provider",
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const manager = await getPersistentManager(cfg);
+
+    // Step 1: index content with the primary provider.
+    await manager.sync({ reason: "test" });
+    const initialStatus = manager.status();
+    expect(initialStatus.provider).toBe("mock");
+    expect(initialStatus.dirty).toBe(false);
+
+    // Step 2: simulate primary failure by replacing the live provider with
+    // a failing one, then trigger search to activate fallback.
+    const fields = manager as unknown as {
+      fallbackFrom: string | undefined;
+      provider: {
+        id: string;
+        model: string;
+        embedQuery: (text: string) => Promise<number[]>;
+        embedBatch: (texts: string[]) => Promise<number[][]>;
+        close: () => Promise<void>;
+      };
+    };
+    fields.provider = {
+      id: "mock",
+      model: "mock-embed",
+      embedQuery: async () => {
+        throw createLocalWorkerExitError();
+      },
+      embedBatch: async () => {
+        throw createLocalWorkerExitError();
+      },
+      close: async () => {},
+    };
+    const callsBeforeFallbackSearch = providerCalls.length;
+    await manager.search("alpha");
+
+    // Fallback activated: provider id flipped to fallback-provider, fallbackFrom set.
+    expect(fields.provider.id).toBe("fallback-provider");
+    expect(fields.fallbackFrom).toBeTruthy();
+    expect(providerCalls.slice(callsBeforeFallbackSearch).map((c) => c.provider)).toContain(
+      "fallback-provider",
+    );
+
+    // Step 3: trigger another search. The recovery probe runs (throttled to
+    // 30s, but first attempt always allowed), reloads the primary, pings it,
+    // and restores it. Manager state must reflect primary restored.
+    const callsBeforeRecoverySearch = providerCalls.length;
+    const recoveredResults = await manager.search("alpha");
+
+    // Recovery restored the primary: provider id flipped back to "mock" and
+    // fallbackFrom cleared.
+    expect(recoveredResults.length).toBeGreaterThan(0);
+    expect(recoveredResults[0]?.path).toContain("memory/2026-01-12.md");
+    expect(fields.provider.id).toBe("mock");
+    expect(fields.fallbackFrom).toBeUndefined();
+    // Recovery reloaded the primary via loadProviderResult, which registered
+    // a fresh createEmbeddingProvider call beyond the fallback activation.
+    expect(providerCalls.length).toBeGreaterThan(callsBeforeRecoverySearch);
   });
 
   it("clears identity dirty after status resolves the indexed fallback provider", async () => {
