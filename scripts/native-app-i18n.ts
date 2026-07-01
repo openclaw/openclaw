@@ -56,8 +56,7 @@ const ANDROID_EXTENSIONS = new Set([".kt", ".kts"]);
 const APPLE_EXTENSIONS = new Set([".swift", ".plist"]);
 const APPLE_UI_MULTILINE_CALLS =
   /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*"""([\s\S]*?)"""/gu;
-const APPLE_UI_CALL_START =
-  /\b(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*/gu;
+const APPLE_CALL_START = /\b([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*/gu;
 const APPLE_MODIFIER_CALLS =
   /\.(?:navigationTitle|accessibilityLabel|accessibilityHint|help|alert|confirmationDialog)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
 const APPLE_MODIFIER_MULTILINE_CALLS =
@@ -118,7 +117,8 @@ const ANDROID_RESOURCE_ITEMS = /<item\b[^>]*>([\s\S]*?)<\/item>/gu;
 const APPLE_NAMED_LITERALS =
   /\b(?:title|subtitle|label|message|text|prompt|description|help)\s*:\s*(?:"""([\s\S]*?)"""|"((?:\\.|[^"\\])*)")/gu;
 const APPLE_VIEW_TYPE = /\bstruct\s+([A-Za-z_][A-Za-z0-9_]*)[^:{\n]*:\s*[^{\n]*\bView\b/gu;
-const APPLE_VIEW_FUNCTION = /\bfunc\s+([A-Za-z_][A-Za-z0-9_]*)[^\n{]*->\s*some\s+View\b/gu;
+const APPLE_VIEW_FUNCTION =
+  /\bfunc\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^{}]*?\)\s*(?:async\s*)?(?:throws\s*)?->\s*some\s+View\b/gu;
 const APPLE_ALERT_FUNCTION = /\bfunc\s+([A-Za-z_][A-Za-z0-9_]*)[^{]*\{[^{}]{0,600}\bNSAlert\s*\(/gu;
 const APPLE_BUILTIN_UI_TYPES = new Set([
   "Alert",
@@ -390,8 +390,16 @@ function extractKotlinStringLiterals(source: string, start: number, end: number)
   return values;
 }
 
-function extractSwiftUiCalls(entries: Candidate[], repoPath: string, source: string) {
-  for (const match of source.matchAll(APPLE_UI_CALL_START)) {
+function extractSwiftUiCalls(
+  entries: Candidate[],
+  repoPath: string,
+  source: string,
+  uiCallNames: ReadonlySet<string>,
+) {
+  for (const match of source.matchAll(APPLE_CALL_START)) {
+    if (!match[1] || !uiCallNames.has(match[1])) {
+      continue;
+    }
     const offset = match.index ?? 0;
     let cursor = offset + match[0].length;
     const first = readSwiftStringLiteral(source, cursor);
@@ -529,7 +537,7 @@ function extractCandidates(
     }
   }
   if (surface === "apple") {
-    extractSwiftUiCalls(entries, repoPath, source);
+    extractSwiftUiCalls(entries, repoPath, source, uiCallNames);
     for (const property of source.matchAll(APPLE_STRING_PROPERTY)) {
       const name = property[1];
       const openingBrace = (property.index ?? 0) + property[0].lastIndexOf("{");
