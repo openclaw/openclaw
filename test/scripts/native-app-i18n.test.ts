@@ -46,6 +46,18 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "ask OpenClaw $prompt")).toBe(true);
     expect(entries.some((entry) => entry.source === "OpenClaw is paused")).toBe(true);
     expect(entries.some((entry) => entry.source === "Last issue")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Agent chat and recent work.")).toBe(true);
+    expect(entries.some((entry) => entry.source === "No sessions yet")).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.source ===
+          "Approve this device on the gateway.\n1) `\\(commandLine)`\n2) `/pair approve` in your OpenClaw chat\n\\(requestLine)\nOpenClaw will also retry automatically when you return to this app.",
+      ),
+    ).toBe(true);
+    expect(entries.some((entry) => entry.source === "Approve this device on the gateway.\n")).toBe(
+      false,
+    );
     expect(
       entries.some(
         (entry) =>
