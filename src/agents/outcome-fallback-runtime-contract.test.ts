@@ -93,7 +93,7 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     expect(run.mock.calls.at(1)).toEqual([
       OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider,
       OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel,
-      { isFinalFallbackAttempt: true },
+      { isFinalFallbackAttempt: true, isFallback: true },
     ]);
     expect(result.attempts[0]?.provider).toBe(OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider);
     expect(result.attempts[0]?.model).toBe(OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel);
