@@ -55,7 +55,7 @@ export type ConfiguredModelProviderRateLimit = {
   requestsPerMinute?: number;
   /** Minimum delay between admitted requests for this provider/model bucket. */
   minIntervalMs?: number;
-  /** Maximum locally queued requests waiting for this bucket. */
+  /** Maximum locally queued requests waiting for this bucket. Defaults to 64. */
   maxQueueSize?: number;
 };
 

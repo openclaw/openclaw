@@ -1052,6 +1052,44 @@ describe("buildGuardedModelFetch", () => {
     }
   });
 
+  it("bounds omitted rate-limit queue sizes", async () => {
+    vi.useFakeTimers();
+    try {
+      const model = {
+        id: "gpt-5.4",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">;
+      getModelProviderRequestTransportMock.mockReturnValue({ rateLimit: { minIntervalMs: 50 } });
+      fetchWithSsrFGuardMock.mockImplementation(async () => ({
+        response: new Response("ok", { status: 200 }),
+        finalUrl: "https://api.openai.com/v1/responses",
+        release: vi.fn(async () => undefined),
+      }));
+      const fetcher = buildGuardedModelFetch(model);
+
+      const first = await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
+      await first.text();
+      const queued = Array.from({ length: 64 }, () =>
+        fetcher("https://api.openai.com/v1/responses", { method: "POST" }),
+      );
+      const queueFull = await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
+
+      expect(queueFull.status).toBe(429);
+      expect(queueFull.headers.get("x-should-retry")).toBe("false");
+      await expect(queueFull.json()).resolves.toMatchObject({
+        error: { code: "provider_rate_limit_queue_full", type: "rate_limit" },
+      });
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(50 * queued.length);
+      await Promise.all(queued);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(65);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("allows zero-size queues to dispatch immediately", async () => {
     vi.useFakeTimers();
     try {

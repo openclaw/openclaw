@@ -1088,7 +1088,7 @@ export const FIELD_HELP: Record<string, string> = {
   "models.providers.*.request.rateLimit.minIntervalMs":
     "Minimum milliseconds between admitted requests for the provider/model/baseUrl bucket. Use this to pace providers with strict burst limits.",
   "models.providers.*.request.rateLimit.maxQueueSize":
-    "Maximum number of local requests allowed to wait behind the provider/model/baseUrl bucket. When full, OpenClaw rejects new requests with a local 429 instead of building an unbounded backlog.",
+    "Maximum number of local requests allowed to wait behind the provider/model/baseUrl bucket. Defaults to 64 for active limiters. When full, OpenClaw rejects new requests with a local 429 instead of building an unbounded backlog.",
   "models.providers.*.models":
     "Declared model list for a provider including identifiers, metadata, provider-specific params, and optional compatibility/cost hints. Keep IDs exact to provider catalog values so selection and fallback resolve correctly.",
   "models.providers.*.models[].agentRuntime":

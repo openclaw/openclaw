@@ -562,6 +562,8 @@ type ProviderRequestRateLimitBucket = {
   lastDispatchAt: number;
 };
 
+const DEFAULT_PROVIDER_RATE_LIMIT_MAX_QUEUE_SIZE = 64;
+
 const providerRequestRateLimitBuckets = new Map<string, ProviderRequestRateLimitBucket>();
 
 function resetProviderRequestRateLimitBucketsForTests(): void {
@@ -658,7 +660,7 @@ async function waitForProviderRequestRateLimit(
     lastDispatchAt: 0,
   };
   providerRequestRateLimitBuckets.set(key, bucket);
-  const maxQueueSize = config.maxQueueSize ?? Number.POSITIVE_INFINITY;
+  const maxQueueSize = config.maxQueueSize ?? DEFAULT_PROVIDER_RATE_LIMIT_MAX_QUEUE_SIZE;
   if (bucket.queued === 0 && resolveProviderRateLimitDelayMs(bucket, config) <= 0) {
     bucket.lastDispatchAt = Date.now();
     bucket.requestTimes.push(bucket.lastDispatchAt);
