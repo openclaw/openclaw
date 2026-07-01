@@ -136,10 +136,10 @@ describe("sandbox config merges", () => {
 
     const prune = resolveSandboxPruneConfig({
       scope: "agent",
-      globalPrune: { idleHours: 24, maxAgeDays: 7 },
-      agentPrune: { idleHours: 0, maxAgeDays: 1 },
+      globalPrune: { idleHours: 24, maxAgeDays: 7, onSessionEnd: false },
+      agentPrune: { idleHours: 0, maxAgeDays: 1, onSessionEnd: true },
     });
-    expect(prune).toEqual({ idleHours: 0, maxAgeDays: 1 });
+    expect(prune).toEqual({ idleHours: 0, maxAgeDays: 1, onSessionEnd: true });
 
     const browserShared = resolveSandboxBrowserConfig({
       scope: "shared",
@@ -150,10 +150,10 @@ describe("sandbox config merges", () => {
 
     const pruneShared = resolveSandboxPruneConfig({
       scope: "shared",
-      globalPrune: { idleHours: 24, maxAgeDays: 7 },
-      agentPrune: { idleHours: 0, maxAgeDays: 1 },
+      globalPrune: { idleHours: 24, maxAgeDays: 7, onSessionEnd: false },
+      agentPrune: { idleHours: 0, maxAgeDays: 1, onSessionEnd: true },
     });
-    expect(pruneShared).toEqual({ idleHours: 24, maxAgeDays: 7 });
+    expect(pruneShared).toEqual({ idleHours: 24, maxAgeDays: 7, onSessionEnd: false });
   });
 
   it("merges sandbox ssh settings and ignores agent overrides under shared scope", () => {

@@ -9,6 +9,8 @@ import { getSandboxBackendManager } from "./backend.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { dockerSandboxBackendManager } from "./docker-backend.js";
 import {
+  applySandboxRegistryCleanupLocation,
+  getSandboxRegistryCleanupLocations,
   readBrowserRegistry,
   readRegistry,
   removeBrowserRegistryEntry,
@@ -102,11 +104,13 @@ export async function removeSandboxContainer(containerName: string): Promise<voi
   const entry = registry.entries.find((item) => item.containerName === containerName);
   if (entry) {
     const manager = getSandboxBackendManager(entry.backendId ?? "docker");
-    await manager?.removeRuntime({
-      entry,
-      config,
-      agentId: resolveSandboxAgentId(entry.sessionKey),
-    });
+    for (const location of getSandboxRegistryCleanupLocations(entry)) {
+      await manager?.removeRuntime({
+        entry: applySandboxRegistryCleanupLocation(entry, location),
+        config,
+        agentId: resolveSandboxAgentId(entry.sessionKey),
+      });
+    }
   }
   await removeRegistryEntry(containerName);
 }

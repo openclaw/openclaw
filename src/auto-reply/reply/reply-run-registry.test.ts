@@ -15,9 +15,11 @@ import {
   queueReplyRunMessage,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   replyRunRegistry,
+  ReplyRunAlreadyActiveError,
   runAfterReplyOperationClear,
   resolveActiveReplyRunSessionId,
   waitForReplyRunEndBySessionId,
+  withReplyRunAdmissionBlock,
 } from "./reply-run-registry.js";
 
 describe("reply run registry", () => {
@@ -380,6 +382,121 @@ describe("reply run registry", () => {
 
     expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
     expect(afterClear).toHaveBeenCalledTimes(1);
+  });
+
+  it("drains already-admitted operations before running an admission block", async () => {
+    const cancel = vi.fn();
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-running",
+      resetTriggered: false,
+    });
+    operation.attachBackend({
+      kind: "embedded",
+      cancel,
+      isStreaming: () => true,
+    });
+    operation.setPhase("running");
+    const order: string[] = [];
+
+    const blocked = withReplyRunAdmissionBlock("agent:main:main", async () => {
+      order.push("cleanup");
+      expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
+    });
+
+    await vi.waitFor(() => {
+      expect(operation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
+    });
+    expect(cancel).toHaveBeenCalledWith("restart");
+    expect(order).toEqual([]);
+    expect(() =>
+      createReplyOperation({
+        sessionKey: "agent:main:main",
+        sessionId: "blocked-new-turn",
+        resetTriggered: false,
+      }),
+    ).toThrow("Reply run admission is blocked");
+
+    operation.complete();
+    await blocked;
+
+    expect(order).toEqual(["cleanup"]);
+  });
+
+  it("allows the current operation to run an in-band admission block", async () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-resetting",
+      resetTriggered: false,
+    });
+    operation.setPhase("running");
+    const order: string[] = [];
+
+    await withReplyRunAdmissionBlock(
+      "agent:main:main",
+      async () => {
+        order.push("cleanup");
+        expect(replyRunRegistry.get("agent:main:main")).toBe(operation);
+      },
+      { currentOperation: operation },
+    );
+
+    expect(order).toEqual(["cleanup"]);
+    expect(operation.result).toBeNull();
+    operation.complete();
+  });
+
+  it("serializes concurrent admission block callbacks per session", async () => {
+    let releaseFirst: () => void = () => undefined;
+    const firstReleased = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const order: string[] = [];
+
+    const first = withReplyRunAdmissionBlock("agent:main:main", async () => {
+      order.push("first-start");
+      await firstReleased;
+      order.push("first-end");
+      return "first";
+    });
+    const second = withReplyRunAdmissionBlock("agent:main:main", async () => {
+      order.push("second-start");
+      return "second";
+    });
+
+    await Promise.resolve();
+    expect(order).toEqual(["first-start"]);
+    expect(() =>
+      createReplyOperation({
+        sessionKey: "agent:main:main",
+        sessionId: "blocked-new-turn",
+        resetTriggered: false,
+      }),
+    ).toThrow("Reply run admission is blocked");
+
+    releaseFirst();
+
+    await expect(first).resolves.toBe("first");
+    await expect(second).resolves.toBe("second");
+    expect(order).toEqual(["first-start", "first-end", "second-start"]);
+  });
+
+  it("reports an active run when admission block drain times out", async () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-running",
+      resetTriggered: false,
+    });
+    operation.setPhase("running");
+
+    await expect(
+      withReplyRunAdmissionBlock("agent:main:main", async () => undefined, {
+        waitTimeoutMs: 1,
+      }),
+    ).rejects.toBeInstanceOf(ReplyRunAlreadyActiveError);
+    expect(operation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
+
+    operation.complete();
   });
 
   it("force-clears retained failed operations", () => {

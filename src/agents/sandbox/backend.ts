@@ -24,6 +24,7 @@ export type {
   SandboxBackendWorkdirResolver,
 } from "./backend.types.js";
 export type {
+  SandboxBackendCleanupMetadata,
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
   SandboxBackendExecSpec,

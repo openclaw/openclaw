@@ -150,6 +150,7 @@ function buildConfig(enableNoVnc: boolean): SandboxConfig {
     prune: {
       idleHours: 24,
       maxAgeDays: 7,
+      onSessionEnd: false,
     },
   };
 }

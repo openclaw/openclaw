@@ -4,8 +4,10 @@ import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
   replyRunRegistry,
   ReplyRunAlreadyActiveError,
+  ReplyRunAdmissionBlockedError,
   ReplyRunFollowupAdmissionBlockedError,
   type ReplyOperation,
+  waitForReplyRunAdmissionBlockRelease,
   waitForReplyRunFollowupAdmission,
 } from "./reply-run-registry.js";
 
@@ -58,6 +60,23 @@ export async function admitReplyTurn(params: {
         }),
       };
     } catch (error) {
+      if (error instanceof ReplyRunAdmissionBlockedError) {
+        if (params.kind === "heartbeat" || params.kind === "control_abort") {
+          return { status: "skipped", reason: "active-run" };
+        }
+        const released = await waitForReplyRunAdmissionBlockRelease(
+          params.sessionKey,
+          waitTimeoutMs,
+          { signal: params.upstreamAbortSignal },
+        );
+        if (!released) {
+          return {
+            status: "skipped",
+            reason: isAbortSignalAborted(params.upstreamAbortSignal) ? "aborted" : "active-run",
+          };
+        }
+        continue;
+      }
       if (error instanceof ReplyRunFollowupAdmissionBlockedError) {
         if (params.kind === "heartbeat") {
           return { status: "skipped", reason: "active-run" };

@@ -55,6 +55,7 @@ export type SandboxBrowserConfig = {
 export type SandboxPruneConfig = {
   idleHours: number;
   maxAgeDays: number;
+  onSessionEnd: boolean;
 };
 
 export type SandboxSshConfig = {

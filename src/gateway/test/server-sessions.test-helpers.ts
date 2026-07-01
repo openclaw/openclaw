@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AssistantMessage, UserMessage } from "openclaw/plugin-sdk/llm";
 import { afterAll, beforeAll, beforeEach, expect, vi } from "vitest";
+import type { cleanupSessionScopedSandboxForLifecycleEnd } from "../../agents/sandbox.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { InternalHookEvent } from "../../hooks/internal-hooks.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
@@ -141,6 +142,18 @@ const bundleMcpRuntimeMocks = vi.hoisted(() => ({
   disposeSessionMcpRuntime: vi.fn(async (_sessionId: string) => {}),
   disposeAllSessionMcpRuntimes: vi.fn(async () => {}),
 }));
+const sandboxLifecycleMocks = vi.hoisted(() => ({
+  cleanupSessionScopedSandboxForLifecycleEnd: vi.fn<
+    typeof cleanupSessionScopedSandboxForLifecycleEnd
+  >(async () => ({
+    skipped: true,
+    scopeKeys: [],
+    removedContainers: 0,
+    removedBrowsers: 0,
+    removedWorkspaces: 0,
+    failures: [],
+  })),
+}));
 
 vi.mock("../../auto-reply/reply/queue.js", async () => {
   const actual = await vi.importActual<typeof import("../../auto-reply/reply/queue.js")>(
@@ -265,6 +278,16 @@ vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
       : Promise.resolve(false),
 }));
 
+vi.mock("../../agents/sandbox.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../agents/sandbox.js")>("../../agents/sandbox.js");
+  return {
+    ...actual,
+    cleanupSessionScopedSandboxForLifecycleEnd:
+      sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd,
+  };
+});
+
 export function setupGatewaySessionsTestHarness() {
   installGatewayTestHooks({ scope: "suite" });
 
@@ -318,6 +341,15 @@ export function setupGatewaySessionsTestHarness() {
     browserSessionTabMocks.closeTrackedBrowserTabsForSessions.mockResolvedValue(0);
     bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockClear();
     bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockResolvedValue(undefined);
+    sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd.mockClear();
+    sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd.mockResolvedValue({
+      skipped: true,
+      scopeKeys: [],
+      removedContainers: 0,
+      removedBrowsers: 0,
+      removedWorkspaces: 0,
+      failures: [],
+    });
   });
 
   const requireHarness = () => {
@@ -694,4 +726,5 @@ export {
   acpManagerMocks,
   browserSessionTabMocks,
   bundleMcpRuntimeMocks,
+  sandboxLifecycleMocks,
 };

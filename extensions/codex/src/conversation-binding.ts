@@ -141,12 +141,18 @@ async function resolveConversationAppServerRuntime(params: {
     agentId: params.agentId,
     sessionKey: params.sessionKey,
   });
+  const lifecycleOwnerSessionId = readSessionLifecycleOwnerSessionId({
+    config: params.config,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
   const sandboxForPolicy =
     execPolicy.touched && execPolicy.security === "full" && execPolicy.ask !== "off"
       ? await resolveSandboxContext({
           config: params.config,
           sessionKey: params.sessionKey,
           workspaceDir: params.workspaceDir,
+          lifecycleOwnerSessionId,
         })
       : undefined;
   const runtime = resolveCodexAppServerRuntimeOptions({
@@ -893,6 +899,29 @@ function readSessionExecOverrides(params: {
     security: entry.execSecurity,
     ask: entry.execAsk,
   };
+}
+
+function readSessionLifecycleOwnerSessionId(params: {
+  config?: CodexConversationConfig;
+  agentId?: string;
+  sessionKey?: string;
+}): string | undefined {
+  const sessionKey = params.sessionKey?.trim();
+  if (!params.config || !sessionKey) {
+    return undefined;
+  }
+  const agentId = parseAgentIdFromSessionKey(sessionKey) ?? params.agentId;
+  try {
+    const storePath = resolveStorePath(params.config.session?.store, { agentId });
+    const sessionId = getSessionEntry({
+      storePath,
+      sessionKey,
+      readConsistency: "latest",
+    })?.sessionId?.trim();
+    return sessionId || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function canReadSessionExecOverrides(params: {

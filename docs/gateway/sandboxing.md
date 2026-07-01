@@ -173,6 +173,37 @@ Use `backend: "ssh"` when you want OpenClaw to sandbox `exec`, file tools, and m
   </Accordion>
 </AccordionGroup>
 
+### Managed ephemeral session lifecycle
+
+Use `scope: "session"` when a task, thread, or spawned child session needs deterministic sandbox reuse while it is active. Add `prune.onSessionEnd: true` when that owner should be ephemeral:
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        mode: "all",
+        scope: "session",
+        prune: {
+          idleHours: 12,
+          maxAgeDays: 3,
+          onSessionEnd: true,
+        },
+      },
+    },
+  },
+}
+```
+
+With this opt-in lifecycle, OpenClaw:
+
+- creates and reuses one sandbox per session/thread key
+- removes the matching runtime, browser runtime, registry entries, and non-shared sandbox workspace when the owning session is reset, deleted, or rolled over by idle/daily reset policy
+- uses idle/max-age prune as crash recovery for owners that stop without a clean lifecycle end; after a stale session-scope runtime is removed, prune also removes that scope's sandbox workspace
+- still lets operators force a rebuild with `openclaw sandbox recreate --session <key>`
+
+This does not enable sandboxing globally, does not affect `scope: "agent"` or `scope: "shared"`, and does not tear down a still-active owner after every turn.
+
 ### OpenShell backend
 
 Use `backend: "openshell"` when you want OpenClaw to sandbox tools in an OpenShell-managed remote environment. For the full setup guide, configuration reference, and workspace mode comparison, see the dedicated [OpenShell page](/gateway/openshell).

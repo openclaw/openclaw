@@ -150,6 +150,30 @@ openclaw sandbox recreate --agent family
 openclaw sandbox recreate --agent alfred
 ```
 
+### Managed ephemeral session sandboxes
+
+For long-running task or thread owners, combine session scope with lifecycle cleanup:
+
+```jsonc
+{
+  "agents": {
+    "defaults": {
+      "sandbox": {
+        "mode": "all",
+        "scope": "session",
+        "prune": {
+          "idleHours": 12,
+          "maxAgeDays": 3,
+          "onSessionEnd": true,
+        },
+      },
+    },
+  },
+}
+```
+
+OpenClaw reuses the same sandbox runtime for the same session/thread key while that owner is active. When the owning session is reset, deleted, or rolled over by idle/daily reset policy, OpenClaw removes the matching runtime, browser runtime, registry entries, and non-shared sandbox workspace. Idle and max-age prune remain the crash-recovery path for owners that never reach a clean lifecycle end, and remove stale session-scope workspaces after the runtime cleanup succeeds.
+
 ## Why this is needed
 
 When you update sandbox configuration:
@@ -193,6 +217,7 @@ Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sand
         "prune": {
           "idleHours": 24, // Auto-prune after 24h idle
           "maxAgeDays": 7, // Auto-prune after 7 days
+          "onSessionEnd": false, // Remove session-scoped resources on reset/delete/rollover
         },
       },
     },

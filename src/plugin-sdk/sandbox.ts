@@ -7,6 +7,7 @@ export type {
   RunSshSandboxCommandParams,
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
+  SandboxBackendCleanupMetadata,
   SandboxBackendExecSpec,
   SandboxBackendFactory,
   SandboxFsBridge,

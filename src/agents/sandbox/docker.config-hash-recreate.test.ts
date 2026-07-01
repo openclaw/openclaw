@@ -172,7 +172,7 @@ function createSandboxConfig(
       autoStartTimeoutMs: 5000,
     },
     tools: { allow: [], deny: [] },
-    prune: { idleHours: 24, maxAgeDays: 7 },
+    prune: { idleHours: 24, maxAgeDays: 7, onSessionEnd: false },
   };
 }
 

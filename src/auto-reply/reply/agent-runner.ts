@@ -1178,6 +1178,7 @@ export async function runReplyAgent(params: {
   resetTriggered?: boolean;
   replyThreadingOverride?: TemplateContext["ReplyThreading"];
   replyOperation?: ReplyOperation;
+  deferredSandboxLifecycleCleanup?: () => Promise<void>;
 }): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
     commandBody,
@@ -1210,6 +1211,7 @@ export async function runReplyAgent(params: {
     resetTriggered,
     replyThreadingOverride,
     replyOperation: providedReplyOperation,
+    deferredSandboxLifecycleCleanup,
   } = params;
 
   let activeSessionEntry = sessionEntry;
@@ -1485,6 +1487,7 @@ export async function runReplyAgent(params: {
       }
     }
   }
+  await deferredSandboxLifecycleCleanup?.();
   let runFollowupTurn = queuedRunFollowupTurn;
   let shouldDrainQueuedFollowupsAfterClear = false;
   const returnWithQueuedFollowupDrain = <T>(value: T): T => {

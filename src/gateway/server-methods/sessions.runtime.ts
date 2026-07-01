@@ -3,10 +3,16 @@
  */
 export {
   archiveSessionTranscriptsForSessionDetailed,
+  clearGatewaySandboxLifecycleCleanupSessionKeys,
   cleanupSessionBeforeMutation,
+  cleanupSandboxForSessionLifecycleEnd,
   emitGatewayBeforeResetPluginHook,
   emitGatewaySessionEndPluginHook,
   emitGatewaySessionStartPluginHook,
   emitSessionUnboundLifecycleEvent,
   performGatewaySessionReset,
+  persistGatewaySandboxLifecycleCleanupSessionKeys,
+  resolveGatewaySandboxLifecycleCleanupOwnerSessionIds,
+  resolveGatewaySandboxLifecycleCleanupSessionKeys,
+  SandboxLifecycleCleanupError,
 } from "../session-reset-service.js";

@@ -33,6 +33,7 @@ export function createSandboxPruneConfig(
   return {
     idleHours: 24,
     maxAgeDays: 7,
+    onSessionEnd: false,
     ...overrides,
   };
 }

@@ -289,6 +289,7 @@ const SandboxPruneSchema = z
   .object({
     idleHours: z.number().int().nonnegative().optional(),
     maxAgeDays: z.number().int().nonnegative().optional(),
+    onSessionEnd: z.boolean().optional(),
   })
   .strict()
   .optional();

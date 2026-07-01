@@ -669,6 +669,7 @@ async function createCodexSideToolBridge(input: {
     const sandbox = await resolveSandboxContext({
       config: input.params.cfg,
       sessionKey: sandboxSessionKey,
+      lifecycleOwnerSessionId: input.params.sessionId,
       workspaceDir: input.cwd,
     });
     const allTools = createOpenClawCodingTools({

@@ -551,6 +551,34 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   ws.close();
 });
 
+test("sessions.compact without maxLines waits for pending sandbox lifecycle cleanup", async () => {
+  const { dir } = await createSessionStoreDir();
+  await fs.writeFile(
+    path.join(dir, "sess-main.jsonl"),
+    `${JSON.stringify({ role: "user", content: "hello" })}\n`,
+    "utf-8",
+  );
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main", {
+        pendingSandboxLifecycleCleanupSessionKeys: ["agent:main:main"],
+        pendingSandboxLifecycleCleanupReason: "session-reset",
+      }),
+    },
+  });
+
+  const { ws } = await openClient();
+  const compacted = await rpcReq(ws, "sessions.compact", { key: "main" });
+
+  expect(compacted.ok).toBe(false);
+  expect(compacted.error?.message ?? "").toMatch(/sandbox cleanup pending/i);
+  expect((compacted.error as typeof compacted.error & { retryable?: boolean })?.retryable).toBe(
+    true,
+  );
+  expect(embeddedRunMock.compactEmbeddedAgentSession).not.toHaveBeenCalled();
+  ws.close();
+});
+
 test("sessions.compact treats Codex native compaction start as pending, not completed", async () => {
   const { dir, storePath } = await createSessionStoreDir();
   await fs.writeFile(

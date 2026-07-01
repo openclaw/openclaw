@@ -46,6 +46,10 @@ import {
 } from "../../agents/embedded-agent-runner/runs.js";
 import { compactEmbeddedAgentSession } from "../../agents/embedded-agent.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
+import {
+  ReplyRunAlreadyActiveError,
+  withReplyRunAdmissionBlock,
+} from "../../auto-reply/reply/reply-run-registry.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import {
   runSessionsCleanup,
@@ -2243,8 +2247,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const deleteTranscript = typeof p.deleteTranscript === "boolean" ? p.deleteTranscript : true;
     const {
       cleanupSessionBeforeMutation,
+      cleanupSandboxForSessionLifecycleEnd,
       emitGatewaySessionEndPluginHook,
       emitSessionUnboundLifecycleEvent,
+      persistGatewaySandboxLifecycleCleanupSessionKeys,
+      resolveGatewaySandboxLifecycleCleanupOwnerSessionIds,
+      resolveGatewaySandboxLifecycleCleanupSessionKeys,
+      SandboxLifecycleCleanupError,
     } = await loadSessionsRuntimeModule();
 
     const { entry, legacyKey, canonicalKey } = loadSessionEntry(key, {
@@ -2253,28 +2262,93 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     if (rejectPluginRuntimeDeleteMismatch({ client, key: canonicalKey ?? key, entry, respond })) {
       return;
     }
-    const mutationCleanupError = await cleanupSessionBeforeMutation({
+    const cleanupSessionKeys = resolveGatewaySandboxLifecycleCleanupSessionKeys({
       cfg,
+      entry,
       key,
       target,
-      entry,
       legacyKey,
       canonicalKey,
-      reason: "session-delete",
     });
-    if (mutationCleanupError) {
-      respond(false, undefined, mutationCleanupError);
+    const cleanupOwnerSessionIds = resolveGatewaySandboxLifecycleCleanupOwnerSessionIds(entry);
+    let deletion: Awaited<ReturnType<typeof deleteSessionEntryLifecycle>>;
+    try {
+      const deleteResult = await withReplyRunAdmissionBlock(
+        target.canonicalKey ?? key,
+        async () => {
+          const mutationCleanupError = await cleanupSessionBeforeMutation({
+            cfg,
+            key,
+            target,
+            entry,
+            legacyKey,
+            canonicalKey,
+            reason: "session-delete",
+          });
+          if (mutationCleanupError) {
+            return { ok: false as const, error: mutationCleanupError };
+          }
+          await persistGatewaySandboxLifecycleCleanupSessionKeys({
+            cleanupSessionKeys,
+            expectedSessionId: entry?.sessionId,
+            ownerSessionIds: cleanupOwnerSessionIds,
+            reason: "session-delete",
+            sessionKey: target.canonicalKey,
+            storePath,
+          });
+          await cleanupSandboxForSessionLifecycleEnd({
+            cfg,
+            entry,
+            key,
+            target,
+            legacyKey,
+            canonicalKey,
+            reason: "session-delete",
+          });
+          return {
+            ok: true as const,
+            deletion: await deleteSessionEntryLifecycle({
+              agentId: target.agentId,
+              archiveTranscript: deleteTranscript,
+              expectedSessionId: entry?.sessionId,
+              storePath,
+              target: {
+                canonicalKey: target.canonicalKey,
+                storeKeys: target.storeKeys,
+              },
+            }),
+          };
+        },
+      );
+      if (!deleteResult.ok) {
+        respond(false, undefined, deleteResult.error);
+        return;
+      }
+      deletion = deleteResult.deletion;
+    } catch (error) {
+      if (error instanceof ReplyRunAlreadyActiveError) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `Session ${target.canonicalKey ?? key} is still active; try again in a moment.`,
+          ),
+        );
+        return;
+      }
+      if (!(error instanceof SandboxLifecycleCleanupError)) {
+        throw error;
+      }
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, `Session delete cleanup failed: ${String(error)}`, {
+          retryable: true,
+        }),
+      );
       return;
     }
-    const deletion = await deleteSessionEntryLifecycle({
-      agentId: target.agentId,
-      archiveTranscript: deleteTranscript,
-      storePath,
-      target: {
-        canonicalKey: target.canonicalKey,
-        storeKeys: target.storeKeys,
-      },
-    });
     const deleted = deletion.deleted;
     const sessionId = deletion.deletedSessionId;
     const sessionFile = deletion.deletedSessionFile;
@@ -2436,26 +2510,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         return;
       }
 
-      const interruptResult = await interruptSessionRunIfActive({
-        req,
-        context,
-        client,
-        isWebchatConnect,
-        requestedKey: key,
-        canonicalKey: target.canonicalKey,
-        agentId: requestedAgentId,
-        sessionId,
-      });
-      if (interruptResult.error) {
-        respond(false, undefined, interruptResult.error);
-        return;
-      }
-
-      const resolvedModel = resolveSessionModelRef(cfg, entry, target.agentId);
-      const workspaceDir =
-        normalizeOptionalString(entry?.spawnedWorkspaceDir) ||
-        resolveAgentWorkspaceDir(cfg, target.agentId);
-      const cwd = normalizeOptionalString(entry?.spawnedCwd);
       const operationId = randomUUID();
       emitSessionOperation(context, {
         operationId,
@@ -2466,29 +2520,120 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       });
       let result: Awaited<ReturnType<typeof compactEmbeddedAgentSession>>;
       try {
-        result = await compactEmbeddedAgentSession({
-          sessionId,
-          sessionKey: target.canonicalKey,
-          agentId: target.agentId,
-          allowGatewaySubagentBinding: true,
-          sessionFile: filePath,
-          workspaceDir,
-          cwd,
-          config: cfg,
-          provider: resolvedModel.provider,
-          model: resolvedModel.model,
-          authProfileId: entry?.authProfileOverride,
-          agentHarnessId: entry?.sessionId === sessionId ? entry.agentHarnessId : undefined,
-          thinkLevel: normalizeThinkLevel(entry?.thinkingLevel),
-          reasoningLevel: normalizeReasoningLevel(entry?.reasoningLevel),
-          bashElevated: {
-            enabled: false,
-            allowed: false,
-            defaultLevel: "off",
-          },
-          trigger: "manual",
+        const admitted = await withReplyRunAdmissionBlock(target.canonicalKey, async () => {
+          const currentTarget = await updateSessionStore(storePath, (store) => {
+            const { entry: currentEntry, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
+              cfg,
+              key,
+              store,
+              agentId: requestedAgentId,
+            });
+            return { entry: currentEntry, primaryKey };
+          });
+          const currentEntry = currentTarget.entry;
+          if (currentEntry?.sessionId !== sessionId) {
+            return {
+              ok: false as const,
+              error: errorShape(
+                ErrorCodes.UNAVAILABLE,
+                `Session ${target.canonicalKey} changed before compaction; try again.`,
+                { retryable: true },
+              ),
+            };
+          }
+          if ((currentEntry.pendingSandboxLifecycleCleanupSessionKeys?.length ?? 0) > 0) {
+            return {
+              ok: false as const,
+              error: errorShape(
+                ErrorCodes.UNAVAILABLE,
+                `Session ${target.canonicalKey} has sandbox cleanup pending; retry the reset or delete operation first.`,
+                { retryable: true },
+              ),
+            };
+          }
+          const interruptResult = await interruptSessionRunIfActive({
+            req,
+            context,
+            client,
+            isWebchatConnect,
+            requestedKey: key,
+            canonicalKey: target.canonicalKey,
+            agentId: requestedAgentId,
+            sessionId,
+          });
+          if (interruptResult.error) {
+            return { ok: false as const, error: interruptResult.error };
+          }
+
+          const resolvedModel = resolveSessionModelRef(cfg, currentEntry, target.agentId);
+          const workspaceDir =
+            normalizeOptionalString(currentEntry.spawnedWorkspaceDir) ||
+            resolveAgentWorkspaceDir(cfg, target.agentId);
+          const cwd = normalizeOptionalString(currentEntry.spawnedCwd);
+          return {
+            ok: true as const,
+            result: await compactEmbeddedAgentSession({
+              sessionId,
+              sessionKey: target.canonicalKey,
+              agentId: target.agentId,
+              allowGatewaySubagentBinding: true,
+              sessionFile: filePath,
+              workspaceDir,
+              cwd,
+              config: cfg,
+              provider: resolvedModel.provider,
+              model: resolvedModel.model,
+              authProfileId: currentEntry.authProfileOverride,
+              agentHarnessId:
+                currentEntry.sessionId === sessionId ? currentEntry.agentHarnessId : undefined,
+              thinkLevel: normalizeThinkLevel(currentEntry.thinkingLevel),
+              reasoningLevel: normalizeReasoningLevel(currentEntry.reasoningLevel),
+              bashElevated: {
+                enabled: false,
+                allowed: false,
+                defaultLevel: "off",
+              },
+              trigger: "manual",
+            }),
+          };
         });
+        if (!admitted.ok) {
+          emitSessionOperation(context, {
+            operationId,
+            operation: "compact",
+            phase: "end",
+            sessionKey: target.canonicalKey,
+            ...(target.canonicalKey === "global" && target.agentId
+              ? { agentId: target.agentId }
+              : {}),
+            completed: false,
+            reason: admitted.error.message,
+          });
+          respond(false, undefined, admitted.error);
+          return;
+        }
+        result = admitted.result;
       } catch (err) {
+        if (err instanceof ReplyRunAlreadyActiveError) {
+          const error = errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `Session ${target.canonicalKey} is still active; try again in a moment.`,
+            { retryable: true },
+          );
+          emitSessionOperation(context, {
+            operationId,
+            operation: "compact",
+            phase: "end",
+            sessionKey: target.canonicalKey,
+            ...(target.canonicalKey === "global" && target.agentId
+              ? { agentId: target.agentId }
+              : {}),
+            completed: false,
+            reason: error.message,
+          });
+          respond(false, undefined, error);
+          return;
+        }
         emitSessionOperation(context, {
           operationId,
           operation: "compact",

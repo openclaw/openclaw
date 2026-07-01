@@ -240,6 +240,56 @@ describe("codex conversation binding", () => {
     );
   });
 
+  it("passes the current session owner when resolving bind thread sandbox policy", async () => {
+    codexRequirementsTomlMock.mockReturnValue(
+      [
+        'allowed_sandbox_modes = ["read-only", "workspace-write"]',
+        'allowed_approval_policies = ["never", "on-request"]',
+        'allowed_approvals_reviewers = ["user"]',
+      ].join("\n"),
+    );
+    resolveSandboxContextMock.mockResolvedValue({ enabled: true });
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionKey = "agent:main:session-1";
+    const config = {
+      session: { store: storePath },
+      tools: {
+        exec: {
+          security: "full",
+          ask: "on-miss",
+        },
+      },
+    };
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "owner-session-1",
+        updatedAt: Date.now(),
+      },
+    });
+
+    await expect(
+      startCodexConversationThread({
+        config: config as never,
+        sessionFile,
+        workspaceDir: tempDir,
+        sessionKey,
+      }),
+    ).rejects.toThrow(
+      "OpenClaw native Codex conversation binding cannot route interactive approvals yet",
+    );
+
+    expect(resolveSandboxContextMock).toHaveBeenCalledWith({
+      config,
+      sessionKey,
+      workspaceDir: tempDir,
+      lifecycleOwnerSessionId: "owner-session-1",
+    });
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+  });
+
   it("selects Codex network-proxy permissions through app-server bind thread config", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -1556,6 +1606,25 @@ describe("codex conversation binding", () => {
     );
     resolveSandboxContextMock.mockResolvedValue({ enabled: true });
     const sessionFile = path.join(tempDir, "session.jsonl");
+    const storePath = path.join(tempDir, "sessions.json");
+    const sessionKey = "agent:main:session-1";
+    const config = {
+      session: { store: storePath },
+      tools: {
+        exec: {
+          security: "full",
+          ask: "on-miss",
+        },
+      },
+    };
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "owner-session-1",
+        updatedAt: Date.now(),
+      },
+    });
     await fs.writeFile(
       `${sessionFile}.codex-app-server.json`,
       JSON.stringify({
@@ -1603,11 +1672,11 @@ describe("codex conversation binding", () => {
         channel: "telegram",
         isGroup: false,
         commandAuthorized: true,
-        sessionKey: "agent:main:session-1",
+        sessionKey,
       },
       {
         channelId: "telegram",
-        sessionKey: "agent:main:session-1",
+        sessionKey,
         pluginBinding: {
           bindingId: "binding-1",
           pluginId: "codex",
@@ -1626,14 +1695,7 @@ describe("codex conversation binding", () => {
       },
       {
         timeoutMs: 50,
-        config: {
-          tools: {
-            exec: {
-              security: "full",
-              ask: "on-miss",
-            },
-          },
-        } as never,
+        config: config as never,
       },
     );
 
@@ -1645,16 +1707,10 @@ describe("codex conversation binding", () => {
       "legacy full exec security with ask requires Codex app-server danger-full-access",
     );
     expect(resolveSandboxContextMock).toHaveBeenCalledWith({
-      config: {
-        tools: {
-          exec: {
-            security: "full",
-            ask: "on-miss",
-          },
-        },
-      },
-      sessionKey: "agent:main:session-1",
+      config,
+      sessionKey,
       workspaceDir: tempDir,
+      lifecycleOwnerSessionId: "owner-session-1",
     });
     expect(turnStartParams).toEqual([]);
   });

@@ -342,6 +342,184 @@ describe("openshell backend manager", () => {
     });
   });
 
+  it("records nullable openshell default routing for lifecycle cleanup", async () => {
+    const workspaceDir = await makeTempDir("openclaw-openshell-workspace-");
+    const factory = createOpenShellSandboxBackendFactory({
+      pluginConfig: resolveOpenShellPluginConfig({
+        command: "/usr/local/bin/openshell",
+      }),
+    });
+
+    const backend = await factory({
+      sessionKey: "agent:main:turn",
+      scopeKey: "agent:main",
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      cfg: createOpenShellBackendSandboxConfig(),
+    });
+
+    expect(backend.cleanupMetadata).toEqual({
+      openShellGateway: null,
+      openShellGatewayEndpoint: null,
+    });
+  });
+
+  it("removes runtimes through their recorded openshell gateway", async () => {
+    cliMocks.runOpenShellCli.mockResolvedValue({
+      code: 0,
+      stdout: "",
+      stderr: "",
+    });
+
+    const manager = createOpenShellSandboxBackendManager({
+      pluginConfig: resolveOpenShellPluginConfig({
+        command: "/usr/local/bin/openshell-new",
+        gateway: "new-lab",
+        gatewayEndpoint: "https://new-lab.example",
+      }),
+    });
+
+    await manager.removeRuntime({
+      entry: {
+        containerName: "openclaw-session-5678",
+        backendId: "openshell",
+        runtimeLabel: "openclaw-session-5678",
+        sessionKey: "agent:main",
+        createdAtMs: 1,
+        lastUsedAtMs: 1,
+        image: "openclaw",
+        configLabelKind: "Source",
+        cleanupMetadata: {
+          openShellGateway: "old-lab",
+          openShellGatewayEndpoint: "https://old-lab.example",
+        },
+      },
+      config: {},
+    });
+
+    const expectedConfig = resolveOpenShellPluginConfig({
+      command: "/usr/local/bin/openshell-new",
+      gateway: "old-lab",
+      gatewayEndpoint: "https://old-lab.example",
+    });
+    expect(cliMocks.runOpenShellCli).toHaveBeenCalledWith({
+      context: {
+        sandboxName: "openclaw-session-5678",
+        config: expectedConfig,
+      },
+      args: ["sandbox", "delete", "openclaw-session-5678"],
+    });
+  });
+
+  it("removes runtimes through their recorded openshell default route", async () => {
+    cliMocks.runOpenShellCli.mockResolvedValue({
+      code: 0,
+      stdout: "",
+      stderr: "",
+    });
+
+    const manager = createOpenShellSandboxBackendManager({
+      pluginConfig: resolveOpenShellPluginConfig({
+        command: "/usr/local/bin/openshell-new",
+        gateway: "new-lab",
+        gatewayEndpoint: "https://new-lab.example",
+      }),
+    });
+
+    await manager.removeRuntime({
+      entry: {
+        containerName: "openclaw-session-5678",
+        backendId: "openshell",
+        runtimeLabel: "openclaw-session-5678",
+        sessionKey: "agent:main",
+        createdAtMs: 1,
+        lastUsedAtMs: 1,
+        image: "openclaw",
+        configLabelKind: "Source",
+        cleanupMetadata: {
+          openShellGateway: null,
+          openShellGatewayEndpoint: null,
+        },
+      },
+      config: {},
+    });
+
+    const expectedConfig = resolveOpenShellPluginConfig({
+      command: "/usr/local/bin/openshell-new",
+    });
+    expect(cliMocks.runOpenShellCli).toHaveBeenCalledWith({
+      context: {
+        sandboxName: "openclaw-session-5678",
+        config: expectedConfig,
+      },
+      args: ["sandbox", "delete", "openclaw-session-5678"],
+    });
+  });
+
+  it("treats missing openshell sandbox deletes as already removed", async () => {
+    cliMocks.runOpenShellCli.mockResolvedValue({
+      code: 1,
+      stdout: "",
+      stderr: "sandbox openclaw-session-5678 not found",
+    });
+
+    const manager = createOpenShellSandboxBackendManager({
+      pluginConfig: resolveOpenShellPluginConfig({
+        command: "/usr/local/bin/openshell",
+        gateway: "lab",
+      }),
+    });
+
+    await expect(
+      manager.removeRuntime({
+        entry: {
+          containerName: "openclaw-session-5678",
+          backendId: "openshell",
+          runtimeLabel: "openclaw-session-5678",
+          sessionKey: "agent:main",
+          createdAtMs: 1,
+          lastUsedAtMs: 1,
+          image: "openclaw",
+          configLabelKind: "Source",
+        },
+        config: {},
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("reports openshell sandbox delete failures", async () => {
+    cliMocks.runOpenShellCli.mockResolvedValue({
+      code: 1,
+      stdout: "",
+      stderr: "not authorized",
+    });
+
+    const manager = createOpenShellSandboxBackendManager({
+      pluginConfig: resolveOpenShellPluginConfig({
+        command: "/usr/local/bin/openshell",
+        gateway: "lab",
+      }),
+    });
+
+    await expect(
+      manager.removeRuntime({
+        entry: {
+          containerName: "openclaw-session-5678",
+          backendId: "openshell",
+          runtimeLabel: "openclaw-session-5678",
+          sessionKey: "agent:main",
+          createdAtMs: 1,
+          lastUsedAtMs: 1,
+          image: "openclaw",
+          configLabelKind: "Source",
+        },
+        config: {},
+      }),
+    ).rejects.toThrow(
+      "Failed to remove OpenShell sandbox runtime openclaw-session-5678: not authorized",
+    );
+  });
+
   it("rejects malformed exec commands before opening an OpenShell SSH session", async () => {
     const factory = createOpenShellSandboxBackendFactory({
       pluginConfig: resolveOpenShellPluginConfig({

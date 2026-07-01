@@ -466,6 +466,7 @@ export async function runCodexAppServerAttempt(
   const sandbox = await resolveSandboxContext({
     config: params.config,
     sessionKey: sandboxSessionKey,
+    lifecycleOwnerSessionId: params.sessionId,
     workspaceDir: resolvedWorkspace,
   });
   preDynamicStartupStages.mark("sandbox");

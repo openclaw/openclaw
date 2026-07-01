@@ -10,6 +10,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
+import { cleanupSessionScopedSandboxForLifecycleEnd } from "../../agents/sandbox.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
@@ -36,6 +37,7 @@ import {
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
+import { updateSessionStore } from "../../config/sessions/store.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import {
   DEFAULT_RESET_TRIGGERS,
@@ -72,13 +74,14 @@ import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 import { isResetAuthorizedForContext } from "./reset-authorization.js";
+import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import {
   maybeRetireLegacyMainDeliveryRoute,
   resolveLastChannelRaw,
   resolveLastToRaw,
 } from "./session-delivery.js";
-import { replyRunRegistry } from "./reply-run-registry.js";
 import {
   createReplySessionEntryHandle,
   type ReplySessionEntryHandle,
@@ -175,6 +178,61 @@ function recoverTerminalSessionEntryForVisibleTurn(entry: SessionEntry): Session
   };
 }
 
+function normalizeSandboxLifecycleCleanupSessionKeys(
+  keys: ReadonlyArray<string | undefined>,
+): string[] {
+  const normalized = new Set<string>();
+  for (const key of keys) {
+    const trimmed = normalizeOptionalString(key);
+    if (trimmed) {
+      normalized.add(trimmed);
+    }
+  }
+  return [...normalized];
+}
+
+async function clearPendingSandboxLifecycleCleanupSessionKeys(params: {
+  sessionEntryHandle: ReplySessionEntryHandle;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+  cleanupSessionKeys: readonly string[];
+}): Promise<void> {
+  const cleanupSessionKeys = new Set(params.cleanupSessionKeys);
+  if (cleanupSessionKeys.size === 0) {
+    return;
+  }
+  await updateSessionStore(
+    params.storePath,
+    (store) => {
+      const entry = store[params.sessionKey];
+      if (!entry || entry.sessionId !== params.sessionId) {
+        return false;
+      }
+      const pending = entry.pendingSandboxLifecycleCleanupSessionKeys ?? [];
+      const nextPending = pending.filter((key) => !cleanupSessionKeys.has(key));
+      if (nextPending.length === pending.length) {
+        return false;
+      }
+      const nextEmpty = nextPending.length === 0;
+      const nextEntry = {
+        ...entry,
+        pendingSandboxLifecycleCleanupSessionKeys: nextPending.length > 0 ? nextPending : undefined,
+        pendingSandboxLifecycleCleanupReason: nextEmpty
+          ? undefined
+          : entry.pendingSandboxLifecycleCleanupReason,
+        pendingSandboxLifecycleCleanupOwnerSessionIds: nextEmpty
+          ? undefined
+          : entry.pendingSandboxLifecycleCleanupOwnerSessionIds,
+      };
+      store[params.sessionKey] = nextEntry;
+      params.sessionEntryHandle.replaceCurrent(nextEntry);
+      return true;
+    },
+    { skipSaveWhenResult: (changed) => !changed },
+  );
+}
+
 export type SessionInitResult = {
   sessionCtx: TemplateContext;
   sessionEntry: SessionEntry;
@@ -193,6 +251,7 @@ export type SessionInitResult = {
   isGroup: boolean;
   bodyStripped?: string;
   triggerBodyNormalized: string;
+  deferredSandboxLifecycleCleanup?: () => Promise<void>;
 };
 
 export type InitSessionStateParams = {
@@ -374,6 +433,7 @@ async function initSessionStateAttemptLocked(
   let persistedSubagentRole: SessionEntry["subagentRole"];
   let persistedSubagentControlScope: SessionEntry["subagentControlScope"];
   let persistedDisplayName: SessionEntry["displayName"];
+  let deferredSandboxLifecycleCleanup: (() => Promise<void>) | undefined;
 
   const normalizedChatType = normalizeChatType(ctx.ChatType);
   const isGroup =
@@ -567,6 +627,17 @@ async function initSessionStateAttemptLocked(
       (softResetAllowed && canReuseExistingEntry)) &&
       !terminalMainTranscriptNewerThanRegistry);
   const activeReplyOperation = replyRunRegistry.get(sessionKey);
+  const hasPendingSandboxLifecycleDeleteCleanup =
+    entry?.pendingSandboxLifecycleCleanupReason === "session-delete" &&
+    normalizeSandboxLifecycleCleanupSessionKeys(
+      entry.pendingSandboxLifecycleCleanupSessionKeys ?? [],
+    ).length > 0;
+  if (hasPendingSandboxLifecycleDeleteCleanup && resetTriggered) {
+    isNewSession = false;
+    resetTriggered = false;
+    bodyStripped = undefined;
+    matchedResetTriggerLower = undefined;
+  }
   const deferImplicitRolloverForActiveRun =
     !resetTriggered &&
     !freshEntry &&
@@ -578,13 +649,19 @@ async function initSessionStateAttemptLocked(
   // Implicit daily/idle rollover must not rename a transcript while that exact
   // session's active writer is still running. Admission will steer/wait/queue;
   // queued pre-dispatch reservations still let the current turn roll over.
-  const effectiveFreshEntry = deferImplicitRolloverForActiveRun ? true : freshEntry;
+  // Failed deletes are terminal until sessions.delete retries their cleanup.
+  const effectiveFreshEntry =
+    hasPendingSandboxLifecycleDeleteCleanup || deferImplicitRolloverForActiveRun
+      ? true
+      : freshEntry;
   // Capture the current session entry before any reset so its transcript can be
   // archived afterward.  We need to do this for both explicit resets (/new, /reset)
   // and for scheduled/daily resets where the session has become stale (!freshEntry).
   // Without this, daily-reset transcripts are left as orphaned files on disk (#35481).
   const previousSessionEntry =
-    (resetTriggered || !effectiveFreshEntry) && entry ? { ...entry } : undefined;
+    !hasPendingSandboxLifecycleDeleteCleanup && (resetTriggered || !effectiveFreshEntry) && entry
+      ? { ...entry }
+      : undefined;
   const previousSessionEndReason = resetTriggered
     ? resolveExplicitSessionEndReason(matchedResetTriggerLower)
     : resolveStaleSessionEndReason({
@@ -689,6 +766,25 @@ async function initSessionStateAttemptLocked(
         ]),
       )
     : baseEntry?.usageFamilySessionIds;
+  const runtimePolicySessionKey = resolveRuntimePolicySessionKey({
+    cfg,
+    ctx,
+    sessionKey,
+  });
+  const pendingSandboxLifecycleCleanupSessionKeys = previousSessionEntry
+    ? normalizeSandboxLifecycleCleanupSessionKeys([
+        ...(previousSessionEntry.pendingSandboxLifecycleCleanupSessionKeys ?? []),
+        previousSessionEntry.sessionId,
+        sessionKey,
+        runtimePolicySessionKey,
+      ])
+    : baseEntry?.pendingSandboxLifecycleCleanupSessionKeys;
+  const pendingSandboxLifecycleCleanupReason =
+    previousSessionEntry?.pendingSandboxLifecycleCleanupReason ??
+    baseEntry?.pendingSandboxLifecycleCleanupReason;
+  const pendingSandboxLifecycleCleanupOwnerSessionIds =
+    previousSessionEntry?.pendingSandboxLifecycleCleanupOwnerSessionIds ??
+    baseEntry?.pendingSandboxLifecycleCleanupOwnerSessionIds;
   // Track the originating channel/to for announce routing (subagent announce-back).
   const originatingChannelRaw = ctx.OriginatingChannel as string | undefined;
   const isInterSession = isInterSessionInputProvenance(ctx.InputProvenance);
@@ -776,6 +872,9 @@ async function initSessionStateAttemptLocked(
     responseUsage: persistedResponseUsage ?? baseEntry?.responseUsage,
     usageFamilyKey,
     usageFamilySessionIds,
+    pendingSandboxLifecycleCleanupSessionKeys,
+    pendingSandboxLifecycleCleanupReason,
+    pendingSandboxLifecycleCleanupOwnerSessionIds,
     modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
     providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
     modelOverrideSource: persistedModelOverrideSource ?? baseEntry?.modelOverrideSource,
@@ -946,6 +1045,10 @@ async function initSessionStateAttemptLocked(
   const previousSessionTranscript = committed.previousSessionTranscript;
 
   if (previousSessionEntry?.sessionId) {
+    const previousOwnerSessionIds = normalizeSandboxLifecycleCleanupSessionKeys([
+      ...(previousSessionEntry.usageFamilySessionIds ?? []),
+      previousSessionEntry.sessionId,
+    ]);
     await retireSessionMcpRuntime({
       sessionId: previousSessionEntry.sessionId,
       reason: "reply-session-rollover",
@@ -967,6 +1070,94 @@ async function initSessionStateAttemptLocked(
       onWarn: (message) => log.warn(message),
       onError: (error) => log.warn(`browser tab cleanup failed: ${String(error)}`),
     });
+    deferredSandboxLifecycleCleanup = async () => {
+      const cleanupSessionKeys = normalizeSandboxLifecycleCleanupSessionKeys([
+        ...(sessionEntry.pendingSandboxLifecycleCleanupSessionKeys ?? []),
+        previousSessionEntry.sessionId,
+        sessionKey,
+        runtimePolicySessionKey,
+      ]);
+      try {
+        const result = await cleanupSessionScopedSandboxForLifecycleEnd({
+          config: cfg,
+          agentId,
+          sessionKeys: cleanupSessionKeys,
+          ownerSessionIds: previousOwnerSessionIds,
+          reason:
+            previousSessionEndReason === "new" || previousSessionEndReason === "reset"
+              ? "session-reset"
+              : "session-rollover",
+          onWarn: (message) => log.warn(message),
+        });
+        if (result.failures.length > 0) {
+          throw new Error(
+            `sandbox lifecycle cleanup incomplete: ${result.failures
+              .map((failure) => failure.error)
+              .join("; ")}`,
+          );
+        }
+        await clearPendingSandboxLifecycleCleanupSessionKeys({
+          sessionEntryHandle,
+          sessionId,
+          sessionKey,
+          storePath,
+          cleanupSessionKeys,
+        });
+      } catch (error) {
+        log.warn(`sandbox lifecycle cleanup failed: ${String(error)}`);
+        throw error;
+      }
+    };
+  }
+  const retrySessionKeys = normalizeSandboxLifecycleCleanupSessionKeys(
+    sessionEntry.pendingSandboxLifecycleCleanupSessionKeys ?? [],
+  );
+  const retryOwnerSessionIds = normalizeSandboxLifecycleCleanupSessionKeys(
+    sessionEntry.pendingSandboxLifecycleCleanupOwnerSessionIds?.length
+      ? sessionEntry.pendingSandboxLifecycleCleanupOwnerSessionIds
+      : (sessionEntry.usageFamilySessionIds ?? []).filter(
+          (ownerSessionId) => ownerSessionId && ownerSessionId !== sessionId,
+        ),
+  );
+  if (
+    !deferredSandboxLifecycleCleanup &&
+    retrySessionKeys.length > 0 &&
+    sessionEntry.pendingSandboxLifecycleCleanupReason === "session-delete"
+  ) {
+    deferredSandboxLifecycleCleanup = async () => {
+      throw new Error("session delete cleanup is pending; retry sessions.delete");
+    };
+  }
+  if (!deferredSandboxLifecycleCleanup && retrySessionKeys.length > 0) {
+    deferredSandboxLifecycleCleanup = async () => {
+      try {
+        const result = await cleanupSessionScopedSandboxForLifecycleEnd({
+          config: cfg,
+          agentId,
+          sessionKeys: retrySessionKeys,
+          ownerSessionIds: retryOwnerSessionIds,
+          reason: "session-rollover",
+          onWarn: (message) => log.warn(message),
+        });
+        if (result.failures.length > 0) {
+          throw new Error(
+            `sandbox lifecycle cleanup incomplete: ${result.failures
+              .map((failure) => failure.error)
+              .join("; ")}`,
+          );
+        }
+        await clearPendingSandboxLifecycleCleanupSessionKeys({
+          sessionEntryHandle,
+          sessionId,
+          sessionKey,
+          storePath,
+          cleanupSessionKeys: retrySessionKeys,
+        });
+      } catch (error) {
+        log.warn(`sandbox lifecycle cleanup failed: ${String(error)}`);
+        throw error;
+      }
+    };
   }
 
   const sessionCtx: TemplateContext = {
@@ -1054,5 +1245,6 @@ async function initSessionStateAttemptLocked(
     isGroup,
     bodyStripped,
     triggerBodyNormalized,
+    deferredSandboxLifecycleCleanup,
   };
 }

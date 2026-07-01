@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { isInboundPathAllowed } from "@openclaw/media-core/inbound-path-policy";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { assertSandboxPath } from "../../agents/sandbox-paths.js";
-import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
+import { withSandboxWorkspaceForSession, type SandboxWorkspaceInfo } from "../../agents/sandbox.js";
 import { slugifySessionKey } from "../../agents/sandbox/shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
@@ -42,15 +42,20 @@ type StageableMediaSource = {
   physicalPath: string;
 };
 
-export async function stageSandboxMedia(params: {
+type StageSandboxMediaParams = {
   ctx: MsgContext;
   sessionCtx: TemplateContext;
   cfg: OpenClawConfig;
   sessionKey?: string;
   workspaceDir: string;
   remoteMediaMode?: "sandbox-or-cache" | "cache";
-}): Promise<StageSandboxMediaResult> {
-  const { ctx, sessionCtx, cfg, sessionKey, workspaceDir } = params;
+  sandboxWorkspace?: SandboxWorkspaceInfo | null;
+};
+
+export async function stageSandboxMedia(
+  params: StageSandboxMediaParams,
+): Promise<StageSandboxMediaResult> {
+  const { ctx, cfg, sessionKey, workspaceDir } = params;
   const hasPathsArray = Array.isArray(ctx.MediaPaths) && ctx.MediaPaths.length > 0;
   const rawPaths = resolveRawPaths(ctx);
   if (rawPaths.length === 0 || !sessionKey) {
@@ -58,13 +63,41 @@ export async function stageSandboxMedia(params: {
   }
 
   const forceRemoteCache = ctx.MediaRemoteHost && params.remoteMediaMode === "cache";
-  const sandbox = forceRemoteCache
-    ? null
-    : await ensureSandboxWorkspaceForSession({
-        config: cfg,
-        sessionKey,
-        workspaceDir,
-      });
+  if (forceRemoteCache || params.sandboxWorkspace !== undefined) {
+    return await stageSandboxMediaWithWorkspace({
+      params,
+      sandbox: params.sandboxWorkspace ?? null,
+      rawPaths,
+      hasPathsArray,
+    });
+  }
+  return await withSandboxWorkspaceForSession(
+    {
+      config: cfg,
+      sessionKey,
+      workspaceDir,
+    },
+    async (sandbox) =>
+      await stageSandboxMediaWithWorkspace({
+        params,
+        sandbox,
+        rawPaths,
+        hasPathsArray,
+      }),
+  );
+}
+
+async function stageSandboxMediaWithWorkspace(params: {
+  params: StageSandboxMediaParams;
+  sandbox: SandboxWorkspaceInfo | null;
+  rawPaths: string[];
+  hasPathsArray: boolean;
+}): Promise<StageSandboxMediaResult> {
+  const { ctx, sessionCtx, cfg, sessionKey, workspaceDir } = params.params;
+  const { sandbox, rawPaths, hasPathsArray } = params;
+  if (!sessionKey) {
+    return EMPTY_STAGE_RESULT;
+  }
 
   // For remote attachments without sandbox, use ~/.openclaw/media (not agent workspace for privacy).
   // Managed local inbound refs are already in OpenClaw's media store; when no sandbox is
@@ -75,6 +108,10 @@ export async function stageSandboxMedia(params: {
   const effectiveWorkspaceDir = sandbox?.workspaceDir ?? remoteMediaCacheDir ?? workspaceDir;
   if (!effectiveWorkspaceDir) {
     return EMPTY_STAGE_RESULT;
+  }
+  if (sandbox) {
+    ctx.MediaWorkspaceDir = sandbox.workspaceDir;
+    sessionCtx.MediaWorkspaceDir = sandbox.workspaceDir;
   }
 
   await fs.mkdir(effectiveWorkspaceDir, { recursive: true });
@@ -107,9 +144,10 @@ export async function stageSandboxMedia(params: {
       continue;
     }
     const stageIntoSandboxMediaDir = Boolean(sandbox);
-    const relativeDest = stageIntoSandboxMediaDir || hostWorkspaceStagingDir
-      ? path.join(hostWorkspaceStagingDir ?? path.join("media", "inbound"), fileName)
-      : fileName;
+    const relativeDest =
+      stageIntoSandboxMediaDir || hostWorkspaceStagingDir
+        ? path.join(hostWorkspaceStagingDir ?? path.join("media", "inbound"), fileName)
+        : fileName;
     const dest = path.join(effectiveWorkspaceDir, relativeDest);
 
     try {

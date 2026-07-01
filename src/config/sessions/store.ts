@@ -280,6 +280,13 @@ export type DeleteSessionEntryLifecycleResult = {
   deletedSessionId?: string;
 };
 
+export type DeleteSessionEntryLifecycleMutation = Omit<
+  DeleteSessionEntryLifecycleResult,
+  "archivedTranscripts" | "deleted"
+> & {
+  deletedEntry: SessionEntry;
+};
+
 export type SessionEntryLifecycleRemoval = {
   /** Exact persisted key to remove from the store. */
   sessionKey: string;
@@ -1145,6 +1152,7 @@ export async function applySessionEntryPatchProjection<
 /** Resets one persisted session entry and rotates its file-backed transcript artifacts. */
 export async function resetSessionEntryLifecycle(params: {
   afterEntryMutation?: (mutation: ResetSessionEntryLifecycleMutation) => Promise<void> | void;
+  beforeEntryMutation?: (mutation: ResetSessionEntryLifecycleMutation) => Promise<void> | void;
   agentId?: string;
   buildNextEntry: (context: {
     currentEntry?: SessionEntry;
@@ -1169,8 +1177,6 @@ export async function resetSessionEntryLifecycle(params: {
     if (!nextSessionFile) {
       throw new Error("reset session lifecycle requires next entry sessionFile");
     }
-    store[params.target.canonicalKey] = nextEntry;
-    await saveSessionStoreUnlocked(params.storePath, store);
     const mutation: ResetSessionEntryLifecycleMutation = {
       nextEntry: cloneSessionEntry(nextEntry),
     };
@@ -1184,6 +1190,9 @@ export async function resetSessionEntryLifecycle(params: {
     if (previousSessionId) {
       mutation.previousSessionId = previousSessionId;
     }
+    await params.beforeEntryMutation?.(mutation);
+    store[params.target.canonicalKey] = nextEntry;
+    await saveSessionStoreUnlocked(params.storePath, store);
     await params.afterEntryMutation?.(mutation);
     const archivedTranscripts = await archiveLifecycleSessionTranscripts({
       sessionId: previousSessionId,
@@ -1208,6 +1217,8 @@ export async function resetSessionEntryLifecycle(params: {
 export async function deleteSessionEntryLifecycle(params: {
   agentId?: string;
   archiveTranscript: boolean;
+  beforeEntryRemoval?: (mutation: DeleteSessionEntryLifecycleMutation) => Promise<void> | void;
+  expectedSessionId?: string;
   storePath: string;
   target: SessionLifecycleStoreTarget;
 }): Promise<DeleteSessionEntryLifecycleResult> {
@@ -1224,8 +1235,28 @@ export async function deleteSessionEntryLifecycle(params: {
         deleted: false,
       };
     }
+    if (
+      params.expectedSessionId !== undefined &&
+      deletedEntry.sessionId !== params.expectedSessionId
+    ) {
+      restoreUnchangedSessionStoreCache(params.storePath, store);
+      return {
+        archivedTranscripts: [],
+        deleted: false,
+      };
+    }
     const deletedSessionId = deletedEntry.sessionId;
     const deletedSessionFile = deletedEntry.sessionFile;
+    const mutation: DeleteSessionEntryLifecycleMutation = {
+      deletedEntry: cloneSessionEntry(deletedEntry),
+    };
+    if (deletedSessionFile) {
+      mutation.deletedSessionFile = deletedSessionFile;
+    }
+    if (deletedSessionId) {
+      mutation.deletedSessionId = deletedSessionId;
+    }
+    await params.beforeEntryRemoval?.(mutation);
     delete store[params.target.canonicalKey];
     await saveSessionStoreUnlocked(params.storePath, store);
     const archivedTranscripts = params.archiveTranscript
@@ -1240,14 +1271,8 @@ export async function deleteSessionEntryLifecycle(params: {
     const result: DeleteSessionEntryLifecycleResult = {
       archivedTranscripts,
       deleted: true,
+      ...mutation,
     };
-    result.deletedEntry = cloneSessionEntry(deletedEntry);
-    if (deletedSessionFile) {
-      result.deletedSessionFile = deletedSessionFile;
-    }
-    if (deletedSessionId) {
-      result.deletedSessionId = deletedSessionId;
-    }
     return result;
   });
 }

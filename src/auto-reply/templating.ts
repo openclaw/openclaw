@@ -206,6 +206,11 @@ export type MsgContext = {
    * client; any later failure only reaches the broadcast channel.
    */
   MediaStaged?: boolean;
+  /**
+   * Session/generation id observed when MediaStaged was set before reply admission.
+   * If the turn lands on a different session, getReply must restage into the new owner.
+   */
+  MediaStagedSessionId?: string;
   /** Telegram sticker metadata (emoji, set name, file IDs, cached description). */
   Sticker?: StickerContextMetadata;
   /** True when current-turn sticker media is present in MediaPaths. */

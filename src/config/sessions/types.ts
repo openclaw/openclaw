@@ -7,10 +7,7 @@ import type {
   SessionAcpIdentityState,
   SessionAcpMeta,
 } from "@openclaw/acp-core/types";
-import {
-  normalizeOptionalString,
-  type FastMode,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
@@ -273,6 +270,12 @@ export type SessionEntry = {
   usageFamilyKey?: string;
   /** Session ids known to belong to this usage lineage, including archived predecessors. */
   usageFamilySessionIds?: string[];
+  /** Deterministic sandbox scope keys that must be cleaned before this session runs again. */
+  pendingSandboxLifecycleCleanupSessionKeys?: string[];
+  /** Lifecycle reason for pending sandbox cleanup retry semantics. */
+  pendingSandboxLifecycleCleanupReason?: "session-reset" | "session-delete" | "session-rollover";
+  /** Session-owner ids that pending sandbox cleanup is allowed to remove. */
+  pendingSandboxLifecycleCleanupOwnerSessionIds?: string[];
   /** Timestamp (ms) of the last user/channel interaction that should extend idle lifetime. */
   lastInteractionAt?: number;
   /** Stable first-run start time for subagent sessions, persisted after completion. */

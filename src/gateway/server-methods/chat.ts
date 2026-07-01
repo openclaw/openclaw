@@ -45,7 +45,7 @@ import { modelCatalogBrowseRequiresFullDiscovery } from "../../agents/model-cata
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
-import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
+import { withSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import {
@@ -55,6 +55,7 @@ import {
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
+import { waitForReplyRunAdmissionBlockRelease } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   stageSandboxMedia,
   type StageSandboxMediaResult,
@@ -1502,104 +1503,109 @@ async function prestageMediaPathOffloads(params: {
   }
 
   try {
+    // Reset/delete cleanup owns the session lane before tearing down the sandbox.
+    // Wait here before resolving the workspace, or this pre-stage path can tag
+    // files as current-session media that cleanup deletes underneath it.
+    await waitForReplyRunAdmissionBlockRelease(params.sessionKey);
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
-    const sandbox = await ensureSandboxWorkspaceForSession({
-      config: params.cfg,
-      sessionKey: params.sessionKey,
-      workspaceDir,
-    });
-    if (!sandbox) {
-      return refsByManagedPath(mediaPathRefs);
-    }
+    return await withSandboxWorkspaceForSession(
+      { config: params.cfg, sessionKey: params.sessionKey, workspaceDir },
+      async (sandbox) => {
+        if (!sandbox) {
+          return refsByManagedPath(mediaPathRefs);
+        }
 
-    // stageSandboxMedia caps each file at STAGED_MEDIA_MAX_BYTES (=
-    // MEDIA_MAX_BYTES, 5MB) and silently skips oversized files. The parse cap
-    // (resolveChatAttachmentMaxBytes, default 20MB) is higher, so a sandboxed
-    // session receiving a non-PDF file between the two caps would otherwise
-    // pass parse, fail staging, and surface as a retryable 5xx even though
-    // retry cannot succeed. Reject here as a client-side 4xx instead. Managed
-    // PDFs in that range pass through above instead of being rejected.
-    const oversizedForSandbox = refsToStage.filter((ref) => ref.sizeBytes > MEDIA_MAX_BYTES);
-    if (oversizedForSandbox.length > 0) {
-      const details = oversizedForSandbox
-        .map((ref) => `${ref.label} (${ref.sizeBytes} bytes)`)
-        .join(", ");
-      throw new UnsupportedAttachmentError(
-        "non-image-too-large-for-sandbox",
-        `attachments exceed sandbox staging limit (${MEDIA_MAX_BYTES} bytes): ${details}`,
-      );
-    }
+        // stageSandboxMedia caps each file at STAGED_MEDIA_MAX_BYTES (=
+        // MEDIA_MAX_BYTES, 5MB) and silently skips oversized files. The parse cap
+        // (resolveChatAttachmentMaxBytes, default 20MB) is higher, so a sandboxed
+        // session receiving a non-PDF file between the two caps would otherwise
+        // pass parse, fail staging, and surface as a retryable 5xx even though
+        // retry cannot succeed. Reject here as a client-side 4xx instead. Managed
+        // PDFs in that range pass through above instead of being rejected.
+        const oversizedForSandbox = refsToStage.filter((ref) => ref.sizeBytes > MEDIA_MAX_BYTES);
+        if (oversizedForSandbox.length > 0) {
+          const details = oversizedForSandbox
+            .map((ref) => `${ref.label} (${ref.sizeBytes} bytes)`)
+            .join(", ");
+          throw new UnsupportedAttachmentError(
+            "non-image-too-large-for-sandbox",
+            `attachments exceed sandbox staging limit (${MEDIA_MAX_BYTES} bytes): ${details}`,
+          );
+        }
 
-    const stagingCtx: MsgContext = {
-      MediaPath: refsToStage[0].path,
-      MediaPaths: refsToStage.map((ref) => ref.path),
-      MediaType: refsToStage[0].mimeType,
-      MediaTypes: refsToStage.map((ref) => ref.mimeType),
-    };
-    let stageResult: StageSandboxMediaResult;
-    try {
-      stageResult = await stageSandboxMedia({
-        ctx: stagingCtx,
-        sessionCtx: stagingCtx as TemplateContext,
-        cfg: params.cfg,
-        sessionKey: params.sessionKey,
-        workspaceDir,
-      });
-    } catch (stageErr) {
-      // stageSandboxMedia threw before copying anything (e.g. workspace mkdir
-      // ENOSPC/EPERM), so nothing reached the sandbox. Already-managed inbound
-      // PDFs still reach the agent via their managed media path (host-side
-      // media-understanding reads the media-store root); fail the send only when a
-      // ref cannot fall back. #90097
-      if (refsToStage.some((ref) => !isManagedInboundPdfOffloadRef(ref))) {
-        throw stageErr;
-      }
-      return refsByManagedPath(mediaPathRefs);
-    }
+        const stagingCtx: MsgContext = {
+          MediaPath: refsToStage[0].path,
+          MediaPaths: refsToStage.map((ref) => ref.path),
+          MediaType: refsToStage[0].mimeType,
+          MediaTypes: refsToStage.map((ref) => ref.mimeType),
+        };
+        let stageResult: StageSandboxMediaResult;
+        try {
+          stageResult = await stageSandboxMedia({
+            ctx: stagingCtx,
+            sessionCtx: stagingCtx as TemplateContext,
+            cfg: params.cfg,
+            sessionKey: params.sessionKey,
+            workspaceDir,
+            sandboxWorkspace: sandbox,
+          });
+        } catch (stageErr) {
+          // stageSandboxMedia threw before copying anything (e.g. workspace mkdir
+          // ENOSPC/EPERM), so nothing reached the sandbox. Already-managed inbound
+          // PDFs still reach the agent via their managed media path (host-side
+          // media-understanding reads the media-store root); fail the send only when a
+          // ref cannot fall back. #90097
+          if (refsToStage.some((ref) => !isManagedInboundPdfOffloadRef(ref))) {
+            throw stageErr;
+          }
+          return refsByManagedPath(mediaPathRefs);
+        }
 
-    // stageSandboxMedia silently keeps unstaged entries as their original
-    // absolute path, so length parity does not prove every file landed in the
-    // sandbox. The RPC max (20MB via resolveChatAttachmentMaxBytes) admits files
-    // above the staging cap (STAGED_MEDIA_MAX_BYTES = 5MB); check the returned
-    // `staged` map for missing sources. Already-managed inbound PDFs fall back to
-    // their absolute managed path (host-side media-understanding reads the
-    // media-store root); any other missing source is a 5xx MediaOffloadError the
-    // client can retry. #90097
-    const stagedSources = stageResult.staged;
-    const missing = refsToStage.filter((ref) => !stagedSources.has(ref.path));
-    const unstageable = missing.filter((ref) => !isManagedInboundPdfOffloadRef(ref));
-    if (unstageable.length > 0) {
-      throw new Error(
-        `attachment staging incomplete: ${stagedSources.size}/${refsToStage.length} paths staged into sandbox workspace (missing: ${unstageable.map((ref) => ref.path).join(", ")})`,
-      );
-    }
-    const stagedPaths = stagingCtx.MediaPaths ?? [];
-    const stagedTypes = stagingCtx.MediaTypes ?? refsToStage.map((ref) => ref.mimeType);
+        // stageSandboxMedia silently keeps unstaged entries as their original
+        // absolute path, so length parity does not prove every file landed in the
+        // sandbox. The RPC max (20MB via resolveChatAttachmentMaxBytes) admits files
+        // above the staging cap (STAGED_MEDIA_MAX_BYTES = 5MB); check the returned
+        // `staged` map for missing sources. Already-managed inbound PDFs fall back to
+        // their absolute managed path (host-side media-understanding reads the
+        // media-store root); any other missing source is a 5xx MediaOffloadError the
+        // client can retry. #90097
+        const stagedSources = stageResult.staged;
+        const missing = refsToStage.filter((ref) => !stagedSources.has(ref.path));
+        const unstageable = missing.filter((ref) => !isManagedInboundPdfOffloadRef(ref));
+        if (unstageable.length > 0) {
+          throw new Error(
+            `attachment staging incomplete: ${stagedSources.size}/${refsToStage.length} paths staged into sandbox workspace (missing: ${unstageable.map((ref) => ref.path).join(", ")})`,
+          );
+        }
+        const stagedPaths = stagingCtx.MediaPaths ?? [];
+        const stagedTypes = stagingCtx.MediaTypes ?? refsToStage.map((ref) => ref.mimeType);
 
-    // Map each ref to its post-staging path. Staged files become sandbox-relative
-    // (e.g. `media/inbound/foo.pdf`) so the agent inside the container can read
-    // them; pass-through PDFs and managed PDFs that fell back from staging keep
-    // their absolute managed path (stagedPaths preserves the absolute path for any
-    // unstaged entry). Host-side media-understanding resolves both via
-    // ctx.MediaWorkspaceDir plus the media-store root. Preserve attachment order.
-    const resolvedByRef = new Map<OffloadedRef, { path: string; mimeType: string }>();
-    refsToStage.forEach((ref, index) => {
-      resolvedByRef.set(ref, {
-        path: stagedPaths[index] ?? ref.path,
-        mimeType: stagedTypes[index] ?? ref.mimeType,
-      });
-    });
-    for (const ref of passThroughRefs) {
-      resolvedByRef.set(ref, { path: ref.path, mimeType: ref.mimeType });
-    }
-    const ordered = mediaPathRefs.map(
-      (ref) => resolvedByRef.get(ref) ?? { path: ref.path, mimeType: ref.mimeType },
+        // Map each ref to its post-staging path. Staged files become sandbox-relative
+        // (e.g. `media/inbound/foo.pdf`) so the agent inside the container can read
+        // them; pass-through PDFs and managed PDFs that fell back from staging keep
+        // their absolute managed path (stagedPaths preserves the absolute path for any
+        // unstaged entry). Host-side media-understanding resolves both via
+        // ctx.MediaWorkspaceDir plus the media-store root. Preserve attachment order.
+        const resolvedByRef = new Map<OffloadedRef, { path: string; mimeType: string }>();
+        refsToStage.forEach((ref, index) => {
+          resolvedByRef.set(ref, {
+            path: stagedPaths[index] ?? ref.path,
+            mimeType: stagedTypes[index] ?? ref.mimeType,
+          });
+        });
+        for (const ref of passThroughRefs) {
+          resolvedByRef.set(ref, { path: ref.path, mimeType: ref.mimeType });
+        }
+        const ordered = mediaPathRefs.map(
+          (ref) => resolvedByRef.get(ref) ?? { path: ref.path, mimeType: ref.mimeType },
+        );
+        return {
+          paths: ordered.map((entry) => entry.path),
+          types: ordered.map((entry) => entry.mimeType),
+          workspaceDir: sandbox.workspaceDir,
+        };
+      },
     );
-    return {
-      paths: ordered.map((entry) => entry.path),
-      types: ordered.map((entry) => entry.mimeType),
-      workspaceDir: sandbox.workspaceDir,
-    };
   } catch (err) {
     await Promise.allSettled(
       params.offloadedRefs.map((ref) => deleteMediaBuffer(ref.id, "inbound")),
@@ -3554,6 +3560,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     let mediaPathOffloadPaths: string[] = [];
     let mediaPathOffloadTypes: string[] = [];
     let mediaPathOffloadWorkspaceDir: string | undefined;
+    let mediaPathOffloadsPreStaged = false;
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
@@ -3771,6 +3778,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               sessionKey,
               agentId,
             }));
+            mediaPathOffloadsPreStaged = true;
           },
           {
             phase: "agent-turn",
@@ -3982,7 +3990,12 @@ export const chatHandlers: GatewayRequestHandlers = {
         ctx.MediaType = mediaPathOffloadTypes[0];
         ctx.MediaTypes = mediaPathOffloadTypes;
         ctx.MediaWorkspaceDir = mediaPathOffloadWorkspaceDir;
-        ctx.MediaStaged = true;
+        if (mediaPathOffloadsPreStaged) {
+          ctx.MediaStaged = true;
+          if (mediaPathOffloadWorkspaceDir) {
+            ctx.MediaStagedSessionId = backingSessionId ?? clientRunId;
+          }
+        }
       }
       const mediaPathOffloadsIncludeImages = mediaPathOffloadTypes.some((type) =>
         type.startsWith("image/"),

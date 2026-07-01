@@ -18,6 +18,7 @@ import { sanitizeEnvVars } from "./sanitize-env-vars.js";
 export type SshSandboxSettings = {
   command: string;
   target: string;
+  workspaceRoot?: string;
   strictHostKeyChecking: boolean;
   updateHostKeys: boolean;
   identityFile?: string;

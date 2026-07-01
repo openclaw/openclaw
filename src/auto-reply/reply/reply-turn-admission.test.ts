@@ -4,6 +4,7 @@ import {
   createReplyOperation,
   runAfterReplyOperationClear,
   testing,
+  withReplyRunAdmissionBlock,
 } from "./reply-run-registry.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 
@@ -293,6 +294,84 @@ describe("reply turn admission", () => {
     active.complete();
   });
 
+  it("waits for visible turns during destructive session cleanup", async () => {
+    let releaseCleanup: () => void = () => {};
+    const cleanupReleased = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const blocked = withReplyRunAdmissionBlock(
+      "agent:main:discord:channel:delete",
+      async () => await cleanupReleased,
+    );
+
+    const admitted = admitReplyTurn({
+      sessionKey: "agent:main:discord:channel:delete",
+      sessionId: "new-session",
+      kind: "visible",
+      resetTriggered: false,
+    });
+
+    let settled = false;
+    void admitted.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    releaseCleanup();
+    await blocked;
+    const result = await admitted;
+
+    expect(result.status).toBe("owned");
+    if (result.status === "owned") {
+      expect(result.operation.sessionId).toBe("new-session");
+      result.operation.complete();
+    }
+  });
+
+  it("times out queued follow-up turns during destructive session cleanup", async () => {
+    vi.useFakeTimers();
+    try {
+      let releaseCleanup: () => void = () => {};
+      const cleanupReleased = new Promise<void>((resolve) => {
+        releaseCleanup = resolve;
+      });
+      const blocked = withReplyRunAdmissionBlock(
+        "agent:main:discord:channel:delete",
+        async () => await cleanupReleased,
+      );
+
+      const admitted = admitReplyTurn({
+        sessionKey: "agent:main:discord:channel:delete",
+        sessionId: "queued-session",
+        kind: "queued_followup",
+        resetTriggered: false,
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await expect(admitted).resolves.toEqual({ status: "skipped", reason: "active-run" });
+      releaseCleanup();
+      await blocked;
+    } finally {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
+  });
+
+  it("skips heartbeat turns during destructive session cleanup", async () => {
+    await withReplyRunAdmissionBlock("agent:main:discord:channel:delete", async () => {
+      await expect(
+        admitReplyTurn({
+          sessionKey: "agent:main:discord:channel:delete",
+          sessionId: "heartbeat-session",
+          kind: "heartbeat",
+          resetTriggered: false,
+        }),
+      ).resolves.toEqual({ status: "skipped", reason: "active-run" });
+    });
+  });
+
   it("stops waiting when the caller aborts", async () => {
     const active = createReplyOperation({
       sessionKey: "agent:main:telegram:topic:42",
@@ -316,5 +395,30 @@ describe("reply turn admission", () => {
       activeOperation: active,
     });
     active.complete();
+  });
+
+  it("stops waiting for destructive session cleanup when the caller aborts", async () => {
+    let releaseCleanup: () => void = () => {};
+    const cleanupReleased = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const blocked = withReplyRunAdmissionBlock(
+      "agent:main:discord:channel:delete",
+      async () => await cleanupReleased,
+    );
+    const abortController = new AbortController();
+    const admitted = admitReplyTurn({
+      sessionKey: "agent:main:discord:channel:delete",
+      sessionId: "waiting-session",
+      kind: "visible",
+      resetTriggered: false,
+      upstreamAbortSignal: abortController.signal,
+    });
+
+    abortController.abort();
+
+    await expect(admitted).resolves.toEqual({ status: "skipped", reason: "aborted" });
+    releaseCleanup();
+    await blocked;
   });
 });

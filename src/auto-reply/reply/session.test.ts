@@ -30,10 +30,10 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 import { drainFormattedSystemEvents } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { initSessionState } from "./session.js";
-import { replyRunRegistry } from "./reply-run-registry.js";
 
 const sessionForkMocks = vi.hoisted(() => ({
   forkSessionFromParent: vi.fn(),
@@ -45,6 +45,16 @@ const channelSummaryMocks = vi.hoisted(() => ({
 }));
 const browserMaintenanceMocks = vi.hoisted(() => ({
   closeTrackedBrowserTabsForSessions: vi.fn(async () => 0),
+}));
+const sandboxLifecycleMocks = vi.hoisted(() => ({
+  cleanupSessionScopedSandboxForLifecycleEnd: vi.fn(async () => ({
+    skipped: true,
+    scopeKeys: [],
+    removedContainers: 0,
+    removedBrowsers: 0,
+    removedWorkspaces: 0,
+    failures: [],
+  })),
 }));
 
 type ForkSessionParamsForTest = {
@@ -174,6 +184,16 @@ vi.mock("./session-fork.js", () => ({
 vi.mock("../../plugin-sdk/browser-maintenance.js", () => ({
   closeTrackedBrowserTabsForSessions: browserMaintenanceMocks.closeTrackedBrowserTabsForSessions,
 }));
+
+vi.mock("../../agents/sandbox.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../agents/sandbox.js")>("../../agents/sandbox.js");
+  return {
+    ...actual,
+    cleanupSessionScopedSandboxForLifecycleEnd:
+      sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd,
+  };
+});
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => null,
@@ -435,6 +455,14 @@ function registerCurrentConversationBindingAdapterForTest(params: {
 beforeEach(() => {
   channelSummaryMocks.buildChannelSummary.mockReset().mockResolvedValue([]);
   browserMaintenanceMocks.closeTrackedBrowserTabsForSessions.mockReset().mockResolvedValue(0);
+  sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd.mockReset().mockResolvedValue({
+    skipped: true,
+    scopeKeys: [],
+    removedContainers: 0,
+    removedBrowsers: 0,
+    removedWorkspaces: 0,
+    failures: [],
+  });
   sessionBindingTesting.resetSessionBindingAdaptersForTests();
   sessionForkMocks.nextSessionId = 0;
   sessionForkMocks.resolveParentForkTokenCount.mockReset().mockImplementation(({ parentEntry }) => {
@@ -2714,6 +2742,8 @@ describe("initSessionState browser tab cleanup", () => {
     await writeSessionStoreFast(storePath, {
       [sessionKey]: {
         sessionId: existingSessionId,
+        usageFamilySessionIds: ["ancestor-session", existingSessionId],
+        pendingSandboxLifecycleCleanupSessionKeys: ["agent:main:telegram:dm:legacy-ownerless"],
         updatedAt: Date.now(),
       },
     });
@@ -2733,11 +2763,130 @@ describe("initSessionState browser tab cleanup", () => {
     });
 
     expect(result.isNewSession).toBe(true);
+    let stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].pendingSandboxLifecycleCleanupSessionKeys).toEqual([
+      "agent:main:telegram:dm:legacy-ownerless",
+      existingSessionId,
+      sessionKey,
+    ]);
     const cleanupParams = requireMockCallArg(
       browserMaintenanceMocks.closeTrackedBrowserTabsForSessions,
       "closeTrackedBrowserTabsForSessions",
     );
     expect(cleanupParams.sessionKeys).toEqual([existingSessionId, sessionKey]);
+    expect(sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd).not.toHaveBeenCalled();
+    await result.deferredSandboxLifecycleCleanup?.();
+    expect(sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        reason: "session-reset",
+        sessionKeys: expect.arrayContaining([
+          "agent:main:telegram:dm:legacy-ownerless",
+          existingSessionId,
+          sessionKey,
+        ]),
+        ownerSessionIds: ["ancestor-session", existingSessionId],
+      }),
+    );
+    stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].pendingSandboxLifecycleCleanupSessionKeys).toBeUndefined();
+  });
+
+  it("does not retry sandbox lifecycle cleanup after pending targets are cleared", async () => {
+    const storePath = await createStorePath("openclaw-tab-cleanup-cleared-");
+    const sessionKey = "agent:main:telegram:dm:tab-clean";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "current-session",
+        usageFamilySessionIds: ["old-session", "current-session"],
+        updatedAt: Date.now(),
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        SessionKey: sessionKey,
+      },
+      cfg: {
+        session: { store: storePath, idleMinutes: 999 },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.deferredSandboxLifecycleCleanup).toBeUndefined();
+    expect(sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd).not.toHaveBeenCalled();
+  });
+
+  it("does not retry failed-delete sandbox cleanup as a rollover", async () => {
+    const storePath = await createStorePath("openclaw-delete-cleanup-pending-");
+    const sessionKey = "agent:main:telegram:dm:delete-pending";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "delete-pending-session",
+        pendingSandboxLifecycleCleanupSessionKeys: [sessionKey],
+        pendingSandboxLifecycleCleanupReason: "session-delete",
+        pendingSandboxLifecycleCleanupOwnerSessionIds: ["delete-pending-session"],
+        updatedAt: Date.now(),
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "hello",
+        SessionKey: sessionKey,
+      },
+      cfg: {
+        session: { store: storePath, idleMinutes: 999 },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.deferredSandboxLifecycleCleanup).toBeTypeOf("function");
+    await expect(result.deferredSandboxLifecycleCleanup?.()).rejects.toThrow(
+      "session delete cleanup is pending",
+    );
+    expect(sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd).not.toHaveBeenCalled();
+  });
+
+  it("does not mint a replacement session when failed-delete cleanup blocks reset", async () => {
+    const storePath = await createStorePath("openclaw-delete-cleanup-reset-pending-");
+    const sessionKey = "agent:main:telegram:dm:delete-reset-pending";
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: "delete-pending-session",
+        pendingSandboxLifecycleCleanupSessionKeys: [sessionKey],
+        pendingSandboxLifecycleCleanupReason: "session-delete",
+        pendingSandboxLifecycleCleanupOwnerSessionIds: ["delete-pending-session"],
+        updatedAt: Date.now() - 10 * 60_000,
+      },
+    });
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "/new",
+        RawBody: "/new",
+        CommandBody: "/new",
+        SessionKey: sessionKey,
+      },
+      cfg: {
+        session: { store: storePath, idleMinutes: 1 },
+      } as OpenClawConfig,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe("delete-pending-session");
+    expect(result.previousSessionEntry).toBeUndefined();
+    expect(result.deferredSandboxLifecycleCleanup).toBeTypeOf("function");
+    await expect(result.deferredSandboxLifecycleCleanup?.()).rejects.toThrow(
+      "session delete cleanup is pending",
+    );
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].sessionId).toBe("delete-pending-session");
+    expect(stored[sessionKey].pendingSandboxLifecycleCleanupReason).toBe("session-delete");
+    expect(sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd).not.toHaveBeenCalled();
   });
 
   it("does not close browser tabs for a fresh session without previous state", async () => {
@@ -2758,6 +2907,7 @@ describe("initSessionState browser tab cleanup", () => {
 
     expect(result.isNewSession).toBe(true);
     expect(browserMaintenanceMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
+    expect(sandboxLifecycleMocks.cleanupSessionScopedSandboxForLifecycleEnd).not.toHaveBeenCalled();
   });
 });
 
