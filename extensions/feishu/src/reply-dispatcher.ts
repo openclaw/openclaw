@@ -272,7 +272,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   // Partial previews are replaceable; only committed final text may precede an error notice.
   let hasStreamingFinalText = false;
   const deliveredFinalTexts = new Set<string>();
-  let sentBlockText = "";
+  let sentIndependentBlockText = false;
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
   let streamingClosedForReply = false;
@@ -639,7 +639,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         if (!replyLifecycleStateInitialized) {
           replyLifecycleStateInitialized = true;
           deliveredFinalTexts.clear();
-          sentBlockText = "";
+          sentIndependentBlockText = false;
           streamingClosedForReply = false;
           streamingCloseErroredForReply = false;
           visibleReplySent = false;
@@ -698,14 +698,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           streamingClosedForReply &&
           !streamingCloseErroredForReply &&
           finalTextWouldUseStreamingCard;
-        const skipTextForBlockStreamed =
-          info?.kind === "final" && hasText && sentBlockText !== "" && text === sentBlockText;
         const shouldDeliverText =
           hasText &&
           !hasVoiceMedia &&
           !skipTextForDuplicateFinal &&
-          !skipTextForClosedStreamingFinal &&
-          !skipTextForBlockStreamed;
+          !skipTextForClosedStreamingFinal;
         const shouldDiscardStreamingPreview =
           info?.kind === "final" &&
           (finalTextExceedsStreamingLimit ||
@@ -726,13 +723,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             // messages for true progressive delivery.
             if (!useStreamingCard) {
               if (coreBlockStreamingEnabled) {
-                // Send block text as independent Feishu messages for
-                // true progressive delivery without card-side playback.
-                // Route through chunked delivery so textChunkLimit is
-                // honored, matching the established final/static path.
-                // Preserve mention targets only on the first emitted
-                // block chunk so @mentioned users receive a notification.
-                const isFirstBlock = sentBlockText === "";
+                // Reuse normal text chunking, but notify mentions only on the first visible chunk.
+                const isFirstBlock = !sentIndependentBlockText;
                 await sendChunkedTextReply({
                   text,
                   useCard: false,
@@ -740,7 +732,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                   sendChunk: async ({ chunk, isFirst }) => {
                     await sendMessageFeishu({
                       cfg,
-                      to: chatId,
+                      to: sendTarget,
                       text: chunk,
                       replyToMessageId: sendReplyToMessageId,
                       replyInThread: effectiveReplyInThread,
@@ -752,9 +744,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                     });
                   },
                 });
-                // Track original block text for duplicate-final suppression,
-                // not the chunked output which may differ.
-                sentBlockText += text;
+                sentIndependentBlockText = true;
+                if (hasMedia) {
+                  await sendMediaReplies(payload);
+                }
               }
               return;
             }

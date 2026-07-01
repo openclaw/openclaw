@@ -192,6 +192,20 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   }
 
+  function useNonStreamingBlockAccount() {
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "auto",
+        streaming: false,
+        blockStreaming: true,
+      },
+    });
+  }
+
   function setupNonStreamingAutoDispatcher() {
     useNonStreamingAutoAccount();
 
@@ -667,277 +681,56 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
-  it("sends block as independent message when blockStreaming is true and streaming is disabled", async () => {
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: {
-        renderMode: "auto",
-        streaming: false,
-        blockStreaming: true,
-      },
-    });
-
-    const { options } = createDispatcherHarness({
-      runtime: createRuntimeLogger(),
-    });
-
-    await options.deliver({ text: "block chunk" }, { kind: "block" });
-    await options.deliver({ text: "trailing final" }, { kind: "final" });
-    await options.onIdle?.();
-
-    expect(streamingInstances).toHaveLength(0);
-    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
-    expectMockArgFields(sendMessageFeishuMock, "block message send params", {
-      text: "block chunk",
-    });
-    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
-  });
-
-  it("skips final text when it matches concatenated block-streamed content", async () => {
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: {
-        renderMode: "auto",
-        streaming: false,
-        blockStreaming: true,
-      },
-    });
-
-    const { options } = createDispatcherHarness({
-      runtime: createRuntimeLogger(),
-    });
-
-    await options.deliver({ text: "Hello " }, { kind: "block" });
-    await options.deliver({ text: "world!" }, { kind: "block" });
-    await options.deliver({ text: "Hello world!" }, { kind: "final" });
-    await options.onIdle?.();
-
-    expect(streamingInstances).toHaveLength(0);
-    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
-    expectMockArgFields(sendMessageFeishuMock, "first block message", {
-      text: "Hello ",
-    });
-    expectMockArgFields(
-      sendMessageFeishuMock,
-      "second block message",
-      {
-        text: "world!",
-      },
-      1,
+  it("sends complete chunked blocks to the DM target", async () => {
+    useNonStreamingBlockAccount();
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
+    runtime.channel.text.chunkTextWithMode.mockImplementation((text: string) =>
+      text === "First paragraph." ? ["First ", "paragraph."] : [text],
     );
+    const mentions = [{ openId: "ou_target", name: "Target User", key: "@_user_1" }];
+    const { options } = createDispatcherHarness({
+      chatId: "oc_p2p_chat",
+      sendTarget: "user:ou_sender",
+      mentionTargets: mentions,
+    });
+
+    await options.deliver({ text: "First paragraph." }, { kind: "block" });
+    await options.deliver(
+      { text: "Second paragraph.", mediaUrl: "https://example.com/block.png" },
+      { kind: "block" },
+    );
+    await options.onIdle?.();
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(3);
+    expectMockArgFields(sendMessageFeishuMock, "first block chunk", {
+      to: "user:ou_sender",
+      text: "First ",
+      mentions,
+    });
+    expectMockArgFields(sendMessageFeishuMock, "second block chunk", { text: "paragraph." }, 1);
+    expectMockArgFields(sendMessageFeishuMock, "second block", { text: "Second paragraph." }, 2);
+    expect(sendMessageFeishuMock.mock.calls[1]?.[0]).not.toHaveProperty("mentions");
+    expect(sendMessageFeishuMock.mock.calls[2]?.[0]).not.toHaveProperty("mentions");
+    expectMockArgFields(sendMediaFeishuMock, "block media", {
+      to: "user:ou_sender",
+      mediaUrl: "https://example.com/block.png",
+    });
+    expect(streamingInstances).toHaveLength(0);
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("does not suppress final text when it differs from block-streamed content", async () => {
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: {
-        renderMode: "auto",
-        streaming: false,
-        blockStreaming: true,
-      },
-    });
-
-    const { options } = createDispatcherHarness({
-      runtime: createRuntimeLogger(),
-    });
+  it("delivers a final message when it differs from independently sent blocks", async () => {
+    useNonStreamingBlockAccount();
+    const { options } = createDispatcherHarness();
 
     await options.deliver({ text: "partial block" }, { kind: "block" });
     await options.deliver({ text: "final answer" }, { kind: "final" });
     await options.onIdle?.();
 
-    expect(streamingInstances).toHaveLength(0);
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
-    expectMockArgFields(sendMessageFeishuMock, "first message send params", {
-      text: "partial block",
-    });
-    expectMockArgFields(
-      sendMessageFeishuMock,
-      "second message send params",
-      {
-        text: "final answer",
-      },
-      1,
-    );
-    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
-  });
-
-  it("preserves mention targets on the first independently sent block", async () => {
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: {
-        renderMode: "auto",
-        streaming: false,
-        blockStreaming: true,
-      },
-    });
-
-    const { options } = createDispatcherHarness({
-      runtime: createRuntimeLogger(),
-      mentionTargets: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
-    });
-
-    await options.deliver({ text: "first block" }, { kind: "block" });
-    await options.deliver({ text: "second block" }, { kind: "block" });
-    await options.onIdle?.();
-
-    expect(streamingInstances).toHaveLength(0);
-    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
-    // First block carries mentions
-    expectMockArgFields(sendMessageFeishuMock, "first block with mentions", {
-      text: "first block",
-      mentions: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
-    });
-    // Second block does NOT carry mentions
-    expectMockArgFields(
-      sendMessageFeishuMock,
-      "second block without mentions",
-      {
-        text: "second block",
-      },
-      1,
-    );
-    const secondCallArg = sendMessageFeishuMock.mock.calls[1][0];
-    expect(secondCallArg).not.toHaveProperty("mentions");
-    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
-  });
-
-  it("does not attach mentions to block when mentionTargets is empty", async () => {
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: {
-        renderMode: "auto",
-        streaming: false,
-        blockStreaming: true,
-      },
-    });
-
-    const { options } = createDispatcherHarness({
-      runtime: createRuntimeLogger(),
-      mentionTargets: [],
-    });
-
-    await options.deliver({ text: "block text" }, { kind: "block" });
-    await options.onIdle?.();
-
-    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
-    const callArg = sendMessageFeishuMock.mock.calls[0][0];
-    expect(callArg).not.toHaveProperty("mentions");
-  });
-
-  it("splits a long block into chunked messages when textChunkLimit is small", async () => {
-    resolveFeishuAccountMock.mockReturnValue({
-      accountId: "main",
-      appId: "app_id",
-      appSecret: "app_secret",
-      domain: "feishu",
-      config: {
-        renderMode: "auto",
-        streaming: false,
-        blockStreaming: true,
-      },
-    });
-
-    // Override chunkTextWithMode to actually split text into small chunks,
-    // simulating a low textChunkLimit.
-    const chunkedTexts = ["AAAA", "BBBB", "CCCC"];
-    let chunkCallIndex = 0;
-    getFeishuRuntimeMock.mockReturnValue({
-      channel: {
-        text: {
-          resolveTextChunkLimit: vi.fn(() => 4),
-          resolveChunkMode: vi.fn(() => "fixed"),
-          resolveMarkdownTableMode: vi.fn(() => "preserve"),
-          convertMarkdownTables: vi.fn((text: string) => text),
-          chunkTextWithMode: vi.fn(() => {
-            chunkCallIndex += 1;
-            // Only split the block; keep other calls returning single chunk
-            if (chunkCallIndex === 1) {
-              return chunkedTexts;
-            }
-            return [chunkCallIndex as unknown as string];
-          }),
-          chunkMarkdownTextWithMode: vi.fn((text: string) => [text]),
-        },
-        reply: {
-          createReplyDispatcherWithTyping: createReplyDispatcherWithTypingMock,
-          resolveHumanDelayConfig: vi.fn(() => undefined),
-        },
-      },
-    });
-
-    try {
-      const { options } = createDispatcherHarness({
-        runtime: createRuntimeLogger(),
-        mentionTargets: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
-      });
-
-      await options.deliver({ text: "AAAABBBBCCCC" }, { kind: "block" });
-      await options.onIdle?.();
-
-      // Block should be split into 3 chunks, each sent as independent message
-      expect(sendMessageFeishuMock).toHaveBeenCalledTimes(3);
-      expectMockArgFields(sendMessageFeishuMock, "first chunk with mentions", {
-        text: "AAAA",
-        mentions: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
-      });
-      expectMockArgFields(
-        sendMessageFeishuMock,
-        "second chunk without mentions",
-        {
-          text: "BBBB",
-        },
-        1,
-      );
-      expectMockArgFields(
-        sendMessageFeishuMock,
-        "third chunk without mentions",
-        {
-          text: "CCCC",
-        },
-        2,
-      );
-      // Confirm no mentions on second and third chunks
-      const chunk2Arg = sendMessageFeishuMock.mock.calls[1][0] as Record<string, unknown>;
-      expect(chunk2Arg).not.toHaveProperty("mentions");
-      const chunk3Arg = sendMessageFeishuMock.mock.calls[2][0] as Record<string, unknown>;
-      expect(chunk3Arg).not.toHaveProperty("mentions");
-      expect(streamingInstances).toHaveLength(0);
-      expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
-    } finally {
-      // Restore the default chunkTextWithMode for subsequent tests
-      getFeishuRuntimeMock.mockReturnValue({
-        channel: {
-          text: {
-            resolveTextChunkLimit: vi.fn(() => 4000),
-            resolveChunkMode: vi.fn(() => "line"),
-            resolveMarkdownTableMode: vi.fn(() => "preserve"),
-            convertMarkdownTables: vi.fn((text: string) => text),
-            chunkTextWithMode: vi.fn((text: string) => [text]),
-            chunkMarkdownTextWithMode: vi.fn((text: string) => [text]),
-          },
-          reply: {
-            createReplyDispatcherWithTyping: createReplyDispatcherWithTypingMock,
-            resolveHumanDelayConfig: vi.fn(() => undefined),
-          },
-        },
-      });
-    }
+    expectMockArgFields(sendMessageFeishuMock, "block message", { text: "partial block" });
+    expectMockArgFields(sendMessageFeishuMock, "final message", { text: "final answer" }, 1);
   });
 
   it("does not prepend automatic mentions to streaming card closes", async () => {
