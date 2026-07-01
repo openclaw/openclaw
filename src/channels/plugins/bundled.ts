@@ -246,6 +246,7 @@ function resolveGeneratedBundledChannelModulePath(params: {
     params.entry,
     params.metadata.dirName,
     resolveBundledChannelScanDir(params.rootScope),
+    params.metadata.rootDir,
   );
 }
 
