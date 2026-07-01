@@ -735,6 +735,69 @@ def command_transcript(args):
     print_result({"ok": True, "chatId": chat_id, "messages": messages}, args.json, getattr(args, "output", ""))
 
 
+def find_inline_button(message, button_text=""):
+    markup = message.get("reply_markup") or {}
+    if markup.get("@type") != "replyMarkupInlineKeyboard":
+        return None
+    rows = markup.get("rows") or []
+    wanted = button_text.strip().lower()
+    for row_index, row in enumerate(rows):
+        for column_index, button in enumerate(row):
+            text = str(button.get("text") or "")
+            if wanted and text.strip().lower() != wanted:
+                continue
+            button_type = button.get("type") or {}
+            if button_type.get("@type") != "inlineKeyboardButtonTypeCallback":
+                continue
+            return {
+                "row": row_index,
+                "column": column_index,
+                "text": text,
+                "data": button_type.get("data") or "",
+            }
+    return None
+
+
+def command_click_callback(args):
+    config, bot_config = load_config()
+    driver = UserDriver(config, bot_config)
+    driver.authorize(argparse.Namespace(timeout_ms=args.timeout_ms))
+    chat_id = driver.resolve_chat(args.chat)
+    message = driver.client.request(
+        {"@type": "getMessage", "chat_id": chat_id, "message_id": int(args.message_id)},
+        timeout=20,
+    )
+    button = find_inline_button(message, args.button_text)
+    if not button:
+        raise DriverError("No matching callback inline button found on the target message.")
+    payload = {"@type": "callbackQueryPayloadData", "data": button["data"]}
+    answer = driver.client.request(
+        {
+            "@type": "getCallbackQueryAnswer",
+            "chat_id": chat_id,
+            "message_id": int(args.message_id),
+            "payload": payload,
+        },
+        timeout=30,
+    )
+    refreshed = driver.client.request(
+        {"@type": "getMessage", "chat_id": chat_id, "message_id": int(args.message_id)},
+        timeout=20,
+    )
+    print_result(
+        {
+            "ok": True,
+            "chatId": chat_id,
+            "messageId": int(args.message_id),
+            "button": button,
+            "answer": answer,
+            "message": normalize_message(refreshed),
+        },
+        args.json,
+        getattr(args, "output", ""),
+    )
+
+
 def command_chats(args):
     config, bot_config = load_config()
     driver = UserDriver(config, bot_config)
@@ -855,6 +918,13 @@ def main():
     transcript.add_argument("--chat", default="")
     transcript.add_argument("--limit", type=int, default=20)
     transcript.set_defaults(func=command_transcript)
+
+    click_callback = sub.add_parser("click-callback")
+    add_common(click_callback)
+    click_callback.add_argument("--chat", default="")
+    click_callback.add_argument("--message-id", required=True)
+    click_callback.add_argument("--button-text", default="")
+    click_callback.set_defaults(func=command_click_callback)
 
     chats = sub.add_parser("chats")
     add_common(chats)

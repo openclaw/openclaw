@@ -60,6 +60,7 @@ type Options = {
   dryRun: boolean;
   envFile?: string;
   expect: string[];
+  crabboxWarmupArgs: string[];
   gatewayPort: number;
   idleTimeout: string;
   keepBox: boolean;
@@ -194,6 +195,7 @@ function usageText() {
     "",
     "Useful options:",
     "  --class <name>                Crabbox machine class. Default: standard.",
+    "  --crabbox-warmup-arg <arg>    Extra argument appended to crabbox warmup. Repeatable.",
     "  --desktop-chat-title <name>   Telegram Desktop chat to select before recording.",
     "  --id <cbx_id>                 Reuse an existing Crabbox desktop lease.",
     "  --keep-box                    Leave the Crabbox lease running for VNC debugging.",
@@ -298,6 +300,7 @@ export function parseArgs(argvInput: string[]): Options {
       trimToValue(process.env.OPENCLAW_TELEGRAM_USER_DESKTOP_CHAT_TITLE) ?? "OpenClaw Testing",
     dryRun: false,
     expect: ["OpenClaw"],
+    crabboxWarmupArgs: [],
     gatewayPort: 19_879,
     idleTimeout: "60m",
     keepBox: false,
@@ -329,9 +332,9 @@ export function parseArgs(argvInput: string[]): Options {
   const seenSingleValueOptions = new Set<string>();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    const readValue = (options: { repeatable?: boolean } = {}) => {
+    const readValue = (options: { allowOptionLike?: boolean; repeatable?: boolean } = {}) => {
       const value = argv[index + 1];
-      if (isMissingOptionValue(value)) {
+      if (value === undefined || (!options.allowOptionLike && value.startsWith("--"))) {
         usage();
       }
       if (!options.repeatable) {
@@ -347,6 +350,8 @@ export function parseArgs(argvInput: string[]): Options {
       opts.crabboxClass = readValue();
     } else if (arg === "--crabbox-bin") {
       opts.crabboxBin = readValue();
+    } else if (arg === "--crabbox-warmup-arg") {
+      opts.crabboxWarmupArgs.push(readValue({ allowOptionLike: true, repeatable: true }));
     } else if (arg === "--desktop-chat-title") {
       opts.desktopChatTitle = readValue();
     } else if (arg === "--dry-run") {
@@ -1379,6 +1384,7 @@ async function warmupCrabbox(opts: Options, root: string) {
       opts.idleTimeout,
       "--ttl",
       opts.ttl,
+      ...opts.crabboxWarmupArgs,
     ],
     cwd: root,
     stdio: "inherit",
@@ -1604,6 +1610,7 @@ export function renderRemoteSetup(params: { tdlibSha256?: string; tdlibUrl?: str
   const tdlibUrl = shellQuote(params.tdlibUrl ?? "");
   return `#!/usr/bin/env bash
 set -euo pipefail
+export PATH="/usr/local/sbin:/usr/sbin:/sbin:$PATH"
 root=${REMOTE_ROOT}
 tdlib_sha256=${tdlibSha256}
 tdlib_url=${tdlibUrl}
@@ -1656,7 +1663,7 @@ if ! ldconfig -p | grep -q libtdjson.so; then
     printf '%s  %s\\n' "$tdlib_sha256" "$root/tdlib-linux.tgz" | sha256sum -c -
     mkdir -p "$root/tdlib-linux"
     tar -xzf "$root/tdlib-linux.tgz" -C "$root/tdlib-linux"
-    lib="$(find "$root/tdlib-linux" -name libtdjson.so -type f | head -n 1)"
+    lib="$(find "$root/tdlib-linux" \\( -type f -o -type l \\) -name libtdjson.so | head -n 1)"
     test -n "$lib"
     sudo install -m 0755 "$lib" /usr/local/lib/libtdjson.so
   else
@@ -2277,7 +2284,7 @@ async function startSession(root: string, opts: Options, outputDir: string) {
     if (credential) {
       await releaseCredential(root, opts, credential.leaseFile).catch(() => {});
     }
-    if (leaseId && createdLease) {
+    if (leaseId && createdLease && !opts.keepBox) {
       await stopCrabbox(root, opts, leaseId).catch(() => {});
     }
     throw error;
