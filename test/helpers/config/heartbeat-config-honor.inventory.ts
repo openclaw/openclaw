@@ -174,4 +174,16 @@ export const HEARTBEAT_CONFIG_HONOR_INVENTORY: ConfigHonorInventoryRow[] = [
     reloadPaths: ["src/gateway/config-reload-plan.ts"],
     testPaths: ["src/infra/heartbeat-runner.returns-default-unset.test.ts"],
   },
+  {
+    key: "transcriptMode",
+    schemaPaths: [
+      "agents.defaults.heartbeat.transcriptMode",
+      "agents.list.*.heartbeat.transcriptMode",
+    ],
+    typePaths: ["src/config/types.agent-defaults.ts", "src/config/zod-schema.agent-runtime.ts"],
+    mergePaths: ["src/infra/heartbeat-summary.ts"],
+    consumerPaths: ["src/agents/embedded-agent-runner/run/attempt.ts"],
+    reloadPaths: ["src/gateway/config-reload-plan.ts"],
+    testPaths: ["src/auto-reply/heartbeat-filter.test.ts"],
+  },
 ];

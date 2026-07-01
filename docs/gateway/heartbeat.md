@@ -108,6 +108,7 @@ Outside heartbeats, stray `HEARTBEAT_OK` at the start/end of a message is stripp
         accountId: "ops-bot", // optional multi-account channel id
         prompt: "Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.",
         ackMaxChars: 300, // max chars allowed after HEARTBEAT_OK
+        transcriptMode: "strip-all", // default: strip-all | options: strip-all | keep-result | keep-all
       },
     },
   },
@@ -270,6 +271,15 @@ Use `accountId` to target a specific account on multi-account channels like Tele
 </ParamField>
 <ParamField path="ackMaxChars" type="number" default="300">
   Max chars allowed after `HEARTBEAT_OK` before delivery.
+
+</ParamField>
+<ParamField path="transcriptMode" type='"strip-all" | "keep-result" | "keep-all"' default="strip-all">
+  Controls how acknowledged heartbeat turns are filtered in the conversation history:
+  - `strip-all` (default): removes the heartbeat prompt, intermediate tool runs/results, and the terminal acknowledgement response entirely.
+  - `keep-result`: removes the heartbeat prompt and intermediate tool run noise, but retains a single compact assistant turn summarizing any non-empty report/text returned alongside the acknowledgement.
+  - `keep-all`: disables filtering, keeping the full prompt, tool run history, and acknowledgement.
+
+This only affects acknowledged heartbeat turns.
 
 </ParamField>
 <ParamField path="suppressToolErrorWarnings" type="boolean">

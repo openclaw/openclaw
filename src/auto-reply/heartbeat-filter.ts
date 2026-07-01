@@ -445,13 +445,92 @@ function resolveHeartbeatArtifactSpanEnd(
   return index;
 }
 
+function extractHeartbeatResponseToolSummary(message: {
+  role: string;
+  content?: unknown;
+}): string | undefined {
+  const findSummary = (block: Record<string, unknown>): string | undefined => {
+    if (readToolCallName(block) === HEARTBEAT_RESPONSE_TOOL_NAME) {
+      const args = parseToolCallArguments(readToolCallArguments(block));
+      if (args) {
+        // Exclude visible/notify:true tool calls from summary extraction
+        if (args.notify === true || args.notify === "true") {
+          return undefined;
+        }
+        const summary = readString(args.summary) ?? "";
+        const notificationText = readString(args.notificationText) ?? "";
+        const reason = readString(args.reason) ?? "";
+        const text = summary || notificationText || reason;
+        if (text.trim()) {
+          return text.trim();
+        }
+      }
+    }
+    return undefined;
+  };
+
+  for (const call of collectMessageToolCalls(message)) {
+    const text = findSummary(call);
+    if (text) {
+      return text;
+    }
+  }
+
+  for (const block of collectToolCallBlocks(message.content)) {
+    const text = findSummary(block);
+    if (text) {
+      return text;
+    }
+  }
+
+  return undefined;
+}
+
+function isCompletedSilentHeartbeatResponseToolCall(
+  messages: HeartbeatTranscriptMessage[],
+  index: number,
+  endIndex: number,
+): boolean {
+  const msg = messages[index];
+  const silentCalls = [
+    ...collectMessageToolCalls(msg),
+    ...collectToolCallBlocks(msg.content),
+  ].filter(
+    (call) =>
+      readToolCallName(call) === HEARTBEAT_RESPONSE_TOOL_NAME &&
+      !isVisibleHeartbeatResponseToolCall(call),
+  );
+
+  if (silentCalls.length === 0) {
+    return false;
+  }
+
+  const callIds = new Set(silentCalls.flatMap((call) => collectToolCallIds(call)));
+  for (let rIdx = index + 1; rIdx < endIndex; rIdx++) {
+    const result = messages[rIdx];
+    if (hasSuccessfulToolResultMessage(result)) {
+      if (callIds.size === 0) {
+        return true;
+      }
+      for (const resultId of collectSuccessfulToolResultCallIds(result)) {
+        if (callIds.has(resultId)) {
+          return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 /** Remove heartbeat-only prompt, ack, and silent tool artifacts from a transcript. */
 export function filterHeartbeatTranscriptArtifacts<T extends { role: string; content?: unknown }>(
   messages: T[],
   ackMaxChars?: number,
   heartbeatPrompt?: string,
+  mode?: "strip-all" | "keep-result" | "keep-all",
 ): T[] {
-  if (messages.length === 0) {
+  const resolvedMode = mode ?? "strip-all";
+  if (messages.length === 0 || resolvedMode === "keep-all") {
     return messages;
   }
 
@@ -469,6 +548,64 @@ export function filterHeartbeatTranscriptArtifacts<T extends { role: string; con
       result.push(messages[i]);
       i++;
       continue;
+    }
+
+    if (resolvedMode === "keep-result") {
+      let lastAssistantMessage: T | undefined;
+      let lastAssistantIndex = -1;
+      for (let j = next - 1; j > i; j--) {
+        if (messages[j].role === "assistant") {
+          lastAssistantMessage = messages[j];
+          lastAssistantIndex = j;
+          break;
+        }
+      }
+
+      if (lastAssistantMessage && lastAssistantIndex !== -1) {
+        const isCompletedTextAck = isHeartbeatOkResponse(lastAssistantMessage, ackMaxChars);
+        const isCompletedSilentTool = isCompletedSilentHeartbeatResponseToolCall(
+          messages,
+          lastAssistantIndex,
+          next,
+        );
+
+        if (isCompletedTextAck || isCompletedSilentTool) {
+          let cleanTrimmed: string | undefined;
+          if (isCompletedSilentTool) {
+            cleanTrimmed = extractHeartbeatResponseToolSummary(lastAssistantMessage);
+          } else if (isCompletedTextAck) {
+            const { text } = resolveMessageText(lastAssistantMessage.content);
+            const { text: cleanText } = stripHeartbeatToken(text, {
+              mode: "message",
+              maxAckChars: ackMaxChars,
+            });
+            cleanTrimmed = cleanText.trim();
+          }
+
+          if (cleanTrimmed) {
+            const msgObj = lastAssistantMessage as unknown as Record<string, unknown>;
+            const {
+              tool_calls: _tc,
+              function_call: _fc,
+              reasoning_content: _rc,
+              reasoning: _r,
+              diagnostics: _d,
+              ...rest
+            } = msgObj;
+
+            result.push({
+              ...rest,
+              content:
+                typeof lastAssistantMessage.content === "string"
+                  ? cleanTrimmed
+                  : Array.isArray(lastAssistantMessage.content)
+                    ? [{ type: "text", text: cleanTrimmed }]
+                    : cleanTrimmed,
+              ...(msgObj.stopReason !== undefined ? { stopReason: "stop" } : {}),
+            } as T);
+          }
+        }
+      }
     }
 
     i = next;

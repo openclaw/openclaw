@@ -3326,6 +3326,7 @@ export async function runEmbeddedAttempt(
             validated,
             heartbeatSummary?.ackMaxChars,
             heartbeatSummary?.prompt,
+            heartbeatSummary?.transcriptMode,
           );
           const truncated = limitHistoryTurns(
             heartbeatFiltered,
@@ -4226,6 +4227,7 @@ export async function runEmbeddedAttempt(
             activeSession.messages,
             heartbeatSummary?.ackMaxChars,
             heartbeatSummary?.prompt,
+            heartbeatSummary?.transcriptMode,
           );
           if (filteredMessages.length < activeSession.messages.length) {
             activeSession.agent.state.messages = filteredMessages;
