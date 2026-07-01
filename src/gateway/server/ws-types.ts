@@ -16,6 +16,8 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   sharedGatewaySessionGeneration?: string;
   presenceKey?: string;
   clientIp?: string;
+  /** Authenticated user identity from trusted-proxy header. */
+  authUser?: string;
   internal?: {
     approvalRuntime?: boolean;
     agentRuntimeIdentity?: AgentRuntimeIdentity;

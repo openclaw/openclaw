@@ -42,6 +42,8 @@ type SharedSecretGatewayAuth = Pick<ResolvedGatewayAuth, "mode">;
 export type AuthorizedGatewayHttpRequest = {
   authMethod?: GatewayAuthResult["method"];
   trustDeclaredOperatorScopes: boolean;
+  /** Authenticated user identity (e.g. email from trusted-proxy header). */
+  user?: string;
 };
 
 export type GatewayHttpRequestAuthCheckResult =
@@ -138,6 +140,7 @@ export async function checkGatewayHttpRequestAuth(params: {
       // must opt in explicitly if they want to treat that shared-secret path as a
       // full trusted-operator surface.
       trustDeclaredOperatorScopes: !usesSharedSecretGatewayMethod(authResult.method),
+      ...(authResult.user ? { user: authResult.user } : {}),
     },
   };
 }
