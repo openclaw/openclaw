@@ -1,3 +1,4 @@
+import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 /**
  * MCP client transport factory.
  *
@@ -29,6 +30,8 @@ type ResolvedMcpTransport = {
   requestTimeoutMs: number;
   supportsParallelToolCalls: boolean;
   detachStderr?: () => void;
+  authProvider?: OAuthClientProvider;
+  serverUrl?: string;
 };
 
 function attachStderrLogging(serverName: string, transport: OpenClawStdioClientTransport) {
@@ -148,6 +151,8 @@ export function resolveMcpTransport(
       connectionTimeoutMs: resolved.connectionTimeoutMs,
       requestTimeoutMs: resolved.requestTimeoutMs,
       supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+      authProvider,
+      serverUrl: resolved.url,
     };
   }
   const sseHeaders: Record<string, string> = { ...headers };
@@ -166,5 +171,7 @@ export function resolveMcpTransport(
     connectionTimeoutMs: resolved.connectionTimeoutMs,
     requestTimeoutMs: resolved.requestTimeoutMs,
     supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+    authProvider,
+    serverUrl: resolved.url,
   };
 }

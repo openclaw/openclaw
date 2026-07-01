@@ -35,6 +35,7 @@ import type {
 } from "./agent-bundle-mcp-types.js";
 import { loadEmbeddedAgentMcpConfig } from "./embedded-agent-mcp.js";
 import { isMcpConfigRecord } from "./mcp-config-shared.js";
+import { ensureMcpOAuthTokenFresh, startMcpOAuthProactiveRefresh } from "./mcp-oauth.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
 
 type BundleMcpSession = {
@@ -50,6 +51,7 @@ type BundleMcpSession = {
   sharedAcrossCatalogGenerations: boolean;
   connectPromise?: Promise<void>;
   detachStderr?: () => void;
+  stopRefresh?: () => void;
 };
 
 type LoadedMcpConfig = ReturnType<typeof loadEmbeddedAgentMcpConfig>;
@@ -389,6 +391,7 @@ function summarizeServerCapabilities(capabilities: ServerCapabilities | undefine
 const DISPOSE_TIMEOUT_MS = 5_000;
 
 async function disposeSession(session: BundleMcpSession) {
+  session.stopRefresh?.();
   session.detachStderr?.();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let timedOut = false;
@@ -670,6 +673,17 @@ export function createSessionMcpRuntime(params: {
                     },
                   },
                 );
+                // Keep the OAuth access token fresh for the life of this
+                // persistent session; cleared in disposeSession so the timer
+                // never dangles.
+                const stopRefresh =
+                  resolved.authProvider && resolved.serverUrl
+                    ? startMcpOAuthProactiveRefresh({
+                        serverName,
+                        serverUrl: resolved.serverUrl,
+                        authProvider: resolved.authProvider,
+                      })
+                    : undefined;
                 session = {
                   serverName,
                   client,
@@ -682,6 +696,7 @@ export function createSessionMcpRuntime(params: {
                   catalogUseCount: 0,
                   sharedAcrossCatalogGenerations: false,
                   detachStderr: resolved.detachStderr,
+                  stopRefresh,
                 };
                 sessions.set(serverName, session);
               }
@@ -696,6 +711,17 @@ export function createSessionMcpRuntime(params: {
               let connectedForCatalog = false;
               try {
                 failIfDisposed();
+                if (resolved.authProvider && resolved.serverUrl) {
+                  // Refresh a stale OAuth token before connecting: rarely-used
+                  // servers are idle-disposed before the background timer fires,
+                  // so the token expires during idle and reconnect would present
+                  // a dead token. Runs each catalog use; no-op when still fresh.
+                  await ensureMcpOAuthTokenFresh({
+                    serverName,
+                    serverUrl: resolved.serverUrl,
+                    authProvider: resolved.authProvider,
+                  });
+                }
                 await ensureSessionConnected(session, resolved.connectionTimeoutMs);
                 connectedForCatalog = true;
                 failIfDisposed();
