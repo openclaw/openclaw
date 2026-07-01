@@ -3,13 +3,26 @@ import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk
 import type { DiscordMessageEvent } from "./listeners.js";
 import { resolveDiscordMessageChannelId } from "./message-utils.js";
 
+// Persisted so a committed inbound key still dedupes after a gateway restart:
+// Discord's gateway resume replays recently-dispatched messages, and a
+// memory-only guard would re-dispatch them. Mirrors imessage/telegram inbound
+// dedupe. claim = in-memory ownership; commit = persisted; release = reclaimable.
+const DISCORD_INBOUND_DEDUPE_PLUGIN_ID = "discord";
+const DISCORD_INBOUND_DEDUPE_NAMESPACE_PREFIX = "discord.inbound-dedupe";
+// 5min recency absorbs a resume/replay burst; short enough that a genuinely new
+// message reusing a stale key after minutes is not wrongly suppressed.
 const RECENT_DISCORD_MESSAGE_TTL_MS = 5 * 60_000;
 const RECENT_DISCORD_MESSAGE_MAX = 5000;
+// Bounds persisted rows per namespace (SQLite growth cap).
+const DISCORD_INBOUND_DEDUPE_STATE_MAX_ENTRIES = 10_000;
 
 export function createDiscordInboundReplayGuard(): ClaimableDedupe {
   return createClaimableDedupe({
+    pluginId: DISCORD_INBOUND_DEDUPE_PLUGIN_ID,
+    namespacePrefix: DISCORD_INBOUND_DEDUPE_NAMESPACE_PREFIX,
     ttlMs: RECENT_DISCORD_MESSAGE_TTL_MS,
     memoryMaxSize: RECENT_DISCORD_MESSAGE_MAX,
+    stateMaxEntries: DISCORD_INBOUND_DEDUPE_STATE_MAX_ENTRIES,
   });
 }
 
