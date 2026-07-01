@@ -555,10 +555,7 @@ export function createChannelIngressQueue<
           claimOptions?.orderBy === "id"
             ? select.orderBy("event_id", "asc")
             : select.orderBy("received_at", "asc").orderBy("event_id", "asc");
-        orderedSelect =
-          claimOptions?.deriveLaneKey === undefined
-            ? orderedSelect.limit(1)
-            : orderedSelect.limit(normalizeScanLimit(claimOptions.scanLimit));
+        orderedSelect = orderedSelect.limit(normalizeScanLimit(claimOptions?.scanLimit));
         const rows = executeSqliteQuerySync(tx.db, orderedSelect).rows;
         const selected = rows.find((row) => {
           const rec = baseRecord<TPayload, TMetadata>(row);
@@ -580,11 +577,7 @@ export function createChannelIngressQueue<
         }
         const derivedLaneKey =
           selected.lane_key ??
-          (claimOptions?.deriveLaneKey
-            ? (() => {
-                return claimOptions.deriveLaneKey(selectedBase);
-              })()
-            : undefined);
+          (claimOptions?.deriveLaneKey ? claimOptions.deriveLaneKey(selectedBase) : undefined);
         const token = randomUUID();
         const claimedAt = now();
         const ownerId = normalizePart(claimOptions?.ownerId, `${process.pid}`);
