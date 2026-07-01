@@ -27,12 +27,12 @@ import {
   resolveStoredSessionOwnerAgentId,
 } from "../session-store-key.js";
 import { readRecentSessionMessagesWithStatsAsync } from "../session-transcript-readers.js";
-import { loadCombinedSessionStoreForGateway } from "../session-utils.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
 import {
   collectTrackedActiveSessionRuns,
   collectTrackedActiveSessionRunSnapshot,
   resolveVisibleActiveSessionRunState,
+  type TrackedActiveSessionRun,
 } from "./session-active-runs.js";
 import { loadSessionEntriesForTarget } from "./sessions-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
@@ -109,6 +109,18 @@ function quoteDiagnoseCliArg(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+function formatDiagnoseNextCheckCommand(params: {
+  subcommand: string;
+  target: Pick<DiagnoseTarget, "agentId" | "key">;
+}): string {
+  const { agentId, key } = params.target;
+  const agentScope =
+    agentId && (key === "global" || key === "unknown")
+      ? ` --agent ${quoteDiagnoseCliArg(agentId)}`
+      : "";
+  return `openclaw sessions${agentScope} ${params.subcommand} --session-key ${quoteDiagnoseCliArg(key)}`;
+}
+
 function classifyDiagnoseSessionKind(key: string): DiagnoseRow["kind"] {
   if (key === "global") {
     return "global";
@@ -175,10 +187,31 @@ function buildNotFoundDiagnosis(
   };
 }
 
+function hasDiagnoseTrackedActiveRun(params: {
+  activeRuns: readonly TrackedActiveSessionRun[];
+  key: string;
+  agentId?: string;
+  defaultAgentId: string;
+}): boolean {
+  return params.activeRuns.some((active) => {
+    if (active.sessionKey !== params.key) {
+      return false;
+    }
+    if (params.key !== "global") {
+      return true;
+    }
+    const requestedAgentId = normalizeAgentId(params.agentId ?? params.defaultAgentId);
+    const activeAgentId = normalizeAgentId(active.agentId ?? params.defaultAgentId);
+    return activeAgentId === requestedAgentId;
+  });
+}
+
 function scoreDiagnoseCandidatePreselect(params: {
   key: string;
   entry: SessionEntry;
-  activeSessionKeys: ReadonlySet<string>;
+  activeRuns: readonly TrackedActiveSessionRun[];
+  agentId?: string;
+  defaultAgentId: string;
 }): number {
   const embeddedRun = getEmbeddedRunDiagnosticSnapshot({
     sessionId: params.entry.sessionId,
@@ -195,17 +228,30 @@ function scoreDiagnoseCandidatePreselect(params: {
     sessionKey: params.key,
   });
   const lane = getCommandLaneSnapshot(resolveSessionLane(params.key));
+  const hasActiveEvidence =
+    hasDiagnoseTrackedActiveRun({
+      activeRuns: params.activeRuns,
+      key: params.key,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      defaultAgentId: params.defaultAgentId,
+    }) ||
+    embeddedRun.active ||
+    Boolean(activity.activeWorkKind);
+  const hasQueuedEvidence = (diagnostic.queueDepth ?? 0) > 0 || lane.queuedCount > 0;
+  const hasProcessingEvidence = diagnostic.state === "processing";
+  const hasCurrentWorkEvidence = hasActiveEvidence || hasQueuedEvidence || hasProcessingEvidence;
   let score = 0;
-  if (params.activeSessionKeys.has(params.key) || embeddedRun.active || activity.activeWorkKind) {
+  if (hasActiveEvidence) {
     score += 50;
   }
-  if ((diagnostic.queueDepth ?? 0) > 0 || lane.queuedCount > 0) {
+  if (hasQueuedEvidence) {
     score += 40;
   }
-  if (diagnostic.state === "processing") {
+  if (hasProcessingEvidence) {
     score += 30;
   }
   if (
+    hasCurrentWorkEvidence &&
     activity.lastProgressAgeMs !== undefined &&
     activity.lastProgressAgeMs >= STALE_PROGRESS_MIN_AGE_MS
   ) {
@@ -284,56 +330,68 @@ function listDiagnoseCandidateRows(params: {
   p: DiagnoseParams;
 }) {
   const { cfg, context, p } = params;
-  const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, {
-    agentId: p.agentId,
-  });
   const hasExplicitNonKeySelector = Boolean(p.sessionId || p.label);
   const requestedAgentId = p.agentId ? normalizeAgentId(p.agentId) : undefined;
-  const activeSessionKeys = new Set(
-    collectTrackedActiveSessionRuns(context)
-      .filter((run) => !requestedAgentId || !run.agentId || run.agentId === requestedAgentId)
-      .map((run) => run.sessionKey)
-      .filter((key): key is string => Boolean(key)),
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const targets = requestedAgentId
+    ? resolveAgentSessionStoreTargetsSync(cfg, requestedAgentId)
+    : resolveAllAgentSessionStoreTargetsSync(cfg);
+  const activeRuns = collectTrackedActiveSessionRuns(context).filter(
+    (run) => !requestedAgentId || !run.agentId || run.agentId === requestedAgentId,
   );
-  const candidates = Object.entries(store)
-    .filter(([key, entry]) => {
+  const candidates: Array<{ candidate: DiagnoseCandidate; preselectScore: number }> = [];
+  for (const target of targets) {
+    for (const { sessionKey, entry } of listSessionEntries({
+      clone: false,
+      storePath: target.storePath,
+    })) {
       if (!entry?.sessionId) {
-        return false;
+        continue;
       }
+      const key = resolveStoredSessionKeyForAgentStore({
+        cfg,
+        agentId: target.agentId,
+        sessionKey,
+      });
       if (key === "global" && p.includeGlobal !== true && !hasExplicitNonKeySelector) {
-        return false;
+        continue;
       }
       if (key === "unknown" && p.includeUnknown !== true && !hasExplicitNonKeySelector) {
-        return false;
+        continue;
       }
       if (p.label && entry.label !== p.label) {
-        return false;
+        continue;
       }
       if (p.sessionId && entry.sessionId !== p.sessionId) {
-        return false;
+        continue;
       }
-      return true;
-    })
-    .map(([key, entry]) => ({
-      key,
-      entry,
-      preselectScore: scoreDiagnoseCandidatePreselect({ key, entry, activeSessionKeys }),
-    }))
-    .toSorted((a, b) => {
-      const activePriority = b.preselectScore - a.preselectScore;
-      return activePriority || (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0);
-    })
-    .slice(0, DEFAULT_DIAGNOSE_SCAN_LIMIT)
-    .map(({ key, entry }) =>
-      buildDiagnoseCandidate({
+      const candidate = buildDiagnoseCandidate({
         cfg,
         key,
         entry,
-        storePath,
-        ...(p.agentId ? { fallbackAgentId: p.agentId } : {}),
-      }),
-    );
-  return { candidates };
+        storePath: target.storePath,
+        fallbackAgentId: target.agentId,
+      });
+      candidates.push({
+        candidate,
+        preselectScore: scoreDiagnoseCandidatePreselect({
+          key,
+          entry,
+          activeRuns,
+          agentId: candidate.agentId ?? target.agentId,
+          defaultAgentId,
+        }),
+      });
+    }
+  }
+  const selectedCandidates = candidates
+    .toSorted((a, b) => {
+      const activePriority = b.preselectScore - a.preselectScore;
+      return activePriority || (b.candidate.row.updatedAt ?? 0) - (a.candidate.row.updatedAt ?? 0);
+    })
+    .slice(0, DEFAULT_DIAGNOSE_SCAN_LIMIT)
+    .map(({ candidate }) => candidate);
+  return { candidates: selectedCandidates };
 }
 
 function scoreDiagnoseCandidate(params: {
@@ -372,28 +430,29 @@ function scoreDiagnoseCandidate(params: {
   });
   const lane = getCommandLaneSnapshot(resolveSessionLane(params.row.key));
   const terminal = isDiagnoseRowTerminal(params.row);
-  let score = 0;
-  if (
+  const hasActiveEvidence =
     gatewayRun.hasActiveRun ||
     activeRunState.active ||
     embeddedRun.active ||
-    activity.activeWorkKind
-  ) {
+    Boolean(activity.activeWorkKind);
+  const hasQueuedEvidence = (diagnostic.queueDepth ?? 0) > 0 || lane.queuedCount > 0;
+  const hasProcessingEvidence = diagnostic.state === "processing";
+  const hasCurrentWorkEvidence = hasActiveEvidence || hasQueuedEvidence || hasProcessingEvidence;
+  let score = 0;
+  if (hasActiveEvidence) {
     score += 50;
   }
-  if ((diagnostic.queueDepth ?? 0) > 0 || lane.queuedCount > 0) {
+  if (hasQueuedEvidence) {
     score += 40;
   }
   if (
     terminal &&
-    (gatewayRun.hasActiveRun ||
-      activeRunState.active ||
-      embeddedRun.active ||
-      diagnostic.state === "processing")
+    (gatewayRun.hasActiveRun || activeRunState.active || embeddedRun.active || hasProcessingEvidence)
   ) {
     score += 80;
   }
   if (
+    hasCurrentWorkEvidence &&
     activity.lastProgressAgeMs !== undefined &&
     activity.lastProgressAgeMs >= STALE_PROGRESS_MIN_AGE_MS
   ) {
@@ -800,8 +859,8 @@ async function buildDiagnoseResult(params: {
       : {}),
     findings,
     nextChecks: [
-      `openclaw sessions tail --session-key ${quoteDiagnoseCliArg(target.key)}`,
-      `openclaw sessions export-trajectory --session-key ${quoteDiagnoseCliArg(target.key)}`,
+      formatDiagnoseNextCheckCommand({ subcommand: "tail", target }),
+      formatDiagnoseNextCheckCommand({ subcommand: "export-trajectory", target }),
       "openclaw health --verbose",
     ],
   };

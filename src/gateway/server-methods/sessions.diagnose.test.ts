@@ -6,6 +6,10 @@ import {
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY,
 } from "../../agents/embedded-agent-runner/run-state.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import {
+  markDiagnosticRunProgressForTest,
+  resetDiagnosticRunActivityForTest,
+} from "../../logging/diagnostic-run-activity.js";
 import { writeSessionStore } from "../test-helpers.js";
 import {
   directSessionReq,
@@ -30,6 +34,7 @@ const { createSessionStoreDir, createSelectedGlobalSessionStore } =
 afterEach(() => {
   ACTIVE_EMBEDDED_RUNS.clear();
   ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.clear();
+  resetDiagnosticRunActivityForTest();
 });
 
 test("sessions.diagnose returns read-only live and stored evidence without transcript paths", async () => {
@@ -183,6 +188,38 @@ test("sessions.diagnose picks an embedded active session beyond the bounded newe
   });
 });
 
+test("sessions.diagnose ignores stale completed progress when choosing default target", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      "agent:main:old": sessionStoreEntry("sess-old", { updatedAt: 1 }),
+      "agent:main:new": sessionStoreEntry("sess-new", { updatedAt: 2 }),
+    },
+  });
+
+  const nowSpy = vi.spyOn(Date, "now");
+  try {
+    nowSpy.mockReturnValue(1_700_000_000_000);
+    markDiagnosticRunProgressForTest({
+      sessionId: "sess-old",
+      sessionKey: "agent:main:old",
+      reason: "run.completed",
+    });
+    nowSpy.mockReturnValue(1_700_000_130_000);
+
+    const result = await directSessionReq<SessionsDiagnoseResult>("sessions.diagnose", {});
+
+    expect(result.ok).toBe(true);
+    expect(result.payload).toMatchObject({
+      outcome: "diagnosed",
+      chosenBecause: "newest stored session",
+      session: { key: "agent:main:new", sessionId: "sess-new" },
+    });
+  } finally {
+    nowSpy.mockRestore();
+  }
+});
+
 test("sessions.diagnose reports no_sessions when no stored sessions exist", async () => {
   await createSessionStoreDir();
   await writeSessionStore({ entries: {} });
@@ -260,6 +297,68 @@ test("sessions.diagnose excludes global and unknown fallback rows unless opted i
   expect(unknownResult.payload).toMatchObject({
     outcome: "diagnosed",
     session: { key: "unknown", sessionId: "sess-unknown" },
+  });
+});
+
+test("sessions.diagnose keeps the source agent for global fallback rows", async () => {
+  const { mainStorePath, workStorePath } = await createSelectedGlobalSessionStore();
+  const now = Date.now();
+  await writeSessionStore({
+    storePath: mainStorePath,
+    entries: {
+      global: sessionStoreEntry("sess-main-global", { updatedAt: 10 }),
+    },
+  });
+  await writeSessionStore({
+    storePath: workStorePath,
+    entries: {
+      global: sessionStoreEntry("sess-work-global", { updatedAt: 20 }),
+    },
+  });
+
+  const result = await directSessionReq<SessionsDiagnoseResult>(
+    "sessions.diagnose",
+    { includeGlobal: true },
+    {
+      context: {
+        chatAbortControllers: new Map([
+          [
+            "run-work-global",
+            {
+              controller: new AbortController(),
+              sessionId: "sess-work-global",
+              sessionKey: "global",
+              agentId: "work",
+              startedAtMs: now - 1_000,
+              expiresAtMs: now + 60_000,
+              kind: "agent",
+            },
+          ],
+        ]),
+      },
+    },
+  );
+
+  expect(result.ok).toBe(true);
+  expect(result.payload).toMatchObject({
+    outcome: "diagnosed",
+    session: {
+      key: "global",
+      sessionId: "sess-work-global",
+      agentId: "work",
+      hasActiveRun: true,
+    },
+    live: {
+      gatewayRun: {
+        hasActiveRun: true,
+        runs: [expect.objectContaining({ agentId: "work" })],
+      },
+    },
+    nextChecks: [
+      "openclaw sessions --agent work tail --session-key global",
+      "openclaw sessions --agent work export-trajectory --session-key global",
+      "openclaw health --verbose",
+    ],
   });
 });
 
