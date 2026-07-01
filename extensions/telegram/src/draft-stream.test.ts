@@ -524,6 +524,77 @@ describe("createTelegramDraftStream", () => {
     }
   });
 
+  it("self-recovers a flood-held edit during a silent window without a fresh update", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = createMockDraftApi();
+      api.editMessageText.mockRejectedValueOnce(
+        Object.assign(
+          new Error("Call to 'editMessageText' failed! (429: Too Many Requests: retry after 1)"),
+          { error_code: 429, parameters: { retry_after: 1 } },
+        ),
+      );
+      const stream = createDraftStream(api);
+
+      stream.update("Hello");
+      await stream.flush();
+      stream.update("Hello again");
+      await stream.flush();
+      expect(api.editMessageText).toHaveBeenCalledTimes(1);
+
+      // No further update() or flush() — claude-cli emits nothing while a tool
+      // runs. The self-retry timer must re-flush the held edit on its own once the
+      // suspend window elapses, so the preview never freezes on the prior frame.
+      await vi.advanceTimersByTimeAsync(1100);
+
+      expect(api.editMessageText).toHaveBeenCalledTimes(2);
+      expect(api.editMessageText).toHaveBeenLastCalledWith(123, 17, "Hello again");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not count flood control toward the permanent-stop budget", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = createMockDraftApi();
+      const flood = () =>
+        Object.assign(
+          new Error("Call to 'editMessageText' failed! (429: Too Many Requests: retry after 1)"),
+          { error_code: 429, parameters: { retry_after: 1 } },
+        );
+      // Five consecutive floods — well past the 3-failure permanent-stop budget —
+      // then Telegram recovers. The legacy code counted 429s toward the breaker and
+      // killed the preview on the 4th; backpressure must instead keep it alive.
+      api.editMessageText
+        .mockRejectedValueOnce(flood())
+        .mockRejectedValueOnce(flood())
+        .mockRejectedValueOnce(flood())
+        .mockRejectedValueOnce(flood())
+        .mockRejectedValueOnce(flood());
+      const warn = vi.fn();
+      const stream = createDraftStream(api, { warn });
+
+      stream.update("Hello");
+      await stream.flush();
+
+      stream.update("Live edit");
+      for (let i = 0; i < 8; i++) {
+        await stream.flush();
+        await vi.advanceTimersByTimeAsync(1100);
+      }
+
+      expect(api.editMessageText).toHaveBeenLastCalledWith(123, 17, "Live edit");
+      // Floods surfaced as recoverable backpressure, never as a permanent stop.
+      expect(warn.mock.calls.some(([m]) => String(m).includes("flood-suspended"))).toBe(true);
+      expect(
+        warn.mock.calls.some(([m]) => String(m).startsWith("telegram stream preview failed:")),
+      ).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("stops the preview after repeated retryable edit failures", async () => {
     const api = createMockDraftApi();
     api.editMessageText.mockRejectedValue(

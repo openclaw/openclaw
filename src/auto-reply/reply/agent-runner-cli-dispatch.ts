@@ -1,9 +1,6 @@
 // Builds CLI runtime dispatch inputs for agent runner executions.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { clearCliSession } from "../../agents/cli-session.js";
@@ -31,14 +28,6 @@ import {
 import { FAST_MODE_AUTO_PROGRESS_KIND, type ReplyPayload } from "../reply-payload.js";
 import { formatToolAggregate } from "../tool-meta.js";
 import { resolveAgentLifecycleTerminalMetadata } from "./agent-lifecycle-terminal.js";
-
-function isClaudeCliProvider(provider: string): boolean {
-  return normalizeLowercaseStringOrEmpty(provider) === "claude-cli";
-}
-
-function shouldBridgeCliAssistantTextToReasoning(provider: string): boolean {
-  return isClaudeCliProvider(provider);
-}
 
 function createAgentEventBridge<T>(params: {
   runId: string;
@@ -108,6 +97,32 @@ function createAssistantTextBridge(params: {
     deliver: params.deliver,
     read: (evt) => {
       if (evt.stream !== "assistant") {
+        return undefined;
+      }
+      const text = typeof evt.data.text === "string" ? evt.data.text : undefined;
+      if (text === undefined || text === lastText) {
+        return undefined;
+      }
+      lastText = text;
+      return text;
+    },
+  });
+}
+
+function createReasoningTextBridge(params: {
+  runId: string;
+  suppressed?: boolean;
+  deliver?: (text: string) => Promise<void>;
+}) {
+  let lastText: string | undefined;
+  return createAgentEventBridge({
+    runId: params.runId,
+    suppressed: params.suppressed,
+    deliver: params.deliver,
+    read: (evt) => {
+      // CLI reasoning streams on the dedicated "thinking" event, mirroring the
+      // embedded runner; the assistant stream stays the answer-preview source.
+      if (evt.stream !== "thinking") {
         return undefined;
       }
       const text = typeof evt.data.text === "string" ? evt.data.text : undefined;
@@ -450,12 +465,10 @@ async function runCliAgentWithLifecycleInternal(
     suppressed: params.suppressAssistantBridge,
     deliver: params.onAssistantText,
   });
-  const reasoningBridge = createAssistantTextBridge({
+  const reasoningBridge = createReasoningTextBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
-    deliver: shouldBridgeCliAssistantTextToReasoning(params.provider)
-      ? params.onReasoningText
-      : undefined,
+    deliver: params.onReasoningText,
   });
   const toolBridge = createToolEventBridge({
     runId: params.runId,

@@ -2796,6 +2796,61 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("renders a labelless first tool line exactly once with no backticks", async () => {
+    // Regression: renderTelegramProgressDraftPreview used to treat the first plain
+    // text line as a bold heading whenever the compositor emitted more text lines
+    // than it rendered structured lines. With `progress.label: false` there is no
+    // heading in the plain text, so the first CONTENT line — which the compositor
+    // formatted with formatTelegramProgressLine backticks for the plain-text lane —
+    // got emitted as `<b>`🧩 Skill`</b>` above the structured `<b>🧩 Skill</b>`: the
+    // same first line rendered twice, once with visible backticks and once plain.
+    // The heading is now derived only when the `\n\n` label separator is present
+    // (or the draft is label-only), so a labelless draft carries no heading.
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({
+          name: "Skill",
+          phase: "start",
+          toolCallId: "call-1",
+        });
+        await replyOptions?.onToolStart?.({
+          name: "Bash",
+          phase: "start",
+          toolCallId: "call-2",
+          args: { command: "ls" },
+        });
+        await dispatcherOptions.deliver({ text: "DONE" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: false } } },
+    });
+
+    const previews = answerDraftStream.updatePreview.mock.calls.map(
+      (call) => (call[0] as { text?: string } | undefined)?.text ?? "",
+    );
+    // Every rendered preview: the Skill line appears at most once and never carries
+    // markdown backticks leaked from the plain-text lane.
+    for (const preview of previews) {
+      expect((preview.match(/🧩 Skill/gu) ?? []).length).toBeLessThanOrEqual(1);
+      expect(preview).not.toContain("`");
+    }
+    // The final preview shows both tool lines with no leading bold heading (the
+    // Bash arg summary is the branch's existing rendering, unrelated to the fix).
+    expect(answerDraftStream.updatePreview).toHaveBeenLastCalledWith(
+      telegramProgressPreview(
+        "🧩 Skill\n🛠️ Bash: ls",
+        "<b>🧩 Skill</b>\n<b>🛠️ Bash</b> <code>🛠️ list files</code>",
+      ),
+    );
+    expectDeliveredReply(0, { text: "DONE" });
+  });
+
   it("renders api progress item edge cases as HTML transport previews", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
@@ -2821,6 +2876,116 @@ describe("dispatchTelegramMessage draft streaming", () => {
       ),
     );
     expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("keeps the live progress preview through tools when an intermediate text block precedes tool calls", async () => {
+    // Reproduces the claude-cli stream-json trace: thinking -> intermediate
+    // text-block preamble ("I'll run...") -> exec x3 -> final. The preamble is
+    // commentary, not a durable message, and must NOT wipe the live progress
+    // draft (reasoning + tool preview) before the tools even run.
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        // Intermediate assistant text block emitted as a preamble before tools.
+        await dispatcherOptions.deliver(
+          { text: "I'll run the three commands sequentially" },
+          { kind: "block" },
+        );
+        await replyOptions?.onItemEvent?.({
+          kind: "command",
+          name: "exec",
+          progressText: "git status",
+        });
+        await dispatcherOptions.deliver({ text: "DONE" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+    });
+
+    // 1. The preamble text block must NOT be delivered as a durable message.
+    expect(answerDraftStream.update).not.toHaveBeenCalledWith(
+      "I'll run the three commands sequentially",
+    );
+    // 2. The live tool preview persists through the tool phase: the last
+    //    rendered preview still shows the running command (preview was not
+    //    wiped/restarted by the preamble), and the preamble itself streamed
+    //    into the live draft as commentary rather than vanishing.
+    const lastPreview = answerDraftStream.updatePreview.mock.calls.at(-1)?.[0];
+    expect(lastPreview).toEqual(
+      expect.objectContaining({
+        text: expect.stringContaining("<b>🛠️ Exec</b> <code>git status</code>"),
+      }),
+    );
+    expect(lastPreview).toEqual(
+      expect.objectContaining({
+        text: expect.stringContaining("I'll run the three commands sequentially"),
+      }),
+    );
+    // 3. The final answer is delivered as a real reply (progress mode finalizes
+    //    via the deliver path, not answerDraftStream.update), and it is the
+    //    FIRST delivered reply — the preamble produced no durable message of its
+    //    own, it only lived in the progress preview.
+    expectDeliveredReply(0, { text: "DONE" });
+  });
+
+  it("keeps one tool line across the silent-window keep-alive and collapses it on the final answer", async () => {
+    // Regression: the claude-cli tool-start now forwards its toolCallId (see
+    // agent-runner-execution), and the silent-window keep-alive arrives as an
+    // onToolStart "update" carrying that SAME id. Both build a line keyed by
+    // tool:<toolCallId>, so the keep-alive refreshes THAT line in place — it must
+    // never stack a second "still working" line for the same tool — and the live
+    // preview must be cleared (collapsed) on the final answer, not left behind.
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({
+          name: "exec",
+          phase: "start",
+          toolCallId: "call-1",
+          args: { command: "du -sh" },
+        });
+        // The claude-cli active-tool heartbeat re-emits the running tool as an
+        // "update" reusing the start's toolCallId.
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "update", toolCallId: "call-1" });
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "update", toolCallId: "call-1" });
+        await dispatcherOptions.deliver({ text: "Disk usage report" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Working" } } },
+    });
+
+    // No duplicate block: every rendered preview shows exactly one tool header
+    // for the single running tool. Before the toolCallId was forwarded the start
+    // line was unkeyed and could not merge with the keep-alive line, so the same
+    // tool stacked twice.
+    const previews = answerDraftStream.updatePreview.mock.calls.map(
+      (call) => (call[0] as { text?: string } | undefined)?.text ?? "",
+    );
+    expect(previews.length).toBeGreaterThan(0);
+    for (const preview of previews) {
+      const toolHeaderCount = (preview.match(/<b>🛠️/gu) ?? []).length;
+      expect(toolHeaderCount).toBe(1);
+    }
+
+    // The preview is collapsed on the final answer (its draft is cleared after
+    // the last preview render), and the final is delivered once durably.
+    expect(answerDraftStream.clear).toHaveBeenCalledTimes(1);
+    const lastClearOrder = answerDraftStream.clear.mock.invocationCallOrder.at(-1) ?? 0;
+    const lastPreviewOrder = answerDraftStream.updatePreview.mock.invocationCallOrder.at(-1) ?? 0;
+    expect(lastClearOrder).toBeGreaterThan(lastPreviewOrder);
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expectDeliveredReply(0, { text: "Disk usage report" });
   });
 
   it("does not restart progress drafts after final answer delivery", async () => {

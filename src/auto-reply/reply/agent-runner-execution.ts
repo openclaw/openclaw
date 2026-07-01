@@ -2348,8 +2348,18 @@ export async function runAgentTurnWithFallback(params: {
                     await params.opts.onPartialReply({ text: textForTyping });
                   },
                   onReasoningText: async (text) => {
+                    // claude-cli forwards the full reasoning-so-far for the turn on
+                    // every thinking delta (src/agents/cli-output.ts accumulates
+                    // reasoningText and never resets it between thinking blocks). Mark
+                    // it as a snapshot so the progress compositor REPLACES the prior
+                    // reasoning instead of concatenating it into an ever-growing
+                    // run-on line — matching the Codex runtime, which already emits
+                    // reasoning with isReasoningSnapshot: true. Keep main's
+                    // requiresReasoningProgressOptIn gate so reasoning still respects
+                    // the per-channel progress opt-in.
                     await params.opts?.onReasoningStream?.({
                       text,
+                      isReasoningSnapshot: true,
                       requiresReasoningProgressOptIn: true,
                     });
                   },
@@ -2358,13 +2368,20 @@ export async function runAgentTurnWithFallback(params: {
                     if (payload.phase === "result") {
                       return;
                     }
-                    const { name, phase, args } = payload;
+                    const { name, phase, args, toolCallId } = payload;
                     await Promise.all([
                       params.typingSignals.signalToolStart(),
+                      // Forward toolCallId so the channel keys this tool's live
+                      // progress line by it. The silent-window keep-alive
+                      // ("update" phase) carries the same id; dropping it here
+                      // leaves the start line unkeyed, so the keep-alive cannot
+                      // refresh it in place and the tool renders as a duplicate
+                      // "still working" line that never collapses.
                       params.opts?.onToolStart?.({
                         name,
                         phase,
                         args,
+                        ...(toolCallId !== undefined ? { toolCallId } : {}),
                         detailMode: params.toolProgressDetail,
                       }),
                     ]);

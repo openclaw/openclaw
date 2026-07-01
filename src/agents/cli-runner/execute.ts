@@ -1016,6 +1016,31 @@ export async function executePreparedCliRun(
             },
           });
         };
+        const emitCliReasoningDelta = ({ text, delta }: CliStreamingDelta) => {
+          if (text || delta) {
+            observedCliActivity = true;
+          }
+          if (!emitLiveEvents) {
+            return;
+          }
+          // Mirror the embedded runner's reasoning preview: reasoning streams on
+          // the dedicated "thinking" event so the channel reasoning lane renders
+          // incremental thinking, separate from the assistant answer stream.
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "thinking",
+            data: {
+              text: applyPluginTextReplacements(
+                text,
+                context.backendResolved.textTransforms?.output,
+              ),
+              delta: applyPluginTextReplacements(
+                delta,
+                context.backendResolved.textTransforms?.output,
+              ),
+            },
+          });
+        };
         if (shouldUseClaudeLiveSession(context)) {
           if (!hasJsonlOutput) {
             throw new Error("Claude live session requires JSONL streaming parser");
@@ -1043,6 +1068,7 @@ export async function executePreparedCliRun(
             noOutputTimeoutMs,
             getProcessSupervisor: executeDeps.getProcessSupervisor,
             onAssistantDelta: emitCliAssistantDelta,
+            onReasoningDelta: emitCliReasoningDelta,
             onToolUseStart: emitCliToolUseStart,
             onToolResult: emitCliToolResult,
             onCommentaryText:
@@ -1076,6 +1102,7 @@ export async function executePreparedCliRun(
                 backend,
                 providerId: context.backendResolved.id,
                 onAssistantDelta: emitCliAssistantDelta,
+                onReasoningDelta: emitCliReasoningDelta,
                 onToolUseStart: emitCliToolUseStart,
                 onToolResult: emitCliToolResult,
                 onCommentaryText:

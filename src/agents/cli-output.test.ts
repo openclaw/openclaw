@@ -787,6 +787,77 @@ describe("createCliJsonlStreamingParser", () => {
     ]);
   });
 
+  it("streams Claude thinking_delta blocks as reasoning deltas, not assistant text", () => {
+    const assistantDeltas: Array<{ text: string; delta: string }> = [];
+    const reasoningDeltas: Array<{ text: string; delta: string; sessionId?: string }> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "local-cli",
+      onAssistantDelta: (delta) => assistantDeltas.push(delta),
+      onReasoningDelta: (delta) => reasoningDeltas.push(delta),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-thinking" }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "thinking", thinking: "" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "thinking_delta", thinking: "Let me " },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "thinking_delta", thinking: "think." },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "signature_delta", signature: "sig" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 1,
+            delta: { type: "text_delta", text: "Answer." },
+          },
+        }),
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(reasoningDeltas).toEqual([
+      { text: "Let me ", delta: "Let me ", sessionId: "session-thinking", usage: undefined },
+      { text: "Let me think.", delta: "think.", sessionId: "session-thinking", usage: undefined },
+    ]);
+    expect(assistantDeltas).toEqual([
+      { text: "Answer.", delta: "Answer.", sessionId: "session-thinking", usage: undefined },
+    ]);
+  });
+
   it("streams Gemini message deltas and tool events", () => {
     const deltas: Array<{ text: string; delta: string; sessionId?: string }> = [];
     const starts: CliToolUseStartDelta[] = [];

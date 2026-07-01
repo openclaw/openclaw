@@ -3019,6 +3019,87 @@ describe("runAgentTurnWithFallback", () => {
     expect(call?.name).toBe("Bash");
     expect(call?.phase).toBe("start");
     expect(call?.args).toEqual({ command: "ls -la" });
+    // The tool-call id must be forwarded so the channel keys this tool's live
+    // progress line by it. The silent-tool-window keep-alive ("update") carries
+    // the same toolCallId; if the start drops it the keep-alive line cannot
+    // refresh the start line in place and the same tool renders as a duplicate
+    // "still working" line that never collapses into the tool/result lifecycle.
+    expect(call?.toolCallId).toBe("toolu_01ABCD");
+  });
+
+  it("forwards the same toolCallId on the cli tool-start and the silent-window keep-alive", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "claude-opus-4-6"),
+      provider: "claude-cli",
+      model: "claude-opus-4-6",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+        "../../infra/agent-events.js",
+      );
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "tool",
+        data: {
+          phase: "start",
+          name: "Bash",
+          toolCallId: "toolu_keepalive",
+          args: { command: "du -sh" },
+        },
+      });
+      // The claude-cli active-tool heartbeat re-emits the running tool as an
+      // "update" event carrying elapsedMs; it must reuse the start's toolCallId
+      // so the channel refreshes the single live line instead of stacking a
+      // second keep-alive line keyed by a different (missing) id.
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "tool",
+        data: { phase: "update", name: "Bash", toolCallId: "toolu_keepalive", elapsedMs: 10_000 },
+      });
+      return { payloads: [{ text: "done" }], meta: {} };
+    });
+
+    const onToolStart = vi.fn<NonNullable<GetReplyOptions["onToolStart"]>>(async () => undefined);
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-opus-4-6";
+
+    await runAgentTurnWithFallback({
+      commandBody: "hi",
+      followupRun,
+      sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
+      opts: { onToolStart },
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+
+    // Both the start and the keep-alive ("update") reach onToolStart, and both
+    // must carry the same id so the channel merges them into one live line.
+    expect(onToolStart).toHaveBeenCalledTimes(2);
+    const startCall = onToolStart.mock.calls[0]?.[0];
+    const keepAliveCall = onToolStart.mock.calls[1]?.[0];
+    expect(startCall?.phase).toBe("start");
+    expect(keepAliveCall?.phase).toBe("update");
+    expect(startCall?.toolCallId).toBe("toolu_keepalive");
+    expect(keepAliveCall?.toolCallId).toBe("toolu_keepalive");
+    expect(startCall?.toolCallId).toBe(keepAliveCall?.toolCallId);
   });
 
   it("bridges CLI commentary agent events into onItemEvent for live preview", async () => {
@@ -3246,7 +3327,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(onPartialReply).not.toHaveBeenCalled();
   });
 
-  it("bridges CLI assistant agent events into onReasoningStream for live reasoning preview (opus-4-7 text_delta path)", async () => {
+  it("bridges CLI thinking agent events into onReasoningStream for live reasoning preview (opus-4-7 thinking_delta path)", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("claude-cli", "claude-opus-4-7"),
@@ -3258,14 +3339,16 @@ describe("runAgentTurnWithFallback", () => {
       const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
         "../../infra/agent-events.js",
       );
+      // CLI reasoning streams on the dedicated "thinking" event (see
+      // createReasoningTextBridge); the assistant stream stays the answer source.
       realAgentEvents.emitAgentEvent({
         runId: params.runId,
-        stream: "assistant",
+        stream: "thinking",
         data: { text: "Thinking", delta: "Thinking" },
       });
       realAgentEvents.emitAgentEvent({
         runId: params.runId,
-        stream: "assistant",
+        stream: "thinking",
         data: { text: "Thinking about it", delta: " about it" },
       });
       return { payloads: [{ text: "Thinking about it" }], meta: {} };
@@ -3363,6 +3446,142 @@ describe("runAgentTurnWithFallback", () => {
       setImmediate(resolve);
     });
 
+    expect(onReasoningStream).not.toHaveBeenCalled();
+  });
+
+  it("does not bridge CLI thinking agent events to onReasoningStream when silentExpected is set (/reasoning off — parity with embedded runtime)", async () => {
+    // The claude-cli reasoning bridge publishes raw thinking on the shared
+    // "thinking" agent event exactly like the embedded runtime
+    // (src/agents/embedded-agent-subscribe.ts emits stream: "thinking" the same
+    // way). Visibility is enforced downstream at this auto-reply seam, not at the
+    // emitter, so a silent turn (/reasoning off) must drop thinking deltas before
+    // they ever reach onReasoningStream — for the thinking stream too, not just
+    // the legacy assistant-text path.
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "claude-opus-4-7"),
+      provider: "claude-cli",
+      model: "claude-opus-4-7",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+        "../../infra/agent-events.js",
+      );
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { text: "Thinking", delta: "Thinking" },
+      });
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { text: "Thinking about it", delta: " about it" },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const onReasoningStream = vi.fn<NonNullable<GetReplyOptions["onReasoningStream"]>>(
+      async (_payload) => undefined,
+    );
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-opus-4-7";
+    followupRun.run.silentExpected = true;
+
+    await runAgentTurnWithFallback({
+      commandBody: "hi",
+      followupRun,
+      sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
+      opts: { onReasoningStream },
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(onReasoningStream).not.toHaveBeenCalled();
+  });
+
+  it("preserves the assistant answer preview for claude-cli turns that emit assistant text but no thinking_delta", async () => {
+    // clawsweeper [P2]: switching the reasoning bridge source from assistant
+    // events to thinking events must not regress the live preview for turns
+    // that emit assistant text_delta but no thinking_delta. The assistant
+    // stream still drives onPartialReply (the answer preview); only the
+    // reasoning lane stays empty when the model produces no readable thinking.
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "claude-opus-4-7"),
+      provider: "claude-cli",
+      model: "claude-opus-4-7",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockImplementationOnce(async (params: { runId: string }) => {
+      const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
+        "../../infra/agent-events.js",
+      );
+      // Assistant text only — no "thinking" event this turn.
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { text: "Hello", delta: "Hello" },
+      });
+      realAgentEvents.emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
+        data: { text: "Hello world", delta: " world" },
+      });
+      return { payloads: [{ text: "Hello world" }], meta: {} };
+    });
+
+    const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>(
+      async (_payload) => undefined,
+    );
+    const onReasoningStream = vi.fn<NonNullable<GetReplyOptions["onReasoningStream"]>>(
+      async (_payload) => undefined,
+    );
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "claude-opus-4-7";
+
+    await runAgentTurnWithFallback({
+      commandBody: "hi",
+      followupRun,
+      sessionCtx: { Provider: "telegram", MessageSid: "msg" } as unknown as TemplateContext,
+      opts: { onPartialReply, onReasoningStream },
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    // Answer preview preserved from the assistant stream...
+    const partialTexts = onPartialReply.mock.calls.map((call) => call[0].text);
+    expect(partialTexts).toEqual(["Hello", "Hello world"]);
+    // ...and no reasoning leaks when there was no thinking_delta.
     expect(onReasoningStream).not.toHaveBeenCalled();
   });
 

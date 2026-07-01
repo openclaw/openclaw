@@ -3660,7 +3660,10 @@ describe("processDiscordMessage draft streaming", () => {
     const lastUpdate = draftStream.update.mock.calls.at(-1)?.[0];
     const reasoningLine = lastUpdate?.split("\n").at(-1);
 
-    expect(reasoningLine).toMatch(/^🧠 _.*…_$/u);
+    // Reasoning truncates from the tail (leading ellipsis) so the preview shows
+    // the latest thought; italics must still be balanced around the kept text.
+    // Marker is 🧠 (main renamed the reasoning prefix from •).
+    expect(reasoningLine).toMatch(/^🧠 _….*_$/u);
     expect(reasoningLine?.match(/_/gu)).toHaveLength(2);
   });
 
