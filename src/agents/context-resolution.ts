@@ -137,6 +137,46 @@ function resolveConfiguredProviderContextTokens(
   return findContextTokens((id) => normalizeProviderId(id) === normalizedProvider);
 }
 
+function resolveProviderQualifiedModel(provider: string, model: string): string | undefined {
+  const slash = model.indexOf("/");
+  if (slash <= 0) {
+    return undefined;
+  }
+  const prefixedProvider = normalizeProviderId(model.slice(0, slash));
+  const bareModel = model.slice(slash + 1).trim();
+  return prefixedProvider === normalizeProviderId(provider) && bareModel ? bareModel : undefined;
+}
+
+function resolveKnownRuntimeCanonicalProvider(provider: string): string | undefined {
+  return normalizeProviderId(provider) === "claude-cli" ? "anthropic" : undefined;
+}
+
+function resolveConfiguredRuntimeContextTokens(
+  cfg: OpenClawConfig | null | undefined,
+  provider: string,
+  model: string,
+): ConfiguredContextTokens | undefined {
+  const explicitResult = resolveConfiguredProviderContextTokens(cfg, provider, model);
+  if (explicitResult) {
+    return explicitResult;
+  }
+  const canonicalProvider = resolveKnownRuntimeCanonicalProvider(provider);
+  if (
+    !canonicalProvider ||
+    normalizeProviderId(canonicalProvider) === normalizeProviderId(provider)
+  ) {
+    return undefined;
+  }
+  const canonicalResult = resolveConfiguredProviderContextTokens(cfg, canonicalProvider, model);
+  if (canonicalResult) {
+    return canonicalResult;
+  }
+  const canonicalModel = resolveProviderQualifiedModel(canonicalProvider, model);
+  return canonicalModel
+    ? resolveConfiguredProviderContextTokens(cfg, canonicalProvider, canonicalModel)
+    : undefined;
+}
+
 function resolveModelFamilyId(modelId: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
   return normalized.includes("/") ? (normalized.split("/").at(-1) ?? normalized) : normalized;
@@ -179,13 +219,13 @@ export function resolveContextTokensForModelFromCache(
   const explicitProvider = params.provider?.trim();
 
   if (ref && explicitProvider) {
-    const configuredWindow = resolveConfiguredProviderContextTokens(
+    const configuredWindow = resolveConfiguredRuntimeContextTokens(
       params.cfg,
       explicitProvider,
       ref.model,
     );
     const sourceConfig = params.sourceCfg === undefined ? params.cfg : params.sourceCfg;
-    const sourceConfiguredWindow = resolveConfiguredProviderContextTokens(
+    const sourceConfiguredWindow = resolveConfiguredRuntimeContextTokens(
       sourceConfig,
       explicitProvider,
       ref.model,
