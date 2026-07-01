@@ -35,6 +35,7 @@ import {
   type SourceDeliveryPlan,
   type SourceDeliveryVisibleDelivery,
 } from "../../infra/outbound/source-delivery-plan.js";
+import { getDiagnosticSessionState } from "../../logging/diagnostic-session-state.js";
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
@@ -1487,6 +1488,18 @@ export async function runCronIsolatedAgentTurn(params: {
     trackSessionState: true,
   });
   messageLifecycle.markProcessing();
+
+  // Declare the cron run's timeout budget so the diagnostic heartbeat respects it
+  // when evaluating stuck-session abort eligibility. Without this, the heartbeat
+  // uses the global stuckSessionAbortMs (~6 min) and aborts embedded runs that
+  // are still within their configured timeoutSeconds budget.
+  if (diagnosticsEnabled && prepared.context.timeoutMs) {
+    const cronDiagState = getDiagnosticSessionState({
+      sessionId: prepared.context.runSessionId,
+      sessionKey: prepared.context.runSessionKey,
+    });
+    cronDiagState.timeoutBudgetMs = prepared.context.timeoutMs;
+  }
 
   let outcome: "completed" | "error" = "completed";
   let outcomeError: string | undefined;
