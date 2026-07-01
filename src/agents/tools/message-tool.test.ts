@@ -111,6 +111,19 @@ const mocks = vi.hoisted(() => ({
   ),
 }));
 
+vi.mock("../../channels/plugins/bundled.js", async () => {
+  const actual = await vi.importActual<typeof import("../../channels/plugins/bundled.js")>(
+    "../../channels/plugins/bundled.js",
+  );
+  // This unit suite installs minimal loaded plugins when it exercises channel actions.
+  // Bundled source entry loading belongs to the loader integration suites.
+  return {
+    ...actual,
+    getBundledChannelPlugin: vi.fn(() => undefined),
+    getBundledChannelSetupPlugin: vi.fn(() => undefined),
+  };
+});
+
 type RunMessageActionInput = {
   agentId?: string;
   cfg?: unknown;
@@ -577,6 +590,20 @@ describe("poll vote echo guard", () => {
 
     expect(result.details).toMatchObject({ status: "suppressed", reason: "poll_vote_echo" });
     expect(mocks.runMessageAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not suppress a different keycap option with the same words", async () => {
+    const tool = createPollVoteTool("Option 1️⃣");
+    await castBlueVote(tool);
+
+    const result = await tool.execute("send", {
+      action: "send",
+      channel: "imessage",
+      message: "2️⃣ Option.",
+    });
+
+    expect(result.details).not.toMatchObject({ status: "suppressed" });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(2);
   });
 
   it("does not cross accounts, delivery targets, or conflicting target fields", async () => {

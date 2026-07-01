@@ -82,6 +82,7 @@ import {
   resolveGatewayOptions,
   type GatewayCallOptions,
 } from "./gateway.js";
+import { isPollVoteEchoText } from "./poll-vote-echo.js";
 
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
 const MESSAGE_TOOL_THREAD_READ_HINT =
@@ -171,38 +172,6 @@ type VisibleTextSuppressionReason =
   | "poll_vote_echo";
 
 const POLL_VOTE_ECHO_TTL_MS = 30_000;
-
-// Sheds emoji ANYWHERE, then trailing sentence punctuation. Emoji land on both
-// sides asymmetrically: iMessage poll options suffix them ("Lobster 🦞 "), while
-// the agent's echo prefixes them ("🦞 Lobster."), so a leading-only strip left
-// "lobster 🦞" != "lobster" and the redundant text leaked. Each emoji run
-// becomes a space so "a🦞b" can't fuse. Internal punctuation stays, so "C#",
-// "C++", "Node.js" remain distinct. An emoji-only label normalizes to empty,
-// which the guard below refuses to suppress on (fail-open).
-// Exported for tests.
-export function normalizePollEchoText(text: string): string {
-  return (
-    text
-      // Keycap sequences (base + optional VS16 + U+20E3) clear as a UNIT so "1️⃣"
-      // -> "" not "1"; a plain "1"/"#"/"*" option (no U+20E3) is left intact so it
-      // can still match a plain-text echo.
-      .replace(/[0-9#*]\u{FE0F}?\u{20E3}/gu, " ")
-      // Emoji anywhere: pictographic, regional-indicator flags ("🇺🇸"), skin-tone
-      // modifiers, subdivision-flag tag chars, ZWJ, and variation selectors. Uses
-      // property escapes + standalone atoms in an ALTERNATION, not one character
-      // class, so eslint no-misleading-character-class stays happy (combining
-      // marks / ZWJ / emoji-modifiers are misleading inside `[...]`).
-      .replace(
-        /(?:\p{Extended_Pictographic}|\p{Regional_Indicator}|\p{Emoji_Modifier}|[\u{E0020}-\u{E007F}]|\u{FE0F}|\u{200D}|\u{20E3})+/gu,
-        " ",
-      )
-      .replace(/\s+/gu, " ")
-      .trim()
-      .replace(/[.!?]+$/u, "")
-      .trim()
-      .toLowerCase()
-  );
-}
 
 function resolvePollVoteEchoRoute(params: {
   action: ChannelMessageActionName;
@@ -1423,12 +1392,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             readStringParam(params, "text") ??
             readStringParam(params, "message") ??
             readStringParam(params, "content");
-          const normalizedOption = normalizePollEchoText(vote.option);
-          if (
-            outboundText &&
-            normalizedOption &&
-            normalizePollEchoText(outboundText) === normalizedOption
-          ) {
+          if (outboundText && isPollVoteEchoText(vote.option, outboundText)) {
             return jsonResult({
               status: "suppressed",
               reason: "poll_vote_echo" satisfies VisibleTextSuppressionReason,

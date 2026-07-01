@@ -188,6 +188,7 @@ struct RootTabs: View {
                 .tabItem { Label("Settings", systemImage: "gearshape.fill") }
                 .tag(AppTab.settings)
         }
+        .openClawTabBarBehavior()
     }
 
     private var sidebarSplitContent: some View {
@@ -402,7 +403,6 @@ struct RootTabs: View {
             ChatProTab(
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 headerTitle: "Chat",
-                headerSubtitle: "Agent conversation",
                 showsAgentBadge: false,
                 ownsNavigationStack: false,
                 openSettings: { self.selectSidebarDestination(.gateway) })

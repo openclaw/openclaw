@@ -123,7 +123,8 @@ const CONDITIONAL_BRANCHES = [
   /\bif\s*\([^)]*\)\s*"((?:\\.|[^"\\])*)"\s*else\s*"((?:\\.|[^"\\])*)"/gu,
   /\?\s*"((?:\\.|[^"\\])*)"\s*:\s*"((?:\\.|[^"\\])*)"/gu,
 ];
-const UI_STRING_NAME_RE = /(?:title|subtitle|body|message|label|text|description|prompt|help)$/iu;
+const UI_STRING_NAME_RE =
+  /(?:title|subtitle|body|message|label|text|description|detail|prompt|help)$/iu;
 const APPLE_STRING_PROPERTY = /\bvar\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*String\s*\{/gu;
 const APPLE_SWITCH_BRANCH =
   /(?:\bcase\b[^:\n]+|\bdefault)\s*:\s*(?:return\s+)?"((?:\\.|[^"\\])*)"/gu;
@@ -135,7 +136,7 @@ const ANDROID_RESOURCE_COLLECTIONS =
   /<(?:string-array|plurals)\b[^>]*>([\s\S]*?)<\/(?:string-array|plurals)>/gu;
 const ANDROID_RESOURCE_ITEMS = /<item\b[^>]*>([\s\S]*?)<\/item>/gu;
 const APPLE_NAMED_LITERALS =
-  /\b(?:title|subtitle|label|message|text|prompt|description|help)\s*:\s*(?:"""([\s\S]*?)"""|"((?:\\.|[^"\\])*)")/gu;
+  /\b([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(?:"""([\s\S]*?)"""|"((?:\\.|[^"\\])*)")/gu;
 const APPLE_VIEW_TYPE = /\bstruct\s+([A-Za-z_][A-Za-z0-9_]*)[^:{\n]*:\s*[^{\n]*\bView\b/gu;
 const APPLE_VIEW_FUNCTION =
   /\bfunc\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^{}]*?\)\s*(?:async\s*)?(?:throws\s*)?->\s*some\s+View\b/gu;
@@ -622,12 +623,18 @@ function extractCandidates(
       }
     }
     for (const match of source.matchAll(APPLE_NAMED_LITERALS)) {
+      const argumentName = match[1];
       const callName = enclosingCallName(source, match.index ?? 0);
-      if (!callName || !uiCallNames.has(callName)) {
+      if (
+        !argumentName ||
+        !UI_STRING_NAME_RE.test(argumentName) ||
+        !callName ||
+        !uiCallNames.has(callName)
+      ) {
         continue;
       }
-      const multiline = match[1];
-      const literal = multiline ?? match[2];
+      const multiline = match[2];
+      const literal = multiline ?? match[3];
       if (literal) {
         addCandidate(
           entries,
