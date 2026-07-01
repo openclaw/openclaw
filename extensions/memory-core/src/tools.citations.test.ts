@@ -495,6 +495,104 @@ describe("memory tools", () => {
     expect(getMemorySearchManagerMockCalls()).toBe(1);
   });
 
+  it("runs the memory and wiki branches concurrently for corpus=all (#92633)", async () => {
+    // Regression: corpus=all awaited the memory/sessions branch fully before
+    // starting the wiki/supplement branch, so two searches that each finished
+    // well under the 15s tool deadline summed past it and the tool returned
+    // nothing. Running them concurrently keeps the combined wall time near
+    // max(branch), so the same two 9s searches now resolve at ~9s.
+    vi.useFakeTimers();
+    try {
+      const delay = (ms: number) =>
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, ms);
+        });
+      setMemorySearchImpl(async () => {
+        await delay(9_000);
+        return [
+          {
+            path: "MEMORY.md",
+            startLine: 5,
+            endLine: 7,
+            score: 0.9,
+            snippet: "@@ -5,3 @@\nAssistant: noted",
+            source: "memory" as const,
+          },
+        ];
+      });
+      registerMemoryCorpusSupplement("memory-wiki", {
+        search: async () => {
+          await delay(9_000);
+          return [
+            {
+              corpus: "wiki",
+              path: "entities/alpha.md",
+              title: "Alpha",
+              kind: "entity",
+              score: 1.1,
+              snippet: "Alpha wiki entry",
+            },
+          ];
+        },
+        get: async () => null,
+      });
+
+      const tool = createMemorySearchToolOrThrow();
+      const resultPromise = tool.execute("call_all_concurrent", {
+        query: "alpha",
+        corpus: "all",
+      });
+      // Sequentially the two branches take 18s and trip the 15s deadline;
+      // concurrently the tool resolves once the shared 9s elapses.
+      await vi.advanceTimersByTimeAsync(9_000);
+      const result = await resultPromise;
+      const details = result.details as {
+        disabled?: boolean;
+        results: Array<{ corpus: string; path: string }>;
+      };
+      expect(details.disabled).toBeUndefined();
+      expect(details.results.map((entry) => [entry.corpus, entry.path])).toEqual([
+        ["wiki", "entities/alpha.md"],
+        ["memory", "MEMORY.md"],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("records the memory cooldown when corpus=all memory and wiki both fail (#92633)", async () => {
+    // Concurrency must not let a wiki failure mask a real memory backend failure:
+    // when both branches throw, the memory cooldown still has to be recorded so a
+    // broken embedding provider is suppressed rather than re-hit on the next turn.
+    let searchCalls = 0;
+    setMemorySearchImpl(async () => {
+      searchCalls += 1;
+      throw new Error("openai embeddings failed: 500 server_error");
+    });
+    registerMemoryCorpusSupplement("memory-wiki", {
+      search: async () => {
+        throw new Error("wiki supplement unavailable");
+      },
+      get: async () => null,
+    });
+
+    const tool = createMemorySearchToolOrThrow();
+    const bothFail = await tool.execute("call_all_both_fail", {
+      query: "alpha",
+      corpus: "all",
+    });
+    expectUnavailableMemorySearchDetails(bothFail.details, {
+      error: "openai embeddings failed: 500 server_error",
+      warning: "Memory search is unavailable due to an embedding/provider error.",
+      action: "Check embedding provider configuration and retry memory_search.",
+    });
+
+    // The next memory search is suppressed by the cooldown (no second backend hit).
+    const followup = await tool.execute("call_memory_after_both_fail", { query: "alpha" });
+    expect((followup.details as { disabled?: boolean }).disabled).toBe(true);
+    expect(searchCalls).toBe(1);
+  });
+
   it("does not cooldown primary memory when a corpus=all wiki supplement stalls", async () => {
     vi.useFakeTimers();
     try {
