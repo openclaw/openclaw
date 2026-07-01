@@ -20,6 +20,7 @@ const INBOUND_FILE_EXTRACTION_MAX_PAGES_CAP = 150;
 
 type InboundFileExtractionDefaults = {
   mediaMaxMb?: number;
+  pdfMaxBytesMb?: number;
   pdfMaxPages?: number;
 };
 
@@ -36,7 +37,10 @@ function resolveInboundFileExtractionMaxBytes(
   defaults: InboundFileExtractionDefaults | undefined,
 ): number {
   const maxMb =
-    positiveExtractionLimit(defaults?.mediaMaxMb) ?? INBOUND_FILE_EXTRACTION_DEFAULT_MAX_MB;
+    Math.max(
+      positiveExtractionLimit(defaults?.mediaMaxMb) ?? INBOUND_FILE_EXTRACTION_DEFAULT_MAX_MB,
+      positiveExtractionLimit(defaults?.pdfMaxBytesMb) ?? 0,
+    );
   return Math.min(Math.floor(maxMb * 1024 * 1024), INBOUND_FILE_EXTRACTION_MAX_BYTES_CAP);
 }
 

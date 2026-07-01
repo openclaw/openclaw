@@ -248,9 +248,9 @@ export type AgentDefaultsConfig = {
   mediaGenerationAutoProviderFallback?: boolean;
   /** Optional PDF-capable model and fallbacks (provider/model). Accepts string or {primary,fallbacks}. */
   pdfModel?: AgentToolModelConfig;
-  /** Maximum PDF file size in megabytes (default: 10). */
+  /** Maximum PDF file size in megabytes for the PDF tool (default: 10). Values above the inbound attachment cap also raise the inbound document-extraction byte limit. */
   pdfMaxBytesMb?: number;
-  /** Maximum number of PDF pages to process (default: 20). */
+  /** Maximum number of PDF pages to process for the PDF tool and inbound PDF text extraction (default: 20). */
   pdfMaxPages?: number;
   /** Model catalog with optional aliases (full provider/model keys). */
   models?: Record<string, AgentModelEntryConfig>;

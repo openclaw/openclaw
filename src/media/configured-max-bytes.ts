@@ -18,6 +18,18 @@ export function resolveGeneratedMediaMaxBytes(cfg: OpenClawConfig | undefined, k
   return resolveConfiguredMediaMaxBytes(cfg) ?? maxBytesForKind(kind);
 }
 
+/** Default decoded-byte cap (MB) for inbound chat attachments when `agents.defaults.mediaMaxMb` is unset. */
+export const DEFAULT_CHAT_ATTACHMENT_MAX_MB = 20;
+
+/**
+ * Resolves the maximum decoded attachment size accepted for chat inputs.
+ * Gateway accept paths and inbound media extraction share this cap so an
+ * accepted attachment is never silently skipped downstream.
+ */
+export function resolveChatAttachmentMaxBytes(cfg: OpenClawConfig): number {
+  return resolveConfiguredMediaMaxBytes(cfg) ?? DEFAULT_CHAT_ATTACHMENT_MAX_MB * MB;
+}
+
 /** Reads channel/account media caps from raw channel config without requiring typed account schemas. */
 export function resolveChannelAccountMediaMaxMb(params: {
   cfg: OpenClawConfig;

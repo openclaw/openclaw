@@ -28,6 +28,21 @@ describe("resolveFileExtractionLimits", () => {
     expect(resolveFileExtractionLimits(cfg).maxBytes).toBe(25 * 1024 * 1024);
   });
 
+  it("lets agents.defaults.pdfMaxBytesMb raise the byte cap within the safety ceiling", () => {
+    const cfg = { agents: { defaults: { pdfMaxBytesMb: 24 } } } as OpenClawConfig;
+    expect(resolveFileExtractionLimits(cfg).maxBytes).toBe(24 * 1024 * 1024);
+  });
+
+  it("does not let agents.defaults.pdfMaxBytesMb lower the byte cap", () => {
+    const cfg = { agents: { defaults: { pdfMaxBytesMb: 1 } } } as OpenClawConfig;
+    expect(resolveFileExtractionLimits(cfg).maxBytes).toBe(20 * 1024 * 1024);
+  });
+
+  it("clamps agents.defaults.pdfMaxBytesMb to the host-side safety ceiling", () => {
+    const cfg = { agents: { defaults: { pdfMaxBytesMb: 500 } } } as OpenClawConfig;
+    expect(resolveFileExtractionLimits(cfg).maxBytes).toBe(25 * 1024 * 1024);
+  });
+
   it("clamps the page budget to the 150-page ceiling", () => {
     const cfg = { agents: { defaults: { pdfMaxPages: 100000 } } } as OpenClawConfig;
     expect(resolveFileExtractionLimits(cfg).pdf.maxPages).toBe(150);
