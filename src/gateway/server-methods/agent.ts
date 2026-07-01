@@ -79,6 +79,11 @@ import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-m
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import {
+  durableAgentTurnErrorPayload,
+  startDurableAgentTurnLifecycle,
+  type DurableAgentTurnLifecycle,
+} from "../../durable/agent-turn.js";
+import {
   assertAgentRunLifecycleGenerationCurrent,
   claimAgentRunContext,
   clearAgentRunContext,
@@ -951,6 +956,7 @@ function dispatchAgentRunFromGateway(params: {
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
   taskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent">;
+  durableLifecycle?: DurableAgentTurnLifecycle;
 }) {
   const shouldTrackTask = params.taskTrackingMode === "cli";
   let taskTracked = false;
@@ -1017,6 +1023,20 @@ function dispatchAgentRunFromGateway(params: {
           payload,
         },
       });
+      params.durableLifecycle?.markTerminal({
+        status: aborted ? "cancelled" : "succeeded",
+        eventType: aborted ? "agent.turn.cancelled" : "agent.turn.succeeded",
+        payload: {
+          summary: payload.summary,
+          ...(aborted ? { stopReason: payload.stopReason ?? "rpc" } : {}),
+          ...(timeoutAttribution.timeoutPhase
+            ? { timeoutPhase: timeoutAttribution.timeoutPhase }
+            : {}),
+          ...(timeoutAttribution.providerStarted !== undefined
+            ? { providerStarted: timeoutAttribution.providerStarted }
+            : {}),
+        },
+      });
       // Send a second res frame (same id) so TS clients with expectFinal can wait.
       // Swift clients will typically treat the first res as the result and ignore this.
       params.respond(true, payload, undefined, { runId: params.runId });
@@ -1051,12 +1071,20 @@ function dispatchAgentRunFromGateway(params: {
           ...(aborted ? {} : { error }),
         },
       });
+      params.durableLifecycle?.markTerminal({
+        status: aborted ? "cancelled" : "failed",
+        eventType: aborted ? "agent.turn.cancelled" : "agent.turn.failed",
+        payload: aborted
+          ? { summary: payload.summary, stopReason, timeoutPhase: "gateway_draining" }
+          : durableAgentTurnErrorPayload(err),
+      });
       params.respond(aborted, payload, aborted ? undefined : error, {
         runId: params.runId,
         ...(aborted ? {} : { error: formatForLog(err) }),
       });
     })
     .finally(() => {
+      params.durableLifecycle?.close();
       clearAgentRunContext(params.runId, params.ingressOpts.lifecycleGeneration);
       params.cleanupAbortController();
     });
@@ -2704,6 +2732,15 @@ export const agentHandlers: GatewayRequestHandlers = {
         }
       }
 
+      const durableLifecycle = startDurableAgentTurnLifecycle({
+        runId,
+        message,
+        agentId: resolvedSessionKey === "global" ? activeSessionAgentId : agentId,
+        sessionKey: resolvedSessionKey,
+        channel: resolvedChannel,
+        transport: "gateway",
+        deliver,
+      });
       const accepted = {
         runId,
         sessionKey: resolvedSessionKey,
@@ -2711,6 +2748,11 @@ export const agentHandlers: GatewayRequestHandlers = {
         status: "accepted" as const,
         acceptedAt: Date.now(),
       };
+      durableLifecycle.markRunning({
+        acceptedAt: accepted.acceptedAt,
+        taskTrackingMode,
+        controlUiVisible: !suppressVisibleSessionEffects,
+      });
       const acceptedDedupePayload = {
         ...accepted,
         controlUiVisible: !suppressVisibleSessionEffects,
@@ -2761,6 +2803,16 @@ export const agentHandlers: GatewayRequestHandlers = {
               undefined,
               { runId },
             );
+            durableLifecycle.markTerminal({
+              status: "cancelled",
+              eventType: "agent.turn.cancelled",
+              payload: {
+                summary: "aborted",
+                stopReason,
+                timeoutPhase: "queue",
+                providerStarted: false,
+              },
+            });
             return;
           }
 
@@ -2917,6 +2969,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             respond,
             context,
             taskTrackingMode: dispatchTaskTrackingMode,
+            durableLifecycle,
           });
           dispatched = true;
         } catch (err) {
@@ -2940,8 +2993,14 @@ export const agentHandlers: GatewayRequestHandlers = {
             runId,
             error: formatForLog(err),
           });
+          durableLifecycle.markTerminal({
+            status: "failed",
+            eventType: "agent.turn.failed",
+            payload: durableAgentTurnErrorPayload(err),
+          });
         } finally {
           if (!dispatched) {
+            durableLifecycle.close();
             activeRunAbort.cleanup({ force: true });
           }
         }

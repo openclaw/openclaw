@@ -113,6 +113,12 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     description: "Inspect durable background tasks and flows",
     hasSubcommands: true,
   },
+  {
+    name: "durable",
+    description: "Inspect native durable workflow runs, timelines, and coordination state",
+    hasSubcommands: true,
+    parentDefaultHelp: true,
+  },
 ] as const satisfies ReadonlyArray<CoreCliCommandDescriptor>);
 
 /** Static root-command descriptors for the core CLI surface. */
