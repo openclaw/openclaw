@@ -810,14 +810,14 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     if (action === "poll-vote") {
       await assertPrivateApiEnabled();
       if (
-        privateApiStatus?.selectors?.pollPayloadMessage !== true ||
+        privateApiStatus?.selectors?.pollVoteMessage !== true ||
         !imessageRpcSupportsMethod(privateApiStatus, "poll.vote")
       ) {
         await probePrivateApiStatus(true);
       }
-      if (privateApiStatus?.selectors?.pollPayloadMessage !== true) {
+      if (privateApiStatus?.selectors?.pollVoteMessage !== true) {
         throw new Error(
-          "iMessage poll-vote requires an imsg bridge that advertises the pollPayloadMessage selector. Update imsg, run imsg launch to re-inject the bridge, then run openclaw channels status --probe to refresh capability detection.",
+          "iMessage poll-vote requires an imsg bridge that advertises the pollVoteMessage selector. Update imsg, run imsg launch to re-inject the bridge, then run openclaw channels status --probe to refresh capability detection.",
         );
       }
       // A previously injected helper can be newer than cliPath. The selector

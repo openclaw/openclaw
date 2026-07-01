@@ -80,7 +80,7 @@ export function describeIMessageMessageTool({
     if (
       action === "poll-vote" &&
       privateApiStatus?.selectors &&
-      !privateApiStatus.selectors.pollPayloadMessage
+      !privateApiStatus.selectors.pollVoteMessage
     ) {
       continue;
     }

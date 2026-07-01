@@ -340,7 +340,7 @@ describe("imessage message actions", () => {
     probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
       available: true,
       v2Ready: true,
-      selectors: { pollPayloadMessage: true },
+      selectors: { pollVoteMessage: true },
       rpcMethods: ["send", "poll.send", "poll.vote"],
     });
     runtimeMock.resolveIMessageMessageId.mockReturnValueOnce("poll-full-guid");
@@ -377,7 +377,7 @@ describe("imessage message actions", () => {
     probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
       available: true,
       v2Ready: true,
-      selectors: { pollPayloadMessage: true },
+      selectors: { pollVoteMessage: true },
       rpcMethods: ["send", "poll.send", "poll.vote"],
     });
     await expect(
@@ -399,7 +399,7 @@ describe("imessage message actions", () => {
     probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
       available: true,
       v2Ready: true,
-      selectors: { pollPayloadMessage: true },
+      selectors: { pollVoteMessage: true },
       rpcMethods: ["send", "poll.send", "poll.vote"],
     });
     await expect(
@@ -416,7 +416,7 @@ describe("imessage message actions", () => {
     const staleStatus = {
       available: true,
       v2Ready: true,
-      selectors: { pollPayloadMessage: true },
+      selectors: { pollVoteMessage: true },
       rpcMethods: ["send", "poll.send", "messages.poll.send"],
     };
     probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue(staleStatus);
@@ -438,13 +438,11 @@ describe("imessage message actions", () => {
     expect(runtimeMock.sendPollVote).not.toHaveBeenCalled();
   });
 
-  it("rejects a poll vote when the bridge lacks the poll balloon initializer", async () => {
-    // Votes use the same pollPayloadMessage balloon initializer as poll-send;
-    // without it the bridge cannot construct the vote.
+  it("rejects a poll vote when the bridge lacks the vote initializer", async () => {
     const staleStatus = {
       available: true,
       v2Ready: true,
-      selectors: {},
+      selectors: { pollPayloadMessage: true },
       rpcMethods: ["send", "poll.send", "poll.vote"],
     };
     probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue(staleStatus);
@@ -459,7 +457,7 @@ describe("imessage message actions", () => {
           pollOptionIndex: 2,
         },
       } as never),
-    ).rejects.toThrow(/pollPayloadMessage selector.*imsg launch/);
+    ).rejects.toThrow(/pollVoteMessage selector.*imsg launch/);
     expect(runtimeMock.sendPollVote).not.toHaveBeenCalled();
   });
 
@@ -467,7 +465,7 @@ describe("imessage message actions", () => {
     probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
       available: true,
       v2Ready: true,
-      selectors: { pollPayloadMessage: true },
+      selectors: { pollVoteMessage: true },
       rpcMethods: ["send", "poll.vote"],
     });
     runtimeMock.resolveIMessageMessageId.mockReturnValueOnce("poll-full-guid");
