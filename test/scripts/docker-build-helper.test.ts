@@ -1298,6 +1298,62 @@ docker_e2e_docker_cmd run second
     }
   });
 
+  it("retries Docker runs when rootless daemons reject NanoCPUs", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-rootless-nanocpus-"));
+
+    try {
+      const binDir = join(workDir, "bin");
+      mkdirSync(binDir);
+      writeFileSync(
+        join(binDir, "timeout"),
+        `#!/bin/bash
+set -euo pipefail
+if [[ "$1" = "--kill-after=1s" ]]; then
+  exit 0
+fi
+shift 2
+"$@"
+`,
+      );
+      chmodSync(join(binDir, "timeout"), 0o755);
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin:$PATH"
+unset OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS
+unset OPENCLAW_DOCKER_E2E_MEMORY OPENCLAW_DOCKER_E2E_CPUS OPENCLAW_DOCKER_E2E_PIDS_LIMIT
+export OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=32
+
+docker() {
+  printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
+  if [[ "$*" == *"--cpus"* ]]; then
+    echo "docker: Error response from daemon: NanoCPUs can not be set, as your kernel does not support CPU CFS scheduler or the cgroup is not mounted" >&2
+    return 125
+  fi
+}
+export -f docker
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+
+docker_e2e_docker_cmd run demo 2>"$TMPDIR/stderr"
+
+mapfile -t docker_seen <"$TMPDIR/docker-seen"
+[[ "\${docker_seen[0]}" = "run --memory 8g --cpus 16 --pids-limit 2048 demo" ]]
+[[ "\${docker_seen[1]}" = "run demo" ]]
+[[ "\${#docker_seen[@]}" = "2" ]]
+grep -Fq "NanoCPUs can not be set" "$TMPDIR/stderr"
+grep -Fq "retrying without default" "$TMPDIR/stderr"
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
   it("ignores Docker-like command arguments after the image when cleaning up a resource-limit retry", () => {
     const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-cgroup-image-boundary-"));
 
@@ -1876,6 +1932,72 @@ mapfile -t docker_seen <"$TMPDIR/docker-seen"
 [[ "\${docker_seen[3]}" = "run --name package-gateway --cidfile $TMPDIR/package.cid demo" ]]
 [[ "\${docker_seen[4]}" = "run second" ]]
 [[ ! -e "$TMPDIR/package.cid" ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("retries package-backed Docker runs when rootless daemons reject NanoCPUs", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-package-rootless-nanocpus-"));
+
+    try {
+      const binDir = join(workDir, "bin");
+      mkdirSync(binDir);
+      writeFileSync(
+        join(binDir, "gtimeout"),
+        `#!/bin/bash
+set -euo pipefail
+if [[ "$1" = "--kill-after=1s" ]]; then
+  exit 0
+fi
+shift 2
+"$@"
+`,
+      );
+      chmodSync(join(binDir, "gtimeout"), 0o755);
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin"
+export OPENCLAW_DOCKER_E2E_RUN_TIMEOUT=15s
+export OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=8
+unset OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS
+unset OPENCLAW_DOCKER_E2E_MEMORY OPENCLAW_DOCKER_E2E_CPUS OPENCLAW_DOCKER_E2E_PIDS_LIMIT
+
+dirname() {
+  /usr/bin/dirname "$@"
+}
+
+docker_e2e_docker_cmd() {
+  return 0
+}
+
+docker() {
+  printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
+  if [[ "$*" == *"--cpus"* ]]; then
+    echo "docker: Error response from daemon: NanoCPUs can not be set, as your kernel does not support CPU CFS scheduler or the cgroup is not mounted" >&2
+    return 125
+  fi
+}
+export -f docker_e2e_docker_cmd docker
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+
+docker_e2e_docker_run_cmd run demo 2>"$TMPDIR/stderr"
+
+mapfile -t docker_seen <"$TMPDIR/docker-seen"
+[[ "\${docker_seen[0]}" = "run --memory 8g --cpus 8 --pids-limit 2048 demo" ]]
+[[ "\${docker_seen[1]}" = "run demo" ]]
+[[ "\${#docker_seen[@]}" = "2" ]]
+stderr="$(<"$TMPDIR/stderr")"
+[[ "$stderr" = *"NanoCPUs can not be set"* ]]
+[[ "$stderr" = *"retrying without default"* ]]
 `;
 
       execFileSync("bash", ["-lc", script], { encoding: "utf8" });

@@ -55,9 +55,12 @@ if ! declare -F docker_e2e_docker_run_resource_args >/dev/null 2>&1; then
     esac
     case "$text" in
       *cgroup*controller* | *cgroup*controllers* | *cgroup*not*supported* | \
+        *cgroup*is*not*mounted* | *cgroup*not*mounted* | \
         *Cgroup*controller* | *Cgroup*controllers* | *Cgroup*not*supported* | \
+        *Cgroup*is*not*mounted* | *Cgroup*not*mounted* | \
         *pids*not*available* | *pids*not*supported* | *cannot*set*pids*limit* | \
         *PIDs*not*available* | *PIDs*not*supported* | *cannot*set*PIDs*limit* | \
+        *NanoCPUs*can*not*be*set* | *CPU*CFS*scheduler* | \
         *cpu*controller* | *CPU*controller* | *memory*controller* | *Memory*controller* | \
         *resource*limit*not*supported* | *Resource*limit*not*supported* | \
         *oci*runtime*cgroup* | *OCI*runtime*cgroup*)
