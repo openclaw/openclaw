@@ -20,7 +20,7 @@
     <string name="use_tls">Usa TLS</string>
     <string name="token_optional">Token (opzionale)</string>
     <string name="password">Password</string>
-    <string name="run_onboarding_again">Esegui di nuovo l&apos;onboarding</string>
+    <string name="run_onboarding_again">Esegui di nuovo l’onboarding</string>
     <string name="resolved_endpoint">Endpoint risolto</string>
     <string name="gateway_setup">Configurazione gateway</string>
     <string name="connect_to_gateway">Connettiti al tuo Gateway</string>
