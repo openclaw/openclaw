@@ -2,21 +2,22 @@
  * Telegram inline button utilities for model selection.
  *
  * Callback data patterns (max 64 bytes for Telegram):
- * - mdl_prov              - show providers list
- * - mdl_list_{prov}_{pg}  - show models for provider (page N, 1-indexed)
- * - mdl_sel_{provider/id} - select model (standard)
- * - mdl_sel/{model}       - select model (compact fallback when standard is >64 bytes)
- * - mdl_back              - back to providers list
+ * - mdl_prov                      - show providers list
+ * - mdl_list_{prov}_{pg}          - show models for provider (page N, 1-indexed)
+ * - mdl_sel_{prov}_{pg}_{idx}     - select model by page + absolute index
+ * - mdl_back                      - back to providers list
+ *
+ * The index-based select format avoids the 64-byte callback_data limit:
+ * model names are never embedded in the button data (#98221).
  */
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { fitsTelegramCallbackData } from "./approval-callback-data.js";
 
 export type ButtonRow = Array<{ text: string; callback_data: string }>;
 
 export type ParsedModelCallback =
   | { type: "providers" }
   | { type: "list"; provider: string; page: number }
-  | { type: "select"; provider?: string; model: string }
+  | { type: "select"; provider: string; page: number; modelIndex: number }
   | { type: "back" };
 
 export type ProviderInfo = {
@@ -45,8 +46,7 @@ const CALLBACK_PREFIX = {
   providers: "mdl_prov",
   back: "mdl_back",
   list: "mdl_list_",
-  selectStandard: "mdl_sel_",
-  selectCompact: "mdl_sel/",
+  select: "mdl_sel_",
 } as const;
 
 /**
@@ -73,31 +73,14 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
     }
   }
 
-  // mdl_sel/{model} (compact fallback)
-  const compactSelMatch = trimmed.match(/^mdl_sel\/(.+)$/);
-  if (compactSelMatch) {
-    const modelRef = compactSelMatch[1];
-    if (modelRef) {
-      return {
-        type: "select",
-        model: modelRef,
-      };
-    }
-  }
-
-  // mdl_sel_{provider/model}
-  const selMatch = trimmed.match(/^mdl_sel_(.+)$/);
+  // mdl_sel_{provider}_{page}_{modelIndex}  (page and modelIndex are 1-based)
+  const selMatch = trimmed.match(/^mdl_sel_([a-z0-9_.-]+)_(\d+)_(\d+)$/i);
   if (selMatch) {
-    const modelRef = selMatch[1];
-    if (modelRef) {
-      const slashIndex = modelRef.indexOf("/");
-      if (slashIndex > 0 && slashIndex < modelRef.length - 1) {
-        return {
-          type: "select",
-          provider: modelRef.slice(0, slashIndex),
-          model: modelRef.slice(slashIndex + 1),
-        };
-      }
+    const [, provider, pageStr, idxStr] = selMatch;
+    const page = parseStrictPositiveInteger(pageStr);
+    const modelIndex = parseStrictPositiveInteger(idxStr);
+    if (provider && page !== undefined && modelIndex !== undefined) {
+      return { type: "select", provider, page, modelIndex };
     }
   }
 
@@ -106,14 +89,12 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
 
 export function buildModelSelectionCallbackData(params: {
   provider: string;
-  model: string;
-}): string | null {
-  const fullCallbackData = `${CALLBACK_PREFIX.selectStandard}${params.provider}/${params.model}`;
-  if (fitsTelegramCallbackData(fullCallbackData)) {
-    return fullCallbackData;
-  }
-  const compactCallbackData = `${CALLBACK_PREFIX.selectCompact}${params.model}`;
-  return fitsTelegramCallbackData(compactCallbackData) ? compactCallbackData : null;
+  page: number;
+  modelIndex: number;
+}): string {
+  // Fixed-length callback (page and modelIndex are 1-based).
+  // Never embeds model names, always fits in 64 bytes (#98221).
+  return `${CALLBACK_PREFIX.select}${params.provider}_${params.page}_${params.modelIndex}`;
 }
 
 export function resolveModelSelection(params: {
@@ -121,28 +102,18 @@ export function resolveModelSelection(params: {
   providers: readonly string[];
   byProvider: ReadonlyMap<string, ReadonlySet<string>>;
 }): ResolveModelSelectionResult {
-  if (params.callback.provider) {
-    return {
-      kind: "resolved",
-      provider: params.callback.provider,
-      model: params.callback.model,
-    };
+  const { provider, modelIndex } = params.callback;
+  const models = params.byProvider.get(provider);
+  if (!models || models.size === 0) {
+    return { kind: "ambiguous", model: "", matchingProviders: params.providers };
   }
-  const matchingProviders = params.providers.filter((id) =>
-    params.byProvider.get(id)?.has(params.callback.model),
-  );
-  if (matchingProviders.length === 1) {
-    return {
-      kind: "resolved",
-      provider: matchingProviders[0],
-      model: params.callback.model,
-    };
+  // Sort models the same way buildModelsKeyboard sorts them (#98221)
+  const sorted = [...models].toSorted((a, b) => a.localeCompare(b));
+  const model = sorted[modelIndex - 1]; // modelIndex is 1-based
+  if (!model) {
+    return { kind: "ambiguous", model: "", matchingProviders: params.providers };
   }
-  return {
-    kind: "ambiguous",
-    model: params.callback.model,
-    matchingProviders,
-  };
+  return { kind: "resolved", provider, model };
 }
 
 function isCurrentModelSelection(params: {
@@ -210,12 +181,13 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   const endIndex = Math.min(startIndex + pageSize, models.length);
   const pageModels = models.slice(startIndex, endIndex);
 
-  for (const model of pageModels) {
-    const callbackData = buildModelSelectionCallbackData({ provider, model });
-    // Skip models that still exceed Telegram's callback_data limit.
-    if (!callbackData) {
-      continue;
-    }
+  for (const [pageIdx, model] of pageModels.entries()) {
+    const modelIndex = startIndex + pageIdx + 1; // 1-based absolute index in sorted models (#98221)
+    const callbackData = buildModelSelectionCallbackData({
+      provider,
+      page: currentPage,
+      modelIndex,
+    });
 
     const isCurrentModel = isCurrentModelSelection({ currentModel, provider, model });
     const fallbackLabel = model.includes("/") ? `${provider}/${model}` : model;
