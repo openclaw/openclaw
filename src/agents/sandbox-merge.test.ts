@@ -37,6 +37,41 @@ describe("sandbox config merges", () => {
     });
   });
 
+  it("preserves an explicitly empty global sandbox docker env", () => {
+    const resolved = resolveSandboxDockerConfig({
+      scope: "agent",
+      globalDocker: { env: {} },
+      agentDocker: {},
+    });
+
+    expect(resolved.env).toEqual({});
+  });
+
+  it("preserves literal sandbox docker env strings exactly", () => {
+    const resolved = resolveSandboxDockerConfig({
+      scope: "agent",
+      globalDocker: {
+        env: {
+          EMPTY: "",
+          SPACES: "  ",
+          LITERAL: "value",
+        },
+      },
+      agentDocker: {
+        env: {
+          AGENT_EMPTY: "",
+        },
+      },
+    });
+
+    expect(resolved.env).toEqual({
+      EMPTY: "",
+      SPACES: "  ",
+      LITERAL: "value",
+      AGENT_EMPTY: "",
+    });
+  });
+
   it("resolves sandbox docker GPU passthrough with agent precedence", () => {
     const inherited = resolveSandboxDockerConfig({
       scope: "agent",

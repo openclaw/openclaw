@@ -1,6 +1,6 @@
+import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 /** Builds the static and plugin-derived registry of secret migration targets. */
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { loadChannelSecretContractApiForRecord } from "./channel-contract-api.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
@@ -167,6 +167,28 @@ const CORE_SECRET_TARGET_REGISTRY: SecretTargetRegistryEntry[] = [
     targetType: "agents.list[].memorySearch.remote.apiKey",
     configFile: "openclaw.json",
     pathPattern: "agents.list[].memorySearch.remote.apiKey",
+    secretShape: SECRET_INPUT_SHAPE,
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  },
+  {
+    id: "agents.defaults.sandbox.docker.env.*",
+    targetType: "agents.defaults.sandbox.docker.env.*",
+    configFile: "openclaw.json",
+    pathPattern: "agents.defaults.sandbox.docker.env.*",
+    secretShape: SECRET_INPUT_SHAPE,
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  },
+  {
+    id: "agents.list[].sandbox.docker.env.*",
+    targetType: "agents.list[].sandbox.docker.env.*",
+    configFile: "openclaw.json",
+    pathPattern: "agents.list[].sandbox.docker.env.*",
     secretShape: SECRET_INPUT_SHAPE,
     expectedResolvedValue: "string",
     includeInPlan: true,
