@@ -783,40 +783,43 @@ describe("routine service", () => {
   });
 
   it("persists live enabled state after adopting an enabled orphan backing cron job", async () => {
-    await withOpenClawTestState({ prefix: "routine-adopt-enabled-orphan-disabled-input-" }, async () => {
-      const cron = createFakeCronService();
-      const created = await createRoutine(createRoutineInput(), {
-        cron,
-        cronStorePath: "/tmp/cron.sqlite",
-      });
-      const cronJobId = created.routine.trigger.cronJobId;
-      const cronJob = cron.jobs.get(cronJobId);
-      if (!cronJob) {
-        throw new Error("expected backing cron job");
-      }
-      expect(cronJob.enabled).toBe(true);
-      openOpenClawStateDatabase().db.exec("DELETE FROM routine_records");
+    await withOpenClawTestState(
+      { prefix: "routine-adopt-enabled-orphan-disabled-input-" },
+      async () => {
+        const cron = createFakeCronService();
+        const created = await createRoutine(createRoutineInput(), {
+          cron,
+          cronStorePath: "/tmp/cron.sqlite",
+        });
+        const cronJobId = created.routine.trigger.cronJobId;
+        const cronJob = cron.jobs.get(cronJobId);
+        if (!cronJob) {
+          throw new Error("expected backing cron job");
+        }
+        expect(cronJob.enabled).toBe(true);
+        openOpenClawStateDatabase().db.exec("DELETE FROM routine_records");
 
-      const replay = await createRoutine(createRoutineInput({ enabled: false }), {
-        cron,
-        cronStorePath: "/tmp/cron.sqlite",
-      });
+        const replay = await createRoutine(createRoutineInput({ enabled: false }), {
+          cron,
+          cronStorePath: "/tmp/cron.sqlite",
+        });
 
-      expect(replay.created).toBe(false);
-      expect(replay.idempotent).toBe(true);
-      expect(replay.routine.enabled).toBe(true);
-      cron.jobs.delete(cronJobId);
-      await expect(
-        inspectRoutine("daily-ops", { cron, cronStorePath: "/tmp/cron.sqlite" }),
-      ).resolves.toMatchObject({
-        enabled: true,
-        status: {
-          status: "missing",
-          backing: "missing",
+        expect(replay.created).toBe(false);
+        expect(replay.idempotent).toBe(true);
+        expect(replay.routine.enabled).toBe(true);
+        cron.jobs.delete(cronJobId);
+        await expect(
+          inspectRoutine("daily-ops", { cron, cronStorePath: "/tmp/cron.sqlite" }),
+        ).resolves.toMatchObject({
           enabled: true,
-        },
-      });
-    });
+          status: {
+            status: "missing",
+            backing: "missing",
+            enabled: true,
+          },
+        });
+      },
+    );
   });
 
   it("completes a persisted staged routine whose backing cron job was not armed", async () => {
@@ -997,9 +1000,44 @@ describe("routine service", () => {
           driftReason: expect.stringContaining("changed intent"),
         },
       });
-      await expect(createRoutine(createRoutineInput(), { cron })).rejects.toThrow(
-        "different intent",
-      );
+      await expect(createRoutine(createRoutineInput(), { cron })).rejects.toThrow("changed intent");
+    });
+  });
+
+  it("rejects create replay that matches a drifted backing cron job", async () => {
+    await withOpenClawTestState({ prefix: "routine-cron-drift-replay-" }, async () => {
+      const cron = createFakeCronService();
+      const created = await createRoutine(createRoutineInput(), { cron });
+      const cronJob = cron.jobs.get(created.routine.trigger.cronJobId);
+      if (!cronJob) {
+        throw new Error("expected backing cron job");
+      }
+      const driftedSchedule = { kind: "every" as const, everyMs: 120_000 };
+      cron.jobs.set(cronJob.id, {
+        ...cronJob,
+        schedule: driftedSchedule,
+        updatedAtMs: cronJob.updatedAtMs + 1,
+      });
+
+      await expect(
+        createRoutine(
+          createRoutineInput({
+            trigger: {
+              kind: "schedule",
+              schedule: driftedSchedule,
+            },
+          }),
+          { cron },
+        ),
+      ).rejects.toThrow("different intent");
+      await expect(inspectRoutine("daily-ops", { cron })).resolves.toMatchObject({
+        trigger: { schedule: created.routine.trigger.schedule },
+        status: {
+          status: "drifted",
+          backing: "drifted",
+          driftReason: expect.stringContaining("changed intent"),
+        },
+      });
     });
   });
 

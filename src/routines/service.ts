@@ -916,9 +916,10 @@ function toRoutineView(record: RoutineStoredRecord, cronJob: CronJob | undefined
   const status = routineStatus(record, cronJob);
   // Cron is canonical for executable fields while linked. The routine row is a
   // registry snapshot used for missing-backing visibility and create recovery.
-  const source = cronJob && status.backing === "linked"
-    ? createRoutineRecordFromCronJob(record, cronJob)
-    : toPublicRoutineRecord(record);
+  const source =
+    cronJob && status.backing === "linked"
+      ? createRoutineRecordFromCronJob(record, cronJob)
+      : toPublicRoutineRecord(record);
   return {
     ...source,
     enabled: status.enabled,
@@ -1025,6 +1026,21 @@ function assertRoutineBackingCronJobMatches(
   const comparable = createRoutineRecordFromCronJob(record, cronJob);
   if (
     routineIntentSignature(comparable, {
+      includeEveryAnchor: hasExplicitEveryAnchor(record.trigger.schedule),
+    }) !== routineIntentSignatureFromNormalized(normalized)
+  ) {
+    throw routineInvalidRequest(
+      `routine id already exists with different intent: ${normalized.id}`,
+    );
+  }
+}
+
+function assertRoutineCreateIntentMatchesRecord(
+  record: RoutineRecord,
+  normalized: NormalizedRoutineCreate,
+): void {
+  if (
+    routineIntentSignature(record, {
       includeEveryAnchor: hasExplicitEveryAnchor(record.trigger.schedule),
     }) !== routineIntentSignatureFromNormalized(normalized)
   ) {
@@ -1266,16 +1282,9 @@ export async function createRoutine(
       if (existing) {
         assertRoutineCronStoreActive(existing, context.cronStorePath);
         const existingCronJob = await context.cron.readJob(existing.trigger.cronJobId);
+        assertRoutineCreateIntentMatchesRecord(existing, normalized);
         if (existingCronJob) {
-          assertRoutineBackingCronJobMatches(existing, normalized, existingCronJob);
-        } else if (
-          routineIntentSignature(existing, {
-            includeEveryAnchor: hasExplicitEveryAnchor(existing.trigger.schedule),
-          }) !== routineIntentSignatureFromNormalized(normalized)
-        ) {
-          throw routineInvalidRequest(
-            `routine id already exists with different intent: ${normalized.id}`,
-          );
+          assertRoutineBackingCronJobMatchesRecord(existing, existingCronJob);
         }
         if (!existingCronJob) {
           return {
