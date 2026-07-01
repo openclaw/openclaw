@@ -608,6 +608,8 @@ export type ChannelMessagingAdapter = {
   targetResolver?: {
     looksLikeId?: (raw: string, normalized?: string) => boolean;
     hint?: string;
+    /** Bare words that are command/session references for this channel, not literal destinations. */
+    reservedLiterals?: readonly string[];
     /**
      * Plugin-owned fallback for explicit/native targets or post-directory-miss
      * resolution. This should complement directory lookup, not duplicate it.
@@ -763,6 +765,8 @@ export type ChannelMessageActionAdapter = {
         aliases: string[];
         /** Alias fields that identify the destination conversation, not an existing message. */
         deliveryTargetAliases?: string[];
+        /** Convert typed owner fields such as chatId into the canonical shared target shape. */
+        resolveDeliveryTarget?: (params: { args: Record<string, unknown> }) => string | undefined;
       }
     >
   >;

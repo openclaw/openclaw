@@ -244,4 +244,71 @@ describe("irc inbound behavior", () => {
     expect(ctx?.To).toBe("channel:#ops");
     expect(ctx?.OriginatingTo).toBe("channel:#ops");
   });
+
+  it("drops a spoofed sender for a host-less nick!user DM allowlist entry", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    const runtime = createRuntimeEnv();
+    setIrcRuntime(coreRuntime as never);
+
+    await handleIrcInbound({
+      message: createMessage({
+        target: "alice",
+        senderNick: "alice",
+        senderUser: "ident",
+        senderHost: "attacker.example",
+        text: "hello",
+      }),
+      account: createAccount({
+        config: {
+          dmPolicy: "allowlist",
+          allowFrom: ["alice!ident"],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+        },
+      }),
+      config: { channels: { irc: {} } } as CoreConfig,
+      runtime,
+      sendReply: vi.fn(async () => {}),
+    });
+
+    expect(
+      (coreRuntime.channel.inbound.dispatchReply as unknown as { mock: { calls: unknown[][] } })
+        .mock.calls.length,
+    ).toBe(0);
+    expect(runtime.log).toHaveBeenCalledWith(
+      "irc: drop DM sender alice!ident@attacker.example (dmPolicy=allowlist)",
+    );
+  });
+
+  it("admits a sender matching a full nick!user@host DM allowlist entry", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    const runtime = createRuntimeEnv();
+    setIrcRuntime(coreRuntime as never);
+
+    await handleIrcInbound({
+      message: createMessage({
+        target: "alice",
+        senderNick: "alice",
+        senderUser: "ident",
+        senderHost: "example.com",
+        text: "hello",
+      }),
+      account: createAccount({
+        config: {
+          dmPolicy: "allowlist",
+          allowFrom: ["alice!ident@example.com"],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+        },
+      }),
+      config: { channels: { irc: {} } } as CoreConfig,
+      runtime,
+      sendReply: vi.fn(async () => {}),
+    });
+
+    expect(
+      (coreRuntime.channel.inbound.dispatchReply as unknown as { mock: { calls: unknown[][] } })
+        .mock.calls.length,
+    ).toBe(1);
+  });
 });

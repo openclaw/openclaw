@@ -1,0 +1,37 @@
+<resources>
+    <string name="app_name">OpenClaw Node</string>
+    <string name="gateway_connection">Koneksi Gateway</string>
+    <string name="connect_gateway">Hubungkan Gateway</string>
+    <string name="disconnect">Putuskan koneksi</string>
+    <string name="trust_this_gateway">Percayai gateway ini?</string>
+    <string name="trust_and_continue">Percayai dan lanjutkan</string>
+    <string name="cancel">Batal</string>
+    <string name="endpoint">Endpoint</string>
+    <string name="status">Status</string>
+    <string name="connected_gateway_ready">Gateway Anda aktif dan siap.</string>
+    <string name="connect_gateway_get_started">Hubungkan ke gateway Anda untuk memulai.</string>
+    <string name="copy_report_for_claw">Salin Laporan untuk Claw</string>
+    <string name="advanced_controls">Kontrol lanjutan</string>
+    <string name="connection_method">Metode koneksi</string>
+    <string name="setup_code">Kode Penyiapan</string>
+    <string name="manual">Manual</string>
+    <string name="paste_setup_code">Tempel kode penyiapan</string>
+    <string name="host">Host</string>
+    <string name="use_tls">Gunakan TLS</string>
+    <string name="token_optional">Token (opsional)</string>
+    <string name="password">Kata sandi</string>
+    <string name="run_onboarding_again">Jalankan onboarding lagi</string>
+    <string name="resolved_endpoint">Endpoint yang diselesaikan</string>
+    <string name="gateway_setup">Penyiapan Gateway</string>
+    <string name="connect_to_gateway">Hubungkan ke Gateway Anda</string>
+    <string name="scan_setup_code">Pindai kode penyiapan</string>
+    <string name="use_gateway_qr">Gunakan QR Gateway atau kode penyiapan Anda</string>
+    <string name="nearby_gateway">Gateway terdekat</string>
+    <string name="enter_gateway_url">Masukkan URL gateway</string>
+    <string name="connect_manual_url">Hubungkan menggunakan URL manual</string>
+    <string name="permissions">Izin</string>
+    <string name="done">Selesai</string>
+    <string name="gateway_trust_first_seen">Verifikasi sidik jari sertifikat sebelum memercayai gateway ini.\n\n%1$s</string>
+    <string name="gateway_trust_changed">Sertifikat gateway berubah. Lanjutkan hanya jika Anda mengharapkan perubahan ini.\n\nSHA-256 lama:\n%1$s\n\nSHA-256 baru:\n%2$s</string>
+    <string name="gateway_recovery">Pemulihan gateway</string>
+</resources>

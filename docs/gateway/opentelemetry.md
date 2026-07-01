@@ -194,6 +194,12 @@ on the public diagnostic event bus.
   internal request trace scope. Logs and diagnostic events inside that scope
   inherit the request trace by default, while agent run and model-call spans are
   created as children so provider `traceparent` headers stay on the same trace.
+- **Model-call correlation:** `openclaw.model.call` spans include safe prompt
+  component sizes by default and include per-call token attributes when the
+  provider result exposes usage. `openclaw.model.usage` remains the run-level
+  accounting span for aggregate cost, context, and channel dashboards; it stays
+  on the same diagnostic trace when the emitting runtime has trusted trace
+  context.
 
 ## Exported metrics
 
@@ -333,6 +339,8 @@ Liveness warnings also emit:
   - `gen_ai.request.model`, `gen_ai.operation.name`, `openclaw.provider`, `openclaw.model`, `openclaw.api`, `openclaw.transport`
   - `openclaw.errorCategory` and optional `openclaw.failureKind` on errors
   - `openclaw.model_call.request_bytes`, `openclaw.model_call.response_bytes`, `openclaw.model_call.time_to_first_byte_ms`
+  - `openclaw.model_call.prompt.input_messages_count`, `openclaw.model_call.prompt.input_messages_chars`, `openclaw.model_call.prompt.system_prompt_chars`, `openclaw.model_call.prompt.tool_definitions_count`, `openclaw.model_call.prompt.tool_definitions_chars`, `openclaw.model_call.prompt.total_chars` (safe component sizes only, no prompt text)
+  - `openclaw.model_call.usage.*` and `gen_ai.usage.*` when the model-call result carries provider usage for that individual call
   - `openclaw.provider.request_id_hash` (bounded SHA-based hash of the upstream provider request id; raw ids are not exported)
   - With `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`, model-call spans use the latest GenAI inference span name `{gen_ai.operation.name} {gen_ai.request.model}` and `CLIENT` span kind instead of `openclaw.model.call`.
 - `openclaw.harness.run`
@@ -404,6 +412,10 @@ to them directly without OTLP export.
 - `exec.process.completed` - terminal outcome, duration, target, mode, exit
   code, and failure kind. Command text and working directories are not
   included.
+- `exec.approval.followup_suppressed` - stale approval follow-up dropped after
+  a session rebound. Includes `approvalId`, `reason` (`session_rebound`),
+  `phase` (`direct_delivery` or `gateway_preflight`), and the dispatcher
+  timestamp. Session keys, routes, and command text are not included.
 
 ## Without an exporter
 

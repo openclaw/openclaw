@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { AUTH_PROFILE_FILENAME } from "../agents/auth-profiles/constants.js";
+import { deleteTestEnvValue } from "../test-utils/env.js";
 import { testing as controlPlaneRateLimitTesting } from "./control-plane-rate-limit.js";
 import {
   connectOk,
@@ -147,7 +148,7 @@ async function expectSchemaLookupInvalid(pathValue: unknown) {
 }
 
 async function writeUnresolvedAuthProfileTokenRef(missingEnvVar: string) {
-  delete process.env[missingEnvVar];
+  deleteTestEnvValue(missingEnvVar);
   const authStorePath = path.join(resolveDefaultAgentDir({}), AUTH_PROFILE_FILENAME);
   await fs.mkdir(path.dirname(authStorePath), { recursive: true });
   await fs.writeFile(
@@ -177,7 +178,7 @@ beforeEach(() => {
 describe("gateway config methods", () => {
   it("rejects config.set when SecretRef resolution fails", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_${Date.now()}`;
-    delete process.env[missingEnvVar];
+    deleteTestEnvValue(missingEnvVar);
     const current = await getCurrentConfigObject();
     const nextConfig = configWithGatewayTokenSecretRef(current.config, missingEnvVar);
 
@@ -273,6 +274,82 @@ describe("gateway config methods", () => {
       const persisted = await fs.readFile(configPath, "utf-8");
       expect(persisted).toContain('"port": 19002');
       expect(persisted).not.toContain('"baseUrl"');
+    } finally {
+      await fs.rm(configPath, { force: true });
+      resetConfigRuntimeState();
+    }
+  });
+
+  it("accepts config.patch when bundled provider baseUrl was only defaulted", async () => {
+    const { createConfigIO, resetConfigRuntimeState } = await import("../config/config.js");
+    const configPath = createConfigIO().configPath;
+    try {
+      await writeJsonFile(configPath, {
+        models: {
+          providers: {
+            openai: {
+              agentRuntime: { id: "openclaw" },
+            },
+          },
+        },
+      });
+      resetConfigRuntimeState();
+
+      const current = await getCurrentConfigObject();
+
+      const res = await rpcReq<{
+        ok?: boolean;
+        error?: { message?: string };
+      }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({ gateway: { port: 19003 } }),
+        baseHash: current.hash,
+      });
+
+      expect(res.error).toBeUndefined();
+      expect(res.ok).toBe(true);
+      const persisted = await fs.readFile(configPath, "utf-8");
+      expect(persisted).toContain('"port": 19003');
+      expect(persisted).not.toContain('"baseUrl"');
+      expect(persisted).not.toContain('"models": []');
+    } finally {
+      await fs.rm(configPath, { force: true });
+      resetConfigRuntimeState();
+    }
+  });
+
+  it("preserves authored empty bundled provider models during config.patch", async () => {
+    const { createConfigIO, resetConfigRuntimeState } = await import("../config/config.js");
+    const configPath = createConfigIO().configPath;
+    try {
+      await writeJsonFile(configPath, {
+        models: {
+          providers: {
+            openai: {
+              agentRuntime: { id: "openclaw" },
+              models: [],
+            },
+          },
+        },
+      });
+      resetConfigRuntimeState();
+
+      const current = await getCurrentConfigObject();
+
+      const res = await rpcReq<{
+        ok?: boolean;
+        error?: { message?: string };
+      }>(requireWs(), "config.patch", {
+        raw: JSON.stringify({ gateway: { port: 19004 } }),
+        baseHash: current.hash,
+      });
+
+      expect(res.error).toBeUndefined();
+      expect(res.ok).toBe(true);
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        models?: { providers?: { openai?: { baseUrl?: unknown; models?: unknown } } };
+      };
+      expect(persisted.models?.providers?.openai?.baseUrl).toBeUndefined();
+      expect(persisted.models?.providers?.openai?.models).toEqual([]);
     } finally {
       await fs.rm(configPath, { force: true });
       resetConfigRuntimeState();
@@ -805,7 +882,7 @@ describe("gateway config methods", () => {
 
   it("rejects config.patch when merged SecretRefs cannot resolve", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_PATCH_${Date.now()}`;
-    delete process.env[missingEnvVar];
+    deleteTestEnvValue(missingEnvVar);
     const beforeHash = await getConfigHash();
     const res = await rpcReq<{ ok?: boolean; error?: { message?: string } }>(
       requireWs(),
@@ -837,7 +914,7 @@ describe("gateway config methods", () => {
 describe("gateway config.apply", () => {
   it("rejects config.apply when SecretRef resolution fails", async () => {
     const missingEnvVar = `OPENCLAW_MISSING_SECRETREF_APPLY_${Date.now()}`;
-    delete process.env[missingEnvVar];
+    deleteTestEnvValue(missingEnvVar);
     const current = await getCurrentConfigObject();
     const nextConfig = configWithGatewayTokenSecretRef(current.config, missingEnvVar);
 

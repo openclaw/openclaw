@@ -624,7 +624,11 @@ def run_copilot(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         raise SystemExit("--thinking is not supported by the copilot engine")
     if not args.tools:
         raise SystemExit("--no-tools is not supported by the copilot engine; copilot requires a read-only file view tool to load the review bundle without exposing it in argv")
-    with tempfile.TemporaryDirectory(prefix="autoreview-copilot.") as tempdir:
+    # ignore_cleanup_errors: on Windows the spawned copilot process (and its MCP
+    # subprocesses) keep `tempdir` as their cwd briefly after exit, holding a directory
+    # handle that makes rmtree fail with WinError 32. The review already completed, so a
+    # cleanup race must not abort the run; best-effort delete is correct here.
+    with tempfile.TemporaryDirectory(prefix="autoreview-copilot.", ignore_cleanup_errors=True) as tempdir:
         prompt_path = Path(tempdir) / "prompt.txt"
         prompt_path.write_text(prompt)
         os.chmod(prompt_path, 0o600)

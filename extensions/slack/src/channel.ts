@@ -30,6 +30,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import {
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
@@ -423,6 +424,7 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: null,
   textChunkLimit: SLACK_TEXT_LIMIT,
+  sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
   normalizePayload: ({ payload, cfg, accountId }) =>
     isSlackInteractiveRepliesEnabled({ cfg, accountId })
       ? compileSlackInteractiveReplies(payload)
@@ -661,8 +663,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         }
         return resolveTargetsWithOptionalToken({
           token:
-            normalizeOptionalString(account.userToken) ??
-            normalizeOptionalString(account.botToken),
+            normalizeOptionalString(account.userToken) ?? normalizeOptionalString(account.botToken),
           inputs,
           missingTokenNote: "missing Slack token",
           resolveWithToken: async ({ token, inputs: inputsLocal }) =>
@@ -817,10 +818,14 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
               toolContext,
             }),
           ),
-    resolveReplyTransport: ({ threadId, replyToId, replyDelivery }) => {
+    resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit, replyDelivery }) => {
+      const allowedReplyToId = replyDelivery?.replyToMode === "off" ? undefined : replyToId;
+      // Slack's thread_ts identifies the root. Only known inherited replies may let
+      // that root replace a child timestamp; explicit and unknown callers stay reply-first.
+      const preferThreadId = replyToIsExplicit === false;
       const resolvedReplyToId = resolveSlackThreadTsValue({
-        replyToId: replyDelivery?.replyToMode === "off" ? undefined : replyToId,
-        threadId,
+        replyToId: preferThreadId ? threadId : allowedReplyToId,
+        threadId: preferThreadId ? allowedReplyToId : threadId,
       });
       return {
         replyToId:

@@ -42,4 +42,3 @@ export const testing = {
     precomputedChannelOptions = undefined;
   },
 };
-export { testing as __testing };

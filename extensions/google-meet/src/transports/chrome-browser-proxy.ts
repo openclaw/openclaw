@@ -192,6 +192,7 @@ export async function callBrowserProxyOnNode(params: {
       timeoutMs: params.timeoutMs,
     },
     timeoutMs: addTimerTimeoutGraceMs(params.timeoutMs) ?? 1,
+    scopes: ["operator.admin"],
   });
   return parseBrowserProxyResult(raw);
 }

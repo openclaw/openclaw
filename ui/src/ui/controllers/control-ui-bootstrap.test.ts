@@ -16,6 +16,7 @@ function requireFetchCall(fetchMock: ReturnType<typeof vi.fn>, index = 0) {
 describe("loadControlUiBootstrapConfig", () => {
   afterEach(() => {
     setUiTimeFormatPreference("auto");
+    document.documentElement.removeAttribute("style");
   });
 
   it("threads agents.defaults.timeFormat into the UI hour-cycle preference", async () => {
@@ -104,6 +105,101 @@ describe("loadControlUiBootstrapConfig", () => {
     expect(state.embedSandboxMode).toBe("scripts");
     expect(state.allowExternalEmbedUrls).toBe(true);
     expect(state.chatMessageMaxWidth).toBe("min(1280px, 82%)");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("applies configured seamColor to Control UI accent variables", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        basePath: "",
+        assistantName: "Main",
+        assistantAvatar: "M",
+        assistantAgentId: "main",
+        seamColor: "#1A2b3C",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const state = {
+      basePath: "",
+      assistantName: "Assistant",
+      assistantAvatar: null,
+      assistantAvatarSource: null,
+      assistantAvatarStatus: null,
+      assistantAvatarReason: null,
+      assistantAgentId: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      chatMessageMaxWidth: null,
+      serverVersion: null,
+    };
+
+    await loadControlUiBootstrapConfig(state);
+
+    const rootStyle = document.documentElement.style;
+    expect(rootStyle.getPropertyValue("--accent")).toBe("#1A2b3C");
+    expect(rootStyle.getPropertyValue("--ring")).toBe("#1A2b3C");
+    expect(rootStyle.getPropertyValue("--primary")).toBe("#1A2b3C");
+    expect(rootStyle.getPropertyValue("--accent-hover")).toBe(
+      "color-mix(in srgb, var(--accent) 82%, white 18%)",
+    );
+    expect(rootStyle.getPropertyValue("--accent-subtle")).toBe(
+      "color-mix(in srgb, var(--accent) 16%, transparent)",
+    );
+
+    vi.unstubAllGlobals();
+  });
+
+  it("removes server seamColor variables when bootstrap color is missing or invalid", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          basePath: "",
+          assistantName: "Main",
+          assistantAvatar: "M",
+          assistantAgentId: "main",
+          seamColor: "00aaee",
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          basePath: "",
+          assistantName: "Main",
+          assistantAvatar: "M",
+          assistantAgentId: "main",
+          seamColor: "lobster",
+        }),
+      });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const state = {
+      basePath: "",
+      assistantName: "Assistant",
+      assistantAvatar: null,
+      assistantAvatarSource: null,
+      assistantAvatarStatus: null,
+      assistantAvatarReason: null,
+      assistantAgentId: null,
+      localMediaPreviewRoots: [],
+      embedSandboxMode: "scripts" as const,
+      allowExternalEmbedUrls: false,
+      chatMessageMaxWidth: null,
+      serverVersion: null,
+    };
+
+    await loadControlUiBootstrapConfig(state);
+    expect(document.documentElement.style.getPropertyValue("--accent")).toBe("#00aaee");
+
+    await loadControlUiBootstrapConfig(state);
+    expect(document.documentElement.style.getPropertyValue("--accent")).toBe("");
+    expect(document.documentElement.style.getPropertyValue("--ring")).toBe("");
+    expect(document.documentElement.style.getPropertyValue("--focus-ring")).toBe("");
 
     vi.unstubAllGlobals();
   });

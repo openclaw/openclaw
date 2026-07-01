@@ -65,6 +65,17 @@ describe("usage-bar verbs", () => {
     expect(render([{ text: "{m|alias:models}" }], { m: "some-new-model" })).toBe("some-new-model");
   });
 
+  it("alias — prototype keys (toString, constructor) do not match inherited properties", () => {
+    // When a model is named "toString" or "constructor", the `in` operator
+    // would match Object.prototype inherited properties and return
+    // Object.prototype.toString (a function) instead of the raw key.
+    // After the fix (Object.hasOwn), these should echo through unchanged.
+    expect(render([{ text: "{m|alias:models}" }], { m: "toString" })).toBe("toString");
+    expect(render([{ text: "{m|alias:models}" }], { m: "constructor" })).toBe("constructor");
+    expect(render([{ text: "{m|alias:models}" }], { m: "valueOf" })).toBe("valueOf");
+    expect(render([{ text: "{m|alias:models}" }], { m: "__proto__" })).toBe("__proto__");
+  });
+
   it("fallback when path is missing/empty", () => {
     expect(render([{ text: "{identity.emoji|🤖} hi" }], {})).toBe("🤖 hi");
     expect(render([{ text: "{identity.emoji|🤖} hi" }], { identity: { emoji: "🩺" } })).toBe(
@@ -85,6 +96,18 @@ describe("usage-bar segment forms", () => {
     expect(render(seg, { state: { fast_mode: true } })).toBe("⚡");
     expect(render(seg, { state: { fast_mode: false } })).toBe("🐌");
     expect(render(seg, { state: {} })).toBe("");
+  });
+
+  it("map — prototype keys (toString, constructor) do not match inherited properties", () => {
+    // When the map key is "toString" or "constructor", the `in` operator
+    // would incorrectly match Object.prototype inherited properties and
+    // return undefined (Object.prototype.toString is a function, not a
+    // string case value) instead of falling through to _default.
+    const seg = [
+      { map: "state.mode", cases: { toString: "should-not-match", _default: "fallback" } },
+    ];
+    expect(render(seg, { state: { mode: "toString" } })).toBe("should-not-match");
+    expect(render(seg, { state: { mode: "constructor" } })).toBe("fallback");
   });
 
   it("each with item_scales picks a scale per window by position", () => {

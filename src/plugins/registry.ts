@@ -741,9 +741,21 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }> = [];
     for (const event of normalizedEvents) {
       const wrappedHandler: typeof handler = async (evt) => {
-        // Shallow-copy to avoid mutating the shared event object
-        // passed to all handlers sequentially by triggerInternalHook
-        return handler({ ...evt, context: { ...evt.context, pluginConfig } });
+        const context = evt.context;
+        const hadPluginConfig = Object.hasOwn(context, "pluginConfig");
+        const previousPluginConfig = context.pluginConfig;
+        // Internal hooks intentionally share one mutable context object across
+        // handlers; only pluginConfig stays per-handler and is restored after.
+        context.pluginConfig = pluginConfig;
+        try {
+          return await handler({ ...evt, context });
+        } finally {
+          if (hadPluginConfig) {
+            context.pluginConfig = previousPluginConfig;
+          } else {
+            delete context.pluginConfig;
+          }
+        }
       };
       registerInternalHook(event, wrappedHandler);
       nextRegistrations.push({ event, handler: wrappedHandler });
@@ -2649,7 +2661,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
             pluginRuntimeRecordById.get(pluginId) ??
             registry.plugins.find((entry) => entry.id === pluginId);
           return record?.source
-            ? withPluginRuntimePluginScope({ pluginId, pluginSource: record.source }, run)
+            ? withPluginRuntimePluginScope(
+                {
+                  pluginId,
+                  pluginSource: record.source,
+                  pluginOrigin: record.origin,
+                  pluginTrustedOfficialInstall: record.trustedOfficialInstall,
+                },
+                run,
+              )
             : withPluginRuntimePluginScope({ pluginId }, run);
         };
         const getRuntimeProperty = () => {
@@ -2712,6 +2732,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
             complete: (params) =>
               withPluginRuntimePluginIdScope(pluginId, () => llm.complete(params)),
           } satisfies PluginRuntime["llm"];
+        }
+        if (prop === "nodes") {
+          const nodes = getRuntimeProperty();
+          return {
+            list: (params) => runWithPluginScope(() => nodes.list(params)),
+            invoke: (params) => runWithPluginScope(() => nodes.invoke(params)),
+          } satisfies PluginRuntime["nodes"];
         }
         if (prop !== "subagent") {
           return getRuntimeProperty();
@@ -2885,6 +2912,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   `plugin:${record.id}`,
                   {
                     allowSameOwnerRefresh: true,
+                    lifecycle: registrationMode === "full" ? "runtime" : "readOnlyDiscovery",
                   },
                 );
                 if (!result.ok) {

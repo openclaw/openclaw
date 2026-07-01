@@ -476,6 +476,45 @@ describe("google transport stream", () => {
     expect(result.content[2]).toHaveProperty("thoughtSignature", "Y2FsbF9zaWdfMQ==");
   });
 
+  it("preserves MAX_TOKENS when the partial response contains a function call", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      buildSseResponse([
+        {
+          candidates: [
+            {
+              content: {
+                parts: [{ functionCall: { name: "lookup", args: { q: "hello" } } }],
+              },
+              finishReason: "MAX_TOKENS",
+            },
+          ],
+        },
+      ]),
+    );
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGeminiModel(),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+          tools: [
+            {
+              name: "lookup",
+              description: "Look up a value",
+              parameters: { type: "object" },
+            },
+          ],
+        } as Parameters<typeof streamFn>[1],
+        { apiKey: "gemini-api-key" } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("length");
+    expect(result.content).toEqual([expect.objectContaining({ type: "toolCall", name: "lookup" })]);
+  });
+
   it("strips redundant google provider prefixes from Gemini API model paths", async () => {
     guardedFetchMock.mockResolvedValueOnce(buildSseResponse([]));
 
@@ -2125,6 +2164,173 @@ describe("google transport stream", () => {
     } as never);
 
     expect(params.contents).toEqual([{ role: "user", parts: [{ text: " " }] }]);
+  });
+
+  it("serializes structured-only Google tool results before fallback", () => {
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
+      messages: [
+        googleToolCallAssistantTurn(),
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "lookup",
+          content: [
+            {
+              type: "json",
+              value: { city: "Paris", temperatureC: 21 },
+              apiToken: "secret-token-123",
+            },
+          ],
+          isError: false,
+          timestamp: 1,
+        },
+      ],
+    } as never);
+
+    const functionResponse = (params.contents[1] as GoogleTestContentTurn).parts[0]
+      .functionResponse as { response: { output: string } };
+
+    expect(functionResponse).toMatchObject({ name: "lookup" });
+    expect(functionResponse.response.output).toContain('"city":"Paris"');
+    expect(functionResponse.response.output).toContain('"temperatureC":21');
+    expect(functionResponse.response.output).toContain('"apiToken":"');
+    expect(functionResponse.response.output).not.toContain("secret-token-123");
+  });
+
+  it("keeps explicit Google tool-result text before structured fallback", () => {
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
+      messages: [
+        googleToolCallAssistantTurn(),
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "lookup",
+          content: [
+            { type: "json", value: { ignored: true } },
+            { type: "text", text: "explicit result" },
+          ],
+          isError: false,
+          timestamp: 1,
+        },
+      ],
+    } as never);
+
+    expect(params.contents[1]).toMatchObject({
+      parts: [{ functionResponse: { response: { output: "explicit result" } } }],
+    });
+  });
+
+  it("redacts opaque and binary structured Google tool-result fields", () => {
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
+      messages: [
+        googleToolCallAssistantTurn(),
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "lookup",
+          content: [
+            {
+              type: "resource",
+              mimeType: "image/png",
+              data: "abcdef",
+              encrypted_content: "opaque",
+              text: "data:image/png;base64,abcdef",
+            },
+          ],
+          isError: false,
+          timestamp: 1,
+        },
+      ],
+    } as never);
+
+    const functionResponse = (params.contents[1] as GoogleTestContentTurn).parts[0]
+      .functionResponse as { response: { output: string } };
+
+    expect(functionResponse.response.output).toContain('"data":"[binary data omitted: 6 chars]"');
+    expect(functionResponse.response.output).toContain(
+      '"encrypted_content":"[omitted encrypted_content]"',
+    );
+    expect(functionResponse.response.output).toContain('"text":"[inline data URI: 23 chars]"');
+  });
+
+  it("uses shared structured redaction for Google tool-result fields", () => {
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
+      messages: [
+        googleToolCallAssistantTurn(),
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "lookup",
+          content: [
+            {
+              type: "json",
+              privateKey: "leaked-private-key-value-12345",
+              private_key: "leaked-private-key-snake-12345",
+              key: "leaked-generic-key-value-12345",
+              keyMaterial: "leaked-key-material-value-12345",
+              jwt: "leaked-jwt-value-1234567890",
+              session: "leaked-session-value-123456",
+              code: "code-value-1234567890",
+              error: { code: "ERR_VISIBLE_GOOGLE_CODE" },
+              oauth: { code: "OPAQUEGOOGLECODE1234567890" },
+              providerError: { error: { code: "ERR_VISIBLE_PROVIDER_GOOGLE_CODE" } },
+              signature: "leaked-signature-value-12345",
+              cookie: "leaked-cookie-value-123456",
+              "set-cookie": "leaked-set-cookie-value-12345",
+              paymentCredential: "leaked-payment-credential-12345",
+              cardNumber: "41111111111111112222",
+              visible: "safe-value",
+            },
+          ],
+          isError: false,
+          timestamp: 1,
+        },
+      ],
+    } as never);
+
+    const functionResponse = (params.contents[1] as GoogleTestContentTurn).parts[0]
+      .functionResponse as { response: { output: string } };
+
+    expect(functionResponse.response.output).toContain('"visible":"safe-value"');
+    expect(functionResponse.response.output).toContain('"code":"ERR_VISIBLE_GOOGLE_CODE"');
+    expect(functionResponse.response.output).toContain('"code":"ERR_VISIBLE_PROVIDER_GOOGLE_CODE"');
+    for (const leakedValue of [
+      "leaked-private-key-value-12345",
+      "leaked-private-key-snake-12345",
+      "leaked-generic-key-value-12345",
+      "leaked-key-material-value-12345",
+      "leaked-jwt-value-1234567890",
+      "leaked-session-value-123456",
+      "code-value-1234567890",
+      "OPAQUEGOOGLECODE1234567890",
+      "leaked-signature-value-12345",
+      "leaked-cookie-value-123456",
+      "leaked-set-cookie-value-12345",
+      "leaked-payment-credential-12345",
+      "41111111111111112222",
+    ]) {
+      expect(functionResponse.response.output).not.toContain(leakedValue);
+    }
+  });
+
+  it("keeps Google media-only tool results on media placeholders", () => {
+    const params = buildGoogleGenerativeAiParams(buildGeminiModel(), {
+      messages: [
+        googleToolCallAssistantTurn(),
+        {
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "lookup",
+          content: [{ type: "audio", mimeType: "audio/wav", data: "wav-bytes" }],
+          isError: false,
+          timestamp: 1,
+        },
+      ],
+    } as never);
+
+    expect(params.contents[1]).toMatchObject({
+      parts: [{ functionResponse: { response: { output: "(see attached audio)" } } }],
+    });
   });
 
   it.each([

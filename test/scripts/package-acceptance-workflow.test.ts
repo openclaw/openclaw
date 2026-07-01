@@ -290,6 +290,11 @@ describe("package acceptance workflow", () => {
       '"+refs/heads/main:refs/remotes/origin/main"',
     );
     expect(workflowStep(hydrate, "Prepare Crabbox shell").if).toBeUndefined();
+    const prepareCrabboxShell = workflowStep(hydrate, "Prepare Crabbox shell").run;
+    expect(prepareCrabboxShell).toContain("link_node_tool()");
+    expect(prepareCrabboxShell).toContain('readlink -f "$source"');
+    expect(prepareCrabboxShell).toContain('readlink -f "$target"');
+    expect(prepareCrabboxShell).toContain("link_node_tool corepack");
     expect(workflowStep(hydrate, "Ensure Docker is running").if).toBeUndefined();
     expect(workflowStep(hydrate, "Ensure SSH is available").if).toBeUndefined();
     expect(workflowStep(hydrate, "Hydrate provider env helper").if).toBeUndefined();
@@ -363,6 +368,11 @@ describe("package acceptance workflow", () => {
     expect(workflowStep(hydrateGithub, "Setup Node environment").uses).toBe(
       "./.github/actions/setup-node-env",
     );
+    const hydrateGithubCrabboxShell = workflowStep(hydrateGithub, "Prepare Crabbox shell").run;
+    expect(hydrateGithubCrabboxShell).toContain("link_node_tool()");
+    expect(hydrateGithubCrabboxShell).toContain('readlink -f "$source"');
+    expect(hydrateGithubCrabboxShell).toContain('readlink -f "$target"');
+    expect(hydrateGithubCrabboxShell).toContain("link_node_tool corepack");
     expect(workflowStep(hydrateGithub, "Hydrate provider env helper").env?.FACTORY_API_KEY).toBe(
       "${{ secrets.FACTORY_API_KEY }}",
     );
@@ -1071,6 +1081,9 @@ describe("package artifact reuse", () => {
       '-e OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS="$ACP_SETUP_TIMEOUT_SECONDS"',
     );
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
+      '-e OPENCLAW_LIVE_ACP_BIND_REQUIRE_CRON="${OPENCLAW_LIVE_ACP_BIND_REQUIRE_CRON:-}"',
+    );
+    expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
       'echo "timeout command not found; cannot bound live ACP bind setup after ${timeout_value}"',
     );
     expect(readFileSync("scripts/test-live-acp-bind-docker.sh", "utf8")).toContain(
@@ -1521,10 +1534,7 @@ describe("package artifact reuse", () => {
 
     for (const item of cases) {
       const label = `${item.workflowPath} ${item.jobName}`;
-      const uploadStep = workflowStep(
-        workflowJob(item.workflowPath, item.jobName),
-        item.stepName,
-      );
+      const uploadStep = workflowStep(workflowJob(item.workflowPath, item.jobName), item.stepName);
 
       expect(uploadStep.if, label).toContain("always()");
       expect(uploadStep.uses, label).toBe(UPLOAD_ARTIFACT_V7);
@@ -2104,7 +2114,7 @@ describe("package artifact reuse", () => {
     expect(pluginPretagPackScript).toContain("scripts/check-plugin-npm-runtime-builds.mjs");
     expect(pluginPretagPackScript).toContain("scripts/plugin-npm-publish.sh");
     expect(pluginPretagPackScript).toContain("scripts/plugin-clawhub-publish.sh");
-    expect(clawHubWorkflow).toContain('CLAWHUB_CLI_PACKAGE: "clawhub@0.21.0"');
+    expect(clawHubWorkflow).toContain('CLAWHUB_CLI_PACKAGE: "clawhub@0.23.1"');
     expect(clawHubWorkflow).not.toContain("CLAWHUB_REPOSITORY:");
     expect(clawHubWorkflow).not.toContain("CLAWHUB_REF:");
     expect(clawHubWorkflow).toContain("pack_plugins_clawhub_artifacts:");
@@ -2127,7 +2137,10 @@ describe("package artifact reuse", () => {
       "github.event_name == 'workflow_dispatch' && inputs.dry_run != true && inputs.publish_scope == 'selected' && steps.plan.outputs.skipped_published_count != '0'",
     );
     expect(clawHubWorkflow).toContain(
-      "uses: openclaw/clawhub/.github/workflows/package-publish.yml@9d49df109d4ad3dc8a6ecf05d26b39f46d294721",
+      "uses: openclaw/clawhub/.github/workflows/package-publish.yml@d8096dfc039e86ab942ddf9ef117d04849fd84c1",
+    );
+    expect(clawHubWorkflow).toContain(
+      "family: ${{ contains(fromJson('[\"@openclaw/acpx\",\"@openclaw/diffs\",\"@openclaw/feishu\",\"@openclaw/qqbot\"]'), matrix.plugin.packageName) && 'bundle-plugin' || '' }}",
     );
     expect(clawHubWorkflow).toContain("dry_run:");
     expect(clawHubWorkflow).toContain("default: false");
@@ -2277,7 +2290,7 @@ describe("package artifact reuse", () => {
     expect(pluginNpmWorkflow).toContain("environment: npm-release");
     expect(clawHubWorkflow.match(/environment: clawhub-plugin-release/g)?.length).toBe(1);
     expect(clawHubNewWorkflow).toContain("name: Plugin ClawHub New");
-    expect(clawHubNewWorkflow).toContain('CLAWHUB_CLI_PACKAGE: "clawhub@0.21.0"');
+    expect(clawHubNewWorkflow).toContain('CLAWHUB_CLI_PACKAGE: "clawhub@0.23.1"');
     expect(clawHubNewWorkflow).not.toContain("CLAWHUB_REPOSITORY:");
     expect(clawHubNewWorkflow).not.toContain("CLAWHUB_REF:");
     expect(clawHubNewWorkflow).toContain("environment: clawhub-plugin-bootstrap");

@@ -243,6 +243,9 @@ Common scopes:
 
 `talk.config` with `includeSecrets: true` requires `operator.talk.secrets`
 (or `operator.admin`).
+When secrets are included, clients should read the active Talk provider
+credential from `talk.resolved.config.apiKey`; `talk.providers.<id>.apiKey`
+stays source-shaped and may be a SecretRef object or a redacted string.
 
 Plugin-registered gateway RPC methods may request their own operator scope, but
 reserved core admin prefixes (`config.*`, `exec.approvals.*`, `wizard.*`,

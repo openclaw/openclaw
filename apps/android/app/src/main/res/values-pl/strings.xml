@@ -1,0 +1,37 @@
+<resources>
+    <string name="app_name">OpenClaw Node</string>
+    <string name="gateway_connection">Połączenie z bramą</string>
+    <string name="connect_gateway">Połącz z bramą</string>
+    <string name="disconnect">Rozłącz</string>
+    <string name="trust_this_gateway">Ufać tej bramie?</string>
+    <string name="trust_and_continue">Zaufaj i kontynuuj</string>
+    <string name="cancel">Anuluj</string>
+    <string name="endpoint">Punkt końcowy</string>
+    <string name="status">Status</string>
+    <string name="connected_gateway_ready">Twoja brama jest aktywna i gotowa.</string>
+    <string name="connect_gateway_get_started">Połącz się ze swoją bramą, aby rozpocząć.</string>
+    <string name="copy_report_for_claw">Kopiuj raport dla Claw</string>
+    <string name="advanced_controls">Zaawansowane ustawienia</string>
+    <string name="connection_method">Metoda połączenia</string>
+    <string name="setup_code">Kod konfiguracji</string>
+    <string name="manual">Ręcznie</string>
+    <string name="paste_setup_code">Wklej kod konfiguracji</string>
+    <string name="host">Host</string>
+    <string name="use_tls">Użyj TLS</string>
+    <string name="token_optional">Token (opcjonalnie)</string>
+    <string name="password">Hasło</string>
+    <string name="run_onboarding_again">Uruchom ponownie wdrażanie</string>
+    <string name="resolved_endpoint">Rozpoznany punkt końcowy</string>
+    <string name="gateway_setup">Konfiguracja bramy</string>
+    <string name="connect_to_gateway">Połącz ze swoją bramą</string>
+    <string name="scan_setup_code">Zeskanuj kod konfiguracji</string>
+    <string name="use_gateway_qr">Użyj kodu QR bramy lub kodu konfiguracji</string>
+    <string name="nearby_gateway">Pobliska brama</string>
+    <string name="enter_gateway_url">Wprowadź URL bramy</string>
+    <string name="connect_manual_url">Połącz, używając ręcznego URL</string>
+    <string name="permissions">Uprawnienia</string>
+    <string name="done">Gotowe</string>
+    <string name="gateway_trust_first_seen">Sprawdź odcisk certyfikatu, zanim zaufasz tej bramie.\n\n%1$s</string>
+    <string name="gateway_trust_changed">Certyfikat bramy uległ zmianie. Kontynuuj tylko wtedy, gdy oczekujesz tej zmiany.\n\nStary SHA-256:\n%1$s\n\nNowy SHA-256:\n%2$s</string>
+    <string name="gateway_recovery">Odzyskiwanie bramy</string>
+</resources>

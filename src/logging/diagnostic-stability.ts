@@ -35,6 +35,7 @@ export type DiagnosticStabilityEventRecord = {
   transport?: string;
   brain?: string;
   toolName?: string;
+  approvalId?: string;
   activeWorkKind?: string;
   pairedToolName?: string;
   provider?: string;
@@ -430,6 +431,11 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.timedOut = event.timedOut;
       record.failureKind = event.failureKind;
       assignReasonCode(record, event.failureKind);
+      break;
+    case "exec.approval.followup_suppressed":
+      record.approvalId = event.approvalId;
+      record.phase = event.phase;
+      assignReasonCode(record, event.reason);
       break;
     case "run.started":
       record.provider = event.provider;

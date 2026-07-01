@@ -5,6 +5,7 @@ import {
   takeMessageIdAfterStop,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
 import {
@@ -169,7 +170,7 @@ function findTelegramDraftChunkLength(
       high = mid - 1;
     }
   }
-  return best;
+  return sliceUtf16Safe(text, 0, best).length;
 }
 
 export function createTelegramDraftStream(params: {

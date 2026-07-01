@@ -2,10 +2,12 @@
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  parseSessionFileEntriesWithWarnings,
+  type SessionFileParseWarning,
+} from "../../agents/sessions/session-file-parser.js";
 import {
   migrateSessionEntries,
-  type FileEntry as SessionFileEntry,
   type SessionEntry as AgentSessionEntry,
   type SessionHeader,
 } from "../../agents/sessions/session-manager.js";
@@ -32,13 +34,8 @@ interface SessionData {
   tools?: Array<{ name: string; description?: string; parameters?: unknown }>;
 }
 
-type SessionExportJsonlWarning = {
-  code: "invalid-session-json" | "invalid-session-row";
-  row: number;
-};
-
 type SessionExportWarningSummary = {
-  code: SessionExportJsonlWarning["code"];
+  code: SessionFileParseWarning["code"];
   count: number;
   rows: number[];
 };
@@ -160,47 +157,10 @@ async function writeNewDefaultExportFile(filePath: string, html: string): Promis
   throw new Error(`Could not find an unused export filename near ${filePath}`);
 }
 
-function isSessionFileEntry(value: unknown): value is SessionFileEntry {
-  if (!isRecord(value) || typeof value.type !== "string") {
-    return false;
-  }
-  if (value.type !== "message") {
-    return true;
-  }
-  const message = value.message;
-  return isRecord(message) && typeof message.role === "string";
-}
-
-function parseSessionEntriesWithWarnings(content: string): {
-  entries: SessionFileEntry[];
-  warnings: SessionExportJsonlWarning[];
-} {
-  const entries: SessionFileEntry[] = [];
-  const warnings: SessionExportJsonlWarning[] = [];
-  const rows = content.split(/\r?\n/u);
-  for (const [index, rawLine] of rows.entries()) {
-    const line = rawLine.trim();
-    if (!line) {
-      continue;
-    }
-    try {
-      const parsed = JSON.parse(line) as unknown;
-      if (!isSessionFileEntry(parsed)) {
-        warnings.push({ code: "invalid-session-row", row: index + 1 });
-        continue;
-      }
-      entries.push(parsed);
-    } catch {
-      warnings.push({ code: "invalid-session-json", row: index + 1 });
-    }
-  }
-  return { entries, warnings };
-}
-
 function summarizeSessionExportWarnings(
-  warnings: SessionExportJsonlWarning[],
+  warnings: SessionFileParseWarning[],
 ): SessionExportWarningSummary[] {
-  const summaries = new Map<SessionExportJsonlWarning["code"], SessionExportWarningSummary>();
+  const summaries = new Map<SessionFileParseWarning["code"], SessionExportWarningSummary>();
   for (const warning of warnings) {
     const summary = summaries.get(warning.code);
     if (summary) {
@@ -246,7 +206,7 @@ async function readSessionDataFromTranscript(sessionFile: string): Promise<{
   warnings: SessionExportWarningSummary[];
 }> {
   const raw = await fsp.readFile(sessionFile, "utf-8");
-  const { entries: fileEntries, warnings } = parseSessionEntriesWithWarnings(raw);
+  const { entries: fileEntries, warnings } = parseSessionFileEntriesWithWarnings(raw);
   migrateSessionEntries(fileEntries);
   const header =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;

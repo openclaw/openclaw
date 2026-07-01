@@ -3,8 +3,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { runPluginPayloadSmokeCheck } from "./plugin-payload-validation.js";
+
+type BundleFormat = "codex" | "claude" | "cursor";
+type FormatMarkedBundleInstallRecord = PluginInstallRecord & {
+  format: "bundle";
+  bundleFormat?: BundleFormat;
+};
 
 describe("runPluginPayloadSmokeCheck", () => {
   let tmpRoot: string;
@@ -28,6 +35,45 @@ describe("runPluginPayloadSmokeCheck", () => {
       await fs.mkdir(path.dirname(target), { recursive: true });
       await fs.writeFile(target, mainContent, "utf8");
     }
+  }
+
+  async function writeBundle(params: {
+    dir: string;
+    format: BundleFormat;
+    manifest?: unknown;
+    markerOnly?: boolean;
+  }) {
+    await fs.mkdir(params.dir, { recursive: true });
+    if (params.markerOnly) {
+      await fs.mkdir(path.join(params.dir, "skills"), { recursive: true });
+      return;
+    }
+    const manifestDir =
+      params.format === "codex"
+        ? ".codex-plugin"
+        : params.format === "cursor"
+          ? ".cursor-plugin"
+          : ".claude-plugin";
+    await fs.mkdir(path.join(params.dir, manifestDir), { recursive: true });
+    await fs.writeFile(
+      path.join(params.dir, manifestDir, "plugin.json"),
+      JSON.stringify(params.manifest ?? { name: `${params.format}-bundle` }),
+      "utf8",
+    );
+    await fs.mkdir(path.join(params.dir, "skills"), { recursive: true });
+  }
+
+  function formatMarkedBundleRecord(params: {
+    installPath: string;
+    bundleFormat?: BundleFormat;
+  }): PluginInstallRecord {
+    const record: FormatMarkedBundleInstallRecord = {
+      source: "marketplace",
+      format: "bundle",
+      ...(params.bundleFormat ? { bundleFormat: params.bundleFormat } : {}),
+      installPath: params.installPath,
+    };
+    return record;
   }
 
   function resolveTestHostRoot(): string {
@@ -93,6 +139,135 @@ describe("runPluginPayloadSmokeCheck", () => {
         installPath: dir,
         reason: "missing-package-json",
         detail: `package.json is missing under ${dir}`,
+      },
+    ]);
+  });
+
+  it.each([
+    ["codex", "clawhubFamily"],
+    ["claude", "format"],
+    ["cursor", "format"],
+  ] as const)(
+    "accepts a tracked %s bundle record with no package.json via %s metadata",
+    async (bundleFormat, metadataKind) => {
+      const dir = path.join(tmpRoot, `${bundleFormat}-bundle`);
+      await writeBundle({ dir, format: bundleFormat });
+      const result = await runPluginPayloadSmokeCheck({
+        records: {
+          [`${bundleFormat}-bundle`]:
+            metadataKind === "clawhubFamily"
+              ? {
+                  source: "clawhub",
+                  clawhubFamily: "bundle-plugin",
+                  installPath: dir,
+                }
+              : formatMarkedBundleRecord({ installPath: dir, bundleFormat }),
+        },
+        env: {},
+      });
+      expect(result.checked).toEqual([`${bundleFormat}-bundle`]);
+      expect(result.failures).toEqual([]);
+    },
+  );
+
+  it("accepts a tracked manifestless Claude bundle record with no package.json", async () => {
+    const dir = path.join(tmpRoot, "manifestless-claude-bundle");
+    await writeBundle({ dir, format: "claude", markerOnly: true });
+    const result = await runPluginPayloadSmokeCheck({
+      records: {
+        "manifestless-claude-bundle": formatMarkedBundleRecord({ installPath: dir }),
+      },
+      env: {},
+    });
+    expect(result.checked).toEqual(["manifestless-claude-bundle"]);
+    expect(result.failures).toEqual([]);
+  });
+
+  it("accepts a persisted marketplace bundle record without transient format metadata", async () => {
+    const dir = path.join(tmpRoot, "marketplace-bundle");
+    await writeBundle({ dir, format: "cursor" });
+    const result = await runPluginPayloadSmokeCheck({
+      records: {
+        "marketplace-bundle": {
+          source: "marketplace",
+          installPath: dir,
+          marketplaceName: "Local",
+          marketplaceSource: "local/repo",
+          marketplacePlugin: "marketplace-bundle",
+        },
+      },
+      env: {},
+    });
+    expect(result.checked).toEqual(["marketplace-bundle"]);
+    expect(result.failures).toEqual([]);
+  });
+
+  it("reports a bundle manifest failure instead of requiring package.json for bundle records", async () => {
+    const dir = path.join(tmpRoot, "broken-bundle");
+    await fs.mkdir(path.join(dir, ".codex-plugin"), { recursive: true });
+    const result = await runPluginPayloadSmokeCheck({
+      records: {
+        "broken-bundle": formatMarkedBundleRecord({ installPath: dir, bundleFormat: "codex" }),
+      },
+      env: {},
+    });
+    expect(result.failures).toStrictEqual([
+      {
+        pluginId: "broken-bundle",
+        installPath: dir,
+        reason: "missing-bundle-manifest",
+        detail: `No supported bundle manifest or bundle marker found under ${dir}`,
+      },
+    ]);
+  });
+
+  it("reports invalid bundle manifest when a parseable bundle manifest is not an object", async () => {
+    const dir = path.join(tmpRoot, "non-object-bundle");
+    await writeBundle({ dir, format: "codex", manifest: [] });
+    const result = await runPluginPayloadSmokeCheck({
+      records: {
+        "non-object-bundle": {
+          source: "clawhub",
+          clawhubFamily: "bundle-plugin",
+          installPath: dir,
+        },
+      },
+      env: {},
+    });
+    expect(result.failures).toStrictEqual([
+      {
+        pluginId: "non-object-bundle",
+        installPath: dir,
+        reason: "invalid-bundle-manifest",
+        detail: "Bundle manifest validation failed: plugin manifest must be an object",
+      },
+    ]);
+  });
+
+  it("keeps dual-format bundle records on native package validation", async () => {
+    const dir = path.join(tmpRoot, "dual-format-bundle");
+    await writeBundle({ dir, format: "codex" });
+    await writePackage(dir, {
+      name: "dual-format-bundle",
+      openclaw: { extensions: ["./missing-extension.js"] },
+    });
+    const result = await runPluginPayloadSmokeCheck({
+      records: {
+        "dual-format-bundle": {
+          source: "clawhub",
+          clawhubFamily: "bundle-plugin",
+          installPath: dir,
+        },
+      },
+      env: {},
+    });
+    expect(result.failures).toStrictEqual([
+      {
+        pluginId: "dual-format-bundle",
+        installPath: dir,
+        reason: "missing-extension-entry",
+        detail:
+          "Plugin extension entry validation failed: extension entry not found: ./missing-extension.js",
       },
     ]);
   });

@@ -613,6 +613,7 @@ export async function startQaGatewayChild(params: {
   controlUiEnabled?: boolean;
   enabledPluginIds?: string[];
   forwardHostHome?: boolean;
+  mockAuthAgentIds?: readonly string[];
   mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
   runtimeEnvPatch?: NodeJS.ProcessEnv;
 }) {
@@ -709,6 +710,7 @@ export async function startQaGatewayChild(params: {
       cfg = await stageQaMockAuthProfiles({
         cfg,
         stateDir,
+        agentIds: params.mockAuthAgentIds,
         providers: mockAuthProviders,
       });
     }

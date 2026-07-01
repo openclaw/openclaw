@@ -229,7 +229,7 @@ describe("outbound policy helpers", () => {
     expectCrossContextPolicyResult(params);
   });
 
-  it.each(["edit", "delete", "pin", "unpin"] satisfies ChannelMessageActionName[])(
+  it.each(["edit", "delete", "pin", "unpin", "poll-vote"] satisfies ChannelMessageActionName[])(
     "blocks cross-provider %s actions by default",
     (action) => {
       expectCrossContextPolicyResult({

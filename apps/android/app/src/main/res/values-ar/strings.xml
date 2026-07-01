@@ -1,0 +1,37 @@
+<resources>
+    <string name="app_name">OpenClaw Node</string>
+    <string name="gateway_connection">اتصال البوابة</string>
+    <string name="connect_gateway">توصيل البوابة</string>
+    <string name="disconnect">قطع الاتصال</string>
+    <string name="trust_this_gateway">هل تثق بهذه البوابة؟</string>
+    <string name="trust_and_continue">الثقة والمتابعة</string>
+    <string name="cancel">إلغاء</string>
+    <string name="endpoint">نقطة النهاية</string>
+    <string name="status">الحالة</string>
+    <string name="connected_gateway_ready">بوابتك نشطة وجاهزة.</string>
+    <string name="connect_gateway_get_started">اتصل ببوابتك للبدء.</string>
+    <string name="copy_report_for_claw">نسخ التقرير لـ Claw</string>
+    <string name="advanced_controls">عناصر التحكم المتقدمة</string>
+    <string name="connection_method">طريقة الاتصال</string>
+    <string name="setup_code">رمز الإعداد</string>
+    <string name="manual">يدوي</string>
+    <string name="paste_setup_code">الصق رمز الإعداد</string>
+    <string name="host">المضيف</string>
+    <string name="use_tls">استخدام TLS</string>
+    <string name="token_optional">الرمز المميز (اختياري)</string>
+    <string name="password">كلمة المرور</string>
+    <string name="run_onboarding_again">تشغيل الإعداد الأولي مرة أخرى</string>
+    <string name="resolved_endpoint">نقطة النهاية التي تم حلها</string>
+    <string name="gateway_setup">إعداد البوابة</string>
+    <string name="connect_to_gateway">الاتصال ببوابتك</string>
+    <string name="scan_setup_code">مسح رمز الإعداد</string>
+    <string name="use_gateway_qr">استخدم رمز QR الخاص ببوابتك أو رمز الإعداد</string>
+    <string name="nearby_gateway">بوابة قريبة</string>
+    <string name="enter_gateway_url">أدخل عنوان URL للبوابة</string>
+    <string name="connect_manual_url">الاتصال باستخدام عنوان URL يدوي</string>
+    <string name="permissions">الأذونات</string>
+    <string name="done">تم</string>
+    <string name="gateway_trust_first_seen">تحقق من بصمة الشهادة قبل الوثوق بهذه البوابة.\n\n%1$s</string>
+    <string name="gateway_trust_changed">تم تغيير شهادة البوابة. تابع فقط إذا كنت تتوقع هذا التغيير.\n\nSHA-256 القديم:\n%1$s\n\nSHA-256 الجديد:\n%2$s</string>
+    <string name="gateway_recovery">استرداد البوابة</string>
+</resources>

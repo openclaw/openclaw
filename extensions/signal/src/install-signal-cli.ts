@@ -5,12 +5,14 @@ import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { CONFIG_DIR, extractArchive, resolveBrewExecutable } from "openclaw/plugin-sdk/setup-tools";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export type ReleaseAsset = {
   name?: string;
@@ -105,7 +107,7 @@ export function pickAsset(
   }
 
   if (platform === "darwin") {
-    return byName(/macos|osx|darwin/) || archives[0];
+    return byName(/macos|osx|darwin/);
   }
 
   if (platform === "win32") {
@@ -228,7 +230,7 @@ async function installSignalCliViaBrew(runtime: RuntimeEnv): Promise<SignalInsta
     return {
       ok: false,
       error:
-        `No native signal-cli build is available for ${process.arch}. ` +
+        `No native signal-cli build is available for ${process.platform}/${process.arch}. ` +
         "Install Homebrew (https://brew.sh) and try again, or install signal-cli manually.",
     };
   }
@@ -242,7 +244,7 @@ async function installSignalCliViaBrew(runtime: RuntimeEnv): Promise<SignalInsta
   if (result.code !== 0) {
     return {
       ok: false,
-      error: `brew install signal-cli failed (exit ${result.code}): ${result.stderr.trim().slice(0, 200)}`,
+      error: `brew install signal-cli failed (exit ${result.code}): ${truncateUtf16Safe(result.stderr.trim(), 200)}`,
     };
   }
 
@@ -303,7 +305,7 @@ export async function installSignalCliFromRelease(
       };
     }
     try {
-      payload = (await response.json()) as ReleaseResponse;
+      payload = await readProviderJsonResponse<ReleaseResponse>(response, "signal.release-info");
     } catch {
       return {
         ok: false,
@@ -372,9 +374,9 @@ export async function installSignalCli(runtime: RuntimeEnv): Promise<SignalInsta
   }
 
   // The official signal-cli GitHub releases only ship a native binary for
-  // x86-64 Linux.  On other architectures (arm64, armv7, etc.) we delegate
-  // to Homebrew which builds from source and bundles the JRE automatically.
-  const hasNativeRelease = process.platform !== "linux" || process.arch === "x64";
+  // x86-64 Linux.  Other platforms use Homebrew instead of guessing from
+  // unrelated release archives.
+  const hasNativeRelease = process.platform === "linux" && process.arch === "x64";
 
   if (hasNativeRelease) {
     return installSignalCliFromRelease(runtime);

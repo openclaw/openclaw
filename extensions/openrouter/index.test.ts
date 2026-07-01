@@ -65,6 +65,26 @@ function createOpenRouterDoneStream(params: { responseId: string; totalCost: num
   return stream;
 }
 
+function createOpenRouterDoneStreamWithoutGeneration() {
+  const stream = createAssistantMessageEventStream();
+  queueMicrotask(() => {
+    stream.push({
+      type: "done",
+      reason: "stop",
+      message: {
+        role: "assistant",
+        api: "openai-completions",
+        provider: "openrouter",
+        model: "openrouter/auto",
+        content: [{ type: "text", text: "ok" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      } as never,
+    });
+  });
+  return stream;
+}
+
 function createOpenRouterAbortedStream() {
   const stream = createAssistantMessageEventStream();
   queueMicrotask(() => {
@@ -748,6 +768,42 @@ describe("openrouter provider hooks", () => {
     });
   });
 
+  it("forwards resolved API keys as explicit OpenRouter auth headers", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const baseStreamFn = vi.fn((..._args: unknown[]) =>
+      createOpenRouterDoneStreamWithoutGeneration(),
+    );
+
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "openrouter",
+      modelId: "openrouter/auto",
+      streamFn: baseStreamFn,
+    } as never);
+    if (!wrapped) {
+      throw new Error("expected OpenRouter wrapper");
+    }
+
+    const stream = await wrapped(
+      {
+        provider: "openrouter",
+        api: "openai-completions",
+        id: "openrouter/auto",
+        baseUrl: "https://openrouter.ai/api/v1",
+        compat: {},
+      } as never,
+      { messages: [] } as never,
+      { apiKey: "or-test-key" } as never,
+    );
+    await stream.result();
+
+    expect(baseStreamFn).toHaveBeenCalledOnce();
+    const options = baseStreamFn.mock.calls[0]?.[2] as { headers?: HeadersInit } | undefined;
+    const headers = new Headers(options?.headers);
+    expect(headers.get("authorization")).toBe("Bearer or-test-key");
+    expect(headers.get("http-referer")).toBe("https://openclaw.ai");
+    expect(headers.get("x-openrouter-title")).toBe("OpenClaw");
+  });
+
   it("reconciles OpenRouter streamed usage with generation metadata cost", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const fetchMock = vi.fn(async (url: string) => {
@@ -786,6 +842,57 @@ describe("openrouter provider hooks", () => {
 
       expect(fetchMock).toHaveBeenCalledOnce();
       expect(message.usage.cost.total).toBe(0.0042);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("falls back to streamed cost estimate when generation metadata response is oversized", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    // Body exceeds the 16 MiB cap; readProviderJsonResponse must reject it and
+    // applyOpenRouterBilledCost must fall back to the streamed estimate.
+    const oversizedBody = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(16 * 1024 * 1024 + 1).fill(0x78));
+        controller.close();
+      },
+    });
+    const fetchMock = vi.fn(async (url: string) => {
+      expect(url).toBe("https://openrouter.ai/api/v1/generation?id=gen-oversized-1");
+      return new Response(oversizedBody, {
+        headers: { "Content-Type": "application/json" },
+        status: 200,
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const baseStreamFn = vi.fn(() =>
+      createOpenRouterDoneStream({ responseId: "gen-oversized-1", totalCost: 0.001 }),
+    );
+
+    try {
+      const wrapped = provider.wrapStreamFn?.({
+        provider: "openrouter",
+        modelId: "openrouter/auto",
+        streamFn: baseStreamFn,
+      } as never);
+      if (!wrapped) {
+        throw new Error("expected OpenRouter wrapper");
+      }
+      const stream = await wrapped(
+        {
+          provider: "openrouter",
+          api: "openai-completions",
+          id: "openrouter/auto",
+          baseUrl: "https://openrouter.ai/api/v1",
+          compat: {},
+        } as never,
+        { messages: [] } as never,
+        { apiKey: "or-test-key" } as never,
+      );
+      const message = await stream.result();
+
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(message.usage.cost.total).toBe(0.001);
     } finally {
       vi.unstubAllGlobals();
     }

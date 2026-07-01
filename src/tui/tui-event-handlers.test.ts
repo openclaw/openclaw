@@ -585,7 +585,21 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(setActivityStatus).toHaveBeenCalledWith("idle");
-    expect(tui.requestRender).toHaveBeenCalled();
+    expect(tui.requestRender).toHaveBeenCalledWith(true);
+  });
+
+  it("force-renders when terminal lifecycle end clears an active status", () => {
+    const { tui, handleAgentEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-9" },
+    });
+
+    handleAgentEvent({
+      runId: "run-9",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+
+    expect(tui.requestRender).toHaveBeenCalledWith(true);
   });
 
   it("does not let delayed finalized-run lifecycle clobber a newer active run", () => {

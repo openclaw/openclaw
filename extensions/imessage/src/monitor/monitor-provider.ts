@@ -45,7 +45,7 @@ import {
   resolveSendPolicy,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
 import { pollPendingIMessageApprovalReactions } from "../approval-reaction-poller.js";
@@ -94,6 +94,7 @@ import {
   releaseIMessageInboundReplay,
 } from "./inbound-dedupe.js";
 import {
+  buildDirectIMessageReplyTarget,
   buildIMessageInboundContext,
   rememberIMessageSkippedFromMeForSelfChatDedupe,
   resolveIMessageReactionContext,
@@ -102,6 +103,7 @@ import {
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { stageIMessageAttachments } from "./media-staging.js";
 import { parseIMessageNotification } from "./parse-notification.js";
+import { renderIMessagePollBody } from "./poll-render.js";
 import { enqueueIMessageReactionSystemEvent } from "./reaction-system-event.js";
 import { advanceIMessageRecoveryCursor, loadIMessageRecoveryCursor } from "./recovery-cursor.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
@@ -727,7 +729,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       const combined = combineIMessagePayloads(messages);
       if (shouldLogVerbose()) {
         const text = combined.text ?? "";
-        const preview = text.slice(0, 50);
+        const preview = sliceUtf16Safe(text, 0, 50);
         const ellipsis = text.length > 50 ? "..." : "";
         logVerbose(
           `[imessage] merged ${entries.length} debounced messages: "${preview}${ellipsis}"`,
@@ -831,7 +833,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   }
 
   function resolveIMessageInboundBodyText(message: IMessagePayload) {
-    const messageText = (message.text ?? "").trim();
+    // Native poll balloons carry only a 0xFFFD placeholder in `text`; render the
+    // decoded poll (question/options/votes) so the agent sees the actual poll.
+    const pollBody = message.poll ? renderIMessagePollBody(message.poll) : null;
+    const messageText = (pollBody ?? message.text ?? "").trim();
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
     const effectiveAttachmentRoots = remoteHost ? remoteAttachmentRoots : attachmentRoots;
     const validAttachments = attachments.filter((entry) => {
@@ -1039,6 +1044,87 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const storePath = resolveStorePath(cfg.session?.store, {
       agentId: decision.route.agentId,
     });
+    const privateApiStatus = getCachedIMessagePrivateApiStatus(cliPath);
+    const supportsTyping = imessageRpcSupportsMethod(privateApiStatus, "typing");
+    const supportsRead = imessageRpcSupportsMethod(privateApiStatus, "read");
+    if (privateApiStatus?.available === true) {
+      // Surface a single warning per restart when the bridge is up but we
+      // had to gate off typing/read because the imsg build pre-dates the
+      // capability list. Otherwise the user sees no typing bubble / no
+      // "Read" receipt with no visible reason.
+      if (!supportsTyping || !supportsRead) {
+        warnIfImsgUpgradeNeeded.fireOnce(privateApiStatus.rpcMethods, runtime);
+      }
+    }
+    const configuredTypingMode = resolveConfiguredIMessageTypingMode(cfg);
+    const sendPolicy = resolveSendPolicy({
+      cfg,
+      entry: getSessionEntry({ storePath, sessionKey: decision.route.sessionKey }),
+      sessionKey: decision.route.sessionKey,
+      channel: "imessage",
+      chatType: decision.isGroup ? "group" : "direct",
+    });
+    const shouldUseDirectToolTypingOptions =
+      !decision.isGroup &&
+      sendPolicy !== "deny" &&
+      (configuredTypingMode === undefined || configuredTypingMode === "instant");
+    const shouldStartDirectTyping = supportsTyping && shouldUseDirectToolTypingOptions;
+    const earlyDirectTypingTarget = shouldStartDirectTyping
+      ? buildDirectIMessageReplyTarget({
+          cfg,
+          accountId: decision.route.accountId,
+          sender: decision.sender,
+        })
+      : undefined;
+    let stopEarlyDirectTyping: (() => void) | undefined;
+    if (earlyDirectTypingTarget) {
+      // Start channel-native feedback before the expensive history/context/model
+      // path. Use a short-lived client so a slow typing RPC cannot block the
+      // monitor client's watch stream. Stop is sequenced after start so fast
+      // command replies cannot leave a late true after typing:false.
+      const earlyDirectTypingStarted = sendIMessageTyping(earlyDirectTypingTarget, true, {
+        cfg,
+        accountId: accountInfo.accountId,
+      }).then(
+        () => true,
+        (err: unknown) => {
+          logTypingFailure({
+            log: (msg) => logVerbose(msg),
+            channel: "imessage",
+            action: "start",
+            target: earlyDirectTypingTarget,
+            error: err,
+          });
+          return false;
+        },
+      );
+      let earlyTypingStopQueued = false;
+      stopEarlyDirectTyping = () => {
+        if (earlyTypingStopQueued) {
+          return;
+        }
+        earlyTypingStopQueued = true;
+        void earlyDirectTypingStarted
+          .then(async (started) => {
+            if (!started) {
+              return;
+            }
+            await sendIMessageTyping(earlyDirectTypingTarget, false, {
+              cfg,
+              accountId: accountInfo.accountId,
+            });
+          })
+          .catch((err: unknown) => {
+            logTypingFailure({
+              log: (msg) => logVerbose(msg),
+              channel: "imessage",
+              action: "stop",
+              target: earlyDirectTypingTarget,
+              error: err,
+            });
+          });
+      };
+    }
     const stagedAttachments = remoteHost
       ? []
       : await stageIMessageAttachments(validAttachments, {
@@ -1107,31 +1193,20 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       );
     }
 
-    const privateApiStatus = getCachedIMessagePrivateApiStatus(cliPath);
-    const supportsTyping = imessageRpcSupportsMethod(privateApiStatus, "typing");
-    const supportsRead = imessageRpcSupportsMethod(privateApiStatus, "read");
-    if (privateApiStatus?.available === true) {
-      // Surface a single warning per restart when the bridge is up but we
-      // had to gate off typing/read because the imsg build pre-dates the
-      // capability list. Otherwise the user sees no typing bubble / no
-      // "Read" receipt with no visible reason.
-      if (!supportsTyping || !supportsRead) {
-        warnIfImsgUpgradeNeeded.fireOnce(privateApiStatus.rpcMethods, runtime);
-      }
-    }
     const sendReadReceipts = imessageCfg.sendReadReceipts !== false;
     const typingTarget = ctxPayload.To;
 
     if (supportsRead && sendReadReceipts && typingTarget) {
-      try {
-        await markIMessageChatRead(typingTarget, {
-          cfg,
-          accountId: accountInfo.accountId,
-          client: getActiveClient(),
-        });
-      } catch (err) {
+      // Read receipts are best-effort channel UI. Do not put them on the
+      // critical path before model dispatch; slow private-API reads otherwise
+      // make accepted iMessage turns feel stuck before the agent starts. Use
+      // a short-lived client so a stuck read cannot block monitor-client typing.
+      void markIMessageChatRead(typingTarget, {
+        cfg,
+        accountId: accountInfo.accountId,
+      }).catch((err: unknown) => {
         runtime.error?.(`imessage: mark read failed: ${String(err)}`);
-      }
+      });
     }
 
     const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
@@ -1234,35 +1309,27 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       },
     });
     let directTypingController: IMessageTypingController | undefined;
-    const configuredTypingMode = resolveConfiguredIMessageTypingMode(cfg);
-    const sendPolicy = resolveSendPolicy({
-      cfg,
-      entry: getSessionEntry({ storePath, sessionKey: decision.route.sessionKey }),
-      sessionKey: decision.route.sessionKey,
-      channel: "imessage",
-      chatType: decision.isGroup ? "group" : "direct",
-    });
-    const shouldStartToolTyping =
-      !decision.isGroup &&
-      sendPolicy !== "deny" &&
-      (configuredTypingMode === undefined || configuredTypingMode === "instant");
-    const directToolTypingOptions = shouldStartToolTyping
+    const directToolTypingOptions = shouldUseDirectToolTypingOptions
       ? ({
           // iMessage's native typing bubble is channel-owned UI, not a
           // visible tool-progress message. The suppress flag is what lets
           // dispatch forward this callback even when verbose progress is off;
           // allowProgress covers message_tool_only source delivery. Keep this on
-          // the direct instant/default path so configured typingMode values still
-          // decide when typing can begin.
+          // the direct instant/default path even when older imsg builds do not
+          // report native typing support.
           suppressDefaultToolProgressMessages: true,
           allowProgressCallbacksWhenSourceDeliverySuppressed: true,
           onTypingController: (typing: IMessageTypingController) => {
             directTypingController = typing;
             typingReplyOptions.onTypingController?.(typing);
           },
-          onToolStart: async () => {
-            await directTypingController?.startTypingLoop();
-          },
+          ...(supportsTyping
+            ? {
+                onToolStart: async () => {
+                  await directTypingController?.startTypingLoop();
+                },
+              }
+            : {}),
         } as const)
       : {};
     const configuredBlockStreaming = resolveChannelStreamingBlockEnabled(accountInfo.config);
@@ -1325,11 +1392,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             historyMap: groupHistories,
             limit: historyLimit,
           },
-          onPreDispatchFailure: () =>
-            settleReplyDispatcher({
+          onPreDispatchFailure: () => {
+            stopEarlyDirectTyping?.();
+            void settleReplyDispatcher({
               dispatcher,
               onSettled: () => markDispatchIdle(),
-            }),
+            });
+          },
           runDispatch: async () => {
             try {
               return await dispatchInboundMessage({
@@ -1348,6 +1417,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
               });
             } finally {
               markDispatchIdle();
+              stopEarlyDirectTyping?.();
             }
           },
         }),

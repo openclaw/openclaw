@@ -105,6 +105,7 @@ import {
   isWebchatClient,
 } from "../../../utils/message-channel.js";
 import { resolveRuntimeServiceVersion } from "../../../version.js";
+import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import { AUTH_RATE_LIMIT_SCOPE_NODE_PAIRING, type AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
@@ -1865,6 +1866,49 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
           connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND &&
           isOperatorApprovalRuntimeToken(connectParams.auth?.approvalRuntimeToken);
+        const agentRuntimeIdentityToken = connectParams.auth?.agentRuntimeIdentityToken;
+        const canAcceptAgentRuntimeIdentity =
+          pairingLocality !== "remote" &&
+          connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
+          connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND;
+        let trustedAgentRuntimeIdentity:
+          | ReturnType<typeof verifyAgentRuntimeIdentityToken>
+          | undefined;
+        if (typeof agentRuntimeIdentityToken === "string") {
+          if (!canAcceptAgentRuntimeIdentity) {
+            const message =
+              "agent runtime identity token is only accepted from local backend gateway clients";
+            markHandshakeFailure("agent-runtime-identity-untrusted-client", {
+              client: connectParams.client.id,
+              mode: connectParams.client.mode,
+              pairingLocality,
+            });
+            sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, message);
+            close(1008, truncateCloseReason(message));
+            return;
+          }
+          trustedAgentRuntimeIdentity = verifyAgentRuntimeIdentityToken(agentRuntimeIdentityToken);
+          if (!trustedAgentRuntimeIdentity) {
+            const message = "invalid agent runtime identity token";
+            markHandshakeFailure("agent-runtime-identity-invalid", {
+              client: connectParams.client.id,
+              mode: connectParams.client.mode,
+              pairingLocality,
+            });
+            sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, message);
+            close(1008, message);
+            return;
+          }
+        }
+        const internal =
+          isTrustedApprovalRuntime || trustedAgentRuntimeIdentity
+            ? {
+                ...(isTrustedApprovalRuntime ? { approvalRuntime: true } : {}),
+                ...(trustedAgentRuntimeIdentity
+                  ? { agentRuntimeIdentity: trustedAgentRuntimeIdentity }
+                  : {}),
+              }
+            : undefined;
         clearHandshakeTimer();
         const nextClient: GatewayWsClient = {
           socket,
@@ -1875,7 +1919,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,
           presenceKey,
           clientIp: reportedClientIp,
-          ...(isTrustedApprovalRuntime ? { internal: { approvalRuntime: true } } : {}),
+          ...(internal ? { internal } : {}),
           ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
           ...(Object.keys(pluginNodeCapabilitySurfaces).length > 0
             ? { pluginNodeCapabilitySurfaces }

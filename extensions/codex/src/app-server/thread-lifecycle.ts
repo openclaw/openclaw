@@ -10,7 +10,13 @@ import {
 import { buildCodexUserMcpServersThreadConfigPatch } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
 import { CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "../../prompt-overlay.js";
-import { isModernCodexModel } from "../../provider.js";
+import {
+  isMaxReasoningCodexModel,
+  isModernCodexModel,
+  readCodexSupportedReasoningEfforts,
+  resolveCodexSupportedReasoningEffort,
+  type CodexReasoningEffort,
+} from "../../provider.js";
 import {
   CodexAppServerRpcError,
   isCodexAppServerConnectionClosedError,
@@ -27,6 +33,7 @@ import {
 } from "./dynamic-tool-profile.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import {
+  buildCodexPluginAppsConfigPatchFromPolicyContext,
   isCodexPluginThreadBindingStale,
   mergeCodexThreadConfigs,
   type CodexPluginThreadConfig,
@@ -630,9 +637,16 @@ export async function startOrResumeThread(params: {
           configPatch: params.finalConfigPatch,
           nativeHookRelayGeneration: params.nativeHookRelayGeneration,
         };
+        // Codex rebuilds effective config on thread/resume, so replay the app
+        // allowlist persisted at thread/start or plugin tools disappear after one turn.
+        const pluginAppsConfigPatch =
+          params.pluginThreadConfig?.enabled && resumeBinding.pluginAppPolicyContext
+            ? buildCodexPluginAppsConfigPatchFromPolicyContext(resumeBinding.pluginAppPolicyContext)
+            : undefined;
         const resumeConfig = mergeCodexThreadConfigs(
           params.config,
           userMcpServersConfigPatch,
+          pluginAppsConfigPatch,
           finalConfigPatch.configPatch,
         );
         const resumeParams = lifecycleTiming.measureSync("thread-resume-params", () =>
@@ -1111,7 +1125,7 @@ export function buildThreadStartParams(
     ...(modelSelection.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
     cwd: options.cwd,
     approvalPolicy: options.appServer.approvalPolicy,
-    approvalsReviewer: options.appServer.approvalsReviewer,
+    approvalsReviewer: resolveCodexThreadApprovalsReviewer(options.appServer, options.config),
     ...codexThreadSandboxOrPermissions(options.appServer),
     ...(options.appServer.serviceTier !== undefined
       ? { serviceTier: options.appServer.serviceTier }
@@ -1193,7 +1207,7 @@ export function buildThreadResumeParams(
     model: modelSelection.model,
     ...(modelSelection.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
     approvalPolicy: options.appServer.approvalPolicy,
-    approvalsReviewer: options.appServer.approvalsReviewer,
+    approvalsReviewer: resolveCodexThreadApprovalsReviewer(options.appServer, options.config),
     ...codexThreadSandboxOrPermissions(options.appServer),
     ...(options.appServer.serviceTier !== undefined
       ? { serviceTier: options.appServer.serviceTier }
@@ -1435,7 +1449,11 @@ export function buildTurnStartParams(
     ...(options.appServer.serviceTier !== undefined
       ? { serviceTier: options.appServer.serviceTier }
       : {}),
-    effort: resolveReasoningEffort(params.thinkLevel, modelSelection.model),
+    effort: resolveReasoningEffort(
+      params.thinkLevel,
+      modelSelection.model,
+      readCodexSupportedReasoningEfforts(params.model?.compat),
+    ),
     ...(options.environmentSelection ? { environments: options.environmentSelection } : {}),
     collaborationMode: buildTurnCollaborationMode(params, {
       model: modelSelection.model,
@@ -1445,6 +1463,13 @@ export function buildTurnStartParams(
       heartbeatCollaborationInstructions: options.heartbeatCollaborationInstructions,
     }),
   };
+}
+
+function resolveCodexThreadApprovalsReviewer(
+  appServer: CodexAppServerRuntimeOptions,
+  config?: JsonObject,
+): CodexAppServerRuntimeOptions["approvalsReviewer"] {
+  return config?.approvals_reviewer === "user" ? "user" : appServer.approvalsReviewer;
 }
 
 function codexThreadSandboxOrPermissions(
@@ -1486,7 +1511,11 @@ export function buildTurnCollaborationMode(
     mode: "default",
     settings: {
       model,
-      reasoning_effort: resolveReasoningEffort(params.thinkLevel, model),
+      reasoning_effort: resolveReasoningEffort(
+        params.thinkLevel,
+        model,
+        readCodexSupportedReasoningEfforts(params.model?.compat),
+      ),
       developer_instructions: buildTurnScopedCollaborationInstructions(params, options),
     },
   };
@@ -1509,7 +1538,7 @@ function buildTurnScopedCollaborationInstructions(
   if (params.trigger === "cron") {
     return joinPresentSections(buildCronCollaborationInstructions(), contextInstructions);
   }
-  if (params.trigger === "heartbeat") {
+  if (params.trigger === "heartbeat" && params.bootstrapContextRunKind !== "commitment-only") {
     return joinPresentSections(
       buildHeartbeatCollaborationInstructions(),
       contextInstructions,
@@ -1780,7 +1809,19 @@ export function resolveCodexAppServerModelProvider(params: {
 export function resolveReasoningEffort(
   thinkLevel: EmbeddedRunAttemptParams["thinkLevel"],
   modelId: string,
-): "minimal" | "low" | "medium" | "high" | "xhigh" | null {
+  supportedReasoningEfforts?: readonly string[],
+): CodexReasoningEffort | null {
+  if (thinkLevel === "off" || thinkLevel === "adaptive") {
+    return null;
+  }
+  if (supportedReasoningEfforts) {
+    return (
+      resolveCodexSupportedReasoningEffort({
+        requested: thinkLevel,
+        supportedReasoningEfforts,
+      }) ?? null
+    );
+  }
   if (thinkLevel === "minimal") {
     return isModernCodexModel(modelId) ? "low" : "minimal";
   }
@@ -1791,6 +1832,9 @@ export function resolveReasoningEffort(
     thinkLevel === "xhigh"
   ) {
     return thinkLevel;
+  }
+  if (thinkLevel === "max" && isMaxReasoningCodexModel(modelId)) {
+    return "max";
   }
   return null;
 }

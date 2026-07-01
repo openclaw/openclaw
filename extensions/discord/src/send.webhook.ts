@@ -3,6 +3,7 @@ import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runt
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveDiscordClientAccountContext } from "./client.js";
 import {
   DiscordError,
@@ -52,7 +53,7 @@ function coerceWebhookErrorBody(raw: string): unknown {
   try {
     return JSON.parse(raw);
   } catch {
-    return { message: raw.slice(0, 200) };
+    return { message: truncateUtf16Safe(raw, 200) };
   }
 }
 

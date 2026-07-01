@@ -144,6 +144,18 @@ describe("downloadLineMedia", () => {
     expect(saveMediaStreamCall()[2]).toBe("inbound");
   });
 
+  it("passes original filenames to the media store for extension fallback", async () => {
+    getMessageContentMock.mockResolvedValueOnce(chunks([Buffer.from("unknown-audio-bytes")]));
+
+    await downloadLineMedia("mid-file-audio", "token", 10 * 1024 * 1024, {
+      originalFilename: "voice-note.m4a",
+    });
+
+    const call = saveMediaStreamCall();
+    expect(call[3]).toBe(10 * 1024 * 1024);
+    expect(call[4]).toBe("voice-note.m4a");
+  });
+
   it("uses media store content type for MP4 video", async () => {
     const mp4 = Buffer.from([
       0x00, 0x00, 0x00, 0x1c, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d,

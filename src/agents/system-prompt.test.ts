@@ -976,6 +976,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("## Provider Dynamic\n\nDynamic guidance.");
     expect(prompt).toContain("## Tool Call Style\nProvider-specific tool call guidance.");
     expect(prompt).not.toContain("Default: do not narrate routine, low-risk tool calls");
+    // The relocated exec-approval guidance stays suppressed when tool_call_style is
+    // provider-overridden, preserving the "override replaces the whole section" contract.
+    expect(prompt).not.toContain("If exec returns approval-pending");
   });
 
   it("includes inline button style guidance when runtime supports inline buttons", () => {
@@ -1023,6 +1026,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(telegramPrompt).toContain("pull quotes");
     expect(telegramPrompt).toContain('task lists via `<input type="checkbox"/>` inside `<li>`');
     expect(telegramPrompt).toContain("anchors/in-message links");
+    expect(telegramPrompt).toContain(
+      "formulas (inline `<tg-math>LaTeX</tg-math>`, block `<tg-math-block>LaTeX</tg-math-block>`; not `$...$` or `\\(...\\)`)",
+    );
     expect(telegramPrompt).toContain("maps/collages/slideshows");
     expect(telegramPrompt).toContain("use `<details>`, not legacy `<blockquote expandable>`");
     expect(telegramPrompt).toContain("use `<ul><li>...</li></ul>`, not literal bullet characters");
@@ -1382,12 +1388,13 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Reactions are enabled for Telegram in MINIMAL mode.");
   });
 
-  it("keeps stable project context before volatile channel guidance for prefix-cache reuse", () => {
-    const prompt = buildAgentSystemPrompt({
+  it("keeps exec-approval and authorized-sender guidance below the stable prefix", () => {
+    const baseParams = {
       workspaceDir: "/tmp/openclaw",
       toolNames: ["message"],
+      ownerNumbers: ["+123"],
       runtimeInfo: {
-        channel: "telegram",
+        channel: "webchat",
         capabilities: ["inlineButtons"],
       },
       contextFiles: [
@@ -1399,7 +1406,8 @@ describe("buildAgentSystemPrompt", () => {
       extraSystemPrompt: "Current group-chat facts",
       reactionGuidance: { level: "minimal", channel: "Telegram" },
       ttsHint: "Use short voice-friendly replies.",
-    });
+    } satisfies Parameters<typeof buildAgentSystemPrompt>[0];
+    const prompt = buildAgentSystemPrompt(baseParams);
 
     const projectContextPos = prompt.indexOf("# Project Context");
     const boundaryPos = prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
@@ -1407,6 +1415,10 @@ describe("buildAgentSystemPrompt", () => {
     const groupChatPos = prompt.lastIndexOf("## Group Chat Context");
     const reactionsPos = prompt.lastIndexOf("## Reactions");
     const voicePos = prompt.lastIndexOf("## Voice (TTS)");
+    // These sections vary with approval UI capabilities and owner identity, so
+    // both must stay below the stable prefix boundary.
+    const approvalPos = prompt.lastIndexOf("use native approval card");
+    const authorizedSendersPos = prompt.lastIndexOf("## Authorized Senders");
 
     expect(projectContextPos).toBeGreaterThan(-1);
     expect(boundaryPos).toBeGreaterThan(projectContextPos);
@@ -1414,6 +1426,25 @@ describe("buildAgentSystemPrompt", () => {
     expect(groupChatPos).toBeGreaterThan(boundaryPos);
     expect(reactionsPos).toBeGreaterThan(boundaryPos);
     expect(voicePos).toBeGreaterThan(boundaryPos);
+    expect(approvalPos).toBeGreaterThan(boundaryPos);
+    expect(authorizedSendersPos).toBeGreaterThan(boundaryPos);
+
+    const stablePrefix = prompt.slice(0, boundaryPos);
+    const otherOwnerPrompt = buildAgentSystemPrompt({
+      ...baseParams,
+      ownerNumbers: ["+456"],
+    });
+    const manualApprovalPrompt = buildAgentSystemPrompt({
+      ...baseParams,
+      runtimeInfo: { channel: "webchat", capabilities: [] },
+    });
+    expect(otherOwnerPrompt).toContain("Authorized senders: +456");
+    expect(otherOwnerPrompt).not.toContain("Authorized senders: +123");
+    expect(manualApprovalPrompt).toContain("send the exact /approve command");
+    expect(manualApprovalPrompt).not.toContain("use native approval card");
+    for (const variant of [otherOwnerPrompt, manualApprovalPrompt]) {
+      expect(variant.slice(0, variant.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY))).toBe(stablePrefix);
+    }
   });
 });
 

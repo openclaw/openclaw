@@ -60,6 +60,8 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: Sources
+    resources:
+      - path: Resources/Localizable.xcstrings
     dependencies:
       - target: OpenClawShareExtension
         embed: true
@@ -156,7 +158,7 @@ targets:
           NSAllowsLocalNetworking: true
         NSBonjourServices:
           - _openclaw-gw._tcp
-        NSCameraUsageDescription: OpenClaw can capture photos or short video clips when requested via the gateway.
+        NSCameraUsageDescription: OpenClaw uses the camera when you scan a Gateway setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace.
         NSCalendarsUsageDescription: OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.
         NSCalendarsFullAccessUsageDescription: OpenClaw uses your calendars to show events and scheduling context when you enable calendar access.
         NSCalendarsWriteOnlyAccessUsageDescription: OpenClaw uses your calendars to add events when you enable calendar access.
@@ -185,6 +187,8 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: ShareExtension
+    resources:
+      - path: Resources/Localizable.xcstrings
     dependencies:
       - package: OpenClawKit
       - sdk: AppIntents.framework
@@ -227,6 +231,8 @@ targets:
     sources:
       - path: ActivityWidget
       - path: Sources/LiveActivity/OpenClawActivityAttributes.swift
+    resources:
+      - path: Resources/Localizable.xcstrings
     dependencies:
       - sdk: WidgetKit.framework
       - sdk: ActivityKit.framework
@@ -259,6 +265,8 @@ targets:
       - path: WatchApp
         excludes:
           - Info.plist
+    resources:
+      - path: Resources/Localizable.xcstrings
     dependencies:
       - sdk: AppIntents.framework
       - sdk: WatchConnectivity.framework

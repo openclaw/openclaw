@@ -17,8 +17,8 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
-import { isChildlessCodexNativeSubagentTask } from "./codex-native-subagent-task.js";
 import { cancelActiveCronTaskRun } from "./cron-task-cancel.js";
+import { isChildlessNativeSubagentTask } from "./native-subagent-task.js";
 import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
@@ -812,17 +812,27 @@ function findExistingTaskForCreate(params: {
 }): TaskRecord | undefined {
   const runId = params.runId?.trim();
   const runScopeMatches = runId
-    ? getTasksByRunId(runId).filter(
-        (task) =>
-          task.runtime === params.runtime &&
-          task.scopeKind === params.scopeKind &&
-          (normalizeOptionalString(task.ownerKey) ?? "") ===
-            (normalizeOptionalString(params.ownerKey) ?? "") &&
-          (normalizeOptionalString(task.childSessionKey) ?? "") ===
-            (normalizeOptionalString(params.childSessionKey) ?? "") &&
+    ? getTasksByRunId(runId).filter((task) => {
+        if (
+          task.runtime !== params.runtime ||
+          task.scopeKind !== params.scopeKind ||
+          (normalizeOptionalString(task.ownerKey) ?? "") !==
+            (normalizeOptionalString(params.ownerKey) ?? "") ||
+          (normalizeOptionalString(task.childSessionKey) ?? "") !==
+            (normalizeOptionalString(params.childSessionKey) ?? "")
+        ) {
+          return false;
+        }
+        if (params.runtime === "acp") {
+          // ACP one-task flow ids can be derived after creation; they must not
+          // split one logical ACP run into duplicate task rows.
+          return true;
+        }
+        return (
           (normalizeOptionalString(task.parentFlowId) ?? "") ===
-            (normalizeOptionalString(params.parentFlowId) ?? ""),
-      )
+          (normalizeOptionalString(params.parentFlowId) ?? "")
+        );
+      })
     : [];
   const exact = runId
     ? runScopeMatches.find(
@@ -1170,6 +1180,9 @@ function updateTask(taskId: string, patch: Partial<TaskRecord>): TaskRecord | nu
     return null;
   }
   const next = normalizeTaskTimestamps({ ...current, ...patch });
+  if (Object.hasOwn(patch, "error") && patch.error === undefined) {
+    delete next.error;
+  }
   if (isTerminalTaskStatus(next.status) && typeof next.cleanupAfter !== "number") {
     next.cleanupAfter = resolveTaskCleanupAfter({
       ...next,
@@ -1543,11 +1556,10 @@ export function markTaskTerminalById(params: {
   terminalOutcome?: TaskTerminalOutcome | null;
 }): TaskRecord | null {
   ensureTaskRegistryReady();
-  return updateTask(params.taskId, {
+  const patch: Partial<TaskRecord> = {
     status: params.status,
     endedAt: params.endedAt,
     lastEventAt: params.lastEventAt ?? params.endedAt,
-    ...(params.error !== undefined ? { error: params.error } : {}),
     ...(params.terminalSummary !== undefined
       ? { terminalSummary: normalizeTaskSummary(params.terminalSummary) }
       : {}),
@@ -1559,7 +1571,11 @@ export function markTaskTerminalById(params: {
           }),
         }
       : {}),
-  });
+  };
+  if (Object.hasOwn(params, "error")) {
+    patch.error = params.error;
+  }
+  return updateTask(params.taskId, patch);
 }
 
 export function markTaskLostById(params: {
@@ -2092,7 +2108,7 @@ export async function cancelTaskById(params: {
           };
         }
       } else if (!childSessionKey) {
-        if (!isChildlessCodexNativeSubagentTask(task)) {
+        if (!isChildlessNativeSubagentTask(task)) {
           return {
             found: true,
             cancelled: false,
@@ -2138,12 +2154,25 @@ export async function cancelTaskById(params: {
         };
       }
     }
-    const updated = updateTask(task.taskId, {
-      status: "cancelled",
-      endedAt: Date.now(),
-      lastEventAt: Date.now(),
-      error: params.reason?.trim() || "Cancelled by operator.",
-    });
+    const endedAt = Date.now();
+    const error = params.reason?.trim() || "Cancelled by operator.";
+    const updated =
+      task.runtime === "acp" && task.runId?.trim()
+        ? (updateTaskStateByRunId({
+            runId: task.runId,
+            runtime: "acp",
+            sessionKey: childSessionKey,
+            status: "cancelled",
+            endedAt,
+            lastEventAt: endedAt,
+            error,
+          }).find((record) => record.taskId === task.taskId) ?? null)
+        : updateTask(task.taskId, {
+            status: "cancelled",
+            endedAt,
+            lastEventAt: endedAt,
+            error,
+          });
     if (!updated) {
       return {
         found: true,

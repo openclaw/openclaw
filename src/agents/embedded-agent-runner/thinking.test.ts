@@ -738,6 +738,18 @@ describe("wrapAnthropicStreamWithRecovery", () => {
         }),
     },
     {
+      name: "ProviderHttpError errorBody",
+      createError: () =>
+        Object.assign(new Error(genericizedProviderError), {
+          errorBody: JSON.stringify({
+            error: {
+              message: terminalThinkingSignatureError,
+              type: "invalid_request_error",
+            },
+          }),
+        }),
+    },
+    {
       name: "cyclic cause graph",
       createError: () => {
         const root = new Error(genericizedProviderError) as Error & { cause?: unknown };

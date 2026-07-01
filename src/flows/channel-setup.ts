@@ -741,28 +741,30 @@ export async function setupChannels(
   };
 
   if (options?.quickstartDefaults) {
+    const skipValue = "__skip__" as const;
+    const quickstartInitialValue = options?.initialSelection?.[0] ?? skipValue;
     while (true) {
       const { entries, catalogById } = getChannelEntries();
       const choice = await prompter.select({
         message: t("wizard.channels.selectQuickstart"),
         options: [
-          ...resolveChannelSetupSelectionContributions({
-            entries,
-            statusByChannel: buildStatusByChannelForSelection(catalogById),
-            resolveDisabledHint,
-          }).map((contribution) => contribution.option),
           {
-            value: "__skip__",
+            value: skipValue,
             label: t("common.skipForNow"),
             hint: t("wizard.channels.skipLaterHint", {
               command: formatCliCommand("openclaw channels add"),
             }),
           },
+          ...resolveChannelSetupSelectionContributions({
+            entries,
+            statusByChannel: buildStatusByChannelForSelection(catalogById),
+            resolveDisabledHint,
+          }).map((contribution) => contribution.option),
         ],
-        initialValue: quickstartDefault,
+        initialValue: quickstartInitialValue,
         searchable: true,
       });
-      if (choice === "__skip__") {
+      if (choice === skipValue) {
         break;
       }
       if ((await handleChannelChoice(choice)) === "done") {

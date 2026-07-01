@@ -1,0 +1,37 @@
+<resources>
+    <string name="app_name">OpenClaw Node</string>
+    <string name="gateway_connection">Connessione al gateway</string>
+    <string name="connect_gateway">Connetti gateway</string>
+    <string name="disconnect">Disconnetti</string>
+    <string name="trust_this_gateway">Considerare attendibile questo gateway?</string>
+    <string name="trust_and_continue">Considera attendibile e continua</string>
+    <string name="cancel">Annulla</string>
+    <string name="endpoint">Endpoint</string>
+    <string name="status">Stato</string>
+    <string name="connected_gateway_ready">Il tuo gateway è attivo e pronto.</string>
+    <string name="connect_gateway_get_started">Connettiti al tuo gateway per iniziare.</string>
+    <string name="copy_report_for_claw">Copia report per Claw</string>
+    <string name="advanced_controls">Controlli avanzati</string>
+    <string name="connection_method">Metodo di connessione</string>
+    <string name="setup_code">Codice di configurazione</string>
+    <string name="manual">Manuale</string>
+    <string name="paste_setup_code">Incolla codice di configurazione</string>
+    <string name="host">Host</string>
+    <string name="use_tls">Usa TLS</string>
+    <string name="token_optional">Token (opzionale)</string>
+    <string name="password">Password</string>
+    <string name="run_onboarding_again">Esegui di nuovo l’onboarding</string>
+    <string name="resolved_endpoint">Endpoint risolto</string>
+    <string name="gateway_setup">Configurazione gateway</string>
+    <string name="connect_to_gateway">Connettiti al tuo Gateway</string>
+    <string name="scan_setup_code">Scansiona codice di configurazione</string>
+    <string name="use_gateway_qr">Usa il QR del tuo Gateway o il codice di configurazione</string>
+    <string name="nearby_gateway">Gateway nelle vicinanze</string>
+    <string name="enter_gateway_url">Inserisci URL del gateway</string>
+    <string name="connect_manual_url">Connetti usando un URL manuale</string>
+    <string name="permissions">Autorizzazioni</string>
+    <string name="done">Fine</string>
+    <string name="gateway_trust_first_seen">Verifica l’impronta digitale del certificato prima di considerare attendibile questo gateway.\n\n%1$s</string>
+    <string name="gateway_trust_changed">Il certificato del gateway è cambiato. Continua solo se ti aspettavi questa modifica.\n\nSHA-256 precedente:\n%1$s\n\nNuovo SHA-256:\n%2$s</string>
+    <string name="gateway_recovery">Ripristino del gateway</string>
+</resources>
