@@ -34,6 +34,23 @@ const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
   bundled: 3,
 };
 
+function comparablePluginId(value: string | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function channelConfigReplacesCurrentOwner(params: {
+  channelConfigPreferOver?: readonly string[];
+  current: ChannelMetadataRecord;
+}): boolean {
+  const preferred = new Set(
+    (params.channelConfigPreferOver ?? []).map(comparablePluginId).filter(Boolean),
+  );
+  if (preferred.size === 0) {
+    return false;
+  }
+  return preferred.has(comparablePluginId(params.current.schemaPluginId));
+}
+
 /** Collects plugin config UI metadata with deterministic origin precedence and output ordering. */
 export function collectPluginSchemaMetadata(registry: PluginManifestRegistry): PluginUiMetadata[] {
   const deduped = new Map<
@@ -103,6 +120,20 @@ export function collectChannelSchemaMetadataWithOwnership(
       ) {
         // A closer-origin channel config owns schema/UI hints even if a farther plugin also
         // advertises the same channel id.
+        continue;
+      }
+      if (
+        current &&
+        current.originRank === originRank &&
+        (current.configSchema !== undefined || current.configUiHints !== undefined) &&
+        !channelConfigReplacesCurrentOwner({
+          channelConfigPreferOver: channelConfig.preferOver,
+          current,
+        })
+      ) {
+        // Same-origin replacement channel plugins can explicitly supersede bundled channel
+        // metadata with preferOver. Without that signal, keep the first schema so registry
+        // traversal order cannot accidentally erase the active replacement schema.
         continue;
       }
       byChannelId.set(channelId, {
