@@ -403,6 +403,8 @@ export type AttachmentMediaPolicy =
   | {
       mode: "sandbox";
       sandboxRoot: string;
+      /** Container-side workspace root (default "/workspace"). */
+      containerWorkdir?: string;
     }
   | {
       mode: "host";
@@ -414,6 +416,8 @@ export type AttachmentMediaPolicy =
 /** Chooses sandbox or host media loading policy for attachment hydration. */
 export function resolveAttachmentMediaPolicy(params: {
   sandboxRoot?: string;
+  /** Container-side workspace root (default "/workspace"). */
+  containerWorkdir?: string;
   mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[] | "any";
   mediaReadFile?: OutboundMediaReadFile;
@@ -423,6 +427,7 @@ export function resolveAttachmentMediaPolicy(params: {
     return {
       mode: "sandbox",
       sandboxRoot,
+      containerWorkdir: params.containerWorkdir,
     };
   }
   const explicitLocalRoots = resolveOutboundMediaLocalRoots(params.mediaLocalRoots);
@@ -552,6 +557,8 @@ export async function normalizeSandboxMediaParams(params: {
 }): Promise<void> {
   const sandboxRoot =
     params.mediaPolicy.mode === "sandbox" ? params.mediaPolicy.sandboxRoot.trim() : undefined;
+  const containerWorkdir =
+    params.mediaPolicy.mode === "sandbox" ? params.mediaPolicy.containerWorkdir : undefined;
   for (const key of buildActionMediaSourceParamKeys(params.extraParamKeys)) {
     const entry = resolveMediaParamEntry(params.args, key);
     if (!entry) {
@@ -561,7 +568,11 @@ export async function normalizeSandboxMediaParams(params: {
     if (!sandboxRoot) {
       continue;
     }
-    const normalized = await resolveSandboxedMediaSource({ media: entry.value, sandboxRoot });
+    const normalized = await resolveSandboxedMediaSource({
+      media: entry.value,
+      sandboxRoot,
+      containerWorkdir,
+    });
     if (normalized !== entry.value) {
       params.args[entry.key] = normalized;
     }
@@ -583,6 +594,7 @@ export async function normalizeSandboxMediaParams(params: {
     const normalized = await resolveSandboxedMediaSource({
       media: attachmentSource.value,
       sandboxRoot,
+      containerWorkdir,
     });
     if (normalized !== attachmentSource.value) {
       attachmentSource.attachment[attachmentSource.key] = normalized;
@@ -594,8 +606,10 @@ export async function normalizeSandboxMediaParams(params: {
 export async function normalizeSandboxMediaList(params: {
   values: string[];
   sandboxRoot?: string;
+  containerWorkdir?: string;
 }): Promise<string[]> {
   const sandboxRoot = params.sandboxRoot?.trim();
+  const containerWorkdir = params.containerWorkdir;
   const normalized: string[] = [];
   const seen = new Set<string>();
   for (const value of params.values) {
@@ -605,7 +619,7 @@ export async function normalizeSandboxMediaList(params: {
     }
     assertMediaNotDataUrl(raw);
     const resolved = sandboxRoot
-      ? await resolveSandboxedMediaSource({ media: raw, sandboxRoot })
+      ? await resolveSandboxedMediaSource({ media: raw, sandboxRoot, containerWorkdir })
       : raw;
     if (seen.has(resolved)) {
       continue;

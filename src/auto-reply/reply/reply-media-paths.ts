@@ -82,18 +82,29 @@ export function createReplyMediaPathNormalizer(params: {
     channel: params.messageProvider,
     accountId: params.accountId,
   });
-  let sandboxRootPromise: Promise<string | undefined> | undefined;
+  let sandboxInfoPromise:
+    | Promise<{
+        sandboxRoot: string | undefined;
+        containerWorkdir: string | undefined;
+      }>
+    | undefined;
   const persistedMediaBySource = new Map<string, Promise<string>>();
 
-  const resolveSandboxRoot = async (): Promise<string | undefined> => {
-    if (!sandboxRootPromise) {
-      sandboxRootPromise = ensureSandboxWorkspaceForSession({
+  const resolveSandboxInfo = async (): Promise<{
+    sandboxRoot: string | undefined;
+    containerWorkdir: string | undefined;
+  }> => {
+    if (!sandboxInfoPromise) {
+      sandboxInfoPromise = ensureSandboxWorkspaceForSession({
         config: params.cfg,
         sessionKey: params.sessionKey,
         workspaceDir: params.workspaceDir,
-      }).then((sandbox) => sandbox?.workspaceDir);
+      }).then((sandbox) => ({
+        sandboxRoot: sandbox?.workspaceDir,
+        containerWorkdir: sandbox?.containerWorkdir,
+      }));
     }
-    return await sandboxRootPromise;
+    return await sandboxInfoPromise;
   };
 
   const resolveMediaAccessForSource = (media: string) =>
@@ -175,13 +186,14 @@ export function createReplyMediaPathNormalizer(params: {
       !media.startsWith("~") &&
       !path.isAbsolute(media) &&
       !WINDOWS_DRIVE_RE.test(media);
-    const sandboxRoot = await resolveSandboxRoot();
-    if (sandboxRoot) {
+    const sandboxInfo = await resolveSandboxInfo();
+    if (sandboxInfo.sandboxRoot) {
       let sandboxResolvedMedia: string;
       try {
         sandboxResolvedMedia = await resolveSandboxedMediaSource({
           media,
-          sandboxRoot,
+          sandboxRoot: sandboxInfo.sandboxRoot,
+          containerWorkdir: sandboxInfo.containerWorkdir,
         });
       } catch (err) {
         if (FILE_URL_RE.test(media)) {
