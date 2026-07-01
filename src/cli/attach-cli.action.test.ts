@@ -35,7 +35,7 @@ vi.mock("../gateway/call.js", () => ({
               },
             },
           },
-          env: { OPENCLAW_MCP_TOKEN: "tok-123", OPENCLAW_MCP_SESSION_KEY: sessionKey },
+          env: { OPENCLAW_MCP_TOKEN: "tok-123" },
         };
       }
       return {};
@@ -88,6 +88,7 @@ describe("openclaw attach (action)", () => {
     const out = logs.join("\n");
     expect(out).toContain("agent:main:cli");
     expect(out).toContain("--mcp-config");
+    expect(out).toContain("--strict-mcp-config");
     expect(out).toContain("OPENCLAW_MCP_TOKEN");
     expect(out).not.toContain("attach.revoke");
   });
@@ -126,8 +127,14 @@ describe("openclaw attach (action)", () => {
   });
 
   it("spawns Claude Code and revokes the grant when the child exits", async () => {
-    await runAttach("--session", "agent:main:spawn"); // spawn path (no --print-config)
+    await runAttach("--session", "agent:main:spawn");
     expect(gatewayCalls.find((c) => c.method === "attach.grant")).toBeTruthy();
+    const { spawn } = await import("node:child_process");
+    expect(vi.mocked(spawn).mock.calls[0]?.[1]).toEqual([
+      "--strict-mcp-config",
+      "--mcp-config",
+      expect.stringContaining(".mcp.json"),
+    ]);
     spawnedChild.emit("exit", 0, null);
     await tick();
     await tick();
@@ -143,6 +150,41 @@ describe("openclaw attach (action)", () => {
     expect(gatewayCalls.filter((c) => c.method === "attach.revoke")).toHaveLength(1);
     expect(exitCode).toBe(1);
     expect(logs.join("\n")).toContain("Failed to launch");
+  });
+
+  it("warns when revoke fails but still exits with the child status", async () => {
+    vi.mocked(callGateway).mockImplementationOnce(async (p) => {
+      gatewayCalls.push({
+        method: p.method,
+        params: p.params,
+        mode: p.mode,
+        hasDeviceIdentityKey: "deviceIdentity" in p,
+      });
+      return {
+        sessionKey: "agent:main:spawn",
+        token: "tok-123",
+        expiresAtMs: 2_000_000_000_000,
+        mcpConfig: { mcpServers: { openclaw: {} } },
+        env: { OPENCLAW_MCP_TOKEN: "tok-123" },
+      } as never;
+    });
+    vi.mocked(callGateway).mockImplementationOnce(async (p) => {
+      gatewayCalls.push({
+        method: p.method,
+        params: p.params,
+        mode: p.mode,
+        hasDeviceIdentityKey: "deviceIdentity" in p,
+      });
+      throw new Error("gateway down");
+    });
+
+    await runAttach("--session", "agent:main:spawn");
+    spawnedChild.emit("exit", 0, null);
+    await tick();
+    await tick();
+
+    expect(exitCode).toBe(0);
+    expect(logs.join("\n")).toContain("failed to revoke attach grant");
   });
 
   it("detaches its signal handlers after the child exits (no listener leak)", async () => {
