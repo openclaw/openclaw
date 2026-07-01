@@ -115,6 +115,37 @@ describe("Anthropic provider", () => {
     expect(config.defaultHeaders?.["x-api-key"]).toBeUndefined();
   });
 
+  it("wires buildGuardedModelFetch into the Microsoft Foundry bearer Anthropic SDK fetch option", async () => {
+    const model = makeAnthropicModel({
+      provider: "microsoft-foundry",
+      baseUrl: "https://example.services.ai.azure.com/anthropic",
+      authHeader: true,
+    });
+    const context = {
+      messages: [{ role: "user", content: "hello", timestamp: 1 }],
+    } satisfies Context;
+
+    streamAnthropic(model, context, {
+      apiKey: "foundry-bearer-token",
+    });
+
+    await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
+    const config = anthropicMockState.configs[0] as {
+      apiKey?: string | null;
+      authToken?: string | null;
+      baseURL?: string;
+      fetch?: unknown;
+    };
+
+    expect(config.apiKey).toBeNull();
+    expect(config.authToken).toBe("foundry-bearer-token");
+    expect(config.baseURL).toBe("https://example.services.ai.azure.com/anthropic");
+    // Bounded-read contract: a custom `fetch` is wired through the SDK. The
+    // cap itself is exercised in `provider-transport-fetch.test.ts`; this
+    // test only proves the cap is in scope on this code path.
+    expect(typeof config.fetch).toBe("function");
+  });
+
   it("keeps Microsoft Foundry API-key profiles on Anthropic API key auth", async () => {
     const model = makeAnthropicModel({
       provider: "microsoft-foundry",
