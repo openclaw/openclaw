@@ -510,7 +510,7 @@ MiniMax is configured via `models.providers` because it uses custom endpoints:
 See [/providers/minimax](/providers/minimax) for setup details, model options, and config snippets.
 
 <Note>
-On MiniMax's Anthropic-compatible streaming path, OpenClaw disables thinking by default for the M2.x family unless you explicitly set it; MiniMax-M3 (and M3.x) stays on the provider's omitted/adaptive thinking path by default. `/fast on` rewrites `MiniMax-M2.7` to `MiniMax-M2.7-highspeed`.
+On MiniMax's Anthropic-compatible streaming path, OpenClaw disables thinking by default for the M2.x family unless you explicitly set it; MiniMax-M3 (and M3.x) stays on the provider's omitted/adaptive thinking path by default. Fast mode (`/fast on`, `/fast auto`, or `params.fastMode`) rewrites `MiniMax-M2.7` to `MiniMax-M2.7-highspeed`, and opts `MiniMax-M3` (and M3.x) into MiniMax's paid priority lane via `service_tier=priority` (billed at 1.5x standard) for both `minimax/*` and `minimax-portal/*`.
 </Note>
 
 Plugin-owned capability split:

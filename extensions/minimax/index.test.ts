@@ -328,6 +328,57 @@ describe("minimax provider hooks", () => {
     expect(resolvedPortalModelId).toBe("MiniMax-M2.7-highspeed");
   });
 
+  it("opts MiniMax-M3 into the priority service_tier and 1.5x cost for both provider IDs", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: minimaxProviderPlugin,
+      id: "minimax",
+      name: "MiniMax Provider",
+    });
+
+    // M3 has no highspeed variant: fast mode must inject service_tier=priority
+    // and bill 1.5x the standard M3 rate ({0.6,2.4,0.12,0} -> {0.9,3.6,0.18,0}).
+    const driveM3 = (providerId: "minimax" | "minimax-portal") => {
+      const provider = requireRegisteredProvider(providers, providerId);
+      let capturedPayload: Record<string, unknown> = {};
+      let capturedCost: Model<"anthropic-messages">["cost"] | undefined;
+      const capture: StreamFn = (model, _context, options) => {
+        capturedCost = model.cost;
+        const payload: Record<string, unknown> = {};
+        options?.onPayload?.(payload, model);
+        capturedPayload = payload;
+        return {} as ReturnType<StreamFn>;
+      };
+      const wrapped = provider.wrapStreamFn?.({
+        provider: providerId,
+        modelId: "MiniMax-M3",
+        extraParams: { fastMode: true },
+        streamFn: capture,
+      } as never);
+      void wrapped?.(
+        {
+          api: "anthropic-messages",
+          provider: providerId,
+          id: "MiniMax-M3",
+          cost: { input: 0.6, output: 2.4, cacheRead: 0.12, cacheWrite: 0 },
+        } as Model<"anthropic-messages">,
+        { messages: [] } as Context,
+        {},
+      );
+      return { capturedPayload, capturedCost };
+    };
+
+    for (const providerId of ["minimax", "minimax-portal"] as const) {
+      const { capturedPayload, capturedCost } = driveM3(providerId);
+      expect(capturedPayload.service_tier).toBe("priority");
+      // 1.5x scaling carries float artifacts (2.4 * 1.5 -> 3.5999…); assert the
+      // billed intent per field rather than exact equality.
+      expect(capturedCost?.input).toBeCloseTo(0.9, 10);
+      expect(capturedCost?.output).toBeCloseTo(3.6, 10);
+      expect(capturedCost?.cacheRead).toBeCloseTo(0.18, 10);
+      expect(capturedCost?.cacheWrite).toBe(0);
+    }
+  });
+
   it("shares the provider hook bundle across MiniMax variants", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: minimaxProviderPlugin,

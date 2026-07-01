@@ -7,6 +7,27 @@ const MINIMAX_FAST_MODEL_IDS = new Map<string, string>([
 ]);
 type DynamicFastMode = boolean | (() => boolean | undefined);
 
+type MinimaxModelCost = {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+};
+
+/**
+ * Resolves the per-million cost OpenClaw should bill for a MiniMax fast-mode
+ * lane. MiniMax pricing is owned by the MiniMax plugin, so the wrapper decides
+ * the lane and asks the plugin for the matching cost rather than hard-coding
+ * provider pricing in core. Returning `undefined` leaves the base model cost in
+ * place (the caller opted out of cost correction).
+ */
+export type ResolveMinimaxFastLaneCost = (params: {
+  /** Model id the request is actually sent as (highspeed variant, or the base M3 id). */
+  requestModelId: string;
+  /** True when the request opts into the paid `service_tier: "priority"` lane (M3.x). */
+  priority: boolean;
+}) => MinimaxModelCost | undefined;
+
 function resolveMinimaxFastModelId(modelId: unknown): string | undefined {
   if (typeof modelId !== "string") {
     return undefined;
@@ -66,6 +87,7 @@ function resolvePositiveMaxTokens(value: unknown): number | undefined {
 export function createMinimaxFastModeWrapper(
   baseStreamFn: StreamFn | undefined,
   fastMode: DynamicFastMode,
+  resolveFastLaneCost?: ResolveMinimaxFastLaneCost,
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -78,11 +100,36 @@ export function createMinimaxFastModeWrapper(
     }
 
     const fastModelId = resolveMinimaxFastModelId(model.id);
-    if (!fastModelId) {
-      return underlying(model, context, options);
+    if (fastModelId) {
+      // M2.x: route to the dedicated highspeed model variant and bill at its
+      // higher rate so cost estimates match the variant MiniMax actually runs.
+      const cost = resolveFastLaneCost?.({ requestModelId: fastModelId, priority: false });
+      return underlying({ ...model, id: fastModelId, ...(cost ? { cost } : {}) }, context, options);
     }
 
-    return underlying({ ...model, id: fastModelId }, context, options);
+    // M3.x has no highspeed model variant; opt its requests into MiniMax's paid
+    // priority lane via `service_tier` and bill at the priority rate. Other
+    // MiniMax models get no fast-mode change. Preserve a service_tier an earlier
+    // wrapper/caller already set.
+    if (!isMinimaxModelRequiringThinking(model)) {
+      return underlying(model, context, options);
+    }
+    const modelId = typeof model.id === "string" ? model.id.trim() : "";
+    const priorityCost = resolveFastLaneCost?.({ requestModelId: modelId, priority: true });
+    const priorityModel = priorityCost ? { ...model, cost: priorityCost } : model;
+    const originalOnPayload = options?.onPayload;
+    return underlying(priorityModel, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          if (payloadObj.service_tier === undefined) {
+            payloadObj.service_tier = "priority";
+          }
+        }
+        return originalOnPayload?.(payload, model);
+      },
+    });
   };
 }
 
