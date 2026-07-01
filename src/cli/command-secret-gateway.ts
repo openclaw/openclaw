@@ -358,12 +358,14 @@ function classifyConfiguredTargetRefs(params: {
 }): {
   hasActiveConfiguredRef: boolean;
   hasUnknownConfiguredRef: boolean;
+  activeConfiguredRefPaths: Set<string>;
   diagnostics: string[];
 } {
   if (params.configuredTargetRefPaths.size === 0) {
     return {
       hasActiveConfiguredRef: false,
       hasUnknownConfiguredRef: false,
+      activeConfiguredRefPaths: new Set(),
       diagnostics: [],
     };
   }
@@ -388,6 +390,7 @@ function classifyConfiguredTargetRefs(params: {
   const diagnostics = new Set<string>();
   let hasActiveConfiguredRef = false;
   let hasUnknownConfiguredRef = false;
+  const activeConfiguredRefPaths = new Set<string>();
 
   for (const path of params.configuredTargetRefPaths) {
     if (
@@ -396,6 +399,7 @@ function classifyConfiguredTargetRefs(params: {
       params.optionalActivePaths?.has(path)
     ) {
       hasActiveConfiguredRef = true;
+      activeConfiguredRefPaths.add(path);
       continue;
     }
     const inactiveWarning = inactiveWarningsByPath.get(path);
@@ -409,6 +413,7 @@ function classifyConfiguredTargetRefs(params: {
   return {
     hasActiveConfiguredRef,
     hasUnknownConfiguredRef,
+    activeConfiguredRefPaths,
     diagnostics: [...diagnostics],
   };
 }
@@ -520,6 +525,36 @@ function collectActiveGatewayExecSecretRefCredentialPaths(
       })
     );
   });
+}
+
+function collectActiveExecTargetRefPaths(params: {
+  config: OpenClawConfig;
+  targetIds: Set<string>;
+  configuredTargetRefPaths: Set<string>;
+  activeConfiguredRefPaths: ReadonlySet<string>;
+}): string[] {
+  const defaults = params.config.secrets?.defaults;
+  const execPaths: string[] = [];
+  for (const target of commandSecretGatewayDeps.discoverConfigSecretTargetsByIds(
+    params.config,
+    params.targetIds,
+  )) {
+    if (
+      !params.configuredTargetRefPaths.has(target.path) ||
+      !params.activeConfiguredRefPaths.has(target.path)
+    ) {
+      continue;
+    }
+    const { ref } = resolveSecretInputRef({
+      value: target.value,
+      refValue: target.refValue,
+      defaults,
+    });
+    if (ref?.source === "exec") {
+      execPaths.push(target.path);
+    }
+  }
+  return execPaths;
 }
 
 async function resolveCommandSecretRefsWithoutGateway(params: {
@@ -938,7 +973,23 @@ export async function resolveCommandSecretRefsViaGateway(params: {
   const gatewayExecSecretRefCredentialPaths = resolutionPolicy.allowExecSecretRefs
     ? []
     : collectActiveGatewayExecSecretRefCredentialPaths(params.config);
-  if (gatewayExecSecretRefCredentialPaths.length > 0) {
+  const targetExecSecretRefPaths = resolutionPolicy.allowExecSecretRefs
+    ? collectActiveExecTargetRefPaths({
+        config: params.config,
+        targetIds: params.targetIds,
+        configuredTargetRefPaths,
+        activeConfiguredRefPaths: preflight.activeConfiguredRefPaths,
+      })
+    : [];
+  const skipGatewayExecPaths = [
+    ...gatewayExecSecretRefCredentialPaths,
+    ...targetExecSecretRefPaths,
+  ];
+  if (skipGatewayExecPaths.length > 0) {
+    const reasonDiagnostic =
+      gatewayExecSecretRefCredentialPaths.length > 0
+        ? `${params.commandName}: skipped gateway secrets.resolve because gateway credentials use exec SecretRefs at ${gatewayExecSecretRefCredentialPaths.join(", ")}; rerun with --allow-exec to execute configured exec providers.`
+        : `${params.commandName}: skipped gateway secrets.resolve because SecretRefs use exec providers at ${targetExecSecretRefPaths.join(", ")}; rerun with --allow-exec to execute configured exec providers.`;
     return await resolveCommandSecretRefsWithoutGateway({
       config: params.config,
       commandName: params.commandName,
@@ -949,7 +1000,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
       forcedActivePaths: params.forcedActivePaths,
       optionalActivePaths: params.optionalActivePaths,
       resolutionPolicy,
-      reasonDiagnostic: `${params.commandName}: skipped gateway secrets.resolve because gateway credentials use exec SecretRefs at ${gatewayExecSecretRefCredentialPaths.join(", ")}; rerun with --allow-exec to execute configured exec providers.`,
+      reasonDiagnostic,
     });
   }
 
