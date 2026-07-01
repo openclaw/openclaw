@@ -197,6 +197,20 @@ function hasPublishableSkillFile(params: { skillDir: string; rootDir: string }):
  */
 function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: string }): void {
   const pluginSkillsDir = opts?.pluginSkillsDir ?? resolveDefaultPluginSkillsDir();
+
+  // Always ensure the plugin-skills directory exists with private permissions,
+  // even when there are no skills to publish (upgrade repair).
+  try {
+    fs.mkdirSync(pluginSkillsDir, { recursive: true, mode: 0o700 });
+    try {
+      fs.chmodSync(pluginSkillsDir, 0o700);
+    } catch {
+      /* best effort */
+    }
+  } catch {
+    // best-effort; symlink will fail below if dir is truly unusable
+  }
+
   const managedTargets = new Map<string, string>();
 
   // Collect basename → target mappings, reporting collisions.
@@ -211,11 +225,6 @@ function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: str
   // precedence, so they never shadow managed or bundled skills.
   for (const [name, target] of managedTargets) {
     const linkPath = path.join(pluginSkillsDir, name);
-    try {
-      fs.mkdirSync(pluginSkillsDir, { recursive: true });
-    } catch {
-      // best-effort; symlink will fail below if dir is truly unusable
-    }
     try {
       const existingEntry = fs.lstatSync(linkPath);
       if (existingEntry.isSymbolicLink()) {

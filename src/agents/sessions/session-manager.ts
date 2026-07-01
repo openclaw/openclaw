@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { isProxy } from "node:util/types";
 import {
   appendJsonlEntrySync,
@@ -440,7 +440,18 @@ export function getDefaultSessionDir(cwd: string, agentDir: string = getDefaultA
   const safePath = `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
   const sessionDir = join(agentDir, "sessions", safePath);
   if (!existsSync(sessionDir)) {
-    mkdirSync(sessionDir, { recursive: true });
+    mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
+  }
+  // Repair permissions on existing managed dirs after upgrade
+  try {
+    chmodSync(sessionDir, 0o700);
+    const sessionsParent = join(agentDir, "sessions");
+    chmodSync(sessionsParent, 0o700);
+    // Also repair gateway sessions path (sibling of agentDir under agents/<id>/)
+    const gatewaySessions = join(dirname(agentDir), "sessions");
+    chmodSync(gatewaySessions, 0o700);
+  } catch {
+    /* best effort */
   }
   return sessionDir;
 }
@@ -1485,7 +1496,7 @@ export class SessionManager {
     this.sessionDir = sessionDir;
     this.shouldPersist = persist;
     if (persist && sessionDir && !existsSync(sessionDir)) {
-      mkdirSync(sessionDir, { recursive: true });
+      mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
     }
 
     if (sessionFile) {
@@ -2923,6 +2934,19 @@ export class SessionManager {
     const cwd = cwdOverride ?? header?.cwd ?? process.cwd();
     // If no sessionDir provided, derive from file's parent directory
     const dir = sessionDir ?? resolve(path, "..");
+    // Repair permissions on managed session state directories after upgrade,
+    // including the sibling CLI sessions dir when opening from the gateway path.
+    try {
+      chmodSync(dir, 0o700);
+      // If dir is agents/<id>/sessions, also repair agents/<id>/agent/sessions
+      const parentDir = dirname(dir);
+      const cliSessions = join(parentDir, "agent", "sessions");
+      if (existsSync(cliSessions)) {
+        chmodSync(cliSessions, 0o700);
+      }
+    } catch {
+      /* best effort */
+    }
     return new SessionManager(cwd, dir, path, true, loaded);
   }
 
@@ -2965,7 +2989,7 @@ export class SessionManager {
 
     const dir = sessionDir ?? getDefaultSessionDir(targetCwd);
     if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
     }
 
     // Create new session file with new ID but forked content

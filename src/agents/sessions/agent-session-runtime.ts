@@ -371,7 +371,7 @@ export class AgentSessionRuntime {
 
     const sessionDir = this.currentSession.sessionManager.getSessionDir();
     if (!existsSync(sessionDir)) {
-      mkdirSync(sessionDir, { recursive: true });
+      mkdirSync(sessionDir, { recursive: true, mode: 0o700 });
     }
 
     const destinationPath = join(sessionDir, basename(resolvedPath));

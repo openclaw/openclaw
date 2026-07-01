@@ -1216,7 +1216,8 @@ function ensureCreatedSessionTranscript(params: {
       },
     );
     if (!fs.existsSync(sessionFile)) {
-      fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+      const sessionParentDir = path.dirname(sessionFile);
+      fs.mkdirSync(sessionParentDir, { recursive: true });
       fs.writeFileSync(
         sessionFile,
         `${JSON.stringify(createSessionTranscriptHeader({ sessionId: params.entry.sessionId }))}\n`,
