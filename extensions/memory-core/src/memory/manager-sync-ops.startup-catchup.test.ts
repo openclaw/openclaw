@@ -151,6 +151,10 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     return await this.markSessionStartupCatchupDirtyFiles();
   }
 
+  detectStartupDirtySync(): void {
+    this.detectSessionStartupDirtySync();
+  }
+
   async runSyncForTest(params?: MemorySyncParams): Promise<void> {
     await this.runSync(params);
   }
@@ -345,6 +349,17 @@ describe("session startup catch-up", () => {
     await expect(harness.markStartupDirtyFiles()).resolves.toEqual([session.filePath]);
     expect(harness.getDirtySessionFiles()).toEqual([session.filePath]);
     expect(harness.isSessionsDirty()).toBe(true);
+    expect(harness.syncCalls).toEqual([]);
+  });
+
+  it("detects unindexed session files synchronously for status mode", async () => {
+    const session = await writeSessionFile("thread.jsonl");
+    const harness = new SessionStartupCatchupHarness([]);
+
+    harness.detectStartupDirtySync();
+    expect(harness.getDirtySessionFiles()).toEqual([session.filePath]);
+    expect(harness.isSessionsDirty()).toBe(true);
+    // Sync detection does not trigger background sync
     expect(harness.syncCalls).toEqual([]);
   });
 

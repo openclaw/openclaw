@@ -448,6 +448,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       this.batch = this.resolveBatchConfig();
       if (!transient) {
         this.ensureSessionStartupCatchup();
+      } else if (params.purpose === "status") {
+        this.detectSessionStartupDirtySync();
       }
     } catch (err) {
       closeMemoryDatabase(this.db);

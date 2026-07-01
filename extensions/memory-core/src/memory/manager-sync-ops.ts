@@ -1496,6 +1496,62 @@ export abstract class MemoryManagerSyncOps {
     });
   }
 
+  /**
+   * Synchronous detection of unindexed session transcripts for status-mode
+   * initialization. Sets sessionsDirty when on-disk session files have no
+   * corresponding memory_index_sources rows, so plain `memory status`
+   * reports accurate dirty state without performing a full sync.
+   */
+  protected detectSessionStartupDirtySync(): void {
+    if (!this.sources.has("sessions")) {
+      return;
+    }
+    try {
+      const sessionsDir = resolveSessionTranscriptsDirForAgent(this.agentId);
+      if (!fsSync.existsSync(sessionsDir)) {
+        return;
+      }
+      const entries = fsSync.readdirSync(sessionsDir, { withFileTypes: true });
+      const sessionFiles: MemorySessionStartupFileState[] = [];
+      for (const entry of entries) {
+        if (!entry.isFile() || !isUsageCountedSessionTranscriptFileName(entry.name)) {
+          continue;
+        }
+        const absPath = path.join(sessionsDir, entry.name);
+        try {
+          const stat = fsSync.statSync(absPath);
+          sessionFiles.push({
+            absPath,
+            path: sessionPathForFile(absPath),
+            mtimeMs: stat.mtimeMs,
+            size: stat.size,
+          });
+        } catch {
+          // File may have been deleted between readdir and stat; skip.
+        }
+      }
+      if (sessionFiles.length === 0) {
+        return;
+      }
+      const existingRows = loadMemorySourceFileState({
+        db: this.db,
+        source: "sessions",
+      }).rows;
+      const dirtyFiles = resolveMemorySessionStartupDirtyFiles({
+        files: sessionFiles,
+        existingRows,
+      });
+      if (dirtyFiles.length > 0) {
+        for (const file of dirtyFiles) {
+          this.sessionsDirtyFiles.add(file);
+        }
+        this.sessionsDirty = true;
+      }
+    } catch {
+      // Non-fatal: status will report whatever persisted flags exist.
+    }
+  }
+
   protected async markSessionStartupCatchupDirtyFiles(): Promise<string[]> {
     if (!this.sources.has("sessions") || this.closed) {
       return [];
