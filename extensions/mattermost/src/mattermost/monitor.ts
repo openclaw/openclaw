@@ -169,17 +169,31 @@ type MattermostReaction = {
   emoji_name?: string;
   create_at?: number;
 };
+const MATTERMOST_INBOUND_REPLAY_PLUGIN_ID = "mattermost";
+const MATTERMOST_INBOUND_REPLAY_NAMESPACE_PREFIX = "mattermost.inbound-replay";
 const RECENT_MATTERMOST_MESSAGE_TTL_MS = 5 * 60_000;
 const RECENT_MATTERMOST_MESSAGE_MAX = 2000;
+// Bounds persisted rows per namespace (SQLite growth cap); TTL is the primary fence.
+const MATTERMOST_INBOUND_REPLAY_STATE_MAX_ENTRIES = 10_000;
 
 function normalizeInteractionSourceIps(values?: string[]): string[] {
   return normalizeTrimmedStringList(values);
 }
 
-const recentInboundMessages = createClaimableDedupe({
-  ttlMs: RECENT_MATTERMOST_MESSAGE_TTL_MS,
-  memoryMaxSize: RECENT_MATTERMOST_MESSAGE_MAX,
-});
+// Persisted so a committed inbound key still dedupes after a gateway restart:
+// a redelivered post would otherwise be re-processed by a memory-only guard.
+// claim = in-memory ownership; commit = persisted; release = reclaimable.
+export function createMattermostInboundReplayGuard(): ClaimableDedupe {
+  return createClaimableDedupe({
+    pluginId: MATTERMOST_INBOUND_REPLAY_PLUGIN_ID,
+    namespacePrefix: MATTERMOST_INBOUND_REPLAY_NAMESPACE_PREFIX,
+    ttlMs: RECENT_MATTERMOST_MESSAGE_TTL_MS,
+    memoryMaxSize: RECENT_MATTERMOST_MESSAGE_MAX,
+    stateMaxEntries: MATTERMOST_INBOUND_REPLAY_STATE_MAX_ENTRIES,
+  });
+}
+
+const recentInboundMessages = createMattermostInboundReplayGuard();
 
 export class MattermostRetryableInboundError extends Error {
   constructor(message: string, options?: ErrorOptions) {
