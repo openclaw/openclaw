@@ -12,6 +12,7 @@ const {
   detectNodeFastScope,
   listChangedPaths,
   parseArgs,
+  shouldRunNativeI18n,
 } = (await import("../../scripts/ci-changed-scope.mjs")) as unknown as {
   detectChangedScope: (paths: string[]) => {
     runNode: boolean;
@@ -32,6 +33,7 @@ const {
     runPluginContracts: boolean;
     runCiRouting: boolean;
   };
+  shouldRunNativeI18n: (paths: string[]) => boolean;
   listChangedPaths: (
     base: string,
     head?: string,
@@ -120,9 +122,7 @@ describe("parseArgs", () => {
 
   it("rejects missing CI diff refs", () => {
     expect(() => parseArgs(["--base", "--head", "HEAD"])).toThrow("--base requires a value");
-    expect(() => parseArgs(["--base", "-h", "--head", "HEAD"])).toThrow(
-      "--base requires a value",
-    );
+    expect(() => parseArgs(["--base", "-h", "--head", "HEAD"])).toThrow("--base requires a value");
     expect(() => parseArgs(["--head"])).toThrow("--head requires a value");
     expect(() => parseArgs(["--head", "-h"])).toThrow("--head requires a value");
     expect(() => parseArgs(["--base", ""])).toThrow("--base requires a value");
@@ -130,6 +130,27 @@ describe("parseArgs", () => {
 });
 
 describe("detectChangedScope", () => {
+  it("routes only native i18n-owned paths to the native inventory job", () => {
+    for (const changedPath of [
+      "apps/.i18n/native-source.json",
+      "apps/android/app/src/main/java/ai/openclaw/app/MainActivity.kt",
+      "apps/ios/Sources/RootTabs.swift",
+      "apps/macos/Sources/OpenClaw/Settings.swift",
+      "apps/shared/OpenClawKit/Sources/OpenClawKit/Client.swift",
+      "scripts/native-app-i18n.ts",
+      "scripts/android-app-i18n.ts",
+      "scripts/apple-app-i18n.ts",
+      "test/scripts/native-app-i18n.test.ts",
+      ".github/workflows/native-app-locale-refresh.yml",
+      ".github/workflows/ci.yml",
+    ]) {
+      expect(shouldRunNativeI18n([changedPath]), changedPath).toBe(true);
+    }
+
+    expect(shouldRunNativeI18n(["src/config/defaults.ts"])).toBe(false);
+    expect(shouldRunNativeI18n(["scripts/install.sh"])).toBe(false);
+  });
+
   it("fails safe when no paths are provided", () => {
     expect(detectChangedScope([])).toEqual({
       runNode: true,
@@ -891,6 +912,7 @@ describe("detectChangedScope", () => {
       run_fast_install_smoke: "false",
       run_full_install_smoke: "false",
       run_control_ui_i18n: "false",
+      run_native_i18n: "false",
     });
   });
 });

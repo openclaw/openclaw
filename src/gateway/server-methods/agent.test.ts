@@ -5,6 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import {
+  onDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
+import {
   registerExecApprovalFollowupRuntimeHandoff,
   resetExecApprovalFollowupRuntimeHandoffsForTests,
 } from "../../agents/bash-tools.exec-approval-followup-state.js";
@@ -600,6 +606,7 @@ describe("gateway agent handler", () => {
   afterEach(() => {
     envSnapshot.restore();
     resetDetachedTaskLifecycleRuntimeForTests();
+    resetDiagnosticEventsForTest();
     resetTaskRegistryForTests();
     resetSubagentRegistryForTests({ persist: false });
     subagentRegistryTesting.setDepsForTest();
@@ -2050,6 +2057,7 @@ describe("gateway agent handler", () => {
       broadcastToConnIds,
       completedRun,
       childSessionKey,
+      task: "follow-up",
     });
   });
 
@@ -3212,6 +3220,10 @@ describe("gateway agent handler", () => {
       lastTo: "123",
     });
     const context = makeContext();
+    const diagnostics: DiagnosticEventPayload[] = [];
+    onDiagnosticEvent((event) => {
+      diagnostics.push(event);
+    });
     const updateSessionStoreCallsBefore = mocks.updateSessionStore.mock.calls.length;
     const agentCommandCallsBefore = mocks.agentCommand.mock.calls.length;
 
@@ -3237,6 +3249,15 @@ describe("gateway agent handler", () => {
       status: "ok",
       summary: expect.stringContaining("exec approval followup dropped"),
     });
+    await waitForDiagnosticEventsDrained();
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        type: "exec.approval.followup_suppressed",
+        approvalId: "req-rebound-followup",
+        reason: "session_rebound",
+        phase: "gateway_preflight",
+      }),
+    );
     expect(mocks.updateSessionStore.mock.calls.length).toBe(updateSessionStoreCallsBefore);
     expect(mocks.agentCommand.mock.calls.length).toBe(agentCommandCallsBefore);
     const dedupeEntry = context.dedupe.get("agent:exec-approval-followup:req-rebound-followup");
@@ -4055,6 +4076,61 @@ describe("gateway agent handler", () => {
         "create",
         "send",
       ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a provider-owned CLI session across the daily default boundary on the gateway path", async () => {
+    const now = Date.parse("2026-04-25T12:00:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      mocks.resolveExplicitAgentSessionKey.mockReturnValue("agent:main:main");
+      mockMainSessionEntry({
+        sessionId: "provider-owned-session-id",
+        updatedAt: now,
+        sessionStartedAt: now - 25 * 60 * 60_000,
+        lastInteractionAt: now - 25 * 60 * 60_000,
+        modelProvider: "claude-cli",
+        cliSessionBindings: { "claude-cli": { sessionId: "claude-cli-conversation-123" } },
+      });
+      const loaded = mocks.loadSessionEntry();
+      let capturedEntry: Record<string, unknown> | undefined;
+      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+        const store: Record<string, unknown> = {
+          [loaded.canonicalKey]: structuredClone(loaded.entry),
+        };
+        const result = await updater(store);
+        capturedEntry = result as Record<string, unknown>;
+        return result;
+      });
+      mocks.agentCommand.mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: { durationMs: 100 },
+      });
+
+      await invokeAgent(
+        {
+          message: "provider-owned daily boundary",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "provider-owned-daily-boundary",
+        },
+        { reqId: "provider-owned-daily-boundary" },
+      );
+
+      const call = await waitForAgentCommandCall<{
+        sessionId?: string;
+        sessionKey?: string;
+      }>();
+      expect(call.sessionKey).toBe("agent:main:main");
+      expect(call.sessionId).toBe("provider-owned-session-id");
+      expect(capturedEntry?.sessionStartedAt).toBe(now - 25 * 60 * 60_000);
+      expect(capturedEntry?.cliSessionBindings).toMatchObject({
+        "claude-cli": { sessionId: "claude-cli-conversation-123" },
+      });
+      expect(mocks.emitGatewaySessionEndPluginHook).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
@@ -5316,6 +5392,8 @@ describe("gateway agent handler", () => {
   });
 
   it("does not auto-route voice wake requests with another agent's explicit main session", async () => {
+    const opsAgentCfg = { agents: { list: [{ id: "main" }, { id: "ops" }] } };
+    mocks.listAgentIds.mockReturnValue(["main", "ops"]);
     mocks.loadVoiceWakeRoutingConfig.mockResolvedValue({
       version: 1,
       defaultTarget: { sessionKey: "agent:main:voice" },
@@ -5325,7 +5403,7 @@ describe("gateway agent handler", () => {
     mocks.resolveVoiceWakeRouteByTrigger.mockReturnValue({ sessionKey: "agent:main:voice" });
 
     mocks.loadSessionEntry.mockImplementation((sessionKey: string) => ({
-      cfg: {},
+      cfg: opsAgentCfg,
       storePath: "/tmp/sessions.json",
       entry: {
         sessionId: "voice-session-id",
@@ -5340,6 +5418,7 @@ describe("gateway agent handler", () => {
     });
     mocks.loadVoiceWakeRoutingConfig.mockClear();
     mocks.resolveVoiceWakeRouteByTrigger.mockClear();
+    mocks.agentCommand.mockClear();
 
     const respond = vi.fn();
     await invokeAgent(

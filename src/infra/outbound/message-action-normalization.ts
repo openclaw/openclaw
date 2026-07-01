@@ -10,13 +10,19 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { applyTargetToParams } from "./channel-target.js";
-import { actionHasTarget, actionRequiresTarget } from "./message-action-spec.js";
+import {
+  actionHasTarget,
+  actionRequiresTarget,
+  resolveActionDeliveryTargetAlias,
+  type ActionDeliveryTargetAliasSpec,
+} from "./message-action-spec.js";
 
 /** Normalizes message-action args before target validation and dispatch. */
 export function normalizeMessageActionInput(params: {
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
   toolContext?: ChannelThreadingToolContext;
+  targetAliasSpec?: ActionDeliveryTargetAliasSpec;
 }): Record<string, unknown> {
   const normalizedArgs = { ...params.args };
   const { action, toolContext } = params;
@@ -30,6 +36,21 @@ export function normalizeMessageActionInput(params: {
   const hasLegacyTarget =
     (normalizeOptionalString(normalizedArgs.to) ?? "").length > 0 ||
     (normalizeOptionalString(normalizedArgs.channelId) ?? "").length > 0;
+  const legacyTarget =
+    normalizeOptionalString(normalizedArgs.to) ??
+    normalizeOptionalString(normalizedArgs.channelId) ??
+    "";
+  const deliveryAliasTarget = resolveActionDeliveryTargetAlias(action, normalizedArgs, {
+    channel: inferredChannel,
+    aliasSpec: params.targetAliasSpec,
+  });
+
+  if (deliveryAliasTarget && explicitTarget && deliveryAliasTarget !== explicitTarget) {
+    throw new Error(`Action ${action} received conflicting target and delivery alias values.`);
+  }
+  if (deliveryAliasTarget && legacyTarget && deliveryAliasTarget !== legacyTarget) {
+    throw new Error(`Action ${action} received conflicting target and delivery alias values.`);
+  }
 
   if (explicitTarget && hasLegacyTargetFields) {
     // Canonical `target` wins over old `to`/`channelId` aliases before validation.
@@ -37,9 +58,14 @@ export function normalizeMessageActionInput(params: {
     delete normalizedArgs.channelId;
   }
 
+  if (!explicitTarget && !hasLegacyTarget && deliveryAliasTarget) {
+    normalizedArgs.target = deliveryAliasTarget;
+  }
+
   if (
     !explicitTarget &&
     !hasLegacyTarget &&
+    !deliveryAliasTarget &&
     actionRequiresTarget(action) &&
     !actionHasTarget(action, normalizedArgs, { channel: inferredChannel })
   ) {
@@ -52,9 +78,6 @@ export function normalizeMessageActionInput(params: {
   }
 
   if (!explicitTarget && actionRequiresTarget(action) && hasLegacyTarget) {
-    const legacyTo = normalizeOptionalString(normalizedArgs.to) ?? "";
-    const legacyChannelId = normalizeOptionalString(normalizedArgs.channelId) ?? "";
-    const legacyTarget = legacyTo || legacyChannelId;
     if (legacyTarget) {
       normalizedArgs.target = legacyTarget;
       delete normalizedArgs.to;

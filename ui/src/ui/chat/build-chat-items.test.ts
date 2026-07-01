@@ -551,6 +551,65 @@ describe("buildChatItems", () => {
     ]);
   });
 
+  it("keeps distinct keyed preamble segments independent from accumulated stream snapshots", () => {
+    const items = buildChatItems(
+      createProps({
+        streamSegments: [
+          { text: "Checking workspace", ts: 0, itemId: "preamble-1" },
+          { text: "Checking workspace", ts: 0, itemId: "preamble-2" },
+          { text: "Checking workspace details", ts: 0, itemId: "preamble-3" },
+        ],
+        toolMessages: [{ role: "toolResult", content: "Tool output", timestamp: 1 }],
+      }),
+    );
+
+    expect(items).toMatchObject([
+      { kind: "stream", text: "Checking workspace", startedAt: 0 },
+      { kind: "stream", text: "Checking workspace", startedAt: 0 },
+      { kind: "stream", text: "Checking workspace details", startedAt: 0 },
+      { kind: "group", role: "tool" },
+    ]);
+  });
+
+  it("keeps already-visible tool cards before matching-timestamp keyed preambles", () => {
+    const items = buildChatItems(
+      createProps({
+        streamSegments: [{ text: "Checking after the tool", ts: 1, itemId: "preamble-after-tool" }],
+        toolMessages: [{ role: "toolResult", content: "Tool output", timestamp: 1 }],
+      }),
+    );
+
+    expect(items).toMatchObject([
+      { kind: "group", role: "tool" },
+      { kind: "stream", text: "Checking after the tool", startedAt: 1 },
+    ]);
+  });
+
+  it("orders a keyed preamble that arrived before a later tool above that tool", () => {
+    // Regression: keyed commentary must merge into the timestamp ordering path
+    // rather than render below every tool card. A preamble that arrived between
+    // an earlier and a later tool should stay between them while the run is live.
+    const items = buildChatItems(
+      createProps({
+        streamSegments: [
+          { text: "Planning the next step", ts: 2, itemId: "preamble-between-tools" },
+        ],
+        toolMessages: [
+          { role: "toolResult", content: "First tool", timestamp: 1 },
+          { role: "toolResult", content: "Second tool", timestamp: 3 },
+        ],
+      }),
+    );
+
+    expect(items).toMatchObject([
+      { kind: "group", role: "tool" },
+      { kind: "stream", text: "Planning the next step", startedAt: 2 },
+      { kind: "group", role: "tool" },
+    ]);
+    const streamItems = items.filter((item) => item.kind === "stream");
+    expect(streamItems).toHaveLength(1);
+  });
+
   it("suppresses metadata-only history messages before grouping", () => {
     const groups = messageGroups({
       messages: [

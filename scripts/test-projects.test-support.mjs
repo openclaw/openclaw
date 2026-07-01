@@ -746,6 +746,9 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/ci-changed-scope.mjs", ["src/scripts/ci-changed-scope.test.ts"]],
   ["scripts/ci-docker-pull-retry.sh", ["test/scripts/ci-docker-pull-retry.test.ts"]],
   ["scripts/control-ui-i18n.ts", ["test/scripts/control-ui-i18n.test.ts"]],
+  ["scripts/apple-app-i18n.ts", ["test/scripts/apple-app-i18n.test.ts"]],
+  ["scripts/native-app-i18n.ts", ["test/scripts/native-app-i18n.test.ts"]],
+  ["scripts/android-app-i18n.ts", ["test/scripts/android-app-i18n.test.ts"]],
   [
     "scripts/copy-bundled-plugin-metadata.mjs",
     ["src/plugins/copy-bundled-plugin-metadata.test.ts", "src/infra/run-node.test.ts"],
@@ -1924,7 +1927,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ["scripts/test-projects.test-support.mjs", ["test/scripts/test-projects.test.ts"]],
   ["scripts/dev/gateway-smoke.ts", ["test/e2e/qa-lab/runtime/gateway-smoke.e2e.test.ts"]],
   ["scripts/dev/test-device-pair-telegram.ts", ["test/scripts/test-device-pair-telegram.test.ts"]],
-  ["scripts/test-live-media.ts", ["test/scripts/test-live-media.test.ts"]],
+  [
+    "test/e2e/qa-lab/media/hosted-media-provider-live.ts",
+    ["test/e2e/qa-lab/media/hosted-media-provider-live.test.ts"],
+  ],
   ["scripts/profile-extension-memory.mjs", ["test/scripts/profile-extension-memory.test.ts"]],
   [
     "scripts/openclaw-performance-source-summary.mjs",

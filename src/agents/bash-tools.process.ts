@@ -19,7 +19,11 @@ import {
   setJobTtlMs,
 } from "./bash-process-registry.js";
 import { describeProcessTool } from "./bash-tools.descriptions.js";
-import { handleProcessSendKeys, type WritableStdin } from "./bash-tools.process-send-keys.js";
+import {
+  handleProcessSendKeys,
+  type WritableStdin,
+  writeProcessStdin,
+} from "./bash-tools.process-send-keys.js";
 import { processSchema } from "./bash-tools.schemas.js";
 import {
   clampWithDefault,
@@ -364,18 +368,6 @@ export function createProcessTool(
         return { ok: true as const, session: scopedSession, stdin };
       };
 
-      const writeToStdin = async (stdin: WritableStdin, data: string) => {
-        await new Promise<void>((resolve, reject) => {
-          stdin.write(data, (err) => {
-            if (err) {
-              reject(err);
-            } else {
-              resolve();
-            }
-          });
-        });
-      };
-
       const runningSessionResult = (
         sessionLocal: ProcessSession,
         text: string,
@@ -596,7 +588,7 @@ export function createProcessTool(
           if (!resolved.ok) {
             return resolved.result;
           }
-          await writeToStdin(resolved.stdin, params.data ?? "");
+          await writeProcessStdin(resolved.stdin, params.data ?? "");
           if (params.eof) {
             resolved.stdin.end();
           }
@@ -628,7 +620,7 @@ export function createProcessTool(
           if (!resolved.ok) {
             return resolved.result;
           }
-          await writeToStdin(resolved.stdin, "\r");
+          await writeProcessStdin(resolved.stdin, "\r");
           return runningSessionResult(
             resolved.session,
             `Submitted session ${params.sessionId} (sent CR).`,
@@ -652,7 +644,7 @@ export function createProcessTool(
               details: { status: "failed" },
             };
           }
-          await writeToStdin(resolved.stdin, payload);
+          await writeProcessStdin(resolved.stdin, payload);
           return runningSessionResult(
             resolved.session,
             `Pasted ${params.text?.length ?? 0} chars to session ${params.sessionId}.`,

@@ -4,6 +4,10 @@ export * from "../gateway/channel-status-patches.js";
 export { addGatewayClientOptions, callGatewayFromCli } from "../cli/gateway-rpc.js";
 export type { GatewayRpcOpts } from "../cli/gateway-rpc.js";
 export { isLoopbackHost } from "../gateway/net.js";
+export async function resolveAdvertisedLanHost(): Promise<string | null> {
+  const runtime = await import("../infra/advertised-lan-host.js");
+  return await runtime.resolveAdvertisedLanHost();
+}
 export { resolveHostedPluginSurfaceUrl } from "../gateway/hosted-plugin-surface-url.js";
 export type { HostedPluginSurfaceUrlParams } from "../gateway/hosted-plugin-surface-url.js";
 export {

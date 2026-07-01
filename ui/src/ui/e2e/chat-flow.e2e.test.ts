@@ -271,6 +271,50 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("keeps a targetless message-tool source reply beside the automatic final reply", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const prompt = "send progress through the message tool and then finish";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const params = requireRecord(sendRequest.params);
+      expect(params).toMatchObject({ sessionKey: "main", message: prompt, deliver: false });
+      const runId = requireString(params.idempotencyKey, "chat send idempotency key");
+
+      await gateway.emitChatFinal({
+        runId,
+        text: "Visible progress from the targetless message tool.",
+      });
+      await page
+        .getByText("Visible progress from the targetless message tool.")
+        .waitFor({ timeout: 10_000 });
+
+      await gateway.emitChatFinal({ runId, text: "Visible automatic final reply." });
+      await page.getByText("Visible automatic final reply.").waitFor({ timeout: 10_000 });
+      const bubbleTexts = await page.locator(".chat-thread .chat-bubble").allTextContents();
+      for (const expectedText of [
+        prompt,
+        "Visible progress from the targetless message tool.",
+        "Visible automatic final reply.",
+      ]) {
+        expect(bubbleTexts.some((text) => text.includes(expectedText))).toBe(true);
+      }
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("keeps the composer clear when a stale native input replay arrives after send", async () => {
     const context = await newBrowserContext({
       locale: "en-US",

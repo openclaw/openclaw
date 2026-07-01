@@ -42,6 +42,17 @@ import UIKit
         }
     }
 
+    @Test @MainActor func hostedPushRelayDisclosureBuildsAViewHierarchy() {
+        for typeSize in [DynamicTypeSize.large, .accessibility5] {
+            let root = HostedPushRelayDisclosureSheet(
+                message: "Enabling this sends delivery data through OpenClaw's hosted push relay.",
+                onContinue: {})
+                .environment(\.dynamicTypeSize, typeSize)
+
+            _ = Self.host(root, size: CGSize(width: 402, height: 450))
+        }
+    }
+
     @Test @MainActor func rootTabsBuildsDeviceOrientationShellMatrix() {
         for scenario in Self.rootTabsShellScenarios() {
             let appModel = NodeAppModel()
@@ -70,6 +81,74 @@ import UIKit
 
             _ = Self.host(root)
         }
+    }
+
+    @Test @MainActor func gatewayTrustPromptAlertPresentsWhenPromptAppearsAfterInitialRender() async {
+        let appModel = NodeAppModel()
+        let gatewayController = Self.gatewayControllerWithCapturedTLSFingerprint(appModel: appModel)
+        let root = Color.clear
+            .gatewayTrustPromptAlert()
+            .environment(gatewayController)
+
+        let window = Self.host(root)
+        await Self.triggerGatewayTrustPrompt(controller: gatewayController)
+        await Self.waitForPresentedAlert(in: window)
+
+        #expect(window.rootViewController?.presentedViewController is UIAlertController)
+    }
+
+    @Test @MainActor func rootPromptAlertStackPresentsGatewayTrustPrompt() async {
+        let appModel = NodeAppModel()
+        let gatewayController = Self.gatewayControllerWithCapturedTLSFingerprint(appModel: appModel)
+        let root = Color.clear
+            .gatewayTrustPromptAlert()
+            .deepLinkAgentPromptAlert()
+            .environment(appModel)
+            .environment(gatewayController)
+
+        let window = Self.host(root)
+        await Self.triggerGatewayTrustPrompt(controller: gatewayController)
+        await Self.waitForPresentedAlert(in: window)
+
+        #expect(window.rootViewController?.presentedViewController is UIAlertController)
+    }
+
+    @Test @MainActor func rootPromptAlertStackStillPresentsDeepLinkPrompt() async throws {
+        let appModel = NodeAppModel()
+        appModel._test_setGatewayConnected(true)
+        let gatewayController = Self.gatewayControllerWithCapturedTLSFingerprint(appModel: appModel)
+        let root = Color.clear
+            .gatewayTrustPromptAlert()
+            .deepLinkAgentPromptAlert()
+            .environment(appModel)
+            .environment(gatewayController)
+
+        let window = Self.host(root)
+        let url = try #require(URL(string: "openclaw://agent?message=hello%20from%20deep%20link"))
+        await appModel.handleDeepLink(url: url)
+        await Self.waitForPresentedAlert(in: window)
+
+        #expect(window.rootViewController?.presentedViewController is UIAlertController)
+    }
+
+    @MainActor private static func gatewayControllerWithCapturedTLSFingerprint(
+        appModel: NodeAppModel)
+        -> GatewayConnectionController
+    {
+        GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            tcpReachabilityProbe: { _, _, _, _ in true },
+            tlsFingerprintProbe: { _ in .fingerprint("abc123") })
+    }
+
+    @MainActor private static func triggerGatewayTrustPrompt(controller: GatewayConnectionController) async {
+        let host = "gateway-\(UUID().uuidString).example.com"
+        let port = 18789
+        let stableID = "manual|\(host.lowercased())|\(port)"
+        defer { GatewayTLSStore.clearFingerprint(stableID: stableID) }
+        GatewayTLSStore.clearFingerprint(stableID: stableID)
+        await controller.connectManual(host: host, port: port, useTLS: true)
     }
 
     @Test @MainActor func phoneControlHubBuildsGatewayStateViewHierarchies() {
@@ -147,6 +226,14 @@ import UIKit
     @Test @MainActor func voiceWakeToastBuildsAViewHierarchy() {
         let root = VoiceWakeToast(command: "openclaw: do something")
         _ = Self.host(root)
+    }
+
+    @MainActor private static func waitForPresentedAlert(in window: UIWindow) async {
+        for _ in 0 ..< 10 {
+            if window.rootViewController?.presentedViewController != nil { return }
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
     }
 
     @MainActor private static func rootTabsGatewayStateModels() -> [NodeAppModel] {

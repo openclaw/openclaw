@@ -33,6 +33,7 @@ import type {
   GatewayServiceEnvArgs,
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
+  GatewayServiceReadOptions,
   GatewayServiceRestartResult,
   GatewayServiceStartRepairIssue,
   GatewayServiceStartResult,
@@ -56,6 +57,7 @@ export type {
   GatewayServiceEnvArgs,
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
+  GatewayServiceReadOptions,
   GatewayServiceRestartResult,
   GatewayServiceStartRepairIssue,
   GatewayServiceStartResult,
@@ -83,7 +85,10 @@ export type GatewayService = {
   restart: (args: GatewayServiceControlArgs) => Promise<GatewayServiceRestartResult>;
   isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
   readCommand: (env: GatewayServiceEnv) => Promise<GatewayServiceCommandConfig | null>;
-  readRuntime: (env: GatewayServiceEnv) => Promise<GatewayServiceRuntime>;
+  readRuntime: (
+    env: GatewayServiceEnv,
+    opts?: GatewayServiceReadOptions,
+  ) => Promise<GatewayServiceRuntime>;
 };
 
 function mergeGatewayServiceEnv(
@@ -183,9 +188,12 @@ export async function readGatewayServiceState(
   const baseEnv = args.env ?? (process.env as GatewayServiceEnv);
   const command = await service.readCommand(baseEnv).catch(() => null);
   const env = mergeGatewayServiceEnv(baseEnv, command);
+  // Propagate the status read deadline so a wedged service manager fails soft
+  // instead of hanging both probes. readCommand parses local files and needs no
+  // bound; isLoaded/readRuntime can spawn service-manager subprocesses.
   const [loaded, runtime] = await Promise.all([
-    service.isLoaded({ env }).catch(() => false),
-    service.readRuntime(env).catch(() => undefined),
+    service.isLoaded({ env, timeoutMs: args.timeoutMs }).catch(() => false),
+    service.readRuntime(env, { timeoutMs: args.timeoutMs }).catch(() => undefined),
   ]);
   return {
     installed: command !== null,

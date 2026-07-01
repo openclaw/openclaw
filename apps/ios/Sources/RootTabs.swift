@@ -26,6 +26,9 @@ struct RootTabs: View {
     @State private var selectedSidebarDestination: SidebarDestination = Self.initialSidebarDestination
     @State private var selectedSettingsRoute: SettingsRoute? = Self.initialSidebarDestination.settingsRoute
     @State private var selectedSettingsRouteRequestID: Int = 0
+    // Embedded Settings rows push onto the sidebar stack; clear it before
+    // changing sidebar roots so stale settings detail screens cannot survive.
+    @State private var sidebarNavigationPath: [SettingsRoute] = []
     @State private var isSidebarVisible: Bool = Self.initialSidebarVisibility ?? false
     @State private var sidebarVisibilityUserOverridden: Bool = Self.initialSidebarVisibility != nil
     @State private var isSidebarDrawerLayout: Bool = false
@@ -44,16 +47,21 @@ struct RootTabs: View {
     @State private var suppressedExecApprovalPromptIDForNotificationSettings: String?
 
     private static var initialTab: AppTab {
-        let arguments = ProcessInfo.processInfo.arguments
+        Self.initialTab(arguments: ProcessInfo.processInfo.arguments)
+    }
+
+    static func initialTab(arguments: [String]) -> AppTab {
         guard let flagIndex = arguments.firstIndex(of: "--openclaw-initial-tab") else {
-            return .control
+            return self.fallbackInitialTab(arguments: arguments)
         }
         let valueIndex = arguments.index(after: flagIndex)
         guard arguments.indices.contains(valueIndex) else {
-            return .control
+            return Self.fallbackInitialTab(arguments: arguments)
         }
 
         switch arguments[valueIndex].lowercased() {
+        case "control", "overview":
+            return .control
         case "chat":
             return .chat
         case "talk", "voice":
@@ -63,8 +71,12 @@ struct RootTabs: View {
         case "settings":
             return .settings
         default:
-            return .control
+            return Self.fallbackInitialTab(arguments: arguments)
         }
+    }
+
+    private static func fallbackInitialTab(arguments: [String]) -> AppTab {
+        self.requestedInitialSidebarDestination(arguments: arguments)?.appTab ?? .chat
     }
 
     private static var initialSidebarDestination: SidebarDestination {
@@ -75,7 +87,10 @@ struct RootTabs: View {
     }
 
     private static var requestedInitialSidebarDestination: SidebarDestination? {
-        let arguments = ProcessInfo.processInfo.arguments
+        Self.requestedInitialSidebarDestination(arguments: ProcessInfo.processInfo.arguments)
+    }
+
+    static func requestedInitialSidebarDestination(arguments: [String]) -> SidebarDestination? {
         guard let flagIndex = arguments.firstIndex(of: "--openclaw-initial-destination") else {
             return nil
         }
@@ -136,14 +151,6 @@ struct RootTabs: View {
 
     private var phoneTabContent: some View {
         TabView(selection: self.$selectedTab) {
-            RootTabsPhoneControlHub(
-                groups: Self.phoneControlGroups,
-                initialDestination: Self.requestedInitialSidebarDestination,
-                openRootDestination: { self.selectSidebarDestination($0) })
-                .tabItem { Label("Control", systemImage: "square.grid.2x2") }
-                .badge(self.appModel.pendingExecApprovalPrompt == nil ? 0 : 1)
-                .tag(AppTab.control)
-
             ChatProTab(openSettings: { self.selectSidebarDestination(.gateway) })
                 .tabItem { Label("Chat", systemImage: "bubble.left.fill") }
                 .tag(AppTab.chat)
@@ -155,6 +162,14 @@ struct RootTabs: View {
                         systemImage: self.appModel.talkMode.isEnabled ? "waveform.circle.fill" : "waveform.circle")
                 }
                 .tag(AppTab.talk)
+
+            RootTabsPhoneControlHub(
+                groups: Self.phoneControlGroups,
+                initialDestination: Self.requestedInitialSidebarDestination,
+                openRootDestination: { self.selectSidebarDestination($0) })
+                .tabItem { Label("Control", systemImage: "square.grid.2x2") }
+                .badge(self.appModel.pendingExecApprovalPrompt == nil ? 0 : 1)
+                .tag(AppTab.control)
 
             NavigationStack {
                 AgentProTab(
@@ -218,13 +233,19 @@ struct RootTabs: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             if self.isSidebarVisible {
-                Color.black.opacity(0.28)
-                    .ignoresSafeArea()
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        self.hideSidebar()
-                    }
-                    .transition(.opacity)
+                HStack(spacing: 0) {
+                    Color.clear
+                        .frame(width: sidebarWidth)
+                        .allowsHitTesting(false)
+                    Color.black.opacity(0.28)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            self.hideSidebar()
+                        }
+                }
+                .ignoresSafeArea()
+                .transition(.opacity)
+                .zIndex(0)
 
                 self.sidebarColumn
                     .frame(width: sidebarWidth, alignment: .topLeading)
@@ -234,6 +255,7 @@ struct RootTabs: View {
                     }
                     .shadow(color: .black.opacity(0.26), radius: 18, x: 8, y: 0)
                     .transition(.move(edge: .leading).combined(with: .opacity))
+                    .zIndex(1)
             }
         }
     }
@@ -247,7 +269,6 @@ struct RootTabs: View {
         VStack(spacing: 0) {
             self.sidebarIdentityHeader
             self.sidebarList
-            self.sidebarFooter
         }
         .safeAreaPadding(.top, 8)
         .safeAreaPadding(.bottom, 8)
@@ -322,26 +343,6 @@ struct RootTabs: View {
         .background(Color(uiColor: .systemBackground))
     }
 
-    private var sidebarFooter: some View {
-        VStack(spacing: 0) {
-            self.sidebarHorizontalSeparator
-            HStack(spacing: 10) {
-                Text("VERSION")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 8)
-                Text("v\(DeviceInfoHelper.openClawVersionString())")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
-                ProStatusDot(color: self.sidebarGatewayStatusColor)
-            }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 12)
-        }
-    }
-
     private var sidebarHorizontalSeparator: some View {
         Rectangle()
             .fill(Color(uiColor: .separator))
@@ -378,7 +379,10 @@ struct RootTabs: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.82)
                 .truncationMode(.tail)
+                .padding(.vertical, 8)
+                .padding(.horizontal, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .foregroundStyle(destination == self.selectedSidebarDestination ? OpenClawBrand.accent : .primary)
@@ -398,18 +402,22 @@ struct RootTabs: View {
                 headerTitle: "Chat",
                 headerSubtitle: "Agent conversation",
                 showsAgentBadge: false,
+                ownsNavigationStack: false,
                 openSettings: { self.selectSidebarDestination(.gateway) })
         case .talk:
             TalkProTab(
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
+                ownsNavigationStack: false,
                 openSettings: { self.selectSidebarDestination(.gateway) })
         case .overview:
             CommandCenterTab(
+                ownsNavigationStack: false,
                 headerTitle: "Overview",
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 showsHeaderMark: false,
                 openChat: { self.selectSidebarDestination(.chat) },
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.selectSidebarDestination(.gateway) },
+                openSessions: { self.selectSidebarDestination(.sessions) })
         case .activity:
             IPadActivityScreen(
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
@@ -472,22 +480,28 @@ struct RootTabs: View {
                 SettingsProTab(
                     directRoute: selectedSettingsRoute,
                     headerLeadingAction: self.sidebarHeaderLeadingAction,
+                    ownsNavigationStack: false,
+                    navigateToRoute: self.pushSidebarSettingsRoute,
                     onRouteChange: self.handleSettingsRouteChange)
             } else {
                 SettingsProTab(
                     headerLeadingAction: self.sidebarHeaderLeadingAction,
+                    ownsNavigationStack: false,
+                    navigateToRoute: self.pushSidebarSettingsRoute,
                     onRouteChange: self.handleSettingsRouteChange)
             }
         case .gateway:
             SettingsProTab(
                 directRoute: self.selectedSettingsRoute ?? self.selectedSidebarDestination.settingsRoute ?? .gateway,
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
+                ownsNavigationStack: false,
+                navigateToRoute: self.pushSidebarSettingsRoute,
                 onRouteChange: self.handleSettingsRouteChange)
         }
     }
 
     private var sidebarDetailNavigationShell: some View {
-        NavigationStack {
+        NavigationStack(path: self.$sidebarNavigationPath) {
             self.sidebarDetailShell
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -926,6 +940,7 @@ struct RootTabs: View {
 
 extension RootTabs {
     private func selectSidebarDestination(_ destination: SidebarDestination) {
+        self.sidebarNavigationPath.removeAll()
         if destination.settingsRoute != .notifications {
             self.suppressedExecApprovalPromptIDForNotificationSettings = nil
         }
@@ -939,6 +954,7 @@ extension RootTabs {
     }
 
     private func selectSettingsRoute(_ route: SettingsRoute) {
+        self.sidebarNavigationPath.removeAll()
         if route != .notifications {
             self.suppressedExecApprovalPromptIDForNotificationSettings = nil
         }
@@ -950,6 +966,11 @@ extension RootTabs {
         withAnimation(.easeInOut(duration: 0.22)) {
             self.setSidebarVisible(false)
         }
+    }
+
+    private func pushSidebarSettingsRoute(_ route: SettingsRoute) {
+        self.sidebarNavigationPath = [route]
+        self.handleSettingsRouteChange(route)
     }
 
     private func handleSettingsRouteChange(_ route: SettingsRoute?) {
@@ -1021,14 +1042,18 @@ extension RootTabs {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String {
-        if problem.canTrustRotatedCertificate { return "Trust certificate" }
-        return problem.retryable ? "Retry" : "Open Settings"
+    private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String? {
+        GatewayProblemPrimaryAction.title(
+            for: problem,
+            retryTitle: "Retry",
+            nonRetryableTitle: "Open Settings")
     }
 
     private func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) {
         if problem.canTrustRotatedCertificate {
             Task { await self.gatewayController.trustRotatedGatewayCertificate(from: problem) }
+        } else if GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem) {
+            return
         } else if problem.retryable {
             Task { await self.gatewayController.connectLastKnown() }
         } else {

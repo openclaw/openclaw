@@ -214,6 +214,22 @@ Supported surfaces:
 - To keep preview streaming but hide tool-progress lines, set `streaming.preview.toolProgress` to `false` for that channel. To keep tool-progress lines visible while hiding command/exec text, set `streaming.preview.commandText` to `"status"` or `streaming.progress.commandText` to `"status"`; the default is `"raw"` to preserve released behavior. This policy is shared by draft/progress channels that use OpenClaw's compact progress renderer, including Discord, Matrix, Microsoft Teams, Mattermost, Slack draft previews, and Telegram. To disable preview edits entirely, set `streaming.mode` to `off`.
 - Telegram selected quote replies are an exception: when `replyToMode` is not `"off"` and selected quote text is present, OpenClaw skips the answer preview stream for that turn so tool-progress preview lines cannot render. Current-message replies without selected quote text still keep preview streaming. See [Telegram channel docs](/channels/telegram) for details.
 
+### Commentary progress lane
+
+Beyond tool-progress, the compact progress renderer can surface one more lane in the draft:
+
+- **`streaming.progress.commentary`** — render the model's pre-tool **commentary** (💬) — short "I'll check… then…" narration — interleaved with tool lines in the progress draft.
+
+```json
+{
+  "channels": {
+    "discord": {
+      "streaming": { "mode": "progress", "progress": { "commentary": true } }
+    }
+  }
+}
+```
+
 Keep progress lines visible but hide raw command/exec text:
 
 ```json

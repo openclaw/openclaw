@@ -1336,6 +1336,8 @@ export const it: TranslationMap = {
     settings: "Impostazioni chat",
     thinkingToggle: "Attiva/disattiva output di pensiero/elaborazione dell'assistente",
     toolCallsToggle: "Attiva/disattiva chiamate agli strumenti e risultati strumenti",
+    commentaryToggle: "Mantieni il commento dopo la risposta finale",
+    commentaryLabel: "Commento",
     autoScrollMode: "Modalità di scorrimento automatico",
     autoScrollAlways: "Sempre",
     autoScrollNearBottom: "Vicino al fondo",
@@ -1380,6 +1382,11 @@ export const it: TranslationMap = {
       retry: "Riprova",
       retrySend: "Riprova invio",
       retryQueuedMessage: "Riprova messaggio in coda",
+    },
+    pairingQrExpired: {
+      title: "QR di pairing scaduto",
+      reason: "Esegui di nuovo /pair qr per generare un nuovo codice di configurazione.",
+      badge: "Scaduto",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

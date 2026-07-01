@@ -590,6 +590,8 @@ export function buildEmbeddedRunPayloads(params: {
     mediaUrl?: string;
     isError?: boolean;
     isReasoning?: boolean;
+    /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
+    isCommentary?: boolean;
     audioAsVoice?: boolean;
     replyToId?: string;
     replyToTag?: boolean;
@@ -603,10 +605,9 @@ export function buildEmbeddedRunPayloads(params: {
     };
   }> = [];
 
-  const sourceReplyPayloads =
-    params.sourceReplyDeliveryMode === "message_tool_only"
-      ? (params.messagingToolSourceReplyPayloads ?? [])
-      : [];
+  // Internal source replies always need transcript/UI mirror payloads. Only a
+  // message_tool_only run suppresses the separate automatic final answer.
+  const sourceReplyPayloads = params.messagingToolSourceReplyPayloads ?? [];
   const sourceReplyStartIndex = replyItems.length;
   sourceReplyPayloads.forEach((payload, index) => {
     const text = normalizeOptionalString(payload.text) ?? "";
@@ -647,7 +648,7 @@ export function buildEmbeddedRunPayloads(params: {
   const useMarkdown = params.toolResultFormat === "markdown";
   const suppressAssistantArtifacts =
     params.didSendDeterministicApprovalPrompt === true ||
-    hasSourceReplyPayload ||
+    (params.sourceReplyDeliveryMode === "message_tool_only" && hasSourceReplyPayload) ||
     deliveredSourceReplyViaMessageTool;
   const nonEmptyAssistantTexts = params.assistantTexts.filter((text) => text.trim().length > 0);
   const currentAssistant = params.currentAssistant ?? undefined;

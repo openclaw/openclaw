@@ -185,6 +185,7 @@ describe("docker build helper", () => {
     expect(helper).toContain('docker_build_run_logged "$label" "$timeout_value" "$log_file"');
     expect(helper).toContain("OPENCLAW_DOCKER_BUILD_REQUIRE_TIMEOUT");
     expect(helper).toContain("frontend grpc server closed unexpectedly");
+    expect(helper).toContain("docker_build_resource_exhausted_failure()");
   });
 
   it("treats Docker registry auth 5xx failures as transient build failures", () => {
@@ -206,6 +207,32 @@ ROOT_DIR=${shellQuote(rootDir)}
 LOG_PATH=${shellQuote(logPath)}
 source "$ROOT_DIR/scripts/lib/docker-build.sh"
 docker_build_transient_failure "$LOG_PATH"
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("detects Docker builder memory exhaustion failures", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-build-memory-"));
+
+    try {
+      const logPath = join(workDir, "docker-build.log");
+      writeFileSync(
+        logPath,
+        [
+          'ERROR: failed to build: failed to solve: ResourceExhausted: process "/bin/sh -c pnpm build:docker" did not complete successfully: cannot allocate memory',
+        ].join("\n"),
+      );
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+LOG_PATH=${shellQuote(logPath)}
+source "$ROOT_DIR/scripts/lib/docker-build.sh"
+docker_build_resource_exhausted_failure "$LOG_PATH"
 `;
 
       execFileSync("bash", ["-lc", script], { encoding: "utf8" });

@@ -247,6 +247,7 @@ export const registerTelegramHandlers = ({
     dispatchDedupeKeys: string[];
     spooledReplayParticipants: TelegramSpooledReplayDeferredParticipant[];
   };
+  type PromptContextMessageSelection = ReadonlyMap<string, "include" | "exclude">;
 
   const mediaGroupBuffer = new Map<string, BufferedMediaGroupEntry>();
   const mediaGroupProcessingByKey = new Map<string, Promise<void>>();
@@ -952,8 +953,10 @@ export const registerTelegramHandlers = ({
       }
 
       const allMedia: TelegramMediaRef[] = [];
+      const promptContextMessageSelection = new Map<string, "include" | "exclude">();
       let skippedCount = 0;
-      for (const { ctx } of entry.messages) {
+      for (const { ctx, msg } of entry.messages) {
+        const sourceMessageId = String(msg.message_id);
         let media;
         try {
           media = await resolveMedia({
@@ -968,6 +971,7 @@ export const registerTelegramHandlers = ({
           runtime.log?.(
             warn(`media group: skipping photo that failed to fetch: ${String(mediaErr)}`),
           );
+          promptContextMessageSelection.set(sourceMessageId, "exclude");
           skippedCount++;
           continue;
         }
@@ -976,8 +980,11 @@ export const registerTelegramHandlers = ({
             path: media.path,
             contentType: media.contentType,
             stickerMetadata: media.stickerMetadata,
+            sourceMessageId,
           });
+          promptContextMessageSelection.set(sourceMessageId, "include");
         } else {
+          promptContextMessageSelection.set(sourceMessageId, "exclude");
           skippedCount++;
         }
       }
@@ -1006,6 +1013,7 @@ export const registerTelegramHandlers = ({
         ctx: primaryEntry.ctx,
         msg: primaryEntry.msg,
         allMedia,
+        promptContextMessageSelection,
         storeAllowFrom: entry.storeAllowFrom,
         options: {
           ...promptContextBoundaryOptions(entry.promptContextMinTimestampMs),
@@ -1233,6 +1241,7 @@ export const registerTelegramHandlers = ({
     replyChainNodes: TelegramCachedMessageNode[],
     options?: TelegramMessageContextOptions,
     mediaByMessageId?: ReadonlyMap<string, TelegramMediaRef>,
+    selectedMessageIds?: PromptContextMessageSelection,
   ): Promise<TelegramPromptContextEntry[]> => {
     const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
     const groupHistoryContextMode = isGroup
@@ -1289,7 +1298,29 @@ export const registerTelegramHandlers = ({
         ? { includeNode: buildMentionOnlyGroupHistoryPredicate({ ctx, msg, threadId }) }
         : {}),
     });
-    const cachePromptMessages = conversationContext.map((entry) =>
+    const conversationContextById = new Map(
+      conversationContext.flatMap((entry) =>
+        entry.node.messageId ? [[entry.node.messageId, entry] as const] : [],
+      ),
+    );
+    for (const [selectedMessageId, selection] of selectedMessageIds ?? []) {
+      if (selection === "exclude") {
+        conversationContextById.delete(selectedMessageId);
+        continue;
+      }
+      if (selectedMessageId === messageId || conversationContextById.has(selectedMessageId)) {
+        continue;
+      }
+      const node = await messageCache.get({
+        accountId,
+        chatId: msg.chat.id,
+        messageId: selectedMessageId,
+      });
+      if (node?.messageId) {
+        conversationContextById.set(node.messageId, { node });
+      }
+    }
+    const cachePromptMessages = Array.from(conversationContextById.values()).map((entry) =>
       toPromptContextMessage(
         entry.node,
         { replyTarget: entry.isReplyTarget },
@@ -1375,6 +1406,7 @@ export const registerTelegramHandlers = ({
     ctx: TelegramContext;
     msg: Message;
     allMedia: TelegramMediaRef[];
+    promptContextMessageSelection?: PromptContextMessageSelection;
     storeAllowFrom: string[];
     options?: TelegramMessageContextOptions;
     dispatchDedupeKeys?: string[];
@@ -1452,15 +1484,15 @@ export const registerTelegramHandlers = ({
       const promptContextMediaByMessageId = new Map<string, TelegramMediaRef>();
       const currentMessageId =
         typeof params.msg.message_id === "number" ? String(params.msg.message_id) : undefined;
-      const currentMedia = params.allMedia[0];
-      const currentPromptMediaPath = currentMedia?.path
-        ? resolveTelegramPromptMediaPath(currentMedia.path)
-        : undefined;
-      if (currentMessageId && currentMedia && currentPromptMediaPath) {
-        promptContextMediaByMessageId.set(currentMessageId, {
-          ...currentMedia,
-          path: currentPromptMediaPath,
-        });
+      for (const [index, media] of params.allMedia.entries()) {
+        const messageId = media.sourceMessageId ?? (index === 0 ? currentMessageId : undefined);
+        const promptMediaPath = media.path ? resolveTelegramPromptMediaPath(media.path) : undefined;
+        if (messageId && promptMediaPath) {
+          promptContextMediaByMessageId.set(messageId, {
+            ...media,
+            path: promptMediaPath,
+          });
+        }
       }
       for (const entry of replyChain) {
         const promptMediaPath = entry.mediaPath
@@ -1479,6 +1511,7 @@ export const registerTelegramHandlers = ({
         replyChainNodes,
         params.options,
         promptContextMediaByMessageId,
+        params.promptContextMessageSelection,
       );
       const result = await processMessage(
         params.ctx,

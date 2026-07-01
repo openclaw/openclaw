@@ -1333,6 +1333,8 @@ export const uk: TranslationMap = {
     settings: "Налаштування чату",
     thinkingToggle: "Перемкнути показ мислення/роботи асистента",
     toolCallsToggle: "Перемкнути виклики інструментів і результати інструментів",
+    commentaryToggle: "Зберігати коментар після остаточної відповіді",
+    commentaryLabel: "Коментар",
     autoScrollMode: "Режим автопрокручування",
     autoScrollAlways: "Завжди",
     autoScrollNearBottom: "Біля низу",
@@ -1377,6 +1379,11 @@ export const uk: TranslationMap = {
       retry: "Повторити",
       retrySend: "Повторити надсилання",
       retryQueuedMessage: "Повторити повідомлення в черзі",
+    },
+    pairingQrExpired: {
+      title: "QR-код для пар'ювання застарів",
+      reason: "Виконайте /pair qr знову, щоб згенерувати новий код налаштування.",
+      badge: "Застарів",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

@@ -12,7 +12,12 @@ import {
   ANTHROPIC_OMITTED_REASONING_TEXT,
   findActiveAnthropicToolTurnAssistantIndex,
 } from "../llm/providers/anthropic-thinking-replay.js";
-import type { AnthropicOptions } from "../llm/providers/anthropic.js";
+import type { AnthropicOptions, AnthropicThinkingDisplay } from "../llm/providers/anthropic.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultBlockText,
+  extractToolResultText,
+} from "../llm/providers/tool-result-text.js";
 import type {
   AssistantMessageDiagnostic,
   Context,
@@ -58,6 +63,7 @@ import {
   coerceTransportToolCallArguments,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
+  encodeAssistantTextSignatureV1,
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
@@ -116,7 +122,7 @@ function resolveAnthropicRequestModelId(model: AnthropicTransportModel): string 
 }
 
 type TransportContentBlock =
-  | { type: "text"; text: string; index?: number }
+  | { type: "text"; text: string; index?: number; textSignature?: string }
   | {
       type: "thinking";
       thinking: string;
@@ -295,16 +301,17 @@ function toClaudeCodeName(name: string): string {
   return CLAUDE_CODE_TOOL_LOOKUP.get(normalizeLowercaseStringOrEmpty(name)) ?? name;
 }
 
-function convertContentBlocks(
-  content: Array<
-    { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
-  >,
-) {
-  const hasImages = content.some((item) => item.type === "image");
-  if (!hasImages) {
-    return sanitizeNonEmptyTransportPayloadText(
-      content.map((item) => ("text" in item ? item.text : "")).join("\n"),
+function convertContentBlocks(content: readonly unknown[]) {
+  const text = extractToolResultText(content);
+  const mediaPlaceholder = describeToolResultMediaPlaceholder(content);
+  const hasImages =
+    Array.isArray(content) &&
+    content.some(
+      (item) =>
+        item && typeof item === "object" && (item as Record<string, unknown>).type === "image",
     );
+  if (!hasImages) {
+    return sanitizeNonEmptyTransportPayloadText(text, mediaPlaceholder ?? "(no output)");
   }
   const blocks: Array<
     | { type: "text"; text: string }
@@ -314,26 +321,30 @@ function convertContentBlocks(
       }
   > = [];
   let hasTextBlock = false;
-  for (const block of content) {
-    if (block.type === "text") {
-      const text = sanitizeTransportPayloadText(block.text);
-      if (text.trim().length > 0) {
-        blocks.push({ type: "text", text });
-        hasTextBlock = true;
-      }
-    } else {
-      blocks.push({
-        type: "image" as const,
-        source: {
-          type: "base64",
-          media_type: block.mimeType,
-          data: block.data,
-        },
-      });
+  for (const block of Array.isArray(content) ? content : []) {
+    if (!block || typeof block !== "object") {
+      continue;
     }
+    const record = block as Record<string, unknown>;
+    const blockText = extractToolResultBlockText(block);
+    if (blockText) {
+      blocks.push({ type: "text", text: sanitizeTransportPayloadText(blockText) });
+      hasTextBlock = true;
+    }
+    if (record.type !== "image") {
+      continue;
+    }
+    blocks.push({
+      type: "image" as const,
+      source: {
+        type: "base64",
+        media_type: typeof record.mimeType === "string" ? record.mimeType : "image/png",
+        data: typeof record.data === "string" ? record.data : "",
+      },
+    });
   }
   if (!hasTextBlock) {
-    return [{ type: "text", text: "(see attached image)" }, ...blocks];
+    blocks.unshift({ type: "text", text: mediaPlaceholder ?? "(see attached image)" });
   }
   return blocks;
 }
@@ -578,6 +589,25 @@ function mapStopReason(reason: string | undefined): string {
       return "stop";
     default:
       throw new Error(`Unhandled stop reason: ${String(reason)}`);
+  }
+}
+
+function tagPendingCommentaryText(content: TransportContentBlock[]): void {
+  let commentaryTextIndex = content.filter(
+    (block) => block.type === "text" && block.textSignature !== undefined,
+  ).length;
+  for (const block of content) {
+    if (
+      block.type === "text" &&
+      block.text.trim().length > 0 &&
+      block.textSignature === undefined
+    ) {
+      block.textSignature = encodeAssistantTextSignatureV1(
+        `commentary-${commentaryTextIndex}`,
+        "commentary",
+      );
+      commentaryTextIndex += 1;
+    }
   }
 }
 
@@ -975,9 +1005,13 @@ function buildAnthropicParams(
   if (fable5 || model.reasoning || supportsAdaptiveThinking(model)) {
     if (fable5 || options?.thinkingEnabled) {
       if (supportsAdaptiveThinking(model)) {
-        params.thinking = fable5
-          ? { type: "adaptive", display: "summarized" }
-          : { type: "adaptive" };
+        // Default display to "summarized" so Opus 4.7+/Fable 5 return a thinking
+        // summary like older Claude 4 models — mirrors the provider path
+        // (llm/providers/anthropic.ts). Without it the adaptive request omits the
+        // summary and only an encrypted signature comes back, so the 🧠 lane is
+        // blank (the live agent transport previously sent this for opus-4-8).
+        const display: AnthropicThinkingDisplay = options?.thinkingDisplay ?? "summarized";
+        params.thinking = { type: "adaptive", display };
         const effort = options?.effort ?? (fable5 ? "high" : undefined);
         if (effort) {
           params.output_config = { effort };
@@ -1122,6 +1156,14 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         const reasoningContentThinkingBlocks = new Map<number, number>();
         const reasoningContentTextBlocks = new Map<number, number>();
         let sawMessageStop = false;
+        const pendingTextEnds: Array<Parameters<typeof eventSink.push>[0]> = [];
+        // Hold text_end until tool-boundary classification is known.
+        const flushPendingTextEnds = () => {
+          for (const event of pendingTextEnds) {
+            eventSink.push(event);
+          }
+          pendingTextEnds.length = 0;
+        };
         const eventIndexKey = (eventIndex: unknown) =>
           typeof eventIndex === "number" ? eventIndex : -1;
         const appendReasoningContentThinkingDelta = (
@@ -1339,6 +1381,8 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               continue;
             }
             if (contentBlock?.type === "tool_use") {
+              tagPendingCommentaryText(output.content);
+              flushPendingTextEnds();
               const block: TransportContentBlock = {
                 type: "toolCall",
                 id: typeof contentBlock.id === "string" ? contentBlock.id : "",
@@ -1489,7 +1533,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             blockIndexes.delete(eventIndex);
             delete block.index;
             if (block.type === "text") {
-              eventSink.push({
+              pendingTextEnds.push({
                 type: "text_end",
                 contentIndex: index,
                 content: block.text,
@@ -1553,6 +1597,16 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               output.usage.cacheRead +
               output.usage.cacheWrite;
             calculateCost(model, output.usage);
+            // Gate on the turn CONTAINING a tool call, not the provider's stop_reason
+            // label: Bedrock/Vertex-proxied routes (e.g. pioneer) report "end_turn" on
+            // tool-using turns. No-op for direct Anthropic (already "toolUse" here).
+            if (
+              output.stopReason === "toolUse" ||
+              output.content.some((block) => block.type === "toolCall")
+            ) {
+              tagPendingCommentaryText(output.content);
+            }
+            flushPendingTextEnds();
           }
         }
         if (refusalBuffer && !sawMessageStop) {
@@ -1565,6 +1619,18 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           throw new Error(output.errorMessage ?? "An unknown error occurred");
         }
         refusalBuffer?.flush();
+        // Backstop: streaming tags commentary at the tool-boundary above, but
+        // replay/non-streaming assembly may reach here with tool calls untagged.
+        // Idempotent, so it never double-tags the streaming path. Gate on the turn
+        // containing a tool call (not stop_reason) so proxied Bedrock/Vertex routes
+        // that mislabel tool turns as "end_turn" still tag their narration.
+        if (
+          output.stopReason === "toolUse" ||
+          output.content.some((block) => block.type === "toolCall")
+        ) {
+          tagPendingCommentaryText(output.content);
+        }
+        flushPendingTextEnds();
         finalizeTransportStream({ stream, output });
       } catch (error) {
         if (refusalBuffer) {

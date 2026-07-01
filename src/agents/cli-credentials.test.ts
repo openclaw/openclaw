@@ -305,6 +305,57 @@ describe("cli credentials", () => {
     });
   });
 
+  it("does not read stale Codex tokens when auth.json resolves to API-key mode", () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-api-key-mode-"));
+    process.env.CODEX_HOME = tempHome;
+    const expSeconds = Math.floor(Date.parse("2026-03-24T12:34:56Z") / 1000);
+    execSyncMock.mockImplementation(() => {
+      throw new Error("not found");
+    });
+
+    const authPath = path.join(tempHome, "auth.json");
+    fs.mkdirSync(tempHome, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      authPath,
+      JSON.stringify({
+        auth_mode: "apikey",
+        OPENAI_API_KEY: "sk-codex-api-key",
+        tokens: {
+          access_token: createJwtWithExp(expSeconds),
+          refresh_token: "stale-file-refresh",
+        },
+      }),
+      "utf8",
+    );
+
+    expect(readCodexCliCredentials({ platform: "linux", execSync: execSyncMock })).toBeNull();
+  });
+
+  it("treats an empty Codex auth.json API-key field as API-key mode", () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-empty-api-key-mode-"));
+    process.env.CODEX_HOME = tempHome;
+    const expSeconds = Math.floor(Date.parse("2026-03-24T12:34:56Z") / 1000);
+    execSyncMock.mockImplementation(() => {
+      throw new Error("not found");
+    });
+
+    const authPath = path.join(tempHome, "auth.json");
+    fs.mkdirSync(tempHome, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      authPath,
+      JSON.stringify({
+        OPENAI_API_KEY: "",
+        tokens: {
+          access_token: createJwtWithExp(expSeconds),
+          refresh_token: "stale-file-refresh",
+        },
+      }),
+      "utf8",
+    );
+
+    expect(readCodexCliCredentials({ platform: "linux", execSync: execSyncMock })).toBeNull();
+  });
+
   it("rejects Codex auth.json fallback expiry when stat and process clock are invalid", () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-invalid-clock-"));
     process.env.CODEX_HOME = tempHome;

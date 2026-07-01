@@ -32,18 +32,18 @@ struct ProSectionHeader: View {
     var body: some View {
         HStack {
             Text(self.title)
-                .font(.caption.weight(.medium))
+                .font(.footnote.weight(.medium))
                 .foregroundStyle(.secondary)
                 .textCase(self.uppercase ? .uppercase : nil)
             Spacer()
             if let actionTitle {
                 if let action {
                     Button(actionTitle, action: action)
-                        .font(.caption.weight(.medium))
+                        .font(.footnote.weight(.medium))
                         .foregroundStyle(OpenClawBrand.accent)
                 } else {
                     Text(actionTitle)
-                        .font(.caption.weight(.medium))
+                        .font(.footnote.weight(.medium))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -377,7 +377,7 @@ struct ProValuePill: View {
 
     var body: some View {
         Text(self.value)
-            .font(.caption.weight(.semibold))
+            .font(.footnote.weight(.semibold))
             .foregroundStyle(self.color)
             .lineLimit(1)
             .padding(.horizontal, 8)

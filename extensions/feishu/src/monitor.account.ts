@@ -500,7 +500,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
     const eventDispatcher = createEventDispatcher(account);
     const chatHistories = new Map<string, HistoryEntry[]>();
     threadBindingManager = createFeishuThreadBindingManager({ accountId, cfg });
-    const channelRuntime = params.channelRuntime ?? getFeishuRuntime().channel;
+    const channelRuntime = params.channelRuntime?.inbound ? params.channelRuntime : getFeishuRuntime().channel;
 
     registerEventHandlers(eventDispatcher, {
       cfg,

@@ -282,6 +282,8 @@ function prettyLanguageLabel(locale: string): string {
       return "Persian";
     case "ru":
       return "Russian";
+    case "sv":
+      return "Swedish";
     case "de":
       return "German";
     case "es":
@@ -608,6 +610,8 @@ function buildSystemPrompt(targetLocale: string, glossary: readonly GlossaryEntr
     "- The JSON must be an object whose keys exactly match the provided ids.",
     "- Translate all English prose; keep code, URLs, product names, CLI commands, config keys, and env vars in English.",
     "- Preserve placeholders exactly, including {count}, {time}, {shown}, {total}, and similar tokens.",
+    "- Preserve Swift interpolation expressions such as \\(name) exactly, including the backslash and parentheses.",
+    "- Preserve Kotlin interpolation expressions such as $name and ${value} exactly.",
     "- Preserve punctuation, ellipses, arrows, and casing when they are part of literal UI text.",
     "- Preserve Markdown, inline code, HTML tags, and slash commands when present.",
     "- Use fluent, neutral product UI language.",
@@ -1489,6 +1493,63 @@ async function translateBatch(
     }
   }
   throw lastError ?? new Error("translation failed");
+}
+
+export type NativeTranslationEntry = {
+  id: string;
+  source: string;
+  sourcePath: string;
+};
+
+export async function translateNativeEntries(
+  entries: readonly NativeTranslationEntry[],
+  targetLocale: string,
+  glossary: readonly GlossaryEntry[] = [],
+): Promise<Map<string, string>> {
+  if (!hasTranslationProvider()) {
+    throw new Error("native app translation requires OPENAI_API_KEY or ANTHROPIC_API_KEY");
+  }
+  const pending = entries.map((entry) => ({
+    cacheKey: cacheKey(entry.id, hashText(entry.source), targetLocale),
+    key: entry.id,
+    text: entry.source,
+    textHash: hashText(entry.source),
+  }));
+  const batches = buildTranslationBatches(pending);
+  let client: TranslationClient | null = null;
+  const clientAccess: ClientAccess = {
+    async getClient() {
+      if (!client) {
+        client = await TranslationClient.create(buildSystemPrompt(targetLocale, glossary));
+      }
+      return client;
+    },
+    async resetClient() {
+      if (!client) {
+        return;
+      }
+      await client.close();
+      client = null;
+    },
+  };
+  try {
+    const translated = new Map<string, string>();
+    for (const [batchIndex, batch] of batches.entries()) {
+      const result = await translateBatch(clientAccess, batch, {
+        locale: targetLocale,
+        localeCount: 1,
+        localeIndex: 1,
+        batchCount: batches.length,
+        batchIndex: batchIndex + 1,
+      });
+      for (const [id, value] of result) {
+        translated.set(id, value);
+      }
+    }
+    return translated;
+  } finally {
+    await clientAccess.resetClient();
+  }
 }
 
 type SyncOutcome = {

@@ -526,6 +526,50 @@ describe("printDaemonStatus", () => {
     });
   });
 
+  it("prints gathered advertised dashboard links without recomputing them", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+        },
+        config: {
+          cli: {
+            path: "/tmp/openclaw-cli/openclaw.json",
+            exists: true,
+            valid: true,
+          },
+          daemon: {
+            path: "/tmp/openclaw-daemon/openclaw.json",
+            exists: true,
+            valid: true,
+            controlUi: { basePath: "/ui" },
+          },
+          mismatch: true,
+        },
+        gateway: {
+          bindMode: "lan",
+          bindHost: "0.0.0.0",
+          port: 19001,
+          portSource: "service args",
+          probeUrl: "wss://127.0.0.1:19001",
+          tlsEnabled: true,
+          controlUiLinks: {
+            httpUrl: "https://10.211.55.3:19001/ui/",
+            wsUrl: "wss://10.211.55.3:19001/ui",
+          },
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expect(runtime.log).toHaveBeenCalledWith("Dashboard: https://10.211.55.3:19001/ui/");
+    expect(resolveControlUiLinksMock).not.toHaveBeenCalled();
+  });
+
   it("prints deep config warnings", () => {
     printDaemonStatus(
       {
@@ -726,5 +770,66 @@ describe("printDaemonStatus", () => {
     const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
     expect(errors).not.toContain("systemd user services unavailable");
     expect(errors).not.toContain("run loginctl enable-linger");
+  });
+
+  it("warns that systemd gave up restarting a crash-looped gateway", () => {
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    try {
+      printDaemonStatus(
+        {
+          service: {
+            label: "systemd",
+            loaded: true,
+            loadedText: "loaded",
+            notLoadedText: "not loaded",
+            runtime: {
+              status: "stopped",
+              state: "failed",
+              systemd: { result: "exit-code", nRestarts: 5, startLimitBurst: 5 },
+            },
+          },
+          extraServices: [],
+        },
+        { json: false },
+      );
+    } finally {
+      platform.mockRestore();
+    }
+
+    const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
+    expect(errors).toContain("systemd stopped restarting the gateway after repeated crashes");
+    expect(errors).not.toContain("likely exited immediately");
+  });
+
+  it("keeps the generic stopped message after a config exit (78) despite a stale restart count", () => {
+    // RestartPreventExitStatus=78 stopped systemd deliberately; a leftover
+    // NRestarts must not surface start-limit recovery guidance here.
+    const platform = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    try {
+      printDaemonStatus(
+        {
+          service: {
+            label: "systemd",
+            loaded: true,
+            loadedText: "loaded",
+            notLoadedText: "not loaded",
+            runtime: {
+              status: "stopped",
+              state: "failed",
+              lastExitStatus: 78,
+              systemd: { result: "exit-code", nRestarts: 5, startLimitBurst: 5 },
+            },
+          },
+          extraServices: [],
+        },
+        { json: false },
+      );
+    } finally {
+      platform.mockRestore();
+    }
+
+    const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
+    expect(errors).toContain("Service is loaded but not running (likely exited immediately).");
+    expect(errors).not.toContain("systemd stopped restarting the gateway");
   });
 });
