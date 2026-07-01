@@ -1020,6 +1020,39 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.reply).not.toHaveBeenCalled();
   });
 
+  it("suppresses the warning when a direct plugin command suppresses replies", async () => {
+    const cfg = createConfig();
+    const commandSpec: NativeCommandSpec = {
+      name: "cron_jobs",
+      description: "List cron jobs",
+      acceptsArgs: false,
+    };
+    const interaction = createInteraction();
+    const pluginMatch = {
+      command: {
+        name: "cron_jobs",
+        description: "List cron jobs",
+        pluginId: "cron-jobs",
+        acceptsArgs: false,
+        handler: vi.fn().mockResolvedValue({ suppressReply: true }),
+      },
+      args: undefined,
+    };
+
+    runtimeModuleMocks.matchPluginCommand.mockReturnValue(pluginMatch as never);
+    runtimeModuleMocks.executePluginCommand.mockResolvedValue({ suppressReply: true });
+    const dispatchSpy = runtimeModuleMocks.dispatchReplyWithDispatcher.mockResolvedValue(
+      {} as never,
+    );
+    const command = await createNativeCommand(cfg, commandSpec);
+
+    await (command as { run: (interaction: unknown) => Promise<void> }).run(interaction as unknown);
+
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expectNoFollowUpContent(interaction, "⚠️ Command produced no visible reply.");
+    expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
   it("forwards Discord thread metadata into direct plugin command execution", async () => {
     const cfg = {
       commands: {

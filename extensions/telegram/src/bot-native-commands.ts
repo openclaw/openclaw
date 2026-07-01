@@ -116,7 +116,7 @@ type TelegramNativeCommandContext = Context & { match?: string };
 type TelegramChunkMode = ReturnType<
   typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").resolveChunkMode
 >;
-type TelegramNativeReplyPayload = import("openclaw/plugin-sdk/reply-dispatch-runtime").ReplyPayload;
+type TelegramNativeReplyPayload = import("openclaw/plugin-sdk/plugin-entry").PluginCommandResult;
 type TelegramNativeReplyChannelData = {
   buttons?: TelegramInlineButtons;
   pin?: boolean;
@@ -458,9 +458,7 @@ function normalizeTelegramNativeReplyPayload(
 }
 
 function isSuppressedTelegramNativeReplyPayload(result: TelegramNativeReplyPayload): boolean {
-  return Boolean(
-    (result as TelegramNativeReplyPayload & { suppressReply?: boolean }).suppressReply,
-  );
+  return result.suppressReply === true;
 }
 
 function hasRenderableTelegramNativeReplyPayload(result: TelegramNativeReplyPayload): boolean {
@@ -1657,24 +1655,13 @@ export const registerTelegramNativeCommands = ({
           }),
         );
 
-        if (
+        const suppressTelegramNativeReply =
           shouldSuppressLocalTelegramExecApprovalPrompt({
             cfg: runtimeCfg,
             accountId: route.accountId,
             payload: result,
-          })
-        ) {
-          await cleanupTelegramProgressPlaceholder({
-            bot,
-            chatId,
-            progressMessageId,
-            runtime,
-          });
-          return;
-        }
-
-        // If the plugin handled delivery itself and wants no fallback, just clean up
-        if (isSuppressedTelegramNativeReplyPayload(result)) {
+          }) || isSuppressedTelegramNativeReplyPayload(result);
+        if (suppressTelegramNativeReply) {
           await cleanupTelegramProgressPlaceholder({
             bot,
             chatId,
