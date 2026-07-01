@@ -15,7 +15,6 @@ import { gzipSync, gunzipSync } from "node:zlib";
 // ---------------------------------------------------------------------------
 // Inline implementation of readResponseWithLimit
 // ---------------------------------------------------------------------------
-const DEFAULT_MAX_BYTES = 16 * 1024 * 1024; // 16 MiB
 const MAX_DECODED_TOKEN_BODY_BYTES = 16 * 1024 * 1024;
 
 async function readResponseWithLimit(response, maxBytes, opts) {
@@ -26,7 +25,9 @@ async function readResponseWithLimit(response, maxBytes, opts) {
   try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        break;
+      }
       total += value.byteLength;
       if (total > maxBytes) {
         const err =
@@ -357,7 +358,9 @@ async function main() {
   server.close();
 }
 
-main().catch((e) => {
-  console.error("Fatal:", e);
-  process.exit(1);
-});
+main().catch(
+  /* oxlint-disable typescript/use-unknown-in-catch-callback-variable */ (e) => {
+    console.error("Fatal:", e);
+    process.exit(1);
+  },
+);
