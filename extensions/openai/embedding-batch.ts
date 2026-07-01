@@ -119,15 +119,31 @@ async function fetchOpenAiFileContent(params: {
 
 async function readOpenAiBatchOutputLines(
   response: Response,
-  onLine: (line: OpenAiBatchOutputLine) => void,
+  params: {
+    maxLines: number;
+    onLine: (line: OpenAiBatchOutputLine) => boolean;
+  },
 ): Promise<void> {
+  let lineCount = 0;
+  const emitOutputLine = (line: OpenAiBatchOutputLine): boolean => {
+    lineCount += 1;
+    if (lineCount > params.maxLines) {
+      throw new Error(`openai.batch-file-content: JSONL output exceeds ${params.maxLines} records`);
+    }
+    return params.onLine(line);
+  };
+  const emitParsedLine = (line: string): boolean =>
+    emitOutputLine(parseOpenAiBatchOutputLine(line));
+
   const reader = response.body?.getReader();
   if (!reader) {
     const text = await readProviderTextResponse(response, "openai.batch-file-content", {
       maxBytes: OPENAI_BATCH_OUTPUT_LINE_MAX_BYTES,
     });
     for (const line of parseOpenAiBatchOutput(text)) {
-      onLine(line);
+      if (!emitOutputLine(line)) {
+        break;
+      }
     }
     return;
   }
@@ -149,24 +165,27 @@ async function readOpenAiBatchOutputLines(
     }
     line += segment;
   };
-  const emitLine = () => {
+  const emitLine = (): boolean => {
     const trimmed = line.trim();
     line = "";
     lineBytes = 0;
     if (trimmed) {
-      onLine(parseOpenAiBatchOutputLine(trimmed));
+      return emitParsedLine(trimmed);
     }
+    return true;
   };
-  const consumeText = (text: string) => {
+  const consumeText = (text: string): boolean => {
     let offset = 0;
     while (true) {
       const newline = text.indexOf("\n", offset);
       if (newline === -1) {
         appendSegment(text.slice(offset));
-        return;
+        return true;
       }
       appendSegment(text.slice(offset, newline));
-      emitLine();
+      if (!emitLine()) {
+        return false;
+      }
       offset = newline + 1;
     }
   };
@@ -178,10 +197,15 @@ async function readOpenAiBatchOutputLines(
         break;
       }
       if (value && value.byteLength > 0) {
-        consumeText(decoder.decode(value, { stream: true }));
+        if (!consumeText(decoder.decode(value, { stream: true }))) {
+          await reader.cancel().catch(() => {});
+          return;
+        }
       }
     }
-    consumeText(decoder.decode());
+    if (!consumeText(decoder.decode())) {
+      return;
+    }
     if (line.trim()) {
       emitLine();
     }
@@ -196,13 +220,18 @@ async function readOpenAiBatchOutputLines(
 async function readOpenAiBatchOutputFile(params: {
   openAi: OpenAiEmbeddingClient;
   fileId: string;
-  onLine: (line: OpenAiBatchOutputLine) => void;
+  maxLines: number;
+  onLine: (line: OpenAiBatchOutputLine) => boolean;
 }): Promise<void> {
   return await fetchOpenAiBatchResource({
     openAi: params.openAi,
     path: `/files/${params.fileId}/content`,
     errorPrefix: "openai batch file content",
-    parse: async (res) => await readOpenAiBatchOutputLines(res, params.onLine),
+    parse: async (res) =>
+      await readOpenAiBatchOutputLines(res, {
+        maxLines: params.maxLines,
+        onLine: params.onLine,
+      }),
   });
 }
 
@@ -461,8 +490,10 @@ export async function runOpenAiEmbeddingBatches(
       await readOpenAiBatchOutputFile({
         openAi: params.openAi,
         fileId: completed.outputFileId,
+        maxLines: group.length,
         onLine: (line) => {
           applyEmbeddingBatchOutputLine({ line, remaining, errors, byCustomId });
+          return remaining.size > 0;
         },
       });
 

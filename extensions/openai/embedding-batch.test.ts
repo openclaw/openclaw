@@ -431,6 +431,83 @@ describe("OpenAI embedding batch output", () => {
     );
   });
 
+  it("stops reading batch output after all requested custom IDs are accounted for", async () => {
+    const outputLineCount = 1024;
+    let outputLinesSent = 0;
+    let canceled = false;
+    const outputResponse = new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (outputLinesSent >= outputLineCount) {
+            controller.close();
+            return;
+          }
+          const line =
+            outputLinesSent === 0
+              ? {
+                  custom_id: "0",
+                  response: {
+                    status_code: 200,
+                    body: { data: [{ embedding: [1] }] },
+                  },
+                }
+              : {
+                  custom_id: `extra-${outputLinesSent}`,
+                  response: {
+                    status_code: 200,
+                    body: { data: [{ embedding: [outputLinesSent] }] },
+                  },
+                };
+          controller.enqueue(jsonlEncoder.encode(`${JSON.stringify(line)}\n`));
+          outputLinesSent += 1;
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { status: 200, headers: { "Content-Type": "application/jsonl" } },
+    );
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = fetchInputUrl(input);
+      if (url.endsWith("/files") && init?.method === "POST") {
+        return jsonResponse({ id: "file-0" });
+      }
+      if (url.endsWith("/batches") && init?.method === "POST") {
+        return jsonResponse({ id: "batch-0", status: "completed", output_file_id: "output-0" });
+      }
+      if (url.endsWith("/files/output-0/content")) {
+        return outputResponse;
+      }
+      return new Response("unexpected request", { status: 500 });
+    });
+
+    const byCustomId = await runOpenAiEmbeddingBatches({
+      openAi: {
+        baseUrl: "https://openai-compatible.example/v1",
+        headers: { Authorization: "Bearer test" },
+        model: "text-embedding-3-small",
+        fetchImpl,
+      },
+      agentId: "main",
+      requests: [
+        {
+          custom_id: "0",
+          method: "POST",
+          url: "/v1/embeddings",
+          body: { model: "text-embedding-3-small", input: "payload" },
+        },
+      ],
+      wait: true,
+      concurrency: 1,
+      pollIntervalMs: 1000,
+      timeoutMs: 60_000,
+    });
+
+    expect([...byCustomId.entries()]).toEqual([["0", [1]]]);
+    expect(canceled).toBe(true);
+    expect(outputLinesSent).toBeLessThan(outputLineCount);
+  });
+
   it("bounds batch output file content without buffering the whole response", async () => {
     const outputChunkCount = 1024;
     let outputChunksSent = 0;
