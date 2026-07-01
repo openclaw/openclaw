@@ -8,6 +8,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { rawDataToString } from "../infra/ws.js";
+import { readChromeVersion } from "./chrome.diagnostics.js";
 import {
   parseBrowserMajorVersion,
   resolveGoogleChromeExecutableForPlatform,
@@ -946,6 +947,103 @@ describe("browser chrome helpers", () => {
     } as unknown as StopChromeTarget;
     await expect(stopOpenClawChrome(running, 10)).resolves.toBeUndefined();
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  describe("readChromeVersion content-length bounds", () => {
+    it("parses JSON when content-length is under 16 MiB", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(
+            JSON.stringify({ Browser: "Chrome/130", webSocketDebuggerUrl: "ws://host/path" }),
+            {
+              status: 200,
+              headers: { "content-type": "application/json", "content-length": "128" },
+            },
+          ),
+        ),
+      );
+      const version = await readChromeVersion("http://127.0.0.1:12345", 50);
+      expect(version.Browser).toBe("Chrome/130");
+      expect(version.webSocketDebuggerUrl).toBe("ws://host/path");
+    });
+
+    it("parses JSON when content-length is exactly at 16 MiB", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify({ Browser: "Chrome/130" }), {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+              "content-length": String(16 * 1024 * 1024),
+            },
+          }),
+        ),
+      );
+      const version = await readChromeVersion("http://127.0.0.1:12345", 50);
+      expect(version.Browser).toBe("Chrome/130");
+    });
+
+    it("throws when content-length exceeds 16 MiB", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify({ Browser: "Chrome/130" }), {
+            status: 200,
+            headers: {
+              "content-type": "application/json",
+              "content-length": String(16 * 1024 * 1024 + 1),
+            },
+          }),
+        ),
+      );
+      await expect(readChromeVersion("http://127.0.0.1:12345", 50)).rejects.toThrow(
+        "CDP /json/version body exceeds 16 MiB",
+      );
+    });
+
+    it("parses JSON when content-length header is absent", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify({ Browser: "Chrome/130" }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        ),
+      );
+      const version = await readChromeVersion("http://127.0.0.1:12345", 50);
+      expect(version.Browser).toBe("Chrome/130");
+    });
+
+    it("parses JSON when content-length is 0", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify({ Browser: "Chrome/130" }), {
+            status: 200,
+            headers: { "content-type": "application/json", "content-length": "0" },
+          }),
+        ),
+      );
+      const version = await readChromeVersion("http://127.0.0.1:12345", 50);
+      expect(version.Browser).toBe("Chrome/130");
+    });
+
+    it("parses JSON when content-length is non-numeric", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify({ Browser: "Chrome/130" }), {
+            status: 200,
+            headers: { "content-type": "application/json", "content-length": "garbage" },
+          }),
+        ),
+      );
+      const version = await readChromeVersion("http://127.0.0.1:12345", 50);
+      expect(version.Browser).toBe("Chrome/130");
+    });
   });
 });
 
