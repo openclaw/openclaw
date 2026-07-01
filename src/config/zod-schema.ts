@@ -33,6 +33,11 @@ import {
   SessionSendPolicySchema,
 } from "./zod-schema.session.js";
 
+const CRON_MODEL_PREFLIGHT_DEFAULT_TIMEOUT_MS = 2_500;
+const CRON_MODEL_PREFLIGHT_DEFAULT_MAX_ATTEMPTS = 1;
+const CRON_MODEL_PREFLIGHT_DEFAULT_RETRY_DELAY_MS = 0;
+const CRON_MODEL_PREFLIGHT_MAX_TOTAL_WINDOW_MS = 55_000;
+
 const BrowserSnapshotDefaultsSchema = z
   .object({
     mode: z.literal("efficient").optional(),
@@ -915,6 +920,28 @@ export const OpenClawSchema = z
             keepLines: z.number().int().positive().optional(),
           })
           .strict()
+          .optional(),
+        modelPreflight: z
+          .object({
+            timeoutMs: z.number().int().min(100).max(55_000).optional(),
+            maxAttempts: z.number().int().min(1).max(10).optional(),
+            retryDelayMs: z.number().int().min(0).max(55_000).optional(),
+          })
+          .strict()
+          .superRefine((value, ctx) => {
+            const timeoutMs = value.timeoutMs ?? CRON_MODEL_PREFLIGHT_DEFAULT_TIMEOUT_MS;
+            const maxAttempts = value.maxAttempts ?? CRON_MODEL_PREFLIGHT_DEFAULT_MAX_ATTEMPTS;
+            const retryDelayMs = value.retryDelayMs ?? CRON_MODEL_PREFLIGHT_DEFAULT_RETRY_DELAY_MS;
+            const totalWindowMs = timeoutMs * maxAttempts + retryDelayMs * (maxAttempts - 1);
+            if (totalWindowMs > CRON_MODEL_PREFLIGHT_MAX_TOTAL_WINDOW_MS) {
+              ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                message:
+                  `cron.modelPreflight total retry window must be <= ${CRON_MODEL_PREFLIGHT_MAX_TOTAL_WINDOW_MS}ms ` +
+                  `per endpoint so it fits within the cron agent setup budget; got ${totalWindowMs}ms.`,
+              });
+            }
+          })
           .optional(),
         failureAlert: z
           .object({
