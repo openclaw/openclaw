@@ -1,9 +1,10 @@
 // Covers backup archive creation and verification filtering.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import * as tar from "tar";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { backupVerifyCommand } from "../commands/backup-verify.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -18,9 +19,13 @@ import {
   buildExtensionsNodeModulesFilter,
   createBackupArchive,
   formatBackupCreateSummary,
+  sweepStaleBackupArtifacts,
   type BackupCreateResult,
 } from "./backup-create.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+
+const BACKUP_STAGING_OWNER_FILE = ".openclaw-backup-owner.json";
+const BACKUP_ARCHIVE_OWNER_SUFFIX = ".openclaw-owner.json";
 
 function makeResult(overrides: Partial<BackupCreateResult> = {}): BackupCreateResult {
   return {
@@ -1202,5 +1207,148 @@ describe("createBackupArchive", () => {
         }
       },
     );
+  });
+});
+
+describe("sweepStaleBackupArtifacts", () => {
+  let testRoot: string;
+  let outputDir: string;
+  let outputPath: string;
+  let tempRoot: string;
+
+  beforeEach(async () => {
+    testRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sweep-test-"));
+    outputDir = path.join(testRoot, "backups");
+    outputPath = path.join(outputDir, "backup.tar.gz");
+    tempRoot = path.join(testRoot, "staging-root");
+    await fs.mkdir(outputDir, { recursive: true });
+    await fs.mkdir(tempRoot, { recursive: true });
+  });
+
+  afterEach(async () => {
+    await fs.rm(testRoot, { recursive: true, force: true }).catch(() => undefined);
+  });
+
+  async function markOld(targetPath: string): Promise<void> {
+    const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
+    await fs.utimes(targetPath, new Date(twoHoursAgo), new Date(twoHoursAgo));
+  }
+
+  async function writeOwner(ownerPath: string, pid: number): Promise<void> {
+    await fs.writeFile(ownerPath, `${JSON.stringify({ pid, startedAtMs: Date.now() })}\n`, "utf8");
+  }
+
+  it("removes stale openclaw-backup-* directories from the selected temp root", async () => {
+    const staleDir = path.join(tempRoot, "openclaw-backup-abc123");
+    await fs.mkdir(staleDir);
+    await fs.writeFile(path.join(staleDir, "manifest.json"), "{}");
+    await markOld(staleDir);
+
+    const entries = await fs.readdir(tempRoot, { withFileTypes: true });
+    expect(entries.some((e) => e.name === "openclaw-backup-abc123")).toBe(true);
+
+    await sweepStaleBackupArtifacts({ outputPath, tempRoot });
+
+    const after = await fs.readdir(tempRoot);
+    expect(after).not.toContain("openclaw-backup-abc123");
+  });
+
+  it("removes stale temp archive files next to the output path", async () => {
+    const uuid = randomUUID();
+    const tempFile = path.join(outputDir, `backup.tar.gz.${uuid}.tmp`);
+    await fs.writeFile(tempFile, "data");
+    await markOld(tempFile);
+
+    await sweepStaleBackupArtifacts({ outputPath, tempRoot });
+
+    const after = await fs.readdir(outputDir);
+    expect(after).not.toContain(`backup.tar.gz.${uuid}.tmp`);
+  });
+
+  it("preserves recent artifacts within grace window", async () => {
+    const recentDir = path.join(tempRoot, "openclaw-backup-recent");
+    await fs.mkdir(recentDir);
+    await fs.writeFile(path.join(recentDir, "data"), "x");
+
+    const uuid = randomUUID();
+    const recentFile = path.join(outputDir, `backup.tar.gz.${uuid}.tmp`);
+    await fs.writeFile(recentFile, "data");
+
+    await sweepStaleBackupArtifacts({ outputPath, tempRoot });
+
+    expect(await fs.readdir(tempRoot)).toContain("openclaw-backup-recent");
+    expect(await fs.readdir(outputDir)).toContain(`backup.tar.gz.${uuid}.tmp`);
+  });
+
+  it("ignores unrelated files and uuid temp files that do not match the output basename", async () => {
+    const uuid = randomUUID();
+    const unrelatedArchiveTemp = path.join(outputDir, `other-backup.tar.gz.${uuid}.tmp`);
+    await fs.writeFile(path.join(outputDir, "unrelated.txt"), "keep me");
+    await fs.writeFile(unrelatedArchiveTemp, "keep me");
+    await fs.mkdir(path.join(tempRoot, "some-other-dir"));
+    await markOld(unrelatedArchiveTemp);
+
+    await sweepStaleBackupArtifacts({ outputPath, tempRoot });
+
+    expect(await fs.readdir(outputDir)).toEqual(
+      expect.arrayContaining(["unrelated.txt", `other-backup.tar.gz.${uuid}.tmp`]),
+    );
+    expect(await fs.readdir(tempRoot)).toContain("some-other-dir");
+  });
+
+  it("preserves stale artifacts while their owner process is still alive", async () => {
+    const staleDir = path.join(tempRoot, "openclaw-backup-active");
+    await fs.mkdir(staleDir);
+    await fs.writeFile(path.join(staleDir, "manifest.json"), "{}");
+    await writeOwner(path.join(staleDir, BACKUP_STAGING_OWNER_FILE), process.pid);
+    await markOld(staleDir);
+
+    const uuid = randomUUID();
+    const tempFileName = `backup.tar.gz.${uuid}.tmp`;
+    const tempFile = path.join(outputDir, tempFileName);
+    await fs.writeFile(tempFile, "data");
+    await writeOwner(`${tempFile}${BACKUP_ARCHIVE_OWNER_SUFFIX}`, process.pid);
+    await markOld(tempFile);
+
+    await sweepStaleBackupArtifacts({ outputPath, tempRoot });
+
+    expect(await fs.readdir(tempRoot)).toContain("openclaw-backup-active");
+    expect(await fs.readdir(outputDir)).toEqual(
+      expect.arrayContaining([tempFileName, `${tempFileName}${BACKUP_ARCHIVE_OWNER_SUFFIX}`]),
+    );
+  });
+
+  it("removes stale artifacts and owner markers when their owner is not live", async () => {
+    const staleDir = path.join(tempRoot, "openclaw-backup-dead-owner");
+    await fs.mkdir(staleDir);
+    await writeOwner(path.join(staleDir, BACKUP_STAGING_OWNER_FILE), -1);
+    await markOld(staleDir);
+
+    const uuid = randomUUID();
+    const tempFileName = `backup.tar.gz.${uuid}.tmp`;
+    const tempFile = path.join(outputDir, tempFileName);
+    const ownerFileName = `${tempFileName}${BACKUP_ARCHIVE_OWNER_SUFFIX}`;
+    await fs.writeFile(tempFile, "data");
+    await writeOwner(path.join(outputDir, ownerFileName), -1);
+    await markOld(tempFile);
+
+    await sweepStaleBackupArtifacts({ outputPath, tempRoot });
+
+    expect(await fs.readdir(tempRoot)).not.toContain("openclaw-backup-dead-owner");
+    expect(await fs.readdir(outputDir)).not.toEqual(
+      expect.arrayContaining([tempFileName, ownerFileName]),
+    );
+  });
+
+  it("preserves stale owner sidecars without archive files when their owner is still alive", async () => {
+    const uuid = randomUUID();
+    const ownerFileName = `backup.tar.gz.${uuid}.tmp${BACKUP_ARCHIVE_OWNER_SUFFIX}`;
+    const ownerPath = path.join(outputDir, ownerFileName);
+    await writeOwner(ownerPath, process.pid);
+    await markOld(ownerPath);
+
+    await sweepStaleBackupArtifacts({ outputPath, tempRoot });
+
+    expect(await fs.readdir(outputDir)).toContain(ownerFileName);
   });
 });
