@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
 import { resolveAcpxPluginConfig } from "./config.js";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
@@ -13,6 +13,7 @@ const execFileAsync = promisify(execFile);
 const tempDirs: string[] = [];
 const previousEnv = {
   CODEX_HOME: process.env.CODEX_HOME,
+  OPENCLAW_ACPX_CODEX_HOME: process.env.OPENCLAW_ACPX_CODEX_HOME,
   OPENCLAW_AGENT_DIR: process.env.OPENCLAW_AGENT_DIR,
 };
 
@@ -88,9 +89,14 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
 }
 
+beforeEach(() => {
+  delete process.env.OPENCLAW_ACPX_CODEX_HOME;
+});
+
 afterEach(async () => {
   vi.restoreAllMocks();
   restoreEnv("CODEX_HOME");
+  restoreEnv("OPENCLAW_ACPX_CODEX_HOME");
   restoreEnv("OPENCLAW_AGENT_DIR");
   for (const dir of tempDirs.splice(0)) {
     await fs.rm(dir, { recursive: true, force: true });
@@ -282,6 +288,75 @@ describe("prepareAcpxCodexAuthConfig", () => {
     expect(wrapper).toContain("defaultArgs = [installedBinPath]");
   });
 
+  it("launches the locally installed Codex ACP bin with configured codexHome", async () => {
+    const root = await makeTempDir();
+    const stateDir = path.join(root, "state");
+    const configuredCodexHome = path.join(root, "configured-codex-home");
+    const generated = generatedCodexPaths(stateDir);
+    const installedBinPath = path.join(root, "codex-acp-bin.js");
+    await fs.writeFile(
+      installedBinPath,
+      "console.log(JSON.stringify({ argv: process.argv.slice(2), codexHome: process.env.CODEX_HOME }));\n",
+      "utf8",
+    );
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {
+        codexHome: configuredCodexHome,
+      },
+      workspaceDir: root,
+    });
+
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+      resolveInstalledCodexAcpBinPath: async () => installedBinPath,
+    });
+
+    const { stdout } = await execFileAsync(process.execPath, [generated.wrapperPath], {
+      cwd: root,
+    });
+    const launched = JSON.parse(stdout.trim()) as { argv?: unknown; codexHome?: unknown };
+    expect(launched.argv).toEqual([]);
+    expect(path.resolve(String(launched.codexHome))).toBe(configuredCodexHome);
+    await expect(fs.access(configuredCodexHome)).resolves.toBeUndefined();
+    await expect(fs.access(generated.configPath)).rejects.toMatchObject({ code: "ENOENT" });
+    const wrapper = await fs.readFile(generated.wrapperPath, "utf8");
+    expect(wrapper).toContain(JSON.stringify(configuredCodexHome));
+  });
+
+  it("launches the locally installed Codex ACP bin with OPENCLAW_ACPX_CODEX_HOME", async () => {
+    const root = await makeTempDir();
+    const stateDir = path.join(root, "state");
+    const envCodexHome = path.join(root, "env-codex-home");
+    const generated = generatedCodexPaths(stateDir);
+    const installedBinPath = path.join(root, "codex-acp-bin.js");
+    await fs.writeFile(
+      installedBinPath,
+      "console.log(JSON.stringify({ argv: process.argv.slice(2), codexHome: process.env.CODEX_HOME }));\n",
+      "utf8",
+    );
+    process.env.OPENCLAW_ACPX_CODEX_HOME = envCodexHome;
+    const pluginConfig = resolveAcpxPluginConfig({
+      rawConfig: {},
+      workspaceDir: root,
+    });
+
+    await prepareAcpxCodexAuthConfig({
+      pluginConfig,
+      stateDir,
+      resolveInstalledCodexAcpBinPath: async () => installedBinPath,
+    });
+
+    const { stdout } = await execFileAsync(process.execPath, [generated.wrapperPath], {
+      cwd: root,
+    });
+    const launched = JSON.parse(stdout.trim()) as { argv?: unknown; codexHome?: unknown };
+    expect(launched.argv).toEqual([]);
+    expect(path.resolve(String(launched.codexHome))).toBe(envCodexHome);
+    await expect(fs.access(envCodexHome)).resolves.toBeUndefined();
+    await expect(fs.access(generated.configPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("launches the locally installed Codex ACP bin with isolated CODEX_HOME", async () => {
     const root = await makeTempDir();
     const stateDir = path.join(root, "state");
@@ -457,11 +532,14 @@ describe("prepareAcpxCodexAuthConfig", () => {
       resolveInstalledClaudeAcpBinPath: async () => installedBinPath,
     });
 
+    const childEnv = { ...process.env };
+    delete childEnv.CODEX_HOME;
     const { stdout } = await execFileAsync(
       process.execPath,
       [generated.wrapperPath, "--permission-mode", "bypass"],
       {
         cwd: root,
+        env: childEnv,
       },
     );
     const launched = JSON.parse(stdout.trim()) as { argv?: unknown; codexHome?: unknown };
