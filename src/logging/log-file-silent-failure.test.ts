@@ -2,7 +2,7 @@
 // stderr warnings when file writes fail persistently.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getLogger,
   getResolvedLoggerSettings,
@@ -86,5 +86,9 @@ describe("logging.file silent failure", () => {
       }
       fs.rmSync(readonlyDir, { recursive: true, force: true });
     }
+  });
+
+  afterAll(async () => {
+    await logPathTracker.cleanup();
   });
 });
