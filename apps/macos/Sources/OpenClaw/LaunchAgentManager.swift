@@ -50,7 +50,7 @@ enum LaunchAgentManager {
           <dict>
             <key>PATH</key>
             <string>\(CommandResolver.preferredPaths().joined(separator: ":"))</string>
-            \(Self.profileEnvironmentEntries(environment: environment))
+            \(self.profileEnvironmentEntries(environment: environment))
           </dict>
           <key>StandardOutPath</key>
           <string>\(LogLocator.launchdLogPath)</string>
