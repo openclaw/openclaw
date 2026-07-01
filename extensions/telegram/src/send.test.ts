@@ -2219,6 +2219,42 @@ describe("sendMessageTelegram", () => {
     vi.useRealTimers();
   });
 
+  it("honors long Telegram retry_after hints above the default send retry cap", async () => {
+    vi.useFakeTimers();
+    const chatId = "123";
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce({
+        message: "429 Too Many Requests",
+        response: { parameters: { retry_after: 45 } },
+      })
+      .mockResolvedValueOnce({
+        message_id: 2,
+        chat: { id: chatId },
+      });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+    const setTimeoutSpy = vi.spyOn(global, "setTimeout");
+
+    const promise = sendMessageTelegram(chatId, "hi", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 30_000, jitter: 0 },
+    });
+
+    await vi.advanceTimersByTimeAsync(44_999);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(promise).resolves.toEqual({ messageId: "2", chatId });
+    expect(firstMockCall(setTimeoutSpy, "setTimeout call")[1]).toBe(45_000);
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    setTimeoutSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
   it("retries wrapped pre-connect HttpError sends", async () => {
     vi.useFakeTimers();
     const chatId = "123";

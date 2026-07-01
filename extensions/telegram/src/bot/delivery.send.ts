@@ -13,6 +13,7 @@ import {
   isTelegramQuoteParamError,
   removeTelegramNativeQuoteParam,
 } from "../reply-parameters.js";
+import { TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS } from "../retry-after.js";
 import {
   buildTelegramRichMessage,
   getTelegramRichRawApi,
@@ -33,6 +34,7 @@ function createTelegramDeliverySendRetry() {
   return createTelegramRetryRunner({
     shouldRetry: (err) => isSafeToRetrySendError(err) || isTelegramRateLimitError(err),
     strictShouldRetry: true,
+    retryAfterMaxDelayMs: TELEGRAM_OUTBOUND_RETRY_AFTER_CAP_MS,
   });
 }
 
