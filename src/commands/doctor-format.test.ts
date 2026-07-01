@@ -89,6 +89,23 @@ describe("buildGatewayRuntimeHints", () => {
     expect(text).not.toContain("systemd stopped restarting the gateway");
   });
 
+  it("keeps the generic stopped hint after a config exit (78) despite a stale restart count", () => {
+    // RestartPreventExitStatus=78 stopped systemd on purpose; the leftover
+    // NRestarts must not flip the hint to start-limit recovery guidance.
+    const text = buildGatewayRuntimeHints(
+      {
+        status: "stopped",
+        state: "failed",
+        lastExitStatus: 78,
+        systemd: { result: "exit-code", nRestarts: 5, startLimitBurst: 5 },
+      },
+      { platform: "linux", env: {} },
+    ).join("\n");
+
+    expect(text).toContain("likely exited immediately");
+    expect(text).not.toContain("systemd stopped restarting the gateway");
+  });
+
   it("keeps the generic stopped hint for an ordinary cleanly-stopped service", () => {
     const text = buildGatewayRuntimeHints(
       { status: "stopped", state: "inactive" },
