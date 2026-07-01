@@ -127,6 +127,23 @@ describe("web tool runtime context", () => {
     expect(mocks.resolveManifestContractOwnerPluginId).not.toHaveBeenCalled();
   });
 
+  it("keeps fetch provider ids aligned with runtime metadata precedence", () => {
+    resolveWebFetchToolRuntimeContext({
+      config: { tools: { web: { fetch: { provider: "firecrawl" } } } },
+      runtimeWebFetch: {
+        providerConfigured: "perplexity-fetch",
+        providerSource: "configured",
+        selectedProvider: "perplexity-fetch",
+        selectedProviderKeySource: "config",
+        diagnostics: [],
+      },
+    });
+
+    const ownerLookup = latestOwnerLookupParams();
+    expect(ownerLookup.contract).toBe("webFetchProviders");
+    expect(ownerLookup.value).toBe("perplexity-fetch");
+  });
+
   it("keeps runtime providers disabled for bundled fetch owners", async () => {
     mocks.resolveManifestContractOwnerPluginId.mockReturnValue("firecrawl");
 

@@ -34,6 +34,18 @@ function resolveRuntimeWebProviderId(metadata: WebProviderRuntimeMetadata | unde
   return metadata?.selectedProvider ?? metadata?.providerConfigured ?? "";
 }
 
+function resolveWebProviderSelectionId(params: {
+  config: OpenClawConfig | undefined;
+  kind: WebProviderKind;
+  runtimeMetadata: WebProviderRuntimeMetadata | undefined;
+}): string {
+  const configuredProviderId = resolveConfiguredWebProviderId(params.config, params.kind);
+  const runtimeProviderId = resolveRuntimeWebProviderId(params.runtimeMetadata);
+  return params.kind === "search"
+    ? configuredProviderId || runtimeProviderId
+    : runtimeProviderId || configuredProviderId;
+}
+
 function shouldPreferRuntimeProviders(params: {
   config?: OpenClawConfig;
   kind: WebProviderKind;
@@ -69,9 +81,11 @@ function resolveWebToolRuntimeContext<TMetadata extends WebProviderRuntimeMetada
     params.lateBindRuntimeConfig === true
       ? (getActiveSecretsRuntimeConfigSnapshot()?.config ?? params.capturedConfig)
       : params.capturedConfig;
-  const providerSelectionId =
-    resolveRuntimeWebProviderId(runtimeMetadata) ||
-    resolveConfiguredWebProviderId(config, params.kind);
+  const providerSelectionId = resolveWebProviderSelectionId({
+    config,
+    kind: params.kind,
+    runtimeMetadata,
+  });
   return {
     config,
     preferRuntimeProviders: shouldPreferRuntimeProviders({
