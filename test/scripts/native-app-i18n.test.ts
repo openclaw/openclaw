@@ -42,7 +42,24 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "Searching…")).toBe(true);
     expect(entries.some((entry) => entry.source === "Run now")).toBe(true);
     expect(entries.some((entry) => entry.source === "Loading chat")).toBe(true);
+    expect(entries.some((entry) => entry.source === "DIARY")).toBe(true);
+    expect(entries.some((entry) => entry.source === "ask OpenClaw $prompt")).toBe(true);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.source ===
+          "First-time TLS connection.\n\nVerify this SHA-256 fingerprint out-of-band before trusting:\n\\(prompt.fingerprintSha256)",
+      ),
+    ).toBe(true);
+    expect(
+      entries.some((entry) =>
+        entry.source.startsWith(
+          "Exec approvals can only be reviewed while OpenClaw is open and connected.",
+        ),
+      ),
+    ).toBe(true);
     expect(entries.some((entry) => entry.source === "$(PRODUCT_BUNDLE_IDENTIFIER)")).toBe(false);
+    expect(entries.some((entry) => entry.source === "ai.openclaw.screenRecord.writer")).toBe(false);
     expect(entries.some((entry) => entry.source === "false")).toBe(false);
     expect(entries.some((entry) => entry.source === "ws")).toBe(false);
     expect(entries.some((entry) => entry.source === '{"includeSecrets":true}')).toBe(false);

@@ -56,8 +56,12 @@ const ANDROID_EXTENSIONS = new Set([".kt", ".kts"]);
 const APPLE_EXTENSIONS = new Set([".swift", ".plist"]);
 const APPLE_UI_CALLS =
   /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
+const APPLE_UI_MULTILINE_CALLS =
+  /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*"""([\s\S]*?)"""/gu;
 const APPLE_MODIFIER_CALLS =
   /\.(?:navigationTitle|accessibilityLabel|accessibilityHint|help|alert|confirmationDialog)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
+const APPLE_MODIFIER_MULTILINE_CALLS =
+  /\.(?:navigationTitle|accessibilityLabel|accessibilityHint|help|alert|confirmationDialog)\s*\(\s*"""([\s\S]*?)"""/gu;
 const ANDROID_CALLS =
   /\b(?:Text|OutlinedTextField|BasicTextField|Button|IconButton|TopAppBar|Snackbar|AlertDialog)\s*\(\s*(?:text\s*=\s*)?"((?:\\.|[^"\\])*)"/gu;
 const ANDROID_PROPERTIES =
@@ -74,8 +78,34 @@ const CONDITIONAL_BRANCHES = [
   /\?\s*"((?:\\.|[^"\\])*)"\s*:\s*"((?:\\.|[^"\\])*)"/gu,
 ];
 const ANDROID_RESOURCE_STRINGS = /<string\b[^>]*>([\s\S]*?)<\/string>/gu;
-const APPLE_NAMED_ARGUMENTS =
-  /\b(?:title|subtitle|label|message|text|prompt|description|help)\s*:\s*"((?:\\.|[^"\\])*)"/gu;
+const ANDROID_RESOURCE_COLLECTIONS =
+  /<(?:string-array|plurals)\b[^>]*>([\s\S]*?)<\/(?:string-array|plurals)>/gu;
+const ANDROID_RESOURCE_ITEMS = /<item\b[^>]*>([\s\S]*?)<\/item>/gu;
+const APPLE_NAMED_LITERALS =
+  /\b(?:title|subtitle|label|message|text|prompt|description|help)\s*:\s*(?:"""([\s\S]*?)"""|"((?:\\.|[^"\\])*)")/gu;
+const APPLE_VIEW_TYPE = /\bstruct\s+([A-Za-z_][A-Za-z0-9_]*)[^:{\n]*:\s*[^{\n]*\bView\b/gu;
+const APPLE_BUILTIN_UI_TYPES = new Set([
+  "Alert",
+  "Button",
+  "ControlGroup",
+  "DatePicker",
+  "DisclosureGroup",
+  "Gauge",
+  "Label",
+  "LabeledContent",
+  "Link",
+  "Menu",
+  "Picker",
+  "ProgressView",
+  "Section",
+  "SecureField",
+  "ShareLink",
+  "Stepper",
+  "Text",
+  "TextEditor",
+  "TextField",
+  "Toggle",
+]);
 const APPLE_PLIST_STRINGS = /<string>([\s\S]*?)<\/string>/gu;
 const GENERATED_PATH_RE = /(?:^|[\\/])(?:build|\.gradle|\.build|DerivedData)(?:$|[\\/])/u;
 const EXCLUDED_PATH_RE = /(?:^|[\\/])(?:Tests?|UITests?|test|Preview(?:s)?)(?:$|[\\/])/u;
@@ -88,7 +118,8 @@ function isTranslatableCandidate(source: string, kind: string): boolean {
     return false;
   }
   BUILD_SETTING_RE.lastIndex = 0;
-  if (/^[a-z0-9_.:/$-]+$/u.test(source) || /^[A-Z0-9_.:/$-]+$/u.test(source)) {
+  const isDirectUiText = kind.startsWith("ui-") || kind.startsWith("resource-");
+  if (!isDirectUiText && (/^[a-z0-9_.:/$-]+$/u.test(source) || /^[A-Z0-9_.:/$-]+$/u.test(source))) {
     return false;
   }
   if (kind === "conditional-branch" && /^[a-z]+(?:[A-Z][A-Za-z0-9]*)+$/u.test(source)) {
@@ -152,7 +183,25 @@ function lineNumber(source: string, offset: number): number {
   return source.slice(0, offset).split("\n").length;
 }
 
-function decodeLiteral(raw: string): string {
+function decodeMultilineLiteral(raw: string): string {
+  const lines = raw.replaceAll("\r\n", "\n").split("\n");
+  if (lines[0]?.trim() === "") {
+    lines.shift();
+  }
+  if (lines.at(-1)?.trim() === "") {
+    lines.pop();
+  }
+  const indents = lines
+    .filter((line) => line.trim())
+    .map((line) => line.match(/^[ \t]*/u)?.[0].length ?? 0);
+  const indent = indents.length > 0 ? Math.min(...indents) : 0;
+  return lines.map((line) => line.slice(Math.min(indent, line.length))).join("\n");
+}
+
+function decodeLiteral(raw: string, kind: string): string {
+  if (kind.endsWith("-multiline")) {
+    return decodeMultilineLiteral(raw);
+  }
   try {
     return JSON.parse(`"${raw}"`) as string;
   } catch {
@@ -164,6 +213,25 @@ function normalizeSource(source: string): string {
   return source;
 }
 
+function enclosingCallName(source: string, offset: number): string | null {
+  let depth = 0;
+  for (let index = offset - 1; index >= 0; index -= 1) {
+    if (source[index] === ")") {
+      depth += 1;
+      continue;
+    }
+    if (source[index] !== "(") {
+      continue;
+    }
+    if (depth > 0) {
+      depth -= 1;
+      continue;
+    }
+    return source.slice(0, index).match(/([A-Za-z_][A-Za-z0-9_]*)\s*$/u)?.[1] ?? null;
+  }
+  return null;
+}
+
 function addCandidate(
   entries: Candidate[],
   surface: NativeI18nSurface,
@@ -172,7 +240,7 @@ function addCandidate(
   kind: string,
   line: number,
 ) {
-  const normalized = normalizeSource(decodeLiteral(source));
+  const normalized = normalizeSource(decodeLiteral(source, kind));
   if (!normalized.trim() || !/\p{L}/u.test(normalized)) {
     return;
   }
@@ -193,14 +261,16 @@ function extractCandidates(
   surface: NativeI18nSurface,
   repoPath: string,
   source: string,
+  appleUiTypes: ReadonlySet<string>,
 ): Candidate[] {
   const entries: Candidate[] = [];
   const patterns =
     surface === "apple"
       ? [
           [APPLE_UI_CALLS, "ui-call"],
+          [APPLE_UI_MULTILINE_CALLS, "ui-call-multiline"],
           [APPLE_MODIFIER_CALLS, "ui-modifier"],
-          [APPLE_NAMED_ARGUMENTS, "ui-named-argument"],
+          [APPLE_MODIFIER_MULTILINE_CALLS, "ui-modifier-multiline"],
           ...CONDITIONAL_BRANCHES.map((pattern) => [pattern, "conditional-branch"] as const),
         ]
       : [
@@ -222,7 +292,27 @@ function extractCandidates(
       }
     }
   }
-  if (surface === "android" && repoPath.endsWith("/res/values/strings.xml")) {
+  if (surface === "apple") {
+    for (const match of source.matchAll(APPLE_NAMED_LITERALS)) {
+      const callName = enclosingCallName(source, match.index ?? 0);
+      if (!callName || !appleUiTypes.has(callName)) {
+        continue;
+      }
+      const multiline = match[1];
+      const literal = multiline ?? match[2];
+      if (literal) {
+        addCandidate(
+          entries,
+          surface,
+          repoPath,
+          literal,
+          multiline === undefined ? "ui-named-argument" : "ui-named-argument-multiline",
+          lineNumber(source, match.index ?? 0),
+        );
+      }
+    }
+  }
+  if (surface === "android" && /\/res\/values\/[^/]+\.xml$/u.test(repoPath)) {
     for (const match of source.matchAll(ANDROID_RESOURCE_STRINGS)) {
       if (match[1])
         addCandidate(
@@ -233,6 +323,24 @@ function extractCandidates(
           "resource-string",
           lineNumber(source, match.index ?? 0),
         );
+    }
+    for (const collection of source.matchAll(ANDROID_RESOURCE_COLLECTIONS)) {
+      const body = collection[1];
+      if (!body) {
+        continue;
+      }
+      const bodyOffset = (collection.index ?? 0) + collection[0].indexOf(body);
+      for (const item of body.matchAll(ANDROID_RESOURCE_ITEMS)) {
+        if (item[1])
+          addCandidate(
+            entries,
+            surface,
+            repoPath,
+            item[1],
+            "resource-item",
+            lineNumber(source, bodyOffset + (item.index ?? 0)),
+          );
+      }
     }
   }
   if (surface === "apple" && repoPath.endsWith(".plist")) {
@@ -267,13 +375,16 @@ async function walkFiles(
       continue;
     }
     const extension = path.extname(entry.name);
-    const allowed =
-      surface === "apple"
-        ? APPLE_EXTENSIONS
-        : fullPath.endsWith(`${path.sep}res${path.sep}values${path.sep}strings.xml`)
-          ? new Set([...ANDROID_EXTENSIONS, ".xml"])
-          : ANDROID_EXTENSIONS;
-    if (entry.isFile() && allowed.has(extension) && !EXCLUDED_FILE_RE.test(entry.name)) {
+    const isAndroidValuesXml =
+      surface === "android" &&
+      extension === ".xml" &&
+      path.dirname(fullPath).endsWith(`${path.sep}res${path.sep}values`);
+    const allowed = surface === "apple" ? APPLE_EXTENSIONS : ANDROID_EXTENSIONS;
+    if (
+      entry.isFile() &&
+      (allowed.has(extension) || isAndroidValuesXml) &&
+      !EXCLUDED_FILE_RE.test(entry.name)
+    ) {
       out.push(fullPath);
     }
   }
@@ -311,17 +422,35 @@ function withIds(entries: Candidate[]): NativeI18nEntry[] {
 }
 
 export async function collectNativeI18nEntries(): Promise<NativeI18nEntry[]> {
-  const entries: Candidate[] = [];
+  const sources: Array<{
+    repoPath: string;
+    source: string;
+    surface: NativeI18nSurface;
+  }> = [];
   for (const surface of ["android", "apple"] as const) {
     for (const sourceRoot of SOURCE_ROOTS[surface]) {
       const files = await walkFiles(sourceRoot, surface);
       for (const filePath of files.toSorted()) {
         const source = await readFile(filePath, "utf8");
         const repoPath = path.relative(ROOT, filePath).split(path.sep).join("/");
-        entries.push(...extractCandidates(surface, repoPath, source));
+        sources.push({ repoPath, source, surface });
       }
     }
   }
+  const appleUiTypes = new Set(APPLE_BUILTIN_UI_TYPES);
+  for (const { source, surface } of sources) {
+    if (surface !== "apple") {
+      continue;
+    }
+    for (const match of source.matchAll(APPLE_VIEW_TYPE)) {
+      if (match[1]) {
+        appleUiTypes.add(match[1]);
+      }
+    }
+  }
+  const entries = sources.flatMap(({ repoPath, source, surface }) =>
+    extractCandidates(surface, repoPath, source, appleUiTypes),
+  );
   return withIds(entries);
 }
 
