@@ -168,6 +168,52 @@ describe("resolveCliRuntimeExecutionProvider", () => {
     ).toBeUndefined();
   });
 
+  it("routes Google execution to Gemini CLI when model config binds google-gemini-cli as runtime", () => {
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupRegistry: () => ({
+        providers: [],
+        cliBackends: [
+          {
+            pluginId: "google",
+            backend: {
+              id: "google-gemini-cli",
+              modelProvider: "google",
+              config: { command: "gemini" },
+              bundleMcp: false,
+            },
+          },
+        ],
+        configMigrations: [],
+        autoEnableProbes: [],
+        diagnostics: [],
+      }),
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "google-gemini-cli",
+          modelProvider: "google",
+          pluginId: "google",
+          config: { command: "gemini" },
+        },
+      ],
+    });
+
+    expect(
+      resolveCliRuntimeExecutionProvider({
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "google/gemini-3.1-pro-preview": { agentRuntime: { id: "google-gemini-cli" } },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        provider: "google",
+        modelId: "gemini-3.1-pro-preview",
+      }),
+    ).toBe("google-gemini-cli");
+  });
+
   it("keeps standalone CLI backend provider refs visible", () => {
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [

@@ -102,4 +102,11 @@ describe("google manifest model catalog", () => {
       expect(aliases?.["gemini-3-pro-preview"]).toBe("gemini-3.1-pro-preview");
     }
   });
+
+  it("declares a provider auth alias mapping google-gemini-cli to google", () => {
+    const manifest = loadManifest();
+    expect((manifest as Record<string, unknown>).providerAuthAliases).toEqual({
+      "google-gemini-cli": "google",
+    });
+  });
 });

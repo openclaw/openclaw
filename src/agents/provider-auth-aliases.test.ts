@@ -270,4 +270,35 @@ describe("provider auth aliases", () => {
     ).toBe("provider-two");
     expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
+
+  it("maps google-gemini-cli to google via the provider auth alias declared in the manifest", () => {
+    const env = { HOME: "/home/test" } as NodeJS.ProcessEnv;
+    const metadataSnapshot = {
+      plugins: [
+        {
+          id: "google",
+          origin: "bundled",
+          providerAuthAliases: { "google-gemini-cli": "google" },
+        },
+      ],
+    } as never;
+
+    // Without the alias, resolveProviderIdForAuth("google-gemini-cli") would
+    // return "google-gemini-cli" and auth profile matching would skip the
+    // Gemini CLI profile when looking for "google" provider credentials.
+    expect(
+      resolveProviderIdForAuth("google-gemini-cli", {
+        env,
+        metadataSnapshot,
+      }),
+    ).toBe("google");
+    // Canonical provider should be unchanged.
+    expect(
+      resolveProviderIdForAuth("google", {
+        env,
+        metadataSnapshot,
+      }),
+    ).toBe("google");
+    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+  });
 });

@@ -15,6 +15,23 @@ import { isModernGoogleModel, resolveGoogleGeminiForwardCompatModel } from "./pr
 const PROVIDER_ID = GOOGLE_GEMINI_CLI_PROVIDER_ID;
 const PROVIDER_LABEL = "Gemini CLI OAuth";
 const DEFAULT_MODEL = "google/gemini-3.1-pro-preview";
+
+/** All Google Gemini chat models that the Gemini CLI supports. */
+const GEMINI_CLI_MODEL_IDS = [
+  "google/gemini-3.5-flash",
+  "google/gemini-3.1-pro-preview",
+  "google/gemini-3.1-flash-lite",
+  "google/gemini-3-flash-preview",
+  "google/gemini-2.5-pro",
+  "google/gemini-2.5-flash",
+  "google/gemini-2.5-flash-lite",
+] as const;
+
+function buildGeminiCliModelRuntimeEntries() {
+  return Object.fromEntries(
+    GEMINI_CLI_MODEL_IDS.map((modelId) => [modelId, { agentRuntime: { id: PROVIDER_ID } }]),
+  );
+}
 const ENV_VARS = [
   "OPENCLAW_GEMINI_OAUTH_CLIENT_ID",
   "OPENCLAW_GEMINI_OAUTH_CLIENT_SECRET",
@@ -88,9 +105,7 @@ export function buildGoogleGeminiCliProvider(): ProviderPlugin {
               configPatch: {
                 agents: {
                   defaults: {
-                    models: {
-                      [DEFAULT_MODEL]: { agentRuntime: { id: PROVIDER_ID } },
-                    },
+                    models: buildGeminiCliModelRuntimeEntries(),
                   },
                 },
               },
