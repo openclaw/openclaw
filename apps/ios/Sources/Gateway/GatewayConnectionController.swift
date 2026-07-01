@@ -16,6 +16,47 @@ import Speech
 import SwiftUI
 import UIKit
 
+enum GatewayTLSFingerprintProbeFailure: Equatable {
+    case endpointUnreachable
+    case tlsHandshakeTimeout
+    case tlsUnavailable
+    case certificateUnavailable
+}
+
+enum GatewayTLSFingerprintProbeResult: Equatable {
+    case fingerprint(String)
+    case failure(GatewayTLSFingerprintProbeFailure)
+}
+
+typealias GatewayTCPReachabilityProbe = @Sendable (String, Int, Double, String) async -> Bool
+typealias GatewayTLSFingerprintProbeFunction = @Sendable (URL) async -> GatewayTLSFingerprintProbeResult
+
+private enum GatewayTLSFingerprintProbeBudget {
+    static let tcpConnectTimeoutSeconds = 3.0
+    static let tlsHandshakeTimeoutSeconds = 10.0
+}
+
+private func defaultGatewayTCPReachabilityProbe(
+    host: String,
+    port: Int,
+    timeoutSeconds: Double,
+    queueLabel: String) async -> Bool
+{
+    await TCPProbe.probe(host: host, port: port, timeoutSeconds: timeoutSeconds, queueLabel: queueLabel)
+}
+
+private func defaultGatewayTLSFingerprintProbe(url: URL) async -> GatewayTLSFingerprintProbeResult {
+    await withCheckedContinuation { continuation in
+        let probe = GatewayTLSFingerprintProbe(
+            url: url,
+            timeoutSeconds: GatewayTLSFingerprintProbeBudget.tlsHandshakeTimeoutSeconds)
+        { result in
+            continuation.resume(returning: result)
+        }
+        probe.start()
+    }
+}
+
 @MainActor
 @Observable
 final class GatewayConnectionController {
@@ -132,6 +173,8 @@ final class GatewayConnectionController {
     private var didAutoConnect = false
     private var pendingServiceResolvers: [String: GatewayServiceResolver] = [:]
     private var pendingTrustConnect: PendingTrustConnect?
+    private let tcpReachabilityProbe: GatewayTCPReachabilityProbe
+    private let tlsFingerprintProbe: GatewayTLSFingerprintProbeFunction
 
     private struct SavedManualEndpoint: Equatable {
         let host: String
@@ -142,11 +185,15 @@ final class GatewayConnectionController {
     init(
         appModel: NodeAppModel,
         startDiscovery: Bool = true,
-        deferDiscoveryUntilLocalNetworkRequest: Bool = false)
+        deferDiscoveryUntilLocalNetworkRequest: Bool = false,
+        tcpReachabilityProbe: @escaping GatewayTCPReachabilityProbe = defaultGatewayTCPReachabilityProbe,
+        tlsFingerprintProbe: @escaping GatewayTLSFingerprintProbeFunction = defaultGatewayTLSFingerprintProbe)
     {
         self.discoveryEnabled = startDiscovery
         self.appModel = appModel
         self.localNetworkAccessRequested = !deferDiscoveryUntilLocalNetworkRequest
+        self.tcpReachabilityProbe = tcpReachabilityProbe
+        self.tlsFingerprintProbe = tlsFingerprintProbe
 
         GatewaySettingsStore.bootstrapPersistence()
         let defaults = UserDefaults.standard
@@ -253,23 +300,36 @@ final class GatewayConnectionController {
         if tlsRequired, stored == nil {
             guard let url = self.buildGatewayURL(host: target.host, port: target.port, useTLS: true)
             else { return "Failed to build TLS URL for trust verification." }
-            guard let fp = await self.probeTLSFingerprint(url: url) else {
-                return "Failed to read TLS fingerprint from discovered gateway."
-            }
-            self.pendingTrustConnect = PendingTrustConnect(
-                url: url,
-                stableID: stableID,
-                isManual: false,
-                authOverride: nil)
-            self.pendingTrustPrompt = TrustPrompt(
-                stableID: stableID,
-                gatewayName: gateway.name,
+            self.appModel?.beginGatewayPreconnectVerification(statusText: "Verifying gateway TLS fingerprint…")
+            switch await self.probeTLSFingerprint(
                 host: target.host,
                 port: target.port,
-                fingerprintSha256: fp,
-                isManual: false)
-            self.appModel?.gatewayStatusText = "Verify gateway TLS fingerprint"
-            return nil
+                url: url,
+                queueLabel: "gateway.tls.discovered")
+            {
+            case let .fingerprint(fp):
+                self.pendingTrustConnect = PendingTrustConnect(
+                    url: url,
+                    stableID: stableID,
+                    isManual: false,
+                    authOverride: nil)
+                self.pendingTrustPrompt = TrustPrompt(
+                    stableID: stableID,
+                    gatewayName: gateway.name,
+                    host: target.host,
+                    port: target.port,
+                    fingerprintSha256: fp,
+                    isManual: false)
+                self.appModel?.gatewayStatusText = "Verify gateway TLS fingerprint"
+                return nil
+            case let .failure(failure):
+                let message = self.tlsProbeFailureMessage(
+                    failure,
+                    host: target.host,
+                    port: target.port)
+                self.appModel?.gatewayStatusText = message
+                return message
+            }
         }
 
         let tlsParams = stored.map { fp in
@@ -324,26 +384,35 @@ final class GatewayConnectionController {
         let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
         if resolvedUseTLS, stored == nil {
             guard let url = self.buildGatewayURL(host: host, port: resolvedPort, useTLS: true) else { return }
-            guard let fp = await self.probeTLSFingerprint(url: url) else {
-                self.appModel?.gatewayStatusText =
-                    "TLS handshake failed for \(host):\(resolvedPort). "
-                        + "Remote gateways must use HTTPS/WSS."
-                return
-            }
-            self.pendingTrustConnect = PendingTrustConnect(
-                url: url,
-                stableID: stableID,
-                isManual: true,
-                authOverride: pendingAuthOverride)
-            self.pendingTrustPrompt = TrustPrompt(
-                stableID: stableID,
-                gatewayName: "\(host):\(resolvedPort)",
+            self.appModel?.beginGatewayPreconnectVerification(statusText: "Verifying gateway TLS fingerprint…")
+            switch await self.probeTLSFingerprint(
                 host: host,
                 port: resolvedPort,
-                fingerprintSha256: fp,
-                isManual: true)
-            self.appModel?.gatewayStatusText = "Verify gateway TLS fingerprint"
-            return
+                url: url,
+                queueLabel: "gateway.tls.manual")
+            {
+            case let .fingerprint(fp):
+                self.pendingTrustConnect = PendingTrustConnect(
+                    url: url,
+                    stableID: stableID,
+                    isManual: true,
+                    authOverride: pendingAuthOverride)
+                self.pendingTrustPrompt = TrustPrompt(
+                    stableID: stableID,
+                    gatewayName: "\(host):\(resolvedPort)",
+                    host: host,
+                    port: resolvedPort,
+                    fingerprintSha256: fp,
+                    isManual: true)
+                self.appModel?.gatewayStatusText = "Verify gateway TLS fingerprint"
+                return
+            case let .failure(failure):
+                self.appModel?.gatewayStatusText = self.tlsProbeFailureMessage(
+                    failure,
+                    host: host,
+                    port: resolvedPort)
+                return
+            }
         }
 
         let tlsParams = stored.map { fp in
@@ -798,12 +867,40 @@ final class GatewayConnectionController {
         return nil
     }
 
-    private func probeTLSFingerprint(url: URL) async -> String? {
-        await withCheckedContinuation { continuation in
-            let probe = GatewayTLSFingerprintProbe(url: url, timeoutSeconds: 3) { fp in
-                continuation.resume(returning: fp)
-            }
-            probe.start()
+    private func probeTLSFingerprint(
+        host: String,
+        port: Int,
+        url: URL,
+        queueLabel: String) async -> GatewayTLSFingerprintProbeResult
+    {
+        self.pendingTrustConnect = nil
+        self.pendingTrustPrompt = nil
+        let reachable = await self.tcpReachabilityProbe(
+            host,
+            port,
+            GatewayTLSFingerprintProbeBudget.tcpConnectTimeoutSeconds,
+            queueLabel)
+        guard reachable else {
+            return .failure(.endpointUnreachable)
+        }
+        return await self.tlsFingerprintProbe(url)
+    }
+
+    private func tlsProbeFailureMessage(
+        _ failure: GatewayTLSFingerprintProbeFailure,
+        host: String,
+        port: Int) -> String
+    {
+        switch failure {
+        case .endpointUnreachable:
+            "Can't reach gateway at \(host):\(port). Check Tailscale or LAN."
+        case .tlsHandshakeTimeout:
+            "TLS fingerprint verification timed out for \(host):\(port). "
+                + "Secure endpoint was reached, but TLS did not finish in time."
+        case .tlsUnavailable:
+            "No TLS endpoint detected at \(host):\(port). Remote gateways must use HTTPS/WSS."
+        case .certificateUnavailable:
+            "Could not read the TLS certificate from \(host):\(port)."
         }
     }
 
@@ -1118,7 +1215,9 @@ extension GatewayConnectionController {
 }
 #endif
 
-private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, @unchecked Sendable {
+private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, URLSessionTaskDelegate,
+    @unchecked Sendable
+{
     private struct ProbeState {
         var didFinish = false
         var session: URLSession?
@@ -1127,10 +1226,14 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, @u
 
     private let url: URL
     private let timeoutSeconds: Double
-    private let onComplete: (String?) -> Void
+    private let onComplete: (GatewayTLSFingerprintProbeResult) -> Void
     private let state = OSAllocatedUnfairLock(initialState: ProbeState())
 
-    init(url: URL, timeoutSeconds: Double, onComplete: @escaping (String?) -> Void) {
+    init(
+        url: URL,
+        timeoutSeconds: Double,
+        onComplete: @escaping (GatewayTLSFingerprintProbeResult) -> Void)
+    {
         self.url = url
         self.timeoutSeconds = timeoutSeconds
         self.onComplete = onComplete
@@ -1149,7 +1252,7 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, @u
         task.resume()
 
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + self.timeoutSeconds) { [weak self] in
-            self?.finish(nil)
+            self?.finish(.failure(.tlsHandshakeTimeout))
         }
     }
 
@@ -1167,10 +1270,22 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, @u
 
         let fp = GatewayTLSFingerprintProbe.certificateFingerprint(trust)
         completionHandler(.cancelAuthenticationChallenge, nil)
-        self.finish(fp)
+        if let fp {
+            self.finish(.fingerprint(fp))
+        } else {
+            self.finish(.failure(.certificateUnavailable))
+        }
     }
 
-    private func finish(_ fingerprint: String?) {
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        guard let error else {
+            self.finish(.failure(.tlsUnavailable))
+            return
+        }
+        self.finish(.failure(Self.failure(for: error)))
+    }
+
+    private func finish(_ result: GatewayTLSFingerprintProbeResult) {
         typealias FinishState = (Bool, URLSessionWebSocketTask?, URLSession?)
         let (shouldComplete, taskToCancel, sessionToInvalidate) = self.state.withLock { s -> FinishState in
             guard !s.didFinish else { return (false, nil, nil) }
@@ -1184,7 +1299,34 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, @u
         guard shouldComplete else { return }
         taskToCancel?.cancel(with: .goingAway, reason: nil)
         sessionToInvalidate?.invalidateAndCancel()
-        self.onComplete(fingerprint)
+        self.onComplete(result)
+    }
+
+    private static func failure(for error: Error) -> GatewayTLSFingerprintProbeFailure {
+        let nsError = error as NSError
+        guard nsError.domain == URLError.errorDomain else {
+            return .tlsUnavailable
+        }
+
+        switch URLError.Code(rawValue: nsError.code) {
+        case .timedOut:
+            return .tlsHandshakeTimeout
+        case .cannotFindHost,
+             .dnsLookupFailed,
+             .cannotConnectToHost,
+             .notConnectedToInternet,
+             .internationalRoamingOff,
+             .callIsActive,
+             .dataNotAllowed:
+            return .endpointUnreachable
+        case .networkConnectionLost,
+             .secureConnectionFailed,
+             .cannotParseResponse,
+             .badServerResponse:
+            return .tlsUnavailable
+        default:
+            return .tlsUnavailable
+        }
     }
 
     private static func certificateFingerprint(_ trust: SecTrust) -> String? {
