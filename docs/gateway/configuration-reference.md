@@ -268,8 +268,7 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - `allow`: optional allowlist (only listed plugins load). `deny` wins.
 - `plugins.modelUsage.enabled`: explicitly enables model usage accounting events
   for provider plugin service subscriptions. Events are scoped to provider ids
-  registered by the same plugin, including configured aliases resolved through
-  `models.providers.<id>.api`. Default: `false`. This is separate from
+  registered by the same plugin. Default: `false`. This is separate from
   `diagnostics.enabled`; enabling it does not expose raw diagnostics.
 - `plugins.entries.<id>.apiKey`: plugin-level API key convenience field (when supported by the plugin).
 - `plugins.entries.<id>.env`: plugin-scoped env var map.

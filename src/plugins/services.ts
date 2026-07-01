@@ -1,8 +1,5 @@
 /** Starts, stops, and inspects plugin service registrations. */
-import {
-  findNormalizedProviderValue,
-  normalizeProviderId,
-} from "@openclaw/model-catalog-core/provider-id";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { STATE_DIR } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -72,27 +69,6 @@ function createModelUsageProviderIds(
   return providerIds;
 }
 
-function modelUsageEventMatchesProviderIds(params: {
-  config: OpenClawConfig;
-  event: DiagnosticUsageEvent;
-  providerIds: ReadonlySet<string>;
-}): boolean {
-  const normalizedProvider = normalizeProviderId(params.event.provider ?? "");
-  if (!normalizedProvider) {
-    return false;
-  }
-  if (params.providerIds.has(normalizedProvider)) {
-    return true;
-  }
-  const providerConfig = findNormalizedProviderValue(
-    params.config.models?.providers,
-    normalizedProvider,
-  );
-  const api =
-    typeof providerConfig?.api === "string" ? normalizeProviderId(providerConfig.api) : "";
-  return Boolean(api && params.providerIds.has(api));
-}
-
 function createServiceContext(params: {
   config: OpenClawConfig;
   registry: PluginRegistry;
@@ -122,13 +98,7 @@ function createServiceContext(params: {
           modelUsage: {
             onEvent: (listener) =>
               onCoreModelUsageEvent((event) => {
-                if (
-                  !modelUsageEventMatchesProviderIds({
-                    config: params.config,
-                    event,
-                    providerIds: modelUsageProviderIds,
-                  })
-                ) {
+                if (!modelUsageProviderIds.has(normalizeProviderId(event.provider ?? ""))) {
                   return;
                 }
                 listener(toPluginModelUsageEvent(event));

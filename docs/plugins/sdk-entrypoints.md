@@ -354,8 +354,7 @@ agent/session ids, token buckets (`input`, `output`, `cacheRead`, `cacheWrite`,
 estimated `costUsd`, and run duration. The surface exposes only model usage
 accounting; raw prompts, responses, tool payloads, and other diagnostics are not
 included. Events are scoped to the service plugin's registered provider ids;
-configured provider aliases such as `models.providers.<id>.api` resolve back to
-the owning provider plugin.
+events for other provider ids are not delivered.
 
 ## Plugin shapes
 

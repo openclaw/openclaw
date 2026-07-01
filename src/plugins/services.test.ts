@@ -82,6 +82,9 @@ function createServiceConfig() {
 
 function createModelUsageServiceConfig() {
   return {
+    diagnostics: {
+      enabled: false,
+    },
     plugins: {
       modelUsage: {
         enabled: true,
@@ -401,7 +404,7 @@ describe("startPluginServices", () => {
     expect(contexts[0]?.modelUsage).toBeUndefined();
   });
 
-  it("exposes trusted model usage events to plugin services when enabled", async () => {
+  it("exposes matching-provider usage when enabled without diagnostics", async () => {
     const seen: PluginModelUsageEvent[] = [];
     let unsubscribe: (() => void) | undefined;
     const config = createModelUsageServiceConfig();
@@ -449,38 +452,40 @@ describe("startPluginServices", () => {
         usage: { total: 1 },
       },
     );
-    emitModelUsageEvent(
-      { diagnostics: { enabled: false }, plugins: { modelUsage: { enabled: true } } },
-      {
-        sessionKey: "agent:main:slack:channel:c1",
-        sessionId: "session-1",
-        channel: "slack",
-        agentId: "main",
-        provider: "openai",
-        model: "gpt-5.5",
-        usage: {
-          input: 10,
-          output: 5,
-          cacheRead: 2,
-          cacheWrite: 1,
-          promptTokens: 13,
-          total: 18,
-        },
-        lastCallUsage: {
-          input: 4,
-          output: 5,
-          cacheRead: 2,
-          cacheWrite: 1,
-          total: 12,
-        },
-        context: {
-          limit: 100,
-          used: 13,
-        },
-        costUsd: 0.00042,
-        durationMs: 123,
+    emitModelUsageEvent(config, {
+      sessionKey: "other-provider",
+      provider: "anthropic",
+      usage: { total: 1 },
+    });
+    emitModelUsageEvent(config, {
+      sessionKey: "agent:main:slack:channel:c1",
+      sessionId: "session-1",
+      channel: "slack",
+      agentId: "main",
+      provider: "openai",
+      model: "gpt-5.5",
+      usage: {
+        input: 10,
+        output: 5,
+        cacheRead: 2,
+        cacheWrite: 1,
+        promptTokens: 13,
+        total: 18,
       },
-    );
+      lastCallUsage: {
+        input: 4,
+        output: 5,
+        cacheRead: 2,
+        cacheWrite: 1,
+        total: 12,
+      },
+      context: {
+        limit: 100,
+        used: 13,
+      },
+      costUsd: 0.00042,
+      durationMs: 123,
+    });
 
     expect(seen).toEqual([
       {
@@ -522,64 +527,6 @@ describe("startPluginServices", () => {
       usage: { total: 1 },
     });
     expect(seen).toHaveLength(1);
-  });
-
-  it("scopes model usage events to provider owner services", async () => {
-    const seen: PluginModelUsageEvent[] = [];
-    let unsubscribe: (() => void) | undefined;
-    const config = {
-      ...createModelUsageServiceConfig(),
-      models: {
-        providers: {
-          "custom-openai": {
-            api: "openai",
-          },
-        },
-      },
-    } as Parameters<typeof startPluginServices>[0]["config"];
-    const usageService: OpenClawPluginService = {
-      id: "usage-reader",
-      start: (ctx) => {
-        if (!ctx.modelUsage) {
-          throw new Error("expected model usage subscription");
-        }
-        unsubscribe = ctx.modelUsage.onEvent((event) => {
-          seen.push(event);
-        });
-      },
-      stop: () => unsubscribe?.(),
-    };
-    const handle = await startPluginServices({
-      registry: createRegistry([usageService], "openai-plugin", "workspace", false, [
-        { pluginId: "openai-plugin", provider: createProvider("openai") },
-        { pluginId: "anthropic-plugin", provider: createProvider("anthropic") },
-      ]),
-      config,
-    });
-
-    emitModelUsageEvent(config, {
-      sessionKey: "other-provider",
-      provider: "anthropic",
-      usage: { total: 1 },
-    });
-    emitModelUsageEvent(config, {
-      sessionKey: "direct-provider",
-      provider: "openai",
-      usage: { total: 2 },
-    });
-    emitModelUsageEvent(config, {
-      sessionKey: "configured-alias",
-      provider: "custom-openai",
-      usage: { total: 3 },
-    });
-    emitModelUsageEvent(config, {
-      sessionKey: "missing-provider",
-      usage: { total: 4 },
-    });
-
-    expect(seen.map((event) => event.sessionKey)).toEqual(["direct-provider", "configured-alias"]);
-
-    await handle.stop();
   });
 
   it("grants internal diagnostics only to trusted diagnostics exporter services", async () => {
