@@ -17,7 +17,7 @@ import {
   formatInheritedThinkingLabel,
   formatThinkingOverrideLabel,
   normalizeThinkingOptionValue,
-} from "../../lib/chat/thinking-labels.ts";
+} from "../../lib/chat/thinking.ts";
 import { formatRelativeTimestamp, parseSessionKeyParts } from "../../lib/format.ts";
 import { formatSessionTokens } from "../../lib/presenter.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";

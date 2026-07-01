@@ -20,7 +20,7 @@ import {
   formatInheritedThinkingLabel,
   formatThinkingOverrideLabel,
   normalizeThinkingOptionValue,
-} from "../../../lib/chat/thinking-labels.ts";
+} from "../../../lib/chat/thinking.ts";
 import {
   type ThinkingCatalogEntry,
   listThinkingLevelLabels,
