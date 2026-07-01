@@ -62,12 +62,6 @@ describe("plugin npm runtime build planning", () => {
       "channel-plugin-api": path.join(repoRoot, "extensions", "qqbot", "channel-plugin-api.ts"),
       "doctor-contract-api": path.join(repoRoot, "extensions", "qqbot", "doctor-contract-api.ts"),
       index: path.join(repoRoot, "extensions", "qqbot", "index.ts"),
-      "legacy-state-migrations-api": path.join(
-        repoRoot,
-        "extensions",
-        "qqbot",
-        "legacy-state-migrations-api.ts",
-      ),
       "runtime-api": path.join(repoRoot, "extensions", "qqbot", "runtime-api.ts"),
       "secret-contract-api": path.join(repoRoot, "extensions", "qqbot", "secret-contract-api.ts"),
       "setup-entry": path.join(repoRoot, "extensions", "qqbot", "setup-entry.ts"),

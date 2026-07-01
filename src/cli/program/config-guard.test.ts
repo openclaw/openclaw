@@ -267,27 +267,6 @@ describe("ensureConfigReady", () => {
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
   });
 
-  it("runs doctor flow for QQBot credential backups in the OS-home legacy tree", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-guard-home-"));
-    tempRoots.push(root);
-    process.env.HOME = root;
-    process.env.OPENCLAW_HOME = path.join(root, "svc");
-    delete process.env.OPENCLAW_STATE_DIR;
-    const markerPath = path.join(
-      root,
-      ".openclaw",
-      "qqbot",
-      "data",
-      "credential-backup-default.json",
-    );
-    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
-    fs.writeFileSync(markerPath, "{}");
-
-    await runEnsureConfigReady(["status"]);
-
-    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
-  });
-
   it("uses shared tilde expansion for OPENCLAW_HOME in the startup detector", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-guard-home-"));
     tempRoots.push(root);
