@@ -78,5 +78,137 @@
   {
     "source": "Webhook",
     "target": "Webhook"
+  },
+  {
+    "source": "Getting Started",
+    "target": "Prise en main"
+  },
+  {
+    "source": "Quick Start",
+    "target": "Démarrage rapide"
+  },
+  {
+    "source": "Install overview",
+    "target": "Vue d'ensemble de l'installation"
+  },
+  {
+    "source": "SDK overview",
+    "target": "Vue d'ensemble du SDK"
+  },
+  {
+    "source": "Model Providers",
+    "target": "Fournisseurs de modèles"
+  },
+  {
+    "source": "Provider directory",
+    "target": "Répertoire des fournisseurs"
+  },
+  {
+    "source": "Channel Routing",
+    "target": "Routage des canaux"
+  },
+  {
+    "source": "Web tools",
+    "target": "Outils web"
+  },
+  {
+    "source": "Secure file operations",
+    "target": "Opérations sécurisées sur les fichiers"
+  },
+  {
+    "source": "Creating skills",
+    "target": "Créer des skills"
+  },
+  {
+    "source": "Setup Wizard Reference",
+    "target": "Référence de l'assistant de configuration"
+  },
+  {
+    "source": "CLI Setup Reference",
+    "target": "Référence de configuration de la CLI"
+  },
+  {
+    "source": "macOS platform notes",
+    "target": "Notes sur la plateforme macOS"
+  },
+  {
+    "source": "Linux server",
+    "target": "Serveur Linux"
+  },
+  {
+    "source": "VPS hosting",
+    "target": "Hébergement VPS"
+  },
+  {
+    "source": "Code mode",
+    "target": "Mode code"
+  },
+  {
+    "source": "Overview",
+    "target": "Vue d'ensemble"
+  },
+  {
+    "source": "Platforms",
+    "target": "Plateformes"
+  },
+  {
+    "source": "Models",
+    "target": "Modèles"
+  },
+  {
+    "source": "Sessions",
+    "target": "Sessions"
+  },
+  {
+    "source": "Status",
+    "target": "État"
+  },
+  {
+    "source": "Logging",
+    "target": "Journalisation"
+  },
+  {
+    "source": "troubleshooting",
+    "target": "Dépannage"
+  },
+  {
+    "source": "Settings",
+    "target": "Paramètres"
+  },
+  {
+    "source": "Credentials",
+    "target": "Identifiants"
+  },
+  {
+    "source": "Deployment",
+    "target": "Déploiement"
+  },
+  {
+    "source": "Channel",
+    "target": "Canal"
+  },
+  {
+    "source": "Channels",
+    "target": "Canaux"
+  },
+  {
+    "source": "Agent runtimes",
+    "target": "Environnements d'exécution des agents"
+  },
+  {
+    "source": "Talk mode",
+    "target": "Mode vocal"
+  },
+  {
+    "source": "Capability Cookbook",
+    "target": "Recueil de capacités"
+  },
+  {
+    "source": "Steering queue",
+    "target": "File de pilotage"
+  },
+  {
+    "source": "Steer",
+    "target": "Piloter"
   }
 ]
