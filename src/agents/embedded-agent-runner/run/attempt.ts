@@ -84,6 +84,7 @@ import {
   buildTrajectoryArtifacts,
   buildTrajectoryRunMetadata,
 } from "../../../trajectory/metadata.js";
+import { resolveTrajectoryFilePath } from "../../../trajectory/paths.js";
 import {
   createTrajectoryRuntimeRecorder,
   toTrajectoryToolDefinitions,
@@ -361,6 +362,7 @@ import {
 } from "./attempt-tool-construction-plan.js";
 import { flushEmbeddedAttemptTrajectoryRecorder } from "./attempt-trajectory-flush-cleanup.js";
 import {
+  NON_DELIVERABLE_TERMINAL_TURN_REASON,
   resolveAttemptTrajectoryTerminal,
   resolveTerminalAssistantTexts,
 } from "./attempt-trajectory-status.js";
@@ -823,6 +825,73 @@ async function loadAttemptSessionEntryAfterQuotaMaintenance(params: {
     },
   );
   return updated ?? entry;
+}
+
+export async function archiveNonDeliverableTerminalSessionIfNeeded(params: {
+  sessionFile: string;
+  sessionId: string;
+  sessionKey?: string;
+  env?: NodeJS.ProcessEnv;
+  warn: (message: string) => void;
+}): Promise<boolean> {
+  const trajectoryFile = resolveTrajectoryFilePath({
+    env: params.env,
+    sessionFile: params.sessionFile,
+    sessionId: params.sessionId,
+  });
+  let text: string;
+  try {
+    text = await fs.readFile(trajectoryFile, "utf8");
+  } catch {
+    return false;
+  }
+
+  const lines = text.split("\n").filter((line) => line.trim().length > 0);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    let event: unknown;
+    try {
+      event = JSON.parse(lines[index]);
+    } catch {
+      continue;
+    }
+    if (!event || typeof event !== "object" || !("type" in event)) {
+      continue;
+    }
+    if (event.type !== "session.ended") {
+      continue;
+    }
+
+    const data = "data" in event ? event.data : undefined;
+    if (
+      !data ||
+      typeof data !== "object" ||
+      !("terminalError" in data) ||
+      data.terminalError !== NON_DELIVERABLE_TERMINAL_TURN_REASON
+    ) {
+      return false;
+    }
+
+    const suffix = `.non-deliverable-${Date.now()}.bak`;
+    const sessionArchive = `${params.sessionFile}${suffix}`;
+    const trajectoryArchive = `${trajectoryFile}${suffix}`;
+    await fs.rename(params.sessionFile, sessionArchive).catch((error: unknown) => {
+      if (!error || typeof error !== "object" || !("code" in error) || error.code !== "ENOENT") {
+        throw error;
+      }
+    });
+    await fs.rename(trajectoryFile, trajectoryArchive).catch((error: unknown) => {
+      if (!error || typeof error !== "object" || !("code" in error) || error.code !== "ENOENT") {
+        throw error;
+      }
+    });
+    params.warn(
+      `[session-recovery] archived non-deliverable terminal transcript sessionKey=${
+        params.sessionKey ?? params.sessionId
+      } sessionArchive=${sessionArchive} trajectoryArchive=${trajectoryArchive}`,
+    );
+    return true;
+  }
+  return false;
 }
 
 export async function runEmbeddedAttempt(
@@ -2204,7 +2273,7 @@ export async function runEmbeddedAttempt(
       ) {
         invalidateSessionFileRepairCache(params.sessionFile);
       }
-      const hadSessionFile = await fs
+      let hadSessionFile = await fs
         .stat(params.sessionFile)
         .then(() => true)
         .catch(() => false);
@@ -2221,6 +2290,19 @@ export async function runEmbeddedAttempt(
         params.model.api === "openai-responses" ||
         params.model.api === "azure-openai-responses" ||
         params.model.api === "openai-chatgpt-responses";
+
+      if (hadSessionFile) {
+        const archivedNonDeliverableSession = await archiveNonDeliverableTerminalSessionIfNeeded({
+          env: process.env,
+          sessionFile: params.sessionFile,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          warn: (message) => log.warn(message),
+        });
+        if (archivedNonDeliverableSession) {
+          hadSessionFile = false;
+        }
+      }
 
       await prewarmSessionFile(params.sessionFile);
       const preparedUserTurnMessage = await params.userTurnTranscriptRecorder?.resolveMessage();
