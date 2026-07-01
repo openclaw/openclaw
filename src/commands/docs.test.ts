@@ -1,8 +1,10 @@
 // Docs command tests cover docs lookup, fetch handling, and runtime output.
+import http from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 
 const fetchMock = vi.fn<typeof fetch>();
+const realGlobalFetch = globalThis.fetch;
 
 vi.mock("../../packages/terminal-core/src/theme.js", () => ({
   isRich: () => false,
@@ -69,6 +71,53 @@ describe("docsSearchCommand", () => {
 
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("HTTP 503"));
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("rejects oversized docs search responses from a real HTTP server (behavior proof)", async () => {
+    let socketDestroyed = false;
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      const ONE_MIB = 1024 * 1024;
+      const chunk = Buffer.alloc(ONE_MIB, 0x41);
+      const writeMore = () => {
+        if (socketDestroyed) return;
+        for (let i = 0; i < 4 && !socketDestroyed; i++) {
+          if (!res.write(chunk)) {
+            res.once("drain", writeMore);
+            return;
+          }
+        }
+        if (!socketDestroyed) setImmediate(writeMore);
+      };
+      writeMore();
+    });
+    server.on("connection", (socket) => {
+      socket.on("close", () => {
+        socketDestroyed = true;
+      });
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as { port: number }).port;
+
+    try {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url: string | URL, init?: RequestInit) => {
+          return realGlobalFetch(`http://127.0.0.1:${port}`, init);
+        }),
+      );
+      const runtime = makeRuntime();
+
+      await docsSearchCommand(["plugin", "allowlist"], runtime);
+
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("Docs search response exceeds"),
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it("renders successful results from the Cloudflare docs search API", async () => {

@@ -77,10 +77,10 @@ async function fetchDocsSearch(query: string): Promise<DocResult[]> {
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
-    const bytes = await readResponseWithLimit(response, DOCS_SEARCH_RESPONSE_MAX_BYTES, {
+    const body = await readResponseWithLimit(response, DOCS_SEARCH_RESPONSE_MAX_BYTES, {
       onOverflow: ({ maxBytes }) => new Error(`Docs search response exceeds ${maxBytes} bytes`),
     });
-    const payload = JSON.parse(new TextDecoder().decode(bytes)) as DocsSearchResponse;
+    const payload = JSON.parse(new TextDecoder().decode(body)) as DocsSearchResponse;
     return parseDocsSearchResults(payload.results);
   } finally {
     clearTimeout(timeout);

@@ -1,12 +1,15 @@
 // Computes git, dependency, and registry update status for OpenClaw installs.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
 import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
 import { channelToNpmTag, type UpdateChannel } from "./update-channels.js";
+
+const NPM_REGISTRY_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
 
 export type PackageManager = "pnpm" | "bun" | "npm" | "unknown";
 
@@ -125,7 +128,10 @@ async function fetchPublicNpmPackageTargetStatus(params: {
         error: `HTTP ${res.status}`,
       };
     }
-    const json = (await res.json()) as {
+    const body = await readResponseWithLimit(res, NPM_REGISTRY_RESPONSE_MAX_BYTES, {
+      onOverflow: ({ maxBytes }) => new Error(`NPM registry response exceeds ${maxBytes} bytes`),
+    });
+    const json = JSON.parse(new TextDecoder().decode(body)) as {
       version?: unknown;
       engines?: { node?: unknown };
     };
