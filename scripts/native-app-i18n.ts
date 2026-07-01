@@ -170,18 +170,24 @@ function isTranslatableCandidate(source: string, kind: string): boolean {
 function extractSwiftInterpolations(source: string): string[] | null {
   const values: string[] = [];
   for (let index = 0; index < source.length; index += 1) {
-    if (source[index] !== "\\" || source[index + 1] !== "(") continue;
+    if (source[index] !== "\\" || source[index + 1] !== "(") {
+      continue;
+    }
     const start = index;
     let depth = 1;
     let quoted = false;
     let escaped = false;
     for (index += 2; index < source.length; index += 1) {
       const character = source[index];
-      if (escaped) escaped = false;
-      else if (character === "\\") escaped = true;
-      else if (character === '"') quoted = !quoted;
-      else if (!quoted && character === "(") depth += 1;
-      else if (!quoted && character === ")") {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === '"') {
+        quoted = !quoted;
+      } else if (!quoted && character === "(") {
+        depth += 1;
+      } else if (!quoted && character === ")") {
         depth -= 1;
         if (depth === 0) {
           values.push(source.slice(start, index + 1));
@@ -189,7 +195,9 @@ function extractSwiftInterpolations(source: string): string[] | null {
         }
       }
     }
-    if (depth !== 0) return null;
+    if (depth !== 0) {
+      return null;
+    }
   }
   return values;
 }
@@ -197,12 +205,15 @@ function extractSwiftInterpolations(source: string): string[] | null {
 function extractKotlinInterpolations(source: string): string[] | null {
   const values = [...source.matchAll(/\$[A-Za-z_][A-Za-z0-9_]*/gu)].map((match) => match[0]);
   for (let index = 0; index < source.length; index += 1) {
-    if (source[index] !== "$" || source[index + 1] !== "{") continue;
+    if (source[index] !== "$" || source[index + 1] !== "{") {
+      continue;
+    }
     const start = index;
     let depth = 1;
     for (index += 2; index < source.length; index += 1) {
-      if (source[index] === "{") depth += 1;
-      else if (source[index] === "}") {
+      if (source[index] === "{") {
+        depth += 1;
+      } else if (source[index] === "}") {
         depth -= 1;
         if (depth === 0) {
           values.push(source.slice(start, index + 1));
@@ -210,9 +221,15 @@ function extractKotlinInterpolations(source: string): string[] | null {
         }
       }
     }
-    if (depth !== 0) return null;
+    if (depth !== 0) {
+      return null;
+    }
   }
   return values;
+}
+
+function compareCodePoints(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function lineNumber(source: string, offset: number): number {
@@ -296,11 +313,17 @@ function readSwiftStringLiteral(
         index = end;
         continue;
       }
-      if (next === "n") raw += "\n";
-      else if (next === "r") raw += "\r";
-      else if (next === "t") raw += "\t";
-      else if (next === '"' || next === "\\") raw += next;
-      else raw += character + next;
+      if (next === "n") {
+        raw += "\n";
+      } else if (next === "r") {
+        raw += "\r";
+      } else if (next === "t") {
+        raw += "\t";
+      } else if (next === '"' || next === "\\") {
+        raw += next;
+      } else {
+        raw += character + next;
+      }
       index += 1;
       continue;
     }
@@ -356,11 +379,17 @@ function readKotlinStringLiteral(
       if (next === undefined) {
         return null;
       }
-      if (next === "n") raw += "\n";
-      else if (next === "r") raw += "\r";
-      else if (next === "t") raw += "\t";
-      else if (next === '"' || next === "\\" || next === "$") raw += next;
-      else raw += character + next;
+      if (next === "n") {
+        raw += "\n";
+      } else if (next === "r") {
+        raw += "\r";
+      } else if (next === "t") {
+        raw += "\t";
+      } else if (next === '"' || next === "\\" || next === "$") {
+        raw += next;
+      } else {
+        raw += character + next;
+      }
       index += 1;
       continue;
     }
@@ -669,7 +698,7 @@ function extractCandidates(
   }
   if (surface === "android" && /\/res\/values\/[^/]+\.xml$/u.test(repoPath)) {
     for (const match of source.matchAll(ANDROID_RESOURCE_STRINGS)) {
-      if (match[1])
+      if (match[1]) {
         addCandidate(
           entries,
           surface,
@@ -678,6 +707,7 @@ function extractCandidates(
           "resource-string",
           lineNumber(source, match.index ?? 0),
         );
+      }
     }
     for (const collection of source.matchAll(ANDROID_RESOURCE_COLLECTIONS)) {
       const body = collection[1];
@@ -686,7 +716,7 @@ function extractCandidates(
       }
       const bodyOffset = (collection.index ?? 0) + collection[0].indexOf(body);
       for (const item of body.matchAll(ANDROID_RESOURCE_ITEMS)) {
-        if (item[1])
+        if (item[1]) {
           addCandidate(
             entries,
             surface,
@@ -695,12 +725,13 @@ function extractCandidates(
             "resource-item",
             lineNumber(source, bodyOffset + (item.index ?? 0)),
           );
+        }
       }
     }
   }
   if (surface === "apple" && repoPath.endsWith(".plist")) {
     for (const match of source.matchAll(APPLE_PLIST_STRINGS)) {
-      if (match[1])
+      if (match[1]) {
         addCandidate(
           entries,
           surface,
@@ -709,6 +740,7 @@ function extractCandidates(
           "plist-string",
           lineNumber(source, match.index ?? 0),
         );
+      }
     }
   }
   return entries;
@@ -756,11 +788,11 @@ function withIds(entries: Candidate[]): NativeI18nEntry[] {
   return unique
     .toSorted(
       (left, right) =>
-        left.surface.localeCompare(right.surface) ||
-        left.path.localeCompare(right.path) ||
+        compareCodePoints(left.surface, right.surface) ||
+        compareCodePoints(left.path, right.path) ||
         left.line - right.line ||
-        left.kind.localeCompare(right.kind) ||
-        left.source.localeCompare(right.source),
+        compareCodePoints(left.kind, right.kind) ||
+        compareCodePoints(left.source, right.source),
     )
     .map((entry) => {
       const digest = createHash("sha256")
@@ -772,7 +804,7 @@ function withIds(entries: Candidate[]): NativeI18nEntry[] {
         id = `${id}.${entry.line}`;
       }
       seen.add(id);
-      return { ...entry, id };
+      return Object.assign(entry, { id });
     });
 }
 
