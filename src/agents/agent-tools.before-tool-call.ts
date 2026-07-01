@@ -94,6 +94,7 @@ import {
   reconcileCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { checkToolMemoryGuard } from "./tool-memory-guard.js";
 import { normalizeToolName } from "./tool-policy.js";
 import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
 import { getToolTerminalPresentation } from "./tool-terminal-presentation.js";
@@ -147,7 +148,11 @@ export type HookContext = {
 };
 
 type HookBlockedKind = "veto" | "failure";
-type HookBlockedReason = "plugin-before-tool-call" | "plugin-approval" | "tool-loop";
+type HookBlockedReason =
+  | "plugin-before-tool-call"
+  | "plugin-approval"
+  | "resource-guard"
+  | "tool-loop";
 type HookOutcome =
   | {
       blocked: true;
@@ -1052,6 +1057,21 @@ export async function runBeforeToolCallHook(args: {
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
+
+  const memoryDecision = await checkToolMemoryGuard({
+    cfg: args.ctx?.config,
+    agentId: args.ctx?.agentId,
+  });
+  if (!memoryDecision.ok) {
+    log.warn(`Blocking ${toolName} due to low memory: ${memoryDecision.reason}`);
+    return {
+      blocked: true,
+      kind: "veto",
+      deniedReason: "resource-guard",
+      reason: memoryDecision.reason,
+      params,
+    };
+  }
 
   if (args.ctx?.sessionKey) {
     const { getDiagnosticSessionState, logToolLoopAction, detectToolCallLoop, recordToolCall } =

@@ -670,6 +670,15 @@ const ToolLoopDetectionSchema = z
   })
   .optional();
 
+const ToolMemoryGuardSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    minAvailableBytes: z.number().int().positive().optional(),
+    minAvailablePercent: z.number().positive().max(100).optional(),
+  })
+  .strict()
+  .optional();
+
 const ToolSearchSchema = z
   .union([
     z.boolean(),
@@ -812,6 +821,7 @@ const AgentToolsSchema = z
     exec: AgentToolExecSchema,
     fs: ToolFsSchema,
     loopDetection: ToolLoopDetectionSchema,
+    memoryGuard: ToolMemoryGuardSchema,
     message: MessageToolConfigSchema,
     sandbox: z
       .object({
@@ -1100,6 +1110,7 @@ export const ToolsSchema = z
       .strict()
       .optional(),
     loopDetection: ToolLoopDetectionSchema,
+    memoryGuard: ToolMemoryGuardSchema,
     toolSearch: ToolSearchSchema,
     codeMode: CodeModeSchema,
     message: MessageToolConfigSchema,
