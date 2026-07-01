@@ -17,7 +17,7 @@ export type ButtonRow = Array<{ text: string; callback_data: string }>;
 export type ParsedModelCallback =
   | { type: "providers" }
   | { type: "list"; provider: string; page: number }
-  | { type: "select"; provider: string; page: number; modelIndex: number }
+  | { type: "select"; provider: string; page: number; modelIndex: number; totalCount: number }
   | { type: "back" };
 
 export type ProviderInfo = {
@@ -73,14 +73,15 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
     }
   }
 
-  // mdl_sel_{provider}_{page}_{modelIndex}  (page and modelIndex are 1-based)
-  const selMatch = trimmed.match(/^mdl_sel_([a-z0-9_.-]+)_(\d+)_(\d+)$/i);
+  // mdl_sel_{provider}_{page}_{modelIndex}_{totalCount}  (page, modelIndex, totalCount are 1-based)
+  const selMatch = trimmed.match(/^mdl_sel_([a-z0-9_.-]+)_(\d+)_(\d+)_(\d+)$/i);
   if (selMatch) {
-    const [, provider, pageStr, idxStr] = selMatch;
+    const [, provider, pageStr, idxStr, totalStr] = selMatch;
     const page = parseStrictPositiveInteger(pageStr);
     const modelIndex = parseStrictPositiveInteger(idxStr);
-    if (provider && page !== undefined && modelIndex !== undefined) {
-      return { type: "select", provider, page, modelIndex };
+    const totalCount = parseStrictPositiveInteger(totalStr);
+    if (provider && page !== undefined && modelIndex !== undefined && totalCount !== undefined) {
+      return { type: "select", provider, page, modelIndex, totalCount };
     }
   }
 
@@ -91,10 +92,13 @@ export function buildModelSelectionCallbackData(params: {
   provider: string;
   page: number;
   modelIndex: number;
+  totalCount: number;
 }): string {
-  // Fixed-length callback (page and modelIndex are 1-based).
+  // Fixed-length callback (page, modelIndex, totalCount are 1-based).
   // Never embeds model names, always fits in 64 bytes (#98221).
-  return `${CALLBACK_PREFIX.select}${params.provider}_${params.page}_${params.modelIndex}`;
+  // totalCount guards against stale buttons: if the provider's model list changes
+  // between render and click, the mismatch is detected and rejected.
+  return `${CALLBACK_PREFIX.select}${params.provider}_${params.page}_${params.modelIndex}_${params.totalCount}`;
 }
 
 export function resolveModelSelection(params: {
@@ -102,16 +106,21 @@ export function resolveModelSelection(params: {
   providers: readonly string[];
   byProvider: ReadonlyMap<string, ReadonlySet<string>>;
 }): ResolveModelSelectionResult {
-  const { provider, modelIndex } = params.callback;
+  const { provider, modelIndex, totalCount } = params.callback;
   const models = params.byProvider.get(provider);
   if (!models || models.size === 0) {
-    return { kind: "ambiguous", model: "", matchingProviders: params.providers };
+    return { kind: "ambiguous", model: "", matchingProviders: [...params.providers] };
+  }
+  // Reject stale buttons: if the provider's model count changed between
+  // render and click, the index may point to a different model (#98221).
+  if (models.size !== totalCount) {
+    return { kind: "ambiguous", model: "", matchingProviders: [...params.providers] };
   }
   // Sort models the same way buildModelsKeyboard sorts them (#98221)
   const sorted = [...models].toSorted((a, b) => a.localeCompare(b));
   const model = sorted[modelIndex - 1]; // modelIndex is 1-based
   if (!model) {
-    return { kind: "ambiguous", model: "", matchingProviders: params.providers };
+    return { kind: "ambiguous", model: "", matchingProviders: [...params.providers] };
   }
   return { kind: "resolved", provider, model };
 }
@@ -187,6 +196,7 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
       provider,
       page: currentPage,
       modelIndex,
+      totalCount: models.length, // guard against stale button clicks
     });
 
     const isCurrentModel = isCurrentModelSelection({ currentModel, provider, model });

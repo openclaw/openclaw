@@ -21,9 +21,18 @@ describe("parseModelCallbackData", () => {
       ["mdl_list_open-ai_1", { type: "list", provider: "open-ai", page: 1 }],
       ["mdl_list_hf.co_1", { type: "list", provider: "hf.co", page: 1 }],
       // Index-based select format (#98221)
-      ["mdl_sel_anthropic_1_1", { type: "select", provider: "anthropic", page: 1, modelIndex: 1 }],
-      ["mdl_sel_openai_2_5", { type: "select", provider: "openai", page: 2, modelIndex: 5 }],
-      ["mdl_sel_hf.co_1_12", { type: "select", provider: "hf.co", page: 1, modelIndex: 12 }],
+      [
+        "mdl_sel_anthropic_1_1_2",
+        { type: "select", provider: "anthropic", page: 1, modelIndex: 1, totalCount: 2 },
+      ],
+      [
+        "mdl_sel_openai_2_5_8",
+        { type: "select", provider: "openai", page: 2, modelIndex: 5, totalCount: 8 },
+      ],
+      [
+        "mdl_sel_hf.co_1_12_42",
+        { type: "select", provider: "hf.co", page: 1, modelIndex: 12, totalCount: 42 },
+      ],
       ["  mdl_prov  ", { type: "providers" }],
     ] as const;
     for (const [input, expected] of cases) {
@@ -56,7 +65,7 @@ describe("parseModelCallbackData", () => {
 describe("resolveModelSelection", () => {
   it("resolves by provider and modelIndex from sorted models", () => {
     const result = resolveModelSelection({
-      callback: { type: "select", provider: "openai", page: 1, modelIndex: 1 },
+      callback: { type: "select", provider: "openai", page: 1, modelIndex: 1, totalCount: 1 },
       providers: ["openai", "anthropic"],
       byProvider: new Map([
         ["openai", new Set(["gpt-4.1"])],
@@ -69,16 +78,25 @@ describe("resolveModelSelection", () => {
   it("resolves by index into correctly sorted models", () => {
     // Models are sorted alphabetically: claude-opus-4, claude-sonnet-4
     const result = resolveModelSelection({
-      callback: { type: "select", provider: "anthropic", page: 1, modelIndex: 2 },
+      callback: { type: "select", provider: "anthropic", page: 1, modelIndex: 2, totalCount: 2 },
       providers: ["anthropic"],
       byProvider: new Map([["anthropic", new Set(["claude-sonnet-4", "claude-opus-4"])]]),
     });
     expect(result).toEqual({ kind: "resolved", provider: "anthropic", model: "claude-sonnet-4" });
   });
 
+  it("returns ambiguous when totalCount differs (stale button guard)", () => {
+    const result = resolveModelSelection({
+      callback: { type: "select", provider: "openai", page: 1, modelIndex: 1, totalCount: 5 },
+      providers: ["openai"],
+      byProvider: new Map([["openai", new Set(["gpt-4.1"])]]),
+    });
+    expect(result.kind).toBe("ambiguous");
+  });
+
   it("returns ambiguous result when provider has no models", () => {
     const result = resolveModelSelection({
-      callback: { type: "select", provider: "missing", page: 1, modelIndex: 0 },
+      callback: { type: "select", provider: "missing", page: 1, modelIndex: 1, totalCount: 0 },
       providers: ["openai", "anthropic"],
       byProvider: new Map([["openai", new Set(["gpt-4.1"])]]),
     });
@@ -88,7 +106,7 @@ describe("resolveModelSelection", () => {
 
   it("returns ambiguous result when modelIndex is out of range", () => {
     const result = resolveModelSelection({
-      callback: { type: "select", provider: "openai", page: 1, modelIndex: 99 },
+      callback: { type: "select", provider: "openai", page: 1, modelIndex: 99, totalCount: 1 },
       providers: ["openai", "anthropic"],
       byProvider: new Map([["openai", new Set(["gpt-4.1"])]]),
     });
@@ -98,14 +116,29 @@ describe("resolveModelSelection", () => {
 
 describe("buildModelSelectionCallbackData", () => {
   it("builds fixed-length index-based callback (#98221)", () => {
-    expect(buildModelSelectionCallbackData({ provider: "openai", page: 1, modelIndex: 0 })).toBe(
-      "mdl_sel_openai_1_0",
-    );
     expect(
-      buildModelSelectionCallbackData({ provider: "anthropic", page: 3, modelIndex: 12 }),
-    ).toBe("mdl_sel_anthropic_3_12");
+      buildModelSelectionCallbackData({
+        provider: "openai",
+        page: 1,
+        modelIndex: 1,
+        totalCount: 5,
+      }),
+    ).toBe("mdl_sel_openai_1_1_5");
+    expect(
+      buildModelSelectionCallbackData({
+        provider: "anthropic",
+        page: 3,
+        modelIndex: 12,
+        totalCount: 42,
+      }),
+    ).toBe("mdl_sel_anthropic_3_12_42");
     // Never embeds model name — always fits 64 bytes regardless of model ID length
-    const cb = buildModelSelectionCallbackData({ provider: "a", page: 1, modelIndex: 0 });
+    const cb = buildModelSelectionCallbackData({
+      provider: "a",
+      page: 1,
+      modelIndex: 1,
+      totalCount: 1,
+    });
     expect(cb.length).toBeLessThan(64);
   });
 });
@@ -205,9 +238,9 @@ describe("buildModelsKeyboard", () => {
       // 2 model rows + back button
       expect(result, testCase.name).toHaveLength(3);
       expect(result[0]?.[0]?.text).toBe(testCase.firstText);
-      expect(result[0]?.[0]?.callback_data).toBe("mdl_sel_anthropic_1_1");
+      expect(result[0]?.[0]?.callback_data).toBe("mdl_sel_anthropic_1_1_2");
       expect(result[1]?.[0]?.text).toBe("claude-opus-4");
-      expect(result[1]?.[0]?.callback_data).toBe("mdl_sel_anthropic_1_2");
+      expect(result[1]?.[0]?.callback_data).toBe("mdl_sel_anthropic_1_2_2");
       expect(result[2]?.[0]?.text).toBe("<< Back");
     }
   });
@@ -229,7 +262,7 @@ describe("buildModelsKeyboard", () => {
     expect(result[0]?.[0]?.text).toBe("Claude Sonnet 4");
     expect(result[1]?.[0]?.text).toBe("Claude Opus 4");
     // callback_data uses index format, not model ID (#98221)
-    expect(result[0]?.[0]?.callback_data).toBe("mdl_sel_nexos_1_1");
+    expect(result[0]?.[0]?.callback_data).toBe("mdl_sel_nexos_1_1_2");
   });
 
   it("falls back to model ID when modelNames does not contain an entry", () => {
