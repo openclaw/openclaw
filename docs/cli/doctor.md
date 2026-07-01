@@ -295,6 +295,26 @@ report and prints a prefilled issue URL.
 original path is missing, reports conflicts when both paths exist, and leaves
 the SQLite database in place.
 
+### Downgrading After Session SQLite Migration
+
+Before starting an older file-backed OpenClaw version, restore the archived
+legacy transcript artifacts:
+
+```bash
+openclaw doctor --session-sqlite restore --session-sqlite-all-agents
+```
+
+Older versions read `sessions.json` entries and the `sessionFile` paths recorded
+in those entries. After the SQLite migration, successful imports move hot JSONL
+transcripts into `session-sqlite-import-archive/`, so the older runtime cannot
+see that history until restore moves those manifest-recorded artifacts back to
+their original paths.
+
+Restore does not delete SQLite data. Sessions created after the SQLite flip
+exist only in SQLite and will not appear to the older runtime. If you later
+upgrade again, run the normal migration validation sequence above so OpenClaw can
+compare restored legacy artifacts with the SQLite rows before importing.
+
 Notes:
 
 - In Nix mode (`OPENCLAW_NIX_MODE=1`), read-only doctor checks still work, but `doctor --fix`, `doctor --repair`, `doctor --yes`, and `doctor --generate-gateway-token` are disabled because `openclaw.json` is immutable. Edit the Nix source for this install instead; for nix-openclaw, use the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start).

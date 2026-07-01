@@ -99,7 +99,10 @@ trajectory sidecars:
 - `maxEntries`: cap session entries (default `500`)
 - Short-lived gateway model-run probe retention is fixed at `24h`, but it is pressure-gated: it only removes stale strict probe rows when session-entry maintenance/cap pressure is reached. This applies only to strict explicit probe keys matching `agent:*:explicit:model-run-<uuid>` and runs before global stale-entry cleanup/capping when it runs.
 - `resetArchiveRetention`: retention for `*.reset.<timestamp>` transcript archives (default: same as `pruneAfter`; `false` disables cleanup)
-- `maxDiskBytes`: optional sessions-directory budget
+- `maxDiskBytes`: optional row/artifact budget. Active SQLite enforcement measures
+  session-row JSON plus transcript-event JSON bytes per session; legacy
+  offline-maintenance enforcement measures files in the selected sessions
+  directory.
 - `highWaterBytes`: optional target after cleanup (default `80%` of `maxDiskBytes`)
 
 Normal Gateway writes flow through the session accessor, which serializes
@@ -152,6 +155,28 @@ Run maintenance on demand:
 openclaw sessions cleanup --dry-run
 openclaw sessions cleanup --enforce
 ```
+
+### Downgrading After The SQLite Flip
+
+Restore archived legacy transcript artifacts before running an older
+file-backed OpenClaw version:
+
+```bash
+openclaw doctor --session-sqlite restore --session-sqlite-all-agents
+```
+
+The migration leaves legacy `sessions.json` files in place for support and
+rollback, but hot transcript JSONL files that were imported into SQLite are
+renamed into `session-sqlite-import-archive/`. Older file-backed runtimes follow
+the `sessionFile` paths in `sessions.json`, so they need those artifacts restored
+before startup. Restore uses migration manifests, moves only recorded archived
+artifacts whose original paths are missing, and leaves the SQLite database in
+place for forward recovery.
+
+Sessions created after the SQLite flip are SQLite-only and will not appear to an
+older file-backed runtime. If you re-upgrade after a downgrade, run the Doctor
+inspection and validation sequence again so OpenClaw can verify restored legacy
+artifacts before importing.
 
 ---
 

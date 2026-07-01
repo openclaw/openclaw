@@ -1270,6 +1270,129 @@ describe("sqlite session normalization", () => {
     ).toEqual(["agent:main:newer", "agent:main:newest"]);
   });
 
+  it("evicts old SQLite transcript rows only when no remaining entry references them", async () => {
+    vi.mocked(getRuntimeConfig).mockReturnValue({
+      session: {
+        maintenance: {
+          highWaterBytes: 350,
+          maxDiskBytes: 1_200,
+          maxEntries: 100,
+          mode: "enforce",
+          pruneAfter: "365d",
+        },
+      },
+    });
+    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
+    const scopeFor = (sessionKey: string) => ({
+      agentId: "main",
+      env,
+      sessionKey,
+      storePath: paths.sqlitePath,
+    });
+    const oldUpdatedAt = Date.now() - 2 * 24 * 60 * 60 * 1000;
+    const unsharedUpdatedAt = oldUpdatedAt - 1_000;
+
+    await patchSqliteSessionEntry(
+      scopeFor("agent:main:unshared-budget"),
+      () => ({ sessionId: "unshared-budget-session", updatedAt: unsharedUpdatedAt }),
+      {
+        fallbackEntry: { sessionId: "unshared-budget-session", updatedAt: unsharedUpdatedAt },
+        replaceEntry: true,
+        skipMaintenance: true,
+      },
+    );
+    await appendSqliteTranscriptEvent(
+      { ...scopeFor("agent:main:unshared-budget"), sessionId: "unshared-budget-session" },
+      {
+        id: "unshared-budget-event",
+        payload: "😀".repeat(400),
+        timestamp: new Date(unsharedUpdatedAt).toISOString(),
+        type: "metadata",
+      },
+    );
+
+    await patchSqliteSessionEntry(
+      scopeFor("agent:main:old-budget"),
+      () => ({ sessionId: "old-budget-session", updatedAt: oldUpdatedAt }),
+      {
+        fallbackEntry: { sessionId: "old-budget-session", updatedAt: oldUpdatedAt },
+        replaceEntry: true,
+        skipMaintenance: true,
+      },
+    );
+    await appendSqliteTranscriptEvent(
+      { ...scopeFor("agent:main:old-budget"), sessionId: "old-budget-session" },
+      {
+        id: "old-budget-event",
+        payload: "x".repeat(50),
+        timestamp: new Date(oldUpdatedAt).toISOString(),
+        type: "metadata",
+      },
+    );
+    await patchSqliteSessionEntry(
+      scopeFor("agent:main:active-budget"),
+      () => ({
+        sessionId: "active-budget-session",
+        updatedAt: Date.now(),
+        usageFamilySessionIds: ["old-budget-session", "active-budget-session"],
+      }),
+      {
+        fallbackEntry: {
+          sessionId: "active-budget-session",
+          updatedAt: Date.now(),
+          usageFamilySessionIds: ["old-budget-session", "active-budget-session"],
+        },
+        replaceEntry: true,
+        skipMaintenance: true,
+      },
+    );
+
+    await updateSqliteSessionEntry(scopeFor("agent:main:active-budget"), () => ({
+      modelOverride: "gpt-5.5",
+    }));
+
+    expect(
+      listSqliteSessionEntries({
+        agentId: "main",
+        env,
+        storePath: paths.sqlitePath,
+      })
+        .map((summary) => summary.sessionKey)
+        .toSorted(),
+    ).toEqual(["agent:main:active-budget"]);
+    await expect(
+      loadSqliteTranscriptEvents({
+        agentId: "main",
+        env,
+        sessionId: "old-budget-session",
+        storePath: paths.sqlitePath,
+      }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "old-budget-event",
+      }),
+    ]);
+    await expect(
+      loadSqliteTranscriptEvents({
+        agentId: "main",
+        env,
+        sessionId: "unshared-budget-session",
+        storePath: paths.sqlitePath,
+      }),
+    ).resolves.toEqual([]);
+    const archivedOldBudget = fs
+      .readdirSync(paths.tempDir)
+      .filter((file) => file.startsWith("old-budget-session.jsonl.deleted."));
+    expect(archivedOldBudget).toHaveLength(0);
+    const archivedUnsharedBudget = fs
+      .readdirSync(paths.tempDir)
+      .filter((file) => file.startsWith("unshared-budget-session.jsonl.deleted."));
+    expect(archivedUnsharedBudget).toHaveLength(1);
+    expect(
+      fs.readFileSync(path.join(paths.tempDir, archivedUnsharedBudget[0] ?? ""), "utf8"),
+    ).toContain("unshared-budget-event");
+  });
+
   it("resolves confirmed lowercased legacy SQLite session aliases", async () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
     const canonicalKey = "agent:main:matrix:channel:!MixedCase:example.org";

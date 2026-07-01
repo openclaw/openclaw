@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import type { Selectable } from "kysely";
+import { sql, type Selectable } from "kysely";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import { deriveSessionTotalTokens, normalizeUsage } from "../../agents/usage.js";
@@ -79,6 +79,7 @@ import {
   capEntryCount,
   pruneStaleModelRunEntries,
   pruneStaleEntries,
+  shouldPreserveMaintenanceEntry,
   shouldRunModelRunPrune,
   shouldRunSessionEntryMaintenance,
   type ResolvedSessionMaintenanceConfig,
@@ -1908,6 +1909,109 @@ function collectSqliteSessionMaintenanceBaseKeys(
   return keys;
 }
 
+function readSqliteSessionRowBytes(database: OpenClawAgentDatabase): {
+  entryBytesByKey: Map<string, number>;
+  transcriptBytesBySessionId: Map<string, number>;
+} {
+  const db = getSessionKysely(database.db);
+  const entryRows = executeSqliteQuerySync(
+    database.db,
+    db.selectFrom("session_entries").select(["session_key", "entry_json"]),
+  ).rows;
+  const transcriptRows = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select(() => [
+        "session_id",
+        sql<number | bigint>`COALESCE(SUM(length(CAST(event_json AS BLOB))), 0)`.as(
+          "event_json_bytes",
+        ),
+      ])
+      .groupBy("session_id"),
+  ).rows;
+  const entryBytesByKey = new Map<string, number>();
+  for (const row of entryRows) {
+    entryBytesByKey.set(row.session_key, Buffer.byteLength(row.entry_json, "utf8"));
+  }
+  const transcriptBytesBySessionId = new Map<string, number>();
+  for (const row of transcriptRows) {
+    const bytes = row.event_json_bytes;
+    transcriptBytesBySessionId.set(row.session_id, normalizeSqliteNumber(bytes ?? 0));
+  }
+  return { entryBytesByKey, transcriptBytesBySessionId };
+}
+
+function getSqliteSessionEntryUpdatedAt(entry?: SessionEntry): number {
+  return entry?.updatedAt ?? Number.NEGATIVE_INFINITY;
+}
+
+function applySqliteSessionDiskBudget(params: {
+  database: OpenClawAgentDatabase;
+  store: Record<string, SessionEntry>;
+  maintenance: ResolvedSessionMaintenanceConfig;
+  preserveKeys: ReadonlySet<string>;
+  rememberRemovedEntry: (removed: { key: string; entry: SessionEntry }) => void;
+}): void {
+  const { maxDiskBytes, highWaterBytes } = params.maintenance;
+  if (maxDiskBytes == null || highWaterBytes == null) {
+    return;
+  }
+  const rowBytes = readSqliteSessionRowBytes(params.database);
+  let totalBytes = 0;
+  const entryBytesByKey = new Map<string, number>();
+  const sessionIdsByKey = new Map<string, readonly string[]>();
+  const sessionIdRefCounts = new Map<string, number>();
+  // Transcript rows can be shared through usage-family references. Count each
+  // referenced session id once up front, then subtract row bytes only when the
+  // last remaining entry reference is removed.
+  for (const [key, entry] of Object.entries(params.store)) {
+    const entryBytes = rowBytes.entryBytesByKey.get(key) ?? 0;
+    const sessionIds = collectSqliteSessionStateIdsForEntry(entry);
+    entryBytesByKey.set(key, entryBytes);
+    sessionIdsByKey.set(key, sessionIds);
+    totalBytes += entryBytes;
+    for (const sessionId of sessionIds) {
+      sessionIdRefCounts.set(sessionId, (sessionIdRefCounts.get(sessionId) ?? 0) + 1);
+    }
+  }
+  for (const sessionId of sessionIdRefCounts.keys()) {
+    totalBytes += rowBytes.transcriptBytesBySessionId.get(sessionId) ?? 0;
+  }
+  if (totalBytes <= maxDiskBytes) {
+    return;
+  }
+  const keys = Object.keys(params.store).toSorted((a, b) => {
+    const aTime = getSqliteSessionEntryUpdatedAt(params.store[a]);
+    const bTime = getSqliteSessionEntryUpdatedAt(params.store[b]);
+    return aTime - bTime;
+  });
+  for (const key of keys) {
+    if (totalBytes <= highWaterBytes) {
+      break;
+    }
+    const entry = params.store[key];
+    if (!entry) {
+      continue;
+    }
+    if (shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: params.preserveKeys })) {
+      continue;
+    }
+    params.rememberRemovedEntry({ key, entry });
+    delete params.store[key];
+    totalBytes -= entryBytesByKey.get(key) ?? 0;
+    for (const sessionId of sessionIdsByKey.get(key) ?? []) {
+      const nextRefCount = (sessionIdRefCounts.get(sessionId) ?? 0) - 1;
+      if (nextRefCount > 0) {
+        sessionIdRefCounts.set(sessionId, nextRefCount);
+        continue;
+      }
+      sessionIdRefCounts.delete(sessionId);
+      totalBytes -= rowBytes.transcriptBytesBySessionId.get(sessionId) ?? 0;
+    }
+  }
+}
+
 function readExactSessionEntryRow(
   database: OpenClawAgentDatabase,
   sessionKey: string,
@@ -2113,6 +2217,13 @@ function applySqliteSessionEntryMaintenance(
       preserveKeys,
     });
   }
+  applySqliteSessionDiskBudget({
+    database,
+    store,
+    maintenance,
+    preserveKeys,
+    rememberRemovedEntry,
+  });
 
   for (const sessionKey of removedKeys) {
     executeSqliteQuerySync(
