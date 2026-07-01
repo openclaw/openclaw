@@ -9,11 +9,13 @@ import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 import {
   testing as authProfileUsageTesting,
+  clampStaleBillingDisable,
   clearAuthProfileCooldown,
   clearExpiredCooldowns,
   isProfileInCooldown,
   markAuthProfileBlockedUntil,
   markAuthProfileFailure,
+  resolveBillingDisableCeilingMs,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntil,
   resolveProfileUnusableUntilForDisplay,
@@ -657,6 +659,230 @@ describe("clearExpiredCooldowns", () => {
 });
 
 // ---------------------------------------------------------------------------
+// clampStaleBillingDisable (#70903)
+// ---------------------------------------------------------------------------
+
+describe("clampStaleBillingDisable", () => {
+  it("clamps a multi-hour persisted billing disable to the active cap anchored to lastFailureAt", () => {
+    const now = 1_700_000_000_000;
+    const fiveHours = 5 * 60 * 60 * 1000;
+    const fifteenMinutes = 15 * 60 * 1000;
+    const lastFailureAt = now - 1_000;
+    const store = makeStore({
+      "anthropic:default": {
+        disabledUntil: now + fiveHours,
+        disabledReason: "billing",
+        errorCount: 2,
+        failureCounts: { billing: 2 },
+        lastFailureAt,
+      },
+    });
+
+    expect(clampStaleBillingDisable(store, fifteenMinutes, now)).toBe(true);
+    // Ceiling is anchored to the original failure time, not `now`.
+    expect(store.usageStats?.["anthropic:default"]?.disabledUntil).toBe(
+      lastFailureAt + fifteenMinutes,
+    );
+    // Reason and counters stay intact so the next failure still escalates
+    // correctly within the failure window.
+    expect(store.usageStats?.["anthropic:default"]?.disabledReason).toBe("billing");
+    expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(2);
+  });
+
+  it("leaves values inside the cap untouched", () => {
+    const now = 1_700_000_000_000;
+    const fiveMinutes = 5 * 60 * 1000;
+    const fifteenMinutes = 15 * 60 * 1000;
+    const store = makeStore({
+      "anthropic:default": {
+        disabledUntil: now + fiveMinutes,
+        disabledReason: "billing",
+      },
+    });
+
+    expect(clampStaleBillingDisable(store, fifteenMinutes, now)).toBe(false);
+    expect(store.usageStats?.["anthropic:default"]?.disabledUntil).toBe(now + fiveMinutes);
+  });
+
+  it("is idempotent: re-clamping the same store at the same now does not move disabledUntil", () => {
+    const now = 1_700_000_000_000;
+    const fiveHours = 5 * 60 * 60 * 1000;
+    const fifteenMinutes = 15 * 60 * 1000;
+    const lastFailureAt = now - 1_000;
+    const store = makeStore({
+      "anthropic:default": {
+        disabledUntil: now + fiveHours,
+        disabledReason: "billing",
+        lastFailureAt,
+      },
+    });
+
+    // First clamp lands on the failure-anchored ceiling and mutates.
+    expect(clampStaleBillingDisable(store, fifteenMinutes, now)).toBe(true);
+    const afterFirst = store.usageStats?.["anthropic:default"]?.disabledUntil;
+    expect(afterFirst).toBe(lastFailureAt + fifteenMinutes);
+
+    // Second clamp with the same `now` is a no-op: the window does not slide.
+    expect(clampStaleBillingDisable(store, fifteenMinutes, now)).toBe(false);
+    expect(store.usageStats?.["anthropic:default"]?.disabledUntil).toBe(afterFirst);
+  });
+
+  it("expires a stale persisted disable instead of reclamping it forward across reloads", () => {
+    const now = 1_700_000_000_000;
+    const fifteenMinutes = 15 * 60 * 1000;
+    // Simulate an old auth-state.json: failure happened long ago, but the
+    // persisted disabledUntil still carries an old multi-hour timestamp.
+    const lastFailureAt = now - 2 * 60 * 60 * 1000; // 2h ago, > 15m cap
+    const stalePersisted = lastFailureAt + 24 * 60 * 60 * 1000; // old 24h default
+    const store = makeStore({
+      "anthropic:default": {
+        disabledUntil: stalePersisted,
+        disabledReason: "billing",
+        lastFailureAt,
+      },
+    });
+
+    // First fresh load clamps to the failure-anchored ceiling, which is already
+    // in the past (lastFailureAt + 15m < now).
+    expect(clampStaleBillingDisable(store, fifteenMinutes, now)).toBe(true);
+    const ceiling = lastFailureAt + fifteenMinutes;
+    expect(store.usageStats?.["anthropic:default"]?.disabledUntil).toBe(ceiling);
+    expect(ceiling).toBeLessThan(now);
+
+    // The profile is now eligible (no active unusable window), and the expiry
+    // sweep clears the past-due disable.
+    const stats = store.usageStats?.["anthropic:default"];
+    expect(resolveProfileUnusableUntil(stats ?? {})).toBeLessThan(now);
+    expect(clearExpiredCooldowns(store, now)).toBe(true);
+    expect(store.usageStats?.["anthropic:default"]?.disabledUntil).toBeUndefined();
+    expect(store.usageStats?.["anthropic:default"]?.disabledReason).toBeUndefined();
+  });
+
+  it("moving-window regression: repeated reloads past the cap make the profile usable, not stuck", () => {
+    const failureAt = 1_700_000_000_000;
+    const fifteenMinutes = 15 * 60 * 1000;
+    const profileId = "anthropic:default";
+
+    // Reconstruct a fresh store on each simulated reload from the same on-disk
+    // bytes (stale 5h disable + the original failure timestamp).
+    const reload = () =>
+      makeStore({
+        [profileId]: {
+          disabledUntil: failureAt + 5 * 60 * 60 * 1000,
+          disabledReason: "billing",
+          lastFailureAt: failureAt,
+        },
+      });
+
+    // Reads BEFORE the cap elapses keep the profile disabled.
+    for (const offset of [0, 5 * 60 * 1000, 10 * 60 * 1000]) {
+      const store = reload();
+      const now = failureAt + offset;
+      clampStaleBillingDisable(store, fifteenMinutes, now);
+      expect(isProfileInCooldown(store, profileId, now)).toBe(true);
+      // Ceiling stays pinned to the failure anchor regardless of `now`.
+      expect(store.usageStats?.[profileId]?.disabledUntil).toBe(failureAt + fifteenMinutes);
+    }
+
+    // Reads AFTER the cap elapses make the profile usable instead of sliding the
+    // window forward — the exact bug the anchor fixes.
+    for (const offset of [16 * 60 * 1000, 60 * 60 * 1000, 5 * 60 * 60 * 1000]) {
+      const store = reload();
+      const now = failureAt + offset;
+      clampStaleBillingDisable(store, fifteenMinutes, now);
+      // disabledUntil stays anchored in the past; it is NOT pushed to now + cap.
+      expect(store.usageStats?.[profileId]?.disabledUntil).toBe(failureAt + fifteenMinutes);
+      expect(isProfileInCooldown(store, profileId, now)).toBe(false);
+      clearExpiredCooldowns(store, now);
+      expect(store.usageStats?.[profileId]?.disabledUntil).toBeUndefined();
+    }
+  });
+
+  it("falls back to now + cap when lastFailureAt is missing (legacy/malformed record)", () => {
+    const now = 1_700_000_000_000;
+    const fiveHours = 5 * 60 * 60 * 1000;
+    const fifteenMinutes = 15 * 60 * 1000;
+    const store = makeStore({
+      "anthropic:default": {
+        disabledUntil: now + fiveHours,
+        disabledReason: "billing",
+        // no lastFailureAt anchor
+      },
+    });
+
+    expect(clampStaleBillingDisable(store, fifteenMinutes, now)).toBe(true);
+    // Without an anchor we clamp once against now + cap so the stale value
+    // cannot keep the profile disabled for hours.
+    expect(store.usageStats?.["anthropic:default"]?.disabledUntil).toBe(now + fifteenMinutes);
+  });
+
+  it("does not touch non-billing disables (auth_permanent)", () => {
+    const now = 1_700_000_000_000;
+    const twoHours = 2 * 60 * 60 * 1000;
+    const fifteenMinutes = 15 * 60 * 1000;
+    const store = makeStore({
+      "anthropic:default": {
+        disabledUntil: now + twoHours,
+        disabledReason: "auth_permanent",
+      },
+    });
+
+    expect(clampStaleBillingDisable(store, fifteenMinutes, now)).toBe(false);
+    expect(store.usageStats?.["anthropic:default"]?.disabledUntil).toBe(now + twoHours);
+  });
+
+  it("does not touch cooldownUntil or blockedUntil", () => {
+    const now = 1_700_000_000_000;
+    const twoHours = 2 * 60 * 60 * 1000;
+    const fifteenMinutes = 15 * 60 * 1000;
+    const store = makeStore({
+      "anthropic:default": {
+        cooldownUntil: now + twoHours,
+        blockedUntil: now + twoHours,
+      },
+    });
+
+    expect(clampStaleBillingDisable(store, fifteenMinutes, now)).toBe(false);
+    expect(store.usageStats?.["anthropic:default"]?.cooldownUntil).toBe(now + twoHours);
+    expect(store.usageStats?.["anthropic:default"]?.blockedUntil).toBe(now + twoHours);
+  });
+
+  it("no-ops on empty stats and invalid caps", () => {
+    const now = 1_700_000_000_000;
+    expect(clampStaleBillingDisable(makeStore(undefined), 60_000, now)).toBe(false);
+    const store = makeStore({
+      "anthropic:default": {
+        disabledUntil: now + 60 * 60 * 1000,
+        disabledReason: "billing",
+      },
+    });
+    expect(clampStaleBillingDisable(store, 0, now)).toBe(false);
+    expect(clampStaleBillingDisable(store, Number.NaN, now)).toBe(false);
+    expect(store.usageStats?.["anthropic:default"]?.disabledUntil).toBe(now + 60 * 60 * 1000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveBillingDisableCeilingMs (#70903)
+// ---------------------------------------------------------------------------
+
+describe("resolveBillingDisableCeilingMs", () => {
+  it("returns the ~15-minute default when no config is provided", () => {
+    const ms = resolveBillingDisableCeilingMs({ providerId: "anthropic" });
+    expect(ms).toBeGreaterThanOrEqual(14 * 60 * 1000);
+    expect(ms).toBeLessThanOrEqual(16 * 60 * 1000);
+  });
+
+  it("honors operator-configured billingMaxHours", () => {
+    const ms = resolveBillingDisableCeilingMs({
+      providerId: "anthropic",
+      cfg: { auth: { cooldowns: { billingMaxHours: 2 } } } as never,
+    });
+    expect(ms).toBe(2 * 60 * 60 * 1000);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // clearAuthProfileCooldown
 // ---------------------------------------------------------------------------
 
@@ -812,8 +1038,10 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
         lastFailureAt: now - 60_000,
       }),
       // errorCount resets, billing count resets to 1 →
-      // calculateDisabledLaneBackoffMs(1, 5h, 24h) = 5h
-      expectedUntil: (now: number) => now + 5 * 60 * 60 * 1000,
+      // calculateDisabledLaneBackoffMs(1, base, max) — base is clamped to
+      // the 60s floor in calculateDisabledLaneBackoffMs, and the new default
+      // base is ~5 minutes after the #70903 tightening, so 5min wins.
+      expectedUntil: (now: number) => now + 5 * 60 * 1000,
       readUntil: (stats: WindowStats | undefined) => stats?.disabledUntil,
     },
     {

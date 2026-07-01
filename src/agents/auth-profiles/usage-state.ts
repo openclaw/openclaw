@@ -136,6 +136,77 @@ export function getSoonestCooldownExpiry(
 }
 
 /**
+ * Clamp persisted billing-disable windows so they cannot extend past the active
+ * `auth.cooldowns.billingMax*` ceiling (see #70903).
+ *
+ * Why: `disabledUntil` is persisted to `auth-state.json`. Users who upgraded
+ * from an older OpenClaw default (`billingMaxHours: 24`) carry stale multi-hour
+ * timestamps even after they've topped up credit. The call layer filters
+ * disabled profiles before any probe can run, so `markAuthProfileSuccess` (the
+ * normal clear path) never fires for stuck users. Re-clamping on read drains
+ * those stale values to the current configured ceiling.
+ *
+ * Only billing-reason disables are touched. `auth_permanent` and
+ * `cooldownUntil`/`blockedUntil` already cap at short windows in code paths
+ * that own them.
+ *
+ * The ceiling is anchored to each profile's `lastFailureAt` (`disabledUntil`
+ * was originally written as `lastFailureAt + backoff` by
+ * `computeNextProfileUsageStats`), NOT to `now`. Anchoring to `now` made the
+ * clamp non-idempotent: every fresh store load (gateway restart, repeated
+ * `resolveAuthProfileOrder`) reclamped `disabledUntil` to `now + billingMaxMs`,
+ * so the window slid forward on each read and the profile never became eligible
+ * (#70903). Anchoring to the failure time makes the clamp idempotent — the same
+ * store re-clamped at any later `now` lands on the same ceiling, and the window
+ * actually elapses once `lastFailureAt + billingMaxMs < now`. The subsequent
+ * `clearExpiredCooldowns` sweep then drops the past-due disable.
+ *
+ * If `lastFailureAt` is missing or non-finite (malformed/legacy record), we
+ * cannot reconstruct the original failure time, so we fall back to clamping
+ * against `now + billingMaxMs` once. That still bounds a stale value to the
+ * current cap rather than honouring a multi-hour timestamp, and a malformed
+ * record without a failure anchor is treated as freshly failing at `now`.
+ *
+ * @returns `true` if any profile was modified.
+ */
+export function clampStaleBillingDisable(
+  store: AuthProfileStore,
+  billingMaxMs: number,
+  now?: number,
+): boolean {
+  const usageStats = store.usageStats;
+  if (!usageStats || !Number.isFinite(billingMaxMs) || billingMaxMs <= 0) {
+    return false;
+  }
+  const ts = now ?? Date.now();
+  let mutated = false;
+  for (const stats of Object.values(usageStats)) {
+    if (
+      !stats ||
+      stats.disabledReason !== "billing" ||
+      typeof stats.disabledUntil !== "number" ||
+      !Number.isFinite(stats.disabledUntil)
+    ) {
+      continue;
+    }
+    // Anchor to the original failure time so the clamp is idempotent across
+    // fresh store loads. Fall back to `now` only when the failure anchor is
+    // missing/non-finite (legacy/malformed record).
+    const anchor =
+      typeof stats.lastFailureAt === "number" && Number.isFinite(stats.lastFailureAt)
+        ? stats.lastFailureAt
+        : ts;
+    const ceiling = anchor + billingMaxMs;
+    if (stats.disabledUntil <= ceiling) {
+      continue;
+    }
+    stats.disabledUntil = ceiling;
+    mutated = true;
+  }
+  return mutated;
+}
+
+/**
  * Clear expired cooldowns from all profiles in the store.
  *
  * When `cooldownUntil` or `disabledUntil` has passed, the corresponding fields

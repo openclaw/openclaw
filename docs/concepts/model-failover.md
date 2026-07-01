@@ -268,7 +268,12 @@ State is stored in the per-agent SQLite auth state:
 
 Defaults:
 
-- Billing backoff starts at **5 hours**, doubles per billing failure, and caps at **24 hours**.
+- Billing backoff starts at **~5 minutes**, doubles per billing failure, and
+  caps at **~15 minutes**. The defaults are intentionally tight because a
+  persisted `disabledUntil` window blocks new requests for its full duration
+  even after billing recovers — the call layer skips disabled profiles before
+  any probe can run. Raise `auth.cooldowns.billingBackoffHours` and
+  `auth.cooldowns.billingMaxHours` if you need a longer pause.
 - Backoff counters reset if the profile hasn't failed for **24 hours** (configurable).
 - Overloaded retries allow **1 same-provider profile rotation** before model fallback.
 - Overloaded retries use **0 ms backoff** by default.

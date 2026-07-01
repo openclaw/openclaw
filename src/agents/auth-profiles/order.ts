@@ -19,10 +19,12 @@ import {
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 import {
+  clampStaleBillingDisable,
   clearExpiredCooldowns,
   isProfileInCooldown,
   resolveProfileUnusableUntil,
 } from "./usage-state.js";
+import { resolveBillingDisableCeilingMs } from "./usage.js";
 
 /** Reason a profile is or is not eligible for provider auth. */
 export type AuthProfileEligibilityReasonCode =
@@ -252,6 +254,15 @@ export function resolveAuthProfileOrder(params: {
   const providerAuthKey = resolveProviderIdForAuth(provider, { config: cfg });
   const now = Date.now();
 
+  // Clamp stale persisted billing disables to the active cap before the expiry
+  // sweep. Users who upgraded from an older default (24h cap) carry timestamps
+  // that the call layer would otherwise honour for hours after billing
+  // recovery. See #70903.
+  clampStaleBillingDisable(
+    store,
+    resolveBillingDisableCeilingMs({ cfg, providerId: providerAuthKey }),
+    now,
+  );
   // Clear any cooldowns that have expired since the last check so profiles
   // get a fresh error count and are not immediately re-penalized on the
   // next transient failure. See #3604.
