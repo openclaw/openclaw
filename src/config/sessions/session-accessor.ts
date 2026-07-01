@@ -90,7 +90,10 @@ import { resolveSessionTranscriptFile } from "./transcript-file-resolve.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import { writeJsonlLines } from "./transcript-jsonl.js";
 import { replayRecentUserAssistantMessages } from "./transcript-replay.js";
-import { streamSessionTranscriptLines } from "./transcript-stream.js";
+import {
+  streamSessionTranscriptLines,
+  streamSessionTranscriptLinesReverse,
+} from "./transcript-stream.js";
 import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
@@ -1819,6 +1822,33 @@ export async function commitReplySessionInitialization(params: {
     ...committed,
     previousSessionTranscript,
   };
+}
+
+/** Reads a bounded transcript tail through the session accessor boundary. */
+export async function readTranscriptTailLines(
+  scope: SessionTranscriptReadScope & { maxLines: number },
+): Promise<{ lines: string[] } | null> {
+  const maxLines = Math.max(1, Math.floor(scope.maxLines));
+  const lines: string[] = [];
+  try {
+    const transcript = resolveSessionTranscriptReadTarget(scope);
+    const stat = await fs.promises.stat(transcript.sessionFile);
+    if (!stat.isFile()) {
+      return null;
+    }
+    if (stat.size <= 0) {
+      return { lines };
+    }
+    for await (const line of streamSessionTranscriptLinesReverse(transcript.sessionFile)) {
+      lines.push(line);
+      if (lines.length >= maxLines) {
+        break;
+      }
+    }
+  } catch {
+    return null;
+  }
+  return { lines: lines.toReversed() };
 }
 
 /**
