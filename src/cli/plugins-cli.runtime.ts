@@ -32,6 +32,7 @@ type PluginInstallActionOptions = {
   link?: boolean;
   pin?: boolean;
   marketplace?: string;
+  agent?: string;
 };
 
 function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {

@@ -12,6 +12,8 @@ export type InstallRecordBase = {
   shasum?: string;
   resolvedAt?: string;
   installedAt?: string;
+  /** Agent workspace ID that owns this install record. Undefined means global. */
+  agentId?: string;
   clawhubUrl?: string;
   clawhubPackage?: string;
   clawhubFamily?: "code-plugin" | "bundle-plugin";

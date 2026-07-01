@@ -109,6 +109,10 @@ function normalizeInstallRecord(
   setInstallStringField(normalized, "marketplaceName", record.marketplaceName);
   setInstallStringField(normalized, "marketplaceSource", record.marketplaceSource);
   setInstallStringField(normalized, "marketplacePlugin", record.marketplacePlugin);
+  // Preserve agentId for agent-specific installs
+  if (record.agentId) {
+    normalized.agentId = record.agentId;
+  }
   return normalized;
 }
 

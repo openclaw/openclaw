@@ -25,6 +25,7 @@ export const InstallRecordShape = {
   shasum: z.string().optional(),
   resolvedAt: z.string().optional(),
   installedAt: z.string().optional(),
+  agentId: z.string().optional(),
   clawhubUrl: z.string().optional(),
   clawhubPackage: z.string().optional(),
   clawhubFamily: z.union([z.literal("code-plugin"), z.literal("bundle-plugin")]).optional(),

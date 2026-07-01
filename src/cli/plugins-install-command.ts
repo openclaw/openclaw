@@ -1,8 +1,10 @@
 // Plugin install command implementation for bundled, npm, path, git, ClawHub, and hook packs.
 import fs from "node:fs";
+import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { theme } from "../../packages/terminal-core/src/theme.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
   readConfigFileSnapshotForWrite,
@@ -224,6 +226,7 @@ async function installBundledPluginSource(params: {
   rawSpec: string;
   bundledSource: BundledPluginSource;
   warning: string;
+  agentId?: string;
   invalidateRuntimeCache?: boolean;
   runtime?: RuntimeEnv;
 }) {
@@ -250,6 +253,7 @@ async function installBundledPluginSource(params: {
       spec: params.rawSpec,
       sourcePath: params.bundledSource.localPath,
       installPath: params.bundledSource.localPath,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
     },
     enable: shouldEnable,
     invalidateRuntimeCache: params.invalidateRuntimeCache,
@@ -401,6 +405,7 @@ async function tryInstallPluginOrHookPackFromNpmSpec(params: {
   safetyOverrides: InstallSafetyOverrides;
   allowBundledFallback: boolean;
   extensionsDir: string;
+  agentId?: string;
   expectedPluginId?: string;
   expectedIntegrity?: string;
   trustedSourceLinkedOfficialInstall?: boolean;
@@ -479,6 +484,7 @@ async function tryInstallPluginOrHookPackFromNpmSpec(params: {
           rawSpec: params.spec,
           bundledSource: bundledFallbackPlan.bundledSource,
           warning: bundledFallbackPlan.warning,
+          agentId: params.agentId,
           invalidateRuntimeCache: params.invalidateRuntimeCache,
           runtime: params.runtime,
         });
@@ -514,7 +520,10 @@ async function tryInstallPluginOrHookPackFromNpmSpec(params: {
   await persistPluginInstall({
     snapshot: params.snapshot,
     pluginId: result.pluginId,
-    install: installRecord,
+    install: {
+      ...installRecord,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+    },
     invalidateRuntimeCache: params.invalidateRuntimeCache,
     runtime: params.runtime,
   });
@@ -527,6 +536,7 @@ async function tryInstallPluginFromNpmPackArchive(params: {
   archivePath: string;
   safetyOverrides: InstallSafetyOverrides;
   extensionsDir: string;
+  agentId?: string;
   invalidateRuntimeCache?: boolean;
   runtime?: RuntimeEnv;
 }): Promise<{ ok: true } | { ok: false }> {
@@ -564,6 +574,7 @@ async function tryInstallPluginFromNpmPackArchive(params: {
       ...(result.npmResolution?.integrity ? { npmIntegrity: result.npmResolution.integrity } : {}),
       ...(result.npmResolution?.shasum ? { npmShasum: result.npmResolution.shasum } : {}),
       ...(result.npmTarballName ? { npmTarballName: result.npmTarballName } : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
     },
     invalidateRuntimeCache: params.invalidateRuntimeCache,
     runtime: params.runtime,
@@ -577,6 +588,7 @@ async function tryInstallPluginFromGitSpec(params: {
   spec: string;
   safetyOverrides: InstallSafetyOverrides;
   extensionsDir: string;
+  agentId?: string;
   invalidateRuntimeCache?: boolean;
   runtime?: RuntimeEnv;
 }): Promise<{ ok: true } | { ok: false }> {
@@ -604,6 +616,7 @@ async function tryInstallPluginFromGitSpec(params: {
       gitUrl: result.git.url,
       gitRef: result.git.ref,
       gitCommit: result.git.commit,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
     },
     invalidateRuntimeCache: params.invalidateRuntimeCache,
     runtime: params.runtime,
@@ -868,6 +881,7 @@ export async function runPluginInstallCommand(params: {
     link?: boolean;
     pin?: boolean;
     marketplace?: string;
+    agent?: string;
   };
   invalidateRuntimeCache?: boolean;
   runtime?: RuntimeEnv;
@@ -992,7 +1006,13 @@ export async function runPluginInstallCommand(params: {
   const cfg = snapshot.config;
   const installMode = resolveInstallMode(opts.force);
   const safetyOverrides = resolveInstallSafetyOverrides({ ...opts, config: cfg });
-  const extensionsDir = resolveDefaultPluginExtensionsDir();
+  let extensionsDir: string;
+  if (opts.agent) {
+    const workspaceDir = resolveAgentWorkspaceDir(cfg, opts.agent);
+    extensionsDir = path.join(workspaceDir, ".openclaw", "extensions");
+  } else {
+    extensionsDir = resolveDefaultPluginExtensionsDir();
+  }
 
   if (opts.marketplace) {
     const result = await installPluginFromMarketplace({
@@ -1020,6 +1040,7 @@ export async function runPluginInstallCommand(params: {
         marketplaceName: result.marketplaceName,
         marketplaceSource: result.marketplaceSource,
         marketplacePlugin: result.marketplacePlugin,
+        ...(opts.agent ? { agentId: opts.agent } : {}),
       },
       invalidateRuntimeCache,
       runtime,
@@ -1117,6 +1138,7 @@ export async function runPluginInstallCommand(params: {
           sourcePath: resolved,
           installPath: resolved,
           version: probe.version,
+          ...(opts.agent ? { agentId: opts.agent } : {}),
         },
         invalidateRuntimeCache,
         successMessage: `Linked plugin path: ${shortenHomePath(resolved)}`,
@@ -1160,6 +1182,7 @@ export async function runPluginInstallCommand(params: {
         sourcePath: resolved,
         installPath: result.targetDir,
         version: result.version,
+        ...(opts.agent ? { agentId: opts.agent } : {}),
       },
       invalidateRuntimeCache,
       runtime,
@@ -1194,6 +1217,7 @@ export async function runPluginInstallCommand(params: {
       safetyOverrides,
       allowBundledFallback: false,
       extensionsDir,
+      agentId: opts.agent,
       invalidateRuntimeCache,
       ...(officialNpmTrust
         ? {
@@ -1225,6 +1249,7 @@ export async function runPluginInstallCommand(params: {
       archivePath: npmPackPath,
       safetyOverrides,
       extensionsDir,
+      agentId: opts.agent,
       invalidateRuntimeCache,
       runtime,
     });
@@ -1241,6 +1266,7 @@ export async function runPluginInstallCommand(params: {
       spec: raw,
       safetyOverrides,
       extensionsDir,
+      agentId: opts.agent,
       invalidateRuntimeCache,
       runtime,
     });
@@ -1336,6 +1362,7 @@ export async function runPluginInstallCommand(params: {
         ...buildClawHubPluginInstallRecordFields(result.clawhub),
         spec: raw,
         installPath: result.targetDir,
+        ...(opts.agent ? { agentId: opts.agent } : {}),
       },
       invalidateRuntimeCache,
       runtime,

@@ -14,7 +14,11 @@ import {
   refreshPersistedInstalledPluginIndexSync,
 } from "./installed-plugin-index-store.js";
 import type { RefreshInstalledPluginIndexParams } from "./installed-plugin-index.js";
-import { recordPluginInstall, type PluginInstallUpdate } from "./installs.js";
+import {
+  extractPluginIdFromKey,
+  recordPluginInstall,
+  type PluginInstallUpdate,
+} from "./installs.js";
 
 export {
   clearLoadInstalledPluginIndexInstallRecordsCache,
@@ -116,11 +120,32 @@ export function recordPluginInstallInRecords(
   return recordPluginInstall({ plugins: { installs: records } }, update).plugins?.installs ?? {};
 }
 
-/** Removes one plugin install record from an in-memory record map. */
+/** Removes one plugin install record from an in-memory record map.
+ *  When agentId is provided, only the matching agent-specific record is removed.
+ *  When agentId is undefined/empty, only the global record (no agentId) is removed. */
 export function removePluginInstallRecordFromRecords(
   records: Record<string, PluginInstallRecord>,
   pluginId: string,
+  agentId?: string,
 ): Record<string, PluginInstallRecord> {
-  const { [pluginId]: _removed, ...rest } = records;
+  const rest: Record<string, PluginInstallRecord> = {};
+  for (const [key, record] of Object.entries(records)) {
+    const recordPluginId = extractPluginIdFromKey(key);
+    if (recordPluginId !== pluginId) {
+      rest[key] = record;
+      continue;
+    }
+    // Same pluginId, now check agentId match
+    if (agentId === undefined || agentId === "") {
+      // Removing global: remove only records without an agentId
+      if (!record.agentId || record.agentId === "") {
+        continue;
+      }
+    } else if (record.agentId === agentId) {
+      // Removing for specific agent: remove only records matching that agentId
+      continue;
+    }
+    rest[key] = record;
+  }
   return rest;
 }

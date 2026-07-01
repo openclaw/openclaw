@@ -100,6 +100,10 @@ vi.mock("../plugins/installs.js", () => ({
   recordPluginInstall,
   buildNpmResolutionInstallFields,
   resolveNpmInstallRecordSpec,
+  extractPluginIdFromKey: (key: string) => {
+    const colonIndex = key.indexOf(":");
+    return colonIndex === -1 ? key : key.slice(0, colonIndex);
+  },
 }));
 
 const clearPluginMetadataLifecycleCaches = vi.hoisted(() => vi.fn());
