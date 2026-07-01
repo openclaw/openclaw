@@ -38,6 +38,7 @@ vi.mock("./bot/delivery.resolve-media.runtime.js", async () => {
         throw new actual.MediaFetchError(
           "fetch_failed",
           err instanceof Error ? err.message : String(err),
+          { cause: err },
         );
       }
     },
@@ -458,9 +459,7 @@ describe("createTelegramBot channel_post media", () => {
     });
     sendMessageSpy.mockClear();
     replySpy.mockClear();
-    // A shutdown/abort mid-fetch (the primary restart-window loss vector) is
-    // durably retryable even though the in-loop retry policy skips aborts.
-    saveRemoteMedia.mockRejectedValue(new Error("This operation was aborted"));
+    saveRemoteMedia.mockRejectedValue(Object.assign(new Error("aborted"), { name: "AbortError" }));
 
     createTelegramBot({ token: "tok" });
     const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
@@ -482,9 +481,6 @@ describe("createTelegramBot channel_post media", () => {
       withTelegramSpooledReplayUpdate(update, () => handler(ctx)),
     );
 
-    // Spooled replay keeps the update (completed:false) so the document is
-    // re-downloaded after restart instead of acked and lost; the "try again"
-    // notice is suppressed because we are durably retrying.
     expect(result).toEqual({ kind: "failed-retryable", error: expect.any(MediaFetchError) });
     expect(sendMessageSpy).not.toHaveBeenCalled();
   });
@@ -519,8 +515,6 @@ describe("createTelegramBot channel_post media", () => {
       withTelegramSpooledReplayUpdate(update, () => handler(ctx)),
     );
 
-    // A permanent failure never succeeds on replay, so it stays best-effort:
-    // the update is acked (no failed-retryable result) and the user is warned.
     expect(result).toBeUndefined();
     await waitForMockCalls(sendMessageSpy, 1);
     expect(sendMessageSpy).toHaveBeenCalledWith(
@@ -538,9 +532,6 @@ describe("createTelegramBot channel_post media", () => {
     });
     sendMessageSpy.mockClear();
     replySpy.mockClear();
-    // A non-network, non-abort fetch_failed (e.g. SSRF/guard denial or a local
-    // Bot API path/read failure) must NOT be durably requeued — it would loop in
-    // the spool with the warning suppressed. It stays best-effort: acked + warned.
     saveRemoteMedia.mockRejectedValue(new Error("blocked by SSRF guard: private address"));
 
     createTelegramBot({ token: "tok" });

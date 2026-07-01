@@ -31,7 +31,6 @@ import {
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
-import { isDurablyRetryableMediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
 import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -67,6 +66,7 @@ import {
 } from "./bot-handlers.debounce-key.js";
 import {
   hasInboundMedia,
+  isDurablyRetryableInboundMediaError,
   isMediaSizeLimitError,
   isRecoverableMediaGroupError,
   resolveInboundMediaFileId,
@@ -2273,17 +2273,10 @@ export const registerTelegramHandlers = ({
         return;
       }
       logger.warn({ chatId, error: String(mediaErr) }, "media fetch failed");
-      const retryable = isDurablyRetryableMediaFetchError(mediaErr);
+      const retryable = isDurablyRetryableInboundMediaError(mediaErr);
       if (retryable) {
-        // Keep the durable spool entry so a transient/shutdown media fetch
-        // failure is re-driven after restart instead of acked and lost (#98076).
-        // bot-core keeps spooled replays (completed:false) and best-effort acks
-        // live updates on this failed-retryable result.
         recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: mediaErr });
       }
-      // On spooled replay the update is durably re-driven, so suppress the
-      // user-facing retry notice that would otherwise repeat on each replay.
-      // Live updates and permanent failures still get the best-effort warning.
       if (!(retryable && isTelegramSpooledReplayUpdate(ctx.update))) {
         await withTelegramApiErrorLogging({
           operation: "sendMessage",
