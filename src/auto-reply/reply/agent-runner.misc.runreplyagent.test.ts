@@ -2776,6 +2776,8 @@ describe("runReplyAgent response usage footer", () => {
     const res = await createRun({ responseUsage: "full", sessionKey });
     const payload = Array.isArray(res) ? res[0] : res;
     const text = payload?.text ?? "";
+    expect(text).toContain("ok\nanthropic🤖claude🌘🐌");
+    expect(text).not.toContain("ok\n\nanthropic");
     expect(text).toContain("anthropic🤖claude🌘🐌");
     expect(text).not.toContain("↕️");
     expect(text).not.toContain("🗄");

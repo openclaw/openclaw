@@ -78,8 +78,10 @@ Use these in chat:
   - Persists per session (stored as `responseUsage`).
   - `/usage reset` (aliases: `inherit`, `clear`, `default`) — clears the session
     override so the session re-inherits the configured default.
-  - `/usage full` shows estimated cost only when OpenClaw has usage metadata and
-    local pricing for the active model. Otherwise it shows tokens only.
+  - `/usage tokens` shows turn token/cache details.
+  - `/usage full` shows compact model/context/cost details; estimated cost appears
+    only when OpenClaw has usage metadata and local pricing for the active model.
+    Custom `messages.usageTemplate` layouts can include token/cache fields.
 - `/usage cost` → shows a local cost summary from OpenClaw session logs.
 
 Other surfaces:
@@ -131,10 +133,11 @@ models.providers.<provider>.models[].cost
 ```
 
 These are **USD per 1M tokens** for `input`, `output`, `cacheRead`, and
-`cacheWrite`. If pricing is missing, OpenClaw shows tokens only. Cost display is
-not limited to API-key auth: non-API-key providers such as `aws-sdk` can show
-estimated cost when their configured model entry includes local pricing and the
-provider returns usage metadata.
+`cacheWrite`. If pricing is missing, `/usage full` omits cost; use `/usage tokens`
+or a custom `messages.usageTemplate` when you need token/cache details in every
+reply. Cost display is not limited to API-key auth: non-API-key providers such
+as `aws-sdk` can show estimated cost when their configured model entry includes
+local pricing and the provider returns usage metadata.
 
 After sidecars and channels reach the Gateway ready path, OpenClaw starts an
 optional background pricing bootstrap for configured model refs that do not

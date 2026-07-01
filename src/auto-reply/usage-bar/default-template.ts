@@ -24,15 +24,8 @@ export const DEFAULT_USAGE_BAR_TEMPLATE: UsageBarTemplate = {
   },
   output: {
     sep: "",
-    // Telegram (and any surface without its own list) falls through to `default`,
-    // so the default is built to read well on a narrow phone screen:
-    // - Tight badges: no separators between model/flags/reasoning/fast.
-    // - NBSP (\u00A0) before "|" and before 💰 keeps those joins non-breaking.
-    // - 📚 is glued hard to the meter so it can't wrap between books and bars.
-    // - The single regular space after "|" is the only sanctioned wrap point.
-    // - Leading \n drops the footer onto its own line, below the message body.
     default: [
-      { text: "\n{model.provider}{identity.emoji|🤖}{model.display_name|alias:models}" },
+      { text: "{model.provider}{identity.emoji|🤖}{model.display_name|alias:models}" },
       { map: "model.is_fallback", cases: { true: "🔄" } },
       { map: "model.is_override", cases: { true: "📌" } },
       { when: "model.reasoning", text: "{model.reasoning|alias:reasoning}" },

@@ -24,7 +24,7 @@ title: "Usage tracking"
 ## Where it shows up
 
 - `/status` in chats: emoji-rich status card with session tokens + estimated cost (API key only). Provider usage shows for the **current model provider** when available as a normalized `X% left` window or provider summary text.
-- `/usage off|tokens|full` in chats: per-response usage footer (OAuth shows tokens only).
+- `/usage off|tokens|full` in chats: per-response usage footer.
 - `/usage cost` in chats: local cost summary aggregated from OpenClaw session logs.
 - CLI: `openclaw status --usage` prints a full per-provider breakdown.
 - CLI: `openclaw channels list` prints the same usage snapshot alongside provider config (use `--no-usage` to skip).
@@ -95,8 +95,8 @@ With no config the prior behavior holds (footer off until `/usage`). Use
 ## Custom `/usage full` footer
 
 `/usage full` shows a built-in compact footer with model, reasoning, fast/slow,
-context window, turn tokens, cache, and cost when those fields are available. No
-template file is required.
+context window, and cost when those fields are available. Token and cache fields
+remain available to custom templates. No template file is required.
 
 `messages.usageTemplate` is only for advanced custom layouts. The value is a
 JSON file path (supports `~`) or an inline object, and it replaces the built-in
@@ -150,42 +150,30 @@ change:
   "output": {
     "sep": "",
     "default": [
-      { "text": "{model.provider}{identity.emoji|🤖} {model.display_name|alias:models}" },
-      { "map": "model.is_fallback", "cases": { "true": " 🔄" } },
-      { "map": "model.is_override", "cases": { "true": " 📌" } },
-      { "when": "model.reasoning", "text": " {model.reasoning|alias:reasoning}" },
-      { "map": "state.fast_mode", "cases": { "true": " ⚡", "false": " 🐌" } },
+      { "text": "{model.provider}{identity.emoji|🤖}{model.display_name|alias:models}" },
+      { "map": "model.is_fallback", "cases": { "true": "🔄" } },
+      { "map": "model.is_override", "cases": { "true": "📌" } },
+      { "when": "model.reasoning", "text": "{model.reasoning|alias:reasoning}" },
+      { "map": "state.fast_mode", "cases": { "true": "⚡️", "false": "🐌" } },
       {
         "when": "context.max_tokens",
-        "text": " | 📚 [{context.pct_used|meter:5:braille}]{context.max_tokens|num}",
+        "text": "\u00A0| 📚[{context.pct_used|meter:5:braille}]{context.max_tokens|num}",
       },
-      {
-        "when": "usage.has_split_tokens",
-        "text": " ↕️ {usage.input_tokens|num|?}/{usage.output_tokens|num|?}",
-      },
-      { "when": "usage.has_total_only_tokens", "text": " ↕️ {usage.total_tokens|num}" },
-      { "when": "usage.cache_hit_pct", "text": " 🗄 {usage.cache_hit_pct|pct}" },
-      { "when": "cost.turn_usd", "text": " 💰{cost.turn_usd|fixed:4}" },
+      { "when": "cost.turn_usd", "text": "\u00A0💰{cost.turn_usd|fixed:4}" },
     ],
     "surfaces": {
       "discord": [
         { "text": "-# -\n" },
-        { "text": "-# {model.provider}{identity.emoji|🤖} {model.display_name|alias:models}" },
+        { "text": "-# {model.provider}{identity.emoji|🤖}{model.display_name|alias:models}" },
         { "map": "model.is_fallback", "cases": { "true": "🔄" } },
         { "map": "model.is_override", "cases": { "true": "📌" } },
-        { "when": "model.reasoning", "text": " {model.reasoning|alias:reasoning}" },
-        { "map": "state.fast_mode", "cases": { "true": " ⚡️", "false": " 🐌" } },
+        { "when": "model.reasoning", "text": "{model.reasoning|alias:reasoning}" },
+        { "map": "state.fast_mode", "cases": { "true": "⚡️", "false": "🐌" } },
         {
           "when": "context.max_tokens",
-          "text": " | 📚 [{context.pct_used|meter:5:braille}]{context.max_tokens|num}",
+          "text": "\u00A0| 📚[{context.pct_used|meter:5:braille}]{context.max_tokens|num}",
         },
-        {
-          "when": "usage.has_split_tokens",
-          "text": " ↕️ {usage.input_tokens|num|?}/{usage.output_tokens|num|?}",
-        },
-        { "when": "usage.has_total_only_tokens", "text": " ↕️ {usage.total_tokens|num}" },
-        { "when": "usage.cache_hit_pct", "text": " 🗄 {usage.cache_hit_pct|pct}" },
-        { "when": "cost.turn_usd", "text": " 💰{cost.turn_usd|fixed:4}" },
+        { "when": "cost.turn_usd", "text": "\u00A0💰{cost.turn_usd|fixed:4}" },
       ],
     },
   },
