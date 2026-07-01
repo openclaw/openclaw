@@ -15,6 +15,10 @@ import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeBlockedLivenessWaitStatus } from "../shared/agent-liveness.js";
 import {
+  isOpenClawMessageToolMirrorAssistantMessage,
+  isTranscriptOnlyOpenClawAssistantMessage,
+} from "../shared/transcript-only-openclaw-assistant.js";
+import {
   buildAgentRunTerminalOutcomeFromWaitResult,
   type AgentRunTerminalOutcome,
 } from "./agent-run-terminal-outcome.js";
@@ -31,6 +35,8 @@ const defaultRunWaitDeps = {
   callGateway,
 };
 
+const DEFAULT_RUNS_DRAIN_TIMEOUT_MS = 30_000;
+
 let runWaitDeps: {
   callGateway: GatewayCaller;
 } = defaultRunWaitDeps;
@@ -43,10 +49,11 @@ function resolveRunWaitDeadlineAtMs(params: { deadlineAtMs?: number; timeoutMs?:
   if (params.deadlineAtMs !== undefined) {
     return asDateTimestampMs(params.deadlineAtMs) ?? resolveDateTimestampMs(Date.now());
   }
-  return (
-    resolveExpiresAtMsFromDurationMs(resolveRunWaitTimeoutMs(params.timeoutMs)) ??
-    resolveDateTimestampMs(Date.now())
-  );
+  const timeoutMs =
+    params.timeoutMs === undefined
+      ? DEFAULT_RUNS_DRAIN_TIMEOUT_MS
+      : resolveRunWaitTimeoutMs(params.timeoutMs);
+  return resolveExpiresAtMsFromDurationMs(timeoutMs) ?? resolveDateTimestampMs(Date.now());
 }
 
 /** Latest assistant reply plus a stable fingerprint for baseline comparisons. */
@@ -125,6 +132,15 @@ function normalizeTerminalOutcomeForWait(
   });
 }
 
+function formatUnexpectedAgentWaitStatusError(wait?: RawAgentWaitResponse): string {
+  const status =
+    typeof wait?.status === "string" && wait.status.trim()
+      ? JSON.stringify(wait.status)
+      : "missing";
+  const detail = typeof wait?.error === "string" && wait.error.trim() ? `: ${wait.error}` : "";
+  return `agent.wait returned unexpected status ${status}${detail}`;
+}
+
 const RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS: readonly RegExp[] = [
   /gateway closed \(1006/i,
   /transport close/i,
@@ -160,6 +176,27 @@ function normalizePendingRunIds(runIds: Iterable<string>): string[] {
   return [...seen];
 }
 
+function isWaitedReplyTranscriptArtifact(message: unknown): boolean {
+  return (
+    isTranscriptOnlyOpenClawAssistantMessage(message) ||
+    isOpenClawMessageToolMirrorAssistantMessage(message) ||
+    isInterSessionInputMessage(message)
+  );
+}
+
+function isInterSessionInputMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return false;
+  }
+  const provenance = (message as { provenance?: unknown }).provenance;
+  return (
+    Boolean(provenance) &&
+    typeof provenance === "object" &&
+    !Array.isArray(provenance) &&
+    (provenance as { kind?: unknown }).kind === "inter_session"
+  );
+}
+
 function resolveLatestAssistantReplySnapshot(messages: unknown[]): AssistantReplySnapshot {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const candidate = messages[i];
@@ -168,6 +205,9 @@ function resolveLatestAssistantReplySnapshot(messages: unknown[]): AssistantRepl
     }
     if ((candidate as { role?: unknown }).role !== "assistant") {
       continue;
+    }
+    if (isWaitedReplyTranscriptArtifact(candidate)) {
+      return {};
     }
     const text = extractAssistantText(candidate);
     if (!text?.trim()) {
@@ -182,6 +222,25 @@ function resolveLatestAssistantReplySnapshot(messages: unknown[]): AssistantRepl
     return { text, fingerprint };
   }
   return {};
+}
+
+export function hasUpdatedAssistantReplySnapshot(
+  latestReply: AssistantReplySnapshot,
+  baseline: AssistantReplySnapshot | undefined,
+): boolean {
+  if (!latestReply.text) {
+    return false;
+  }
+  if (!baseline) {
+    return true;
+  }
+  if (baseline.fingerprint !== undefined) {
+    return latestReply.fingerprint !== baseline.fingerprint;
+  }
+  if (baseline.text !== undefined) {
+    return latestReply.text !== baseline.text;
+  }
+  return true;
 }
 
 /** Read the latest non-tool assistant message for a session. */
@@ -224,7 +283,7 @@ export async function waitForAgentRun(params: {
 }): Promise<AgentWaitResult> {
   const timeoutMs = resolveRunWaitTimeoutMs(params.timeoutMs);
   try {
-    const wait = await (params.callGateway ?? runWaitDeps.callGateway)({
+    const wait = await (params.callGateway ?? runWaitDeps.callGateway)<RawAgentWaitResponse>({
       method: "agent.wait",
       params: {
         runId: params.runId,
@@ -241,7 +300,13 @@ export async function waitForAgentRun(params: {
     if (wait?.status === "error") {
       return normalizeAgentWaitResult("error", wait);
     }
-    return normalizeAgentWaitResult("ok", wait);
+    if (wait?.status === "ok") {
+      return normalizeAgentWaitResult("ok", wait);
+    }
+    return normalizeAgentWaitResult("error", {
+      ...wait,
+      error: formatUnexpectedAgentWaitStatusError(wait),
+    });
   } catch (err) {
     const error = formatErrorMessage(err);
     return {
@@ -274,13 +339,11 @@ export async function waitForAgentRunAndReadUpdatedAssistantReply(params: {
     limit: params.limit,
     callGateway: params.callGateway,
   });
-  const baselineFingerprint = params.baseline?.fingerprint;
-  const replyText =
-    latestReply.text && (!baselineFingerprint || latestReply.fingerprint !== baselineFingerprint)
-      ? latestReply.text
-      : undefined;
+  const replyText = hasUpdatedAssistantReplySnapshot(latestReply, params.baseline)
+    ? latestReply.text
+    : undefined;
   return {
-    status: "ok",
+    ...wait,
     replyText,
   };
 }
