@@ -1,3 +1,4 @@
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 // Matrix plugin module implements route behavior.
 import { resolveConfiguredAcpBindingRecord } from "openclaw/plugin-sdk/acp-binding-resolve-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
@@ -55,7 +56,7 @@ export function resolveMatrixInboundRoute(params: {
   configuredBinding: ReturnType<typeof resolveConfiguredAcpBindingRecord>;
   runtimeBindingId: string | null;
 } {
-  const baseRoute = params.resolveAgentRoute({
+  let baseRoute = params.resolveAgentRoute({
     cfg: params.cfg,
     channel: "matrix",
     accountId: params.accountId,
@@ -72,6 +73,28 @@ export function resolveMatrixInboundRoute(params: {
         }
       : undefined,
   });
+
+  // Fallback: when the route resolved to the default agent and the caller has a
+  // named account, try default-account bindings. This ensures bindings that omit
+  // accountId can match Matrix rooms using a named account (e.g. "ops"), while
+  // preserving the shared route contract that omitted accountId = default account.
+  if (baseRoute.matchedBy === "default" && params.accountId !== DEFAULT_ACCOUNT_ID) {
+    baseRoute = params.resolveAgentRoute({
+      cfg: params.cfg,
+      channel: "matrix",
+      accountId: undefined,
+      peer: {
+        kind: params.isDirectMessage ? "direct" : "channel",
+        id: params.isDirectMessage ? params.senderId : params.roomId,
+      },
+      parentPeer: params.isDirectMessage
+        ? {
+            kind: "channel",
+            id: params.roomId,
+          }
+        : undefined,
+    });
+  }
   const bindingConversationId = params.threadId ?? params.roomId;
   const bindingParentConversationId = params.threadId ? params.roomId : undefined;
   const sessionBindingService = getSessionBindingService();
