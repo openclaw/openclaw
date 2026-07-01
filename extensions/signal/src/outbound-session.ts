@@ -27,12 +27,24 @@ export function resolveSignalOutboundTarget(target: string): ResolvedSignalOutbo
     };
   }
 
-  let recipient = stripped.trim();
-  if (lowered.startsWith("username:")) {
-    recipient = stripped.slice("username:".length).trim();
-  } else if (lowered.startsWith("u:")) {
-    recipient = stripped.slice("u:".length).trim();
+  if (lowered.startsWith("username:") || lowered.startsWith("u:")) {
+    const name = stripped.slice(stripped.indexOf(":") + 1).trim();
+    if (!name) {
+      return null;
+    }
+    // A Signal username is NOT a phone number; routing it through the phone/uuid resolver would
+    // E.164-digit-strip "alice.42" into "+42" and corrupt both the delivery target and the session
+    // key. Keep the username grammar intact, mirroring send.ts parseTarget.
+    const id = `username:${name}`;
+    return {
+      peer: { kind: "direct", id },
+      chatType: "direct",
+      from: `signal:${id}`,
+      to: `signal:${id}`,
+    };
   }
+
+  const recipient = stripped.trim();
   if (!recipient) {
     return null;
   }
