@@ -105,6 +105,104 @@ describe("buildFeishuPostMessagePayload", () => {
       },
     });
   });
+
+  it("materializes single newlines in markdown post text", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "First line\nSecond line\n\nExisting paragraph",
+    });
+
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            {
+              tag: "md",
+              text: "First line\n\nSecond line\n\nExisting paragraph",
+            },
+          ],
+        ],
+      },
+    });
+  });
+
+  it("preserves single newlines between raw markdown table rows", () => {
+    const rawTable = "| Column |\n| --- |\n| Value |";
+    const payload = buildFeishuPostMessagePayload({
+      messageText: rawTable,
+    });
+
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            {
+              tag: "md",
+              text: rawTable,
+            },
+          ],
+        ],
+      },
+    });
+  });
+
+  it("preserves single newlines inside markdown code fences", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "Before\n```ts\nconst a = 1;\nconst b = 2;\n```\nAfter",
+    });
+
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            {
+              tag: "md",
+              text: "Before\n```ts\nconst a = 1;\nconst b = 2;\n```\nAfter",
+            },
+          ],
+        ],
+      },
+    });
+  });
+
+  it("preserves nested shorter fences inside longer markdown code fences", () => {
+    const nestedFence = "````md\n```ts\nconst a = 1;\n```\n````\nAfter";
+    const payload = buildFeishuPostMessagePayload({
+      messageText: nestedFence,
+    });
+
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            {
+              tag: "md",
+              text: nestedFence,
+            },
+          ],
+        ],
+      },
+    });
+  });
+
+  it("keeps original post text when materialized line breaks would exceed a fixed max", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "abcd\nefgh",
+      maxMarkdownTextLength: 6,
+    });
+
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            {
+              tag: "md",
+              text: "abcd\nefgh",
+            },
+          ],
+        ],
+      },
+    });
+  });
 });
 
 describe("getMessageFeishu", () => {
@@ -291,6 +389,47 @@ describe("getMessageFeishu", () => {
         ],
       },
     });
+  });
+
+  it("does not expand post markdown past the resolved send limit", async () => {
+    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_limited" } });
+    mockResolveFeishuAccount.mockReturnValue({
+      accountId: "default",
+      configured: true,
+      config: { textChunkLimit: 6 },
+    });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    const result = await sendMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_send",
+      text: "abcd\nefgh",
+      mentions: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
+    });
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(create.mock.calls[0][0].data.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            { tag: "at", user_id: "ou_target", user_name: "Target User" },
+            { tag: "md", text: "abcd\nefgh" },
+          ],
+        ],
+      },
+    });
+    expect(result.messageId).toBe("om_limited");
+    expect(result.receipt.platformMessageIds).toEqual(["om_limited"]);
   });
 
   it("extracts text content from interactive card elements", async () => {
@@ -691,7 +830,7 @@ describe("editMessageFeishu", () => {
     const result = await editMessageFeishu({
       cfg: {} as ClawdbotConfig,
       messageId: "om_edit",
-      text: "updated body",
+      text: "updated\nbody",
     });
 
     expect(mockClientPatch).toHaveBeenCalledWith({
@@ -703,7 +842,7 @@ describe("editMessageFeishu", () => {
               [
                 {
                   tag: "md",
-                  text: "updated body",
+                  text: "updated\n\nbody",
                 },
               ],
             ],

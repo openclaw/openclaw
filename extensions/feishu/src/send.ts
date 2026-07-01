@@ -13,6 +13,7 @@ import { createFeishuClient } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent } from "./mention.js";
+import { materializeFeishuPostMarkdownLineBreaks } from "./post-markdown.js";
 import { parsePostContent } from "./post.js";
 import {
   assertFeishuMessageApiSuccess,
@@ -25,6 +26,7 @@ import type { FeishuChatType, FeishuMessageInfo, FeishuSendResult } from "./type
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
 const INTERACTIVE_CARD_FALLBACK_TEXT = "[Interactive Card]";
 const POST_FALLBACK_TEXT = "[Rich text message]";
+const FEISHU_TEXT_CHUNK_LIMIT = 4000;
 const FEISHU_CARD_TEMPLATES = new Set([
   "blue",
   "green",
@@ -571,19 +573,34 @@ function buildFeishuPostMentionElements(mentions?: MentionTarget[]): FeishuPostM
   return elements;
 }
 
+function resolveFeishuPostTextChunkLimit(params: {
+  account?: { config?: { textChunkLimit?: number } };
+}): number {
+  const limit = params.account?.config?.textChunkLimit;
+  return typeof limit === "number" && Number.isFinite(limit) && limit > 0
+    ? limit
+    : FEISHU_TEXT_CHUNK_LIMIT;
+}
+
 export function buildFeishuPostMessagePayload(params: {
   messageText: string;
   mentions?: MentionTarget[];
+  maxMarkdownTextLength?: number;
 }): {
   content: string;
   msgType: string;
 } {
-  const { messageText, mentions } = params;
+  const { messageText, mentions, maxMarkdownTextLength } = params;
+  const materializedText = materializeFeishuPostMarkdownLineBreaks(messageText);
+  const postText =
+    maxMarkdownTextLength !== undefined && materializedText.length > maxMarkdownTextLength
+      ? messageText
+      : materializedText;
   const content: FeishuPostMessageElement[] = [
     ...buildFeishuPostMentionElements(mentions),
     {
       tag: "md",
-      text: messageText,
+      text: postText,
     },
   ];
   return {
@@ -609,15 +626,23 @@ export async function sendMessageFeishu(
     mentions,
     accountId,
   } = params;
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
+  const { client, account, receiveId, receiveIdType } = resolveFeishuSendTarget({
+    cfg,
+    to,
+    accountId,
+  });
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "feishu",
   });
 
   const messageText = convertMarkdownTables(text ?? "", tableMode);
-
-  const { content, msgType } = buildFeishuPostMessagePayload({ messageText, mentions });
+  const textChunkLimit = resolveFeishuPostTextChunkLimit({ account });
+  const { content, msgType } = buildFeishuPostMessagePayload({
+    messageText,
+    mentions,
+    maxMarkdownTextLength: textChunkLimit,
+  });
 
   const directParams = { receiveId, receiveIdType, content, msgType };
   return sendReplyOrFallbackDirect(client, {
@@ -702,7 +727,12 @@ export async function editMessageFeishu(params: {
     channel: "feishu",
   });
   const messageText = convertMarkdownTables(text!, tableMode);
-  const payload = buildFeishuPostMessagePayload({ messageText });
+  const payload = buildFeishuPostMessagePayload({
+    messageText,
+    maxMarkdownTextLength: resolveFeishuPostTextChunkLimit({
+      account: resolveFeishuRuntimeAccount({ cfg, accountId }),
+    }),
+  });
   const response = await client.im.message.patch({
     path: { message_id: messageId },
     data: { content: payload.content },
