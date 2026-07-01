@@ -587,6 +587,9 @@ public final class OpenClawChatViewModel {
         let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard role == "assistant" else { return nil }
 
+        // chat.final and session.message can serialize the same final row with
+        // different timestamps/content ids; the run user-turn scope owns safety
+        // for repeated same-text replies across turns.
         let contentFingerprint = Self.finalMessageContentFingerprint(for: message)
         let toolCallId = (message.toolCallId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let toolName = (message.toolName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
