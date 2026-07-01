@@ -33,7 +33,9 @@ const mocks = vi.hoisted(() => {
     printWizardHeader: vi.fn(),
     probeGatewayReachable: vi.fn(),
     waitForGatewayReachable: vi.fn(),
+    resolveAdvertisedControlUiLinks: vi.fn(),
     resolveControlUiLinks: vi.fn(),
+    resolveLocalControlUiProbeLinks: vi.fn(),
     summarizeExistingConfig: vi.fn(),
     promptAuthConfig: vi.fn(),
     promptGatewayConfig: vi.fn(),
@@ -104,7 +106,9 @@ vi.mock("./onboard-helpers.js", () => ({
   guardCancel: <T>(value: T) => value,
   printWizardHeader: mocks.printWizardHeader,
   probeGatewayReachable: mocks.probeGatewayReachable,
+  resolveAdvertisedControlUiLinks: mocks.resolveAdvertisedControlUiLinks,
   resolveControlUiLinks: mocks.resolveControlUiLinks,
+  resolveLocalControlUiProbeLinks: mocks.resolveLocalControlUiProbeLinks,
   summarizeExistingConfig: mocks.summarizeExistingConfig,
   waitForGatewayReachable: mocks.waitForGatewayReachable,
 }));
@@ -220,6 +224,14 @@ function setupBaseWizardState(config: OpenClawConfig = {}) {
   mocks.resolveGatewayPort.mockReturnValue(18789);
   mocks.probeGatewayReachable.mockResolvedValue({ ok: false });
   mocks.resolveControlUiLinks.mockReturnValue({ wsUrl: "ws://127.0.0.1:18789" });
+  mocks.resolveLocalControlUiProbeLinks.mockReturnValue({
+    httpUrl: "http://127.0.0.1:18789/",
+    wsUrl: "ws://127.0.0.1:18789",
+  });
+  mocks.resolveAdvertisedControlUiLinks.mockResolvedValue({
+    httpUrl: "http://127.0.0.1:18789/",
+    wsUrl: "ws://127.0.0.1:18789",
+  });
   mocks.summarizeExistingConfig.mockReturnValue("");
   mocks.createClackPrompter.mockReturnValue({
     intro: vi.fn(async () => {}),
@@ -349,12 +361,7 @@ describe("runConfigureWizard", () => {
         },
       },
     });
-    queueWizardPrompts({
-      select: ["local", "__continue"],
-      confirm: [],
-    });
-
-    await runConfigureWizard({ command: "configure" }, createRuntime());
+    await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
 
     const probeRequests = mocks.probeGatewayReachable.mock.calls.map(([request]) =>
       requireRecord(request, "probe request"),
@@ -366,6 +373,40 @@ describe("runConfigureWizard", () => {
     expect(localProbe?.timeoutMs).toBe(300);
     expect(remoteProbe?.token).toBe("token");
     expect(remoteProbe?.timeoutMs).toBe(300);
+  });
+
+  it("advertises LAN Control UI links while probing the local gateway", async () => {
+    setupBaseWizardState({
+      gateway: {
+        mode: "local",
+        bind: "lan",
+        auth: { token: "token" },
+      },
+    });
+    mocks.resolveAdvertisedControlUiLinks.mockResolvedValueOnce({
+      httpUrl: "http://10.211.55.3:18789/",
+      wsUrl: "ws://10.211.55.3:18789",
+    });
+    mocks.resolveLocalControlUiProbeLinks.mockReturnValueOnce({
+      httpUrl: "http://127.0.0.1:18789/",
+      wsUrl: "ws://127.0.0.1:18789",
+    });
+    await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
+
+    expect(mocks.resolveAdvertisedControlUiLinks).toHaveBeenCalledWith(
+      expect.objectContaining({ bind: "lan", port: 18789 }),
+    );
+    expect(mocks.probeGatewayReachable).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Web UI: http://10.211.55.3:18789/"),
+      "Control UI",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Gateway WS: ws://10.211.55.3:18789"),
+      "Control UI",
+    );
   });
 
   it("exits with code 1 when configure wizard is cancelled", async () => {

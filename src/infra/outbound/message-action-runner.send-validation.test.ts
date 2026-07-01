@@ -254,6 +254,21 @@ describe("runMessageAction send validation", () => {
     ).rejects.toThrow(/requires a target/i);
   });
 
+  it("does not treat broadcast targets as a send target", async () => {
+    await expect(
+      runMessageAction({
+        cfg: emptyConfig,
+        action: "send",
+        params: {
+          action: "send",
+          idempotencyKey: "run:message:1",
+          targets: ["user:123456789"],
+          message: "hello from codex",
+        },
+      }),
+    ).rejects.toThrow(/requires a target/i);
+  });
+
   it("keeps explicit message routes on the normal outbound path", async () => {
     const result = await runMessageAction({
       cfg: workspaceConfig,

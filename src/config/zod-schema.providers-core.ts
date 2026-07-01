@@ -1423,6 +1423,7 @@ const IMessageActionSchema = z
     removeParticipant: z.boolean().optional(),
     leaveGroup: z.boolean().optional(),
     sendAttachment: z.boolean().optional(),
+    polls: z.boolean().optional(),
   })
   .strict()
   .optional();

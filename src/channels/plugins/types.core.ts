@@ -765,6 +765,8 @@ export type ChannelMessageActionAdapter = {
         aliases: string[];
         /** Alias fields that identify the destination conversation, not an existing message. */
         deliveryTargetAliases?: string[];
+        /** Convert typed owner fields such as chatId into the canonical shared target shape. */
+        resolveDeliveryTarget?: (params: { args: Record<string, unknown> }) => string | undefined;
       }
     >
   >;

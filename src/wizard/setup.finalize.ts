@@ -24,7 +24,8 @@ import {
   openUrl,
   probeGatewayReachable,
   waitForGatewayReachable,
-  resolveControlUiLinks,
+  resolveAdvertisedControlUiLinks,
+  resolveLocalControlUiProbeLinks,
 } from "../commands/onboard-helpers.js";
 import type { OnboardOptions } from "../commands/onboard-types.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
@@ -417,7 +418,7 @@ export async function finalizeSetupWizard(
 
   try {
     if (!opts.skipHealth) {
-      const probeLinks = resolveControlUiLinks({
+      const probeLinks = resolveLocalControlUiProbeLinks({
         bind: nextConfig.gateway?.bind ?? "loopback",
         port: settings.port,
         customBindHost: nextConfig.gateway?.customBindHost,
@@ -525,7 +526,14 @@ export async function finalizeSetupWizard(
 
     const controlUiBasePath =
       nextConfig.gateway?.controlUi?.basePath ?? baseConfig.gateway?.controlUi?.basePath;
-    const links = resolveControlUiLinks({
+    const displayLinks = await resolveAdvertisedControlUiLinks({
+      bind: settings.bind,
+      port: settings.port,
+      customBindHost: settings.customBindHost,
+      basePath: controlUiBasePath,
+      tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
+    });
+    const probeLinks = resolveLocalControlUiProbeLinks({
       bind: settings.bind,
       port: settings.port,
       customBindHost: settings.customBindHost,
@@ -534,11 +542,11 @@ export async function finalizeSetupWizard(
     });
     const authedUrl =
       settings.authMode === "token" && settings.gatewayToken && !suppressGatewayTokenOutput
-        ? `${links.httpUrl}#token=${encodeURIComponent(settings.gatewayToken)}`
-        : links.httpUrl;
+        ? `${displayLinks.httpUrl}#token=${encodeURIComponent(settings.gatewayToken)}`
+        : displayLinks.httpUrl;
     if (opts.skipHealth || !gatewayProbe.ok) {
       gatewayProbe = await probeGatewayReachable({
-        url: links.wsUrl,
+        url: probeLinks.wsUrl,
         token: settings.authMode === "token" ? settings.gatewayToken : undefined,
         password: settings.authMode === "password" ? resolvedGatewayPassword : "",
       });
@@ -560,11 +568,11 @@ export async function finalizeSetupWizard(
 
     await prompter.note(
       [
-        t("wizard.finalize.webUiUrl", { url: links.httpUrl }),
+        t("wizard.finalize.webUiUrl", { url: displayLinks.httpUrl }),
         settings.authMode === "token" && settings.gatewayToken && !suppressGatewayTokenOutput
           ? t("wizard.finalize.webUiWithTokenUrl", { url: authedUrl })
           : undefined,
-        t("wizard.finalize.gatewayWsUrl", { url: links.wsUrl }),
+        t("wizard.finalize.gatewayWsUrl", { url: displayLinks.wsUrl }),
         gatewayStatusLine,
         t("wizard.finalize.controlUiDocs"),
       ]
@@ -811,7 +819,7 @@ export async function finalizeSetupWizard(
               : undefined,
             timeoutMs: HATCH_TUI_TIMEOUT_MS,
           },
-          gatewayProbe.ok ? { gatewayUrl: links.wsUrl, authSource: "config" } : {},
+          gatewayProbe.ok ? { gatewayUrl: displayLinks.wsUrl, authSource: "config" } : {},
         );
       } finally {
         restoreTerminalState("post-setup tui", { resumeStdinIfPaused: false });

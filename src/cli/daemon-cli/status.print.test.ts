@@ -526,6 +526,50 @@ describe("printDaemonStatus", () => {
     });
   });
 
+  it("prints gathered advertised dashboard links without recomputing them", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+        },
+        config: {
+          cli: {
+            path: "/tmp/openclaw-cli/openclaw.json",
+            exists: true,
+            valid: true,
+          },
+          daemon: {
+            path: "/tmp/openclaw-daemon/openclaw.json",
+            exists: true,
+            valid: true,
+            controlUi: { basePath: "/ui" },
+          },
+          mismatch: true,
+        },
+        gateway: {
+          bindMode: "lan",
+          bindHost: "0.0.0.0",
+          port: 19001,
+          portSource: "service args",
+          probeUrl: "wss://127.0.0.1:19001",
+          tlsEnabled: true,
+          controlUiLinks: {
+            httpUrl: "https://10.211.55.3:19001/ui/",
+            wsUrl: "wss://10.211.55.3:19001/ui",
+          },
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expect(runtime.log).toHaveBeenCalledWith("Dashboard: https://10.211.55.3:19001/ui/");
+    expect(resolveControlUiLinksMock).not.toHaveBeenCalled();
+  });
+
   it("prints deep config warnings", () => {
     printDaemonStatus(
       {

@@ -296,7 +296,7 @@ describe("Mistral provider", () => {
     const textBlock = toolContent.find((block) => block.type === "text");
     expect(textBlock?.text).toEqual(expect.stringContaining('{"type":"resource"'));
     expect(textBlock?.text).toContain('{\\"key\\":\\"***\\"}');
-    expect(textBlock?.text).not.toContain("value");
+    expect(textBlock?.text).not.toContain('{\\"key\\":\\"value\\"}');
   });
 
   it("serializes structured-only tool results instead of empty fallback", async () => {

@@ -425,7 +425,7 @@ describe("Anthropic provider", () => {
             timestamp: 0,
           },
         ],
-      },
+      } as unknown as Context,
       {
         apiKey: "sk-ant-provider",
         onPayload: (payload) => {

@@ -39,6 +39,14 @@ function assertUtf8Text(buffer: Buffer, sourcePath: string): string {
   return buffer.toString("utf8");
 }
 
+async function readExistingSourcePage(pagePath: string): Promise<string> {
+  try {
+    return await fs.readFile(pagePath, "utf8");
+  } catch {
+    return await fs.readFile(pagePath, "utf8");
+  }
+}
+
 export async function ingestMemoryWikiSource(params: {
   config: ResolvedMemoryWikiConfig;
   inputPath: string;
@@ -87,7 +95,7 @@ export async function ingestMemoryWikiSource(params: {
     ].join("\n"),
   });
 
-  const existing = created ? "" : await fs.readFile(pagePath, "utf8").catch(() => "");
+  const existing = created ? "" : await readExistingSourcePage(pagePath);
   await fs.writeFile(
     pagePath,
     existing ? preserveHumanNotesBlock(markdown, existing) : markdown,

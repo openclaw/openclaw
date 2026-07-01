@@ -38,6 +38,7 @@ export type IMessageProbe = BaseProbeResult & {
 export type IMessageProbeOptions = {
   cliPath?: string;
   dbPath?: string;
+  forceRefresh?: boolean;
   platform?: NodeJS.Platform;
   runtime?: RuntimeEnv;
 };
@@ -316,7 +317,9 @@ export async function probeIMessage(
     };
   }
 
-  const privateApi = await probeIMessagePrivateApi(cliPath, effectiveTimeout);
+  const privateApi = await probeIMessagePrivateApi(cliPath, effectiveTimeout, {
+    forceRefresh: opts.forceRefresh,
+  });
 
   const client = await createIMessageRpcClient({
     cliPath,
