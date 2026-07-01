@@ -87,11 +87,7 @@ import {
 } from "./chat-session.ts";
 import { renderChatControls } from "./components/chat-controls.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
-import {
-  CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS,
-  persistChatComposerState,
-  restoreChatComposerState,
-} from "./composer-persistence.ts";
+import { ChatComposerPersistenceController } from "./composer-persistence.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -960,13 +956,10 @@ export class ChatPage extends LitElement {
   private stopConfigSubscription: (() => void) | undefined;
   private stopSessionsSubscription: (() => void) | undefined;
   private connectedClient: GatewayBrowserClient | null = null;
-  private composerPersistenceTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  private composerPersistenceReady = false;
-  private lastPersistedComposer: {
-    sessionKey: string;
-    chatMessage: string;
-    chatQueue: ChatQueueItem[];
-  } | null = null;
+  private readonly composerPersistence = new ChatComposerPersistenceController(
+    this,
+    () => this.state,
+  );
   private pendingCreatedSessionComposer: {
     sessionKey: string;
     chatMessage: string;
@@ -1031,38 +1024,6 @@ export class ChatPage extends LitElement {
     void subscriptionSync;
     void historyLoad;
     void sessionsRefresh;
-  }
-
-  private persistComposer(immediate = false) {
-    const state = this.state;
-    if (!this.composerPersistenceReady || !state) {
-      return;
-    }
-    const last = this.lastPersistedComposer;
-    const unchanged =
-      last?.sessionKey === state.sessionKey &&
-      last.chatMessage === state.chatMessage &&
-      last.chatQueue === state.chatQueue;
-    if (unchanged) {
-      return;
-    }
-    if (this.composerPersistenceTimer !== null) {
-      globalThis.clearTimeout(this.composerPersistenceTimer);
-      this.composerPersistenceTimer = null;
-    }
-    if (!immediate) {
-      this.composerPersistenceTimer = globalThis.setTimeout(
-        () => this.persistComposer(true),
-        CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS,
-      );
-      return;
-    }
-    persistChatComposerState(state);
-    this.lastPersistedComposer = {
-      sessionKey: state.sessionKey,
-      chatMessage: state.chatMessage,
-      chatQueue: state.chatQueue,
-    };
   }
 
   private readonly handleCommandPaletteSlashCommand = (command: string) => {
@@ -1224,9 +1185,7 @@ export class ChatPage extends LitElement {
     this.state = createPageState(
       this.context,
       () => {
-        if (this.lastPersistedComposer?.chatQueue !== this.state?.chatQueue) {
-          this.persistComposer(true);
-        }
+        this.composerPersistence.persistQueueIfChanged();
         this.requestUpdate();
       },
       this,
@@ -1234,22 +1193,17 @@ export class ChatPage extends LitElement {
     const handleChatDraftChange = this.state.handleChatDraftChange;
     this.state.handleChatDraftChange = (next) => {
       handleChatDraftChange(next);
-      this.persistComposer();
+      this.composerPersistence.schedule();
     };
     this.announceCommandPaletteTarget(this.handleCommandPaletteSlashCommand);
     if (this.data?.sessionKey) {
       this.applyRouteSessionKey(this.data.sessionKey);
     }
-    restoreChatComposerState(this.state, { preserveCurrent: true });
+    this.composerPersistence.restore({ preserveCurrent: true });
     if (this.data?.draft !== undefined) {
       this.state.handleChatDraftChange(this.data.draft);
     }
-    this.composerPersistenceReady = true;
-    this.lastPersistedComposer = {
-      sessionKey: this.state.sessionKey,
-      chatMessage: this.state.chatMessage,
-      chatQueue: this.state.chatQueue,
-    };
+    this.composerPersistence.start();
     this.stopGatewaySnapshot = this.context.gateway.subscribe((snapshot) => {
       this.applyGatewaySnapshot(snapshot);
     });
@@ -1286,7 +1240,7 @@ export class ChatPage extends LitElement {
         this.pendingCreatedSessionComposer = null;
         this.state.chatMessage = pending.chatMessage;
         this.state.chatAttachments = pending.chatAttachments;
-        this.persistComposer(true);
+        this.composerPersistence.persistNow();
       }
       if (this.data.draft !== undefined && this.data.draft !== this.state.chatMessage) {
         this.state.handleChatDraftChange(this.data.draft);
@@ -1295,8 +1249,7 @@ export class ChatPage extends LitElement {
   }
 
   override disconnectedCallback() {
-    this.persistComposer(true);
-    this.composerPersistenceReady = false;
+    this.composerPersistence.stop();
     this.announceCommandPaletteTarget(null);
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     document.removeEventListener("pointerdown", this.handleDocumentPointerdown, true);

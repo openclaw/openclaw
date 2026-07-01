@@ -1,3 +1,4 @@
+import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type {
   ChatAttachment,
   ChatQueueItem,
@@ -484,4 +485,108 @@ export function restoreChatComposerState(
     state.chatQueue = snapshot.queue;
   }
   return true;
+}
+
+export class ChatComposerPersistenceController implements ReactiveController {
+  private timer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private ready = false;
+  private lastPersisted: {
+    sessionKey: string;
+    chatMessage: string;
+    chatQueue: ChatQueueItem[];
+  } | null = null;
+
+  constructor(
+    host: ReactiveControllerHost,
+    private readonly getState: () => ChatComposerPersistenceState | undefined,
+  ) {
+    host.addController(this);
+  }
+
+  hostDisconnected() {
+    this.stop();
+  }
+
+  start() {
+    const state = this.getState();
+    if (!state) {
+      return;
+    }
+    this.ready = true;
+    this.lastPersisted = this.snapshot(state);
+  }
+
+  stop() {
+    this.persistNow();
+    this.ready = false;
+    this.clearTimer();
+  }
+
+  restore(options: RestoreOptions = {}): boolean {
+    const state = this.getState();
+    if (!state) {
+      return false;
+    }
+    const restored = restoreChatComposerState(state, options);
+    this.lastPersisted = this.snapshot(state);
+    return restored;
+  }
+
+  schedule() {
+    this.persist(false);
+  }
+
+  persistNow() {
+    this.persist(true);
+  }
+
+  persistQueueIfChanged() {
+    const state = this.getState();
+    if (this.lastPersisted?.chatQueue !== state?.chatQueue) {
+      this.persistNow();
+    }
+  }
+
+  private persist(immediate: boolean) {
+    const state = this.getState();
+    if (!this.ready || !state || this.isUnchanged(state)) {
+      return;
+    }
+    this.clearTimer();
+    if (!immediate) {
+      this.timer = globalThis.setTimeout(
+        () => this.persistNow(),
+        CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS,
+      );
+      return;
+    }
+    persistChatComposerState(state);
+    this.lastPersisted = this.snapshot(state);
+  }
+
+  private clearTimer() {
+    if (this.timer === null) {
+      return;
+    }
+    globalThis.clearTimeout(this.timer);
+    this.timer = null;
+  }
+
+  private isUnchanged(state: ChatComposerPersistenceState): boolean {
+    const last = this.lastPersisted;
+    return Boolean(
+      last &&
+      last.sessionKey === state.sessionKey &&
+      last.chatMessage === state.chatMessage &&
+      last.chatQueue === state.chatQueue,
+    );
+  }
+
+  private snapshot(state: ChatComposerPersistenceState) {
+    return {
+      sessionKey: state.sessionKey,
+      chatMessage: state.chatMessage,
+      chatQueue: state.chatQueue,
+    };
+  }
 }
