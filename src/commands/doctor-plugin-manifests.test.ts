@@ -1,25 +1,21 @@
 // Doctor plugin manifest tests cover manifest validation, missing installs, and repair guidance.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { cleanupTrackedTempDirs } from "../plugins/test-helpers/fs-fixtures.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   collectLegacyPluginManifestContractMigrations,
   maybeRepairLegacyPluginManifestContracts,
 } from "./doctor-plugin-manifests.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
-const tempDirs: string[] = [];
-
-function makeTrustedBundledPluginsDir() {
-  const fixturesRoot = path.join(process.cwd(), "dist", "extensions");
-  fs.mkdirSync(fixturesRoot, { recursive: true });
-  const dir = fs.mkdtempSync(path.join(fixturesRoot, "openclaw-doctor-plugin-manifests-"));
-  tempDirs.push(dir);
-  return dir;
-}
+const fixturesRoot = path.join(process.cwd(), "dist", "extensions");
+const suiteTempDirs = createSuiteTempRootTracker({
+  prefix: "openclaw-doctor-plugin-manifests-",
+  parentDir: fixturesRoot,
+});
 
 function configWithPluginLoadPath(pluginRoot: string): OpenClawConfig {
   return {
@@ -86,13 +82,21 @@ function createPrompter(overrides: Partial<DoctorPrompter> = {}): DoctorPrompter
 }
 
 describe("doctor plugin manifest legacy contract repair", () => {
+  beforeAll(async () => {
+    fs.mkdirSync(fixturesRoot, { recursive: true });
+    await suiteTempDirs.setup();
+  });
+
+  afterAll(async () => {
+    await suiteTempDirs.cleanup();
+  });
+
   afterEach(() => {
-    cleanupTrackedTempDirs(tempDirs);
     vi.restoreAllMocks();
   });
 
-  it("collects legacy top-level capability keys for migration", () => {
-    const pluginsRoot = makeTrustedBundledPluginsDir();
+  it("collects legacy top-level capability keys for migration", async () => {
+    const pluginsRoot = await suiteTempDirs.make("legacy-capability");
     const root = path.join(pluginsRoot, "openai");
     fs.mkdirSync(root, { recursive: true });
     writePackageJson(root);
@@ -129,8 +133,8 @@ describe("doctor plugin manifest legacy contract repair", () => {
     ]);
   });
 
-  it("collects legacy top-level plugin tool keys for migration", () => {
-    const pluginsRoot = makeTrustedBundledPluginsDir();
+  it("collects legacy top-level plugin tool keys for migration", async () => {
+    const pluginsRoot = await suiteTempDirs.make("legacy-tool");
     const root = path.join(pluginsRoot, "cortex");
     fs.mkdirSync(root, { recursive: true });
     writePackageJson(root);
@@ -166,7 +170,7 @@ describe("doctor plugin manifest legacy contract repair", () => {
   });
 
   it("rewrites legacy top-level capability keys into contracts", async () => {
-    const pluginsRoot = makeTrustedBundledPluginsDir();
+    const pluginsRoot = await suiteTempDirs.make("rewrite-capability");
     const root = path.join(pluginsRoot, "openai");
     fs.mkdirSync(root, { recursive: true });
     writePackageJson(root);
@@ -207,7 +211,7 @@ describe("doctor plugin manifest legacy contract repair", () => {
   });
 
   it("removes duplicate legacy top-level plugin tools while keeping contracts.tools", async () => {
-    const pluginsRoot = makeTrustedBundledPluginsDir();
+    const pluginsRoot = await suiteTempDirs.make("dedupe-tool");
     const root = path.join(pluginsRoot, "cortex");
     fs.mkdirSync(root, { recursive: true });
     writePackageJson(root);
@@ -241,8 +245,8 @@ describe("doctor plugin manifest legacy contract repair", () => {
     });
   });
 
-  it("ignores non-object contracts payloads when collecting migrations", () => {
-    const pluginsRoot = makeTrustedBundledPluginsDir();
+  it("ignores non-object contracts payloads when collecting migrations", async () => {
+    const pluginsRoot = await suiteTempDirs.make("non-object-contracts");
     const root = path.join(pluginsRoot, "openai");
     fs.mkdirSync(root, { recursive: true });
     writePackageJson(root);

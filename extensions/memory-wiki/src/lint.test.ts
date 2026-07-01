@@ -493,4 +493,89 @@ describe("lintMemoryWikiVault", () => {
     await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain("### Contradictions");
     await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain("### Open Questions");
   });
+
+  it("reports unparsable frontmatter as a lint issue instead of failing the whole vault (#96125)", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-invalid-frontmatter-",
+    });
+    await fs.mkdir(path.join(rootDir, "syntheses"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "syntheses", "broken.md"),
+      [
+        "---",
+        "pageType: synthesis",
+        "id: synthesis.broken",
+        "sourceIds:",
+        '  - **MEMORY.md line 235**:"some quoted, value"',
+        "---",
+        "",
+        "# Broken",
+        "",
+        "Body text.",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "syntheses", "healthy.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "synthesis",
+          id: "synthesis.healthy",
+          title: "Healthy",
+          sourceIds: ["source.alpha"],
+        },
+        body: "# Healthy\n",
+      }),
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+
+    expect(issueCodesForPath(result, "syntheses/broken.md")).toEqual(["invalid-frontmatter"]);
+    expect(issueCodesForPath(result, "syntheses/healthy.md")).not.toContain("invalid-frontmatter");
+    await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain(
+      "Frontmatter failed to parse: Unexpected scalar",
+    );
+  });
+
+  it.each([
+    {
+      name: "syntax-error",
+      frontmatterLines: [
+        "pageType: report",
+        "id: report.lint",
+        "sourceIds:",
+        '  - **MEMORY.md line 235**:"some quoted, value"',
+      ],
+      error: "Unexpected scalar",
+    },
+    {
+      name: "sequence-root",
+      frontmatterLines: ["- pageType: report", "  id: report.lint"],
+      error: "Wiki frontmatter must be a YAML mapping",
+    },
+  ])(
+    "rejects a malformed lint report without changing its bytes ($name)",
+    async ({ frontmatterLines, error }) => {
+      const { rootDir, config } = await createVault({
+        prefix: "memory-wiki-lint-malformed-report-",
+      });
+      const reportPath = path.join(rootDir, "reports", "lint.md");
+      await fs.mkdir(path.dirname(reportPath), { recursive: true });
+      const malformedReport = [
+        "---",
+        ...frontmatterLines,
+        "---",
+        "",
+        "# Lint Report",
+        "",
+        "Existing report body.",
+        "",
+      ].join("\n");
+      await fs.writeFile(reportPath, malformedReport, "utf8");
+
+      await expect(lintMemoryWikiVault(config)).rejects.toThrow(error);
+      await expect(fs.readFile(reportPath, "utf8")).resolves.toBe(malformedReport);
+    },
+  );
 });

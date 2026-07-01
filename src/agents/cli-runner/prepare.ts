@@ -650,13 +650,14 @@ export async function prepareCliRunContext(
     });
     return openClawHistoryMessages;
   };
-  const heartbeatPrompt = isSideQuestion
-    ? undefined
-    : resolveHeartbeatPromptForSystemPrompt({
-        config: params.config,
-        agentId: sessionAgentId,
-        defaultAgentId,
-      });
+  const heartbeatPrompt =
+    isSideQuestion || params.bootstrapContextRunKind === "commitment-only"
+      ? undefined
+      : resolveHeartbeatPromptForSystemPrompt({
+          config: params.config,
+          agentId: sessionAgentId,
+          defaultAgentId,
+        });
   const openClawReferences = isSideQuestion
     ? { docsPath: null, sourcePath: null }
     : await prepareDeps.resolveOpenClawReferencePaths({
@@ -743,6 +744,7 @@ export async function prepareCliRunContext(
           ...buildAgentHookContextChannelFields(params),
         },
         hookRunner,
+        bootstrapContextRunKind: params.bootstrapContextRunKind,
       });
       if (hookResult.prependContext) {
         preparedPrompt = `${hookResult.prependContext}\n\n${preparedPrompt}`;
