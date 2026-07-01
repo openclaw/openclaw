@@ -489,13 +489,13 @@ function projectTalkResolvedProviderConfig(params: {
   // includeSecrets authorizes the active Talk provider key only. Keep resolver
   // defaults in the resolved payload, but do not turn arbitrary provider-owned
   // secret-like fields into a new native-client credential surface.
-  const projected = redactConfigObject(params.resolvedConfig) as TalkProviderConfig;
+  const projected = redactConfigObject(params.resolvedConfig);
   const apiKey = normalizeOptionalString(params.resolvedConfig.apiKey);
   return apiKey === undefined ? projected : { ...projected, apiKey };
 }
 
 function projectTalkSourceProviderConfigForSecrets(config: TalkProviderConfig): TalkProviderConfig {
-  const projected = redactConfigObject(config) as TalkProviderConfig;
+  const projected = redactConfigObject(config);
   if (config.apiKey === undefined || typeof config.apiKey === "string") {
     return projected;
   }
@@ -517,13 +517,13 @@ function projectTalkSourceProviderMapForSecrets(
 }
 
 function projectTalkRealtimeForSecrets(realtime: TalkRealtimeConfig): TalkRealtimeConfig {
-  const projected = redactConfigObject(realtime) as TalkRealtimeConfig;
+  const projected = redactConfigObject(realtime);
   const providers = projectTalkSourceProviderMapForSecrets(realtime.providers);
   return providers ? { ...projected, providers } : projected;
 }
 
 function projectTalkSourcePayloadForSecrets(payload: TalkConfigResponse): TalkConfigResponse {
-  const projected = redactConfigObject(payload) as TalkConfigResponse;
+  const projected = redactConfigObject(payload);
   const providers = projectTalkSourceProviderMapForSecrets(payload.providers);
   if (providers) {
     projected.providers = providers;
