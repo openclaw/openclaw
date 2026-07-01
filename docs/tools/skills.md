@@ -178,7 +178,9 @@ publish and sync.
     `clawhub.skill.verify.v1` trust envelope. Installed ClawHub skills verify
     against the version and registry recorded in `.clawhub/origin.json`.
     Bare slugs remain accepted for existing installed or unambiguous skills, but
-    owner-qualified refs avoid publisher ambiguity.
+    owner-qualified refs avoid publisher ambiguity. When the lockfile has
+    installed `SKILL.md` integrity metadata, default installed verification also
+    rejects local skill-file drift and asks you to reinstall from ClawHub.
 
     ClawHub skill pages expose the latest security scan state before install,
     with detail pages for VirusTotal, ClawScan, and static analysis. The

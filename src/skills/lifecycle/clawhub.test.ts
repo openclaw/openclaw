@@ -125,6 +125,7 @@ async function writeClawHubOriginFixture(params: {
   installedVersion?: string;
   installedAt?: number;
   writeLock?: boolean;
+  skillFile?: { path: string; sha256: string };
 }) {
   const skillDir = path.join(params.workspaceDir, "skills", params.slug);
   const registry = params.registry ?? "https://private.example.com/clawhub";
@@ -141,6 +142,7 @@ async function writeClawHubOriginFixture(params: {
         ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
         installedVersion,
         installedAt,
+        ...(params.skillFile ? { skillFile: params.skillFile } : {}),
       },
       null,
       2,
@@ -160,6 +162,7 @@ async function writeClawHubOriginFixture(params: {
               installedAt,
               registry,
               ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
+              ...(params.skillFile ? { skillFile: params.skillFile } : {}),
             },
           },
         },
@@ -2375,6 +2378,75 @@ describe("skills-clawhub", () => {
           throw new Error("expected registry mismatch failure");
         }
         expect(result.error).toContain("does not match the workspace ClawHub lockfile");
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects installed-version verification when the installed skill file changed", async () => {
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-verify-"));
+      try {
+        const expectedContent = "# AgentReceipt\n";
+        const skillDir = await writeClawHubOriginFixture({
+          workspaceDir,
+          slug: "agentreceipt",
+          skillFile: {
+            path: "SKILL.md",
+            sha256: createHash("sha256").update(expectedContent).digest("hex"),
+          },
+        });
+        await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Modified locally\n", "utf8");
+
+        const result = await resolveClawHubSkillVerificationTarget({
+          workspaceDir,
+          slug: "agentreceipt",
+        });
+
+        expect(result.ok).toBe(false);
+        if (result.ok) {
+          throw new Error("expected skill file drift failure");
+        }
+        expect(result.error).toContain("installed skill file does not match");
+        expect(result.error).toContain("Reinstall it from ClawHub");
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    });
+
+    it("allows explicit version verification when the installed skill file changed", async () => {
+      const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-verify-"));
+      try {
+        const expectedContent = "# AgentReceipt\n";
+        const skillDir = await writeClawHubOriginFixture({
+          workspaceDir,
+          slug: "agentreceipt",
+          registry: "https://private.example.com/clawhub",
+          installedVersion: "2.0.0",
+          skillFile: {
+            path: "SKILL.md",
+            sha256: createHash("sha256").update(expectedContent).digest("hex"),
+          },
+        });
+        await fs.writeFile(path.join(skillDir, "SKILL.md"), "# Modified locally\n", "utf8");
+
+        await expect(
+          resolveClawHubSkillVerificationTarget({
+            workspaceDir,
+            slug: "agentreceipt",
+            version: "2.1.0",
+          }),
+        ).resolves.toMatchObject({
+          ok: true,
+          slug: "agentreceipt",
+          baseUrl: "https://private.example.com/clawhub",
+          version: "2.1.0",
+          resolution: {
+            source: "installed",
+            selector: "version",
+            registry: "https://private.example.com/clawhub",
+            installedVersion: "2.0.0",
+          },
+        });
       } finally {
         await fs.rm(workspaceDir, { recursive: true, force: true });
       }
