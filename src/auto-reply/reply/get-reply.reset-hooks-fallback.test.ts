@@ -29,14 +29,18 @@ async function loadGetReplyRuntimeForTest() {
   ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
 }
 
-function createContinueDirectivesResult(resetHookTriggered: boolean) {
+function createContinueDirectivesResult(
+  resetHookTriggered: boolean,
+  body = "/new",
+  overrides: { sessionKey?: string; from?: string; to?: string } = {},
+) {
   return createGetReplyContinueDirectivesResult({
-    body: "/new",
-    abortKey: "telegram:slash:123",
-    from: "telegram:123",
-    to: "slash:123",
+    body,
+    abortKey: overrides.sessionKey ?? "telegram:slash:123",
+    from: overrides.from ?? "telegram:123",
+    to: overrides.to ?? "slash:123",
     senderId: "123",
-    commandSource: "/new",
+    commandSource: body,
     senderIsOwner: true,
     resetHookTriggered,
   });
@@ -84,6 +88,48 @@ describe("getReplyFromConfig reset-hook fallback", () => {
     >;
     expect(hookParams.action).toBe("new");
     expect(hookParams.sessionKey).toBe("agent:main:telegram:direct:123");
+  });
+
+  it("emits fallback reset hooks for the custom trigger that caused the reset", async () => {
+    const ctx = buildNativeResetContext({
+      Provider: "discord",
+      Surface: "discord",
+      RawBody: "!fresh tail",
+      CommandBody: "!fresh tail",
+      SessionKey: "agent:main:discord:channel:ops",
+      CommandTargetSessionKey: "agent:main:discord:channel:ops",
+      From: "discord:123",
+      To: "discord:channel:ops",
+    });
+    mocks.initSessionState.mockResolvedValue(
+      createGetReplySessionState({
+        sessionCtx: ctx,
+        sessionKey: "agent:main:discord:channel:ops",
+        isNewSession: true,
+        resetTriggered: true,
+        sessionScope: "per-chat",
+        triggerBodyNormalized: "!fresh tail",
+        bodyStripped: "tail",
+        matchedResetTrigger: "!fresh",
+      }),
+    );
+    mocks.resolveReplyDirectives.mockResolvedValue(
+      createContinueDirectivesResult(false, "!fresh tail", {
+        sessionKey: "agent:main:discord:channel:ops",
+        from: "discord:123",
+        to: "discord:channel:ops",
+      }),
+    );
+    mocks.handleInlineActions.mockResolvedValue({ kind: "reply", reply: undefined });
+
+    await getReplyFromConfig(ctx, undefined, {});
+
+    expect(mocks.emitResetCommandHooks).toHaveBeenCalledTimes(1);
+    const [[hookParams]] = mocks.emitResetCommandHooks.mock.calls as unknown as Array<
+      [{ action?: string; sessionKey?: string }]
+    >;
+    expect(hookParams.action).toBe("new");
+    expect(hookParams.sessionKey).toBe("agent:main:discord:channel:ops");
   });
 
   it("does not emit fallback hooks when resetHookTriggered is already set", async () => {

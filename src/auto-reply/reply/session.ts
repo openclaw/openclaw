@@ -122,7 +122,9 @@ function stripThreadIdFromOrigin(origin: SessionEntry["origin"]): SessionEntry["
 }
 
 function resolveExplicitSessionEndReason(matchedResetTriggerLower?: string): ReplySessionEndReason {
-  return matchedResetTriggerLower === "/reset" ? "reset" : "new";
+  return matchedResetTriggerLower === "/reset" || matchedResetTriggerLower === "!reset"
+    ? "reset"
+    : "new";
 }
 
 function resolveSessionDefaultAccountId(params: {
@@ -193,6 +195,7 @@ export type SessionInitResult = {
   isGroup: boolean;
   bodyStripped?: string;
   triggerBodyNormalized: string;
+  matchedResetTrigger?: string;
 };
 
 export type InitSessionStateParams = {
@@ -409,6 +412,7 @@ async function initSessionStateAttemptLocked(
   const trimmedBodyLower = normalizeLowercaseStringOrEmpty(trimmedBody);
   const strippedForResetLower = normalizeLowercaseStringOrEmpty(normalizedResetBody);
   let matchedResetTriggerLower: string | undefined;
+  let matchedResetTrigger: string | undefined;
 
   for (const trigger of resetTriggers) {
     if (!trigger) {
@@ -423,6 +427,7 @@ async function initSessionStateAttemptLocked(
       bodyStripped = "";
       resetTriggered = true;
       matchedResetTriggerLower = triggerLower;
+      matchedResetTrigger = trigger;
       break;
     }
     const triggerPrefixLower = `${triggerLower} `;
@@ -435,6 +440,7 @@ async function initSessionStateAttemptLocked(
       bodyStripped = normalizedResetBody.slice(trigger.length).trimStart();
       resetTriggered = true;
       matchedResetTriggerLower = triggerLower;
+      matchedResetTrigger = trigger;
       break;
     }
   }
@@ -1054,5 +1060,6 @@ async function initSessionStateAttemptLocked(
     isGroup,
     bodyStripped,
     triggerBodyNormalized,
+    matchedResetTrigger,
   };
 }
