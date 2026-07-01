@@ -529,6 +529,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           mediaUrl,
           replyToMessageId: sendReplyToMessageId,
           replyInThread: effectiveReplyInThread,
+          allowTopLevelReplyFallback,
           accountId,
           ...(payload.audioAsVoice === true ? { audioAsVoice: true } : {}),
         });

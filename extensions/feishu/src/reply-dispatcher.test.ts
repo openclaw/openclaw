@@ -1448,6 +1448,64 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
+  it("forwards top-level fallback to sendMediaFeishu for normal group quoted replies", async () => {
+    useNonStreamingAutoAccount();
+    const { options } = createDispatcherHarness({
+      replyToMessageId: "om_quote_reply",
+      replyInThread: true,
+      threadReply: true,
+      rootId: "om_original_msg",
+    });
+    await options.deliver({ mediaUrl: "https://example.com/a.png" }, { kind: "final" });
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+    expectMockArgFields(sendMediaFeishuMock, "media send params", {
+      replyToMessageId: "om_quote_reply",
+      replyInThread: true,
+      allowTopLevelReplyFallback: true,
+      mediaUrl: "https://example.com/a.png",
+    });
+  });
+
+  it("keeps sendMediaFeishu opted out of top-level fallback for native topic replies", async () => {
+    useNonStreamingAutoAccount();
+    const { options } = createDispatcherHarness({
+      replyToMessageId: "om_topic_root",
+      replyInThread: true,
+      threadReply: true,
+      rootId: "om_topic_root",
+    });
+    await options.deliver({ mediaUrl: "https://example.com/a.png" }, { kind: "final" });
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+    expectMockArgFields(sendMediaFeishuMock, "media send params", {
+      replyToMessageId: "om_topic_root",
+      replyInThread: true,
+      allowTopLevelReplyFallback: false,
+      mediaUrl: "https://example.com/a.png",
+    });
+  });
+
+  it("omits allowTopLevelReplyFallback on sendMediaFeishu for top-level (non-thread) replies", async () => {
+    useNonStreamingAutoAccount();
+    const { options } = createDispatcherHarness({
+      replyToMessageId: "om_msg",
+      replyInThread: false,
+    });
+    await options.deliver({ mediaUrl: "https://example.com/a.png" }, { kind: "final" });
+
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+    expectMockArgFields(sendMediaFeishuMock, "media send params", {
+      replyToMessageId: "om_msg",
+      replyInThread: false,
+      allowTopLevelReplyFallback: false,
+      mediaUrl: "https://example.com/a.png",
+    });
+  });
+
   it("passes replyInThread to sendStructuredCardFeishu for card text", async () => {
     resolveFeishuAccountMock.mockReturnValue({
       accountId: "main",
