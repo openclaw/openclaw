@@ -83,6 +83,37 @@ describe("Anthropic provider", () => {
     expect(config.defaultHeaders?.["cf-aig-authorization"]).toBe("Bearer gateway-token");
   });
 
+  it("wires buildGuardedModelFetch into the API-key Anthropic SDK fetch option", async () => {
+    const model = makeAnthropicModel({
+      provider: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+    });
+    const context = {
+      messages: [{ role: "user", content: "hello", timestamp: 1 }],
+    } satisfies Context;
+
+    // Plain API key (no sk-ant-oat prefix → not OAuth, not Cloudflare, not Foundry).
+    streamAnthropic(model, context, {
+      apiKey: "sk-ant-api03-test",
+    });
+
+    await vi.waitFor(() => expect(anthropicMockState.configs).toHaveLength(1));
+    const config = anthropicMockState.configs[0] as {
+      apiKey?: string | null;
+      authToken?: string | null;
+      baseURL?: string;
+      fetch?: unknown;
+    };
+
+    expect(config.apiKey).toBe("sk-ant-api03-test");
+    expect(config.authToken).toBeNull();
+    expect(config.baseURL).toBe("https://api.anthropic.com");
+    // Bounded-read contract: a custom `fetch` is wired through the SDK. The
+    // cap itself is exercised in `provider-transport-fetch.test.ts`; this
+    // test only proves the cap is in scope on this code path.
+    expect(typeof config.fetch).toBe("function");
+  });
+
   it("uses bearer auth for Microsoft Foundry Anthropic requests", async () => {
     const model = makeAnthropicModel({
       provider: "microsoft-foundry",
