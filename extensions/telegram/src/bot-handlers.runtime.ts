@@ -2945,7 +2945,7 @@ export const registerTelegramHandlers = ({
           return;
         }
 
-        if (modelCallback.type === "select") {
+        if (modelCallback.type === "select" || modelCallback.type === "select-index") {
           const selection = resolveModelSelection({
             callback: modelCallback,
             providers,

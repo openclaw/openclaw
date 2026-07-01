@@ -33,6 +33,8 @@ describe("parseModelCallbackData", () => {
         "mdl_sel/anthropic/claude-3-7-sonnet",
         { type: "select", model: "anthropic/claude-3-7-sonnet" },
       ],
+      ["mdl_idx_openai_0", { type: "select-index", provider: "openai", index: 0 }],
+      ["mdl_idx_anthropic_42", { type: "select-index", provider: "anthropic", index: 42 }],
       ["  mdl_prov  ", { type: "providers" }],
     ] as const;
     for (const [input, expected] of cases) {
@@ -50,6 +52,9 @@ describe("parseModelCallbackData", () => {
       "mdl_list_openai_9007199254740993",
       "mdl_sel_noslash",
       "mdl_sel/",
+      "mdl_idx_openai",
+      "mdl_idx_openai_-1",
+      "mdl_idx_openai_abc",
     ];
     for (const input of invalid) {
       expect(parseModelCallbackData(input), input).toBeNull();
@@ -111,6 +116,45 @@ describe("resolveModelSelection", () => {
       matchingProviders: [],
     });
   });
+
+  it("resolves select-index callbacks via sorted-list position", () => {
+    const result = resolveModelSelection({
+      callback: { type: "select-index", provider: "openai", index: 1 },
+      providers: ["openai", "anthropic"],
+      byProvider: new Map([
+        ["openai", new Set(["zeta", "alpha", "mid"])],
+        ["anthropic", new Set(["claude-sonnet-4-5"])],
+      ]),
+    });
+    // Sorted list is ["alpha", "mid", "zeta"]; index 1 -> "mid"
+    expect(result).toEqual({ kind: "resolved", provider: "openai", model: "mid" });
+  });
+
+  it("returns ambiguous when select-index targets an unknown provider", () => {
+    const result = resolveModelSelection({
+      callback: { type: "select-index", provider: "missing", index: 0 },
+      providers: ["openai"],
+      byProvider: new Map([["openai", new Set(["gpt-4.1"])]]),
+    });
+    expect(result).toEqual({
+      kind: "ambiguous",
+      model: "<index:0>",
+      matchingProviders: [],
+    });
+  });
+
+  it("returns ambiguous when select-index is out of range", () => {
+    const result = resolveModelSelection({
+      callback: { type: "select-index", provider: "openai", index: 99 },
+      providers: ["openai"],
+      byProvider: new Map([["openai", new Set(["gpt-4.1"])]]),
+    });
+    expect(result).toEqual({
+      kind: "ambiguous",
+      model: "<index:99>",
+      matchingProviders: [],
+    });
+  });
 });
 
 describe("buildModelSelectionCallbackData", () => {
@@ -127,6 +171,29 @@ describe("buildModelSelectionCallbackData", () => {
   it("returns null when even compact callback exceeds Telegram limit", () => {
     const tooLongModel = "x".repeat(80);
     expect(buildModelSelectionCallbackData({ provider: "openai", model: tooLongModel })).toBeNull();
+  });
+
+  it("falls back to index-based callback when compact form still exceeds the limit", () => {
+    const tooLongModel = "x".repeat(80);
+    expect(
+      buildModelSelectionCallbackData({
+        provider: "openai",
+        model: tooLongModel,
+        sortedIndex: 5,
+      }),
+    ).toBe("mdl_idx_openai_5");
+  });
+
+  it("returns null when every encoding exceeds the limit", () => {
+    const tooLongModel = "x".repeat(80);
+    const tooLongProvider = "p".repeat(60);
+    expect(
+      buildModelSelectionCallbackData({
+        provider: tooLongProvider,
+        model: tooLongModel,
+        sortedIndex: 999999,
+      }),
+    ).toBeNull();
   });
 });
 
@@ -495,11 +562,13 @@ describe("large model lists (OpenRouter-scale)", () => {
     }
   });
 
-  it("skips models that would exceed callback_data limit", () => {
+  it("falls back to index-based callback when model name overflows every text encoding", () => {
+    // Caller-sorted list (the keyboard contract requires the caller to sort
+    // alphabetically before paginating, matching resolveModelSelection's sort).
     const models = [
+      "another-short",
       "short-model",
       "this-is-an-extremely-long-model-name-that-definitely-exceeds-the-sixty-four-byte-limit",
-      "another-short",
     ];
     const result = buildModelsKeyboard({
       provider: "openrouter",
@@ -508,10 +577,14 @@ describe("large model lists (OpenRouter-scale)", () => {
       totalPages: 1,
     });
 
-    // Should have 2 model buttons (skipping the long one) + back
+    // All three models render (no skip); the long one gets an index callback.
     const modelButtons = result.filter((row) => !row[0]?.callback_data.startsWith("mdl_back"));
-    expect(modelButtons.length).toBe(2);
-    expect(modelButtons[0]?.[0]?.text).toBe("short-model");
-    expect(modelButtons[1]?.[0]?.text).toBe("another-short");
+    expect(modelButtons.length).toBe(3);
+    expect(modelButtons[0]?.[0]?.text).toBe("another-short");
+    expect(modelButtons[0]?.[0]?.callback_data).toBe("mdl_sel_openrouter/another-short");
+    expect(modelButtons[1]?.[0]?.text).toBe("short-model");
+    expect(modelButtons[1]?.[0]?.callback_data).toBe("mdl_sel_openrouter/short-model");
+    // Index 2 in the sorted list -> the long model
+    expect(modelButtons[2]?.[0]?.callback_data).toBe("mdl_idx_openrouter_2");
   });
 });
