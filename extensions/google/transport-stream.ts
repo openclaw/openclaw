@@ -148,7 +148,6 @@ type GoogleSseChunk = {
 };
 
 let toolCallCounter = 0;
-
 const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
 
 function requiresToolCallId(modelId: string): boolean {

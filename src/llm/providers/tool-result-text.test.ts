@@ -1,5 +1,3 @@
-// Tool-result text extraction keeps provider replay text-first and bounded before
-// structured fallback content can cross external model-provider boundaries.
 import { describe, expect, it } from "vitest";
 import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 
