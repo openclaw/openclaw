@@ -1,0 +1,5 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { buildTenkiSandboxName, buildTenkiSshExecEnv } from "./backend.js";
+
+describe("tenki backend env", () => { const originalEnv = { ...process.env }; afterEach(() => { for (const key of Object.keys(process.env)) if (!(key in originalEnv)) delete process.env[key]; Object.assign(process.env, originalEnv); }); it("filters blocked secrets from ssh exec env", () => { process.env.OPENAI_API_KEY="redacted"; process.env.ANTHROPIC_API_KEY="redacted"; process.env.LANG="en_US.UTF-8"; const env=buildTenkiSshExecEnv(); expect(env.OPENAI_API_KEY).toBeUndefined(); expect(env.ANTHROPIC_API_KEY).toBeUndefined(); expect(env.LANG).toBe("en_US.UTF-8"); }); });
+describe("tenki sandbox names", () => { it("generates safe names from scope keys", () => { const name=buildTenkiSandboxName("agent:somalley_alice:dashboard-8"); expect(name).toMatch(/^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/); expect(name).toContain("somalley-alice"); expect(name).not.toContain("_"); }); });

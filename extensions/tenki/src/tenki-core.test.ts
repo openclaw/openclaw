@@ -1,0 +1,5 @@
+import { describe, expect, it } from "vitest";
+import { buildTenkiBaseArgv, buildTenkiCreateArgs, buildTenkiDeleteArgs, buildTenkiGetArgs, buildTenkiSshConfigArgs, shellEscape } from "./cli.js";
+import { resolveTenkiPluginConfig } from "./config.js";
+
+describe("tenki cli helpers", () => { it("builds base argv", () => { expect(buildTenkiBaseArgv(resolveTenkiPluginConfig({command:"/usr/local/bin/tenki"}))).toEqual(["/usr/local/bin/tenki"]); }); it("shell escapes", () => { expect(shellEscape(`a'b`)).toBe(`'a'"'"'b'`); }); it("builds lifecycle commands", () => { const config=resolveTenkiPluginConfig({from:"openclaw",providers:["anthropic"]}); expect(buildTenkiGetArgs("demo")).toEqual(["sandbox","get","--session","demo","--json"]); expect(buildTenkiSshConfigArgs("demo")).toEqual(["sandbox","ssh-config","--session","demo"]); expect(buildTenkiDeleteArgs("demo")).toEqual(["sandbox","delete","--session","demo"]); expect(buildTenkiCreateArgs({sandboxName:"demo",config})).toEqual(["sandbox","create","--name","demo","--from","openclaw","--auto-providers","--provider","anthropic","--","true"]); }); });

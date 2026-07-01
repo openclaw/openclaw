@@ -129,6 +129,7 @@
     "!dist/extensions/qa-lab/**",
     "!dist/extensions/qa-matrix/**",
     "!dist/extensions/openshell/**",
+    "!dist/extensions/tenki/**",
     "!dist/extensions/qwen/**",
     "!dist/extensions/searxng/**",
     "!dist/extensions/signal/**",

@@ -21,6 +21,7 @@ export const miscExtensionTestRoots = [
   "extensions/searxng",
   "extensions/synthetic",
   "extensions/tavily",
+  "extensions/tenki",
   "extensions/thread-ownership",
   "extensions/vercel-ai-gateway",
   "extensions/webhooks",

@@ -37,9 +37,13 @@
             "id": "brave",
             "label": "Brave Search",
             "hint": "Brave Search web results.",
-            "onboardingScopes": ["text-inference"],
+            "onboardingScopes": [
+              "text-inference"
+            ],
             "credentialLabel": "Brave Search API key",
-            "envVars": ["BRAVE_API_KEY"],
+            "envVars": [
+              "BRAVE_API_KEY"
+            ],
             "placeholder": "BSA...",
             "signupUrl": "https://api-dashboard.search.brave.com/app/keys",
             "docsUrl": "https://docs.openclaw.ai/tools/brave-search",
@@ -343,7 +347,9 @@
           "label": "llama.cpp Provider"
         },
         "contracts": {
-          "embeddingProviders": ["local"]
+          "embeddingProviders": [
+            "local"
+          ]
         },
         "install": {
           "npmSpec": "@openclaw/llama-cpp-provider",
@@ -366,6 +372,23 @@
           "npmSpec": "@openclaw/openshell-sandbox",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.12-beta.1"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/tenki-sandbox",
+      "description": "OpenClaw Tenki sandbox backend",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "tenki",
+          "label": "Tenki Sandbox"
+        },
+        "install": {
+          "npmSpec": "@openclaw/tenki-sandbox",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.6.11"
         }
       }
     },
@@ -406,7 +429,7 @@
           {
             "id": "parallel-free",
             "label": "Parallel Search (Free)",
-            "hint": "Free web search via Parallel's hosted Search MCP — no API key required",
+            "hint": "Free web search via Parallel's hosted Search MCP \u2014 no API key required",
             "onboardingScopes": [
               "text-inference"
             ],
@@ -445,7 +468,7 @@
           {
             "id": "perplexity",
             "label": "Perplexity Search",
-            "hint": "Requires Perplexity API key or OpenRouter API key · structured results",
+            "hint": "Requires Perplexity API key or OpenRouter API key \u00b7 structured results",
             "onboardingScopes": [
               "text-inference"
             ],
