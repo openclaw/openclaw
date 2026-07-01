@@ -1,6 +1,7 @@
 /** Verifies effective plugin id resolution across config, manifests, and activation sources. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 
 const mocks = vi.hoisted(() => ({
@@ -114,6 +115,33 @@ describe("resolveEffectivePluginIds", () => {
         },
       }),
     ).toStrictEqual([]);
+  });
+
+  it("skips unreadable bundled channel-owner metadata while resolving healthy owners", () => {
+    const poisonedPlugin = Object.defineProperty({}, "origin", {
+      get() {
+        throw new Error("poisoned origin");
+      },
+    }) as PluginManifestRecord;
+    const healthyPlugin = {
+      id: "demo-channel-plugin",
+      channels: ["demo-channel"],
+      cliBackends: [],
+      hooks: [],
+      manifestPath: "/plugins/demo/package.json",
+      origin: "bundled",
+      providers: [],
+      rootDir: "/plugins/demo",
+      skills: [],
+      source: "manifest",
+    } satisfies PluginManifestRecord;
+
+    mocks.listPotentialConfiguredChannelIds.mockReturnValue(["demo-channel"]);
+    mocks.loadManifestMetadataSnapshot.mockReturnValue({
+      plugins: [poisonedPlugin, healthyPlugin],
+    } as unknown as PluginMetadataSnapshot);
+
+    expect(resolve({})).toStrictEqual(["demo-channel-plugin"]);
   });
 
   it.each([

@@ -15,7 +15,13 @@ import {
 import { normalizePluginsConfig } from "./config-state.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import { defaultSlotIdForKey } from "./slots.js";
+
+type BundledChannelOwnerMetadata = {
+  pluginId: string;
+  channelIds: readonly string[];
+};
 
 function collectConfiguredChannelIds(
   config: OpenClawConfig,
@@ -73,28 +79,41 @@ function collectBundledChannelOwnerPluginIds(params: {
   });
   const pluginIds = new Set<string>();
   for (const plugin of snapshot.plugins) {
-    if (plugin.origin !== "bundled") {
+    const owner = readBundledChannelOwnerMetadata(plugin);
+    if (!owner?.channelIds.some((channelId) => channelIds.has(channelId))) {
       continue;
     }
     if (
-      plugin.channels.some((channelId) =>
-        channelIds.has(normalizeOptionalLowercaseString(channelId) ?? ""),
-      )
+      passesManifestOwnerBasePolicy({
+        plugin: { id: owner.pluginId },
+        normalizedConfig: plugins,
+        allowRestrictiveAllowlistBypass: true,
+      })
     ) {
-      const pluginId = normalizeOptionalLowercaseString(plugin.id);
-      if (
-        pluginId &&
-        passesManifestOwnerBasePolicy({
-          plugin: { id: pluginId },
-          normalizedConfig: plugins,
-          allowRestrictiveAllowlistBypass: true,
-        })
-      ) {
-        pluginIds.add(pluginId);
-      }
+      pluginIds.add(owner.pluginId);
     }
   }
   return sortUniqueStrings(pluginIds);
+}
+
+function readBundledChannelOwnerMetadata(
+  plugin: PluginManifestRecord,
+): BundledChannelOwnerMetadata | undefined {
+  try {
+    if (plugin.origin !== "bundled") {
+      return undefined;
+    }
+    const pluginId = normalizeOptionalLowercaseString(plugin.id);
+    const channelIds = plugin.channels
+      .map((channelId) => normalizeOptionalLowercaseString(channelId))
+      .filter((channelId): channelId is string => Boolean(channelId));
+    if (!pluginId || channelIds.length === 0) {
+      return undefined;
+    }
+    return { pluginId, channelIds };
+  } catch {
+    return undefined;
+  }
 }
 
 function collectExplicitEffectivePluginIds(config: OpenClawConfig): string[] {
