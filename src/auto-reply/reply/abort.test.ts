@@ -1,15 +1,14 @@
 // Tests abort request handling, cutoff persistence, and active run cleanup.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
   type SessionAbortTargetResult,
 } from "../../config/sessions/session-accessor.js";
+import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import {
   testing as abortTesting,
   getAbortMemory,

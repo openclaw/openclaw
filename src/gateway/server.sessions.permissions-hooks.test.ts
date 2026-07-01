@@ -1,6 +1,5 @@
 // Session permissions and hooks tests protect gateway access control around
 // patch/delete/compact/restore APIs plus emitted internal hook payloads.
-import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, expect, test, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
