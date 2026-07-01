@@ -346,7 +346,13 @@ async function reserveLoopbackPort() {
   }
   const port = address.port;
   await new Promise((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
+    server.close((error) => {
+      if (error) {
+        reject(error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
+      resolve();
+    });
   });
   return port;
 }
