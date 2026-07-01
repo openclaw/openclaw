@@ -342,6 +342,41 @@ describe("signal outbound", () => {
     );
   });
 
+  it("resolves aliases before formatted Signal media sends", async () => {
+    const send = vi.fn(async () => ({
+      messageId: "signal-1",
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ channel: "signal", messageId: "signal-1" }],
+        kind: "media",
+      }),
+    }));
+
+    await signalPlugin.outbound?.sendFormattedMedia?.({
+      cfg: {
+        channels: {
+          signal: {
+            aliases: {
+              ops: "group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      to: "signal:ops",
+      text: "approval",
+      mediaUrl: "file:///tmp/signal-proof.png",
+      deps: { signal: send },
+    });
+
+    expect(send).toHaveBeenCalledWith(
+      "group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
+      "approval",
+      expect.objectContaining({
+        cfg: expect.any(Object),
+        mediaUrl: "file:///tmp/signal-proof.png",
+      }),
+    );
+  });
+
   it("returns clear outbound errors for recursive aliases", () => {
     const resolved = signalPlugin.outbound?.resolveTarget?.({
       cfg: {
