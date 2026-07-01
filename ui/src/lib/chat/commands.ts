@@ -1,12 +1,12 @@
 // Control UI chat domain owns pure slash command rules.
 import type { CommandEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";
-import type { IconName } from "../../components/icons.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";
 
 export type SlashCommandTier = "essential" | "standard" | "power";
+export type ChatIconName = string;
 
 export type SlashCommandDef = {
   key: string;
@@ -14,7 +14,7 @@ export type SlashCommandDef = {
   aliases?: string[];
   description: string;
   args?: string;
-  icon?: IconName;
+  icon?: ChatIconName;
   category?: SlashCommandCategory;
   /** When true, the command is executed client-side via RPC instead of sent to the agent. */
   executeLocal?: boolean;
@@ -51,7 +51,7 @@ const MAX_REMOTE_NAME_LENGTH = 200;
 const MAX_REMOTE_DESCRIPTION_LENGTH = 2_000;
 const MAX_REMOTE_ARG_NAME_LENGTH = 200;
 
-const COMMAND_ICON_OVERRIDES: Partial<Record<string, IconName>> = {
+const COMMAND_ICON_OVERRIDES: Partial<Record<string, ChatIconName>> = {
   help: "book",
   status: "barChart",
   usage: "barChart",
@@ -208,7 +208,7 @@ function mapCategory(command: CommandLike): SlashCommandCategory {
   }
 }
 
-function mapIcon(command: CommandLike): IconName | undefined {
+function mapIcon(command: CommandLike): ChatIconName | undefined {
   return COMMAND_ICON_OVERRIDES[normalizeUiKey(command)] ?? "terminal";
 }
 

@@ -3,7 +3,7 @@ import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { until } from "lit/directives/until.js";
 import { resolveLocalUserName } from "../../app/user-identity.ts";
-import { icons } from "../../components/icons.ts";
+import { icons, type IconName } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../../components/markdown.ts";
 import { t } from "../../i18n/index.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
@@ -43,6 +43,10 @@ import {
 } from "../../pages/chat/tool-cards.ts";
 import { renderChatAvatar } from "./chat-avatar.ts";
 import { formatCompactTokenCount } from "./token-format.ts";
+
+function renderChatIcon(name: string) {
+  return icons[name as IconName] ?? icons.zap;
+}
 
 type AssistantAttachmentAvailability =
   | { status: "checking" }
@@ -1944,7 +1948,7 @@ function renderGroupedMessage(
         : "Tool output";
   const toolMessageLabel =
     formatCollapsedToolSummaryText(toolMessageLabelRaw) ?? toolMessageLabelRaw;
-  const toolMessageIcon = singleToolDisplay ? icons[singleToolDisplay.icon] : icons.zap;
+  const toolMessageIcon = singleToolDisplay ? renderChatIcon(singleToolDisplay.icon) : icons.zap;
 
   const duplicateCount = Math.max(1, Math.floor(opts.duplicateCount ?? 1));
 

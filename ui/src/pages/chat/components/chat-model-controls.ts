@@ -166,7 +166,12 @@ export function renderChatQuotaPill(
 }
 
 export function renderChatModelSelect(state: ChatModelControlsState) {
-  const { currentOverride, defaultLabel, options } = resolveChatModelSelectState(state);
+  const { currentOverride, defaultLabel, options } = resolveChatModelSelectState({
+    chatModelCatalog: state.chatModelCatalog,
+    modelOverrides: state.sessions.state.modelOverrides,
+    sessionKey: state.sessionKey,
+    sessionsResult: state.sessionsResult,
+  });
   const thinking = resolveChatThinkingSelectState(state);
   const fastMode = resolveChatFastModeSelectState(state, currentOverride);
   const busy =
@@ -765,7 +770,12 @@ async function switchChatModel(state: ChatModelControlsState, nextModel: string)
   if (!state.client || !state.connected) {
     return false;
   }
-  const currentOverride = resolveChatModelOverrideValue(state);
+  const currentOverride = resolveChatModelOverrideValue({
+    chatModelCatalog: state.chatModelCatalog,
+    modelOverrides: state.sessions.state.modelOverrides,
+    sessionKey: state.sessionKey,
+    sessionsResult: state.sessionsResult,
+  });
   if (currentOverride === nextModel) {
     return true;
   }

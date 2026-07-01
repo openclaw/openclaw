@@ -12,7 +12,7 @@ import type {
   SessionsListResult,
 } from "../../api/types.ts";
 import { resolveLocalUserName } from "../../app/user-identity.ts";
-import { icons } from "../../components/icons.ts";
+import { icons, type IconName } from "../../components/icons.ts";
 import { handleMarkdownCodeBlockCopy } from "../../components/markdown.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
@@ -1838,6 +1838,10 @@ function scrollActiveSlashMenuOptionIntoView(): void {
   });
 }
 
+function renderSlashIcon(name: string) {
+  return icons[name as IconName] ?? icons.terminal;
+}
+
 function tokenEstimate(draft: string): string | null {
   if (draft.length < 100) {
     return null;
@@ -1994,7 +1998,9 @@ function renderSlashMenu(
                 }}
               >
                 ${vs.slashMenuCommand?.icon
-                  ? html`<span class="slash-menu-icon">${icons[vs.slashMenuCommand.icon]}</span>`
+                  ? html`<span class="slash-menu-icon"
+                      >${renderSlashIcon(vs.slashMenuCommand.icon)}</span
+                    >`
                   : nothing}
                 <span class="slash-menu-name">${arg}</span>
                 <span class="slash-menu-desc">/${vs.slashMenuCommand?.name} ${arg}</span>
@@ -2049,7 +2055,9 @@ function renderSlashMenu(
                 requestUpdate();
               }}
             >
-              ${cmd.icon ? html`<span class="slash-menu-icon">${icons[cmd.icon]}</span>` : nothing}
+              ${cmd.icon
+                ? html`<span class="slash-menu-icon">${renderSlashIcon(cmd.icon)}</span>`
+                : nothing}
               <span class="slash-menu-name">/${cmd.name}</span>
               ${cmd.args ? html`<span class="slash-menu-args">${cmd.args}</span>` : nothing}
               <span class="slash-menu-desc">${cmd.description}</span>

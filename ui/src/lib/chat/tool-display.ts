@@ -9,7 +9,6 @@ import {
 } from "../../../../src/agents/tool-display-common.js";
 import type { ToolDetailMode } from "../../../../src/agents/tool-display-exec.js";
 import type { ControlUiEmbedSandboxMode } from "../../../../src/gateway/control-ui-contract.js";
-import type { IconName } from "../../components/icons.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 const A2UI_PATH = "/__openclaw__/a2ui";
@@ -32,7 +31,7 @@ type SharedToolDisplayConfig = {
 
 export type ToolDisplay = {
   name: string;
-  icon: IconName;
+  icon: ChatToolIconName;
   title: string;
   label: string;
   verb?: string;
@@ -40,8 +39,9 @@ export type ToolDisplay = {
 };
 
 export type EmbedSandboxMode = ControlUiEmbedSandboxMode;
+export type ChatToolIconName = string;
 
-const EMOJI_ICON_MAP: Record<string, IconName> = {
+const EMOJI_ICON_MAP: Record<string, ChatToolIconName> = {
   "🧩": "puzzle",
   "🛠️": "wrench",
   "🧰": "wrench",
@@ -58,7 +58,7 @@ const EMOJI_ICON_MAP: Record<string, IconName> = {
   "💬": "messageSquare",
 };
 
-function iconForEmoji(emoji?: string): IconName {
+function iconForEmoji(emoji?: string): ChatToolIconName {
   if (!emoji) {
     return "puzzle";
   }
@@ -114,7 +114,7 @@ export function resolveToolDisplay(params: {
   const name = normalizeToolName(params.name);
   const key = normalizeLowercaseStringOrEmpty(name);
   const spec = TOOL_MAP[key];
-  const icon = (spec?.icon ?? FALLBACK.icon ?? "puzzle") as IconName;
+  const icon = spec?.icon ?? FALLBACK.icon ?? "puzzle";
   const title = spec?.title ?? defaultTitle(name);
   const label = spec?.label ?? title;
   const toolDisplayParts = resolveToolVerbAndDetailForArgs({

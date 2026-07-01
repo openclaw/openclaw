@@ -2,7 +2,7 @@
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
-import { icons } from "../../components/icons.ts";
+import { icons, type IconName } from "../../components/icons.ts";
 import { isMarkdownBlockArtText } from "../../components/markdown.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
@@ -22,6 +22,10 @@ import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.
 export type ToolPreview = NonNullable<ToolCard["preview"]>;
 
 type FullMessageRequest = NonNullable<SidebarContent["fullMessageRequest"]>;
+
+function renderToolIcon(name: string) {
+  return icons[name as IconName] ?? icons.puzzle;
+}
 
 function resolveTranscriptMessageId(message: Record<string, unknown>): string | undefined {
   if (typeof message.messageId === "string" && message.messageId.trim()) {
@@ -666,7 +670,7 @@ export function renderToolCard(
     >
       ${renderCollapsedToolSummary({
         label: summary.label,
-        icon: icons[display.icon],
+        icon: renderToolIcon(display.icon),
         name: summary.name,
         expanded: opts.expanded,
         isError,
@@ -729,7 +733,7 @@ export function renderExpandedToolCardContent(
     <div class="chat-tool-card chat-tool-card--expanded ${isError ? "chat-tool-card--error" : ""}">
       <div class="chat-tool-card__header">
         <div class="chat-tool-card__title">
-          <span class="chat-tool-card__icon">${icons[display.icon]}</span>
+          <span class="chat-tool-card__icon">${renderToolIcon(display.icon)}</span>
           <span>${display.label}</span>
           ${isError
             ? html`<span class="chat-tool-card__status-badge" role="status"
@@ -830,7 +834,7 @@ export function renderToolCardSidebar(
     >
       <div class="chat-tool-card__header">
         <div class="chat-tool-card__title">
-          <span class="chat-tool-card__icon">${icons[display.icon]}</span>
+          <span class="chat-tool-card__icon">${renderToolIcon(display.icon)}</span>
           <span>${display.label}</span>
         </div>
         ${canClick

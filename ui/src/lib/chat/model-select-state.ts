@@ -1,7 +1,6 @@
 // Chat model select state derivation.
 import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
-import type { SessionCapability } from "../sessions/index.ts";
 import {
   buildCatalogDisplayLookup,
   buildChatModelOptionFromLookup,
@@ -13,8 +12,8 @@ import {
 
 type ChatModelSelectStateInput = {
   chatModelCatalog: ModelCatalogEntry[];
+  modelOverrides: Record<string, string | null | undefined>;
   sessionKey: string;
-  sessions: Pick<SessionCapability, "state">;
   sessionsResult: SessionsListResult | null;
 };
 
@@ -38,7 +37,7 @@ function resolveActiveSessionRow(state: ChatModelSelectStateInput) {
 export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput): string {
   const catalog = state.chatModelCatalog ?? [];
 
-  const sharedOverrides = state.sessions.state.modelOverrides;
+  const sharedOverrides = state.modelOverrides;
   if (Object.hasOwn(sharedOverrides, state.sessionKey)) {
     const shared = sharedOverrides[state.sessionKey];
     return shared === null
