@@ -489,6 +489,7 @@ import {
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./incomplete-turn.js";
 import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
+import { notifyToolActivity } from "./tool-activity-heartbeat.js";
 import { resolveMessageMergeStrategy } from "./message-merge-strategy.js";
 import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
@@ -3706,6 +3707,7 @@ export async function runEmbeddedAttempt(
             result,
             timestamp: Date.now(),
           });
+          notifyToolActivity(runAbortController.signal);
           return result;
         } catch (error) {
           const message = formatErrorMessage(error);
@@ -3721,6 +3723,7 @@ export async function runEmbeddedAttempt(
             isError: true,
             timestamp: Date.now(),
           });
+          notifyToolActivity(runAbortController.signal);
           throw error;
         }
       };
