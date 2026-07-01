@@ -27,6 +27,7 @@ import {
   projectOutboundPayloadPlanForMirror,
 } from "./payloads.js";
 import { buildOutboundSessionContext } from "./session-context.js";
+import { assertAgentSessionOwnership } from "./session-owner.js";
 import { resolveOutboundTarget } from "./targets.js";
 
 let messageConfigRuntimePromise: Promise<typeof import("./message.config.runtime.js")> | null =
@@ -299,8 +300,20 @@ async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<st
   return randomIdempotencyKey();
 }
 
+function assertMessageSendOwnership(params: MessageSendParams): void {
+  assertAgentSessionOwnership({
+    ownerLabel: "sendMessage",
+    agentIds: [params.agentId, params.mirror?.agentId],
+    sessionKeys: [
+      { sessionKey: params.requesterSessionKey, label: "requester session key" },
+      { sessionKey: params.mirror?.sessionKey, label: "mirror session key" },
+    ],
+  });
+}
+
 export async function sendMessage(params: MessageSendParams): Promise<MessageSendResult> {
   const cfg = await resolveMessageConfig(params.cfg);
+  assertMessageSendOwnership(params);
   const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
   const plugin = resolveRequiredPlugin(channel, cfg);
   const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";

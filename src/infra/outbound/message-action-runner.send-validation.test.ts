@@ -36,6 +36,24 @@ describe("runMessageAction send validation", () => {
     setActivePluginRegistry(createTestRegistry([]));
   });
 
+  it("rejects explicit agentId that contradicts sessionKey owner", async () => {
+    await expect(
+      runMessageAction({
+        cfg: emptyConfig,
+        action: "send",
+        params: {
+          message: "hello from codex",
+        },
+        toolContext: {
+          currentChannelProvider: "webchat",
+        },
+        sessionKey: "agent:main:webchat:direct:current-run",
+        agentId: "work",
+        sourceReplyDeliveryMode: "message_tool_only",
+      }),
+    ).rejects.toThrow('message action agentId "work" does not match session key agent "main"');
+  });
+
   it("requires message when no media hint is provided", async () => {
     await expect(
       runDrySend({

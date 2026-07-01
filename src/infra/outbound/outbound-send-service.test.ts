@@ -247,6 +247,100 @@ describe("executeSendAction", () => {
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
   });
 
+  it("rejects ctx agentId that contradicts ctx sessionKey before plugin dispatch", async () => {
+    await expect(
+      executeSendAction({
+        ctx: {
+          cfg: {},
+          channel: "demo-outbound",
+          params: { to: "channel:123", message: "hello" },
+          agentId: "work",
+          sessionKey: "agent:main:demo-outbound:channel:123",
+          dryRun: false,
+        },
+        to: "channel:123",
+        message: "hello",
+      }),
+    ).rejects.toThrow('executeSendAction agentId "work" does not match session key agent "main"');
+
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects mirror agentId that contradicts mirror sessionKey before mirror writes", async () => {
+    await expect(
+      executeSendAction({
+        ctx: {
+          cfg: {},
+          channel: "demo-outbound",
+          params: { to: "channel:123", message: "hello" },
+          mirror: {
+            agentId: "work",
+            sessionKey: "agent:main:demo-outbound:channel:123",
+          },
+          dryRun: false,
+        },
+        to: "channel:123",
+        message: "hello",
+      }),
+    ).rejects.toThrow(
+      'executeSendAction agentId "work" does not match mirror session key agent "main"',
+    );
+
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
+  it("rejects requester and mirror session keys owned by different agents", async () => {
+    await expect(
+      executeSendAction({
+        ctx: {
+          cfg: {},
+          channel: "demo-outbound",
+          params: { to: "channel:123", message: "hello" },
+          sessionKey: "agent:work:directchat:group:ops",
+          mirror: {
+            sessionKey: "agent:main:demo-outbound:channel:123",
+          },
+          dryRun: false,
+        },
+        to: "channel:123",
+        message: "hello",
+      }),
+    ).rejects.toThrow(
+      'executeSendAction session key agent "work" does not match mirror session key agent "main"',
+    );
+
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects poll ctx agentId that contradicts ctx sessionKey before plugin dispatch", async () => {
+    const resolveCorePoll = vi.fn(() => ({
+      to: "channel:123",
+      question: "Lunch?",
+      options: ["Pizza", "Sushi"],
+      maxSelections: 1,
+    }));
+
+    await expect(
+      executePollAction({
+        ctx: {
+          cfg: {},
+          channel: "demo-outbound",
+          params: {},
+          agentId: "work",
+          sessionKey: "agent:main:demo-outbound:channel:123",
+          dryRun: false,
+        },
+        resolveCorePoll,
+      }),
+    ).rejects.toThrow('executePollAction agentId "work" does not match session key agent "main"');
+
+    expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+    expect(resolveCorePoll).not.toHaveBeenCalled();
+  });
+
   it("forwards ctx.agentId to sendMessage on core outbound path", async () => {
     mocks.dispatchChannelMessageAction.mockResolvedValue(null);
     mocks.sendMessage.mockResolvedValue({
@@ -642,13 +736,14 @@ describe("executeSendAction", () => {
     await executePluginMirroredSend({
       mirror: {
         agentId: "agent-9",
+        sessionKey: "agent:agent-9:demo-outbound:channel:123",
       },
       mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
     });
 
     expectMirrorWrite({
       agentId: "agent-9",
-      sessionKey: "agent:main:demo-outbound:channel:123",
+      sessionKey: "agent:agent-9:demo-outbound:channel:123",
       text: "hello",
       mediaUrls: ["https://example.com/a.png", "https://example.com/b.png"],
     });

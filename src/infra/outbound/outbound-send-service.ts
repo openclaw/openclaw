@@ -22,6 +22,7 @@ import { collectActionMediaSourceHints } from "./message-action-params.js";
 import type { MessagePollResult, MessageSendResult } from "./message.js";
 import { sendMessage, sendPoll } from "./message.js";
 import type { OutboundMirror } from "./mirror.js";
+import { assertAgentSessionOwnership } from "./session-owner.js";
 
 /** Gateway connection settings forwarded to outbound send helpers. */
 export type OutboundGatewayContext = {
@@ -68,6 +69,17 @@ type PluginHandledResult = {
 };
 
 type SendMessageParams = Parameters<typeof sendMessage>[0];
+
+function assertOutboundSendContextOwnership(ctx: OutboundSendContext, ownerLabel: string): void {
+  assertAgentSessionOwnership({
+    ownerLabel,
+    agentIds: [ctx.agentId, ctx.mirror?.agentId],
+    sessionKeys: [
+      { sessionKey: ctx.sessionKey, label: "session key" },
+      { sessionKey: ctx.mirror?.sessionKey, label: "mirror session key" },
+    ],
+  });
+}
 
 async function sendCoreMessage(params: {
   ctx: OutboundSendContext;
@@ -251,6 +263,7 @@ export async function executeSendAction(params: {
   sendResult?: MessageSendResult;
 }> {
   throwIfAborted(params.ctx.abortSignal);
+  assertOutboundSendContextOwnership(params.ctx, "executeSendAction");
   const defaultPayload: ReplyPayload = params.payload ?? {
     text: params.message,
     mediaUrl: params.mediaUrl,
@@ -339,6 +352,7 @@ export async function executePollAction(params: {
   toolResult?: AgentToolResult<unknown>;
   pollResult?: MessagePollResult;
 }> {
+  assertOutboundSendContextOwnership(params.ctx, "executePollAction");
   const pluginHandled = await tryHandleWithPluginAction({
     ctx: params.ctx,
     action: "poll",
