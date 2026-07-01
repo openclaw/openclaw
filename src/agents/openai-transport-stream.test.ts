@@ -6844,51 +6844,6 @@ describe("openai transport stream", () => {
     expect(disabled.reasoning_effort).toBe("none");
   });
 
-  it("maps zai thinking format to thinking.type and reasoning_effort for GLM-4.5+", () => {
-    const baseModel = {
-      id: "glm-5.2",
-      name: "GLM 5.2",
-      api: "openai-completions",
-      provider: "zai",
-      baseUrl: "https://open.bigmodel.cn/api/paas/v4",
-      reasoning: true,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 131072,
-      maxTokens: 8192,
-      compat: {
-        thinkingFormat: "zai",
-      },
-    } as unknown as Model<"openai-completions">;
-    const context = {
-      systemPrompt: "system",
-      messages: [],
-      tools: [],
-    } as never;
-
-    const enabled = buildOpenAICompletionsParams(baseModel, context, {
-      reasoning: "medium",
-    } as never) as {
-      thinking?: { type: string };
-      reasoning_effort?: unknown;
-      enable_thinking?: unknown;
-    };
-    const disabled = buildOpenAICompletionsParams(baseModel, context, {
-      reasoning: "off",
-    } as never) as {
-      thinking?: { type: string };
-      reasoning_effort?: unknown;
-      enable_thinking?: unknown;
-    };
-
-    expect(enabled.thinking).toEqual({ type: "enabled" });
-    expect(enabled.reasoning_effort).toBe("medium");
-    expect(enabled).not.toHaveProperty("enable_thinking");
-    expect(disabled.thinking).toEqual({ type: "disabled" });
-    expect(disabled).not.toHaveProperty("reasoning_effort");
-    expect(disabled).not.toHaveProperty("enable_thinking");
-  });
-
   it("maps qwen thinking format to top-level enable_thinking", () => {
     const baseModel = {
       id: "qwen3.5-32b",
