@@ -1,15 +1,11 @@
 {
-  "fallbackKeys": [
-    "chat.pairingQrExpired.badge",
-    "chat.pairingQrExpired.reason",
-    "chat.pairingQrExpired.title"
-  ],
-  "generatedAt": "2026-07-01T10:12:09.439Z",
+  "fallbackKeys": [],
+  "generatedAt": "2026-07-01T10:32:31.526Z",
   "locale": "ar",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
   "sourceHash": "234bc2c00f309d086f9b545f11736fafab8d3f127c441d839695beeee014a53d",
   "totalKeys": 1421,
-  "translatedKeys": 1418,
+  "translatedKeys": 1421,
   "workflow": 1
 }
