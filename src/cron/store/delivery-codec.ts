@@ -1,6 +1,6 @@
 /** SQLite column codec for cron delivery configuration. */
 import type { CronDelivery } from "../types.js";
-import { booleanToInteger, integerToBoolean } from "./scalar-codec.js";
+import { booleanToInteger, integerToBoolean, parseJsonObject } from "./scalar-codec.js";
 import type { CronJobInsert, CronJobRow } from "./schema.js";
 
 /** Maps cron delivery config into normalized SQLite columns. */
@@ -62,14 +62,24 @@ function cronDeliveryModeFromValue(value: unknown): CronDelivery["mode"] | undef
   return value === "none" || value === "announce" || value === "webhook" ? value : undefined;
 }
 
+function threadIdFromRow(row: CronJobRow): string | number | undefined {
+  const config = parseJsonObject<{ delivery?: { threadId?: unknown } }>(row.job_json, {});
+  const typed = config.delivery?.threadId;
+  if (typeof typed === "number" || (typeof typed === "string" && typed)) {
+    return typed;
+  }
+  return row.delivery_thread_id || undefined;
+}
+
 /** Reconstructs delivery config from split SQLite columns, preserving legacy partial rows. */
 export function deliveryFromRow(row: CronJobRow): CronDelivery | undefined {
   const rowMode = cronDeliveryModeFromValue(row.delivery_mode);
+  const threadId = threadIdFromRow(row);
   const hasDeliveryColumns =
     Boolean(
       row.delivery_channel ||
       row.delivery_to ||
-      row.delivery_thread_id ||
+      threadId !== undefined ||
       row.delivery_account_id ||
       row.delivery_completion_mode ||
       row.delivery_completion_to ||
@@ -122,7 +132,7 @@ export function deliveryFromRow(row: CronJobRow): CronDelivery | undefined {
     mode: rowMode ?? "announce",
     ...(row.delivery_channel ? { channel: row.delivery_channel as CronDelivery["channel"] } : {}),
     ...(row.delivery_to ? { to: row.delivery_to } : {}),
-    ...(row.delivery_thread_id ? { threadId: row.delivery_thread_id } : {}),
+    ...(threadId !== undefined ? { threadId } : {}),
     ...(row.delivery_account_id ? { accountId: row.delivery_account_id } : {}),
     ...(row.delivery_best_effort != null
       ? { bestEffort: integerToBoolean(row.delivery_best_effort) }
