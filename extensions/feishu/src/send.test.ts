@@ -105,6 +105,44 @@ describe("buildFeishuPostMessagePayload", () => {
       },
     });
   });
+
+  it("upgrades single newlines outside code blocks to paragraph breaks", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "line one\nline two\n\nline three",
+    });
+
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            {
+              tag: "md",
+              text: "line one\n\nline two\n\nline three",
+            },
+          ],
+        ],
+      },
+    });
+  });
+
+  it("preserves fenced code block newlines when upgrading paragraph breaks", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "intro\n```\ncode line one\ncode line two\n```\noutro",
+    });
+
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            {
+              tag: "md",
+              text: "intro\n\n```\ncode line one\ncode line two\n```\n\noutro",
+            },
+          ],
+        ],
+      },
+    });
+  });
 });
 
 describe("getMessageFeishu", () => {
