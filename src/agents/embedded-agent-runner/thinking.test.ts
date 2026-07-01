@@ -746,6 +746,18 @@ describe("wrapAnthropicStreamWithRecovery", () => {
         return root;
       },
     },
+    {
+      name: "ProviderHttpError errorBody",
+      createError: () =>
+        Object.assign(new Error(genericizedProviderError), {
+          errorBody: JSON.stringify({
+            error: {
+              message: "messages.12.content.3: Invalid `signature` in `thinking` block",
+              type: "invalid_request_error",
+            },
+          }),
+        }),
+    },
   ])(
     "retries genericized request errors carrying provider detail in $name",
     async ({ createError }) => {

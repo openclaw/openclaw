@@ -546,6 +546,7 @@ function shouldRecoverAnthropicThinkingError(
     current.rawError,
     current.errorMessage,
     current.message,
+    current.errorBody,
   ]);
   for (const candidate of candidates) {
     if (
