@@ -1441,6 +1441,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       pendingChatRunId: state.pendingChatRunId,
       pendingOptimisticUserMessage: state.pendingOptimisticUserMessage,
       message,
+      queueMode: state.sessionInfo.queueMode,
     });
   const notifyBlockedChatSubmit = () => {
     chatLog.addSystem("agent is busy — press Esc to abort before sending a new message");
