@@ -1381,6 +1381,11 @@ export const ja_JP: TranslationMap = {
       retrySend: "送信を再試行",
       retryQueuedMessage: "キュー内のメッセージを再試行",
     },
+    pairingQrExpired: {
+      title: "Pairing QR expired",
+      reason: "Run /pair qr again to generate a fresh setup code.",
+      badge: "Expired",
+    },
     composer: {
       placeholder: "Message {name} (Enter to send)",
       placeholderWithAttachments: "Add a message or paste more images...",

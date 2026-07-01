@@ -1386,6 +1386,11 @@ export const ru: TranslationMap = {
       retrySend: "Повторить отправку",
       retryQueuedMessage: "Повторить сообщение в очереди",
     },
+    pairingQrExpired: {
+      title: "Pairing QR expired",
+      reason: "Run /pair qr again to generate a fresh setup code.",
+      badge: "Expired",
+    },
     composer: {
       placeholder: "Сообщение {name} (Enter для отправки)",
       placeholderWithAttachments: "Добавьте сообщение или вставьте еще изображения...",
