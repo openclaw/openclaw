@@ -3,6 +3,10 @@ import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking"
 const INBOUND_META_SENTINELS = [
   "Conversation info (untrusted metadata):",
   "Sender (untrusted metadata):",
+  "Thread starter (untrusted, for context):",
+  "Reply target of current user message (untrusted, for context):",
+  "Forwarded message context (untrusted metadata):",
+  "Chat history since last reply (untrusted, for context):",
 ] as const;
 
 function isInboundMetaSentinelLine(line: string): boolean {
