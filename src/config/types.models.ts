@@ -54,7 +54,8 @@ export type SupportedThinkingFormat =
   | NonNullable<OpenAICompletionsCompat["thinkingFormat"]>
   | "deepseek"
   | "openrouter"
-  | "together";
+  | "together"
+  | "none";
 
 export const MODEL_THINKING_FORMATS = [
   "openai",
@@ -64,6 +65,7 @@ export const MODEL_THINKING_FORMATS = [
   "qwen",
   "qwen-chat-template",
   "zai",
+  "none",
 ] as const satisfies readonly SupportedThinkingFormat[];
 
 export function isModelThinkingFormat(value: string): value is SupportedThinkingFormat {
