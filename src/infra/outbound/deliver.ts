@@ -1756,7 +1756,8 @@ async function deliverOutboundPayloadsCore(
             interactive: effectivePayload.interactive,
             channelData: effectivePayload.channelData,
           }) ||
-          effectivePayload.audioAsVoice === true)
+          effectivePayload.audioAsVoice === true ||
+          Boolean(effectivePayload.mediaUrl || effectivePayload.mediaUrls?.length))
       ) {
         const delivery = await deliveryHandler.sendPayload(
           effectivePayload,
