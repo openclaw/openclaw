@@ -23,6 +23,8 @@ vi.mock("./runtime.js", () => ({
 
 let sendCardFeishu: typeof import("./send.js").sendCardFeishu;
 let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
+let sendImageFeishu: typeof import("./media.js").sendImageFeishu;
+let sendFileFeishu: typeof import("./media.js").sendFileFeishu;
 
 describe("Feishu reply fallback for withdrawn/deleted targets", () => {
   const replyMock = vi.fn();
@@ -40,6 +42,7 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
 
   beforeAll(async () => {
     ({ sendCardFeishu, sendMessageFeishu } = await import("./send.js"));
+    ({ sendImageFeishu, sendFileFeishu } = await import("./media.js"));
   });
 
   afterAll(() => {
@@ -133,6 +136,51 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
           replyToMessageId: "om_parent",
         }),
       "om_card_new",
+    );
+  });
+
+  it("falls back to create for withdrawn image replies", async () => {
+    replyMock.mockResolvedValue({
+      code: 230011,
+      msg: "The message was withdrawn.",
+    });
+    createMock.mockResolvedValue({
+      code: 0,
+      data: { message_id: "om_image_new" },
+    });
+
+    await expectFallbackResult(
+      () =>
+        sendImageFeishu({
+          cfg: {} as never,
+          to: "user:ou_target",
+          imageKey: "img_key",
+          replyToMessageId: "om_parent",
+        }),
+      "om_image_new",
+    );
+  });
+
+  it("falls back to create for withdrawn file replies", async () => {
+    replyMock.mockRejectedValue(
+      Object.assign(new Error("Request failed"), {
+        response: { status: 200, data: { code: 231003, msg: "The message is not found" } },
+      }),
+    );
+    createMock.mockResolvedValue({
+      code: 0,
+      data: { message_id: "om_file_new" },
+    });
+
+    await expectFallbackResult(
+      () =>
+        sendFileFeishu({
+          cfg: {} as never,
+          to: "user:ou_target",
+          fileKey: "file_key",
+          replyToMessageId: "om_parent",
+        }),
+      "om_file_new",
     );
   });
 
