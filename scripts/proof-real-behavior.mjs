@@ -201,7 +201,7 @@ async function main() {
       console.log("  ❌ Unexpected result:", JSON.stringify(data));
       failed++;
     }
-  } catch {
+  } catch (e) {
     console.log("  ❌ Unexpected error:", e.message);
     failed++;
   }
@@ -219,7 +219,7 @@ async function main() {
       console.log("  ❌ Unexpected result:", JSON.stringify(data));
       failed++;
     }
-  } catch {
+  } catch (e) {
     console.log("  ❌ Unexpected error:", e.message);
     failed++;
   }
@@ -233,7 +233,7 @@ async function main() {
     const data = await readChromeVersion(baseUrl, "/json/version-oversized");
     console.log("  ❌ Should have thrown instead of returning:", JSON.stringify(data));
     failed++;
-  } catch {
+  } catch (e) {
     if (e.message.includes("body exceeds 16 MiB")) {
       const rssAfter = process.memoryUsage().rss;
       const delta = Math.round((rssAfter - rssBefore3) / 1024 / 1024);
@@ -260,7 +260,7 @@ async function main() {
       console.log("  ❌ Unexpected result:", JSON.stringify(data));
       failed++;
     }
-  } catch {
+  } catch (e) {
     console.log("  ❌ Unexpected error:", e.message);
     failed++;
   }
@@ -296,7 +296,7 @@ async function main() {
       console.log("  ❌ Unexpected result:", JSON.stringify(data));
       failed++;
     }
-  } catch {
+  } catch (e) {
     // Node.js fetch sometimes rejects non-numeric content-length at the HTTP level.
     // That's orthogonal to our fix — the important thing is our fix doesn't throw
     // its own "exceeds 16 MiB" error for non-numeric values.
@@ -324,7 +324,7 @@ async function main() {
       console.log("  ❌ Unexpected result:", JSON.stringify(data));
       failed++;
     }
-  } catch {
+  } catch (e) {
     console.log("  ❌ Unexpected error:", e.message);
     failed++;
   }
