@@ -1381,9 +1381,9 @@ export const uk: TranslationMap = {
       retryQueuedMessage: "Повторити повідомлення в черзі",
     },
     pairingQrExpired: {
-      title: "Pairing QR expired",
-      reason: "Run /pair qr again to generate a fresh setup code.",
-      badge: "Expired",
+      title: "QR-код для пар'ювання застарів",
+      reason: "Виконайте /pair qr знову, щоб згенерувати новий код налаштування.",
+      badge: "Застарів",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",
