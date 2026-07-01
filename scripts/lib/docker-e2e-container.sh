@@ -142,11 +142,7 @@ docker_e2e_docker_cmd() {
   if [ "${1:-}" = "run" ]; then
     shift
     docker_e2e_docker_run_resource_args "$@" || return $?
-    if [ "${#DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" -gt 0 ]; then
-      docker_e2e_timeout_cmd "$timeout_value" docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
-    else
-      docker_e2e_timeout_cmd "$timeout_value" docker run "$@"
-    fi
+    docker_e2e_docker_run_with_resource_fallback "$timeout_value" "$@"
     return
   fi
   docker_e2e_timeout_cmd "$timeout_value" docker "$@"
@@ -157,11 +153,7 @@ docker_e2e_docker_run_cmd() {
   if [ "${1:-}" = "run" ]; then
     shift
     docker_e2e_docker_run_resource_args "$@" || return $?
-    if [ "${#DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" -gt 0 ]; then
-      docker_e2e_timeout_cmd "$timeout_value" docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
-    else
-      docker_e2e_timeout_cmd "$timeout_value" docker run "$@"
-    fi
+    docker_e2e_docker_run_with_resource_fallback "$timeout_value" "$@"
     return
   fi
   docker_e2e_timeout_cmd "$timeout_value" docker "$@"
@@ -183,6 +175,176 @@ docker_e2e_resource_value_disabled() {
       ;;
   esac
   return 1
+}
+
+docker_e2e_resource_limits_runtime_disabled() {
+  [ "${DOCKER_E2E_RESOURCE_LIMITS_RUNTIME_DISABLED:-}" = "1" ]
+}
+
+docker_e2e_resource_limit_error_file() {
+  local stderr_file="$1"
+  local text=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    text="${text}${line}
+"
+  done <"$stderr_file"
+  case "$text" in
+    *"OCI runtime create failed"* | *"oci runtime create failed"* | \
+      *"Error response from daemon"* | *"error response from daemon"* | \
+      *"failed to create task"* | *"failed to create shim task"* | \
+      *"runc create failed"* | *"crun:"*)
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+  case "$text" in
+    *cgroup*controller* | *cgroup*controllers* | *cgroup*not*supported* | \
+      *Cgroup*controller* | *Cgroup*controllers* | *Cgroup*not*supported* | \
+      *pids*not*available* | *pids*not*supported* | *cannot*set*pids*limit* | \
+      *PIDs*not*available* | *PIDs*not*supported* | *cannot*set*PIDs*limit* | \
+      *cpu*controller* | *CPU*controller* | *memory*controller* | *Memory*controller* | \
+      *resource*limit*not*supported* | *Resource*limit*not*supported* | \
+      *oci*runtime*cgroup* | *OCI*runtime*cgroup*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+docker_e2e_resource_limit_stderr_file() {
+  local template="${TMPDIR:-/tmp}/openclaw-docker-resource-limits.XXXXXX"
+  local stderr_file=""
+  if command -v mktemp >/dev/null 2>&1; then
+    stderr_file="$(mktemp "$template")" || return $?
+  elif [ -x /usr/bin/mktemp ]; then
+    stderr_file="$(/usr/bin/mktemp "$template")" || return $?
+  else
+    echo "mktemp command not found; cannot securely capture Docker stderr" >&2
+    return 127
+  fi
+  chmod 600 "$stderr_file" 2>/dev/null || true
+  printf '%s\n' "$stderr_file"
+}
+
+docker_e2e_print_file_stderr() {
+  local file="$1"
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    printf '%s\n' "$line" >&2
+  done <"$file"
+}
+
+docker_e2e_remove_temp_file() {
+  local file="$1"
+  if command -v rm >/dev/null 2>&1; then
+    rm -f "$file"
+  elif [ -x /usr/bin/rm ]; then
+    /usr/bin/rm -f "$file"
+  fi
+}
+
+docker_e2e_docker_run_created_container_refs() {
+  DOCKER_E2E_RUN_CREATED_CONTAINER_REFS=()
+  DOCKER_E2E_RUN_CREATED_CONTAINER_CIDFILES=()
+  local arg
+  local value
+  while [ "$#" -gt 0 ]; do
+    arg="$1"
+    shift
+    case "$arg" in
+      --name)
+        if [ "$#" -gt 0 ]; then
+          DOCKER_E2E_RUN_CREATED_CONTAINER_REFS+=("$1")
+          shift
+        fi
+        ;;
+      --name=*)
+        value="${arg#--name=}"
+        if [ -n "$value" ]; then
+          DOCKER_E2E_RUN_CREATED_CONTAINER_REFS+=("$value")
+        fi
+        ;;
+      --cidfile)
+        if [ "$#" -gt 0 ]; then
+          value="$1"
+          shift
+          if [ -n "$value" ]; then
+            DOCKER_E2E_RUN_CREATED_CONTAINER_CIDFILES+=("$value")
+          fi
+          if [ -f "$value" ]; then
+            while IFS= read -r arg || [ -n "$arg" ]; do
+              if [ -n "$arg" ]; then
+                DOCKER_E2E_RUN_CREATED_CONTAINER_REFS+=("$arg")
+              fi
+              break
+            done <"$value"
+          fi
+        fi
+        ;;
+      --cidfile=*)
+        value="${arg#--cidfile=}"
+        if [ -n "$value" ]; then
+          DOCKER_E2E_RUN_CREATED_CONTAINER_CIDFILES+=("$value")
+        fi
+        if [ -n "$value" ] && [ -f "$value" ]; then
+          while IFS= read -r arg || [ -n "$arg" ]; do
+            if [ -n "$arg" ]; then
+              DOCKER_E2E_RUN_CREATED_CONTAINER_REFS+=("$arg")
+            fi
+            break
+          done <"$value"
+        fi
+        ;;
+    esac
+  done
+}
+
+docker_e2e_cleanup_failed_resource_limited_run() {
+  docker_e2e_docker_run_created_container_refs "$@"
+  local ref
+  for ref in "${DOCKER_E2E_RUN_CREATED_CONTAINER_REFS[@]}"; do
+    if [ -n "$ref" ]; then
+      docker_e2e_timeout_cmd "${OPENCLAW_DOCKER_E2E_CLEANUP_TIMEOUT:-30s}" docker rm -f "$ref" >/dev/null 2>&1 || true
+    fi
+  done
+  local cidfile
+  for cidfile in "${DOCKER_E2E_RUN_CREATED_CONTAINER_CIDFILES[@]}"; do
+    if [ -n "$cidfile" ]; then
+      docker_e2e_remove_temp_file "$cidfile"
+    fi
+  done
+}
+
+docker_e2e_docker_run_with_resource_fallback() {
+  local timeout_value="$1"
+  shift
+  if [ "${#DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" -eq 0 ]; then
+    docker_e2e_timeout_cmd "$timeout_value" docker run "$@"
+    return
+  fi
+
+  local stderr_file=""
+  stderr_file="$(docker_e2e_resource_limit_stderr_file)" || return $?
+  local status=0
+  if docker_e2e_timeout_cmd "$timeout_value" docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@" 2>"$stderr_file"; then
+    docker_e2e_print_file_stderr "$stderr_file" || true
+    docker_e2e_remove_temp_file "$stderr_file"
+    return 0
+  else
+    status="$?"
+  fi
+  docker_e2e_print_file_stderr "$stderr_file" || true
+  if docker_e2e_resource_limit_error_file "$stderr_file"; then
+    export DOCKER_E2E_RESOURCE_LIMITS_RUNTIME_DISABLED=1
+    echo "Docker run resource limits were rejected by this daemon; retrying without default --memory/--cpus/--pids-limit flags." >&2
+    docker_e2e_cleanup_failed_resource_limited_run "$@"
+    docker_e2e_remove_temp_file "$stderr_file"
+    docker_e2e_timeout_cmd "$timeout_value" docker run "$@"
+    return
+  fi
+  docker_e2e_remove_temp_file "$stderr_file"
+  return "$status"
 }
 
 docker_e2e_detect_available_cpus() {
@@ -240,7 +402,7 @@ docker_e2e_resolve_pids_limit() {
 
 docker_e2e_docker_run_resource_args() {
   DOCKER_E2E_RUN_RESOURCE_ARGS=()
-  if docker_e2e_resource_limits_disabled; then
+  if docker_e2e_resource_limits_disabled || docker_e2e_resource_limits_runtime_disabled; then
     return 0
   fi
 

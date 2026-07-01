@@ -1236,6 +1236,124 @@ OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS=1 docker_e2e_docker_cmd run demo
     }
   });
 
+  it("retries Docker runs without default resource limits when cgroups reject them", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-cgroup-fallback-"));
+
+    try {
+      const binDir = join(workDir, "bin");
+      mkdirSync(binDir);
+      writeFileSync(
+        join(binDir, "timeout"),
+        `#!/bin/bash
+set -euo pipefail
+if [[ "$1" = "--kill-after=1s" ]]; then
+  exit 0
+fi
+shift 2
+"$@"
+`,
+      );
+      chmodSync(join(binDir, "timeout"), 0o755);
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin:$PATH"
+unset OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS
+unset OPENCLAW_DOCKER_E2E_MEMORY OPENCLAW_DOCKER_E2E_CPUS OPENCLAW_DOCKER_E2E_PIDS_LIMIT
+export OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=32
+
+docker() {
+  printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
+  if [[ "$*" == *"--pids-limit"* ]]; then
+    printf 'gateway-cid\\n' >"$TMPDIR/gateway.cid"
+    echo "OCI runtime create failed: crun: controller pids is not available" >&2
+    return 126
+  fi
+  if [[ "$*" == "run --name gateway-test --cidfile $TMPDIR/gateway.cid demo" && -e "$TMPDIR/gateway.cid" ]]; then
+    echo "cidfile exists" >&2
+    return 125
+  fi
+}
+export -f docker
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+
+docker_e2e_docker_cmd run --name gateway-test --cidfile "$TMPDIR/gateway.cid" demo
+docker_e2e_docker_cmd run second
+
+[[ "$(sed -n '1p' "$TMPDIR/docker-seen")" = "run --memory 8g --cpus 16 --pids-limit 2048 --name gateway-test --cidfile $TMPDIR/gateway.cid demo" ]]
+[[ "$(sed -n '2p' "$TMPDIR/docker-seen")" = "rm -f gateway-test" ]]
+[[ "$(sed -n '3p' "$TMPDIR/docker-seen")" = "rm -f gateway-cid" ]]
+[[ "$(sed -n '4p' "$TMPDIR/docker-seen")" = "run --name gateway-test --cidfile $TMPDIR/gateway.cid demo" ]]
+[[ "$(sed -n '5p' "$TMPDIR/docker-seen")" = "run second" ]]
+[[ ! -e "$TMPDIR/gateway.cid" ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns non-resource Docker run failures without retrying", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-run-failure-"));
+
+    try {
+      const binDir = join(workDir, "bin");
+      mkdirSync(binDir);
+      writeFileSync(
+        join(binDir, "timeout"),
+        `#!/bin/bash
+set -euo pipefail
+if [[ "$1" = "--kill-after=1s" ]]; then
+  exit 0
+fi
+shift 2
+"$@"
+`,
+      );
+      chmodSync(join(binDir, "timeout"), 0o755);
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin:$PATH"
+unset OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS
+unset OPENCLAW_DOCKER_E2E_MEMORY OPENCLAW_DOCKER_E2E_CPUS OPENCLAW_DOCKER_E2E_PIDS_LIMIT
+export OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=32
+
+docker() {
+  printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
+  echo "image not found" >&2
+  return 42
+}
+export -f docker
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
+
+set +e
+docker_e2e_docker_cmd run missing 2>"$TMPDIR/stderr"
+status="$?"
+set -e
+
+mapfile -t docker_seen <"$TMPDIR/docker-seen"
+[[ "$status" = "42" ]]
+[[ "\${docker_seen[0]}" = "run --memory 8g --cpus 16 --pids-limit 2048 missing" ]]
+[[ "\${#docker_seen[@]}" = "1" ]]
+[[ "$(<"$TMPDIR/stderr")" = *"image not found"* ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects invalid Docker run pids limits before invoking docker", () => {
     const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-resource-pids-"));
 
@@ -1572,6 +1690,78 @@ docker_e2e_docker_run_cmd run demo
 
 [[ "$(<"$TMPDIR/timeout-seen")" = "gtimeout:--kill-after=30s 15s|docker run --memory 8g --cpus 8 --pids-limit 2048 demo" ]]
 [[ "$(<"$TMPDIR/docker-seen")" = "run --memory 8g --cpus 8 --pids-limit 2048 demo" ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("retries package-backed Docker runs without default resource limits when cgroups reject them", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-package-cgroup-fallback-"));
+
+    try {
+      const binDir = join(workDir, "bin");
+      mkdirSync(binDir);
+      writeFileSync(
+        join(binDir, "gtimeout"),
+        `#!/bin/bash
+set -euo pipefail
+if [[ "$1" = "--kill-after=1s" ]]; then
+  exit 0
+fi
+shift 2
+"$@"
+`,
+      );
+      chmodSync(join(binDir, "gtimeout"), 0o755);
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin"
+export OPENCLAW_DOCKER_E2E_RUN_TIMEOUT=15s
+export OPENCLAW_DOCKER_E2E_AVAILABLE_CPUS=8
+unset OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS
+unset OPENCLAW_DOCKER_E2E_MEMORY OPENCLAW_DOCKER_E2E_CPUS OPENCLAW_DOCKER_E2E_PIDS_LIMIT
+
+dirname() {
+  /usr/bin/dirname "$@"
+}
+
+docker_e2e_docker_cmd() {
+  return 0
+}
+
+docker() {
+  printf "%s\\n" "$*" >>"$TMPDIR/docker-seen"
+  if [[ "$*" == *"--pids-limit"* ]]; then
+    printf 'package-cid\\n' >"$TMPDIR/package.cid"
+    echo "OCI runtime create failed: crun: cgroup controller pids is not available" >&2
+    return 126
+  fi
+  if [[ "$*" == "run --name package-gateway --cidfile $TMPDIR/package.cid demo" && -e "$TMPDIR/package.cid" ]]; then
+    echo "cidfile exists" >&2
+    return 125
+  fi
+}
+export -f docker_e2e_docker_cmd docker
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-package.sh"
+
+docker_e2e_docker_run_cmd run --name package-gateway --cidfile "$TMPDIR/package.cid" demo
+docker_e2e_docker_run_cmd run second
+
+mapfile -t docker_seen <"$TMPDIR/docker-seen"
+[[ "\${docker_seen[0]}" = "run --memory 8g --cpus 8 --pids-limit 2048 --name package-gateway --cidfile $TMPDIR/package.cid demo" ]]
+[[ "\${docker_seen[1]}" = "rm -f package-gateway" ]]
+[[ "\${docker_seen[2]}" = "rm -f package-cid" ]]
+[[ "\${docker_seen[3]}" = "run --name package-gateway --cidfile $TMPDIR/package.cid demo" ]]
+[[ "\${docker_seen[4]}" = "run second" ]]
+[[ ! -e "$TMPDIR/package.cid" ]]
 `;
 
       execFileSync("bash", ["-lc", script], { encoding: "utf8" });
