@@ -139,6 +139,65 @@ describe("memory host SDK package internals", () => {
     ]);
   });
 
+  it("excludes files matching excludePaths glob patterns", async () => {
+    const tmpDir = getTmpDir();
+    const memoryDir = path.join(tmpDir, "memory");
+    fsSync.mkdirSync(memoryDir, { recursive: true });
+    fsSync.mkdirSync(path.join(memoryDir, "dreaming"), { recursive: true });
+    fsSync.mkdirSync(path.join(memoryDir, "dreaming", "light"), { recursive: true });
+    fsSync.mkdirSync(path.join(memoryDir, "dreaming", "deep"), { recursive: true });
+    fsSync.writeFileSync(path.join(tmpDir, "MEMORY.md"), "# root");
+    fsSync.writeFileSync(path.join(memoryDir, "sync.md"), "# sync");
+    fsSync.writeFileSync(
+      path.join(memoryDir, "dreaming", "light", "2025-01-01.md"),
+      "# light dream",
+    );
+    fsSync.writeFileSync(path.join(memoryDir, "dreaming", "deep", "2025-01-01.md"), "# deep dream");
+
+    const files = await listMemoryFiles(tmpDir, undefined, undefined, ["memory/dreaming/light"]);
+
+    const relFiles = files.map((file) => path.relative(tmpDir, file)).toSorted();
+    expect(relFiles).toContain("MEMORY.md");
+    expect(relFiles).toContain(path.join("memory", "sync.md"));
+    expect(relFiles).toContain(path.join("memory", "dreaming", "deep", "2025-01-01.md"));
+    expect(relFiles).not.toContain(path.join("memory", "dreaming", "light", "2025-01-01.md"));
+  });
+
+  it("excludes files matching excludePaths with glob wildcards", async () => {
+    const tmpDir = getTmpDir();
+    const memoryDir = path.join(tmpDir, "memory");
+    fsSync.mkdirSync(memoryDir, { recursive: true });
+    fsSync.mkdirSync(path.join(memoryDir, "archive"), { recursive: true });
+    fsSync.mkdirSync(path.join(memoryDir, "archive", "2024"), { recursive: true });
+    fsSync.writeFileSync(path.join(tmpDir, "MEMORY.md"), "# root");
+    fsSync.writeFileSync(path.join(memoryDir, "archive", "old.md"), "# old");
+    fsSync.writeFileSync(path.join(memoryDir, "archive", "2024", "jan.md"), "# jan");
+
+    const files = await listMemoryFiles(tmpDir, undefined, undefined, ["memory/archive/**"]);
+
+    const relFiles = files.map((file) => path.relative(tmpDir, file)).toSorted();
+    expect(relFiles).toContain("MEMORY.md");
+    expect(relFiles).not.toContain(path.join("memory", "archive", "old.md"));
+    expect(relFiles).not.toContain(path.join("memory", "archive", "2024", "jan.md"));
+  });
+
+  it("returns all files when excludePaths is empty or missing", async () => {
+    const tmpDir = getTmpDir();
+    const memoryDir = path.join(tmpDir, "memory");
+    fsSync.mkdirSync(memoryDir, { recursive: true });
+    fsSync.writeFileSync(path.join(tmpDir, "MEMORY.md"), "# root");
+    fsSync.writeFileSync(path.join(memoryDir, "sync.md"), "# sync");
+
+    const without = await listMemoryFiles(tmpDir, undefined, undefined, undefined);
+    const withEmpty = await listMemoryFiles(tmpDir, undefined, undefined, []);
+
+    const relWithout = without.map((file) => path.relative(tmpDir, file)).toSorted();
+    const relWith = withEmpty.map((file) => path.relative(tmpDir, file)).toSorted();
+    expect(relWithout).toEqual(relWith);
+    expect(relWithout).toContain("MEMORY.md");
+    expect(relWithout).toContain(path.join("memory", "sync.md"));
+  });
+
   it("allows top-level dreams path casing variants", () => {
     expect(isMemoryPath("dreams.md")).toBe(true);
     expect(isMemoryPath("DREAMS.md")).toBe(true);

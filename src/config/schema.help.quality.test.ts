@@ -79,6 +79,7 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.fallback",
   "agents.defaults.memorySearch.sources",
   "agents.defaults.memorySearch.extraPaths",
+  "agents.defaults.memorySearch.excludePaths",
   "agents.defaults.memorySearch.qmd",
   "agents.defaults.memorySearch.qmd.extraCollections",
   "agents.defaults.memorySearch.qmd.extraCollections.path",
