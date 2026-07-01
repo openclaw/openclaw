@@ -573,6 +573,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       guildEntries,
       logger,
       messageHandler,
+      cancelMessageRun: messageHandler.cancelMessageRun,
       trackInboundEvent,
     });
 

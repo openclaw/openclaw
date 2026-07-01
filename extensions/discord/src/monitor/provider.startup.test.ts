@@ -71,6 +71,12 @@ vi.mock("./listeners.js", () => ({
   DiscordMessageListener: function DiscordMessageListener() {
     return { type: "message" };
   },
+  DiscordMessageUpdateListener: function DiscordMessageUpdateListener() {
+    return { type: "message-update" };
+  },
+  DiscordMessageDeleteListener: function DiscordMessageDeleteListener() {
+    return { type: "message-delete" };
+  },
   DiscordInteractionListener: function DiscordInteractionListener() {
     return { type: "interaction" };
   },
@@ -380,7 +386,22 @@ describe("registerDiscordMonitorListeners", () => {
   it("skips reaction listeners when every configured guild disables reactions and DMs are off", () => {
     registerDiscordMonitorListeners(createListenerParams());
 
-    expect(registeredListenerTypes()).toEqual(["interaction", "message", "thread-update"]);
+    expect(registeredListenerTypes()).toEqual([
+      "interaction",
+      "message",
+      "message-update",
+      "thread-update",
+    ]);
+  });
+
+  it("registers the message-delete listener when a run-cancellation hook is provided", () => {
+    registerDiscordMonitorListeners(
+      createListenerParams({
+        cancelMessageRun: vi.fn(() => false),
+      }),
+    );
+
+    expect(registeredListenerTypes()).toContain("message-delete");
   });
 
   it("keeps reaction listeners when direct messages can emit reaction notifications", () => {
