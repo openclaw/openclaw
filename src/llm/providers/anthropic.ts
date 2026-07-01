@@ -62,6 +62,10 @@ import { headersToRecord } from "../utils/headers.js";
 import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import {
+  isEphemeralToolName,
+  summarizeEphemeralToolResult,
+} from "../utils/ephemeral-tool-results.js";
+import {
   ANTHROPIC_OMITTED_REASONING_TEXT,
   findActiveAnthropicToolTurnAssistantIndex,
 } from "./anthropic-thinking-replay.js";
@@ -119,6 +123,24 @@ const ccToolLookup = new Map(claudeCodeTools.map((t) => [t.toLowerCase(), t]));
 
 // Convert tool name to CC canonical casing if it matches (case-insensitive)
 const toClaudeCodeName = (name: string) => ccToolLookup.get(name.toLowerCase()) ?? name;
+
+/**
+ * For ephemeral tool results, return a fixed-length summary instead of the
+ * full content blocks.  Non-ephemeral tools pass through unchanged.
+ */
+function maybeSummarizeEphemeralToolResult(
+  toolName: string,
+  content: (TextContent | ImageContent)[],
+): string | Array<{ type: "text"; text: string } | { type: "image"; source: { type: "base64"; media_type: string; data: string } }> {
+  if (!isEphemeralToolName(toolName)) {
+    return convertContentBlocks(content);
+  }
+  const textResult = content
+    .filter((c): c is TextContent => c.type === "text")
+    .map((c) => c.text)
+    .join("\n");
+  return summarizeEphemeralToolResult(toolName, textResult);
+}
 
 /**
  * Convert content blocks to Anthropic API format
@@ -1275,7 +1297,7 @@ function convertMessages(
       toolResults.push({
         type: "tool_result",
         tool_use_id: msg.toolCallId,
-        content: convertContentBlocks(msg.content),
+        content: maybeSummarizeEphemeralToolResult(msg.toolName, msg.content),
         is_error: msg.isError,
       });
 
@@ -1285,7 +1307,7 @@ function convertMessages(
         toolResults.push({
           type: "tool_result",
           tool_use_id: nextMsg.toolCallId,
-          content: convertContentBlocks(nextMsg.content),
+          content: maybeSummarizeEphemeralToolResult(nextMsg.toolName, nextMsg.content),
           is_error: nextMsg.isError,
         });
         j++;
