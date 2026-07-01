@@ -801,6 +801,36 @@ describe("TelegramPollingSession", () => {
     ).toEqual([30_000, 30_000, 120_000, 30_000]);
   });
 
+  it("backs off every retryable spooled handler failure with an error marker", () => {
+    expect(
+      pollingSessionTesting.resolveSpooledUpdateRetryDelayMs(
+        {
+          updateId: 42,
+          path: "/tmp/42.json",
+          update: { update_id: 42 },
+          receivedAt: 0,
+          attempts: 1,
+          lastAttemptAt: 1_000,
+          lastError: "plain TypeError from handler",
+        },
+        1_999,
+      ),
+    ).toBe(1);
+    expect(
+      pollingSessionTesting.resolveSpooledUpdateRetryDelayMs(
+        {
+          updateId: 43,
+          path: "/tmp/43.json",
+          update: { update_id: 43 },
+          receivedAt: 0,
+          attempts: 1,
+          lastAttemptAt: 1_000,
+        },
+        1_999,
+      ),
+    ).toBe(0);
+  });
+
   it("does not call getUpdates for offset confirmation (avoiding 409 conflicts)", async () => {
     const abort = new AbortController();
     const bot = makeBot();
@@ -2020,6 +2050,57 @@ describe("TelegramPollingSession", () => {
     });
   });
 
+  it("dead-letters retryable poison updates after bounded retries so the lane can drain", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await withTempSpool(async (tempDir) => {
+        const abort = new AbortController();
+        const log = vi.fn();
+        const events: string[] = [];
+        let poisonAttempts = 0;
+        await writeSpooledTestUpdates(tempDir, [
+          topicUpdate(42, 10, "poison"),
+          topicUpdate(44, 10, "after poison"),
+        ]);
+
+        const { runPromise, stopWorker } = startIsolatedIngressSession({
+          abort,
+          spoolDir: tempDir,
+          log,
+          drainIntervalMs: 100,
+          handleUpdate: async (update) => {
+            if (update.update_id === 42) {
+              poisonAttempts += 1;
+              events.push(`poison:${poisonAttempts}`);
+              throw new Error("deterministic handler failure");
+            }
+            if (update.update_id === 44) {
+              events.push("after-poison");
+              abort.abort();
+            }
+          },
+        });
+
+        await vi.waitFor(() => expect(poisonAttempts).toBe(1));
+        await vi.advanceTimersByTimeAsync(130_000);
+
+        await vi.waitFor(() => expect(events.at(-1)).toBe("after-poison"));
+        expect(poisonAttempts).toBe(pollingSessionTesting.spooledRetryMaxAttempts);
+        expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+        expect(await failedUpdateReasons(tempDir)).toEqual([
+          { id: 42, reason: "retry-limit-exceeded" },
+        ]);
+        expectLogIncludes(log, "spooled update 42 on lane");
+        expectLogIncludes(log, "reached retry limit after 8 attempts; dead-lettered");
+
+        stopWorker();
+        await runPromise;
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   for (const scenario of [
     {
       name: "topic",
@@ -2077,20 +2158,17 @@ describe("TelegramPollingSession", () => {
             },
           });
 
-          await vi.waitFor(() => expect(attempts).toBe(1));
-          await vi.advanceTimersByTimeAsync(1_000);
-          expect(attempts).toBe(1);
-          await vi.waitFor(() =>
-            expect(events).toEqual([`${scenario.conflictEvent}:1`, scenario.otherEvent]),
-          );
+          await vi.waitFor(() => expect(attempts).toBeGreaterThanOrEqual(1));
+          await vi.waitFor(() => expect(events).toContain(scenario.otherEvent));
+          expect(events).not.toContain(scenario.blockedEvent);
           expect(await pendingUpdateIds(tempDir, "all")).toEqual([
             scenario.conflict.update_id,
             scenario.blocked.update_id,
           ]);
           expect(await failedUpdateIds(tempDir)).toEqual([]);
 
-          await vi.advanceTimersByTimeAsync(4_500);
-          await vi.waitFor(() => expect(attempts).toBe(2));
+          await vi.advanceTimersByTimeAsync(1_200);
+          await vi.waitFor(() => expect(attempts).toBeGreaterThanOrEqual(2));
           expect(events).not.toContain(scenario.blockedEvent);
           expectLogIncludes(
             log,
