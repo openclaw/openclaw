@@ -54,12 +54,10 @@ const SOURCE_ROOTS: Record<NativeI18nSurface, string[]> = {
 
 const ANDROID_EXTENSIONS = new Set([".kt", ".kts"]);
 const APPLE_EXTENSIONS = new Set([".swift", ".plist"]);
-const APPLE_UI_CALLS =
-  /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
 const APPLE_UI_MULTILINE_CALLS =
   /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*"""([\s\S]*?)"""/gu;
 const APPLE_UI_CALL_START =
-  /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*/gu;
+  /\b(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*/gu;
 const APPLE_MODIFIER_CALLS =
   /\.(?:navigationTitle|accessibilityLabel|accessibilityHint|help|alert|confirmationDialog)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
 const APPLE_MODIFIER_MULTILINE_CALLS =
@@ -111,7 +109,7 @@ const APPLE_STRING_PROPERTY = /\bvar\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*String\s*\
 const APPLE_SWITCH_BRANCH =
   /(?:\bcase\b[^:\n]+|\bdefault)\s*:\s*(?:return\s+)?"((?:\\.|[^"\\])*)"/gu;
 const ANDROID_STRING_FUNCTION =
-  /\bfun\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*:\s*String\s*=\s*when\s*\([^)]*\)\s*\{/gu;
+  /\bfun\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*:\s*String\s*(=|\{)/gu;
 const ANDROID_WHEN_BRANCH = /(?:[^\n{}]+|\belse)\s*->\s*"((?:\\.|[^"\\])*)"/gu;
 const ANDROID_RESOURCE_STRINGS = /<string\b[^>]*>([\s\S]*?)<\/string>/gu;
 const ANDROID_RESOURCE_COLLECTIONS =
@@ -269,25 +267,130 @@ function readSwiftStringLiteral(
       if (next === undefined) {
         return null;
       }
-      raw += character + next;
+      if (next === "(") {
+        let depth = 1;
+        let quoted = false;
+        let escaped = false;
+        let end = index + 2;
+        for (; end < source.length; end += 1) {
+          const interpolationCharacter = source[end];
+          if (escaped) {
+            escaped = false;
+          } else if (quoted && interpolationCharacter === "\\") {
+            escaped = true;
+          } else if (interpolationCharacter === '"') {
+            quoted = !quoted;
+          } else if (!quoted && interpolationCharacter === "(") {
+            depth += 1;
+          } else if (!quoted && interpolationCharacter === ")") {
+            depth -= 1;
+            if (depth === 0) {
+              break;
+            }
+          }
+        }
+        if (depth !== 0) {
+          return null;
+        }
+        raw += source.slice(index, end + 1);
+        index = end;
+        continue;
+      }
+      if (next === "n") raw += "\n";
+      else if (next === "r") raw += "\r";
+      else if (next === "t") raw += "\t";
+      else if (next === '"' || next === "\\") raw += next;
+      else raw += character + next;
       index += 1;
       continue;
     }
     if (character === '"') {
-      const value = raw.replaceAll(/\\(["\\nrt])/gu, (_, escape: string) => {
-        if (escape === "n") return "\n";
-        if (escape === "r") return "\r";
-        if (escape === "t") return "\t";
-        return escape;
-      });
-      return { end: index + 1, value };
+      return { end: index + 1, value: raw };
     }
     raw += character;
   }
   return null;
 }
 
-function extractConcatenatedSwiftUiCalls(entries: Candidate[], repoPath: string, source: string) {
+function readKotlinStringLiteral(
+  source: string,
+  openingQuote: number,
+): { end: number; value: string } | null {
+  if (source[openingQuote] !== '"' || source.startsWith('"""', openingQuote)) {
+    return null;
+  }
+  let raw = "";
+  for (let index = openingQuote + 1; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "$" && source[index + 1] === "{") {
+      let depth = 1;
+      let quoted = false;
+      let escaped = false;
+      let end = index + 2;
+      for (; end < source.length; end += 1) {
+        const interpolationCharacter = source[end];
+        if (escaped) {
+          escaped = false;
+        } else if (quoted && interpolationCharacter === "\\") {
+          escaped = true;
+        } else if (interpolationCharacter === '"') {
+          quoted = !quoted;
+        } else if (!quoted && interpolationCharacter === "{") {
+          depth += 1;
+        } else if (!quoted && interpolationCharacter === "}") {
+          depth -= 1;
+          if (depth === 0) {
+            break;
+          }
+        }
+      }
+      if (depth !== 0) {
+        return null;
+      }
+      raw += source.slice(index, end + 1);
+      index = end;
+      continue;
+    }
+    if (character === "\\") {
+      const next = source[index + 1];
+      if (next === undefined) {
+        return null;
+      }
+      if (next === "n") raw += "\n";
+      else if (next === "r") raw += "\r";
+      else if (next === "t") raw += "\t";
+      else if (next === '"' || next === "\\" || next === "$") raw += next;
+      else raw += character + next;
+      index += 1;
+      continue;
+    }
+    if (character === '"') {
+      return { end: index + 1, value: raw };
+    }
+    raw += character;
+  }
+  return null;
+}
+
+function extractKotlinStringLiterals(source: string, start: number, end: number) {
+  const values: Array<{ offset: number; value: string }> = [];
+  let cursor = start;
+  while (cursor < end) {
+    const openingQuote = source.indexOf('"', cursor);
+    if (openingQuote < 0 || openingQuote >= end) {
+      break;
+    }
+    const literal = readKotlinStringLiteral(source, openingQuote);
+    if (!literal || literal.end > end) {
+      break;
+    }
+    values.push({ offset: openingQuote, value: literal.value });
+    cursor = literal.end;
+  }
+  return values;
+}
+
+function extractSwiftUiCalls(entries: Candidate[], repoPath: string, source: string) {
   for (const match of source.matchAll(APPLE_UI_CALL_START)) {
     const offset = match.index ?? 0;
     let cursor = offset + match[0].length;
@@ -297,6 +400,7 @@ function extractConcatenatedSwiftUiCalls(entries: Candidate[], repoPath: string,
     }
     const values = [first.value];
     cursor = first.end;
+    let unsupportedConcatenation = false;
     while (true) {
       const separator = source.slice(cursor).match(/^\s*\+\s*/u)?.[0];
       if (!separator) {
@@ -305,20 +409,15 @@ function extractConcatenatedSwiftUiCalls(entries: Candidate[], repoPath: string,
       cursor += separator.length;
       const next = readSwiftStringLiteral(source, cursor);
       if (!next) {
+        unsupportedConcatenation = true;
         break;
       }
       values.push(next.value);
       cursor = next.end;
     }
-    if (values.length > 1) {
-      addCandidate(
-        entries,
-        "apple",
-        repoPath,
-        values.join(""),
-        "ui-call-concatenated",
-        lineNumber(source, offset),
-      );
+    if (!unsupportedConcatenation) {
+      const kind = values.length > 1 ? "ui-call-concatenated" : "ui-call";
+      addCandidate(entries, "apple", repoPath, values.join(""), kind, lineNumber(source, offset));
     }
   }
 }
@@ -407,7 +506,6 @@ function extractCandidates(
   const patterns =
     surface === "apple"
       ? [
-          [APPLE_UI_CALLS, "ui-call"],
           [APPLE_UI_MULTILINE_CALLS, "ui-call-multiline"],
           [APPLE_MODIFIER_CALLS, "ui-modifier"],
           [APPLE_MODIFIER_MULTILINE_CALLS, "ui-modifier-multiline"],
@@ -423,13 +521,6 @@ function extractCandidates(
   for (const [pattern, kind] of patterns) {
     for (const match of source.matchAll(pattern)) {
       const offset = match.index ?? 0;
-      if (
-        surface === "apple" &&
-        kind === "ui-call" &&
-        /^\s*\+/u.test(source.slice(offset + match[0].length))
-      ) {
-        continue;
-      }
       for (const value of match.slice(1)) {
         if (value) {
           addCandidate(entries, surface, repoPath, value, kind, lineNumber(source, offset));
@@ -438,7 +529,7 @@ function extractCandidates(
     }
   }
   if (surface === "apple") {
-    extractConcatenatedSwiftUiCalls(entries, repoPath, source);
+    extractSwiftUiCalls(entries, repoPath, source);
     for (const property of source.matchAll(APPLE_STRING_PROPERTY)) {
       const name = property[1];
       const openingBrace = (property.index ?? 0) + property[0].lastIndexOf("{");
@@ -485,14 +576,47 @@ function extractCandidates(
   if (surface === "android") {
     for (const helper of source.matchAll(ANDROID_STRING_FUNCTION)) {
       const name = helper[1];
-      const openingBrace = (helper.index ?? 0) + helper[0].lastIndexOf("{");
-      const closingBrace = findClosingBrace(source, openingBrace);
-      if (!name || !UI_STRING_NAME_RE.test(name) || closingBrace === null) {
+      const bodyKind = helper[2];
+      if (!name || !bodyKind || !UI_STRING_NAME_RE.test(name)) {
         continue;
       }
-      const body = source.slice(openingBrace + 1, closingBrace);
-      for (const branch of body.matchAll(ANDROID_WHEN_BRANCH)) {
-        if (branch[1]) {
+      const bodyStart = (helper.index ?? 0) + helper[0].length;
+      if (bodyKind === "{") {
+        const openingBrace = bodyStart - 1;
+        const closingBrace = findClosingBrace(source, openingBrace);
+        if (closingBrace === null) {
+          continue;
+        }
+        const body = source.slice(bodyStart, closingBrace);
+        for (const returnLine of body.matchAll(/\breturn\b([^\n]*)/gu)) {
+          const lineStart = bodyStart + (returnLine.index ?? 0);
+          const lineEnd = lineStart + returnLine[0].length;
+          for (const literal of extractKotlinStringLiterals(source, lineStart, lineEnd)) {
+            addCandidate(
+              entries,
+              surface,
+              repoPath,
+              literal.value,
+              "conditional-branch",
+              lineNumber(source, literal.offset),
+            );
+          }
+        }
+        continue;
+      }
+      const expression = source.slice(bodyStart);
+      const whenMatch = expression.match(/^\s*when\s*\([^)]*\)\s*\{/u);
+      if (whenMatch) {
+        const openingBrace = bodyStart + whenMatch[0].lastIndexOf("{");
+        const closingBrace = findClosingBrace(source, openingBrace);
+        if (closingBrace === null) {
+          continue;
+        }
+        const body = source.slice(openingBrace + 1, closingBrace);
+        for (const branch of body.matchAll(ANDROID_WHEN_BRANCH)) {
+          if (!branch[1]) {
+            continue;
+          }
           addCandidate(
             entries,
             surface,
@@ -502,6 +626,22 @@ function extractCandidates(
             lineNumber(source, openingBrace + 1 + (branch.index ?? 0)),
           );
         }
+        continue;
+      }
+      const expressionLine = expression.split("\n", 1)[0] ?? "";
+      for (const literal of extractKotlinStringLiterals(
+        source,
+        bodyStart,
+        bodyStart + expressionLine.length,
+      )) {
+        addCandidate(
+          entries,
+          surface,
+          repoPath,
+          literal.value,
+          "conditional-branch",
+          lineNumber(source, literal.offset),
+        );
       }
     }
     for (const match of source.matchAll(ANDROID_NAMED_LITERALS)) {
