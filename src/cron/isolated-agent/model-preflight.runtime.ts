@@ -1,5 +1,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeModelHeaders } from "../../agents/embedded-agent-runner/model.inline-provider.js";
 import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
 import {
   resolveProviderRequestHeaders,
@@ -234,20 +235,27 @@ export async function preflightCronModelProvider(params: {
   // Always delegate — handles auth, request.headers, and provider-level headers
   // in a single call, matching the normal model request path.
   const requestOverrides = sanitizeConfiguredProviderRequest(providerConfig.request);
+  const providerHeaders = sanitizeModelHeaders(providerConfig.headers, {
+    stripSecretRefMarkers: true,
+  });
   let headers: Record<string, string> | undefined;
 
   headers = resolveProviderRequestHeaders({
     provider: params.provider,
     api,
     baseUrl,
+    defaultHeaders: providerHeaders,
     request: requestOverrides,
   });
 
-  // Fall through to resolveApiKeyForProvider when resolveProviderRequestHeaders
-  // returned nothing (no auth/headers configured on the provider).
-  // Skip when mode is "header" — already handled by resolveProviderRequestHeaders above.
-  const headerModeConfigured = providerConfig?.request?.auth?.mode === "header";
-  if (!headers && !headerModeConfigured) {
+  // When the sanitized request has no auth override, try the provider credential
+  // profile as fallback. Provider-level headers carry through via defaultHeaders;
+  // request-level headers are dropped in the fallback call since we only pass
+  // { auth } as the request override — acceptable for a connectivity probe.
+  // Skip when request auth was provided — the resolver already handled it, and
+  // adding a Bearer token from the credential profile would incorrectly override
+  // custom header-mode auth.
+  if (!requestOverrides?.auth) {
     try {
       const resolved = await resolveApiKeyForProvider({
         provider: params.provider,
@@ -264,27 +272,13 @@ export async function preflightCronModelProvider(params: {
           provider: params.provider,
           api,
           baseUrl,
+          defaultHeaders: providerHeaders,
           request: { auth: { mode: "authorization-bearer", token: resolved.apiKey } },
         });
       }
     } catch (err) {
       logDebug(
         `[preflight] resolveApiKeyForProvider failed: ${String(err)} (non-fatal for preflight)`,
-      );
-    }
-  }
-
-  // Debug log for misconfigured header mode (headerName or value is empty)
-  if (headerModeConfigured) {
-    const headerAuth = providerConfig?.request?.auth;
-    if (
-      headerAuth?.mode === "header" &&
-      (!headerAuth.headerName?.trim() ||
-        typeof headerAuth.value !== "string" ||
-        !headerAuth.value.trim())
-    ) {
-      logDebug(
-        `[preflight] request.auth.mode is "header" but headerName or value is empty for provider ${params.provider}; skipping auth`,
       );
     }
   }
