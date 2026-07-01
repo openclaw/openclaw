@@ -1598,13 +1598,13 @@ function deferPendingBackoffMissedCronSlots(
 export async function runMissedJobs(
   state: CronServiceState,
   opts?: { skipJobIds?: ReadonlySet<string>; deferAgentTurnJobs?: boolean },
-): Promise<ReadonlySet<string>> {
+): Promise<void> {
   if (state.stopped) {
-    return new Set();
+    return;
   }
   const plan = await planStartupCatchup(state, opts);
   if (plan.candidates.length === 0 && plan.deferredJobs.length === 0) {
-    return new Set();
+    return;
   }
 
   const outcomes = await executeStartupCatchupPlan(state, plan);
@@ -1612,7 +1612,6 @@ export async function runMissedJobs(
   for (const outcome of finalizedOutcomes) {
     maybeNotifyIsolatedAgentSetupTimeout(state, outcome);
   }
-  return new Set(plan.deferredJobs.map((deferred) => deferred.jobId));
 }
 
 async function planStartupCatchup(
@@ -1843,16 +1842,13 @@ async function applyStartupCatchupOutcomes(
           }
           if (typeof deferred.delayMs === "number") {
             job.state.nextRunAtMs = baseNow + deferred.delayMs + offset - staggerMs;
+            state.pendingCatchupDeferralJobIds.add(jobId);
             offset += staggerMs;
             continue;
           }
           job.state.nextRunAtMs = baseNow + offset;
+          state.pendingCatchupDeferralJobIds.add(jobId);
           offset += staggerMs;
-        }
-        // Record deferred ids so every maintenance recompute path exempts them
-        // from future-slot repair until the staggered slot fires.
-        for (const deferred of plan.deferredJobs) {
-          state.pendingCatchupDeferralJobIds.add(deferred.jobId);
         }
       }
 

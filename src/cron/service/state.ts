@@ -196,10 +196,8 @@ export type CronServiceState = {
   running: boolean;
   stopped: boolean;
   restartRecoveryPending: boolean;
-  /** Job ids whose startup catch-up was deferred to a staggered slot.
-   *  `recomputeNextRunsForMaintenance` must not advance these to their natural
-   *  next run until the deferred slot fires.  Each id is removed once its
-   *  staggered slot is reached (now >= nextRunAtMs). */
+  /** Prevents maintenance reads from advancing deferred startup catch-up slots.
+   * Entries are removed when the deferred job runs or becomes irrelevant. */
   pendingCatchupDeferralJobIds: Set<string>;
   activeManualRunJobIds: Set<string>;
   manualSetupTimeoutRestartNotified: boolean;

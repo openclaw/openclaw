@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite } from "./service.test-harness.js";
-import { start } from "./service/ops.js";
+import { start, status } from "./service/ops.js";
 import { createCronServiceState } from "./service/state.js";
 import { onTimer } from "./service/timer.js";
 import { saveCronStore } from "./store.js";
@@ -77,6 +77,9 @@ describe("CronService startup catch-up repair scoping", () => {
     expect(deferred?.state.nextRunAtMs).toBe(startNow + 5_000);
     expect(deferred?.state.nextRunAtMs).not.toBe(tomorrowNaturalSlot);
     expect(state.pendingCatchupDeferralJobIds.has("daily-overflow")).toBe(true);
+
+    await status(state);
+    expect(deferred?.state.nextRunAtMs).toBe(startNow + 5_000);
 
     now = startNow + 5_005;
     await onTimer(state);
