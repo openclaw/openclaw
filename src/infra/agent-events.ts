@@ -237,10 +237,12 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   ) {
     return;
   }
-  if (context.sessionKey && existing.sessionKey !== context.sessionKey) {
+  const preserveSessionRef =
+    getAgentRunContextOwners(state).get(runId)?.preserveAfterRelease === true;
+  if (!preserveSessionRef && context.sessionKey && existing.sessionKey !== context.sessionKey) {
     existing.sessionKey = context.sessionKey;
   }
-  if (context.sessionId && existing.sessionId !== context.sessionId) {
+  if (!preserveSessionRef && context.sessionId && existing.sessionId !== context.sessionId) {
     existing.sessionId = context.sessionId;
   }
   if (context.verboseLevel && existing.verboseLevel !== context.verboseLevel) {
@@ -284,7 +286,7 @@ export function claimAgentRunContext(
     ownerToken = randomUUID();
     if (existingOwners?.lifecycleGeneration === lifecycleGeneration) {
       existingOwners.ownerTokens.add(ownerToken);
-      if (options.ownsContext) {
+      if (options.ownsContext && !existingOwners.preserveAfterRelease) {
         existingOwners.preserveAfterRelease = false;
       }
     } else {
