@@ -101,6 +101,33 @@ describe("checkBrowserOrigin", () => {
       expected: { ok: true as const, matchedBy: "allowlist" as const },
     },
     {
+      name: "accepts custom app scheme allowlist matches",
+      input: {
+        requestHost: "gateway.example.com:18789",
+        origin: "app://localhost",
+        allowedOrigins: ["app://localhost"],
+      },
+      expected: { ok: true as const, matchedBy: "allowlist" as const },
+    },
+    {
+      name: "accepts custom electron scheme allowlist matches",
+      input: {
+        requestHost: "gateway.example.com:18789",
+        origin: "electron://localhost",
+        allowedOrigins: ["electron://localhost"],
+      },
+      expected: { ok: true as const, matchedBy: "allowlist" as const },
+    },
+    {
+      name: "accepts custom tauri scheme allowlist matches",
+      input: {
+        requestHost: "gateway.example.com:18789",
+        origin: "tauri://localhost",
+        allowedOrigins: ["tauri://localhost"],
+      },
+      expected: { ok: true as const, matchedBy: "allowlist" as const },
+    },
+    {
       name: "accepts wildcard allowlists even alongside specific entries",
       input: {
         requestHost: "gateway.tailnet.ts.net:18789",
