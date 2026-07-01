@@ -376,6 +376,76 @@ describe("installed plugin index", () => {
     expect(records[0]?.startup.sidecar).toBe(false);
   });
 
+  it("ignores malformed stale contribution metadata while building index records", () => {
+    const rootDir = makeTempDir();
+    writeRuntimeEntry(rootDir);
+    const manifestPath = path.join(rootDir, "openclaw.plugin.json");
+
+    const records = buildInstalledPluginIndexRecords({
+      candidates: [createPluginCandidate({ rootDir })],
+      registry: {
+        plugins: [
+          {
+            id: "malformed-stale-record",
+            providers: 42,
+            cliBackends: 42,
+            skills: [],
+            hooks: [],
+            contracts: {
+              tools: 42,
+              migrationProviders: ["legacy-import"],
+            },
+            modelCatalog: {
+              providers: 42,
+              aliases: "demo",
+              suppressions: [null, { provider: "suppressed-demo" }],
+            },
+            modelSupport: {
+              modelPrefixes: 42,
+              modelPatterns: ["^demo-"],
+            },
+            commandAliases: [null, { name: "safe-command" }],
+            activation: {
+              onProviders: "demo",
+              onAgentHarnesses: 42,
+              onConfigPaths: 42,
+            },
+            providerAuthEnvVars: "DEMO_API_KEY",
+            channelEnvVars: 42,
+            origin: "global",
+            rootDir,
+            source: path.join(rootDir, "index.ts"),
+            manifestPath,
+          } as unknown as PluginManifestRecord,
+        ],
+        diagnostics: [],
+      },
+      diagnostics: [],
+      installRecords: {},
+    });
+
+    const record = records[0];
+    expectRecordFields(requireRecord(record, "installed plugin record"), {
+      pluginId: "malformed-stale-record",
+      compat: [],
+    });
+    expect(record?.startup.agentHarnesses).toEqual([]);
+    expect(record?.startup.configPaths).toEqual([]);
+    expect(record?.contributions).toEqual({
+      channels: [],
+      channelConfigs: [],
+      providers: [],
+      modelCatalogProviders: ["suppressed-demo"],
+      modelSupportPrefixes: [],
+      modelSupportPatterns: ["^demo-"],
+      autoEnableProviderIds: [],
+      commandAliases: ["safe-command"],
+      contracts: {
+        migrationProviders: ["legacy-import"],
+      },
+    });
+  });
+
   it("indexes manifestless Claude bundles without missing-manifest diagnostics", () => {
     const rootDir = path.join(makeTempDir(), "workspace");
     writeManifestlessClaudeBundle(rootDir);
