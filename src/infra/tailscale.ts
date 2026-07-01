@@ -49,7 +49,9 @@ export async function findTailscaleBinary(): Promise<string | null> {
           }),
         ]);
       } finally {
-        if (timer) clearTimeout(timer);
+        if (timer) {
+          clearTimeout(timer);
+        }
       }
       return true;
     } catch {

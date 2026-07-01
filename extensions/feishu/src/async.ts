@@ -75,7 +75,7 @@ export function waitForAbortableDelay(
 
   return new Promise((resolve) => {
     let settled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined = undefined;
 
     const finish = (value: boolean) => {
       if (settled) {
