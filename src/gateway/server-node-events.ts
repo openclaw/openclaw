@@ -797,7 +797,7 @@ export const handleNodeEvent = async (
             sessionKey,
             {
               source: "exec-event",
-              intent: "event",
+              intent: "immediate",
               reason: "exec-event",
               coalesceMs: 0,
             },

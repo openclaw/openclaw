@@ -6,6 +6,7 @@ import {
   recordRunStart,
   shouldDeferWake,
 } from "./heartbeat-cooldown.js";
+import { HEARTBEAT_SKIP_MIN_SPACING } from "./heartbeat-wake.js";
 
 describe("shouldDeferWake", () => {
   type Input = Parameters<typeof shouldDeferWake>[0];
@@ -280,7 +281,7 @@ describe("shouldDeferWake", () => {
           lastRunStartedAtMs: 200_000 - DEFAULT_MIN_WAKE_SPACING_MS + 100,
           reason: "exec-event",
         }),
-      ).toEqual({ defer: true, reason: "min-spacing" });
+      ).toEqual({ defer: true, reason: HEARTBEAT_SKIP_MIN_SPACING });
     });
 
     it("does not defer when last run is older than min-spacing", () => {
@@ -305,7 +306,7 @@ describe("shouldDeferWake", () => {
           minSpacingMs: 1_000,
           reason: "exec-event",
         }),
-      ).toEqual({ defer: true, reason: "min-spacing" });
+      ).toEqual({ defer: true, reason: HEARTBEAT_SKIP_MIN_SPACING });
     });
 
     it("does not gate manual wakes on min-spacing", () => {

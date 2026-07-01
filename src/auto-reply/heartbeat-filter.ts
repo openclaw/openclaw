@@ -4,6 +4,7 @@ import { normalizeOptionalString as readString } from "@openclaw/normalization-c
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "./heartbeat-tool-response.js";
 import {
+  EXEC_COMPLETION_TRANSCRIPT_PROMPT,
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
   HEARTBEAT_TRANSCRIPT_PROMPT,
   resolveHeartbeatPromptForResponseTool,
@@ -325,6 +326,22 @@ export function isHeartbeatUserMessage(
   );
 }
 
+/** Return whether a user message is an exec completion notification. */
+export function isExecCompletionUserMessage(message: { role: string; content?: unknown }): boolean {
+  if (message.role !== "user") {
+    return false;
+  }
+  const { text } = resolveMessageText(message.content);
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return (
+    trimmed === EXEC_COMPLETION_TRANSCRIPT_PROMPT ||
+    trimmed.startsWith(`${EXEC_COMPLETION_TRANSCRIPT_PROMPT}\n`)
+  );
+}
+
 /** Return whether an assistant message is only a heartbeat acknowledgement. */
 export function isHeartbeatOkResponse(
   message: { role: string; content?: unknown },
@@ -406,6 +423,9 @@ function resolveHeartbeatArtifactSpanEnd(
     if (isHeartbeatUserMessage(message, heartbeatPrompt)) {
       break;
     }
+    if (isExecCompletionUserMessage(message)) {
+      break;
+    }
     if (isHeartbeatOkResponse(message, ackMaxChars)) {
       sawTerminalHeartbeatArtifact = true;
       index = advancePastAdjacentToolResults(messages, index + 1);
@@ -458,7 +478,9 @@ export function filterHeartbeatTranscriptArtifacts<T extends { role: string; con
   const result: T[] = [];
   let i = 0;
   while (i < messages.length) {
-    if (!isHeartbeatUserMessage(messages[i], heartbeatPrompt)) {
+    const isHeartbeat = isHeartbeatUserMessage(messages[i], heartbeatPrompt);
+    const isExecCompletion = isExecCompletionUserMessage(messages[i]);
+    if (!isHeartbeat && !isExecCompletion) {
       result.push(messages[i]);
       i++;
       continue;

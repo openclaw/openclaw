@@ -63,12 +63,8 @@ describe("heartbeat event prompts", () => {
       name: "builds internal-only exec prompt when delivery is disabled",
       events: ["Exec failed (node=abc id=123, code 1)\nUpload failed"],
       opts: { deliverToUser: false },
-      expected: ["user delivery is disabled", "Handle the result internally", "HEARTBEAT_OK only"],
-      unexpected: [
-        "Upload failed",
-        "system messages above",
-        "Please relay the command output to the user",
-      ],
+      expected: ["User delivery is disabled", "Continue the task based on the result if needed"],
+      unexpected: ["system messages above", "Please relay the command output to the user"],
     },
     {
       name: "suppresses empty exec completion prompts",
@@ -92,6 +88,17 @@ describe("heartbeat event prompts", () => {
         "without captured stdout/stderr",
         "include the exit status or signal",
         "Do not ask the user to provide missing logs",
+      ],
+      unexpected: ["Please relay the command output to the user"],
+    },
+    {
+      name: "shows failed exec without output when delivery is disabled",
+      events: ["Exec failed (abc12345, code 1)"],
+      opts: { deliverToUser: false },
+      expected: [
+        "without captured stdout/stderr",
+        "Handle the result internally",
+        "Continue the task based on the exit status",
       ],
       unexpected: ["Please relay the command output to the user"],
     },
