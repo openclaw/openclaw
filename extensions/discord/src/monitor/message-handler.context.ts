@@ -17,6 +17,7 @@ import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/sess
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
 import { ChannelType } from "../internal/discord.js";
+import { shouldPreserveDiscordSelfReplyBody } from "../self-reply-context.js";
 import { normalizeDiscordAllowList, normalizeDiscordSlug } from "./allow-list.js";
 import { resolveTimestampMs } from "./format.js";
 import {
@@ -318,10 +319,14 @@ export async function buildDiscordMessageProcessContext(params: {
           storePath,
           sessionKey: effectiveSessionKey,
         });
+  const preserveSelfReplyBody =
+    Boolean(botUserId && replyContext?.senderId === botUserId) &&
+    shouldPreserveDiscordSelfReplyBody(replyContext?.id);
 
   const ctxPayload = await buildChannelInboundEventContext({
     channel: "discord",
     resolveSupplementalMedia: true,
+    suppressSelfQuoteBody: !preserveSelfReplyBody,
     contextVisibility: contextVisibilityMode,
     accountId: route.accountId,
     messageId: canonicalMessageId ?? message.id,

@@ -125,6 +125,38 @@ describe("sendFailureNotificationAnnounce", () => {
     expect(deliveryRequest.abortSignal).toBeInstanceOf(AbortSignal);
   });
 
+  it("marks Discord failure alert payloads as self-quote preservable", async () => {
+    mocks.resolveDeliveryTarget.mockResolvedValue({
+      ok: true,
+      channel: "discord",
+      to: "channel:123",
+      accountId: "bot-a",
+      mode: "explicit",
+    });
+
+    await sendFailureNotificationAnnounce(
+      {} as never,
+      {} as never,
+      "main",
+      "job-1",
+      { channel: "discord", to: "channel:123", accountId: "bot-a" },
+      "Cron failed",
+    );
+
+    expect(firstDeliveryRequest().payloads).toEqual([
+      {
+        text: "Cron failed",
+        channelData: {
+          openclaw: {
+            replyContext: {
+              preserveSelfQuoteBody: true,
+            },
+          },
+        },
+      },
+    ]);
+  });
+
   it("uses sessionKey for delivery-target resolution and outbound context", async () => {
     await sendFailureNotificationAnnounce(
       {} as never,

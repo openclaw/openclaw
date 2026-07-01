@@ -203,6 +203,35 @@ type IndexedPreparedOutboundPayloadPlanEntry = PreparedOutboundPayloadPlanEntry 
   sourceIndex: number;
 };
 
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function hasOnlyOpenClawReplyContextMetadata(channelData: Record<string, unknown>): boolean {
+  const channelDataKeys = Object.keys(channelData);
+  if (channelDataKeys.length !== 1) {
+    return false;
+  }
+  const openclawData = readRecord(channelData.openclaw);
+  if (!openclawData || Object.keys(openclawData).length !== 1) {
+    return false;
+  }
+  const replyContext = readRecord(openclawData.replyContext);
+  if (!replyContext) {
+    return false;
+  }
+  return Object.keys(replyContext).length === 1 && replyContext.preserveSelfQuoteBody === true;
+}
+
+export function hasOutboundTransportChannelData(value: unknown): value is Record<string, unknown> {
+  if (!hasReplyChannelData(value)) {
+    return false;
+  }
+  return !hasOnlyOpenClawReplyContextMetadata(value);
+}
+
 function createOutboundPayloadPlanEntry(
   payload: ReplyPayload,
   context: Pick<OutboundPayloadPlanContext, "extractMarkdownImages"> = {},
@@ -248,7 +277,7 @@ function createOutboundPayloadPlanEntry(
   if (!isRenderablePayload(normalizedPayload) && !isSilent) {
     return null;
   }
-  const hasChannelData = hasReplyChannelData(normalizedPayload.channelData);
+  const hasChannelData = hasOutboundTransportChannelData(normalizedPayload.channelData);
   return {
     payload: normalizedPayload,
     hasPresentation: hasMessagePresentationBlocks(normalizedPayload.presentation),
@@ -381,7 +410,9 @@ export function summarizeOutboundPayloadForTransport(
     presentation: payload.presentation,
     delivery: payload.delivery,
     interactive: payload.interactive,
-    channelData: payload.channelData,
+    channelData: hasOutboundTransportChannelData(payload.channelData)
+      ? payload.channelData
+      : undefined,
     ...(text || !spokenText ? {} : { hookContent: spokenText }),
   };
 }
