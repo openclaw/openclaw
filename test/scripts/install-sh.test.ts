@@ -1358,10 +1358,7 @@ describe("install.sh", () => {
     mkdirSync(bin, { recursive: true });
     mkdirSync(outer, { recursive: true });
     mkdirSync(repo, { recursive: true });
-    writeFileSync(
-      join(outer, "package.json"),
-      '{\n  "packageManager": "yarn@4.5.0"\n}\n',
-    );
+    writeFileSync(join(outer, "package.json"), '{\n  "packageManager": "yarn@4.5.0"\n}\n');
     writeFileSync(
       join(repo, "package.json"),
       '{\n  "packageManager": "pnpm@11.2.2+sha512.test"\n}\n',
@@ -1550,6 +1547,78 @@ describe("install.sh macOS Homebrew Node behavior", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("records resolved Node path and opens macOS TCC panes during interactive preflight", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      OS=macos
+      NODE_REALPATH="$HOME/.local/share/fnm/node-versions/v24.15.0/installation/bin/node"
+      mkdir -p "$(dirname "$NODE_REALPATH")"
+      : > "$NODE_REALPATH"
+      chmod +x "$NODE_REALPATH"
+      fake_bin="$(mktemp -d)"
+      OPEN_LOG="$HOME/open.log"
+      export OPEN_LOG
+      cat > "$fake_bin/open" <<'EOS'
+#!/usr/bin/env bash
+printf 'open:%s\n' "$*" >> "$OPEN_LOG"
+EOS
+      chmod +x "$fake_bin/open"
+      export PATH="$fake_bin:$PATH"
+      is_promptable() { return 0; }
+      command() {
+        if [[ "$1" == "-v" && "$2" == "node" ]]; then
+          printf '%s\\n' "$HOME/.local/state/fnm_multishells/123/bin/node"
+          return 0
+        fi
+        builtin command "$@"
+      }
+      node() {
+        if [[ "$1" == "-p" ]]; then
+          printf '%s\\n' "$NODE_REALPATH"
+          return 0
+        fi
+        return 0
+      }
+      ui_section() { printf 'section:%s\\n' "$*"; }
+      ui_info() { printf 'info:%s\\n' "$*"; }
+      ui_warn() { printf 'warn:%s\\n' "$*"; }
+      run_macos_node_tcc_preflight
+      printf 'record=%s\\n' "$(cat "$HOME/.openclaw/runtime/node-path")"
+      cat "$OPEN_LOG"
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("section:macOS Node permissions");
+    expect(result.stdout).toContain("info:OpenClaw Node runtime: ");
+    expect(result.stdout).toContain(
+      "/.local/share/fnm/node-versions/v24.15.0/installation/bin/node",
+    );
+    expect(result.stdout).toContain("warn:Current node command is an fnm multishell shim");
+    expect(result.stdout).toContain("warn:fnm-managed Node permissions stay stable");
+    expect(result.stdout).toContain("open:-R ");
+    expect(result.stdout).toContain("Privacy_AllFiles");
+    expect(result.stdout).toContain("Privacy_Accessibility");
+    expect(result.stdout).toContain("Privacy_ScreenCapture");
+    expect(result.stdout).toContain("record=");
+  });
+
+  it("skips macOS Node TCC preflight outside macOS", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      OS=linux
+      node() { echo "node-called"; }
+      ui_section() { echo "section-called"; }
+      run_macos_node_tcc_preflight
+      test ! -e "$HOME/.openclaw/runtime/node-path"
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain("node-called");
+    expect(result.stdout).not.toContain("section-called");
   });
 });
 

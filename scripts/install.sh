@@ -1619,6 +1619,85 @@ print_active_node_paths() {
     return 0
 }
 
+resolve_active_node_runtime_path() {
+    if ! command -v node &> /dev/null; then
+        return 1
+    fi
+
+    local node_path=""
+    node_path="$(node -p 'require("node:fs").realpathSync(process.execPath)' 2>/dev/null || true)"
+    if [[ -n "$node_path" && -x "$node_path" ]]; then
+        printf '%s\n' "$node_path"
+        return 0
+    fi
+
+    node_path="$(command -v node 2>/dev/null || true)"
+    if [[ -z "$node_path" ]]; then
+        return 1
+    fi
+    if command -v realpath >/dev/null 2>&1; then
+        realpath "$node_path" 2>/dev/null && return 0
+    fi
+    printf '%s\n' "$node_path"
+}
+
+maybe_open_macos_privacy_pane() {
+    local pane="$1"
+    if ! is_promptable; then
+        return 0
+    fi
+    if [[ "${OPENCLAW_OPEN_MACOS_TCC_PREFLIGHT:-1}" != "1" ]]; then
+        return 0
+    fi
+    if ! command -v open >/dev/null 2>&1; then
+        return 0
+    fi
+    open "x-apple.systempreferences:com.apple.preference.security?${pane}" >/dev/null 2>&1 || true
+}
+
+run_macos_node_tcc_preflight() {
+    if [[ "$OS" != "macos" ]]; then
+        return 0
+    fi
+    if [[ "${OPENCLAW_MACOS_NODE_TCC_PREFLIGHT:-1}" != "1" ]]; then
+        return 0
+    fi
+
+    local node_path node_shim runtime_dir node_record
+    node_path="$(resolve_active_node_runtime_path || true)"
+    if [[ -z "$node_path" ]]; then
+        return 0
+    fi
+    node_shim="$(command -v node 2>/dev/null || true)"
+    runtime_dir="$(resolve_openclaw_effective_home)/.openclaw/runtime"
+    node_record="${runtime_dir}/node-path"
+    mkdir -p "$runtime_dir" 2>/dev/null || true
+    printf '%s\n' "$node_path" > "$node_record" 2>/dev/null || true
+
+    ui_section "macOS Node permissions"
+    ui_info "OpenClaw Node runtime: ${node_path}"
+    ui_info "Saved runtime hint: ${node_record}"
+    if [[ "$node_shim" == *"/fnm_multishells/"* ]]; then
+        ui_warn "Current node command is an fnm multishell shim; TCC grants should target the resolved runtime above"
+    fi
+    if [[ "$node_path" == *"/.local/share/fnm/"* || "$node_path" == *"/.fnm/"* ]]; then
+        ui_warn "fnm-managed Node permissions stay stable only while this exact Node version remains selected"
+        echo "  Keep the install pinned, for example: fnm default ${NODE_DEFAULT_MAJOR}"
+    fi
+
+    echo "  Grant this exact node binary if generated scripts need broad local access:"
+    echo "    ${node_path}"
+    echo "  Recommended macOS privacy panes: Full Disk Access, Accessibility, and Screen Recording."
+    echo "  macOS will still require a user approval click unless the Mac is managed with a PPPC profile."
+
+    if is_promptable && command -v open >/dev/null 2>&1 && [[ "${OPENCLAW_OPEN_MACOS_TCC_PREFLIGHT:-1}" == "1" ]]; then
+        open -R "$node_path" >/dev/null 2>&1 || true
+        maybe_open_macos_privacy_pane "Privacy_AllFiles"
+        maybe_open_macos_privacy_pane "Privacy_Accessibility"
+        maybe_open_macos_privacy_pane "Privacy_ScreenCapture"
+    fi
+}
+
 ensure_macos_default_node_active() {
     if [[ "$OS" != "macos" ]]; then
         return 0
@@ -3172,6 +3251,8 @@ main() {
             warn_shell_path_missing_dir "$HOME/.local/bin" "user-local bin dir (~/.local/bin)"
         fi
     fi
+
+    run_macos_node_tcc_preflight
 
     refresh_gateway_service_if_loaded
 
