@@ -121,6 +121,20 @@ describe("describeEmbeddedAgentStreamStrategy", () => {
       }),
     ).toBe("boundary-aware:anthropic-messages");
   });
+
+  it("keeps runtime-auth Codex Responses custom session streams labeled as custom", () => {
+    expect(
+      describeEmbeddedAgentStreamStrategy({
+        currentStreamFn: vi.fn() as never,
+        model: {
+          api: "openai-chatgpt-responses",
+          provider: "openai",
+          id: "gpt-5.5",
+        } as never,
+        resolvedApiKey: "runtime-key",
+      }),
+    ).toBe("session-custom");
+  });
 });
 
 describe("resolveEmbeddedAgentStreamFn", () => {
@@ -253,6 +267,43 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     expect(result.apiKey).toBe("anthropic-runtime-key");
     expect(currentStreamFn).not.toHaveBeenCalled();
     expect(innerStreamFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves runtime-auth Codex Responses custom streams with injected run context", async () => {
+    const currentStreamFn = vi.fn(async (_model, context, options) => ({ context, options }));
+    const runSignal = new AbortController().signal;
+    vi.mocked(providerTransportStream.createBoundaryAwareStreamFnForModel).mockClear();
+
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: currentStreamFn as never,
+      sessionId: "session-1",
+      signal: runSignal,
+      model: {
+        api: "openai-chatgpt-responses",
+        provider: "openai",
+        id: "gpt-5.5",
+      } as never,
+      resolvedApiKey: "oauth-bearer-token",
+      authProfileId: "openai-codex:profile-1",
+    });
+
+    expect(streamFn).not.toBe(currentStreamFn);
+    const result = await expectStreamResultRecord(
+      streamFn(
+        { provider: "openai", id: "gpt-5.5" } as never,
+        { systemPrompt: `intro${SYSTEM_PROMPT_CACHE_BOUNDARY}tail` } as never,
+        {},
+      ),
+      "codex custom stream result",
+    );
+    expect(requireRecord(result.context, "codex custom context").systemPrompt).toBe("intro\ntail");
+    const options = requireRecord(result.options, "codex custom options");
+    expect(options.apiKey).toBe("oauth-bearer-token");
+    expect(options.authProfileId).toBe("openai-codex:profile-1");
+    expect(options.sessionId).toBe("session-1");
+    expect(options.signal).toBe(runSignal);
+    expect(currentStreamFn).toHaveBeenCalledTimes(1);
+    expect(providerTransportStream.createBoundaryAwareStreamFnForModel).not.toHaveBeenCalled();
   });
 
   it("injects the resolved run api key into provider-owned stream functions", async () => {
