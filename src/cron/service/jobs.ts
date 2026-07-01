@@ -682,23 +682,45 @@ export function recomputeNextRunsForMaintenance(
     recomputeExpired?: boolean;
     nowMs?: number;
     repairFutureCronNextRunAtMs?: boolean;
-    skipFutureRepairJobIds?: ReadonlySet<string>;
   },
 ): boolean {
   const recomputeExpired = opts?.recomputeExpired ?? false;
   const repairFutureCronNextRunAtMs = opts?.repairFutureCronNextRunAtMs ?? true;
-  const skipFutureRepairJobIds = opts?.skipFutureRepairJobIds;
+  const deferralIds = state.pendingCatchupDeferralJobIds;
+  // Drop deferral markers for jobs that no longer exist in the store or
+  // are disabled. They will not fire, so no deferral is needed.
+  if (state.store && deferralIds.size > 0) {
+    const relevantDeferralIds = new Set(
+      state.store.jobs.filter((job) => isJobEnabled(job)).map((job) => job.id),
+    );
+    for (const jobId of deferralIds) {
+      if (!relevantDeferralIds.has(jobId)) {
+        deferralIds.delete(jobId);
+      }
+    }
+  }
   return walkSchedulableJobs(
     state,
     ({ job, nowMs: now }) => {
       let changed = false;
+
+      // Clear stale deferral markers once the deferred staggered slot arrives.
+      // After the slot fires, future repair is safe for this job again.
+      if (deferralIds.has(job.id)) {
+        const nextRun = job.state.nextRunAtMs;
+        if (hasScheduledNextRunAtMs(nextRun) && now >= nextRun) {
+          deferralIds.delete(job.id);
+          changed = true;
+        }
+      }
+
       if (!hasScheduledNextRunAtMs(job.state.nextRunAtMs)) {
         if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
           changed = true;
         }
       } else if (
         repairFutureCronNextRunAtMs &&
-        !skipFutureRepairJobIds?.has(job.id) &&
+        !deferralIds.has(job.id) &&
         shouldRepairFutureCronNextRunAtMs({ state, job, nowMs: now })
       ) {
         if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
@@ -1005,6 +1027,8 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   applyAgentTurnToolsAllowPatch(next, patch, existing);
   if (typeof patch.thinking === "string") {
     next.thinking = patch.thinking;
+  } else if (patch.thinking === null) {
+    delete next.thinking;
   }
   if (typeof patch.timeoutSeconds === "number") {
     next.timeoutSeconds = patch.timeoutSeconds;
@@ -1051,7 +1075,7 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     message: patch.message,
     model: typeof patch.model === "string" ? patch.model : undefined,
     fallbacks: Array.isArray(patch.fallbacks) ? patch.fallbacks : undefined,
-    thinking: patch.thinking,
+    thinking: typeof patch.thinking === "string" ? patch.thinking : undefined,
     timeoutSeconds: patch.timeoutSeconds,
     lightContext: patch.lightContext,
     allowUnsafeExternalContent: patch.allowUnsafeExternalContent,

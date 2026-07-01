@@ -1046,6 +1046,7 @@ export const dispatchTelegramMessage = async ({
     active: Boolean(answerLane.stream),
     seed: progressSeed,
     formatLine: formatTelegramProgressLine,
+    reasoningGate: streamReasoningInProgressDraft,
     update: async (streamText, options) => {
       await prepareAnswerLaneForToolProgress();
       answerLane.lastPartialText = streamText;

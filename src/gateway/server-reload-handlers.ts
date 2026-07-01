@@ -59,6 +59,20 @@ import type { ActivateRuntimeSecrets } from "./server-startup-config.js";
 import { resolveHookClientIpConfig } from "./server/hook-client-ip-config.js";
 import type { HookClientIpConfig } from "./server/hooks-request-handler.js";
 
+// When an in-process restart (SIGUSR1) fires while a deferred channel reload
+// is waiting for active work to drain, the restart supersedes the reload.
+// This abort generation lets the restart path cancel the deferred reload before both
+// code paths race to start the same channel. Each createGatewayReloadHandlers call
+// increments the generation so a new lifecycle never clears an abort intended for a
+// previous lifecycle's deferred reload.
+let currentReloadGeneration = 0;
+let abortGeneration: number | undefined = undefined;
+
+/** Signal any in-progress deferred channel reload to abort immediately. */
+export function abortPendingChannelReloads(): void {
+  abortGeneration = currentReloadGeneration;
+}
+
 type GatewayHotReloadState = {
   hooksConfig: ReturnType<typeof resolveHooksConfig>;
   hookClientIpConfig: HookClientIpConfig;
@@ -87,6 +101,8 @@ type GatewayGmailRestartAbortController = {
 export type GatewayPluginReloadResult = {
   restartChannels: ReadonlySet<ChannelKind>;
   activeChannels: ReadonlySet<ChannelKind>;
+  /** Set when the reload was cancelled mid-flight (e.g. by an in-process restart). */
+  cancelled?: boolean;
 };
 
 const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
@@ -170,6 +186,7 @@ type GatewayReloadHandlerParams = {
     nextConfig: OpenClawConfig;
     changedPaths: readonly string[];
     beforeReplace: (channels: ReadonlySet<ChannelKind>) => Promise<void>;
+    isAborted?: () => boolean;
   }) => Promise<GatewayPluginReloadResult>;
   logHooks: {
     info: (msg: string) => void;
@@ -208,6 +225,8 @@ type ManagedGatewayConfigReloaderParams = Omit<
 };
 
 export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) {
+  const myGeneration = ++currentReloadGeneration;
+
   const getActiveCounts = () => {
     const queueSize = getTotalQueueSize();
     const pendingReplies = getTotalPendingReplies();
@@ -282,10 +301,12 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
   const waitForActiveWorkBeforeChannelReload = async (
     channels: Iterable<ChannelKind>,
     nextConfig: OpenClawConfig,
-  ) => {
+  ): Promise<boolean> => {
+    // Returns true when the wait was cancelled (in-process restart supersedes),
+    // false when active work drained or timed out and channel reload may proceed.
     const initial = getActiveCounts();
     if (initial.totalActive <= 0) {
-      return;
+      return false;
     }
     const channelNames = [...channels].join(", ");
     const initialDetails = formatActiveDetails(initial);
@@ -300,14 +321,19 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const startedAt = Date.now();
     let nextStillPendingAt = startedAt + CHANNEL_RELOAD_STILL_PENDING_WARN_MS;
     while (true) {
+      if (abortGeneration !== undefined && myGeneration <= abortGeneration) {
+        return true;
+      }
       await new Promise<void>((resolve) => {
         const timer = setTimeout(resolve, CHANNEL_RELOAD_DEFERRAL_POLL_MS);
         timer.unref?.();
       });
+      if (abortGeneration !== undefined && myGeneration <= abortGeneration) {
+        return true;
+      }
       const current = getActiveCounts();
       if (current.totalActive <= 0) {
-        params.logReload.info("active operations and replies completed; reloading channels now");
-        return;
+        return false;
       }
       const elapsedMs = Date.now() - startedAt;
       if (timeoutMs !== undefined && elapsedMs >= timeoutMs) {
@@ -317,7 +343,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             ", ",
           )} still active; reloading channels anyway`,
         );
-        return;
+        return false;
       }
       if (Date.now() >= nextStillPendingAt) {
         const remaining = formatActiveDetails(current);
@@ -354,6 +380,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const channelsToRestart = new Set(plan.restartChannels);
     const channelsStoppedBeforePluginReload = new Set<ChannelKind>();
     let activePluginChannelsAfterReload: ReadonlySet<ChannelKind> | null = null;
+    let pluginReloadAborted = false;
     const shouldSkipChannelRestart = () =>
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
@@ -365,7 +392,13 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         if (channelsToRestart.size === 0 || shouldSkipChannelRestart()) {
           return;
         }
-        await waitForActiveWorkBeforeChannelReload(channelsToRestart, nextConfig);
+        if (await waitForActiveWorkBeforeChannelReload(channelsToRestart, nextConfig)) {
+          params.logChannels.info(
+            "channel reload before plugin replace cancelled by in-process restart",
+          );
+          pluginReloadAborted = true;
+          return;
+        }
         const stoppedChannels: ChannelKind[] = [];
         const stopFailures = await collectChannelOperationFailures({
           channels: channelsToRestart,
@@ -411,21 +444,28 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           );
         }
       };
-      const pluginReloadResult = await params.reloadPlugins({
-        nextConfig,
-        changedPaths: plan.changedPaths,
-        beforeReplace: stopChannelsBeforePluginReplace,
-      });
-      for (const channel of pluginReloadResult.restartChannels) {
-        channelsToRestart.add(channel);
+      if (!pluginReloadAborted) {
+        const pluginReloadResult = await params.reloadPlugins({
+          nextConfig,
+          changedPaths: plan.changedPaths,
+          beforeReplace: stopChannelsBeforePluginReplace,
+          isAborted: () => pluginReloadAborted,
+        });
+        // beforeReplace may have set pluginReloadAborted inside reloadPlugins;
+        // skip metadata/runtime updates when the reload was cancelled mid-flight.
+        if (!pluginReloadAborted) {
+          for (const channel of pluginReloadResult.restartChannels) {
+            channelsToRestart.add(channel);
+          }
+          activePluginChannelsAfterReload = pluginReloadResult.activeChannels;
+          resetPreparedModelRuntimeStateForHotReload();
+        }
       }
-      activePluginChannelsAfterReload = pluginReloadResult.activeChannels;
-      resetPreparedModelRuntimeStateForHotReload();
     }
-
     if (plan.restartCron) {
       params.onCronRestart?.();
       state.cronState.cron.stop();
+      state.cronState.stopExitWatchers?.();
       nextState.cronState = buildGatewayCronService({
         cfg: nextConfig,
         deps: params.deps,
@@ -433,6 +473,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       });
       startGatewayCronWithLogging({
         cron: nextState.cronState.cron,
+        afterStart: nextState.cronState.reconcileExitWatchers,
         logCron: params.logCron,
       });
     }
@@ -490,32 +531,43 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           "skipping channel reload (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
         );
       } else {
-        if (!plan.reloadPlugins) {
-          await waitForActiveWorkBeforeChannelReload(channelsToRestart, nextConfig);
-        }
-        const restartChannel = async (name: ChannelKind) => {
-          if (plan.reloadPlugins && activePluginChannelsAfterReload?.has(name) === false) {
-            return;
-          }
-          params.logChannels.info(`restarting ${name} channel`);
-          if (!channelsStoppedBeforePluginReload.has(name)) {
-            await params.stopChannel(name, undefined, { manual: false });
-          }
-          await params.startChannel(name);
-        };
-        const restartFailures = await collectChannelOperationFailures({
-          channels: channelsToRestart,
-          run: restartChannel,
-          onFailure: (channel, err) => {
-            params.logChannels.error(
-              `failed to restart ${channel} channel during hot reload: ${formatErrorMessage(err)}`,
-            );
-          },
-        });
-        if (restartFailures.length > 0) {
-          throw new Error(
-            `failed to restart channels during hot reload: ${restartFailures.join(", ")}`,
+        let cancelledByRestart = pluginReloadAborted;
+        if (!plan.reloadPlugins && !cancelledByRestart) {
+          cancelledByRestart = await waitForActiveWorkBeforeChannelReload(
+            channelsToRestart,
+            nextConfig,
           );
+        }
+        if (cancelledByRestart) {
+          params.logChannels.info("channel restart cancelled by in-process restart");
+        } else {
+          const restartChannel = async (name: ChannelKind) => {
+            if (plan.reloadPlugins && activePluginChannelsAfterReload?.has(name) === false) {
+              return;
+            }
+            params.logChannels.info(`restarting ${name} channel`);
+            if (!channelsStoppedBeforePluginReload.has(name)) {
+              await params.stopChannel(name, undefined, { manual: false });
+            }
+            if (abortGeneration !== undefined && myGeneration <= abortGeneration) {
+              return;
+            }
+            await params.startChannel(name);
+          };
+          const restartFailures = await collectChannelOperationFailures({
+            channels: channelsToRestart,
+            run: restartChannel,
+            onFailure: (channel, err) => {
+              params.logChannels.error(
+                `failed to restart ${channel} channel during hot reload: ${formatErrorMessage(err)}`,
+              );
+            },
+          });
+          if (restartFailures.length > 0) {
+            throw new Error(
+              `failed to restart channels during hot reload: ${restartFailures.join(", ")}`,
+            );
+          }
         }
       }
     }

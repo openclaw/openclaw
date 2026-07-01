@@ -1,14 +1,14 @@
 /**
  * Resolves bootstrap context targets for one embedded-agent attempt.
  */
-import type { BootstrapMode } from "../../bootstrap-mode.js";
+import type { BootstrapContextRunKind, BootstrapMode } from "../../bootstrap-mode.js";
 import { resolveBootstrapMode } from "../../bootstrap-mode.js";
 import { DEFAULT_BOOTSTRAP_FILENAME, type WorkspaceBootstrapFile } from "../../workspace.js";
 
 /** Inputs that decide whether this attempt should inject workspace bootstrap context. */
 type AttemptBootstrapRoutingInput = {
   workspaceBootstrapPending: boolean;
-  bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+  bootstrapContextRunKind?: BootstrapContextRunKind;
   trigger?: string;
   sessionKey?: string;
   isPrimaryRun: boolean;

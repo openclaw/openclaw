@@ -139,6 +139,7 @@ import {
   resolveBootstrapFilesForRun,
   resolveContextInjectionMode,
 } from "../../bootstrap-files.js";
+import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
   getChannelAgentToolMeta,
@@ -487,7 +488,11 @@ import {
   resolveSilentToolResultReplyPayload,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./incomplete-turn.js";
-import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
+import {
+  resolveLlmFirstEventTimeoutMs,
+  resolveLlmIdleTimeoutMs,
+  streamWithIdleTimeout,
+} from "./llm-idle-timeout.js";
 import { resolveMessageMergeStrategy } from "./message-merge-strategy.js";
 import { installMessageToolOnlyTerminalHook } from "./message-tool-terminal.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
@@ -1389,7 +1394,7 @@ export async function runEmbeddedAttempt(
     const shouldProbeContinuationSkip =
       !isRawModelRun &&
       contextInjectionMode === "continuation-skip" &&
-      (params.bootstrapContextRunKind ?? "default") !== "heartbeat" &&
+      !isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind) &&
       (await hasCompletedBootstrapTurnForAttempt(params.sessionFile));
     let preloadedBootstrapFiles: WorkspaceBootstrapFile[] | undefined;
     let bootstrapRouting =
@@ -1960,6 +1965,7 @@ export async function runEmbeddedAttempt(
       defaultAgentId,
       isDefaultAgent,
       trigger: params.trigger,
+      bootstrapContextRunKind: params.bootstrapContextRunKind,
     })
       ? resolveHeartbeatPromptForSystemPrompt({
           config: params.config,
@@ -1967,6 +1973,8 @@ export async function runEmbeddedAttempt(
           defaultAgentId,
         })
       : undefined;
+    const promptContributionTrigger =
+      params.bootstrapContextRunKind === "commitment-only" ? undefined : params.trigger;
     const promptContributionContext = {
       config: params.config,
       agentDir: params.agentDir,
@@ -1977,7 +1985,7 @@ export async function runEmbeddedAttempt(
       runtimeChannel,
       runtimeCapabilities,
       agentId: sessionAgentId,
-      trigger: params.trigger,
+      trigger: promptContributionTrigger,
     };
     const promptContribution =
       params.runtimePlan?.prompt.resolveSystemPromptContribution(promptContributionContext) ??
@@ -2700,7 +2708,7 @@ export async function runEmbeddedAttempt(
                 }),
             }),
           runtimeSettings: contextEngineLoopRuntimeSettings,
-          isHeartbeat: params.bootstrapContextRunKind === "heartbeat",
+          isHeartbeat: isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind),
         });
         const removeGuard = installToolResultContextGuard({
           agent: activeSession.agent,
@@ -2872,11 +2880,10 @@ export async function runEmbeddedAttempt(
         workspaceDir: effectiveWorkspace,
         runtimeHandle: getProviderRuntimeHandle(),
       });
-      if (providerTextTransforms) {
+      if (providerTextTransforms?.input?.length) {
         activeSession.agent.streamFn = wrapStreamFnTextTransforms({
           streamFn: activeSession.agent.streamFn,
           input: providerTextTransforms.input,
-          output: providerTextTransforms.output,
           transformSystemPrompt: false,
         });
       }
@@ -3101,6 +3108,15 @@ export async function runEmbeddedAttempt(
         );
       }
 
+      // Tool-call repair can replace structured arguments from fragmented deltas.
+      // Restore provider-masked text afterward so executable args stay canonical.
+      if (providerTextTransforms?.output?.length) {
+        activeSession.agent.streamFn = wrapStreamFnTextTransforms({
+          streamFn: activeSession.agent.streamFn,
+          output: providerTextTransforms.output,
+        });
+      }
+
       if (anthropicPayloadLogger) {
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
@@ -3143,6 +3159,31 @@ export async function runEmbeddedAttempt(
           idleTimeoutMs,
           (error) => idleTimeoutTrigger?.(error),
         );
+      }
+      const firstEventTimeoutMs = resolveLlmFirstEventTimeoutMs({
+        cfg: params.config,
+        runTimeoutMs: resolvedRunTimeoutMs,
+        modelRequestTimeoutMs: (params.model as { requestTimeoutMs?: number }).requestTimeoutMs,
+        model: {
+          baseUrl: params.model.baseUrl,
+          id: params.modelId,
+          provider: params.provider,
+        },
+      });
+      if (firstEventTimeoutMs > 0) {
+        const baseStreamFn = activeSession.agent.streamFn;
+        activeSession.agent.streamFn = (model, context, options) => {
+          type FirstEventStreamOptions = {
+            firstEventTimeoutMs?: number;
+            onFirstEventTimeout?: (error: Error) => void;
+          };
+          const optionsWithFirstEvent = options as FirstEventStreamOptions | undefined;
+          return baseStreamFn(model, context, {
+            ...options,
+            firstEventTimeoutMs: optionsWithFirstEvent?.firstEventTimeoutMs ?? firstEventTimeoutMs,
+            onFirstEventTimeout: optionsWithFirstEvent?.onFirstEventTimeout ?? idleTimeoutTrigger,
+          } as typeof options);
+        };
       }
       let diagnosticModelCallSeq = 0;
       activeSession.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(
@@ -3573,6 +3614,7 @@ export async function runEmbeddedAttempt(
           onAgentToolResult: params.onAgentToolResult,
           onToolResult: params.onToolResult,
           onReasoningStream: params.onReasoningStream,
+          streamReasoningInNonStreamModes: params.streamReasoningInNonStreamModes,
           onReasoningEnd: params.onReasoningEnd,
           onBlockReply,
           onBlockReplyFlush,
@@ -3717,6 +3759,7 @@ export async function runEmbeddedAttempt(
         params.onAttemptAbort?.();
         abortRun(false, reason === "restart" ? createAgentRunRestartAbortError() : undefined);
       };
+      let acceptingSteerMessages = true;
       const queueHandle: EmbeddedAgentQueueHandle & {
         kind: "embedded";
         cancel: (reason?: "user_abort" | "restart" | "superseded") => void;
@@ -3729,6 +3772,7 @@ export async function runEmbeddedAttempt(
           await steerActiveSessionWithOptionalDeliveryWait(activeSession, text, options);
         },
         isStreaming: () => activeSession.isStreaming,
+        isStopped: () => !acceptingSteerMessages || aborted || runAbortController.signal.aborted,
         isCompacting: () => subscription.isCompacting(),
         supportsTranscriptCommitWait: true,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -3962,6 +4006,7 @@ export async function runEmbeddedAttempt(
               hookCtx,
               hookRunner,
               beforeAgentStartResult: params.beforeAgentStartResult,
+              bootstrapContextRunKind: params.bootstrapContextRunKind,
             });
         const promptBeforePromptBuildHooks = effectivePrompt;
         const promptBuildPrependContext = hookResult?.prependContext;
@@ -4125,7 +4170,13 @@ export async function runEmbeddedAttempt(
             log.debug(orphanRepairMessage);
           }
         }
-        if (params.sessionKey && !isRawModelRun) {
+        // Commitment fan-out must leave parent-turn steering queued for the
+        // next normal turn instead of consuming it as commitment context.
+        if (
+          params.sessionKey &&
+          !isRawModelRun &&
+          params.bootstrapContextRunKind !== "commitment-only"
+        ) {
           const leaseId = `${params.runId}:agent-steering`;
           const leased = leasePendingAgentSteeringItems({
             requesterSessionKey: params.sessionKey,
@@ -4869,6 +4920,7 @@ export async function runEmbeddedAttempt(
             promptErrorSource = "prompt";
           }
         } finally {
+          acceptingSteerMessages = false;
           log.debug(
             `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
           );
@@ -5184,7 +5236,7 @@ export async function runEmbeddedAttempt(
             sessionManager: activeSessionManager,
             config: params.config,
             warn: (message) => log.warn(message),
-            isHeartbeat: params.bootstrapContextRunKind === "heartbeat",
+            isHeartbeat: isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind),
           });
         }
 

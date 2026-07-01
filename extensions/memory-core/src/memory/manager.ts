@@ -355,8 +355,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       pending: INDEX_CACHE_PENDING,
       key,
       bypassCache: transient,
-      create: async () =>
-        new MemoryIndexManager({
+      create: async () => {
+        const manager = new MemoryIndexManager({
           cacheKey: key,
           cfg,
           agentId,
@@ -364,7 +364,20 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           settings,
           providerRequirement,
           purpose: params.purpose,
-        }),
+        });
+        // Lightweight dirty-file detection for status mode: check for unindexed
+        // session files on disk without triggering a full sync. This runs before
+        // any caller reads manager.status(), so the dirty flag is accurate when
+        // status() reads sessionsDirty.
+        if (purpose === "status" && manager.sources.has("sessions")) {
+          try {
+            await manager.markSessionStartupCatchupDirtyFiles();
+          } catch (err) {
+            log.warn("memory status session dirty detection failed: " + String(err));
+          }
+        }
+        return manager;
+      },
     });
   }
 

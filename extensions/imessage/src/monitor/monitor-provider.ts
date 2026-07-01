@@ -45,7 +45,7 @@ import {
   resolveSendPolicy,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
 import { pollPendingIMessageApprovalReactions } from "../approval-reaction-poller.js";
@@ -103,6 +103,7 @@ import {
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { stageIMessageAttachments } from "./media-staging.js";
 import { parseIMessageNotification } from "./parse-notification.js";
+import { renderIMessagePollBody } from "./poll-render.js";
 import { enqueueIMessageReactionSystemEvent } from "./reaction-system-event.js";
 import { advanceIMessageRecoveryCursor, loadIMessageRecoveryCursor } from "./recovery-cursor.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
@@ -728,7 +729,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       const combined = combineIMessagePayloads(messages);
       if (shouldLogVerbose()) {
         const text = combined.text ?? "";
-        const preview = text.slice(0, 50);
+        const preview = sliceUtf16Safe(text, 0, 50);
         const ellipsis = text.length > 50 ? "..." : "";
         logVerbose(
           `[imessage] merged ${entries.length} debounced messages: "${preview}${ellipsis}"`,
@@ -832,7 +833,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   }
 
   function resolveIMessageInboundBodyText(message: IMessagePayload) {
-    const messageText = (message.text ?? "").trim();
+    // Native poll balloons carry only a 0xFFFD placeholder in `text`; render the
+    // decoded poll (question/options/votes) so the agent sees the actual poll.
+    const pollBody = message.poll ? renderIMessagePollBody(message.poll) : null;
+    const messageText = (pollBody ?? message.text ?? "").trim();
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
     const effectiveAttachmentRoots = remoteHost ? remoteAttachmentRoots : attachmentRoots;
     const validAttachments = attachments.filter((entry) => {

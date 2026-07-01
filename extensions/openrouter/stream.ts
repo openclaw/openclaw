@@ -206,6 +206,41 @@ function createOpenRouterBilledCostWrapper(
   };
 }
 
+function mergeOpenRouterAuthHeaders(options: Parameters<StreamFn>[2]): Parameters<StreamFn>[2] {
+  const apiKey = readString(options?.apiKey);
+  if (!apiKey) {
+    return options;
+  }
+  const headers = new Headers((options as { headers?: HeadersInit } | undefined)?.headers);
+  if (!headers.has("authorization")) {
+    headers.set("Authorization", `Bearer ${apiKey}`);
+  }
+  if (!headers.has("http-referer")) {
+    headers.set("HTTP-Referer", "https://openclaw.ai");
+  }
+  if (!headers.has("x-openrouter-title")) {
+    headers.set("X-OpenRouter-Title", "OpenClaw");
+  }
+  return {
+    ...options,
+    headers: Object.fromEntries(headers.entries()),
+  } as Parameters<StreamFn>[2];
+}
+
+function createOpenRouterAuthHeaderWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn | undefined {
+  if (!baseStreamFn) {
+    return baseStreamFn;
+  }
+  return (model, context, options) =>
+    baseStreamFn(
+      model,
+      context,
+      isVerifiedOpenRouterRoute(model) ? mergeOpenRouterAuthHeaders(options) : options,
+    );
+}
+
 function assistantMessageHasOpenAIToolCalls(message: Record<string, unknown>): boolean {
   return Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
 }
@@ -376,7 +411,9 @@ export function wrapOpenRouterProviderStream(
   if (!wrapStreamFn) {
     return createOpenRouterBilledCostWrapper(
       createOpenRouterAnthropicPrefillWrapper(
-        createOpenRouterDeepSeekV4ThinkingWrapper(routedStreamFn, ctx.thinkingLevel),
+        createOpenRouterAuthHeaderWrapper(
+          createOpenRouterDeepSeekV4ThinkingWrapper(routedStreamFn, ctx.thinkingLevel),
+        ),
       ),
     );
   }
@@ -390,7 +427,9 @@ export function wrapOpenRouterProviderStream(
     }) ?? undefined;
   return createOpenRouterBilledCostWrapper(
     createOpenRouterAnthropicPrefillWrapper(
-      createOpenRouterDeepSeekV4ThinkingWrapper(wrappedStreamFn, ctx.thinkingLevel),
+      createOpenRouterAuthHeaderWrapper(
+        createOpenRouterDeepSeekV4ThinkingWrapper(wrappedStreamFn, ctx.thinkingLevel),
+      ),
     ),
   );
 }

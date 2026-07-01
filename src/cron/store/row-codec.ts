@@ -21,7 +21,7 @@ import { getCronStoreKysely } from "./schema.js";
 import { bindStateColumns, stateFromRow } from "./state-codec.js";
 import type { LoadedCronStore } from "./types.js";
 
-function bindScheduleColumns(
+export function bindScheduleColumns(
   schedule: CronSchedule,
 ): Pick<
   CronJobInsert,
@@ -46,6 +46,21 @@ function bindScheduleColumns(
       anchor_ms: schedule.anchorMs ?? null,
       schedule_expr: null,
       schedule_tz: null,
+      stagger_ms: null,
+    };
+  }
+  if (schedule.kind === "on-exit") {
+    // v1: reuse existing nullable TEXT columns to round-trip the watcher's
+    // command (schedule_expr) and cwd (schedule_tz) without a schema migration.
+    // schedule_kind disambiguates from cron. (Dedicated columns are a possible
+    // follow-up if reviewers prefer.)
+    return {
+      schedule_kind: "on-exit",
+      at: null,
+      every_ms: null,
+      anchor_ms: null,
+      schedule_expr: schedule.command,
+      schedule_tz: schedule.cwd ?? null,
       stagger_ms: null,
     };
   }
@@ -189,7 +204,7 @@ export function assertCronStoreCanPersist(store: CronStoreFile): void {
   }
 }
 
-function scheduleFromRow(row: CronJobRow): CronSchedule | null {
+export function scheduleFromRow(row: CronJobRow): CronSchedule | null {
   if (row.schedule_kind === "at" && row.at) {
     return { kind: "at", at: row.at };
   }
@@ -206,6 +221,13 @@ function scheduleFromRow(row: CronJobRow): CronSchedule | null {
       expr: row.schedule_expr,
       ...(row.schedule_tz ? { tz: row.schedule_tz } : {}),
       ...(row.stagger_ms != null ? { staggerMs: normalizeNumber(row.stagger_ms) } : {}),
+    };
+  }
+  if (row.schedule_kind === "on-exit" && row.schedule_expr) {
+    return {
+      kind: "on-exit",
+      command: row.schedule_expr,
+      ...(row.schedule_tz ? { cwd: row.schedule_tz } : {}),
     };
   }
   return null;
