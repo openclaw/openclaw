@@ -560,6 +560,7 @@ export function buildExecApprovalPendingToolResult(params: {
             cwd: params.cwd,
             nodeId: params.nodeId,
             warningText: params.warningText,
+            ask: params.ask,
           } satisfies ExecToolDetails),
   };
 }
