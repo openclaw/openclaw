@@ -52,7 +52,11 @@ function resolveSessionHistoryPath(req: IncomingMessage): string | null {
     return null;
   }
   try {
-    return normalizeOptionalString(decodeURIComponent(match[1] ?? "")) ?? null;
+    // normalizeOptionalString returns undefined for whitespace-only strings.
+    // Use "" instead of null so the caller's !sessionKey check sends a 400
+    // rather than returning false (which would fall through to a 404 for a
+    // URL that definitively matched the sessions-history route pattern).
+    return normalizeOptionalString(decodeURIComponent(match[1] ?? "")) ?? "";
   } catch {
     return "";
   }
