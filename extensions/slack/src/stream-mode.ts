@@ -13,6 +13,7 @@ export function resolveSlackStreamingConfig(params: {
   streaming?: unknown;
   streamMode?: unknown;
   nativeStreaming?: unknown;
+  sessionStreamingMode?: unknown;
 }): {
   mode: SlackStreamingMode;
   nativeStreaming: boolean;

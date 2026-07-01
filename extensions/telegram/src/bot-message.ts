@@ -23,7 +23,7 @@ import {
   type TelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
 import type { TelegramBotOptions } from "./bot.types.js";
-import { buildTelegramThreadParams } from "./bot/helpers.js";
+import { buildTelegramThreadParams, resolveTelegramStreamMode } from "./bot/helpers.js";
 import type { TelegramContext, TelegramStreamMode } from "./bot/types.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 
@@ -196,6 +196,25 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     await lifecycle?.onDispatchStart?.();
     const spooledReplay =
       options?.spooledReplay === true || isTelegramSpooledReplayUpdate(primaryCtx.update);
+    let resolvedStreamMode = streamMode;
+    const sessionKey = context.route.sessionKey;
+    if (sessionKey) {
+      try {
+        const storePath = telegramDeps.resolveStorePath(cfg.session?.store, {
+          agentId: context.route.agentId,
+        });
+        const sessionEntry = (telegramDeps.getSessionEntry ?? (() => undefined))({
+          storePath,
+          sessionKey,
+        });
+        resolvedStreamMode = resolveTelegramStreamMode({
+          ...telegramCfg,
+          sessionStreamingMode: sessionEntry?.streamingMode,
+        });
+      } catch (err) {
+        logVerbose(`telegram stream mode session lookup failed: ${String(err)}`);
+      }
+    }
     try {
       const dispatchResult = await dispatchTelegramMessage({
         context,
@@ -203,7 +222,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         cfg,
         runtime,
         replyToMode,
-        streamMode,
+        streamMode: resolvedStreamMode,
         textLimit,
         telegramCfg,
         telegramDeps,

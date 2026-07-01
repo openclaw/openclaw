@@ -153,6 +153,19 @@ describe("channel-streaming", () => {
     );
   });
 
+  it("prefers session preview mode overrides before channel config", () => {
+    expect(
+      resolveChannelPreviewStreamMode({ streaming: { mode: "partial" } }, "off", {
+        sessionMode: "progress",
+      }),
+    ).toBe("progress");
+    expect(
+      resolveChannelPreviewStreamMode({ streaming: { mode: "partial" } }, "off", {
+        sessionMode: "bogus",
+      }),
+    ).toBe("partial");
+  });
+
   it("keeps block preview mode separate from block delivery", () => {
     expect(resolveChannelStreamingBlockEnabled({ streaming: "block" })).toBeUndefined();
     expect(resolveChannelStreamingBlockEnabled({ streaming: { mode: "block" } })).toBeUndefined();

@@ -34,6 +34,16 @@ describe("createSlackPluginBase", () => {
     expect(plugin.security?.collectWarnings).toBeTypeOf("function");
     expect(plugin.security?.collectAuditFindings).toBeTypeOf("function");
   });
+
+  it("advertises the preview-streaming session override so /stream is supported", () => {
+    const plugin = createSlackPluginBase({
+      setup: {} as never,
+      setupWizard: {} as never,
+    });
+
+    // Gates handleStreamCommand: without this flag /stream silently replies "unsupported".
+    expect(plugin.capabilities?.previewStreamingSessionOverride).toBe(true);
+  });
 });
 
 describe("setSlackChannelAllowlist", () => {

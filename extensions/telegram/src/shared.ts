@@ -170,6 +170,7 @@ export function createTelegramPluginBase(params: {
       polls: true,
       nativeCommands: true,
       blockStreaming: true,
+      previewStreamingSessionOverride: true,
     },
     commands: {
       nativeCommandsAutoEnabled: true,

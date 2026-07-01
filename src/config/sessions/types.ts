@@ -7,15 +7,13 @@ import type {
   SessionAcpIdentityState,
   SessionAcpMeta,
 } from "@openclaw/acp-core/types";
-import {
-  normalizeOptionalString,
-  type FastMode,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { Skill } from "../../skills/loading/skill-contract.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import type { StreamingMode } from "../types.base.js";
 import type { TtsAutoMode } from "../types.tts.js";
 import { rewriteSessionFileForNewSessionId } from "./session-file-rotation.js";
 
@@ -294,6 +292,7 @@ export type SessionEntry = {
   chatType?: SessionChatType;
   thinkingLevel?: string;
   fastMode?: FastMode;
+  streamingMode?: StreamingMode;
   verboseLevel?: string;
   traceLevel?: string;
   reasoningLevel?: string;

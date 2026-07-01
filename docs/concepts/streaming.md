@@ -127,6 +127,16 @@ Modes:
 - `block`: preview updates in chunked/appended steps.
 - `progress`: progress/status preview during generation, final answer at completion.
 
+Authorized chat senders can use `/stream status|off|partial|block|progress|default`
+on Telegram, Discord, and Slack to set a session-scoped preview streaming
+override for the current chat. The override wins over channel config for that
+session only; `/stream default` removes it and returns to
+`channels.<channel>.streaming`. `/streaming` is an alias. `final` is accepted by
+the command as a user-facing alias for `off`, but the persisted mode remains the
+canonical `off`. Channels that do not advertise preview-streaming session
+override support reply that `/stream` is unsupported and do not persist an
+override.
+
 `streaming.mode: "block"` is a preview-streaming mode for edit-capable channels
 such as Discord and Telegram. It does not enable channel block delivery there.
 Use `streaming.block.enabled` or the legacy `blockStreaming` channel key when

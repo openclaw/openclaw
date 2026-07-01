@@ -10,8 +10,14 @@ export function resolveDiscordPreviewStreamMode(
   params: {
     streamMode?: unknown;
     streaming?: unknown;
+    sessionStreamingMode?: unknown;
   } = {},
 ): DiscordPreviewStreamMode {
+  if (params.sessionStreamingMode !== undefined) {
+    return resolveChannelPreviewStreamMode(params, "off", {
+      sessionMode: params.sessionStreamingMode,
+    });
+  }
   if (params.streaming === undefined && params.streamMode === undefined) {
     return "progress";
   }

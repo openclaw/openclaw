@@ -178,6 +178,7 @@ plugins.
     | `/stop` | Abort the current run |
     | `/session idle <duration\|off>` | Manage thread-binding idle expiry |
     | `/session max-age <duration\|off>` | Manage thread-binding max-age expiry |
+    | `/stream [status\|off\|partial\|block\|progress\|default]` | Set or clear the current chat's preview streaming mode on supported channels. Alias: `/streaming`. `final` is accepted as an alias for `off`; unsupported channels reply without persisting an override |
     | `/export-session [path]` | Export the current session to HTML. Alias: `/export` |
     | `/export-trajectory [path]` | Export a JSONL trajectory bundle for the current session. Alias: `/trajectory` |
 

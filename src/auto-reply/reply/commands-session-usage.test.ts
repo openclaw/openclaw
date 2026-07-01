@@ -6,7 +6,7 @@ import type {
   CostUsageTotals,
   SessionCostSummary,
 } from "../../infra/session-cost-usage.js";
-import { handleFastCommand, handleUsageCommand } from "./commands-session.js";
+import { handleFastCommand, handleStreamCommand, handleUsageCommand } from "./commands-session.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const resolveSessionAgentIdMock = vi.hoisted(() => vi.fn(() => "main"));
@@ -46,6 +46,9 @@ const resolveFastModeStateMock = vi.hoisted(() =>
     source: "agent",
   })),
 );
+const getChannelPluginMock = vi.hoisted(() =>
+  vi.fn(() => ({ capabilities: { previewStreamingSessionOverride: true } })),
+);
 
 vi.mock("../../agents/agent-scope.js", async () => {
   const actual = await vi.importActual<typeof import("../../agents/agent-scope.js")>(
@@ -69,6 +72,16 @@ vi.mock("../../agents/fast-mode.js", async () => {
   return {
     ...actual,
     resolveFastModeState: resolveFastModeStateMock,
+  };
+});
+
+vi.mock("../../channels/plugins/index.js", async () => {
+  const actual = await vi.importActual<typeof import("../../channels/plugins/index.js")>(
+    "../../channels/plugins/index.js",
+  );
+  return {
+    ...actual,
+    getChannelPlugin: getChannelPluginMock,
   };
 });
 
@@ -452,5 +465,139 @@ describe("handleFastCommand", () => {
     expect(result?.reply?.text).toBe("⚙️ Fast mode reset to default.");
     expect(params.sessionEntry.fastMode).toBe(false);
     expect(params.sessionStore[params.sessionKey]?.fastMode).toBeUndefined();
+  });
+});
+
+describe("handleStreamCommand", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resolveSessionAgentIdMock.mockReturnValue("target");
+    getChannelPluginMock.mockReturnValue({
+      capabilities: { previewStreamingSessionOverride: true },
+    });
+  });
+
+  it("sets stream mode on the target store entry", async () => {
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/stream progress";
+    params.sessionEntry = {
+      sessionId: "wrapper-session",
+      updatedAt: Date.now(),
+    };
+    params.sessionStore = {
+      [params.sessionKey]: {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+      },
+    };
+
+    const result = await handleStreamCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toBe("⚙️ Stream mode set to progress.");
+    expect(params.sessionEntry.streamingMode).toBeUndefined();
+    expect(params.sessionStore[params.sessionKey]?.streamingMode).toBe("progress");
+  });
+
+  it("handles the /streaming alias and persists the override", async () => {
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/streaming block";
+    const sessionEntry = params.sessionEntry;
+    if (!sessionEntry) {
+      throw new Error("expected session entry");
+    }
+    params.sessionStore = { [params.sessionKey]: sessionEntry };
+
+    const result = await handleStreamCommand(params, true);
+
+    expect(result?.reply?.text).toBe("⚙️ Stream mode set to block.");
+    expect(sessionEntry.streamingMode).toBe("block");
+  });
+
+  it("maps /stream final to canonical off mode", async () => {
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/stream final";
+    const sessionEntry = params.sessionEntry;
+    if (!sessionEntry) {
+      throw new Error("expected session entry");
+    }
+    params.sessionStore = { [params.sessionKey]: sessionEntry };
+
+    const result = await handleStreamCommand(params, true);
+
+    expect(result?.reply?.text).toBe("⚙️ Stream mode set to off (final-only).");
+    expect(sessionEntry.streamingMode).toBe("off");
+  });
+
+  it("reports session override status without pretending config defaults are active", async () => {
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/stream status";
+    params.sessionStore = {
+      [params.sessionKey]: {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+        streamingMode: "block",
+      },
+    };
+
+    const result = await handleStreamCommand(params, true);
+
+    expect(result?.reply?.text).toBe("⚙️ Current stream mode: block (session).");
+  });
+
+  it("reports inherited channel config status when no session override is set", async () => {
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/stream status";
+    params.cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { streaming: { mode: "off" } } },
+    } as OpenClawConfig;
+
+    const result = await handleStreamCommand(params, true);
+
+    expect(result?.reply?.text).toBe("⚙️ Current stream mode: off (final-only) (channel config).");
+  });
+
+  it("reports the supported channel default when no override or config is set", async () => {
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/stream status";
+
+    const result = await handleStreamCommand(params, true);
+
+    expect(result?.reply?.text).toBe("⚙️ Current stream mode: partial (channel default).");
+  });
+
+  it("clears stream mode for /stream default", async () => {
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/stream default";
+    params.sessionEntry = {
+      sessionId: "target-session",
+      updatedAt: Date.now(),
+      streamingMode: "progress",
+    };
+    params.sessionStore = { [params.sessionKey]: params.sessionEntry };
+
+    const result = await handleStreamCommand(params, true);
+
+    expect(result?.reply?.text).toBe("⚙️ Stream mode reset to channel default.");
+    expect(params.sessionEntry.streamingMode).toBeUndefined();
+  });
+
+  it("does not persist stream mode on channels that do not honor the override", async () => {
+    getChannelPluginMock.mockReturnValue({
+      capabilities: { previewStreamingSessionOverride: false },
+    });
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/stream progress";
+    const sessionEntry = params.sessionEntry;
+    if (!sessionEntry) {
+      throw new Error("expected session entry");
+    }
+    params.sessionStore = { [params.sessionKey]: sessionEntry };
+
+    const result = await handleStreamCommand(params, true);
+
+    expect(result?.reply?.text).toBe("⚙️ /stream isn't supported on this channel yet.");
+    expect(sessionEntry.streamingMode).toBeUndefined();
   });
 });
