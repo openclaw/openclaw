@@ -301,6 +301,68 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
+  fun recoveryGatewayAuthDetailIdentifiesOlderAppProtocolMismatch() {
+    assertEquals(
+      "This app is older than the gateway. Update OpenClaw on this device, then retry. (app protocol v4, gateway protocol v5).",
+      recoveryGatewayAuthDetail(
+        GatewayConnectionProblem(
+          code = "PROTOCOL_MISMATCH",
+          message = "protocol mismatch",
+          reason = null,
+          requestId = null,
+          recommendedNextStep = null,
+          pauseReconnect = true,
+          retryable = false,
+          clientMinProtocol = 4,
+          clientMaxProtocol = 4,
+          expectedProtocol = 5,
+          minimumProbeProtocol = 4,
+        ),
+      ),
+    )
+  }
+
+  @Test
+  fun recoveryGatewayAuthDetailIdentifiesOlderGatewayProtocolMismatch() {
+    assertEquals(
+      "The gateway is older than this app. Update OpenClaw on the gateway host, then retry. (app protocol v4, gateway protocol v3).",
+      recoveryGatewayAuthDetail(
+        GatewayConnectionProblem(
+          code = "PROTOCOL_MISMATCH",
+          message = "protocol mismatch",
+          reason = null,
+          requestId = null,
+          recommendedNextStep = null,
+          pauseReconnect = true,
+          retryable = false,
+          clientMinProtocol = 4,
+          clientMaxProtocol = 4,
+          expectedProtocol = 3,
+          minimumProbeProtocol = 3,
+        ),
+      ),
+    )
+  }
+
+  @Test
+  fun recoveryGatewayAuthDetailKeepsProtocolMismatchFallbackActionable() {
+    assertEquals(
+      "The app and gateway use incompatible protocol versions. Update OpenClaw on both, then retry.",
+      recoveryGatewayAuthDetail(
+        GatewayConnectionProblem(
+          code = "PROTOCOL_MISMATCH",
+          message = "protocol mismatch",
+          reason = null,
+          requestId = null,
+          recommendedNextStep = null,
+          pauseReconnect = true,
+          retryable = false,
+        ),
+      ),
+    )
+  }
+
+  @Test
   fun recoveryGatewayAuthDetailUsesRecommendedNextStepFallbacks() {
     assertEquals(
       "Gateway authentication is not configured. Edit this connection and try again.",
