@@ -31,7 +31,17 @@ entirely unless you opt into the experimental sandbox exec-server path.
 
 This Codex-native feature is separate from
 [OpenClaw code mode](/reference/code-mode), which is an opt-in QuickJS-WASI
-runtime for generic OpenClaw runs with a different `exec` input shape.
+runtime for generic OpenClaw runs with a different `exec` input shape. The
+shared name causes regular confusion:
+
+- Codex Code Mode is a Codex-owned native harness feature that is normally on
+  for Codex app-server threads.
+- OpenClaw code mode is an OpenClaw-owned experimental runtime feature that is
+  normally off until `tools.codeMode.enabled: true`.
+
+For a side-by-side comparison of defaults, runtimes, policy ownership, and
+`exec` contracts, see
+[OpenClaw code mode vs Codex Code Mode](/reference/code-mode#openclaw-code-mode-vs-codex-code-mode).
 
 For the broader model/provider/runtime split, start with
 [Agent runtimes](/concepts/agent-runtimes). The short version is:

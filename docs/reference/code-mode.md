@@ -20,15 +20,35 @@ different `exec` contracts:
 
 - Codex Code Mode is enabled for Codex app-server threads unless restricted
   tool policy disables native code mode. It runs in the Codex coding harness,
-  where the model writes shell commands through an `exec.command` contract.
+  where the model writes raw JavaScript source through an `exec` contract.
 - OpenClaw code mode is disabled unless `tools.codeMode.enabled: true` is
   configured. It runs in the OpenClaw generic agent runtime, where the model
   writes JavaScript or TypeScript programs through an `exec.code` contract.
 
-Codex Code Mode and Codex-native dynamic tool search are stable Codex harness
-surfaces. OpenClaw code mode is an OpenClaw-owned experimental tool-surface
-adapter for generic OpenClaw runs. It uses `quickjs-wasi`, a hidden OpenClaw
-tool catalog, and the normal OpenClaw tool executor.
+Codex Code Mode is a Codex-owned harness surface that upstream Codex still marks
+as under development (`code_mode` and `code_mode_only` are `Stage::UnderDevelopment`).
+Codex-native dynamic tool search is a separate Codex surface: its `tool_search`
+and `search_tool` feature flags are removed compatibility no-ops now that tool
+search is always enabled (`Stage::Removed`), not an under-development stage.
+OpenClaw enables Codex Code Mode for Codex app-server threads but does not own its
+stability. OpenClaw code mode is an OpenClaw-owned experimental tool-surface
+adapter for generic OpenClaw runs. It uses `quickjs-wasi`, a hidden OpenClaw tool
+catalog, and the normal OpenClaw tool executor.
+
+## OpenClaw code mode vs Codex Code Mode
+
+| Topic                      | OpenClaw code mode                                                                      | Codex Code Mode                                                                             |
+| -------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Owner                      | OpenClaw generic agent runtime                                                          | Codex app-server runtime                                                                    |
+| Default state              | Off unless `tools.codeMode.enabled: true`                                               | On for Codex app-server threads unless native code mode is restricted or disabled           |
+| Guest runtime              | `quickjs-wasi`                                                                          | Codex native coding harness                                                                 |
+| Model-visible `exec` input | `exec.code` (and `exec.command` as an alias) with JavaScript or TypeScript              | `exec` with raw JavaScript source code                                                      |
+| Visible tool surface       | `exec` and `wait`, plus the hidden OpenClaw tool catalog behind guest helpers           | Codex-native code mode plus Codex-native dynamic tool surfaces                              |
+| Policy path                | Nested calls still run through normal OpenClaw tools, hooks, approvals, auth, and audit | Native Codex thread/tool policy, with OpenClaw bridging selected app-server and hook events |
+| Stability                  | Experimental OpenClaw feature                                                           | Codex-owned feature; upstream marks `code_mode`/`code_mode_only` as under development       |
+
+If you are using the bundled Codex harness, see
+[Codex harness](/plugins/codex-harness) for the Codex-native side of the split.
 
 ## What is this?
 
@@ -149,8 +169,8 @@ operators validating high-risk deployments.
 
 - Runtime: [`quickjs-wasi`](https://github.com/vercel-labs/quickjs-wasi).
 - Default state: disabled.
-- Stability: experimental OpenClaw surface; Codex Code mode is a separate stable
-  Codex harness surface.
+- Stability: experimental OpenClaw surface; Codex Code mode is a separate
+  Codex-owned harness surface that upstream Codex marks as under development.
 - Target surface: generic OpenClaw agent runs.
 - Security posture: model code is hostile.
 - User-facing promise: enabling code mode never silently falls back to broad
