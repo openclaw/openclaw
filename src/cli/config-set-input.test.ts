@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseBatchSource } from "./config-set-input.js";
+import { MAX_BATCH_FILE_BYTES, parseBatchSource } from "./config-set-input.js";
 
 function withBatchFile<T>(prefix: string, contents: string, run: (batchPath: string) => T): T {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -103,6 +103,13 @@ describe("config set input parsing", () => {
           batchFile: batchPath,
         }),
       ).toThrow("--batch-file must be a JSON array.");
+    });
+  });
+
+  it("rejects oversized --batch-file payloads", () => {
+    const largeContent = Buffer.alloc(MAX_BATCH_FILE_BYTES + 1, "x");
+    withBatchFile("openclaw-config-set-input-large-", largeContent.toString(), (batchPath) => {
+      expect(() => parseBatchSource({ batchFile: batchPath })).toThrow("Batch file too large");
     });
   });
 });

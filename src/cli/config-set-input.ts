@@ -6,6 +6,8 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import JSON5 from "json5";
 
+export const MAX_BATCH_FILE_BYTES = 1_048_576; // 1 MB
+
 export type ConfigSetOptions = {
   strictJson?: boolean;
   /** @deprecated Use strictJson. */
@@ -135,6 +137,12 @@ export function parseBatchSource(opts: ConfigSetOptions): ConfigSetBatchEntry[] 
   const pathname = normalizeStringifiedOptionalString(opts.batchFile) ?? "";
   if (!pathname) {
     throw new Error("--batch-file must not be empty.");
+  }
+  const stat = fs.statSync(pathname);
+  if (stat.size > MAX_BATCH_FILE_BYTES) {
+    throw new Error(
+      `Batch file too large: ${pathname} (${stat.size} bytes, max ${MAX_BATCH_FILE_BYTES} bytes)`,
+    );
   }
   const raw = fs.readFileSync(pathname, "utf8");
   return parseBatchEntries(raw, "--batch-file");
