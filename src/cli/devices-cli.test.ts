@@ -1414,7 +1414,7 @@ describe("devices cli local fallback", () => {
     expect(approveDevicePairing).not.toHaveBeenCalled();
   });
 
-  it("surfaces owner-credential guidance when the device can't approve its own upgrade", async () => {
+  it("explains how to approve an upgrade from another device", async () => {
     // Explicit --url disables the loopback local fallback, so the scope-upgrade
     // denial propagates as the authorization error the user must resolve. The
     // first rejection is consumed by the pre-approve context lookup, the second
@@ -1426,8 +1426,10 @@ describe("devices cli local fallback", () => {
 
     const errorOutput = stripAnsi(readRuntimeErrorOutput());
     expect(errorOutput).toContain("can't approve its own scope upgrade");
-    expect(errorOutput).toContain("--token");
     expect(errorOutput).toContain("Control UI");
+    expect(errorOutput).toContain("another authorized device");
+    expect(errorOutput).not.toContain("--token");
+    expect(errorOutput).not.toContain("--password");
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 

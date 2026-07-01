@@ -325,7 +325,9 @@ function isUnknownRequestIdError(error: unknown): boolean {
 }
 
 function isScopeUpgradePendingApproval(error: unknown): boolean {
-  return readConnectPairingRequiredMessage(normalizeErrorMessage(error))?.reason === "scope-upgrade";
+  return (
+    readConnectPairingRequiredMessage(normalizeErrorMessage(error))?.reason === "scope-upgrade"
+  );
 }
 
 function resolveLocalPairingFallback(
@@ -1112,7 +1114,7 @@ export async function runDevicesApproveCommand(
   } catch (error) {
     if (isScopeUpgradePendingApproval(error)) {
       defaultRuntime.error(
-        "This device can't approve its own scope upgrade. Retry with owner credentials (--token or --password), or approve it from the Control UI.",
+        "This device can't approve its own scope upgrade. Approve it from the Control UI or another authorized device.",
       );
       defaultRuntime.exit(1);
       return;
