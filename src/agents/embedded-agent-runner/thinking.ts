@@ -546,6 +546,11 @@ function shouldRecoverAnthropicThinkingError(
     current.rawError,
     current.errorMessage,
     current.message,
+    current.errorBody,
+    current.body,
+    current.detail,
+    current.responseBody,
+    current.data,
   ]);
   for (const candidate of candidates) {
     if (
@@ -553,6 +558,32 @@ function shouldRecoverAnthropicThinkingError(
       shouldRecoverAnthropicThinkingErrorMessage(candidate, sessionMeta)
     ) {
       return true;
+    }
+    if (!candidate || typeof candidate !== "object") {
+      continue;
+    }
+    const candidateRecord = candidate as Record<string, unknown>;
+    if (
+      !("error" in candidateRecord) &&
+      !("errorBody" in candidateRecord) &&
+      !("body" in candidateRecord) &&
+      !("detail" in candidateRecord) &&
+      !("responseBody" in candidateRecord) &&
+      !("data" in candidateRecord)
+    ) {
+      continue;
+    }
+    try {
+      const serialized = JSON.stringify(candidate);
+      if (
+        typeof serialized === "string" &&
+        serialized.length <= 20_000 &&
+        shouldRecoverAnthropicThinkingErrorMessage(serialized, sessionMeta)
+      ) {
+        return true;
+      }
+    } catch {
+      // ignore serialization failures from cyclic/non-JSON provider payloads
     }
   }
   return false;
