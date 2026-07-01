@@ -75,21 +75,23 @@ describe("tool-result-char-estimator", () => {
   });
 
   it("counts bashExecution output instead of the flat 256 fallback", () => {
+    // The render wraps command + output with markers via bashExecutionToText.
+    // Use a large output so the rendered length clearly exceeds the legacy 256
+    // flat fallback and proves the estimator reads the actual render.
+    const output = "x".repeat(500);
     const msg = {
       role: "bashExecution",
       command: "printf hello",
-      output: "hello world",
+      output,
       timestamp: Date.now(),
     } as unknown as AgentMessage;
 
     const cache = createMessageCharEstimateCache();
     const chars = estimateMessageCharsCached(msg, cache);
+    // bashExecutionToText joins command + output, so the rendered length is
+    // at least the output length and exceeds the 256 fallback.
+    expect(chars).toBeGreaterThan(output.length);
     expect(chars).toBeGreaterThan(256);
-    expect(chars).toBe(
-      // bashExecutionToText joins command + output, so the rendered length is
-      // at least the command and output combined.
-      chars,
-    );
   });
 
   it("returns 0 for bashExecution records flagged excludeFromContext", () => {
