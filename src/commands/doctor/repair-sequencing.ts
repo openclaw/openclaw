@@ -106,6 +106,7 @@ export async function runDoctorRepairSequence(params: {
   });
   applyMutation(
     maybeRepairOpenAICodexAuthConfig(state.candidate, {
+      migrationPlan: codexRouteRepair.migrationPlan,
       profileIdMap: collectOpenAICodexAuthProfileStoreIdMap({
         cfg: state.candidate,
         env,
@@ -195,6 +196,7 @@ export async function runDoctorRepairSequence(params: {
   const openAIAuthProviderRepair = await maybeRepairOpenAICodexAuthProfileStores({
     cfg: state.candidate,
     env,
+    migrationPlan: codexRouteRepair.migrationPlan,
   });
   if (openAIAuthProviderRepair.changes.length > 0) {
     changeNotes.push(sanitizeLines(openAIAuthProviderRepair.changes));

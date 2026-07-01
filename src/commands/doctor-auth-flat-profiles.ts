@@ -36,6 +36,10 @@ import { coerceSecretRef } from "../config/types.secrets.js";
 import { loadJsonFile } from "../infra/json-file.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import {
+  shouldMigrateLegacyOpenAICodexAuth,
+  type LegacyOpenAICodexMigrationPlan,
+} from "./doctor/shared/legacy-config-migrations.runtime.models.js";
 
 type AuthProfileRepairCandidate = {
   agentDir?: string;
@@ -1603,17 +1607,26 @@ function canonicalizeOpenAILastGood(
 /**
  * Canonicalizes config references from the legacy OpenAI Codex provider id to OpenAI.
  *
+ * Retained legacy Codex migration plans intentionally no-op here so doctor does not
+ * rewrite auth profiles/order while matching legacy routes remain pinned for manual migration.
+ *
  * The optional map lets config and store repairs share deterministic profile ids when both surfaces
  * contain the same legacy profile.
  */
 export function maybeRepairOpenAICodexAuthConfig(
   cfg: OpenClawConfig,
-  options?: { profileIdMap?: ReadonlyMap<string, string> },
+  options?: {
+    profileIdMap?: ReadonlyMap<string, string>;
+    migrationPlan?: LegacyOpenAICodexMigrationPlan;
+  },
 ): {
   config: OpenClawConfig;
   changes: string[];
   warnings: string[];
 } {
+  if (!shouldMigrateLegacyOpenAICodexAuth(options?.migrationPlan)) {
+    return { config: cfg, changes: [], warnings: [] };
+  }
   const config = structuredClone(cfg);
   const root = config as Record<string, unknown>;
   const auth = isRecord(root.auth) ? root.auth : undefined;
@@ -1721,15 +1734,24 @@ function backupOpenAIProviderUnification(authPath: string, now: () => number): s
 }
 
 /**
- * Rewrites legacy OpenAI Codex auth profiles in JSON stores to the canonical OpenAI provider id.
+ * Rewrites legacy OpenAI Codex auth profiles in JSON stores to the canonical OpenAI provider id
+ * when the shared migration plan can fully migrate legacy Codex auth.
  */
 export async function maybeRepairOpenAICodexAuthProfileStores(params: {
   cfg: OpenClawConfig;
   now?: () => number;
   env?: NodeJS.ProcessEnv;
+  migrationPlan?: LegacyOpenAICodexMigrationPlan;
 }): Promise<LegacyFlatAuthProfileRepairResult> {
   const now = params.now ?? Date.now;
   const env = params.env ?? process.env;
+  if (!shouldMigrateLegacyOpenAICodexAuth(params.migrationPlan)) {
+    return {
+      detected: [],
+      changes: [],
+      warnings: [],
+    };
+  }
   const profileIdMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg: params.cfg, env });
   const repairs = listAuthProfileRepairCandidates(params.cfg, env)
     .map((candidate) => resolveOpenAICodexAuthStoreRepair(candidate, profileIdMap))

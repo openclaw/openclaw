@@ -18,6 +18,13 @@ import type { AgentRuntimePolicyConfig } from "../../../config/types.agents-shar
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { detectWindowsSpawnCommandInlineArgs } from "../../../plugin-sdk/windows-spawn.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
+import {
+  buildLegacyOpenAICodexMigrationPlan,
+  formatLegacyOpenAICodexMigrationPlanWarning,
+  shouldMigrateLegacyOpenAICodexModelId,
+  shouldMigrateLegacyOpenAICodexModelRef,
+  type LegacyOpenAICodexMigrationPlan,
+} from "./legacy-config-migrations.runtime.models.js";
 
 type CodexRouteHit = {
   path: string;
@@ -136,7 +143,11 @@ function recordCodexModelHit(params: {
   path: string;
   model: string;
   runtime?: string;
+  migrationPlan?: LegacyOpenAICodexMigrationPlan;
 }): string | undefined {
+  if (!shouldMigrateLegacyOpenAICodexModelRef(params.migrationPlan, params.model)) {
+    return undefined;
+  }
   const canonicalModel = toCanonicalOpenAIModelRef(params.model);
   if (!canonicalModel) {
     return undefined;
@@ -155,6 +166,7 @@ function collectStringModelSlot(params: {
   path: string;
   value: unknown;
   runtime?: string;
+  migrationPlan?: LegacyOpenAICodexMigrationPlan;
 }): boolean {
   if (typeof params.value !== "string") {
     return false;
@@ -169,6 +181,7 @@ function collectStringModelSlot(params: {
       path: params.path,
       model,
       runtime: params.runtime,
+      migrationPlan: params.migrationPlan,
     }),
   );
 }
@@ -178,6 +191,7 @@ function collectModelConfigSlot(params: {
   path: string;
   value: unknown;
   runtime?: string;
+  migrationPlan?: LegacyOpenAICodexMigrationPlan;
 }): boolean {
   if (typeof params.value === "string") {
     return collectStringModelSlot({
@@ -185,6 +199,7 @@ function collectModelConfigSlot(params: {
       path: params.path,
       value: params.value,
       runtime: params.runtime,
+      migrationPlan: params.migrationPlan,
     });
   }
   const record = asMutableRecord(params.value);
@@ -198,6 +213,7 @@ function collectModelConfigSlot(params: {
       path: `${params.path}.primary`,
       value: record.primary,
       runtime: params.runtime,
+      migrationPlan: params.migrationPlan,
     });
   }
   if (Array.isArray(record.fallbacks)) {
@@ -206,6 +222,7 @@ function collectModelConfigSlot(params: {
         hits: params.hits,
         path: `${params.path}.fallbacks.${index}`,
         value: entry,
+        migrationPlan: params.migrationPlan,
       });
     }
   }
@@ -855,6 +872,7 @@ function collectModelsMapRefs(params: {
   hits: CodexRouteHit[];
   path: string;
   models: unknown;
+  migrationPlan?: LegacyOpenAICodexMigrationPlan;
 }): void {
   const record = asMutableRecord(params.models);
   if (!record) {
@@ -868,6 +886,7 @@ function collectModelsMapRefs(params: {
       hits: params.hits,
       path: `${params.path}.${modelRef}`,
       model: modelRef,
+      migrationPlan: params.migrationPlan,
     });
   }
 }
@@ -878,6 +897,7 @@ function collectAgentModelRefs(params: {
   path: string;
   runtime?: string;
   collectModelsMap?: boolean;
+  migrationPlan?: LegacyOpenAICodexMigrationPlan;
 }): void {
   const agent = asMutableRecord(params.agent);
   if (!agent) {
@@ -889,6 +909,7 @@ function collectAgentModelRefs(params: {
       path: `${params.path}.${key}`,
       value: agent[key],
       runtime: key === "model" ? params.runtime : undefined,
+      migrationPlan: params.migrationPlan,
     });
   }
   for (const key of AGENT_MEDIA_MODEL_CONFIG_KEYS) {
@@ -896,39 +917,48 @@ function collectAgentModelRefs(params: {
       hits: params.hits,
       path: `${params.path}.${key}`,
       value: agent[key],
+      migrationPlan: params.migrationPlan,
     });
   }
   collectStringModelSlot({
     hits: params.hits,
     path: `${params.path}.heartbeat.model`,
     value: asMutableRecord(agent.heartbeat)?.model,
+    migrationPlan: params.migrationPlan,
   });
   collectModelConfigSlot({
     hits: params.hits,
     path: `${params.path}.subagents.model`,
     value: asMutableRecord(agent.subagents)?.model,
+    migrationPlan: params.migrationPlan,
   });
   const compaction = asMutableRecord(agent.compaction);
   collectStringModelSlot({
     hits: params.hits,
     path: `${params.path}.compaction.model`,
     value: compaction?.model,
+    migrationPlan: params.migrationPlan,
   });
   collectStringModelSlot({
     hits: params.hits,
     path: `${params.path}.compaction.memoryFlush.model`,
     value: asMutableRecord(compaction?.memoryFlush)?.model,
+    migrationPlan: params.migrationPlan,
   });
   if (params.collectModelsMap) {
     collectModelsMapRefs({
       hits: params.hits,
       path: `${params.path}.models`,
       models: agent.models,
+      migrationPlan: params.migrationPlan,
     });
   }
 }
 
-function collectConfigModelRefs(cfg: OpenClawConfig): CodexRouteHit[] {
+function collectConfigModelRefs(
+  cfg: OpenClawConfig,
+  migrationPlan = buildLegacyOpenAICodexMigrationPlan(cfg),
+): CodexRouteHit[] {
   const hits: CodexRouteHit[] = [];
   const defaults = cfg.agents?.defaults;
   const defaultsRuntime = readLegacyDefaultsRuntime(defaults);
@@ -938,6 +968,7 @@ function collectConfigModelRefs(cfg: OpenClawConfig): CodexRouteHit[] {
     path: "agents.defaults",
     runtime: resolveRuntime({ defaultsRuntime }),
     collectModelsMap: true,
+    migrationPlan,
   });
 
   const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
@@ -958,6 +989,7 @@ function collectConfigModelRefs(cfg: OpenClawConfig): CodexRouteHit[] {
         agentRuntime: asAgentRuntimePolicyConfig(agentRecord.agentRuntime),
         defaultsRuntime,
       }),
+      migrationPlan,
     });
   }
 
@@ -973,6 +1005,7 @@ function collectConfigModelRefs(cfg: OpenClawConfig): CodexRouteHit[] {
           hits,
           path: `channels.modelByChannel.${channelId}.${targetId}`,
           value: model,
+          migrationPlan,
         });
       }
     }
@@ -983,22 +1016,26 @@ function collectConfigModelRefs(cfg: OpenClawConfig): CodexRouteHit[] {
       hits,
       path: `hooks.mappings.${index}.model`,
       value: mapping.model,
+      migrationPlan,
     });
   }
   collectStringModelSlot({
     hits,
     path: "hooks.gmail.model",
     value: cfg.hooks?.gmail?.model,
+    migrationPlan,
   });
   collectStringModelSlot({
     hits,
     path: "messages.tts.summaryModel",
     value: cfg.messages?.tts?.summaryModel,
+    migrationPlan,
   });
   collectStringModelSlot({
     hits,
     path: "channels.discord.voice.model",
     value: asMutableRecord(asMutableRecord(cfg.channels?.discord)?.voice)?.model,
+    migrationPlan,
   });
   return hits;
 }
@@ -1252,6 +1289,7 @@ function rewriteStringModelSlot(params: {
   key: string;
   path: string;
   runtime?: string;
+  migrationPlan?: LegacyOpenAICodexMigrationPlan;
 }): boolean {
   if (!params.container) {
     return false;
@@ -1266,6 +1304,7 @@ function rewriteStringModelSlot(params: {
     path: params.path,
     model,
     runtime: params.runtime,
+    migrationPlan: params.migrationPlan,
   });
   if (!canonicalModel) {
     return false;
@@ -1280,6 +1319,7 @@ function rewriteModelConfigSlot(params: {
   key: string;
   path: string;
   runtime?: string;
+  migrationPlan?: LegacyOpenAICodexMigrationPlan;
 }): boolean {
   if (!params.container) {
     return false;
@@ -1292,6 +1332,7 @@ function rewriteModelConfigSlot(params: {
       key: params.key,
       path: params.path,
       runtime: params.runtime,
+      migrationPlan: params.migrationPlan,
     });
   }
   const record = asMutableRecord(value);
@@ -1304,6 +1345,7 @@ function rewriteModelConfigSlot(params: {
     key: "primary",
     path: `${params.path}.primary`,
     runtime: params.runtime,
+    migrationPlan: params.migrationPlan,
   });
   if (Array.isArray(record.fallbacks)) {
     record.fallbacks = record.fallbacks.map((entry, index) => {
@@ -1315,6 +1357,7 @@ function rewriteModelConfigSlot(params: {
         hits: params.hits,
         path: `${params.path}.fallbacks.${index}`,
         model,
+        migrationPlan: params.migrationPlan,
       });
       return canonicalModel ?? entry;
     });
@@ -1326,6 +1369,7 @@ function rewriteModelsMap(params: {
   hits: CodexRouteHit[];
   models: MutableRecord | undefined;
   path: string;
+  migrationPlan?: LegacyOpenAICodexMigrationPlan;
 }): void {
   if (!params.models) {
     return;
@@ -1335,10 +1379,14 @@ function rewriteModelsMap(params: {
     if (!canonicalModel) {
       continue;
     }
+    if (!shouldMigrateLegacyOpenAICodexModelRef(params.migrationPlan, legacyRef)) {
+      continue;
+    }
     recordCodexModelHit({
       hits: params.hits,
       path: `${params.path}.${legacyRef}`,
       model: legacyRef,
+      migrationPlan: params.migrationPlan,
     });
     const legacyEntry = params.models[legacyRef] ?? {};
     const canonicalEntry = params.models[canonicalModel];
@@ -1596,6 +1644,7 @@ function rewriteAgentModelRefs(params: {
   rewrittenInheritedCompactionModels?: Map<string, string>;
   runtimePolicyChanges: string[];
   unsupportedCompactionChanges: string[];
+  migrationPlan?: LegacyOpenAICodexMigrationPlan;
 }): void {
   if (!params.agent) {
     return;
@@ -1625,6 +1674,7 @@ function rewriteAgentModelRefs(params: {
         key,
         path: `${params.path}.${key}`,
         runtime: params.currentRuntime,
+        migrationPlan: params.migrationPlan,
       });
       preserveCodexRuntimePolicyForNewHits(start);
     } else {
@@ -1635,6 +1685,7 @@ function rewriteAgentModelRefs(params: {
         container: agent,
         key,
         path: `${params.path}.${key}`,
+        migrationPlan: params.migrationPlan,
       });
     }
   }
@@ -1645,6 +1696,7 @@ function rewriteAgentModelRefs(params: {
     container: asMutableRecord(agent.heartbeat),
     key: "model",
     path: `${params.path}.heartbeat.model`,
+    migrationPlan: params.migrationPlan,
   });
   rewriteModelConfigSlotIfCanonicalCodexRuntime({
     cfg: params.cfg,
@@ -1653,6 +1705,7 @@ function rewriteAgentModelRefs(params: {
     container: asMutableRecord(agent.subagents),
     key: "model",
     path: `${params.path}.subagents.model`,
+    migrationPlan: params.migrationPlan,
   });
   const compaction = asMutableRecord(agent.compaction);
   const inheritedCompaction = asMutableRecord(params.inheritedCompaction);
@@ -1672,6 +1725,7 @@ function rewriteAgentModelRefs(params: {
         container: compaction,
         key: "model",
         path: `${params.path}.compaction.model`,
+        migrationPlan: params.migrationPlan,
       });
       preserveCodexRuntimePolicyForNewHits(start);
       const localModel = typeof compaction?.model === "string" ? compaction.model.trim() : "";
@@ -1689,6 +1743,7 @@ function rewriteAgentModelRefs(params: {
           container: inheritedCompaction,
           key: "model",
           path: inheritedModelPath,
+          migrationPlan: params.migrationPlan,
         });
         const inheritedHit = params.hits[inheritedStart];
         const inheritedCanonicalModel =
@@ -1728,6 +1783,7 @@ function rewriteAgentModelRefs(params: {
           container: compaction,
           key: "model",
           path: `${params.path}.compaction.model`,
+          migrationPlan: params.migrationPlan,
         });
       }
     }
@@ -1739,6 +1795,7 @@ function rewriteAgentModelRefs(params: {
       container: compaction,
       key: "model",
       path: `${params.path}.compaction.model`,
+      migrationPlan: params.migrationPlan,
     });
   }
   rewriteStringModelSlotIfCanonicalCodexRuntime({
@@ -1748,6 +1805,7 @@ function rewriteAgentModelRefs(params: {
     container: asMutableRecord(compaction?.memoryFlush),
     key: "model",
     path: `${params.path}.compaction.memoryFlush.model`,
+    migrationPlan: params.migrationPlan,
   });
   for (const key of AGENT_MEDIA_MODEL_CONFIG_KEYS) {
     rewriteModelConfigSlot({
@@ -1755,6 +1813,7 @@ function rewriteAgentModelRefs(params: {
       container: agent,
       key,
       path: `${params.path}.${key}`,
+      migrationPlan: params.migrationPlan,
     });
   }
   if (params.rewriteModelsMap) {
@@ -1763,6 +1822,7 @@ function rewriteAgentModelRefs(params: {
       hits: params.hits,
       models: asMutableRecord(agent.models),
       path: `${params.path}.models`,
+      migrationPlan: params.migrationPlan,
     });
     preserveCodexRuntimePolicyForNewHits(start);
   }
@@ -2345,6 +2405,7 @@ function rewriteStringModelSlotIfCanonicalCodexRuntime(params: {
   container: MutableRecord | undefined;
   key: string;
   path: string;
+  migrationPlan?: LegacyOpenAICodexMigrationPlan;
 }): void {
   const value = params.container?.[params.key];
   if (typeof value !== "string") {
@@ -2366,6 +2427,7 @@ function rewriteStringModelSlotIfCanonicalCodexRuntime(params: {
     container: params.container,
     key: params.key,
     path: params.path,
+    migrationPlan: params.migrationPlan,
   });
 }
 
@@ -2376,6 +2438,7 @@ function rewriteModelConfigSlotIfCanonicalCodexRuntime(params: {
   container: MutableRecord | undefined;
   key: string;
   path: string;
+  migrationPlan?: LegacyOpenAICodexMigrationPlan;
 }): void {
   const value = params.container?.[params.key];
   if (typeof value === "string") {
@@ -2393,6 +2456,7 @@ function rewriteModelConfigSlotIfCanonicalCodexRuntime(params: {
     container: record,
     key: "primary",
     path: `${params.path}.primary`,
+    migrationPlan: params.migrationPlan,
   });
   const fallbacks = Array.isArray(record.fallbacks) ? record.fallbacks : undefined;
   if (!fallbacks) {
@@ -2405,6 +2469,7 @@ function rewriteModelConfigSlotIfCanonicalCodexRuntime(params: {
     const canonicalModel = toCanonicalOpenAIModelRef(entry.trim());
     if (
       !canonicalModel ||
+      !shouldMigrateLegacyOpenAICodexModelRef(params.migrationPlan, entry.trim()) ||
       !canonicalOpenAIModelUsesCodexRuntime({
         cfg: params.cfg,
         modelRef: canonicalModel,
@@ -2469,9 +2534,11 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
   cfg: OpenClawConfig;
   preserveSharedDefaultCompactionOverrides: SharedDefaultCompactionOverrideConsumers;
   ignoreLegacyAgentRuntimePins?: boolean;
+  migrationPlan?: LegacyOpenAICodexMigrationPlan;
 }): ConfigRouteRepairResult {
   const nextConfig = structuredClone(params.cfg);
   const preRepairCfg = params.cfg;
+  const migrationPlan = params.migrationPlan ?? buildLegacyOpenAICodexMigrationPlan(params.cfg);
   const hits: CodexRouteHit[] = [];
   const runtimePolicyChanges: string[] = [];
   const unsupportedCompactionChanges: string[] = [];
@@ -2509,6 +2576,7 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
     rewrittenInheritedCompactionModels,
     runtimePolicyChanges,
     unsupportedCompactionChanges,
+    migrationPlan,
   });
   const inheritedModelRef = readAgentPrimaryModelRef(nextConfig.agents?.defaults);
   const agents = Array.isArray(nextConfig.agents?.list) ? nextConfig.agents.list : [];
@@ -2542,6 +2610,7 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
       rewrittenInheritedCompactionModels,
       runtimePolicyChanges,
       unsupportedCompactionChanges,
+      migrationPlan,
     });
   }
   const channelsModelByChannel = asMutableRecord(nextConfig.channels?.modelByChannel);
@@ -2558,6 +2627,7 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
           container: targets,
           key: targetId,
           path: `channels.modelByChannel.${channelId}.${targetId}`,
+          migrationPlan,
         });
       }
     }
@@ -2569,6 +2639,7 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
       container: mapping as MutableRecord,
       key: "model",
       path: `hooks.mappings.${index}.model`,
+      migrationPlan,
     });
   }
   rewriteStringModelSlotIfCanonicalCodexRuntime({
@@ -2577,6 +2648,7 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
     container: asMutableRecord(nextConfig.hooks?.gmail),
     key: "model",
     path: "hooks.gmail.model",
+    migrationPlan,
   });
   rewriteStringModelSlotIfCanonicalCodexRuntime({
     cfg: nextConfig,
@@ -2584,6 +2656,7 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
     container: asMutableRecord(nextConfig.messages?.tts),
     key: "summaryModel",
     path: "messages.tts.summaryModel",
+    migrationPlan,
   });
   rewriteStringModelSlotIfCanonicalCodexRuntime({
     cfg: nextConfig,
@@ -2591,6 +2664,7 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
     container: asMutableRecord(asMutableRecord(nextConfig.channels?.discord)?.voice),
     key: "model",
     path: "channels.discord.voice.model",
+    migrationPlan,
   });
   const shouldClearRuntimePins = hits.some((hit) => !isCompactionOnlyRouteHit(hit));
   const runtimePinChanges = shouldClearRuntimePins
@@ -2620,7 +2694,10 @@ function configRepairWouldClearLegacyRuntimePins(params: { cfg: OpenClawConfig }
   return dryRun.changes.some((hit) => !isCompactionOnlyRouteHit(hit));
 }
 
-function rewriteConfigModelRefs(params: { cfg: OpenClawConfig }): ConfigRouteRepairResult {
+function rewriteConfigModelRefs(params: {
+  cfg: OpenClawConfig;
+  migrationPlan?: LegacyOpenAICodexMigrationPlan;
+}): ConfigRouteRepairResult {
   const preserveSharedDefaultCompactionOverrides = getSharedDefaultCompactionOverrideConsumers({
     cfg: params.cfg,
     ignoreLegacyAgentRuntimePins: configRepairWouldClearLegacyRuntimePins(params),
@@ -2628,6 +2705,7 @@ function rewriteConfigModelRefs(params: { cfg: OpenClawConfig }): ConfigRouteRep
   return rewriteConfigModelRefsWithCompactionPolicy({
     cfg: params.cfg,
     preserveSharedDefaultCompactionOverrides,
+    migrationPlan: params.migrationPlan,
   });
 }
 
@@ -2721,7 +2799,8 @@ export function collectCodexRouteWarnings(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): string[] {
-  const hits = collectConfigModelRefs(params.cfg);
+  const migrationPlan = buildLegacyOpenAICodexMigrationPlan(params.cfg);
+  const hits = collectConfigModelRefs(params.cfg, migrationPlan);
   const disabledCodexPluginHits = collectDisabledCodexPluginRouteHits(params.cfg);
   const ignoreLegacyAgentRuntimePins = configRepairWouldClearLegacyRuntimePins(params);
   const legacyLosslessCompactionConfigs = collectLegacyLosslessCompactionConfigs({
@@ -2747,6 +2826,10 @@ export function collectCodexRouteWarnings(params: {
       ignoreLegacyAgentRuntimePins,
     });
   const warnings: string[] = [];
+  const migrationPlanWarning = formatLegacyOpenAICodexMigrationPlanWarning(migrationPlan);
+  if (migrationPlanWarning) {
+    warnings.push(migrationPlanWarning);
+  }
   warnings.push(...collectCodexAppServerCommandWarnings(params.cfg));
   if (hits.length > 0) {
     warnings.push(
@@ -2823,8 +2906,15 @@ export function maybeRepairCodexRoutes(params: {
   env?: NodeJS.ProcessEnv;
   shouldRepair: boolean;
   codexRuntimeReady?: boolean;
-}): { cfg: OpenClawConfig; warnings: string[]; changes: string[] } {
-  const hits = collectConfigModelRefs(params.cfg);
+}): {
+  cfg: OpenClawConfig;
+  warnings: string[];
+  changes: string[];
+  migrationPlan: LegacyOpenAICodexMigrationPlan;
+} {
+  const migrationPlan = buildLegacyOpenAICodexMigrationPlan(params.cfg);
+  const hits = collectConfigModelRefs(params.cfg, migrationPlan);
+  const migrationPlanWarning = formatLegacyOpenAICodexMigrationPlanWarning(migrationPlan);
   const disabledCodexPluginHits = collectDisabledCodexPluginRouteHits(params.cfg);
   const ignoreLegacyAgentRuntimePins = configRepairWouldClearLegacyRuntimePins(params);
   const unsupportedCompactionOverrides = collectUnsupportedCodexCompactionOverrides({
@@ -2839,19 +2929,22 @@ export function maybeRepairCodexRoutes(params: {
     hits.length === 0 &&
     disabledCodexPluginHits.length === 0 &&
     unsupportedCompactionOverrides.length === 0 &&
-    legacyLosslessCompactionConfigs.length === 0
+    legacyLosslessCompactionConfigs.length === 0 &&
+    !migrationPlanWarning
   ) {
-    return { cfg: params.cfg, warnings: [], changes: [] };
+    return { cfg: params.cfg, warnings: [], changes: [], migrationPlan };
   }
   if (!params.shouldRepair) {
     return {
       cfg: params.cfg,
       warnings: collectCodexRouteWarnings({ cfg: params.cfg, env: params.env }),
       changes: [],
+      migrationPlan,
     };
   }
   const repaired = rewriteConfigModelRefs({
     cfg: params.cfg,
+    migrationPlan,
   });
   const codexPluginRepair = enableCodexPluginForRequiredRoutes({
     cfg: repaired.cfg,
@@ -2869,6 +2962,7 @@ export function maybeRepairCodexRoutes(params: {
   return {
     cfg: codexPluginRepair.cfg,
     warnings,
+    migrationPlan,
     changes: [
       ...changes,
       ...repaired.runtimePolicyChanges,
@@ -2883,12 +2977,22 @@ function rewriteSessionModelPair(params: {
   entry: SessionEntry;
   providerKey: "modelProvider" | "providerOverride";
   modelKey: "model" | "modelOverride";
+  migrationPlan?: LegacyOpenAICodexMigrationPlan;
 }): boolean {
   let changed = false;
   const provider = normalizeString(params.entry[params.providerKey]);
   const model =
     typeof params.entry[params.modelKey] === "string" ? params.entry[params.modelKey] : undefined;
   if (provider === "openai-codex") {
+    if (!model && params.migrationPlan && params.migrationPlan.providerStatus === "retained") {
+      return false;
+    }
+    if (
+      model &&
+      !shouldMigrateLegacyOpenAICodexModelId(params.migrationPlan, toOpenAIModelId(model) ?? model)
+    ) {
+      return false;
+    }
     params.entry[params.providerKey] = "openai";
     if (model) {
       const modelId = toOpenAIModelId(model);
@@ -2899,6 +3003,9 @@ function rewriteSessionModelPair(params: {
     return true;
   }
   if (model && isOpenAICodexModelRef(model)) {
+    if (!shouldMigrateLegacyOpenAICodexModelRef(params.migrationPlan, model)) {
+      return false;
+    }
     const canonicalModel = toCanonicalOpenAIModelRef(model);
     if (canonicalModel) {
       params.entry[params.modelKey] = canonicalModel;
@@ -2908,10 +3015,21 @@ function rewriteSessionModelPair(params: {
   return changed;
 }
 
-function clearStaleCodexFallbackNotice(entry: SessionEntry): boolean {
+function clearStaleCodexFallbackNotice(
+  entry: SessionEntry,
+  migrationPlan?: LegacyOpenAICodexMigrationPlan,
+): boolean {
   if (
     !isOpenAICodexModelRef(entry.fallbackNoticeSelectedModel) &&
     !isOpenAICodexModelRef(entry.fallbackNoticeActiveModel)
+  ) {
+    return false;
+  }
+  if (
+    (isOpenAICodexModelRef(entry.fallbackNoticeSelectedModel) &&
+      !shouldMigrateLegacyOpenAICodexModelRef(migrationPlan, entry.fallbackNoticeSelectedModel)) ||
+    (isOpenAICodexModelRef(entry.fallbackNoticeActiveModel) &&
+      !shouldMigrateLegacyOpenAICodexModelRef(migrationPlan, entry.fallbackNoticeActiveModel))
   ) {
     return false;
   }
@@ -2936,7 +3054,10 @@ function clearStaleSessionRuntimePins(entry: SessionEntry): boolean {
   return changed;
 }
 
-function repairProviderlessCodexSessionOverride(entry: SessionEntry): boolean {
+function repairProviderlessCodexSessionOverride(
+  entry: SessionEntry,
+  migrationPlan?: LegacyOpenAICodexMigrationPlan,
+): boolean {
   if (
     !isProviderlessModelRef(entry.modelOverride) ||
     !isOpenAICodexAuthProfileRef(entry.authProfileOverride) ||
@@ -2944,6 +3065,9 @@ function repairProviderlessCodexSessionOverride(entry: SessionEntry): boolean {
     entry.modelOverrideSource !== "auto" ||
     normalizeString(entry.providerOverride)
   ) {
+    return false;
+  }
+  if (!shouldMigrateLegacyOpenAICodexModelId(migrationPlan, entry.modelOverride)) {
     return false;
   }
 
@@ -2965,6 +3089,7 @@ function repairProviderlessCodexSessionOverride(entry: SessionEntry): boolean {
 export function repairCodexSessionStoreRoutes(params: {
   store: Record<string, SessionEntry>;
   now?: number;
+  migrationPlan?: LegacyOpenAICodexMigrationPlan;
 }): SessionRouteRepairResult {
   const now = params.now ?? Date.now();
   const sessionKeys: string[] = [];
@@ -2976,16 +3101,21 @@ export function repairCodexSessionStoreRoutes(params: {
       entry,
       providerKey: "modelProvider",
       modelKey: "model",
+      migrationPlan: params.migrationPlan,
     });
     const changedOverrideModelRoute = rewriteSessionModelPair({
       entry,
       providerKey: "providerOverride",
       modelKey: "modelOverride",
+      migrationPlan: params.migrationPlan,
     });
-    const changedProviderlessOverride = repairProviderlessCodexSessionOverride(entry);
+    const changedProviderlessOverride = repairProviderlessCodexSessionOverride(
+      entry,
+      params.migrationPlan,
+    );
     const changedModelRoute =
       changedRuntimeModelRoute || changedOverrideModelRoute || changedProviderlessOverride;
-    const changedFallbackNotice = clearStaleCodexFallbackNotice(entry);
+    const changedFallbackNotice = clearStaleCodexFallbackNotice(entry, params.migrationPlan);
     const changedRuntimePins =
       changedModelRoute || changedFallbackNotice ? clearStaleSessionRuntimePins(entry) : false;
     if (!changedModelRoute && !changedFallbackNotice && !changedRuntimePins) {
@@ -3000,25 +3130,14 @@ export function repairCodexSessionStoreRoutes(params: {
   };
 }
 
-function scanCodexSessionStoreRoutes(store: Record<string, SessionEntry>): string[] {
-  return Object.entries(store).flatMap(([sessionKey, entry]) => {
-    if (!entry) {
-      return [];
-    }
-    const hasLegacyRoute =
-      normalizeString(entry.modelProvider) === "openai-codex" ||
-      normalizeString(entry.providerOverride) === "openai-codex" ||
-      isOpenAICodexModelRef(entry.model) ||
-      isOpenAICodexModelRef(entry.modelOverride) ||
-      (isProviderlessModelRef(entry.modelOverride) &&
-        isOpenAICodexAuthProfileRef(entry.authProfileOverride) &&
-        entry.authProfileOverrideSource === "auto" &&
-        entry.modelOverrideSource === "auto" &&
-        !normalizeString(entry.providerOverride)) ||
-      isOpenAICodexModelRef(entry.fallbackNoticeSelectedModel) ||
-      isOpenAICodexModelRef(entry.fallbackNoticeActiveModel);
-    return hasLegacyRoute ? [sessionKey] : [];
-  });
+function scanCodexSessionStoreRoutes(
+  store: Record<string, SessionEntry>,
+  migrationPlan?: LegacyOpenAICodexMigrationPlan,
+): string[] {
+  return repairCodexSessionStoreRoutes({
+    store: structuredClone(store),
+    migrationPlan,
+  }).sessionKeys;
 }
 
 /** Scan or repair all configured agent session stores that still contain legacy Codex routes. */
@@ -3028,6 +3147,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
   shouldRepair: boolean;
   codexRuntimeReady?: boolean;
 }): Promise<CodexSessionRouteRepairSummary> {
+  const migrationPlan = buildLegacyOpenAICodexMigrationPlan(params.cfg);
   const targets = resolveAllAgentSessionStoreTargetsSync(params.cfg, {
     env: params.env ?? process.env,
   }).filter((target) => fs.existsSync(target.storePath));
@@ -3044,6 +3164,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
     const stale = targets.flatMap((target) => {
       const sessionKeys = scanCodexSessionStoreRoutes(
         loadSessionStore(target.storePath, { skipCache: true, clone: false }),
+        migrationPlan,
       );
       return sessionKeys.map((sessionKey) => `${target.agentId}:${sessionKey}`);
     });
@@ -3069,13 +3190,14 @@ export async function maybeRepairCodexSessionRoutes(params: {
   for (const target of targets) {
     const staleSessionKeys = scanCodexSessionStoreRoutes(
       loadSessionStore(target.storePath, { skipCache: true, clone: false }),
+      migrationPlan,
     );
     if (staleSessionKeys.length === 0) {
       continue;
     }
     const result = await updateSessionStore(
       target.storePath,
-      (store) => repairCodexSessionStoreRoutes({ store }),
+      (store) => repairCodexSessionStoreRoutes({ store, migrationPlan }),
       { skipMaintenance: true },
     );
     if (!result.changed) {

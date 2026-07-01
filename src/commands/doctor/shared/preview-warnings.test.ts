@@ -487,10 +487,10 @@ describe("doctor preview warnings", () => {
 
     const warning = expectSingleWarningContaining(
       warnings,
-      "models.providers.openai-codex cannot be merged automatically",
+      "Legacy `openai-codex` migration is partially retained",
     );
     expect(warning).toContain("models.providers.openai.params");
-    expect(warning).toContain("Move the affected model/provider defaults manually");
+    expect(warning).toContain("migration plan status is `migrated`");
   });
 
   it("sanitizes empty-allowlist warning paths before returning preview output", async () => {
