@@ -1104,6 +1104,42 @@ describe("skills-clawhub", () => {
       }
     });
 
+    it("does not install configured skills during update all without ClawHub tracking", async () => {
+      const workspaceDir = await tempDirs.make("openclaw-configured-update-");
+      const results = await updateSkillsFromClawHub({
+        workspaceDir,
+        config: {
+          agents: {
+            defaults: {
+              skills: ["apple-notes", "sherpa-onnx-tts"],
+            },
+          },
+        },
+      });
+
+      expect(results).toEqual([]);
+      expect(fetchClawHubSkillInstallResolutionMock).not.toHaveBeenCalled();
+      expect(installPackageDirMock).not.toHaveBeenCalled();
+    });
+
+    it("rejects untracked requested updates instead of installing by slug", async () => {
+      const workspaceDir = await tempDirs.make("openclaw-untracked-update-");
+
+      const results = await updateSkillsFromClawHub({
+        workspaceDir,
+        slug: "calendar",
+      });
+
+      expect(results).toEqual([
+        {
+          ok: false,
+          error: 'Skill "calendar" is not tracked as a ClawHub install.',
+        },
+      ]);
+      expect(fetchClawHubSkillInstallResolutionMock).not.toHaveBeenCalled();
+      expect(installPackageDirMock).not.toHaveBeenCalled();
+    });
+
     it("updates a legacy Unicode slug when requested explicitly", async () => {
       const slug = "re\u0430ct";
       const { workspaceDir } = await createLegacyTrackedSkillFixture(slug);
@@ -1288,6 +1324,66 @@ describe("skills-clawhub", () => {
             installedVersion: "2.0.0",
           },
         });
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    });
+
+    it("accepts owner-qualified installed verification targets", async () => {
+      const workspaceDir = await tempDirs.make("openclaw-skill-verify-");
+      try {
+        await writeClawHubOriginFixture({
+          workspaceDir,
+          slug: "weather",
+          ownerHandle: "demo-owner",
+          registry: "https://private.example.com/clawhub",
+          installedVersion: "2.0.0",
+        });
+
+        await expect(
+          resolveClawHubSkillVerificationTarget({
+            workspaceDir,
+            slug: "@demo-owner/weather",
+          }),
+        ).resolves.toMatchObject({
+          ok: true,
+          slug: "weather",
+          ownerHandle: "demo-owner",
+          baseUrl: "https://private.example.com/clawhub",
+          version: "2.0.0",
+          tag: undefined,
+          resolution: {
+            source: "installed",
+            selector: "installed-version",
+            registry: "https://private.example.com/clawhub",
+            installedVersion: "2.0.0",
+          },
+        });
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects owner-qualified installed verification when the owner differs", async () => {
+      const workspaceDir = await tempDirs.make("openclaw-skill-verify-");
+      try {
+        await writeClawHubOriginFixture({
+          workspaceDir,
+          slug: "weather",
+          ownerHandle: "demo-owner",
+        });
+
+        const result = await resolveClawHubSkillVerificationTarget({
+          workspaceDir,
+          slug: "@other-owner/weather",
+        });
+
+        expect(result.ok).toBe(false);
+        if (result.ok) {
+          throw new Error("expected owner mismatch failure");
+        }
+        expect(result.error).toContain("is tracked as @demo-owner/weather");
+        expect(result.error).toContain("not @other-owner/weather");
       } finally {
         await fs.rm(workspaceDir, { recursive: true, force: true });
       }
@@ -1591,6 +1687,79 @@ describe("skills-clawhub", () => {
             registry: "https://configured.example.com/clawhub",
             skillDir: undefined,
             installedVersion: undefined,
+          },
+        });
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    });
+
+    it("uses owner-qualified registry verification targets", async () => {
+      const workspaceDir = await tempDirs.make("openclaw-skill-verify-");
+      resolveClawHubBaseUrlMock.mockReturnValueOnce("https://configured.example.com/clawhub");
+      try {
+        await expect(
+          resolveClawHubSkillVerificationTarget({
+            workspaceDir,
+            slug: "@demo-owner/weather",
+            baseUrl: "https://configured.example.com/clawhub/",
+          }),
+        ).resolves.toEqual({
+          ok: true,
+          slug: "weather",
+          ownerHandle: "demo-owner",
+          baseUrl: "https://configured.example.com/clawhub",
+          version: undefined,
+          tag: undefined,
+          resolution: {
+            source: "registry",
+            selector: "latest",
+            registry: "https://configured.example.com/clawhub",
+            skillDir: undefined,
+            installedVersion: undefined,
+          },
+        });
+      } finally {
+        await fs.rm(workspaceDir, { recursive: true, force: true });
+      }
+    });
+
+    it("keeps owner-qualified registry selectors for explicit versions and tags", async () => {
+      const workspaceDir = await tempDirs.make("openclaw-skill-verify-");
+      try {
+        await expect(
+          resolveClawHubSkillVerificationTarget({
+            workspaceDir,
+            slug: "@demo-owner/weather",
+            version: "2.0.0",
+          }),
+        ).resolves.toMatchObject({
+          ok: true,
+          slug: "weather",
+          ownerHandle: "demo-owner",
+          version: "2.0.0",
+          tag: undefined,
+          resolution: {
+            source: "registry",
+            selector: "version",
+          },
+        });
+
+        await expect(
+          resolveClawHubSkillVerificationTarget({
+            workspaceDir,
+            slug: "@demo-owner/weather",
+            tag: "beta",
+          }),
+        ).resolves.toMatchObject({
+          ok: true,
+          slug: "weather",
+          ownerHandle: "demo-owner",
+          version: undefined,
+          tag: "beta",
+          resolution: {
+            source: "registry",
+            selector: "tag",
           },
         });
       } finally {

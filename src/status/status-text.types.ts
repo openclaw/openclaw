@@ -1,4 +1,5 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Status text types describe runtime status records used by status rendering.
 import type {
   ElevatedLevel,

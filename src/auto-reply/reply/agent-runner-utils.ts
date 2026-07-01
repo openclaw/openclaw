@@ -31,10 +31,7 @@ import {
   resolveRunAuthProfile,
 } from "./agent-runner-auth-profile.js";
 export { resolveProviderScopedAuthProfile, resolveRunAuthProfile };
-import {
-  buildEmbeddedRunBaseParams as buildEmbeddedRunBaseParamsCore,
-  resolveEnforceFinalTagWithResolver,
-} from "./agent-runner-run-params.js";
+import { buildEmbeddedRunBaseParams as buildEmbeddedRunBaseParamsCore } from "./agent-runner-run-params.js";
 export { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
@@ -202,13 +199,6 @@ export const formatBunFetchSocketError = (message: string) => {
   ].join("\n");
 };
 
-/** Resolves whether final-answer tags should be enforced for a queued run. */
-export const resolveEnforceFinalTag = (
-  run: FollowupRun["run"],
-  provider: string,
-  model = run.model,
-) => resolveEnforceFinalTagWithResolver(run, provider, model, isReasoningTagProvider);
-
 /** Resolves candidate-scoped fast mode after model fallback changes provider/model. */
 export function resolveRunFastModeForFallbackCandidate(params: {
   run: FollowupRun["run"];
@@ -288,6 +278,9 @@ function buildEmbeddedContextFromTemplate(params: {
       to: sessionCtx.To,
     }),
     messageThreadId: sessionCtx.MessageThreadId ?? undefined,
+    chatId:
+      normalizeOptionalString(sessionCtx.NativeChannelId) ??
+      normalizeOptionalString(sessionCtx.ChatId),
     memberRoleIds: normalizeMemberRoleIds(sessionCtx.MemberRoleIds),
     // Provider threading context for tool auto-injection
     ...buildThreadingToolContext({
@@ -311,29 +304,10 @@ function normalizeMemberRoleIds(value: TemplateContext["MemberRoleIds"]): string
 function buildTemplateSenderContext(sessionCtx: TemplateContext) {
   return {
     senderId: normalizeOptionalString(sessionCtx.SenderId),
+    channelContext: sessionCtx.ChannelContext,
     senderName: normalizeOptionalString(sessionCtx.SenderName),
     senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),
     senderE164: normalizeOptionalString(sessionCtx.SenderE164),
-  };
-}
-
-/** Builds extra context payloads for embedded run execution. */
-export function buildEmbeddedRunContexts(params: {
-  run: FollowupRun["run"];
-  replyRoute?: EmbeddedReplyRoute;
-  sessionCtx: TemplateContext;
-  hasRepliedRef: { value: boolean } | undefined;
-  provider: string;
-}) {
-  return {
-    authProfile: resolveRunAuthProfile(params.run, params.provider),
-    embeddedContext: buildEmbeddedContextFromTemplate({
-      run: params.run,
-      replyRoute: params.replyRoute,
-      sessionCtx: params.sessionCtx,
-      hasRepliedRef: params.hasRepliedRef,
-    }),
-    senderContext: buildTemplateSenderContext(params.sessionCtx),
   };
 }
 
@@ -349,7 +323,14 @@ export function buildEmbeddedRunExecutionParams(params: {
   promptCacheKey?: string;
   allowTransientCooldownProbe?: boolean;
 }) {
-  const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts(params);
+  const authProfile = resolveRunAuthProfile(params.run, params.provider);
+  const embeddedContext = buildEmbeddedContextFromTemplate({
+    run: params.run,
+    replyRoute: params.replyRoute,
+    sessionCtx: params.sessionCtx,
+    hasRepliedRef: params.hasRepliedRef,
+  });
+  const senderContext = buildTemplateSenderContext(params.sessionCtx);
   const runBaseParams = buildEmbeddedRunBaseParams({
     run: params.run,
     provider: params.provider,

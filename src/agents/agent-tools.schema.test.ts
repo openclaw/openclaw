@@ -7,12 +7,13 @@ import { runAgentLoop, type AgentEvent, type StreamFn } from "openclaw/plugin-sd
 import { createAssistantMessageEventStream, validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { Type, type TSchema } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   testing as beforeToolCallTesting,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
-import { normalizeToolParameterSchema, normalizeToolParameters } from "./agent-tools.schema.js";
+import { normalizeToolParameters } from "./agent-tools.schema.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 
 const TEST_USAGE = {
@@ -40,6 +41,93 @@ describe("normalizeToolParameterSchema", () => {
     expect(second).toBe(first);
     expect(providerSpecific).not.toBe(first);
     expect(providerSpecific).toEqual(first);
+  });
+
+  it("uses Gemini cleanup for OpenAI-compatible providers when the model id is Gemini", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        sessionKey: {
+          description: "Explicit session key, or null to clear it",
+          anyOf: [{ type: "string" }, { type: "null" }],
+        },
+      },
+    };
+
+    expect(
+      normalizeToolParameterSchema(schema, {
+        modelProvider: "jjcc",
+        modelId: "gemini-3.1-pro-preview",
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        sessionKey: {
+          type: "string",
+          description: "Explicit session key, or null to clear it",
+        },
+      },
+    });
+    expect(
+      normalizeToolParameterSchema(schema, {
+        modelProvider: "stepfun",
+        modelId: "step-router-v1",
+      }),
+    ).toEqual(schema);
+  });
+
+  it("keeps normalized tool-schema profile behavior aligned with the cache key", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        sessionKey: {
+          anyOf: [{ type: "string" }, { type: "null" }],
+        },
+      },
+    };
+
+    const defaultSchema = normalizeToolParameterSchema(schema, {
+      modelProvider: "openai-compatible",
+      modelId: "custom-model",
+    });
+    const mixedCaseGeminiProfileSchema = normalizeToolParameterSchema(schema, {
+      modelProvider: "openai-compatible",
+      modelId: "custom-model",
+      modelCompat: { toolSchemaProfile: "Gemini" },
+    });
+
+    expect(defaultSchema).toEqual(schema);
+    expect(mixedCaseGeminiProfileSchema).toEqual({
+      type: "object",
+      properties: {
+        sessionKey: { type: "string" },
+      },
+    });
+  });
+
+  it("applies explicit unsupported keyword stripping after Gemini cleanup", () => {
+    expect(
+      normalizeToolParameterSchema(
+        {
+          type: "object",
+          properties: {
+            count: {
+              anyOf: [{ type: "integer", vendorOnly: true }, { type: "null" }],
+            },
+          },
+        },
+        {
+          modelProvider: "jjcc",
+          modelId: "gemini-3.1-pro-preview",
+          modelCompat: { unsupportedToolSchemaKeywords: ["vendorOnly"] },
+        },
+      ),
+    ).toEqual({
+      type: "object",
+      properties: {
+        count: { type: "integer" },
+      },
+    });
   });
 
   it("normalizes truly empty schemas to type:object with properties:{}", () => {

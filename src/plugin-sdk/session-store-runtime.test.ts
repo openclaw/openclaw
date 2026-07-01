@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as jsonFiles from "../infra/json-files.js";
 import {
+  cleanupSessionLifecycleArtifacts,
   getSessionEntry,
   listSessionEntries,
   patchSessionEntry,
@@ -250,5 +251,50 @@ describe("session-store-runtime compatibility surface", () => {
     } finally {
       writeSpy.mockRestore();
     }
+  });
+
+  it("cleans lifecycle artifacts through the accessor-backed SDK wrapper", async () => {
+    const sessionKey = "agent:main:lifecycle-owned-old";
+    const transcriptPath = path.join(tempDir, "lifecycle-owned-old.jsonl");
+    await saveSessionStore(
+      storePath,
+      {
+        [sessionKey]: {
+          sessionFile: transcriptPath,
+          sessionId: "lifecycle-owned-old",
+          updatedAt: 10,
+        },
+        "agent:main:regular": {
+          sessionId: "regular",
+          updatedAt: 20,
+        },
+      },
+      { skipMaintenance: true },
+    );
+    fs.writeFileSync(transcriptPath, '{"runId":"lifecycle-owned-old"}\n', "utf-8");
+    const oldDate = new Date(Date.now() - 600_000);
+    fs.utimesSync(transcriptPath, oldDate, oldDate);
+
+    await expect(
+      cleanupSessionLifecycleArtifacts({
+        storePath,
+        sessionKeySegmentPrefix: "lifecycle-owned-",
+        transcriptContentMarker: '"runId":"lifecycle-owned-',
+        orphanTranscriptMinAgeMs: 300_000,
+      }),
+    ).resolves.toEqual({
+      archivedTranscriptArtifacts: 1,
+      removedEntries: 1,
+    });
+
+    expect(getSessionEntry({ sessionKey, storePath })).toBeUndefined();
+    expect(getSessionEntry({ sessionKey: "agent:main:regular", storePath })).toMatchObject({
+      sessionId: "regular",
+    });
+    expect(
+      fs
+        .readdirSync(tempDir)
+        .filter((file) => file.startsWith("lifecycle-owned-old.jsonl.deleted.")),
+    ).toHaveLength(1);
   });
 });

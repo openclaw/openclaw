@@ -32,6 +32,7 @@ import {
   describeSessionsListTool,
   SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
+import { stripToolMessages } from "./chat-history-text.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   jsonResult,
@@ -51,7 +52,6 @@ import {
   resolveSandboxedSessionToolContext,
   type SessionListRow,
   type SessionRunStatus,
-  stripToolMessages,
 } from "./sessions-helpers.js";
 
 const SessionsListToolSchema = Type.Object({

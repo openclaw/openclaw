@@ -4,7 +4,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore, updateSessionStore } from "../config/sessions/store.js";
+import { loadSessionEntry, patchSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   normalizeStoredOverrideModel,
   resolveDefaultModelForAgent,
@@ -43,10 +43,12 @@ export function resolveLiveSessionModelSelection(params: {
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId,
   });
-  const entry = loadSessionStore(storePath, {
+  const entry = loadSessionEntry({
+    storePath,
+    sessionKey,
     hydrateSkillPromptRefs: false,
-    skipCache: true,
-  })[sessionKey];
+    readConsistency: "latest",
+  });
   const normalizedSelection = normalizeStoredOverrideModel({
     providerOverride: entry?.providerOverride,
     modelOverride: entry?.modelOverride,
@@ -149,11 +151,13 @@ export function shouldSwitchToLiveModel(params: {
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: params.agentId?.trim(),
   });
-  const entry = loadSessionStore(storePath, {
+  const entry = loadSessionEntry({
+    storePath,
+    sessionKey,
     hydrateSkillPromptRefs: false,
-    skipCache: true,
     clone: false,
-  })[sessionKey];
+    readConsistency: "latest",
+  });
   if (!entry?.liveModelSwitchPending) {
     return undefined;
   }
@@ -210,10 +214,13 @@ export async function clearLiveModelSwitchPending(params: {
   if (!storePath) {
     return;
   }
-  await updateSessionStore(storePath, (store) => {
-    const entry = store[sessionKey];
-    if (entry) {
-      delete entry.liveModelSwitchPending;
-    }
-  });
+  await patchSessionEntry(
+    { storePath, sessionKey },
+    (entry) => {
+      const next = { ...entry };
+      delete next.liveModelSwitchPending;
+      return next;
+    },
+    { replaceEntry: true },
+  );
 }

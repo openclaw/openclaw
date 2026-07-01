@@ -21,8 +21,8 @@ import { getSessionBindingService } from "../../infra/outbound/session-binding-s
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import {
   buildRestartSuccessContinuation,
+  clearRestartSentinel,
   formatDoctorNonInteractiveHint,
-  removeRestartSentinelFile,
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
@@ -707,7 +707,7 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
   const sentinelPayload = buildRestartCommandSentinel(params);
   if (hasSigusr1Listener) {
-    let sentinelPath: string | null = null;
+    let sentinelWritten = false;
     scheduleGatewaySigusr1Restart({
       reason: "/restart",
       // Sibling session-routing guard: /restart writes a session-scoped sentinel
@@ -717,10 +717,13 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       emitHooks: sentinelPayload
         ? {
             beforeEmit: async () => {
-              sentinelPath = await writeRestartSentinel(sentinelPayload);
+              await writeRestartSentinel(sentinelPayload);
+              sentinelWritten = true;
             },
             afterEmitRejected: async () => {
-              await removeRestartSentinelFile(sentinelPath);
+              if (sentinelWritten) {
+                await clearRestartSentinel();
+              }
             },
           }
         : undefined,
@@ -732,10 +735,11 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
-  let sentinelPath: string | null = null;
+  let sentinelWritten = false;
   try {
     if (sentinelPayload) {
-      sentinelPath = await writeRestartSentinel(sentinelPayload);
+      await writeRestartSentinel(sentinelPayload);
+      sentinelWritten = true;
     }
   } catch (err) {
     logVerbose(`failed to write /restart sentinel: ${String(err)}`);
@@ -748,7 +752,9 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   }
   const restartMethod = triggerOpenClawRestart();
   if (!restartMethod.ok) {
-    await removeRestartSentinelFile(sentinelPath);
+    if (sentinelWritten) {
+      await clearRestartSentinel();
+    }
     const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
     return {
       shouldContinue: false,

@@ -1,6 +1,6 @@
 // Test Install Sh Docker tests cover test install sh docker script behavior.
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path, { join } from "node:path";
 import { runInNewContext } from "node:vm";
@@ -9,12 +9,16 @@ import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = "scripts/test-install-sh-docker.sh";
 const INSTALL_E2E_DOCKER_PATH = "scripts/test-install-sh-e2e-docker.sh";
+const INSTALL_E2E_DOCKERFILE_PATH = "scripts/docker/install-sh-e2e/Dockerfile";
 const INSTALL_E2E_RUNNER_PATH = "scripts/docker/install-sh-e2e/run.sh";
 const DOCKER_SETUP_PATH = "scripts/docker/setup.sh";
 const HOST_TIMEOUT_PATH = "scripts/lib/host-timeout.sh";
 const PODMAN_SETUP_PATH = "scripts/podman/setup.sh";
+const PODMAN_QUADLET_TEMPLATE_PATH = "scripts/podman/openclaw.container.in";
 const PODMAN_RUN_PATH = "scripts/run-openclaw-podman.sh";
+const SMOKE_DOCKERFILE_PATH = "scripts/docker/install-sh-smoke/Dockerfile";
 const SMOKE_RUNNER_PATH = "scripts/docker/install-sh-smoke/run.sh";
+const NONROOT_DOCKERFILE_PATH = "scripts/docker/install-sh-nonroot/Dockerfile";
 const NONROOT_RUNNER_PATH = "scripts/docker/install-sh-nonroot/run.sh";
 const BUN_GLOBAL_SMOKE_PATH = "scripts/e2e/bun-global-install-smoke.sh";
 const BUN_GLOBAL_ASSERTIONS_PATH = "scripts/e2e/lib/bun-global-install/assertions.mjs";
@@ -132,6 +136,27 @@ function normalizeInstallE2eAgentOutput(output: string) {
   } finally {
     rmSync(root, { force: true, recursive: true });
   }
+}
+
+function expectInstallDockerfileContract(
+  dockerfilePath: string,
+  runnerPath: string,
+  entrypoint: string,
+): string {
+  const dockerfile = readFileSync(dockerfilePath, "utf8");
+
+  expect(dockerfile).toContain("# syntax=docker/dockerfile:1.7");
+  expect(dockerfile).toMatch(/^FROM \S+@sha256:[a-f0-9]{64}$/m);
+  expect(dockerfile).toContain("apt-get");
+  expect(dockerfile).toContain("bash");
+  expect(dockerfile).toContain("ca-certificates");
+  expect(dockerfile).toContain("curl");
+  expect(dockerfile).toContain(
+    "COPY install-sh-common/version-parse.sh /usr/local/install-sh-common/version-parse.sh",
+  );
+  expect(dockerfile).toContain(`COPY --chmod=755 ${runnerPath} ${entrypoint}`);
+  expect(dockerfile).toContain(`ENTRYPOINT ["${entrypoint}"]`);
+  return dockerfile;
 }
 
 async function waitForCondition(
@@ -266,6 +291,91 @@ describe("test-install-sh-docker", () => {
     expect(workflow).toContain(
       "OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE: ${{ inputs.update_baseline_version || 'latest' }}",
     );
+  });
+
+  it("keeps install-sh Dockerfiles wired to their runner contracts", () => {
+    const e2eDockerfile = expectInstallDockerfileContract(
+      INSTALL_E2E_DOCKERFILE_PATH,
+      "install-sh-e2e/run.sh",
+      "/usr/local/bin/openclaw-install-e2e",
+    );
+    const smokeDockerfile = expectInstallDockerfileContract(
+      SMOKE_DOCKERFILE_PATH,
+      "install-sh-smoke/run.sh",
+      "/usr/local/bin/openclaw-install-smoke",
+    );
+    const nonrootDockerfile = expectInstallDockerfileContract(
+      NONROOT_DOCKERFILE_PATH,
+      "install-sh-nonroot/run.sh",
+      "/usr/local/bin/openclaw-install-nonroot",
+    );
+
+    expect(e2eDockerfile).toContain("USER appuser");
+    expect(smokeDockerfile).toContain(
+      "COPY install-sh-common/cli-verify.sh /usr/local/install-sh-common/cli-verify.sh",
+    );
+    expect(nonrootDockerfile).toContain(
+      "COPY install-sh-common/cli-verify.sh /usr/local/install-sh-common/cli-verify.sh",
+    );
+    expect(nonrootDockerfile).toContain("USER app");
+    expect(nonrootDockerfile).toContain("WORKDIR /home/app");
+    expect(nonrootDockerfile).toContain("NPM_CONFIG_UPDATE_NOTIFIER=false");
+  });
+
+  it("keeps shared install helpers parsing and verifying installed CLI versions", () => {
+    const root = tempDirs.make("openclaw-install-helper-");
+    const binDir = join(root, "bin");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(
+      join(binDir, "openclaw"),
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'case "${1:-}" in',
+        "  --version)",
+        "    printf 'OpenClaw v2026.6.21-beta.1\\r\\n'",
+        "    ;;",
+        "  --help)",
+        "    printf 'usage\\n'",
+        "    ;;",
+        "  *)",
+        "    exit 2",
+        "    ;;",
+        "esac",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        [
+          "set -euo pipefail",
+          "source scripts/docker/install-sh-common/cli-verify.sh",
+          "printf 'parsed=%s\\n' \"$(extract_openclaw_semver 'OpenClaw v2026.6.21-beta.1+build.7')\"",
+          "verify_installed_cli openclaw 2026.6.21-beta.1",
+        ].join("\n"),
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          HOME: root,
+          PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("parsed=2026.6.21-beta.1+build.7");
+    expect(result.stdout).toContain(
+      "cli=openclaw installed=2026.6.21-beta.1 expected=2026.6.21-beta.1",
+    );
+    expect(result.stdout).toContain("==> Sanity: CLI runs");
   });
 
   it("can reuse dist from the already-built root Docker smoke image", () => {
@@ -429,6 +539,35 @@ describe("test-install-sh-docker", () => {
       'BUILD_ARGS+=(--build-arg "OPENCLAW_IMAGE_PIP_PACKAGES=${OPENCLAW_IMAGE_PIP_PACKAGES}")',
     );
     expect(podmanSetup).not.toContain("OPENCLAW_DOCKER_PIP_PACKAGES");
+  });
+
+  it("keeps the Podman Quadlet template aligned with setup substitutions", () => {
+    const setupScript = readFileSync(PODMAN_SETUP_PATH, "utf8");
+    const template = readFileSync(PODMAN_QUADLET_TEMPLATE_PATH, "utf8");
+
+    expect(setupScript).toContain(
+      'QUADLET_TEMPLATE="$REPO_PATH/scripts/podman/openclaw.container.in"',
+    );
+    for (const placeholder of [
+      "OPENCLAW_CONFIG_DIR",
+      "OPENCLAW_WORKSPACE_DIR",
+      "IMAGE_NAME",
+      "CONTAINER_NAME",
+    ]) {
+      expect(setupScript).toContain(`{{${placeholder}}}`);
+      expect(template).toContain(`{{${placeholder}}}`);
+    }
+
+    expect(template).toContain("UserNS=keep-id");
+    expect(template).toContain("User=%U:%G");
+    expect(template).toContain("Volume={{OPENCLAW_CONFIG_DIR}}:/home/node/.openclaw:Z");
+    expect(template).toContain(
+      "Volume={{OPENCLAW_WORKSPACE_DIR}}:/home/node/.openclaw/workspace:Z",
+    );
+    expect(template).toContain("EnvironmentFile={{OPENCLAW_CONFIG_DIR}}/.env");
+    expect(template).toContain("PublishPort=127.0.0.1:18789:18789");
+    expect(template).toContain("Exec=node dist/index.js gateway --bind lan --port 18789");
+    expect(template).not.toContain("/home/admin");
   });
 
   it("allows repository branch history and release tags for secret-backed Docker release checks", () => {

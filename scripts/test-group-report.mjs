@@ -14,6 +14,7 @@ import {
   renderGroupedTestReport,
 } from "./lib/test-group-report.mjs";
 import { formatMs } from "./lib/vitest-report-cli-utils.mjs";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 import { resolveVitestNodeArgs } from "./run-vitest.mjs";
 import {
   applyParallelVitestCachePaths,
@@ -63,7 +64,7 @@ function usage() {
 
 function readRequiredValue(argv, index, flag) {
   const value = argv[index + 1];
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new Error(`${flag} requires a value`);
   }
   return value;
@@ -94,6 +95,14 @@ export function parseTestGroupReportArgs(argv) {
     topFiles: 25,
     vitestArgs: [],
   };
+  const seenSingleValueFlags = new Set();
+  const setSingleValueFlag = (flag, apply) => {
+    if (seenSingleValueFlags.has(flag)) {
+      throw new Error(`${flag} was provided more than once`);
+    }
+    seenSingleValueFlags.add(flag);
+    apply();
+  };
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -123,10 +132,11 @@ export function parseTestGroupReportArgs(argv) {
       continue;
     }
     if (arg === "--compare") {
-      args.compare = {
-        before: readRequiredValue(argv, index, "--compare"),
-        after: readRequiredValue(argv, index + 1, "--compare"),
-      };
+      const before = readRequiredValue(argv, index, "--compare");
+      const after = readRequiredValue(argv, index + 1, "--compare");
+      setSingleValueFlag(arg, () => {
+        args.compare = { before, after };
+      });
       index += 2;
       continue;
     }
@@ -136,42 +146,66 @@ export function parseTestGroupReportArgs(argv) {
       continue;
     }
     if (arg === "--group-by") {
-      args.groupBy = readRequiredValue(argv, index, "--group-by");
+      const value = readRequiredValue(argv, index, "--group-by");
+      setSingleValueFlag(arg, () => {
+        args.groupBy = value;
+      });
       index += 1;
       continue;
     }
     if (arg === "--output") {
-      args.output = readRequiredValue(argv, index, "--output");
+      const value = readRequiredValue(argv, index, "--output");
+      setSingleValueFlag(arg, () => {
+        args.output = value;
+      });
       index += 1;
       continue;
     }
     if (arg === "--limit") {
-      args.limit = readPositiveIntValue(argv, index, "--limit");
+      const value = readPositiveIntValue(argv, index, "--limit");
+      setSingleValueFlag(arg, () => {
+        args.limit = value;
+      });
       index += 1;
       continue;
     }
     if (arg === "--max-test-ms") {
-      args.maxTestMs = readPositiveIntValue(argv, index, "--max-test-ms");
+      const value = readPositiveIntValue(argv, index, "--max-test-ms");
+      setSingleValueFlag(arg, () => {
+        args.maxTestMs = value;
+      });
       index += 1;
       continue;
     }
     if (arg === "--timeout-ms") {
-      args.timeoutMs = readPositiveIntValue(argv, index, "--timeout-ms");
+      const value = readPositiveIntValue(argv, index, "--timeout-ms");
+      setSingleValueFlag(arg, () => {
+        args.timeoutMs = value;
+      });
       index += 1;
       continue;
     }
     if (arg === "--kill-grace-ms") {
-      args.killGraceMs = readPositiveIntValue(argv, index, "--kill-grace-ms");
+      const value = readPositiveIntValue(argv, index, "--kill-grace-ms");
+      setSingleValueFlag(arg, () => {
+        args.killGraceMs = value;
+      });
       index += 1;
       continue;
     }
     if (arg === "--concurrency") {
-      args.concurrency = readPositiveIntValue(argv, index, "--concurrency");
+      const value = readPositiveIntValue(argv, index, "--concurrency");
+      setSingleValueFlag(arg, () => {
+        args.concurrency = value;
+      });
       index += 1;
       continue;
     }
     if (arg === "--top-files") {
-      args.topFiles = readPositiveIntValue(argv, index, "--top-files");
+      const value = readPositiveIntValue(argv, index, "--top-files");
+      setSingleValueFlag(arg, () => {
+        args.topFiles = value;
+      });
       index += 1;
       continue;
     }
@@ -259,9 +293,16 @@ export function signalTestGroupReportChild(
     if (signal === "SIGKILL") {
       args.push("/F");
     }
-    const result = runTaskkill("taskkill", args, { stdio: "ignore" });
+    const taskkillPath = resolveWindowsTaskkillPath();
+    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
     if (!result?.error && result?.status === 0) {
       return;
+    }
+    if (signal !== "SIGKILL") {
+      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
+      if (!forceResult?.error && forceResult?.status === 0) {
+        return;
+      }
     }
   }
   child.kill(signal);

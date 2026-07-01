@@ -257,6 +257,7 @@ export async function buildDynamicTools(input: DynamicToolBuildParams) {
     ...sessionKeys,
     sessionId: params.sessionId,
     runId: params.runId,
+    approvalReviewerDeviceId: params.approvalReviewerDeviceId,
     agentDir,
     cwd: input.effectiveCwd ?? input.effectiveWorkspace,
     workspaceDir: input.effectiveWorkspace,

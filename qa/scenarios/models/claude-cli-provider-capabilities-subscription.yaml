@@ -85,7 +85,8 @@ flow:
         - call: runAgentPrompt
           args:
             - ref: env
-            - sessionKey: agent:qa:claude-cli-chat
+            - sessionKey:
+                expr: "`agent:qa:claude-cli-${config.authMode}-chat`"
               message:
                 expr: config.chatPrompt
               provider:
@@ -116,7 +117,8 @@ flow:
         - call: runAgentPrompt
           args:
             - ref: env
-            - sessionKey: agent:qa:claude-cli-image
+            - sessionKey:
+                expr: "`agent:qa:claude-cli-${config.authMode}-image`"
               message:
                 expr: config.imagePrompt
               provider:
@@ -166,7 +168,7 @@ flow:
           saveAs: mcpSessionKey
           args:
             - ref: env
-            - Claude CLI MCP bridge
+            - expr: "`Claude CLI MCP bridge ${config.authMode}`"
         - call: readEffectiveTools
           saveAs: mcpTools
           args:
@@ -231,7 +233,8 @@ flow:
         - call: runAgentPrompt
           args:
             - ref: env
-            - sessionKey: agent:qa:claude-cli-skill
+            - sessionKey:
+                expr: "`agent:qa:claude-cli-${config.authMode}-skill`"
               message:
                 expr: config.skillPrompt
               provider:

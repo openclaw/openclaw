@@ -28,6 +28,7 @@ import {
 import {
   groupPluginDiscoveryProvidersByOrder,
   normalizePluginDiscoveryResult,
+  providerMatchesFilter,
   resolveRuntimePluginDiscoveryProviders,
   runProviderCatalog,
   runProviderStaticCatalog,
@@ -48,17 +49,6 @@ function buildProviderCatalogEnvCacheFingerprint(env: NodeJS.ProcessEnv): string
     .map(([key, value]) => [key, createHash("sha256").update(value).digest("hex")])
     .toSorted(([left], [right]) => left.localeCompare(right));
   return createHash("sha256").update(JSON.stringify(entries)).digest("hex");
-}
-
-function providerMatchesFilter(params: {
-  provider: Pick<ProviderPlugin, "id" | "aliases" | "hookAliases">;
-  providerFilter: string;
-}): boolean {
-  return [
-    params.provider.id,
-    ...(params.provider.aliases ?? []),
-    ...(params.provider.hookAliases ?? []),
-  ].some((providerId) => normalizeProviderId(providerId) === params.providerFilter);
 }
 
 function collectMatchingContributionOwners(

@@ -333,7 +333,7 @@ Gateway model capability checks also read explicit `models.providers.<id>.models
 
 ### Moonshot AI (Kimi)
 
-Moonshot ships as a bundled provider plugin. Use the built-in provider by default, and add an explicit `models.providers.moonshot` entry only when you need to override the base URL or model metadata:
+Install `@openclaw/moonshot-provider` before onboarding. Add an explicit `models.providers.moonshot` entry only when you need to override the base URL or model metadata:
 
 - Provider: `moonshot`
 - Auth: `MOONSHOT_API_KEY`

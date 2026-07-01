@@ -33,15 +33,12 @@ For the broader model/provider/runtime split, start with
 - A GitHub Copilot subscription that can drive the Copilot CLI (or a
   `gitHubToken` env / auth-profile entry for headless / cron runs).
 - A writable `copilotHome` directory. The harness defaults to
-  `~/.openclaw/agents/<agentId>/copilot` for full per-agent isolation. The
-  platform default (`%APPDATA%\copilot` on Windows, `$XDG_CONFIG_HOME/copilot`
-  or `~/.config/copilot` elsewhere) is used as the doctor probe fallback when
-  no explicit home is set.
+  `<agentDir>/copilot` when OpenClaw provides an agent directory, otherwise
+  `~/.openclaw/agents/<agentId>/copilot` for full per-agent isolation.
 
 `openclaw doctor` runs the plugin
-[doctor contract](#doctor-and-probes) for the extension; failures there are
-the canonical way to confirm the environment is ready before opting an agent
-in.
+[doctor contract](#doctor) for declarative session-state ownership and future
+compatibility migrations. It does not run Copilot CLI environment probes.
 
 ## Plugin install
 
@@ -153,9 +150,11 @@ the same directory), or `~/.openclaw/agents/<agentId>/copilot` otherwise.
 Override with `copilotHome: <path>` on the attempt input when you need a
 custom location (for example, a shared mount for migration).
 
-`probeCopilotAuthShape` (see [Doctor and probes](#doctor-and-probes)) is the
-pure shape check that validates which of the modes above will be used.
-It does not perform a live SDK handshake.
+Live harness tests use `OPENCLAW_COPILOT_AGENT_LIVE_TOKEN` when a direct token
+is needed. The shared live-test setup intentionally scrubs `COPILOT_GITHUB_TOKEN`,
+`GH_TOKEN`, and `GITHUB_TOKEN` after staging real auth profiles into the isolated
+test home, so passing a `gh auth token` value through the dedicated live-test
+variable avoids false skips without exposing the token to unrelated suites.
 
 ## Configuration surface
 
@@ -239,7 +238,7 @@ asserted in
 [`extensions/copilot/harness.test.ts`](https://github.com/openclaw/openclaw/blob/main/extensions/copilot/harness.test.ts)
 under `describe("runSideQuestion")`.
 
-## Doctor and probes
+## Doctor
 
 `extensions/copilot/doctor-contract-api.ts` is auto-loaded by
 `src/plugins/doctor-contract-registry.ts`. It contributes:
@@ -251,18 +250,6 @@ under `describe("runSideQuestion")`.
   runtime `copilot`; CLI session key `copilot`; auth profile
   prefix `github-copilot:`.
 
-`extensions/copilot/src/doctor-probes.ts` exports three imperative probes
-that hosts (including `openclaw doctor`) can call to verify the environment:
-
-| Probe                      | What it checks                                                                    | Reasons it can fail                                                              |
-| -------------------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `probeCopilotCliVersion`   | `copilot --version` exits 0 with a non-empty version string                       | `non-zero-exit`, `empty-version`, `spawn-failed`, `spawn-error`, `probe-timeout` |
-| `probeCopilotHomeWritable` | `mkdir -p copilotHome` + write + rm a marker file                                 | `copilothome-not-writable` (with the underlying fs error in `details.rawError`)  |
-| `probeCopilotAuthShape`    | At least one of `useLoggedInUser`, `gitHubToken`, or `profileId`+`profileVersion` | `no-auth-source`                                                                 |
-
-Each probe accepts a DI seam (`spawnFn`, `fsApi`) so tests do not spawn the
-real Copilot CLI or touch the host fs.
-
 ## Limitations
 
 - The harness only claims the canonical `github-copilot` provider at MVP.
@@ -272,14 +259,10 @@ real Copilot CLI or touch the host fs.
   fallback for whatever runtimes do not have a peer surface.
 - PI session state is not migrated when an agent switches to `copilot`.
   Selection is per attempt; existing PI sessions remain valid.
-- **Interactive `ask_user` is not yet wired.** The SDK's
-  `onUserInputRequest` handler is intentionally not registered, which
-  per the SDK contract hides the `ask_user` tool from the model
-  entirely. Agents running under this harness make best-judgment
-  decisions from the initial prompt rather than asking clarifying
-  questions mid-turn. A follow-up will port the codex pattern at
-  `extensions/codex/src/app-server/user-input-bridge.ts` to route SDK
-  `UserInputRequest`s through the OpenClaw channel/TUI prompt path.
+- `ask_user` uses the same OpenClaw prompt-and-reply path as the Codex
+  harness. When the Copilot SDK asks for user input, OpenClaw posts a
+  blocking prompt to the active channel/TUI and the next queued user
+  message resolves the SDK request.
 
 ## Permissions and ask_user
 
@@ -333,13 +316,23 @@ right scope, and `session_status: "current"` resolves to a stale
 sandbox key. The bridge builder is in
 `extensions/copilot/src/tool-bridge.ts` and mirrors the PI
 authoritative call at
-`src/agents/pi-embedded-runner/run/attempt.ts:1029-1117`. Two PI fields
-are intentionally **not** forwarded at MVP and tracked as follow-ups:
-`sandbox` (the harness does not yet route through `resolveSandboxContext`)
-and the PI tool-search/code-mode machinery
-(`toolSearchCatalogRef`, `includeCoreTools`,
-`includeToolSearchControls`, `toolSearchCatalogExecutor`,
-`toolConstructionPlan`), which has no analog at the SDK boundary.
+`src/agents/pi-embedded-runner/run/attempt.ts:1029-1117`. `runAttempt`
+already resolves sandbox context through the shared
+`resolveSandboxContext` seam, passes the SDK an effective working
+directory, and forwards `sandbox` plus the subagent-spawn workspace into
+the tool bridge. The bridge also forwards the bounded tool-construction
+controls it can enforce at the SDK boundary: `includeCoreTools`, the
+runtime tool allowlist, and `toolConstructionPlan`.
+
+The bridge also uses the shared harness tool-surface helper from
+`openclaw/plugin-sdk/agent-harness-tool-runtime` for PI parity. When
+tool-search is enabled, the SDK sees compact control tools plus a hidden
+catalog executor instead of every OpenClaw tool schema. When code mode is
+enabled, the helper builds the same code-mode control surface and catalog
+lifecycle used by other agent harnesses. Local-model lean defaults,
+runtime-compatible schema filtering, directory hydration, and catalog
+cleanup all stay in the shared helper so Copilot and Codex-adjacent
+harnesses do not drift.
 
 ### Session-level GitHub token
 
@@ -356,7 +349,10 @@ When the resolved mode is `useLoggedInUser`, the session-level field
 is omitted so the SDK keeps deriving identity from the logged-in
 identity.
 
-`ask_user` is intentionally hidden — see Limitations above.
+`ask_user` uses `SessionConfig.onUserInputRequest`. The bridge accepts
+choice indexes or labels for fixed-choice requests, accepts free-form
+answers when the SDK request allows them, and cancels a pending request
+when the OpenClaw attempt is aborted.
 
 ## Related
 

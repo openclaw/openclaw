@@ -16,6 +16,7 @@ import {
   pnpmLockOverrideVersionForVersions,
   parsePnpmPackageKey,
   parseLockPackagePath,
+  resolvePackageDirs,
   restoreCurrentPnpmLockedPackages,
   shouldUseLegacyPeerDepsForShrinkwrap,
   shrinkwrapPackageDirsForChangedPaths,
@@ -56,6 +57,18 @@ describe("generate-npm-shrinkwrap", () => {
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 10 * 60 * 1000,
     });
+  });
+
+  it("rejects short flag package selectors before resolving shrinkwrap targets", () => {
+    expect(() => resolvePackageDirs(["--package-dir", "-h"])).toThrow(
+      "--package-dir requires a package directory.",
+    );
+    expect(() => resolvePackageDirs(["--changed", "--base", "-h"])).toThrow(
+      "--base requires a git ref.",
+    );
+    expect(() => resolvePackageDirs(["--changed", "--head", "-h"])).toThrow(
+      "--head requires a git ref.",
+    );
   });
 
   it("accepts strict npm shrinkwrap command timeout and buffer overrides", () => {

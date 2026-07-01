@@ -6,6 +6,7 @@ import {
   findFailureOutboundMessage,
   formatTransportTranscript,
   readTransportTranscript,
+  waitForNoOutbound,
   waitForOutboundMessage,
   waitForTransportOutboundMessage,
 } from "./suite-runtime-transport.js";
@@ -98,36 +99,29 @@ describe("qa suite transport helpers", () => {
     await expect(pending).rejects.toThrow("Tool read not found");
   });
 
-  it("uses sinceIndex as a full message-bus cursor for outbound waits", async () => {
+  it("checks no-outbound waits from the supplied outbound cursor", async () => {
     const state = createQaBusState();
-    state.addInboundMessage({
-      conversation: { id: "qa-operator", kind: "direct" },
-      senderId: "alice",
-      senderName: "Alice",
-      text: "before",
-    });
-    const sinceIndex = state.getSnapshot().messages.length;
-    const pending = waitForOutboundMessage(
-      state,
-      (candidate) => candidate.text.includes("QA-CURSOR-OK"),
-      5_000,
-      { sinceIndex },
-    );
-
-    state.addInboundMessage({
-      conversation: { id: "qa-operator", kind: "direct" },
-      senderId: "alice",
-      senderName: "Alice",
-      text: "during",
-    });
     state.addOutboundMessage({
       to: "dm:qa-operator",
-      text: "QA-CURSOR-OK",
+      text: "previous scenario reply",
       senderId: "openclaw",
       senderName: "OpenClaw QA",
     });
+    const sinceIndex = state
+      .getSnapshot()
+      .messages.filter((message) => message.direction === "outbound").length;
 
-    await expect(pending).resolves.toMatchObject({ text: "QA-CURSOR-OK" });
+    await expect(waitForNoOutbound(state, 1, { sinceIndex })).resolves.toBeUndefined();
+
+    state.addOutboundMessage({
+      to: "channel:qa-room",
+      text: "current scenario reply",
+      senderId: "openclaw",
+      senderName: "OpenClaw QA",
+    });
+    await expect(waitForNoOutbound(state, 1, { sinceIndex })).rejects.toThrow(
+      "expected no outbound messages, saw 1: channel:qa-room:openclaw:current scenario reply",
+    );
   });
 
   it("fails raw scenario waitForCondition calls when a classified failure reply arrives", async () => {

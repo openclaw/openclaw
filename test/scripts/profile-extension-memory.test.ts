@@ -39,6 +39,15 @@ function runProfileExtensionMemory(args: string[], cwd = process.cwd()) {
   });
 }
 
+function extractReportPath(stdout: string) {
+  const match = stdout.match(/^\[extension-memory\] report: (.+)$/mu);
+  const reportPath = match?.[1];
+  if (!reportPath) {
+    throw new Error(`missing report path in stdout:\n${stdout}`);
+  }
+  return reportPath;
+}
+
 async function waitForChildExit(
   child: ReturnType<typeof spawn>,
   timeoutMs = 8_000,
@@ -103,6 +112,21 @@ describe("scripts/profile-extension-memory", () => {
     }
   });
 
+  it("rejects option-looking string flag values before scanning built plugin artifacts", () => {
+    for (const args of [
+      ["--extension", "-h"],
+      ["--json", "-h"],
+    ]) {
+      const result = runProfileExtensionMemory(args);
+
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain(`[extension-memory] ${args[0]} requires a value`);
+      expect(result.stderr).not.toContain("dist/extensions");
+      expect(result.stderr).not.toContain("at ");
+    }
+  });
+
   it("bounds noisy child output without losing RSS samples", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-"));
     try {
@@ -157,6 +181,44 @@ describe("scripts/profile-extension-memory", () => {
       const report = JSON.parse(readFileSync(reportPath, "utf8"));
       expect(report.counts).toMatchObject({ totalEntries: 1, ok: 1, fail: 0, timeout: 0 });
     } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses distinct default JSON report paths for separate runs", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-"));
+    const reportPaths: string[] = [];
+    try {
+      const extensionDir = path.join(root, "dist", "extensions", "simple");
+      mkdirSync(extensionDir, { recursive: true });
+      writeFileSync(path.join(extensionDir, "index.js"), `export default {};\n`, "utf8");
+
+      for (let index = 0; index < 2; index += 1) {
+        const result = runProfileExtensionMemory(
+          ["--extension", "simple", "--skip-combined", "--concurrency", "1"],
+          root,
+        );
+
+        expect(result.status, result.stderr).toBe(0);
+        const reportPath = extractReportPath(result.stdout);
+        reportPaths.push(reportPath);
+        expect(path.dirname(reportPath)).toBe(tmpdir());
+        expect(path.basename(reportPath)).toMatch(
+          /^openclaw-extension-memory-\d+-\d+-[0-9a-f-]+\.json$/u,
+        );
+        expect(JSON.parse(readFileSync(reportPath, "utf8")).counts).toMatchObject({
+          totalEntries: 1,
+          ok: 1,
+          fail: 0,
+          timeout: 0,
+        });
+      }
+
+      expect(reportPaths[0]).not.toBe(reportPaths[1]);
+    } finally {
+      for (const reportPath of reportPaths) {
+        rmSync(reportPath, { force: true });
+      }
       rmSync(root, { recursive: true, force: true });
     }
   });

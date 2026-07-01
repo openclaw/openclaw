@@ -1,6 +1,6 @@
 // Tests gateway process argv parsing for diagnostics.
 import { describe, expect, it } from "vitest";
-import { isGatewayArgv, parseProcCmdline, parseWindowsCmdline } from "./gateway-process-argv.js";
+import { isGatewayArgv, parseProcCmdline } from "./gateway-process-argv.js";
 
 describe("parseProcCmdline", () => {
   it("splits null-delimited argv and trims empty entries", () => {
@@ -15,27 +15,6 @@ describe("parseProcCmdline", () => {
   it("keeps non-delimited single arguments and drops whitespace-only entries", () => {
     expect(parseProcCmdline(" gateway ")).toEqual(["gateway"]);
     expect(parseProcCmdline(" \0\t\0 ")).toStrictEqual([]);
-  });
-});
-
-describe("parseWindowsCmdline", () => {
-  it("splits unquoted tokens by whitespace", () => {
-    expect(parseWindowsCmdline("node.exe gateway run")).toEqual(["node.exe", "gateway", "run"]);
-  });
-
-  it("handles double-quoted paths with spaces", () => {
-    expect(
-      parseWindowsCmdline('"C:\\Program Files\\node.exe" "C:\\my app\\dist\\index.js" gateway run'),
-    ).toEqual(["C:\\Program Files\\node.exe", "C:\\my app\\dist\\index.js", "gateway", "run"]);
-  });
-
-  it("returns empty array for empty input", () => {
-    expect(parseWindowsCmdline("")).toStrictEqual([]);
-    expect(parseWindowsCmdline("   ")).toStrictEqual([]);
-  });
-
-  it("collapses consecutive spaces outside quotes", () => {
-    expect(parseWindowsCmdline("node.exe   gateway   run")).toEqual(["node.exe", "gateway", "run"]);
   });
 });
 

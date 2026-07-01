@@ -17,7 +17,6 @@ import {
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
 import {
-  isToolAllowedByPolicies,
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
   resolveInheritedToolPolicyForSession,
@@ -35,6 +34,7 @@ import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "../../agents/subagent-capabilities.js";
+import { isToolAllowedByPolicies } from "../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
 import {
   resolveConversationBindingRecord,
@@ -394,7 +394,7 @@ const resolveSessionStoreLookup = (
   if (!sessionKey) {
     return {};
   }
-  const agentId = resolveSessionAgentId({ sessionKey, config: cfg, agentId: ctx.AgentId });
+  const agentId = resolveSessionAgentId({ sessionKey, config: cfg, fallbackAgentId: ctx.AgentId });
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   try {
     const store = loadSessionStore(storePath);
@@ -557,6 +557,14 @@ function resolveChannelModelCandidate(params: {
     groupChannel: params.entry?.groupChannel ?? params.ctx.GroupChannel,
     groupSubject: params.entry?.subject ?? params.ctx.GroupSubject,
     parentSessionKey: params.parentSessionKey,
+    directUserIds: [
+      params.entry?.origin?.nativeDirectUserId,
+      params.entry?.origin?.from,
+      params.entry?.origin?.to,
+      params.ctx.OriginatingTo,
+      params.ctx.From,
+      params.ctx.SenderId,
+    ],
   });
   if (!channelModelOverride) {
     return undefined;
@@ -1267,7 +1275,7 @@ export async function dispatchReplyFromConfig(
   const sessionAgentId = resolveSessionAgentId({
     sessionKey: acpDispatchSessionKey,
     config: cfg,
-    agentId: ctx.AgentId,
+    fallbackAgentId: ctx.AgentId,
   });
   const sessionAgentCfg = resolveAgentConfig(cfg, sessionAgentId);
   const verboseProgress = createShouldEmitVerboseProgress({

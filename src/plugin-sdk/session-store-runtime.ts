@@ -1,6 +1,8 @@
 // Narrow session-store helpers for channel hot paths.
 
+import { resolveStorePath as resolveSessionStorePath } from "../config/sessions/paths.js";
 import {
+  cleanupSessionLifecycleArtifacts as cleanupAccessorSessionLifecycleArtifacts,
   listSessionEntries as listAccessorSessionEntries,
   loadSessionEntry,
   patchSessionEntry as patchAccessorSessionEntry,
@@ -58,6 +60,23 @@ type UpdateSessionStoreEntryParams = {
 
 type UpsertSessionEntryParams = SessionStoreReadParams & {
   entry: SessionEntry;
+};
+
+type SessionLifecycleArtifactsCleanupParams = {
+  agentId?: string;
+  archiveRemovedEntryTranscripts?: boolean;
+  env?: NodeJS.ProcessEnv;
+  orphanTranscriptMinAgeMs: number;
+  sessionStore?: string;
+  sessionKeySegmentPrefix: string;
+  storePath?: string;
+  transcriptContentMarker: string;
+  nowMs?: number;
+};
+
+type SessionLifecycleArtifactsCleanupResult = {
+  archivedTranscriptArtifacts: number;
+  removedEntries: number;
 };
 
 function toSessionAccessScope(params: SessionStoreReadParams): SessionAccessScope {
@@ -141,6 +160,26 @@ export async function upsertSessionEntry(params: UpsertSessionEntryParams): Prom
   await replaceSessionEntry(toSessionAccessScope(params), params.entry);
 }
 
+/** Cleans stale lifecycle-owned session entries and orphan transcripts for one agent store. */
+export async function cleanupSessionLifecycleArtifacts(
+  params: SessionLifecycleArtifactsCleanupParams,
+): Promise<SessionLifecycleArtifactsCleanupResult> {
+  const storePath =
+    params.storePath ??
+    resolveSessionStorePath(params.sessionStore, {
+      agentId: params.agentId,
+      env: params.env,
+    });
+  return await cleanupAccessorSessionLifecycleArtifacts({
+    storePath,
+    archiveRemovedEntryTranscripts: params.archiveRemovedEntryTranscripts,
+    sessionKeySegmentPrefix: params.sessionKeySegmentPrefix,
+    transcriptContentMarker: params.transcriptContentMarker,
+    orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
+    nowMs: params.nowMs,
+  });
+}
+
 export { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
 export { resolveSessionTranscriptPathInDir, resolveStorePath } from "../config/sessions/paths.js";
 /**
@@ -157,7 +196,11 @@ export { resolveSessionFilePath } from "../config/sessions/paths.js";
  * persisting transcript file paths directly.
  */
 export { resolveAndPersistSessionFile } from "../config/sessions/session-file.js";
-export { readLatestAssistantTextFromSessionTranscript } from "../config/sessions/transcript.js";
+export {
+  readLatestAssistantTextFromSessionTranscript,
+  readRecentUserAssistantTextForSession,
+  type SessionRecentConversationText,
+} from "../config/sessions/transcript.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";
 export { resolveGroupSessionKey } from "../config/sessions/group.js";
 export { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";

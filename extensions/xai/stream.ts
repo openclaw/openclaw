@@ -53,6 +53,26 @@ function supportsReasoningControls(model: { compat?: unknown; reasoning?: unknow
   return model.reasoning === true && compat?.supportsReasoningEffort !== false;
 }
 
+const XAI_REASONING_ENCRYPTED_CONTENT_INCLUDE = "reasoning.encrypted_content";
+
+/** xAI-only: request encrypted reasoning for every reasoning-capable model, even when effort is unsupported. */
+function ensureXaiResponsesEncryptedReasoningInclude(
+  payloadObj: Record<string, unknown>,
+  model: { api?: unknown; provider?: unknown; reasoning?: unknown },
+): void {
+  if (model.provider !== "xai" || model.api !== "openai-responses" || model.reasoning !== true) {
+    return;
+  }
+  const existing = payloadObj.include;
+  const include = Array.isArray(existing)
+    ? existing.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  if (!include.includes(XAI_REASONING_ENCRYPTED_CONTENT_INCLUDE)) {
+    include.push(XAI_REASONING_ENCRYPTED_CONTENT_INCLUDE);
+  }
+  payloadObj.include = include;
+}
+
 const TOOL_RESULT_IMAGE_REPLAY_TEXT = "Attached image(s) from tool result:";
 
 type ReplayableInputImagePart =
@@ -181,10 +201,13 @@ export function createXaiToolPayloadCompatibilityWrapper(
           }
           normalizeXaiResponsesToolResultPayload(payloadObj, model);
           if (!supportsReasoningControls(model)) {
+            // Only grok-4.3* advertises configurable effort; drop effort fields elsewhere.
             delete payloadObj.reasoning;
             delete payloadObj.reasoningEffort;
             delete payloadObj.reasoning_effort;
           }
+          // All reasoning xAI models should still request + later replay encrypted_content.
+          ensureXaiResponsesEncryptedReasoningInclude(payloadObj, model);
         }
         return originalOnPayload?.(payload, model);
       },

@@ -49,6 +49,56 @@ DMG_APP_POS="${DMG_APP_POS:-125 160}"
 DMG_APPS_POS="${DMG_APPS_POS:-375 160}"
 DMG_EXTRA_SECTORS="${DMG_EXTRA_SECTORS:-2048}"
 
+require_integer_list() {
+  local name="$1"
+  local raw="$2"
+  local expected_count="$3"
+  local values=()
+  local value
+
+  if [[ "$raw" == *$'\n'* || "$raw" == *$'\r'* ]]; then
+    echo "Error: $name must be a single line of integer values: '$raw'" >&2
+    exit 1
+  fi
+
+  read -r -a values <<< "$raw"
+  if [[ "${#values[@]}" -ne "$expected_count" ]]; then
+    echo "Error: $name must contain $expected_count integer value(s): '$raw'" >&2
+    exit 1
+  fi
+
+  for value in "${values[@]}"; do
+    if [[ ! "$value" =~ ^-?[0-9]+$ ]]; then
+      echo "Error: $name must contain only integer values: '$raw'" >&2
+      exit 1
+    fi
+  done
+}
+
+require_positive_integer() {
+  local name="$1"
+  local raw="$2"
+  if [[ ! "$raw" =~ ^[1-9][0-9]*$ ]]; then
+    echo "Error: $name must be a positive integer: '$raw'" >&2
+    exit 1
+  fi
+}
+
+require_nonnegative_integer() {
+  local name="$1"
+  local raw="$2"
+  if [[ ! "$raw" =~ ^(0|[1-9][0-9]*)$ || "${#raw}" -gt 9 ]]; then
+    echo "Error: $name must be a finite non-negative integer: '$raw'" >&2
+    exit 1
+  fi
+}
+
+require_integer_list DMG_WINDOW_BOUNDS "$DMG_WINDOW_BOUNDS" 4
+require_integer_list DMG_APP_POS "$DMG_APP_POS" 2
+require_integer_list DMG_APPS_POS "$DMG_APPS_POS" 2
+require_positive_integer DMG_ICON_SIZE "$DMG_ICON_SIZE"
+require_nonnegative_integer DMG_EXTRA_SECTORS "$DMG_EXTRA_SECTORS"
+
 to_applescript_list4() {
   local raw="$1"
   echo "$raw" | awk '{ printf "%s, %s, %s, %s", $1, $2, $3, $4 }'

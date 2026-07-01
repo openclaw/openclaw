@@ -5,10 +5,15 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 
 const tempDirs: string[] = [];
 const harnessPath = path.resolve("test/scripts/fixtures/secret-provider-integrations-harness.mjs");
 const proofScriptPath = path.resolve("scripts/e2e/secret-provider-integrations.mjs");
+
+function expectedTaskkillPath(): string {
+  return resolveWindowsTaskkillPath();
+}
 
 function makeTempDir(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-secret-provider-proof-"));
@@ -288,6 +293,30 @@ describe("secret provider integration proof harness", () => {
         delete process.env.OPENCLAW_SECRET_PROOF_OUTPUT_BYTES;
       } else {
         process.env.OPENCLAW_SECRET_PROOF_OUTPUT_BYTES = previousLimit;
+      }
+    }
+  });
+
+  it("clamps oversized command timeout env values before scheduling timers", async () => {
+    const previousTimeout = process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS;
+    process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS = String(Number.MAX_SAFE_INTEGER);
+    try {
+      const proof = await import(
+        `${pathToFileURL(proofScriptPath).href}?case=command-timeout-clamp-${Date.now()}`
+      );
+
+      await expect(
+        proof.runCommand(process.execPath, [
+          "--input-type=module",
+          "--eval",
+          "setTimeout(() => process.exit(0), 25);",
+        ]),
+      ).resolves.toMatchObject({ code: 0 });
+    } finally {
+      if (previousTimeout === undefined) {
+        delete process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS;
+      } else {
+        process.env.OPENCLAW_SECRET_PROOF_COMMAND_MS = previousTimeout;
       }
     }
   });
@@ -585,17 +614,27 @@ describe("secret provider integration proof harness", () => {
       platform: "win32",
       runTaskkill,
     });
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
-      stdio: "ignore",
-    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
 
     proof.terminateProcessTree(child, "SIGKILL", {
       platform: "win32",
       runTaskkill,
     });
-    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
-      stdio: "ignore",
-    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
     expect(child.kill).not.toHaveBeenCalled();
   });
 
@@ -617,12 +656,22 @@ describe("secret provider integration proof harness", () => {
       runTaskkill,
     });
 
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
-      stdio: "ignore",
-    });
-    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
-      stdio: "ignore",
-    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
     expect(child.kill).not.toHaveBeenCalled();
   });
 
@@ -640,17 +689,27 @@ describe("secret provider integration proof harness", () => {
       platform: "win32",
       runTaskkill,
     });
-    expect(runTaskkill).toHaveBeenNthCalledWith(1, "taskkill", ["/PID", "12345", "/T"], {
-      stdio: "ignore",
-    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
 
     proof.signalPtyProcessTree(child, "SIGKILL", {
       platform: "win32",
       runTaskkill,
     });
-    expect(runTaskkill).toHaveBeenNthCalledWith(2, "taskkill", ["/PID", "12345", "/T", "/F"], {
-      stdio: "ignore",
-    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
     expect(child.kill).not.toHaveBeenCalled();
   });
 

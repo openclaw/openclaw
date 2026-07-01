@@ -1031,6 +1031,37 @@ describe("sendMessageTelegram", () => {
     expect(richHtml).toContain("nested<br>line");
   });
 
+  it("materializes bullet and paragraph line breaks in rich Markdown sends", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 60, chat: { id: "123" } });
+
+    await sendMessageTelegram(
+      "123",
+      "Start here:\n\n• Florist - Red Bird\n• Tomberlin - Seventeen",
+      { cfg: { channels: { telegram: { richMessages: true } } }, token: "tok" },
+    );
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.html).toBe(
+      "Start here:<br><br>• Florist - Red Bird<br>• Tomberlin - Seventeen",
+    );
+  });
+
+  it("materializes line breaks on the explicit rich HTML text path", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 61, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", "<b>one</b>\ntwo\n<pre><code>a\nb</code></pre>", {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+      textMode: "html",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    const richHtml = botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.html ?? "";
+    // Inline text breaks materialize; <pre> keeps its newline literal.
+    expect(richHtml).toContain("<b>one</b><br>two");
+    expect(richHtml).toContain("<pre><code>a\nb</code></pre>");
+  });
+
   it("preserves nonempty Markdown when rich rendering is empty", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 45, chat: { id: "123" } });
     const markdown = "[reference]: https://example.com";

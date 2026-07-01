@@ -30,6 +30,14 @@ describe("scripts/bench-sqlite-state", () => {
     expect(result.stderr.trim()).toBe("error: --output requires a value");
   });
 
+  it("rejects short flag output values before seeding benchmark databases", () => {
+    const result = runBench(["--output", "-h"]);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("error: --output requires a value");
+  });
+
   it("rejects invalid profiles without printing a stack trace", () => {
     const result = runBench(["--profile", "huge"]);
 
@@ -38,5 +46,13 @@ describe("scripts/bench-sqlite-state", () => {
     expect(result.stderr.trim()).toBe(
       'error: --profile must be one of smoke, default, large; got "huge"',
     );
+  });
+
+  it("rejects duplicate single-value controls before seeding benchmark databases", () => {
+    const result = runBench(["--profile", "smoke", "--profile", "large"]);
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("error: --profile was provided more than once");
   });
 });

@@ -1315,12 +1315,46 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:sandbox",
       label: "Sandbox",
+      healthChecks: {
+        id: "core/doctor/sandbox/registry-files",
+        description: "Legacy sandbox registry files are represented in SQLite registry storage.",
+        async detect() {
+          const {
+            detectLegacySandboxRegistryFileIssues,
+            legacySandboxRegistryInspectionToHealthFinding,
+          } = await import("../commands/doctor-sandbox.js");
+          return (await detectLegacySandboxRegistryFileIssues()).map(
+            legacySandboxRegistryInspectionToHealthFinding,
+          );
+        },
+        async repair(ctx) {
+          const {
+            detectLegacySandboxRegistryFileIssues,
+            legacySandboxRegistryInspectionToRepairEffect,
+          } = await import("../commands/doctor-sandbox.js");
+          const effects = (await detectLegacySandboxRegistryFileIssues()).map(
+            legacySandboxRegistryInspectionToRepairEffect,
+          );
+          if (ctx.dryRun === true) {
+            return { status: "repaired", changes: [], effects };
+          }
+          return {
+            status: "skipped",
+            reason: "legacy doctor sandbox contribution owns registry migration",
+            changes: [],
+            effects,
+          };
+        },
+      },
       run: runSandboxHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:gateway-services",
       label: "Gateway services",
-      healthCheckIds: ["core/doctor/gateway-services/platform-notes"],
+      healthCheckIds: [
+        "core/doctor/gateway-services/extra",
+        "core/doctor/gateway-services/platform-notes",
+      ],
       run: runGatewayServicesHealth,
     }),
     createDoctorHealthContribution({
@@ -1377,7 +1411,6 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:workspace-status",
       label: "Workspace status",
-      healthCheckIds: ["core/doctor/workspace-status"],
       run: runWorkspaceStatusHealth,
     }),
     createDoctorHealthContribution({

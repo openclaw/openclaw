@@ -4,6 +4,7 @@ import { mkdir, open, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
 
 type Options = {
   altScreen: boolean;
@@ -62,7 +63,7 @@ function readOption(args: string[], name: string): string | undefined {
     return undefined;
   }
   const value = args[idx + 1];
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new CliArgumentError(`${name} requires a value`);
   }
   return value.trim();
@@ -146,7 +147,7 @@ function signalWindowsProcessTree(
   if (signal === "SIGKILL") {
     args.push("/F");
   }
-  const result = runTaskkill("taskkill", args, { stdio: "ignore" });
+  const result = runTaskkill(resolveWindowsTaskkillPath(), args, { stdio: "ignore" });
   return !result?.error && result?.status === 0;
 }
 

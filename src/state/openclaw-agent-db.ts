@@ -10,6 +10,7 @@ import {
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   configureSqliteConnectionPragmas,
   type SqliteWalMaintenance,
@@ -21,7 +22,6 @@ import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js"
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
@@ -51,15 +51,6 @@ export type OpenClawAgentDatabaseOptions = OpenClawStateDatabaseOptions & {
   agentId: string;
 };
 
-/** Shared-state registry row describing an agent database seen by this process. */
-export type OpenClawRegisteredAgentDatabase = {
-  agentId: string;
-  path: string;
-  schemaVersion: number;
-  lastSeenAt: number;
-  sizeBytes: number | null;
-};
-
 type OpenClawAgentMetadataDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_meta">;
 type OpenClawAgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_databases">;
 
@@ -69,11 +60,6 @@ type ExistingSchemaMeta = {
   agentId: string | null;
   role: string | null;
 };
-
-function readSqliteUserVersion(db: DatabaseSync): number {
-  const row = db.prepare("PRAGMA user_version").get() as { user_version?: unknown } | undefined;
-  return Number(row?.user_version ?? 0);
-}
 
 function assertSupportedAgentSchemaVersion(db: DatabaseSync, pathname: string): void {
   const userVersion = readSqliteUserVersion(db);
@@ -235,25 +221,6 @@ function registerAgentDatabase(params: {
     },
     { env: params.env },
   );
-}
-
-/** List agent databases recorded in the shared OpenClaw state registry. */
-export function listOpenClawRegisteredAgentDatabases(
-  options: OpenClawStateDatabaseOptions = {},
-): OpenClawRegisteredAgentDatabase[] {
-  const database = openOpenClawStateDatabase(options);
-  const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    db.selectFrom("agent_databases").selectAll().orderBy("agent_id", "asc").orderBy("path", "asc"),
-  ).rows;
-  return rows.map((row) => ({
-    agentId: normalizeAgentId(row.agent_id),
-    path: row.path,
-    schemaVersion: row.schema_version,
-    lastSeenAt: row.last_seen_at,
-    sizeBytes: row.size_bytes,
-  }));
 }
 
 /** Open or return a cached per-agent database after schema and owner validation. */

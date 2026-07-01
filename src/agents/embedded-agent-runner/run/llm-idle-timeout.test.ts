@@ -142,16 +142,25 @@ describe("resolveLlmIdleTimeoutMs", () => {
     );
   });
 
-  it("disables the default idle timeout for cron when no timeout is configured", () => {
-    expect(resolveLlmIdleTimeoutMs({ trigger: "cron" })).toBe(0);
+  it("uses the default idle timeout for cron cloud model calls when no timeout is configured", () => {
+    expect(resolveLlmIdleTimeoutMs({ trigger: "cron" })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
 
     const cfg = { agents: { defaults: {} } } as OpenClawConfig;
-    expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron" })).toBe(0);
+    expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron" })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
   it("caps agents.defaults.timeoutSeconds for cron before disabling the default idle timeout", () => {
     const cfg = { agents: { defaults: { timeoutSeconds: 300 } } } as OpenClawConfig;
     expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron" })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+  });
+
+  it("keeps cron local provider model calls opted out of the implicit idle watchdog", () => {
+    expect(
+      resolveLlmIdleTimeoutMs({
+        trigger: "cron",
+        model: { baseUrl: "http://127.0.0.1:11434" },
+      }),
+    ).toBe(0);
   });
 
   it.each([

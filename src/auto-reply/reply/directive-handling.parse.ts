@@ -1,4 +1,5 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Parses inline reply directives into typed execution and routing options.
 import type { ExecAsk, ExecSecurity, ExecTarget } from "../../infra/exec-approvals.js";
 import { extractModelDirective } from "../model.js";
@@ -174,10 +175,20 @@ export function parseInlineDirectives(
     hasDirective: hasQueueDirective,
     hasOptions: hasQueueOptions,
   } = extractQueueDirective(modelCleaned);
-
+  const hasAnyDirective =
+    hasThinkDirective ||
+    hasVerboseDirective ||
+    hasTraceDirective ||
+    hasFastDirective ||
+    hasReasoningDirective ||
+    hasElevatedDirective ||
+    hasExecDirective ||
+    hasStatusDirective ||
+    hasModelDirective ||
+    hasQueueDirective;
   // Later directives see text cleaned by earlier directives; preserve that ordering.
   return {
-    cleaned: queueCleaned,
+    cleaned: hasAnyDirective ? queueCleaned : body.trim(),
     hasThinkDirective,
     thinkLevel,
     rawThinkLevel,

@@ -20,11 +20,6 @@ export {
   resolveVisibleSessionReference,
   shouldResolveSessionIdInput,
 } from "./sessions-resolution.js";
-export {
-  extractAssistantText,
-  sanitizeTextContent,
-  stripToolMessages,
-} from "./chat-history-text.js";
 import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";

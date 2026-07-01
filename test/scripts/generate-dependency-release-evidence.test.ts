@@ -92,14 +92,34 @@ describe("generate-dependency-release-evidence", () => {
   });
 
   it("rejects missing dependency evidence CLI option values", () => {
+    const requiredArgs = ["--release-ref", "v2026.5.13", "--npm-dist-tag", "latest"];
     expect(() =>
       parseArgs(["--output-dir", "--release-ref", "v2026.5.13", "--npm-dist-tag", "latest"]),
     ).toThrow("Expected --output-dir <value>.");
+    expect(() => parseArgs(["--output-dir", "-h", ...requiredArgs])).toThrow(
+      "Expected --output-dir <value>.",
+    );
     expect(() =>
       parseArgs(["--output-dir", "evidence", "--release-ref", "--npm-dist-tag", "latest"]),
     ).toThrow("Expected --release-ref <value>.");
     expect(() =>
+      parseArgs(["--output-dir", "evidence", "--release-ref", "-h", "--npm-dist-tag", "latest"]),
+    ).toThrow("Expected --release-ref <value>.");
+    expect(() =>
+      parseArgs([
+        "--output-dir",
+        "evidence",
+        "--release-ref",
+        "v2026.5.13",
+        "--npm-dist-tag",
+        "-h",
+      ]),
+    ).toThrow("Expected --npm-dist-tag <value>.");
+    expect(() =>
       parseArgs(["--output-dir", "evidence", "--release-ref", "v2026.5.13", "--base-ref"]),
+    ).toThrow("Expected --base-ref <value>.");
+    expect(() =>
+      parseArgs(["--output-dir", "evidence", ...requiredArgs, "--base-ref", "-h"]),
     ).toThrow("Expected --base-ref <value>.");
     expect(() =>
       parseArgs([
@@ -114,6 +134,66 @@ describe("generate-dependency-release-evidence", () => {
         "summary.md",
       ]),
     ).toThrow("Expected --github-output <value>.");
+    expect(() =>
+      parseArgs(["--output-dir", "evidence", ...requiredArgs, "--github-output", "-h"]),
+    ).toThrow("Expected --github-output <value>.");
+  });
+
+  it("rejects duplicate dependency evidence CLI options", () => {
+    const requiredArgs = ["--release-ref", "v2026.5.13", "--npm-dist-tag", "latest"];
+    const artifactArgs = ["--output-dir", "evidence", ...requiredArgs];
+    const duplicateCases = [
+      ["--root", ["--root", "repo-a", "--root", "repo-b", ...artifactArgs]],
+      [
+        "--output-dir",
+        ["--output-dir", "evidence-a", "--output-dir", "evidence-b", ...requiredArgs],
+      ],
+      [
+        "--release-ref",
+        [
+          "--output-dir",
+          "evidence",
+          "--release-ref",
+          "v2026.5.13",
+          "--release-ref",
+          "v2026.5.14",
+          "--npm-dist-tag",
+          "latest",
+        ],
+      ],
+      [
+        "--npm-dist-tag",
+        [
+          "--output-dir",
+          "evidence",
+          "--release-ref",
+          "v2026.5.13",
+          "--npm-dist-tag",
+          "latest",
+          "--npm-dist-tag",
+          "beta",
+        ],
+      ],
+      ["--base-ref", [...artifactArgs, "--base-ref", "origin/main", "--base-ref", "HEAD~1"]],
+      [
+        "--github-output",
+        [...artifactArgs, "--github-output", "first.out", "--github-output", "second.out"],
+      ],
+      [
+        "--github-step-summary",
+        [
+          ...artifactArgs,
+          "--github-step-summary",
+          "first.md",
+          "--github-step-summary",
+          "second.md",
+        ],
+      ],
+    ] satisfies Array<[string, string[]]>;
+
+    for (const [flag, args] of duplicateCases) {
+      expect(() => parseArgs(args)).toThrow(`${flag} was provided more than once.`);
+    }
   });
 
   it("prints CLI help without generating evidence", () => {

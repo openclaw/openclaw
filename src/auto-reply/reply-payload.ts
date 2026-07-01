@@ -81,7 +81,7 @@ export type ReplyDeliveryContext = {
   replyToMode: ReplyToMode;
 };
 
-export const REPLY_MEDIA_FAILURE_WARNING = "⚠️ Media failed.";
+const REPLY_MEDIA_FAILURE_WARNING = "⚠️ Media failed.";
 
 /** Appends the standard media failure warning without duplicating it. */
 export function appendReplyMediaFailureWarning(text: string | undefined): string {

@@ -118,6 +118,17 @@ describe("agent command registration", () => {
     expect(deps).toBeUndefined();
   });
 
+  it("forwards a message file to the agent command", async () => {
+    await runCli(["agent", "--message-file", "task.md", "--agent", "ops"]);
+
+    const [options, callRuntime, deps] = commandCall(agentCliCommandMock);
+    expect((options as { message?: string }).message).toBeUndefined();
+    expect((options as { messageFile?: string }).messageFile).toBe("task.md");
+    expect((options as { agent?: string }).agent).toBe("ops");
+    expect(callRuntime).toBe(runtime);
+    expect(deps).toBeUndefined();
+  });
+
   it("accepts a model override for one-shot agent runs", async () => {
     await runCli(["agent", "--message", "hi", "--agent", "ops", "--model", "openai/gpt-5.4"]);
 
