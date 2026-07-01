@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { generatePkceVerifierChallenge, toFormUrlEncoded } from "openclaw/plugin-sdk/provider-auth";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
@@ -31,6 +32,7 @@ const MINIMAX_OAUTH_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:user_code";
 const MINIMAX_RELATIVE_EXPIRY_SECONDS_THRESHOLD = 1_000_000_000;
 const MINIMAX_ABSOLUTE_EXPIRY_MS_THRESHOLD = 1_000_000_000_000;
 const MINIMAX_OAUTH_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const MINIMAX_OAUTH_JSON_MAX_BYTES = 256 * 1024; // 256 KiB — OAuth authorization responses are tiny
 
 function getOAuthEndpoints(region: MiniMaxRegion) {
   const config = MINIMAX_OAUTH_CONFIG[region];
@@ -121,7 +123,13 @@ async function requestOAuthCode(params: {
       throw new Error(`MiniMax OAuth authorization failed: ${text || response.statusText}`);
     }
 
-    const payload = (await response.json()) as MiniMaxOAuthAuthorization & { error?: string };
+    const bytes = await readResponseWithLimit(response, MINIMAX_OAUTH_JSON_MAX_BYTES, {
+      onOverflow: ({ size, maxBytes }) =>
+        new Error(`MiniMax OAuth authorization response exceeds ${maxBytes} bytes (got ${size})`),
+    });
+    const payload = JSON.parse(new TextDecoder().decode(bytes)) as MiniMaxOAuthAuthorization & {
+      error?: string;
+    };
     if (!payload.user_code || !payload.verification_uri) {
       throw new Error(
         payload.error ??

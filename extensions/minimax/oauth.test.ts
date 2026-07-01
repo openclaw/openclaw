@@ -399,4 +399,24 @@ describe("loginMiniMaxPortalOAuth", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     await expect(result).resolves.toMatchObject({ access: "access", refresh: "refresh" });
   });
+
+  it("fails closed when the OAuth authorization response exceeds the size cap", async () => {
+    // 300 KiB body — well above the 256 KiB cap.
+    const fetchMock = vi.fn(async () => {
+      return new Response('{"a":"' + "x".repeat(300 * 1024) + '"}', {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const error = await loginMiniMaxPortalOAuth({
+      openUrl: vi.fn(async () => undefined),
+      note: vi.fn(async () => undefined),
+      progress: { update: vi.fn(), stop: vi.fn() },
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("exceeds");
+  });
 });
