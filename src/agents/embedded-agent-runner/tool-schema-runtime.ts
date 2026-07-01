@@ -2,6 +2,7 @@
  * Normalizes and logs provider-specific tool schemas at runtime.
  */
 import type { TSchema } from "typebox";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
@@ -14,6 +15,8 @@ import type { AgentTool } from "../runtime/index.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { log } from "./logger.js";
 
+const MAX_LOGGED_PROVIDER_TOOL_SCHEMA_VIOLATIONS = 12;
+
 type ProviderToolSchemaParams<TSchemaType extends TSchema = TSchema, TResult = unknown> = {
   tools: AgentTool<TSchemaType, TResult>[];
   provider: string;
@@ -25,6 +28,13 @@ type ProviderToolSchemaParams<TSchemaType extends TSchema = TSchema, TResult = u
   model?: ProviderRuntimeModel;
   runtimeHandle?: ProviderRuntimePluginHandle;
   allowRuntimePluginLoad?: boolean;
+};
+
+type ProviderToolSchemaLogDiagnostic = {
+  toolName: string;
+  toolIndex?: number;
+  violations: string[];
+  violationCount: number;
 };
 
 function buildProviderToolSchemaContext<TSchemaType extends TSchema = TSchema, TResult = unknown>(
@@ -71,6 +81,7 @@ export function normalizeProviderToolSchemas<
  */
 export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParams): void {
   const provider = params.provider.trim();
+  const providerLabel = sanitizeForLog(provider);
   const diagnostics = inspectProviderToolSchemasWithPlugin({
     provider,
     config: params.config,
@@ -87,29 +98,52 @@ export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParam
     return;
   }
 
-  const summary = summarizeProviderToolSchemaDiagnostics(diagnostics);
+  const sanitizedDiagnostics = diagnostics.map(sanitizeProviderToolSchemaDiagnostic);
+  const summary = summarizeProviderToolSchemaDiagnostics(sanitizedDiagnostics);
   log.warn(
-    `provider tool schema diagnostics: ${diagnostics.length} ${diagnostics.length === 1 ? "tool" : "tools"} for ${params.provider}: ${summary}`,
+    `provider tool schema diagnostics: ${sanitizedDiagnostics.length} ${sanitizedDiagnostics.length === 1 ? "tool" : "tools"} for ${providerLabel}: ${summary}`,
     {
-      provider: params.provider,
+      provider: providerLabel,
       toolCount: params.tools.length,
-      diagnosticCount: diagnostics.length,
-      tools: params.tools.map((tool, index) => `${index}:${tool.name}`),
-      diagnostics: diagnostics.map((diagnostic) => ({
+      diagnosticCount: sanitizedDiagnostics.length,
+      tools: params.tools.map(formatProviderToolLogLabel),
+      diagnostics: sanitizedDiagnostics.map((diagnostic) => ({
         index: diagnostic.toolIndex,
         tool: diagnostic.toolName,
-        violations: diagnostic.violations.slice(0, 12),
-        violationCount: diagnostic.violations.length,
+        violations: diagnostic.violations,
+        violationCount: diagnostic.violationCount,
       })),
     },
   );
 }
 
+function sanitizeProviderToolSchemaDiagnostic(
+  diagnostic: ProviderToolSchemaDiagnostic,
+): ProviderToolSchemaLogDiagnostic {
+  return {
+    toolIndex: diagnostic.toolIndex,
+    toolName: sanitizeForLog(diagnostic.toolName),
+    violations: diagnostic.violations
+      .slice(0, MAX_LOGGED_PROVIDER_TOOL_SCHEMA_VIOLATIONS)
+      .map((violation) => sanitizeForLog(violation)),
+    violationCount: diagnostic.violations.length,
+  };
+}
+
+function formatProviderToolLogLabel(tool: AnyAgentTool, index: number): string {
+  try {
+    const name = tool.name;
+    return `${index}:${typeof name === "string" && name ? sanitizeForLog(name) : `tool[${index}]`}`;
+  } catch {
+    return `${index}:tool[${index}]`;
+  }
+}
+
 function summarizeProviderToolSchemaDiagnostics(
-  diagnostics: readonly ProviderToolSchemaDiagnostic[],
+  diagnostics: readonly ProviderToolSchemaLogDiagnostic[],
 ) {
   const visible = diagnostics.slice(0, 6).map((diagnostic) => {
-    const violationCount = diagnostic.violations.length;
+    const violationCount = diagnostic.violationCount;
     return `${diagnostic.toolName || "unknown"} (${violationCount} ${violationCount === 1 ? "violation" : "violations"})`;
   });
   const remaining = diagnostics.length - visible.length;
