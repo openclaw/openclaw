@@ -21,7 +21,7 @@ import {
 } from "./cdp-proxy-bypass.js";
 import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-timeouts.js";
 
-const CDP_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+export const CDP_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
 import { withAllowedHostname } from "./ssrf-policy-helpers.js";
