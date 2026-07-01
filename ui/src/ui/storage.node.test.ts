@@ -91,6 +91,173 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(loadSettings().gatewayUrl).toBe(expectedGatewayUrl("/apps/openclaw"));
   });
 
+  it("does not let a legacy sibling base-path setting override the current page gateway", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "example.com",
+      pathname: "/gateway-a/chat",
+    });
+    setControlUiBasePath("/gateway-a");
+    const gatewayAUrl = expectedGatewayUrl("/gateway-a");
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: gatewayAUrl,
+        theme: "dash",
+        themeMode: "dark",
+        navCollapsed: true,
+        sessionKey: "agent:gateway-a:main",
+        lastActiveSessionKey: "agent:gateway-a:main",
+      }),
+    );
+
+    setTestLocation({
+      protocol: "https:",
+      host: "example.com",
+      pathname: "/gateway-b/chat",
+    });
+    setControlUiBasePath("/gateway-b");
+
+    const settings = loadSettings();
+    expect(settings.gatewayUrl).toBe(expectedGatewayUrl("/gateway-b"));
+    expect(settings.theme).toBe("claw");
+    expect(settings.themeMode).toBe("system");
+    expect(settings.sessionKey).toBe("main");
+    expect(localStorage.getItem("openclaw.control.settings.v1")).toBeNull();
+  });
+
+  it("keeps a legacy cross-origin custom gateway URL", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "example.com",
+      pathname: "/gateway-b/chat",
+    });
+    setControlUiBasePath("/gateway-b");
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "wss://custom-gateway.example/control",
+        theme: "dash",
+      }),
+    );
+
+    const settings = loadSettings();
+    expect(settings.gatewayUrl).toBe("wss://custom-gateway.example/control");
+    expect(settings.theme).toBe("dash");
+  });
+
+  it("keeps a legacy same-origin relative custom gateway URL", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "example.com",
+      pathname: "/openclaw/chat",
+    });
+    setControlUiBasePath("/openclaw");
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "/ws",
+        theme: "dash",
+        themeMode: "dark",
+        sessionKey: "custom-ws-session",
+        lastActiveSessionKey: "custom-ws-session",
+      }),
+    );
+
+    const settings = loadSettings();
+    expect(settings.gatewayUrl).toBe("/ws");
+    expect(settings.theme).toBe("dash");
+    expect(settings.themeMode).toBe("dark");
+    expect(settings.sessionKey).toBe("custom-ws-session");
+    const pageScopedKey = "openclaw.control.settings.v1:wss://example.com/openclaw";
+    expect(JSON.parse(localStorage.getItem(pageScopedKey) ?? "{}")).toMatchObject({
+      gatewayUrl: "/ws",
+      theme: "dash",
+      themeMode: "dark",
+    });
+    expect(localStorage.getItem("openclaw.control.settings.v1")).toBeNull();
+  });
+
+  it("keeps a legacy same-origin absolute WebSocket endpoint URL", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "example.com",
+      pathname: "/openclaw/chat",
+    });
+    setControlUiBasePath("/openclaw");
+    localStorage.setItem(
+      "openclaw.control.settings.v1",
+      JSON.stringify({
+        gatewayUrl: "wss://example.com/ws",
+        theme: "dash",
+      }),
+    );
+
+    const settings = loadSettings();
+    expect(settings.gatewayUrl).toBe("wss://example.com/ws");
+    expect(settings.theme).toBe("dash");
+  });
+
+  it("does not keep legacy sibling base-path WebSocket endpoint URLs", () => {
+    for (const legacyGatewayUrl of ["/gateway-a/ws", "wss://example.com/gateway-a/ws"]) {
+      localStorage.clear();
+      sessionStorage.clear();
+      setTestLocation({
+        protocol: "https:",
+        host: "example.com",
+        pathname: "/gateway-b/chat",
+      });
+      setControlUiBasePath("/gateway-b");
+      localStorage.setItem(
+        "openclaw.control.settings.v1",
+        JSON.stringify({
+          gatewayUrl: legacyGatewayUrl,
+          theme: "dash",
+          sessionKey: "agent:gateway-a:main",
+          lastActiveSessionKey: "agent:gateway-a:main",
+        }),
+      );
+
+      const settings = loadSettings();
+      expect(settings.gatewayUrl).toBe(expectedGatewayUrl("/gateway-b"));
+      expect(settings.theme).toBe("claw");
+      expect(settings.sessionKey).toBe("main");
+      expect(localStorage.getItem("openclaw.control.settings.v1")).toBeNull();
+    }
+  });
+
+  it("persists a same-origin custom gateway URL under the current page scope", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "example.com",
+      pathname: "/openclaw/chat",
+    });
+    setControlUiBasePath("/openclaw");
+    saveSettings({
+      gatewayUrl: "/ws",
+      token: "",
+      sessionKey: "custom-ws-session",
+      lastActiveSessionKey: "custom-ws-session",
+      theme: "dash",
+      themeMode: "dark",
+      chatShowThinking: true,
+      chatShowToolCalls: true,
+      chatAutoScroll: "near-bottom",
+      splitRatio: 0.6,
+      navCollapsed: false,
+      navWidth: 220,
+      navGroupsCollapsed: {},
+      borderRadius: 50,
+      textScale: 100,
+    });
+
+    const settings = loadSettings();
+    expect(settings.gatewayUrl).toBe("/ws");
+    expect(settings.theme).toBe("dash");
+    expect(settings.sessionKey).toBe("custom-ws-session");
+    expect(localStorage.getItem("openclaw.control.settings.v1")).toBeNull();
+  });
+
   it("skips node sessionStorage accessors that warn without a storage file", () => {
     vi.unstubAllGlobals();
     vi.stubGlobal("localStorage", createStorageMock());
@@ -234,8 +401,8 @@ describe("loadSettings default gateway URL derivation", () => {
     });
 
     const settings = loadSettings();
-    expect(settings.gatewayUrl).toBe(gwUrl);
-    expect(settings.token).toBe("gateway-a-token");
+    expect(settings.gatewayUrl).toBe(otherUrl);
+    expect(settings.token).toBe("");
   });
 
   it("does not persist gateway tokens when saving settings", () => {

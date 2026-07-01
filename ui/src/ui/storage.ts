@@ -23,6 +23,8 @@ type PersistedUiSettings = Omit<UiSettings, "token" | "sessionKey" | "lastActive
   sessionsByGateway?: Record<string, ScopedSessionSelection>;
 };
 
+type LoadedSettingsSource = "scoped" | "default" | "legacy";
+
 import { isSupportedLocale } from "../i18n/index.ts";
 import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
 import { parseImportedCustomTheme, type ImportedCustomTheme } from "./custom-theme.ts";
@@ -135,23 +137,67 @@ function getSessionStorage(): Storage | null {
   return getSafeSessionStorage();
 }
 
-function normalizeGatewayTokenScope(gatewayUrl: string): string {
-  const trimmed = normalizeOptionalString(gatewayUrl) ?? "";
-  if (!trimmed) {
-    return "default";
-  }
+function parseGatewayScopeParts(
+  gatewayUrl: string,
+): { scope: string; origin: string; host: string; pathname: string } | null {
   try {
     const base =
       typeof location !== "undefined"
         ? `${location.protocol}//${location.host}${location.pathname || "/"}`
         : undefined;
-    const parsed = base ? new URL(trimmed, base) : new URL(trimmed);
+    const parsed = base ? new URL(gatewayUrl, base) : new URL(gatewayUrl);
     const pathname =
       parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/+$/, "") || parsed.pathname;
-    return `${parsed.protocol}//${parsed.host}${pathname}`;
+    const origin = `${parsed.protocol}//${parsed.host}`;
+    return { scope: `${origin}${pathname}`, origin, host: parsed.host, pathname };
   } catch {
-    return trimmed;
+    return null;
   }
+}
+
+function normalizeGatewayTokenScope(gatewayUrl: string): string {
+  const trimmed = normalizeOptionalString(gatewayUrl) ?? "";
+  if (!trimmed) {
+    return "default";
+  }
+  return parseGatewayScopeParts(trimmed)?.scope ?? trimmed;
+}
+
+function resolvePersistedGatewayUrl(params: {
+  parsedGatewayUrl: string;
+  pageDerivedUrl: string;
+  defaultUrl: string;
+}): string {
+  if (params.parsedGatewayUrl === params.pageDerivedUrl) {
+    return params.defaultUrl;
+  }
+  return params.parsedGatewayUrl;
+}
+
+function isRootWebSocketEndpointPath(pathname: string): boolean {
+  return pathname.toLowerCase() === "/ws";
+}
+
+function shouldIgnoreLegacySettingsForPage(params: {
+  source: LoadedSettingsSource;
+  parsedGatewayUrl: string;
+  pageDerivedUrl: string;
+}): boolean {
+  if (params.source !== "legacy") {
+    return false;
+  }
+  const parsed = parseGatewayScopeParts(params.parsedGatewayUrl);
+  const page = parseGatewayScopeParts(params.pageDerivedUrl);
+  if (!parsed || !page || !page.pathname || parsed.host !== page.host) {
+    return false;
+  }
+  if (parsed.pathname === page.pathname) {
+    return false;
+  }
+  if (isRootWebSocketEndpointPath(parsed.pathname)) {
+    return false;
+  }
+  return true;
 }
 
 function tokenSessionKeyForGateway(gatewayUrl: string): string {
@@ -259,18 +305,43 @@ export function loadSettings(): UiSettings {
   };
 
   try {
-    // First check for legacy key (no scope), then check for scoped key
+    // Prefer the current scoped record; legacy global settings are a fallback for older installs.
     const scopedKey = settingsKeyForGateway(defaults.gatewayUrl);
-    const raw =
-      storage?.getItem(scopedKey) ??
-      storage?.getItem(SETTINGS_KEY_PREFIX + "default") ??
-      storage?.getItem(LEGACY_SETTINGS_KEY);
-    if (!raw) {
+    const pageScopedKey = settingsKeyForGateway(pageDerivedUrl);
+    const scopedRaw = storage?.getItem(scopedKey);
+    const pageScopedRaw = pageScopedKey === scopedKey ? null : storage?.getItem(pageScopedKey);
+    const defaultRaw = storage?.getItem(SETTINGS_KEY_PREFIX + "default");
+    const legacyRaw = storage?.getItem(LEGACY_SETTINGS_KEY);
+    const loaded =
+      scopedRaw != null
+        ? { raw: scopedRaw, source: "scoped" as const }
+        : pageScopedRaw != null
+          ? { raw: pageScopedRaw, source: "scoped" as const }
+          : defaultRaw != null
+            ? { raw: defaultRaw, source: "default" as const }
+            : legacyRaw != null
+              ? { raw: legacyRaw, source: "legacy" as const }
+              : null;
+    if (!loaded?.raw) {
       return defaults;
     }
-    const parsed = JSON.parse(raw) as PersistedUiSettings;
+    const parsed = JSON.parse(loaded.raw) as PersistedUiSettings;
     const parsedGatewayUrl = normalizeOptionalString(parsed.gatewayUrl) ?? defaults.gatewayUrl;
-    const gatewayUrl = parsedGatewayUrl === pageDerivedUrl ? defaultUrl : parsedGatewayUrl;
+    if (
+      shouldIgnoreLegacySettingsForPage({
+        source: loaded.source,
+        parsedGatewayUrl,
+        pageDerivedUrl,
+      })
+    ) {
+      persistSettings(defaults);
+      return defaults;
+    }
+    const gatewayUrl = resolvePersistedGatewayUrl({
+      parsedGatewayUrl,
+      pageDerivedUrl,
+      defaultUrl,
+    });
     const scopedSessionSelection = resolveScopedSessionSelection(gatewayUrl, parsed, defaults);
     const customTheme = parseImportedCustomTheme((parsed as { customTheme?: unknown }).customTheme);
     const { theme, mode } = parseThemeSelection(
@@ -328,7 +399,7 @@ export function loadSettings(): UiSettings {
       customTheme: customTheme ?? undefined,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
     };
-    if ("token" in parsed) {
+    if (loaded.source === "legacy" || "token" in parsed) {
       persistSettings(settings);
     }
     return settings;
@@ -512,7 +583,12 @@ function persistSettings(next: UiSettings) {
   const serialized = JSON.stringify(persisted);
   try {
     storage?.setItem(scopedKey, serialized);
-    storage?.setItem(LEGACY_SETTINGS_KEY, serialized);
+    const { pageUrl: pageDerivedUrl } = deriveDefaultGatewayUrl();
+    const pageScopedKey = settingsKeyForGateway(pageDerivedUrl);
+    if (pageScopedKey !== scopedKey) {
+      storage?.setItem(pageScopedKey, serialized);
+    }
+    storage?.removeItem(LEGACY_SETTINGS_KEY);
   } catch {
     // best-effort — quota exceeded or security restrictions should not
     // prevent in-memory settings and visual updates from being applied
