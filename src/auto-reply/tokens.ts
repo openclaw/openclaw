@@ -63,8 +63,12 @@ export function isSilentReplyText(
   }
   // Match only token-only replies, including repeated tokens separated by whitespace.
   // This prevents substantive replies ending with NO_REPLY from being suppressed (#19537).
-  // Strip stray edge punctuation first so ".NO_REPLY" and "*NO_REPLY*" are caught (#98166).
-  return getSilentExactRegex(token).test(stripEdgePunct(text));
+  // Try exact match first to preserve custom-token punctuation semantics, then fall back
+  // to edge-punctuation-stripped match so ".NO_REPLY" and "*NO_REPLY*" are caught (#98166).
+  return (
+    getSilentExactRegex(token).test(text) ||
+    getSilentExactRegex(token).test(stripEdgePunct(text))
+  );
 }
 
 type SilentReplyActionEnvelope = { action?: unknown };

@@ -132,6 +132,13 @@ describe("isSilentReplyText", () => {
     // "the sentinel is NO_REPLY, fyi" should remain false
     expect(isSilentReplyText("the sentinel is NO_REPLY, fyi")).toBe(false);
   });
+
+  it("preserves exact custom-token matches with punctuation-edged tokens", () => {
+    // Custom tokens whose first/last character is punctuation must still match
+    expect(isSilentReplyText("*SILENT*", "*SILENT*")).toBe(true);
+    expect(isSilentReplyText("#QUIET#", "#QUIET#")).toBe(true);
+    expect(isSilentReplyText("^^MUTE^^", "^^MUTE^^")).toBe(true);
+  });
 });
 
 describe("isSilentReplyPayloadText", () => {
