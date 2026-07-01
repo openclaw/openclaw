@@ -932,6 +932,14 @@ export function createFollowupRunner(params: {
             // summary tracker so both runners deliver identical durable summaries.
             const deliverFollowupToolSummary = (payload: ReplyPayload) =>
               enqueueProgressDelivery(async () => {
+                // Match direct dispatch: suppressToolErrors hides tool-error
+                // summaries from channel progress, while final failure handling remains intact.
+                if (
+                  payload.isError === true &&
+                  runtimeConfig.messages?.suppressToolErrors === true
+                ) {
+                  return;
+                }
                 if (
                   run.sourceReplyDeliveryMode === "message_tool_only" &&
                   !shouldEmitToolResultProgress()

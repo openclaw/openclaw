@@ -2353,6 +2353,88 @@ describe("createFollowupRunner progress forwarding", () => {
     );
   });
 
+  it("suppresses queued follow-up tool error progress in full verbose when suppressToolErrors is enabled", async () => {
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "acct-1",
+      originatingThreadId: "thread-1",
+      run: {
+        config: {
+          messages: {
+            suppressToolErrors: true,
+          },
+        },
+        messageProvider: "discord",
+        verboseLevel: "full",
+      },
+    });
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onToolResult?: (payload: { text: string; isError?: boolean }) => Promise<void>;
+      }) => {
+        await args.onToolResult?.({ text: "warning: command failed", isError: true });
+        return { payloads: [{ text: "handled failure" }], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(queued);
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(1);
+    expect(requireMockCallArg(routeReplyMock, 0).payload).toEqual(
+      expect.objectContaining({ text: "handled failure" }),
+    );
+    expect(requireMockCallArg(routeReplyMock, 0).replyKind).toBe("final");
+  });
+
+  it("keeps queued full-verbose tool error progress visible without suppressToolErrors", async () => {
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "acct-1",
+      originatingThreadId: "thread-1",
+      run: {
+        messageProvider: "discord",
+        verboseLevel: "full",
+      },
+    });
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onToolResult?: (payload: { text: string; isError?: boolean }) => Promise<void>;
+      }) => {
+        await args.onToolResult?.({ text: "warning: command failed", isError: true });
+        return { payloads: [{ text: "handled failure" }], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(queued);
+
+    expect(routeReplyMock).toHaveBeenCalledTimes(2);
+    expect(requireMockCallArg(routeReplyMock, 0).payload).toEqual(
+      expect.objectContaining({ text: "warning: command failed", isError: true }),
+    );
+    expect(requireMockCallArg(routeReplyMock, 0).replyKind).toBe("tool");
+    expect(requireMockCallArg(routeReplyMock, 0).mirror).toBe(false);
+    expect(requireMockCallArg(routeReplyMock, 1).payload).toEqual(
+      expect.objectContaining({ text: "handled failure" }),
+    );
+    expect(requireMockCallArg(routeReplyMock, 1).replyKind).toBe("final");
+  });
+
   it("drains fire-and-forget queued tool progress before final delivery", async () => {
     const queued = createQueuedRun({
       originatingChannel: "discord",
