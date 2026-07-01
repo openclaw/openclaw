@@ -1,5 +1,7 @@
 // Google tests cover embedding batch bounded JSON response reads.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { createServer, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runGeminiEmbeddingBatches } from "./embedding-batch.js";
 import type { GeminiEmbeddingClient } from "./embedding-provider.js";
 
@@ -68,6 +70,17 @@ function singleRequest(): GeminiBatchRequest[] {
       },
     },
   ];
+}
+
+function makeRequests(count: number): GeminiBatchRequest[] {
+  return Array.from({ length: count }, (_, index) => ({
+    custom_id: `r${index}`,
+    request: {
+      model: "models/text-embedding-004",
+      content: { parts: [{ text: `hello ${index}` }] },
+      taskType: "RETRIEVAL_DOCUMENT",
+    },
+  }));
 }
 
 function makeOversizedResponse(): {
@@ -242,5 +255,166 @@ describe("Google embedding-batch bounded JSON reads", () => {
     });
 
     expect(result.get("r0")).toEqual([1, 0, 0]);
+  });
+});
+
+describe("Google embedding-batch file-content streaming (real HTTP server)", () => {
+  let server: ReturnType<typeof createServer>;
+  let port: number;
+  let writeDownload: (res: ServerResponse) => void;
+
+  function writeJsonl(res: ServerResponse, lines: Iterable<string>) {
+    const iterator = lines[Symbol.iterator]();
+    const writeNext = () => {
+      while (true) {
+        const next = iterator.next();
+        if (next.done) {
+          res.end();
+          return;
+        }
+        if (!res.write(`${next.value}\n`)) {
+          res.once("drain", writeNext);
+          return;
+        }
+      }
+    };
+    writeNext();
+  }
+
+  beforeEach(async () => {
+    writeDownload = (res) => {
+      res.writeHead(500);
+      res.end("missing download writer");
+    };
+    server = createServer((req, res) => {
+      const url = req.url ?? "";
+      if (url.includes("/upload/")) {
+        req.resume();
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ name: "files/f-ok" }));
+      } else if (url.includes(":asyncBatchEmbedContent")) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({
+            name: "batches/b-real",
+            state: "SUCCEEDED",
+            outputConfig: { file: "files/out-real" },
+          }),
+        );
+      } else if (url.includes(":download")) {
+        res.writeHead(200, { "Content-Type": "application/jsonl" });
+        writeDownload(res);
+      } else {
+        res.writeHead(500);
+        res.end("unexpected");
+      }
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    port = (server.address() as AddressInfo).port;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()));
+    });
+  });
+
+  it("streams valid output files larger than the generic 16 MiB text cap", async () => {
+    const requests = makeRequests(16_500);
+    const padding = "x".repeat(1_024);
+    writeDownload = (res) => {
+      writeJsonl(
+        res,
+        requests.map((request) =>
+          JSON.stringify({
+            key: request.custom_id,
+            embedding: { values: [1, 0, 0] },
+            padding,
+          }),
+        ),
+      );
+    };
+    const gemini = { ...makeGeminiClient(), baseUrl: `http://127.0.0.1:${port}/v1beta` };
+
+    const result = await runGeminiEmbeddingBatches({
+      gemini,
+      agentId: "main",
+      requests,
+      wait: true,
+      concurrency: 1,
+      pollIntervalMs: 50,
+      timeoutMs: 10_000,
+    });
+
+    expect(result.size).toBe(requests.length);
+    expect(result.get("r0")).toEqual([1, 0, 0]);
+    expect(result.get(`r${requests.length - 1}`)).toEqual([1, 0, 0]);
+    console.log(`[gemini-batch-proof] under-cap: streamed ${result.size} embeddings from >16 MiB JSONL output (real HTTP server, no fetch mock)`);
+  });
+
+  it("rejects a single oversized JSONL output line", async () => {
+    writeDownload = (res) => {
+      res.end(
+        `${JSON.stringify({
+          key: "r0",
+          embedding: { values: [1, 0, 0] },
+          padding: "x".repeat(17 * 1024 * 1024),
+        })}\n`,
+      );
+    };
+    const gemini = { ...makeGeminiClient(), baseUrl: `http://127.0.0.1:${port}/v1beta` };
+
+    const err = await runGeminiEmbeddingBatches({
+      gemini,
+      agentId: "main",
+      requests: singleRequest(),
+      wait: true,
+      concurrency: 1,
+      pollIntervalMs: 50,
+      timeoutMs: 10_000,
+    }).then(() => null).catch((e: unknown) => e as Error);
+    expect(err).not.toBeNull();
+    expect(err?.message).toMatch(/gemini\.batch-file-content: JSONL line exceeds/);
+    console.log(`[gemini-batch-proof] over-cap: oversized JSONL line (17 MiB) rejected before full buffering — ${err?.message}`);
+  });
+
+  it("ignores streamed output records for unknown request ids", async () => {
+    const requests = makeRequests(3);
+    const unknownCount = 10_000;
+    writeDownload = (res) => {
+      function* lines() {
+        yield JSON.stringify({ key: "r0", embedding: { values: [1, 0, 0] } });
+        for (let index = 0; index < unknownCount; index += 1) {
+          yield JSON.stringify({
+            key: `unknown-${index}`,
+            embedding: { values: [0, 1, 0] },
+          });
+        }
+        yield JSON.stringify({ key: "r1", embedding: { values: [0, 1, 0] } });
+        yield JSON.stringify({ key: "r2", embedding: { values: [0, 0, 1] } });
+      }
+      writeJsonl(res, lines());
+    };
+    const gemini = { ...makeGeminiClient(), baseUrl: `http://127.0.0.1:${port}/v1beta` };
+
+    const result = await runGeminiEmbeddingBatches({
+      gemini,
+      agentId: "main",
+      requests,
+      wait: true,
+      concurrency: 1,
+      pollIntervalMs: 50,
+      timeoutMs: 10_000,
+    });
+
+    expect(result.size).toBe(requests.length);
+    expect([...result.keys()]).toEqual(["r0", "r1", "r2"]);
+    expect(result.get("r0")).toEqual([1, 0, 0]);
+    expect(result.get("r1")).toEqual([0, 1, 0]);
+    expect(result.get("r2")).toEqual([0, 0, 1]);
+    expect(result.has("unknown-0")).toBe(false);
+    expect(result.has(`unknown-${unknownCount - 1}`)).toBe(false);
   });
 });
