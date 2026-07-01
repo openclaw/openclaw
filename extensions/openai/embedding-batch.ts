@@ -20,6 +20,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   readProviderJsonResponse,
+  readProviderTextResponse,
   readResponseTextLimited,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -60,6 +61,7 @@ const OPENAI_BATCH_MAX_REQUESTS = 50000;
 const OPENAI_BATCH_MAX_JSONL_BYTES = 190 * 1024 * 1024;
 const OPENAI_BATCH_MAX_POLL_BACKOFF_MS = 5 * 60_000;
 const OPENAI_BATCH_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const OPENAI_BATCH_OUTPUT_LINE_MAX_BYTES = 4 * 1024 * 1024;
 
 async function submitOpenAiBatch(params: {
   openAi: OpenAiEmbeddingClient;
@@ -111,7 +113,96 @@ async function fetchOpenAiFileContent(params: {
     openAi: params.openAi,
     path: `/files/${params.fileId}/content`,
     errorPrefix: "openai batch file content",
-    parse: async (res) => await res.text(),
+    parse: async (res) => await readProviderTextResponse(res, "openai.batch-file-content"),
+  });
+}
+
+async function readOpenAiBatchOutputLines(
+  response: Response,
+  onLine: (line: OpenAiBatchOutputLine) => void,
+): Promise<void> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    const text = await readProviderTextResponse(response, "openai.batch-file-content", {
+      maxBytes: OPENAI_BATCH_OUTPUT_LINE_MAX_BYTES,
+    });
+    for (const line of parseOpenAiBatchOutput(text)) {
+      onLine(line);
+    }
+    return;
+  }
+
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
+  let line = "";
+  let lineBytes = 0;
+
+  const appendSegment = (segment: string) => {
+    if (!segment) {
+      return;
+    }
+    lineBytes += encoder.encode(segment).byteLength;
+    if (lineBytes > OPENAI_BATCH_OUTPUT_LINE_MAX_BYTES) {
+      throw new Error(
+        `openai.batch-file-content: JSONL line exceeds ${OPENAI_BATCH_OUTPUT_LINE_MAX_BYTES} bytes`,
+      );
+    }
+    line += segment;
+  };
+  const emitLine = () => {
+    const trimmed = line.trim();
+    line = "";
+    lineBytes = 0;
+    if (trimmed) {
+      onLine(parseOpenAiBatchOutputLine(trimmed));
+    }
+  };
+  const consumeText = (text: string) => {
+    let offset = 0;
+    while (true) {
+      const newline = text.indexOf("\n", offset);
+      if (newline === -1) {
+        appendSegment(text.slice(offset));
+        return;
+      }
+      appendSegment(text.slice(offset, newline));
+      emitLine();
+      offset = newline + 1;
+    }
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (value && value.byteLength > 0) {
+        consumeText(decoder.decode(value, { stream: true }));
+      }
+    }
+    consumeText(decoder.decode());
+    if (line.trim()) {
+      emitLine();
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => {});
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+async function readOpenAiBatchOutputFile(params: {
+  openAi: OpenAiEmbeddingClient;
+  fileId: string;
+  onLine: (line: OpenAiBatchOutputLine) => void;
+}): Promise<void> {
+  return await fetchOpenAiBatchResource({
+    openAi: params.openAi,
+    path: `/files/${params.fileId}/content`,
+    errorPrefix: "openai batch file content",
+    parse: async (res) => await readOpenAiBatchOutputLines(res, params.onLine),
   });
 }
 
@@ -162,13 +253,15 @@ export function parseOpenAiBatchOutput(text: string): OpenAiBatchOutputLine[] {
   if (!text.trim()) {
     return [];
   }
-  return normalizeStringEntries(text.split("\n")).map((line) => {
-    try {
-      return JSON.parse(line) as OpenAiBatchOutputLine;
-    } catch {
-      throw new Error("OpenAI embedding batch output contained malformed JSONL");
-    }
-  });
+  return normalizeStringEntries(text.split("\n")).map(parseOpenAiBatchOutputLine);
+}
+
+function parseOpenAiBatchOutputLine(line: string): OpenAiBatchOutputLine {
+  try {
+    return JSON.parse(line) as OpenAiBatchOutputLine;
+  } catch {
+    throw new Error("OpenAI embedding batch output contained malformed JSONL");
+  }
 }
 
 async function readOpenAiBatchError(params: {
@@ -362,17 +455,16 @@ export async function runOpenAiEmbeddingBatches(
           }),
       });
 
-      const content = await fetchOpenAiFileContent({
-        openAi: params.openAi,
-        fileId: completed.outputFileId,
-      });
-      const outputLines = parseOpenAiBatchOutput(content);
       const errors: string[] = [];
       const remaining = new Set(group.map((request) => request.custom_id));
 
-      for (const line of outputLines) {
-        applyEmbeddingBatchOutputLine({ line, remaining, errors, byCustomId });
-      }
+      await readOpenAiBatchOutputFile({
+        openAi: params.openAi,
+        fileId: completed.outputFileId,
+        onLine: (line) => {
+          applyEmbeddingBatchOutputLine({ line, remaining, errors, byCustomId });
+        },
+      });
 
       if (errors.length > 0) {
         throw new Error(`openai batch ${batchInfo.id} failed: ${errors.join("; ")}`);
