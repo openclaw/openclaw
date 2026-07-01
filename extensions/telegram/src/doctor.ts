@@ -24,6 +24,7 @@ import {
   legacyConfigRules as TELEGRAM_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig as normalizeTelegramCompatibilityConfig,
 } from "./doctor-contract.js";
+import { resolveTelegramRuntimeGroupPolicy } from "./group-access.js";
 import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
 
 type TelegramAllowFromInvalidHit = { path: string; entry: string };
@@ -35,6 +36,10 @@ type TelegramApiRootBotEndpointHit = {
   value: string;
   normalized: string;
 };
+type TelegramRootGroupsMissingAccountGroupsHit = {
+  accountId: string;
+  groupsPath: string;
+};
 type DoctorAllowFromList = Array<string | number>;
 type DoctorAccountRecord = Record<string, unknown>;
 
@@ -43,11 +48,16 @@ type TelegramAllowFromListRef = {
   holder: Record<string, unknown>;
   key: "allowFrom" | "groupAllowFrom";
 };
+type TelegramRuntimeGroupPolicy = "allowlist" | "disabled" | "open";
 
 function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+function asTelegramRuntimeGroupPolicy(value: unknown): TelegramRuntimeGroupPolicy | undefined {
+  return value === "allowlist" || value === "disabled" || value === "open" ? value : undefined;
 }
 
 function sanitizeForLog(value: string): string {
@@ -56,6 +66,11 @@ function sanitizeForLog(value: string): string {
 
 function hasAllowFromEntries(values?: DoctorAllowFromList): boolean {
   return Array.isArray(values) && values.some((entry) => normalizeOptionalString(String(entry)));
+}
+
+function hasObjectEntries(value: unknown): boolean {
+  const object = asObjectRecord(value);
+  return Boolean(object) && Object.keys(object ?? {}).length > 0;
 }
 
 function collectTelegramAccountScopes(
@@ -249,6 +264,68 @@ export function collectTelegramApiRootWarnings(params: {
   return [
     `- ${samplePath} points at a full Telegram bot endpoint; apiRoot must be the Bot API root only. This can make startup calls like deleteWebhook, deleteMyCommands, and setMyCommands fail with 404 even when direct curl commands work.`,
     `- Run "${params.doctorFixCommand}" to remove the trailing /bot<TOKEN> path from Telegram apiRoot.`,
+  ];
+}
+
+export function scanTelegramRootGroupsMissingAccountGroups(
+  cfg: OpenClawConfig,
+): TelegramRootGroupsMissingAccountGroupsHit[] {
+  const telegram = asObjectRecord((cfg.channels as Record<string, unknown> | undefined)?.telegram);
+  if (!telegram || !hasObjectEntries(telegram.groups)) {
+    return [];
+  }
+  if (telegram.enabled === false) {
+    return [];
+  }
+  const accounts = asObjectRecord(telegram.accounts);
+  if (!accounts) {
+    return [];
+  }
+
+  const channelDefaults = asObjectRecord(asObjectRecord(cfg.channels)?.defaults);
+  const defaultGroupPolicy = asTelegramRuntimeGroupPolicy(channelDefaults?.groupPolicy);
+  const baseGroupPolicy = asTelegramRuntimeGroupPolicy(telegram.groupPolicy);
+  let enabledAccountCount = 0;
+  const accountsThatNeedGroupRules: Array<[string, Record<string, unknown>]> = [];
+  for (const [accountId, rawAccount] of Object.entries(accounts)) {
+    const account = asObjectRecord(rawAccount);
+    if (!account || account.enabled === false) {
+      continue;
+    }
+    enabledAccountCount += 1;
+    const effectiveGroupPolicy = resolveTelegramRuntimeGroupPolicy({
+      providerConfigPresent: true,
+      groupPolicy: asTelegramRuntimeGroupPolicy(account.groupPolicy) ?? baseGroupPolicy,
+      defaultGroupPolicy,
+    }).groupPolicy;
+    if (effectiveGroupPolicy !== "allowlist") {
+      continue;
+    }
+    accountsThatNeedGroupRules.push([accountId, account]);
+  }
+  if (enabledAccountCount < 2) {
+    return [];
+  }
+
+  return accountsThatNeedGroupRules
+    .filter(([, account]) => !hasObjectEntries(account.groups))
+    .map(([accountId]) => ({
+      accountId,
+      groupsPath: `channels.telegram.accounts.${accountId}.groups`,
+    }));
+}
+
+export function collectTelegramRootGroupsMissingAccountGroupsWarnings(params: {
+  hits: TelegramRootGroupsMissingAccountGroupsHit[];
+}): string[] {
+  if (params.hits.length === 0) {
+    return [];
+  }
+  const paths = params.hits
+    .map((hit) => `${sanitizeForLog(hit.accountId)} (${sanitizeForLog(hit.groupsPath)})`)
+    .join(", ");
+  return [
+    `- channels.telegram.groups is set in a multi-account Telegram config, but these enabled allowlisted accounts have no account-local group rules: ${paths}. Root channels.telegram.groups can still participate in generic group ID allowlisting while an account has no local groups. Once you add channels.telegram.accounts.<accountId>.groups, that account uses the local map instead of the root map; copy every allowed group or use "*" there before adding account-scoped options such as requireMention, topics, or per-group allowFrom.`,
   ];
 }
 
@@ -617,6 +694,9 @@ export const telegramDoctor: ChannelDoctorAdapter = {
     ...collectTelegramApiRootWarnings({
       hits: scanTelegramBotEndpointApiRoots(cfg),
       doctorFixCommand,
+    }),
+    ...collectTelegramRootGroupsMissingAccountGroupsWarnings({
+      hits: scanTelegramRootGroupsMissingAccountGroups(cfg),
     }),
     ...collectTelegramSelectedQuoteToolProgressWarnings({
       hits: scanTelegramSelectedQuoteToolProgressWarnings(cfg),

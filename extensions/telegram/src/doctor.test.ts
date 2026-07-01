@@ -8,12 +8,14 @@ import {
   collectTelegramGroupPolicyWarnings,
   collectTelegramMalformedGroupsWarnings,
   collectTelegramMissingEnvTokenWarnings,
+  collectTelegramRootGroupsMissingAccountGroupsWarnings,
   collectTelegramSelectedQuoteToolProgressWarnings,
   maybeRepairTelegramApiRoots,
   maybeRepairTelegramAllowFromUsernames,
   scanTelegramBotEndpointApiRoots,
   scanTelegramInvalidAllowFromEntries,
   scanTelegramMalformedGroupsConfig,
+  scanTelegramRootGroupsMissingAccountGroups,
   scanTelegramSelectedQuoteToolProgressWarnings,
   telegramDoctor,
 } from "./doctor.js";
@@ -481,6 +483,205 @@ describe("telegram doctor", () => {
     expect(repaired.changes).toEqual([
       "- channels.telegram.apiRoot: removed trailing /bot<TOKEN> from Telegram apiRoot.",
       "- channels.telegram.accounts.work.apiRoot: removed trailing /bot<TOKEN> from Telegram apiRoot.",
+    ]);
+  });
+
+  it("warns when root groups do not populate enabled multi-account Telegram account groups", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          groupPolicy: "allowlist",
+          groups: {
+            "-1001234567890": {
+              requireMention: true,
+            },
+          },
+          accounts: {
+            default: {
+              botToken: "123:default",
+              groups: {
+                "-1001234567890": {
+                  requireMention: true,
+                },
+              },
+            },
+            alerts: {
+              botToken: "123:alerts",
+            },
+            disabled: {
+              enabled: false,
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const hits = scanTelegramRootGroupsMissingAccountGroups(cfg);
+    expect(hits).toEqual([
+      {
+        accountId: "alerts",
+        groupsPath: "channels.telegram.accounts.alerts.groups",
+      },
+    ]);
+
+    const warnings = collectTelegramRootGroupsMissingAccountGroupsWarnings({ hits });
+    expect(warnings).toEqual([
+      '- channels.telegram.groups is set in a multi-account Telegram config, but these enabled allowlisted accounts have no account-local group rules: alerts (channels.telegram.accounts.alerts.groups). Root channels.telegram.groups can still participate in generic group ID allowlisting while an account has no local groups. Once you add channels.telegram.accounts.<accountId>.groups, that account uses the local map instead of the root map; copy every allowed group or use "*" there before adding account-scoped options such as requireMention, topics, or per-group allowFrom.',
+    ]);
+    expect(
+      await telegramDoctor.collectPreviewWarnings?.({
+        cfg,
+        doctorFixCommand: "openclaw doctor --fix",
+      }),
+    ).toContain(warnings[0]);
+  });
+
+  it("does not warn about root groups for single-account Telegram configs", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          groups: {
+            "-1001234567890": {
+              requireMention: true,
+            },
+          },
+          accounts: {
+            default: {
+              botToken: "123:default",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(scanTelegramRootGroupsMissingAccountGroups(cfg)).toStrictEqual([]);
+  });
+
+  it("does not warn about root groups when Telegram or effective group policy is open", () => {
+    const disabledCfg = {
+      channels: {
+        telegram: {
+          enabled: false,
+          groups: {
+            "-1001234567890": {
+              requireMention: true,
+            },
+          },
+          accounts: {
+            default: {
+              botToken: "123:default",
+            },
+            alerts: {
+              botToken: "123:alerts",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const openPolicyCfg = {
+      channels: {
+        telegram: {
+          groups: {
+            "-1001234567890": {
+              requireMention: true,
+            },
+          },
+          accounts: {
+            default: {
+              botToken: "123:default",
+              groups: {
+                "-1001234567890": {
+                  requireMention: true,
+                },
+              },
+            },
+            alerts: {
+              botToken: "123:alerts",
+              groupPolicy: "open",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const defaultOpenPolicyCfg = {
+      channels: {
+        defaults: {
+          groupPolicy: "open",
+        },
+        telegram: {
+          groups: {
+            "-1001234567890": {
+              requireMention: true,
+            },
+          },
+          accounts: {
+            default: {
+              botToken: "123:default",
+            },
+            alerts: {
+              botToken: "123:alerts",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const fallbackOpenPolicyCfg = {
+      channels: {
+        telegram: {
+          groups: {
+            "-1001234567890": {
+              requireMention: true,
+            },
+          },
+          accounts: {
+            default: {
+              botToken: "123:default",
+            },
+            alerts: {
+              botToken: "123:alerts",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(scanTelegramRootGroupsMissingAccountGroups(disabledCfg)).toStrictEqual([]);
+    expect(scanTelegramRootGroupsMissingAccountGroups(openPolicyCfg)).toStrictEqual([]);
+    expect(scanTelegramRootGroupsMissingAccountGroups(defaultOpenPolicyCfg)).toStrictEqual([]);
+    expect(scanTelegramRootGroupsMissingAccountGroups(fallbackOpenPolicyCfg)).toStrictEqual([]);
+  });
+
+  it("warns for allowlisted accounts without local groups even when another account is open", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          groups: {
+            "-1001234567890": {
+              requireMention: true,
+            },
+          },
+          accounts: {
+            default: {
+              botToken: "123:default",
+              groupPolicy: "open",
+            },
+            alerts: {
+              botToken: "123:alerts",
+              groupPolicy: "allowlist",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(scanTelegramRootGroupsMissingAccountGroups(cfg)).toEqual([
+      {
+        accountId: "alerts",
+        groupsPath: "channels.telegram.accounts.alerts.groups",
+      },
     ]);
   });
 
