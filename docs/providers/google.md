@@ -473,3 +473,5 @@ WebSocket endpoint, sends the initial setup payload, and waits for
     Shared music tool parameters and provider selection.
   </Card>
 </CardGroup>
+
+For the current Google provider rebuild boundary and compatibility policy, see [Google provider rebuild boundary](/providers/google-provider-rebuild).

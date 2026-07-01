@@ -25,13 +25,13 @@ Provider auth should not implicitly provision Google projects, scrape local CLI 
 
 ## Current boundary change
 
-The bundled Google plugin and lightweight setup entry now register the Gemini CLI provider/backend only when this flag is explicitly enabled:
+The bundled Google runtime plugin now registers the Gemini CLI provider/backend only when this flag is explicitly enabled:
 
 ```bash
 OPENCLAW_ENABLE_GOOGLE_GEMINI_CLI_HARNESS=1
 ```
 
-Without that flag, normal Google registration stays on the official API-backed provider path and does not register the Gemini CLI harness.
+Without that flag, bundled runtime registration stays on the official API-backed provider path and does not directly register the Gemini CLI harness. The setup-registry compatibility path remains available for existing `google-gemini-cli` setup/backend resolution.
 
 ## Follow-up work
 
