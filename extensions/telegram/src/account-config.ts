@@ -4,10 +4,9 @@ import {
   resolveNormalizedAccountEntry,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-core";
-import type {
-  TelegramAccountConfig,
-  TelegramBotToBotConfig,
-} from "openclaw/plugin-sdk/config-contracts";
+import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+
+type TelegramBotToBotConfig = NonNullable<TelegramAccountConfig["botToBot"]>;
 
 function normalizeAllowFromEntry(value: string | number): string {
   return String(value).trim();
