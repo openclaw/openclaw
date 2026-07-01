@@ -1758,6 +1758,7 @@ describe("grouped chat rendering", () => {
             type: "openclaw_pairing_qr",
             image_url: "data:image/png;base64,cXJwbmc=",
             alt: "OpenClaw pairing QR code",
+            expiresAtMs: Date.now() + 60_000,
           },
         ],
         timestamp: Date.now(),
@@ -1768,6 +1769,63 @@ describe("grouped chat rendering", () => {
       pairingQrContainer.querySelector<HTMLImageElement>(".chat-message-image");
     expect(pairingQrImage?.getAttribute("src")).toBe("data:image/png;base64,cXJwbmc=");
     expect(pairingQrImage?.getAttribute("alt")).toBe("OpenClaw pairing QR code");
+
+    const expiredPairingQrContainer = document.createElement("div");
+    renderAssistantMessage(
+      expiredPairingQrContainer,
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "openclaw_pairing_qr",
+            image_url: "data:image/png;base64,ZXhwaXJlZA==",
+            alt: "OpenClaw pairing QR code",
+            expiresAtMs: Date.now() - 1,
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      { showToolCalls: false },
+    );
+    expect(expiredPairingQrContainer.querySelector(".chat-message-image")).toBeNull();
+    expect(expiredPairingQrContainer.textContent).toContain("Pairing QR expired");
+    expect(expiredPairingQrContainer.textContent).toContain(
+      "Run /pair qr again to generate a fresh setup code.",
+    );
+
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-06-30T05:45:00Z"));
+      const refreshPairingQr = vi.fn();
+      const expiringPairingQrContainer = document.createElement("div");
+      renderAssistantMessage(
+        expiringPairingQrContainer,
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "openclaw_pairing_qr",
+              image_url: "data:image/png;base64,cXJwbmc=",
+              alt: "OpenClaw pairing QR code",
+              expiresAtMs: Date.now() + 1_000,
+            },
+          ],
+          timestamp: Date.now(),
+        },
+        { showToolCalls: false, onRequestUpdate: refreshPairingQr },
+      );
+      expect(expiringPairingQrContainer.querySelector(".chat-message-image")).not.toBeNull();
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(refreshPairingQr).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(refreshPairingQr).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+      resetAssistantAttachmentAvailabilityCacheForTest();
+    }
 
     container = renderUserMedia({
       id: "user-history-image-blocked",
