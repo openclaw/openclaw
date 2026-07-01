@@ -16,15 +16,48 @@ export type PluginCliCommandGroupEntry = CommandGroupEntry & {
 
 export type PluginCliCommandGroupMode = "eager" | "lazy";
 
+function listReadableCliPlaceholders(
+  entry: PluginCliCommandGroupEntry,
+): OpenClawPluginCliCommandDescriptor[] {
+  const placeholders = entry.placeholders as readonly OpenClawPluginCliCommandDescriptor[];
+  const readable: OpenClawPluginCliCommandDescriptor[] = [];
+  let placeholderCount: number;
+  try {
+    placeholderCount = placeholders.length;
+  } catch {
+    return readable;
+  }
+  for (let index = 0; index < placeholderCount; index += 1) {
+    try {
+      const placeholder = placeholders[index];
+      if (
+        placeholder &&
+        typeof placeholder.name === "string" &&
+        typeof placeholder.description === "string"
+      ) {
+        readable.push(placeholder);
+      }
+    } catch {
+      // CLI descriptors are plugin-owned metadata. A malformed descriptor row
+      // must not block healthy command roots from registering lazily.
+    }
+  }
+  return readable;
+}
+
 function canRegisterPluginCliLazily(entry: PluginCliCommandGroupEntry): boolean {
-  if (entry.placeholders.length === 0) {
+  const placeholders = listReadableCliPlaceholders(entry);
+  if (placeholders.length === 0) {
     return false;
   }
-  const descriptorNames = new Set(
-    (entry.placeholders as readonly OpenClawPluginCliCommandDescriptor[]).map(
-      (descriptor) => descriptor.name,
-    ),
-  );
+  const descriptorNames = new Set<string>();
+  for (const descriptor of placeholders) {
+    try {
+      descriptorNames.add(descriptor.name);
+    } catch {
+      // Skip only the unreadable descriptor.
+    }
+  }
   return getCommandGroupNames(entry).every((command) => descriptorNames.has(command));
 }
 
@@ -97,7 +130,7 @@ export async function registerPluginCliCommandGroups(
 
     try {
       if (params.mode === "lazy" && canRegisterPluginCliLazily(entry)) {
-        for (const placeholder of entry.placeholders) {
+        for (const placeholder of listReadableCliPlaceholders(entry)) {
           registerLazyCommandGroup(targetProgram, entry, placeholder);
         }
         continue;
