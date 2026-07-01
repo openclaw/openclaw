@@ -30,8 +30,27 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function callArg(
+  mock: { mock: { calls: Array<Array<unknown>> } },
+  callIndex: number,
+  argIndex: number,
+  label: string,
+) {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call: ${label}`);
+  }
+  if (argIndex >= call.length) {
+    throw new Error(`Expected mock call argument ${argIndex}: ${label}`);
+  }
+  return call[argIndex];
+}
+
 function webhookRequestBody() {
-  const request = requireRecord(mocks.fetchWithSsrFGuard.mock.calls[0]?.[0], "webhook request");
+  const request = requireRecord(
+    callArg(mocks.fetchWithSsrFGuard, 0, 0, "webhook request"),
+    "webhook request",
+  );
   const init = requireRecord(request.init, "webhook request init");
   return JSON.parse(String(init.body));
 }
