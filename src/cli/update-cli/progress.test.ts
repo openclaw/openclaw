@@ -62,7 +62,7 @@ describe("inferUpdateFailureHints", () => {
       "global update",
       "npm ERR! code EACCES\nnpm ERR! Error: EACCES: permission denied",
     );
-    const hints = inferUpdateFailureHints(result);
+    const hints = inferUpdateFailureHints(result, { isContainerEnvironment: false });
     expect(hints.join("\n")).toContain("EACCES");
     expect(hints.join("\n")).toContain("npm config set prefix ~/.local");
     expect(hints.join("\n")).toContain("stop the Gateway first");
@@ -73,12 +73,24 @@ describe("inferUpdateFailureHints", () => {
       "global install stage",
       "EACCES: permission denied, mkdtemp '/usr/local/lib/node_modules/.openclaw-update-stage-'",
     );
-    const hints = inferUpdateFailureHints(result);
+    const hints = inferUpdateFailureHints(result, { isContainerEnvironment: false });
     expect(hints.join("\n")).toContain("EACCES");
     expect(hints.join("\n")).toContain("npm config set prefix ~/.local");
     expect(hints.join("\n")).toContain("<system-npm>");
     expect(hints.join("\n")).toContain("gateway install --force");
     expect(hints.join("\n")).toContain("gateway restart");
+  });
+
+  it("returns image redeploy guidance for package permission failures inside containers", () => {
+    const result = makeResult(
+      "global install stage",
+      "EACCES: permission denied, mkdtemp '/usr/local/lib/node_modules/.openclaw-update-stage-'",
+    );
+    const hints = inferUpdateFailureHints(result, { isContainerEnvironment: true });
+    expect(hints.join("\n")).toContain("inside a container");
+    expect(hints.join("\n")).toContain("recreate or redeploy the container");
+    expect(hints.join("\n")).not.toContain("sudo");
+    expect(hints.join("\n")).not.toContain("npm config set prefix");
   });
 
   it("returns native optional dependency hint for node-gyp failures", () => {
