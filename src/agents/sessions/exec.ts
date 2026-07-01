@@ -140,7 +140,9 @@ export async function execCommand(
     const killProcess = () => {
       if (!killed) {
         killed = true;
-        if (proc.pid) killProcessTree(proc.pid);
+        if (proc.pid) {
+          killProcessTree(proc.pid);
+        }
         forceKillTimer = setTimeout(() => {
           if (!settled && proc.pid) {
             killProcessTree(proc.pid);
