@@ -55,6 +55,10 @@ export {
 } from "../agents/sandbox.js";
 
 export {
+  isDangerousHostEnvOverrideVarName,
+  sanitizeSystemRunEnvOverrides,
+} from "../infra/host-env-security.js";
+export {
   runPluginCommandWithTimeout,
   type PluginCommandRunOptions,
   type PluginCommandRunResult,
