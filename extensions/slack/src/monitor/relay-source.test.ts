@@ -22,6 +22,10 @@ function deferred<T>() {
   return { promise, reject, resolve };
 }
 
+function relayFrame(text: string): Buffer {
+  return Buffer.from(text, "utf8");
+}
+
 describe("Slack relay source", () => {
   it("builds authenticated relay websocket URLs safely", () => {
     expect(
@@ -204,19 +208,21 @@ describe("Slack relay source", () => {
   describe("parseRelayFrame", () => {
     it("parses valid JSON frames", () => {
       const frame = parseRelayFrame(
-        JSON.stringify({ type: "slack_event", data: { text: "hello" } }),
+        relayFrame(JSON.stringify({ type: "slack_event", data: { text: "hello" } })),
       );
       expect(frame).toEqual({ type: "slack_event", data: { text: "hello" } });
     });
 
     it("throws SlackRelayMalformedFrameError for malformed JSON", () => {
-      expect(() => parseRelayFrame("NOT JSON {{{")).toThrow(SlackRelayMalformedFrameError);
+      expect(() => parseRelayFrame(relayFrame("NOT JSON {{{"))).toThrow(
+        SlackRelayMalformedFrameError,
+      );
     });
 
     it("wraps the original SyntaxError as the cause", () => {
       let error: unknown;
       try {
-        parseRelayFrame("NOT JSON {{{");
+        parseRelayFrame(relayFrame("NOT JSON {{{"));
       } catch (err: unknown) {
         error = err;
       }
@@ -226,11 +232,11 @@ describe("Slack relay source", () => {
     });
 
     it("parses empty object frames", () => {
-      expect(parseRelayFrame("{}")).toEqual({});
+      expect(parseRelayFrame(relayFrame("{}"))).toEqual({});
     });
 
     it("parses array frames", () => {
-      expect(parseRelayFrame("[1, 2, 3]")).toEqual([1, 2, 3]);
+      expect(parseRelayFrame(relayFrame("[1, 2, 3]"))).toEqual([1, 2, 3]);
     });
   });
 });
