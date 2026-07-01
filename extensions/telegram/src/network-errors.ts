@@ -9,6 +9,12 @@ import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtim
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const TELEGRAM_NETWORK_ORIGIN = Symbol("openclaw.telegram.network-origin");
+export const TELEGRAM_SEND_RETRY_DEFAULTS = {
+  attempts: 3,
+  minDelayMs: 400,
+  maxDelayMs: 60_000,
+  jitter: 0.1,
+} as const;
 
 const RECOVERABLE_ERROR_CODES = new Set([
   "ECONNRESET",

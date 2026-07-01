@@ -1,12 +1,17 @@
 // Telegram plugin module implements delivery.send behavior.
 import { type Bot, GrammyError } from "grammy";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
-import { createTelegramRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
+import { createRateLimitRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
 import { markdownToTelegramHtml, telegramHtmlToPlainTextFallback } from "../format.js";
-import { isSafeToRetrySendError, isTelegramRateLimitError } from "../network-errors.js";
+import {
+  isSafeToRetrySendError,
+  isTelegramRateLimitError,
+  readTelegramRetryAfterMs,
+  TELEGRAM_SEND_RETRY_DEFAULTS,
+} from "../network-errors.js";
 import {
   buildTelegramSendParams,
   getTelegramNativeQuoteReplyMessageId,
@@ -25,7 +30,8 @@ export { buildTelegramSendParams } from "../reply-parameters.js";
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const EMPTY_TEXT_ERR_RE = /message text is empty/i;
-const QUOTE_PARAM_RE = /\bquote not found\b|\bQUOTE_TEXT_INVALID\b|\bquote text invalid\b/i;
+const QUOTE_PARAM_RE =
+  /\bquote not found\b|\bquote text not found\b|\bQUOTE_TEXT_INVALID\b|\bquote text invalid\b/i;
 const RICH_ENTITY_INVALID_RE =
   /RICH_MESSAGE_(?:EMAIL|URL|MENTION|HASHTAG|CASHTAG|BOT_COMMAND|PHONE|BANK_CARD)_INVALID/i;
 const GrammyErrorCtor: typeof GrammyError | undefined =
@@ -39,9 +45,11 @@ function isTelegramQuoteParamError(err: unknown): boolean {
 }
 
 function createTelegramDeliverySendRetry() {
-  return createTelegramRetryRunner({
+  return createRateLimitRetryRunner({
+    defaults: TELEGRAM_SEND_RETRY_DEFAULTS,
+    logLabel: "telegram send",
     shouldRetry: (err) => isSafeToRetrySendError(err) || isTelegramRateLimitError(err),
-    strictShouldRetry: true,
+    retryAfterMs: readTelegramRetryAfterMs,
   });
 }
 

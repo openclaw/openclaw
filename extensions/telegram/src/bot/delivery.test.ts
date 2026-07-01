@@ -212,6 +212,12 @@ function createRichEntityInvalidError(entity = "EMAIL", operation = "sendRichMes
   );
 }
 
+function createTelegramParseError(operation: string) {
+  return new Error(
+    `GrammyError: Call to '${operation}' failed! (400: Bad Request: can't parse entities: Can't find end of the entity)`,
+  );
+}
+
 function createWrappedPreConnectHttpError(operation = "sendMessage") {
   const root = Object.assign(new Error("getaddrinfo ENOTFOUND api.telegram.org"), {
     code: "ENOTFOUND",
@@ -807,6 +813,35 @@ describe("deliverReplies", () => {
     expectRecordFields(mockCallArg(sendPhoto, 0, 2), {
       caption: "hi <b>boss</b>",
       parse_mode: "HTML",
+    });
+  });
+
+  it("retries media reply captions as plain text when Telegram rejects caption HTML", async () => {
+    const runtime = createRuntime();
+    const sendPhoto = vi
+      .fn()
+      .mockRejectedValueOnce(createTelegramParseError("sendPhoto"))
+      .mockResolvedValueOnce({
+        message_id: 3,
+        chat: { id: "123" },
+      });
+    const bot = createBot({ sendPhoto });
+
+    mockMediaLoad("photo.jpg", "image/jpeg", "image");
+
+    await deliverWith({
+      replies: [{ mediaUrl: "https://example.com/photo.jpg", text: "use `<b>` for bold" }],
+      runtime,
+      bot,
+    });
+
+    expect(sendPhoto).toHaveBeenCalledTimes(2);
+    expectRecordFields(mockCallArg(sendPhoto, 0, 2), {
+      caption: "use <code>&lt;b&gt;</code> for bold",
+      parse_mode: "HTML",
+    });
+    expectRecordFields(mockCallArg(sendPhoto, 1, 2), {
+      caption: "use `<b>` for bold",
     });
   });
 

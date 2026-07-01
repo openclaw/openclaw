@@ -57,6 +57,7 @@ import {
 
 const VOICE_FORBIDDEN_MARKER = "VOICE_MESSAGES_FORBIDDEN";
 const CAPTION_TOO_LONG_RE = /caption is too long/i;
+const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
 
@@ -299,6 +300,10 @@ function isCaptionTooLong(err: unknown): boolean {
   return CAPTION_TOO_LONG_RE.test(formatErrorMessage(err));
 }
 
+function isTelegramHtmlParseError(err: unknown): boolean {
+  return PARSE_ERR_RE.test(formatErrorMessage(err));
+}
+
 function resolveVoiceFallbackText(reply: ReplyPayload): string | undefined {
   if (reply.text?.trim()) {
     return reply.text;
@@ -439,41 +444,64 @@ async function deliverMediaReply(params: {
         silent: params.silent,
       }),
     };
+    const plainMediaParams: Record<string, unknown> = {
+      ...mediaParams,
+      ...(caption ? { caption } : {}),
+    };
+    delete plainMediaParams.parse_mode;
+    const sendMediaWithCaptionFallback = async (
+      operation: string,
+      send: (effectiveParams: Record<string, unknown>) => Promise<{ message_id: number }>,
+      requestParams: Record<string, unknown> = mediaParams,
+      shouldLog?: (err: unknown) => boolean,
+    ) => {
+      const request = (
+        effectiveRequestParams: Record<string, unknown>,
+        requestOperation = operation,
+      ) =>
+        sendTelegramWithThreadFallback({
+          operation: requestOperation,
+          runtime: params.runtime,
+          thread: params.thread,
+          requestParams: effectiveRequestParams,
+          ...(shouldLog ? { shouldLog } : {}),
+          send,
+        });
+      try {
+        return await request(requestParams);
+      } catch (err) {
+        if (
+          requestParams !== mediaParams ||
+          !htmlCaption ||
+          !caption ||
+          !isTelegramHtmlParseError(err)
+        ) {
+          throw err;
+        }
+        logVerbose(`telegram ${operation} caption parse failed; retrying caption as plain text`);
+        return await request(plainMediaParams, `${operation} (plain caption retry)`);
+      }
+    };
     if (isGif) {
-      const result = await sendTelegramWithThreadFallback({
-        operation: "sendAnimation",
-        runtime: params.runtime,
-        thread: params.thread,
-        requestParams: mediaParams,
-        send: (effectiveParams) =>
-          params.bot.api.sendAnimation(params.chatId, file, { ...effectiveParams }),
-      });
+      const result = await sendMediaWithCaptionFallback("sendAnimation", (effectiveParams) =>
+        params.bot.api.sendAnimation(params.chatId, file, { ...effectiveParams }),
+      );
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = result.message_id;
       }
       markDelivered(params.progress);
     } else if (kind === "image") {
-      const result = await sendTelegramWithThreadFallback({
-        operation: "sendPhoto",
-        runtime: params.runtime,
-        thread: params.thread,
-        requestParams: mediaParams,
-        send: (effectiveParams) =>
-          params.bot.api.sendPhoto(params.chatId, file, { ...effectiveParams }),
-      });
+      const result = await sendMediaWithCaptionFallback("sendPhoto", (effectiveParams) =>
+        params.bot.api.sendPhoto(params.chatId, file, { ...effectiveParams }),
+      );
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = result.message_id;
       }
       markDelivered(params.progress);
     } else if (kind === "video") {
-      const result = await sendTelegramWithThreadFallback({
-        operation: "sendVideo",
-        runtime: params.runtime,
-        thread: params.thread,
-        requestParams: mediaParams,
-        send: (effectiveParams) =>
-          params.bot.api.sendVideo(params.chatId, file, { ...effectiveParams }),
-      });
+      const result = await sendMediaWithCaptionFallback("sendVideo", (effectiveParams) =>
+        params.bot.api.sendVideo(params.chatId, file, { ...effectiveParams }),
+      );
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = result.message_id;
       }
@@ -490,15 +518,13 @@ async function deliverMediaReply(params: {
           requestParams: typeof mediaParams,
           shouldLog?: (err: unknown) => boolean,
         ) => {
-          const result = await sendTelegramWithThreadFallback({
-            operation: "sendVoice",
-            runtime: params.runtime,
-            thread: params.thread,
+          const result = await sendMediaWithCaptionFallback(
+            "sendVoice",
+            (effectiveParams) =>
+              params.bot.api.sendVoice(params.chatId, file, { ...effectiveParams }),
             requestParams,
             shouldLog,
-            send: (effectiveParams) =>
-              params.bot.api.sendVoice(params.chatId, file, { ...effectiveParams }),
-          });
+          );
           if (firstDeliveredMessageId == null) {
             firstDeliveredMessageId = result.message_id;
           }
@@ -580,28 +606,18 @@ async function deliverMediaReply(params: {
           throw voiceErr;
         }
       } else {
-        const result = await sendTelegramWithThreadFallback({
-          operation: "sendAudio",
-          runtime: params.runtime,
-          thread: params.thread,
-          requestParams: mediaParams,
-          send: (effectiveParams) =>
-            params.bot.api.sendAudio(params.chatId, file, { ...effectiveParams }),
-        });
+        const result = await sendMediaWithCaptionFallback("sendAudio", (effectiveParams) =>
+          params.bot.api.sendAudio(params.chatId, file, { ...effectiveParams }),
+        );
         if (firstDeliveredMessageId == null) {
           firstDeliveredMessageId = result.message_id;
         }
         markDelivered(params.progress);
       }
     } else {
-      const result = await sendTelegramWithThreadFallback({
-        operation: "sendDocument",
-        runtime: params.runtime,
-        thread: params.thread,
-        requestParams: mediaParams,
-        send: (effectiveParams) =>
-          params.bot.api.sendDocument(params.chatId, file, { ...effectiveParams }),
-      });
+      const result = await sendMediaWithCaptionFallback("sendDocument", (effectiveParams) =>
+        params.bot.api.sendDocument(params.chatId, file, { ...effectiveParams }),
+      );
       if (firstDeliveredMessageId == null) {
         firstDeliveredMessageId = result.message_id;
       }

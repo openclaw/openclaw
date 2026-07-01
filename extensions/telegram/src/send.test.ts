@@ -241,6 +241,24 @@ function mockLoadedMedia({
   });
 }
 
+function createTelegramParseError(operation: string): Error {
+  return new Error(
+    `GrammyError: Call to '${operation}' failed! (400: Bad Request: can't parse entities: Can't find end of the entity)`,
+  );
+}
+
+function createTelegramQuoteError(operation: string): Error {
+  return new Error(
+    `GrammyError: Call to '${operation}' failed! (400: Bad Request: quote text not found)`,
+  );
+}
+
+function createTelegramRichEntityInvalidError(entity = "URL"): Error {
+  return new Error(
+    `GrammyError: Call to 'sendRichMessage' failed! (400: Bad Request: RICH_MESSAGE_${entity}_INVALID)`,
+  );
+}
+
 function requireMockCall<T extends unknown[]>(call: T | undefined, label: string): T {
   if (!call) {
     throw new Error(`expected ${label}`);
@@ -996,6 +1014,26 @@ describe("sendMessageTelegram", () => {
       skip_entity_detection: true,
     });
     expect(richMessage?.html).not.toContain("mailto:");
+  });
+
+  it("falls back to plain text when durable rich messages reject invalid entities", async () => {
+    botRawApi.sendRichMessage.mockRejectedValueOnce(createTelegramRichEntityInvalidError("URL"));
+    botApi.sendMessage.mockResolvedValueOnce({ message_id: 46, chat: { id: "123" } });
+    const text = "Status includes https://example.invalid/path";
+
+    await sendMessageTelegram("123", text, {
+      cfg: {
+        channels: {
+          telegram: {
+            richMessages: true,
+          },
+        },
+      },
+      token: "tok",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(botApi.sendMessage).toHaveBeenCalledWith("123", text);
   });
 
   it.each([
@@ -1834,6 +1872,52 @@ describe("sendMessageTelegram", () => {
     });
   });
 
+  it("retries media captions as plain text when Telegram rejects caption HTML", async () => {
+    const chatId = "123";
+    const caption = "use `<b>` for bold";
+    const sendPhoto = vi
+      .fn()
+      .mockRejectedValueOnce(createTelegramParseError("sendPhoto"))
+      .mockResolvedValueOnce({
+        message_id: 91,
+        chat: { id: chatId },
+      });
+    const api = { sendPhoto } as unknown as {
+      sendPhoto: typeof sendPhoto;
+    };
+
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
+
+    await sendMessageTelegram(chatId, caption, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/photo.jpg",
+    });
+
+    expectMediaSendCall(
+      firstMockCall(sendPhoto, "send photo html call"),
+      "send photo html call",
+      chatId,
+      {
+        caption: "use <code>&lt;b&gt;</code> for bold",
+        parse_mode: "HTML",
+      },
+    );
+    expectMediaSendCall(
+      mockCall(sendPhoto, 1, "send photo plain call"),
+      "send photo plain call",
+      chatId,
+      {
+        caption,
+      },
+    );
+  });
+
   it("sends video notes when requested and regular videos otherwise", async () => {
     const chatId = "123";
 
@@ -2110,6 +2194,39 @@ describe("sendMessageTelegram", () => {
     await vi.runAllTimersAsync();
     await expect(promise).resolves.toEqual({ messageId: "1", chatId });
     expect(firstMockCall(setTimeoutSpy, "setTimeout call")[1]).toBe(500);
+    setTimeoutSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("honors Telegram retry_after hints above the generic channel cap", async () => {
+    vi.useFakeTimers();
+    const chatId = "123";
+    const err = Object.assign(new Error("Too Many Requests: retry later"), {
+      error_code: 429,
+      response: { parameters: { retry_after: 45 } },
+    });
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(err)
+      .mockResolvedValueOnce({
+        message_id: 1,
+        chat: { id: chatId },
+      });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+    const setTimeoutSpy = vi.spyOn(global, "setTimeout");
+
+    const promise = sendMessageTelegram(chatId, "hi", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      retry: { attempts: 2, minDelayMs: 0, jitter: 0 },
+    });
+
+    await vi.runAllTimersAsync();
+    await expect(promise).resolves.toEqual({ messageId: "1", chatId });
+    expect(firstMockCall(setTimeoutSpy, "setTimeout call")[1]).toBe(45_000);
     setTimeoutSpy.mockRestore();
     vi.useRealTimers();
   });
@@ -3425,6 +3542,43 @@ describe("shared send behaviors", () => {
         quote: " quoted text\n",
         allow_sending_without_reply: true,
       },
+    });
+  });
+
+  it("retries durable direct quote sends with legacy reply id when Telegram rejects the quote", async () => {
+    const chatId = "123";
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(createTelegramQuoteError("sendMessage"))
+      .mockResolvedValueOnce({
+        message_id: 57,
+        chat: { id: chatId },
+      });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram(chatId, "reply text", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      replyToMessageId: 100,
+      quoteText: "paraphrased quote",
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage).toHaveBeenNthCalledWith(1, chatId, "reply text", {
+      parse_mode: "HTML",
+      reply_parameters: {
+        message_id: 100,
+        quote: "paraphrased quote",
+        allow_sending_without_reply: true,
+      },
+    });
+    expect(sendMessage).toHaveBeenNthCalledWith(2, chatId, "reply text", {
+      parse_mode: "HTML",
+      reply_to_message_id: 100,
+      allow_sending_without_reply: true,
     });
   });
 
