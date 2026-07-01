@@ -547,7 +547,9 @@ export const buildTelegramMessageContext = async ({
     topicName,
     sessionRuntime,
   });
-  const canShowStatusReaction = ctxPayload.InboundEventKind !== "room_event";
+  const isRoomEvent = ctxPayload.InboundEventKind === "room_event";
+  const canShowAckReaction = !isRoomEvent || ackReactionScope === "all";
+  const canShowStatusReaction = !isRoomEvent;
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "telegram",
     accountId: account.accountId,
@@ -556,7 +558,7 @@ export const buildTelegramMessageContext = async ({
     ackReaction && isTelegramSupportedReactionEmoji(ackReaction) ? ackReaction : undefined;
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const shouldSendAckReaction = Boolean(
-    canShowStatusReaction &&
+    canShowAckReaction &&
     ackReaction &&
     shouldAckReactionGate({
       scope: ackReactionScope,
@@ -571,7 +573,10 @@ export const buildTelegramMessageContext = async ({
   );
   const statusReactionsConfig = cfg.messages?.statusReactions;
   const statusReactionsEnabled =
-    statusReactionsConfig?.enabled === true && Boolean(reactionApi) && shouldSendAckReaction;
+    canShowStatusReaction &&
+    statusReactionsConfig?.enabled === true &&
+    Boolean(reactionApi) &&
+    shouldSendAckReaction;
   const resolvedStatusReactionEmojis = statusReactionsEnabled
     ? resolveTelegramStatusReactionEmojis({
         initialEmoji: ackReaction,

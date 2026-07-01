@@ -268,9 +268,10 @@ async function processDiscordMessageInner(
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const isRoomEvent = ctx.inboundEventKind === "room_event";
+  const forceAckForAllScope = ackReactionScope === "all";
   const shouldAckReaction = () =>
     Boolean(
-      !isRoomEvent &&
+      (forceAckForAllScope || !isRoomEvent) &&
       ackReaction &&
       shouldAckReactionGate({
         scope: ackReactionScope,
