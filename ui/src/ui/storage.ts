@@ -1,6 +1,7 @@
 // Control UI module implements storage behavior.
 const SETTINGS_KEY_PREFIX = "openclaw.control.settings.v1:";
 const LEGACY_SETTINGS_KEY = "openclaw.control.settings.v1";
+const CURRENT_GATEWAY_SELECTION_KEY_PREFIX = "openclaw.control.currentGateway.v1:";
 const LOCAL_USER_IDENTITY_KEY = "openclaw.control.user.v1";
 const LOCAL_ASSISTANT_IDENTITY_KEY = "openclaw.control.assistant.v1";
 const LEGACY_TOKEN_SESSION_KEY = "openclaw.control.token.v1";
@@ -9,6 +10,10 @@ const MAX_SCOPED_SESSION_ENTRIES = 10;
 
 function settingsKeyForGateway(gatewayUrl: string): string {
   return `${SETTINGS_KEY_PREFIX}${normalizeGatewayTokenScope(gatewayUrl)}`;
+}
+
+function currentGatewaySelectionKeyForPage(pageUrl: string): string {
+  return `${CURRENT_GATEWAY_SELECTION_KEY_PREFIX}${normalizeGatewayTokenScope(pageUrl)}`;
 }
 
 type ScopedSessionSelection = {
@@ -154,6 +159,106 @@ function normalizeGatewayTokenScope(gatewayUrl: string): string {
   }
 }
 
+function parseGatewayScopeParts(
+  gatewayUrl: string,
+): { scope: string; host: string; pathname: string } | null {
+  try {
+    const parsed = new URL(normalizeGatewayTokenScope(gatewayUrl));
+    const pathname =
+      parsed.pathname === "/" ? "" : parsed.pathname.replace(/\/+$/, "") || parsed.pathname;
+    return { scope: `${parsed.protocol}//${parsed.host}${pathname}`, host: parsed.host, pathname };
+  } catch {
+    return null;
+  }
+}
+
+function isRootWebSocketEndpointPath(pathname: string): boolean {
+  return pathname.toLowerCase() === "/ws";
+}
+
+function isCurrentBaseWebSocketEndpointPath(storedPathname: string, pagePathname: string): boolean {
+  if (!pagePathname) {
+    return false;
+  }
+  const normalizedStored = storedPathname.toLowerCase();
+  const normalizedPage = pagePathname.toLowerCase();
+  return normalizedStored === `${normalizedPage}/ws`;
+}
+
+function shouldIgnoreLegacySettingsFallback(storedUrl: string | undefined, pageDerivedUrl: string) {
+  if (!storedUrl) {
+    return false;
+  }
+  const storedScope = normalizeGatewayTokenScope(storedUrl);
+  const pageScope = normalizeGatewayTokenScope(pageDerivedUrl);
+  if (storedScope === pageScope) {
+    return false;
+  }
+
+  const storedScopeParts = parseGatewayScopeParts(storedUrl);
+  const pageScopeParts = parseGatewayScopeParts(pageDerivedUrl);
+  if (!storedScopeParts || !pageScopeParts || storedScopeParts.host !== pageScopeParts.host) {
+    return false;
+  }
+
+  // Same-host, different-path legacy records can be sibling-gateway pollution.
+  // Keep root /ws and current-base /ws endpoint shapes; remote custom hosts are
+  // accepted by the host mismatch above.
+  return !(
+    isRootWebSocketEndpointPath(storedScopeParts.pathname) ||
+    isCurrentBaseWebSocketEndpointPath(storedScopeParts.pathname, pageScopeParts.pathname)
+  );
+}
+
+type LegacySettingsCandidate =
+  | {
+      raw: string;
+    }
+  | {
+      rejected: true;
+    };
+
+function selectSafeLegacySettingsRaw(
+  storage: Storage | null,
+  pageDerivedUrl: string,
+): LegacySettingsCandidate | null {
+  let rejectedLegacy = false;
+  const legacyRaw = storage?.getItem(LEGACY_SETTINGS_KEY);
+  if (legacyRaw) {
+    try {
+      const legacy = JSON.parse(legacyRaw) as PersistedUiSettings;
+      const storedUrl = normalizeOptionalString(legacy.gatewayUrl);
+      if (shouldIgnoreLegacySettingsFallback(storedUrl, pageDerivedUrl)) {
+        rejectedLegacy = true;
+      } else {
+        // In the shipped legacy format, every save wrote this unscoped key last.
+        // It is still only a fallback: origin-wide legacy state cannot prove
+        // which basePath last selected a remote Gateway.
+        return {
+          raw: legacyRaw,
+        };
+      }
+    } catch {
+      // Continue to the :default fallback below; corrupt unscoped state should
+      // not mask a valid old default entry from the same migration era.
+    }
+  }
+  const defaultRaw = storage?.getItem(SETTINGS_KEY_PREFIX + "default");
+  if (!defaultRaw) {
+    return rejectedLegacy ? { rejected: true } : null;
+  }
+  try {
+    const fallback = JSON.parse(defaultRaw) as PersistedUiSettings;
+    const storedUrl = normalizeOptionalString(fallback.gatewayUrl);
+    if (shouldIgnoreLegacySettingsFallback(storedUrl, pageDerivedUrl)) {
+      return rejectedLegacy ? { rejected: true } : null;
+    }
+    return { raw: defaultRaw };
+  } catch {
+    return rejectedLegacy ? { rejected: true } : null;
+  }
+}
+
 function tokenSessionKeyForGateway(gatewayUrl: string): string {
   return `${TOKEN_SESSION_KEY_PREFIX}${normalizeGatewayTokenScope(gatewayUrl)}`;
 }
@@ -259,12 +364,23 @@ export function loadSettings(): UiSettings {
   };
 
   try {
-    // First check for legacy key (no scope), then check for scoped key
+    // A page-scoped selection remembers which gateway this basePath last used,
+    // while each gateway keeps its payload under its own scope. Falling back to
+    // an unscoped legacy key is allowed only when it belongs to this basePath;
+    // otherwise a sibling gateway on the same origin could hijack the WebSocket.
     const scopedKey = settingsKeyForGateway(defaults.gatewayUrl);
-    const raw =
-      storage?.getItem(scopedKey) ??
-      storage?.getItem(SETTINGS_KEY_PREFIX + "default") ??
-      storage?.getItem(LEGACY_SETTINGS_KEY);
+    const selectedGatewayUrl = normalizeOptionalString(
+      storage?.getItem(currentGatewaySelectionKeyForPage(pageDerivedUrl)),
+    );
+    const selectedRaw = selectedGatewayUrl
+      ? storage?.getItem(settingsKeyForGateway(selectedGatewayUrl))
+      : null;
+    const scopedRaw = storage?.getItem(scopedKey);
+    const legacyRaw = selectedRaw ? null : selectSafeLegacySettingsRaw(storage, pageDerivedUrl);
+    const legacyCandidate = legacyRaw && "raw" in legacyRaw ? legacyRaw : null;
+    const raw: string | null | undefined = selectedRaw ?? scopedRaw ?? legacyCandidate?.raw;
+    const source: "scoped" | "legacy" =
+      legacyCandidate && raw === legacyCandidate.raw ? "legacy" : "scoped";
     if (!raw) {
       return defaults;
     }
@@ -328,7 +444,7 @@ export function loadSettings(): UiSettings {
       customTheme: customTheme ?? undefined,
       locale: isSupportedLocale(parsed.locale) ? parsed.locale : undefined,
     };
-    if ("token" in parsed) {
+    if (source === "legacy" || "token" in parsed) {
       persistSettings(settings);
     }
     return settings;
@@ -512,7 +628,15 @@ function persistSettings(next: UiSettings) {
   const serialized = JSON.stringify(persisted);
   try {
     storage?.setItem(scopedKey, serialized);
-    storage?.setItem(LEGACY_SETTINGS_KEY, serialized);
+    // Keep the page selection separate from gateway-scoped payloads. Reusing
+    // the page key for settings would let default saves clobber remote payloads
+    // or sibling basePaths read each other's selected Gateway (#97636).
+    const { pageUrl: pageDerivedUrl } = deriveDefaultGatewayUrl();
+    storage?.setItem(currentGatewaySelectionKeyForPage(pageDerivedUrl), next.gatewayUrl);
+    storage?.removeItem(LEGACY_SETTINGS_KEY);
+    // The legacy unscoped key is intentionally not written here.  Persisting it
+    // would let the last gateway to save overwrite the shared key and contaminate
+    // settings for every sibling gateway on the same origin (#97636).
   } catch {
     // best-effort — quota exceeded or security restrictions should not
     // prevent in-memory settings and visual updates from being applied
