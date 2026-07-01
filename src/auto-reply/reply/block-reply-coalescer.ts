@@ -25,6 +25,22 @@ export function createBlockReplyCoalescer(params: {
   const joiner = config.joiner ?? "";
   const flushOnEnqueue = config.flushOnEnqueue === true;
 
+  /**
+   * Joins a buffered chunk with the next one using the configured joiner while
+   * collapsing any boundary that already exists at the seam. Block chunks now
+   * carry their own trailing paragraph separator (issue #42106), so re-applying
+   * a "\n\n" joiner verbatim would produce "\n\n\n\n". When the joiner is itself
+   * whitespace we strip a trailing run of that whitespace from the left side
+   * before joining, leaving exactly one separator regardless of whether the
+   * boundary arrived in-band on the chunk or only via the joiner.
+   */
+  const joinBufferedText = (left: string, right: string): string => {
+    if (!joiner || joiner.trim().length > 0) {
+      return `${left}${joiner}${right}`;
+    }
+    return `${left.replace(/\s+$/, "")}${joiner}${right}`;
+  };
+
   let bufferText = "";
   let bufferReplyToId: ReplyPayload["replyToId"];
   let bufferAudioAsVoice: ReplyPayload["audioAsVoice"];
@@ -124,7 +140,7 @@ export function createBlockReplyCoalescer(params: {
 
   /** Merges buffered text into a media payload without changing media metadata. */
   const mergeBufferedTextWithMedia = (payload: ReplyPayload, text: string): ReplyPayload => {
-    const mergedText = text ? `${bufferText}${joiner}${text}` : bufferText;
+    const mergedText = text ? joinBufferedText(bufferText, text) : bufferText;
     const mergedPayload: ReplyPayload = {
       ...payload,
       text: mergedText,
@@ -199,7 +215,7 @@ export function createBlockReplyCoalescer(params: {
       startBufferFromPayload(payload);
     }
 
-    const nextText = bufferText ? `${bufferText}${joiner}${text}` : text;
+    const nextText = bufferText ? joinBufferedText(bufferText, text) : text;
     if (nextText.length > maxChars) {
       if (bufferText) {
         void flush({ force: true });

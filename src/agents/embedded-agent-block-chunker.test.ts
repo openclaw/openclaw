@@ -27,6 +27,45 @@ function expectChunksWithinLength(chunks: string[], maxLength: number) {
 }
 
 describe("EmbeddedBlockChunker", () => {
+  it("preserves the paragraph separator across separate flushed chunks (#42106)", () => {
+    // A reply split into more than one block-streamed delivery must stay
+    // Markdown-equivalent when a client concatenates the deliveries.
+    const chunker = createFlushOnParagraphChunker({ minChars: 1, maxChars: 200 });
+    chunker.append("# Title\n\nFirst paragraph.\n\nSecond paragraph.");
+
+    const chunks: string[] = [];
+    chunker.drain({ force: false, emit: (chunk) => chunks.push(chunk) });
+    chunker.drain({ force: true, emit: (chunk) => chunks.push(chunk) });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    // Concatenating the streamed deliveries reconstructs the original text,
+    // blank-line paragraph boundaries included.
+    expect(chunks.join("")).toBe("# Title\n\nFirst paragraph.\n\nSecond paragraph.");
+    // No delivery is just whitespace.
+    for (const chunk of chunks) {
+      expect(chunk.trim().length).toBeGreaterThan(0);
+    }
+  });
+
+  it("keeps paragraph-boundary chunks within maxChars including the separator (#94216)", () => {
+    // Exact-boundary repro: a paragraph whose length equals maxChars must not
+    // emit `chunk + "\n\n"` (which would exceed maxChars). With maxChars 10 and
+    // "abcdefghij\n\nRest", the paragraph fast path must not emit a 12-char
+    // chunk; it falls through to the size-split path, which respects the bound.
+    const chunker = createFlushOnParagraphChunker({ minChars: 1, maxChars: 10 });
+    chunker.append("abcdefghij\n\nRest");
+
+    const chunks: string[] = [];
+    chunker.drain({ force: false, emit: (chunk) => chunks.push(chunk) });
+    chunker.drain({ force: true, emit: (chunk) => chunks.push(chunk) });
+
+    // No emitted chunk may exceed the delivery bound, separator included.
+    expectChunksWithinLength(chunks, 10);
+    // No content is lost when the over-limit paragraph falls back to size splitting.
+    expect(chunks.join("")).toContain("abcdefghij");
+    expect(chunks.join("")).toContain("Rest");
+  });
+
   it("breaks at paragraph boundary right after fence close", () => {
     // A closed fence is a safe boundary; splitting before it would corrupt
     // markdown rendered by downstream clients.
@@ -52,7 +91,10 @@ describe("EmbeddedBlockChunker", () => {
 
     expect(chunks.length).toBe(1);
     expect(chunks[0]).toContain("console.log");
-    expect(chunks[0]).toMatch(/```\n?$/);
+    // The chunk still ends at the closed fence (never mid-fence) and now carries
+    // the trailing paragraph boundary it ended at so successive deliveries
+    // reconstruct the "\n\n" separator (#42106).
+    expect(chunks[0]).toMatch(/```\n\n$/);
     expect(chunks[0]).not.toContain("After");
     expect(chunker.bufferedText).toMatch(/^After/);
   });
@@ -64,7 +106,7 @@ describe("EmbeddedBlockChunker", () => {
 
     const chunks = drainChunks(chunker);
 
-    expect(chunks).toEqual(["First paragraph.\n\nSecond paragraph."]);
+    expect(chunks).toEqual(["First paragraph.\n\nSecond paragraph.\n\n"]);
     expect(chunker.bufferedText).toBe("Third paragraph.");
   });
 
@@ -107,7 +149,12 @@ describe("EmbeddedBlockChunker", () => {
     const chunks = drainChunks(chunker);
 
     expectChunksWithinLength(chunks, 10);
-    expect(chunks).toEqual(["abcdefghij", "k"]);
+    // "abcdefghij" is a maxChars clamp (no boundary). "k" ends at the paragraph
+    // break, so post-fix (#42106) it carries the consumed "\n\n".
+    expect(chunks).toEqual(["abcdefghij", "k\n\n"]);
+    // The clamped body still respects maxChars; only the boundary chunk gains
+    // the 2-char separator appended after the size decision.
+    expect(chunks[0].length).toBeLessThanOrEqual(10);
     expect(chunker.bufferedText).toBe("Rest");
   });
 
@@ -135,7 +182,7 @@ describe("EmbeddedBlockChunker", () => {
 
     const chunks = drainChunks(chunker);
 
-    expect(chunks).toEqual(["Intro\n```js\nconst a = 1;\n\nconst b = 2;\n```"]);
+    expect(chunks).toEqual(["Intro\n```js\nconst a = 1;\n\nconst b = 2;\n```\n\n"]);
     expect(chunker.bufferedText).toBe("After fence");
   });
 
