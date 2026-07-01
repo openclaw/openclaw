@@ -167,6 +167,7 @@ export const ResponseFrameSchema = Type.Object(
     ok: Type.Boolean(),
     payload: Type.Optional(Type.Unknown()),
     error: Type.Optional(ErrorShapeSchema),
+    meta: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
   },
   { additionalProperties: false },
 );

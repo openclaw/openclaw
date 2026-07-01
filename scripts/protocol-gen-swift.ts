@@ -83,6 +83,9 @@ const DEFAULTED_OPTIONAL_INIT_PARAM_ENTRIES: readonly [string, readonly string[]
   ["ExecApprovalRequestParams", ["requireDeliveryRoute", "suppressDelivery"]],
   ["AgentSummary", ["thinkingLevels", "thinkingOptions", "thinkingDefault"]],
   ["ModelChoice", ["available"]],
+  // Optional response metadata is additive to the v4 envelope; defaulting it to
+  // nil keeps existing `ResponseFrame(..., error:)` Swift call sites compiling.
+  ["ResponseFrame", ["meta"]],
 ];
 
 const DEFAULTED_OPTIONAL_INIT_PARAMS: Record<string, Set<string>> = Object.fromEntries(

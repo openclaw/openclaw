@@ -34,6 +34,7 @@ import {
   validateTalkSessionTurnParams,
   validateTalkSessionTurnResult,
   validateWakeParams,
+  validateResponseFrame,
   type ValidationError,
 } from "./index.js";
 
@@ -845,5 +846,31 @@ describe("validateNodeEventResult", () => {
         reason: "persisted",
       }),
     ).toBe(true);
+  });
+});
+
+describe("validateResponseFrame", () => {
+  it("accepts a response frame without meta (backward compatible)", () => {
+    expect(validateResponseFrame({ type: "res", id: "req-1", ok: true })).toBe(true);
+    expect(validateResponseFrame.errors).toBeNull();
+  });
+
+  it("accepts a response frame carrying server-emitted meta", () => {
+    expect(
+      validateResponseFrame({
+        type: "res",
+        id: "req-2",
+        ok: true,
+        payload: { runId: "run-1" },
+        meta: { cached: true, runId: "run-1" },
+      }),
+    ).toBe(true);
+    expect(validateResponseFrame.errors).toBeNull();
+  });
+
+  it("still rejects unknown top-level fields", () => {
+    expect(
+      validateResponseFrame({ type: "res", id: "req-3", ok: false, unexpected: true }),
+    ).toBe(false);
   });
 });

@@ -215,10 +215,19 @@ loopback/local pairing.
 ## Framing
 
 - **Request**: `{type:"req", id, method, params}`
-- **Response**: `{type:"res", id, ok, payload|error}`
+- **Response**: `{type:"res", id, ok, payload|error, meta?}`
 - **Event**: `{type:"event", event, payload, seq?, stateVersion?}`
 
 Side-effecting methods require **idempotency keys** (see schema).
+
+`meta` is an **optional** free-form object of server-emitted response metadata.
+Method handlers may attach it (for example agent methods set `meta.cached: true`
+on a deduplicated/idempotency-replayed response, alongside `meta.runId`). It is
+advisory, never required, and absent for handlers that supply none — clients that
+do not read it are unaffected. Clients can use it to distinguish a replayed/cached
+response from a fresh one (for example to suppress a retry on a cached failure).
+`meta` is additive to the v4 response envelope; clients that strictly reject
+unknown top-level fields should tolerate or ignore it.
 
 ## Roles + scopes
 
