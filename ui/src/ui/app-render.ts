@@ -5,7 +5,6 @@ import { subtitleForRoute, titleForRoute } from "../app-navigation.ts";
 import {
   appRouter,
   resolveAppNotFound,
-  searchForSession,
   type ApplicationContext,
   type AppRouteModule,
   type RouteId,
@@ -24,6 +23,7 @@ import "../components/login-gate.ts";
 import "../components/page-header.ts";
 import "../components/update-banner.ts";
 import { t } from "../i18n/index.ts";
+import { searchForSession } from "../lib/sessions/index.ts";
 import { resolveAgentIdForSession } from "../pages/chat/chat-avatar.ts";
 import { refreshSlashCommands } from "../pages/chat/chat-commands.ts";
 import { runUpdate } from "../pages/config/data.ts";

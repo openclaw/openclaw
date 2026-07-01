@@ -1,8 +1,9 @@
 import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
-import { searchForSession, type RouteRenderContext } from "../../app-routes.ts";
+import type { RouteRenderContext } from "../../app-routes.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
+import { searchForSession } from "../../lib/sessions/index.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import {
   resolveConfiguredCronModelSuggestions,

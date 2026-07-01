@@ -234,3 +234,7 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
     recentSessions,
   };
 }
+
+export function searchForSession(sessionKey: string): string {
+  return `?session=${encodeURIComponent(sessionKey)}`;
+}

@@ -12,13 +12,14 @@ import type {
   CronRunsStatusFilter,
   CronSortDir,
 } from "../../api/types.ts";
-import { pathForRoute, searchForSession } from "../../app-routes.ts";
+import { pathForRoute } from "../../app-routes.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveCronJobLastRunStatus } from "../../lib/cron-status.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
 import { formatCronSchedule, formatNextRun } from "../../lib/presenter.ts";
+import { searchForSession } from "../../lib/sessions/index.ts";
 import { normalizeStringEntries, uniqueStrings } from "../../lib/string-coerce.ts";
 import type {
   CronFieldErrors,

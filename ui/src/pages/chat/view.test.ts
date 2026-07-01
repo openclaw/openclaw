@@ -2,34 +2,38 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
+import type { UiSettings } from "../../app/settings.ts";
 import {
   blockArtCodeBlockCopyPayloadEncoding,
   encodeBlockArtCodeBlockCopyPayload,
 } from "../../components/markdown.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
 import {
   createModelCatalog,
   createSessionsListResult,
   DEFAULT_CHAT_MODEL_CATALOG,
 } from "../../test-helpers/chat-model.ts";
-import type { AppViewState } from "../../ui/app-view-state.ts";
-import type { GatewayBrowserClient } from "../../ui/gateway.ts";
 import {
   getChatAttachmentDataUrl,
   resetChatAttachmentPayloadStoreForTest,
 } from "./attachment-payload-store.ts";
 import { renderWelcomeState } from "./chat-welcome.ts";
 import { renderChatQueue } from "./components/chat-composer-controls.ts";
-import { renderChatModelSelect, renderChatQuotaPill } from "./components/chat-controls.ts";
+import {
+  renderChatModelSelect,
+  renderChatQuotaPill,
+  type ChatModelControlsState,
+} from "./components/chat-controls.ts";
 import { renderMarkdownSidebar } from "./components/chat-sidebar.ts";
 import { buildRawSidebarContent } from "./components/chat-sidebar.ts";
 import { renderChat, resetChatViewState } from "./view.ts";
 
 const refreshVisibleToolsEffectiveForCurrentSessionMock = vi.hoisted(() =>
-  vi.fn(async (state: AppViewState) => {
+  vi.fn(async (state: ChatHeaderTestState) => {
     const agentId = state.agentsSelectedId ?? "main";
     const sessionKey = state.sessionKey;
     await state.client?.request("tools.effective", { agentId, sessionKey });
@@ -119,6 +123,21 @@ const renderMessageGroupMock = vi.hoisted(() =>
   ),
 );
 const assistantAttachmentRenderVersionMock = vi.hoisted(() => ({ value: 0 }));
+
+type ChatHeaderTestState = ChatModelControlsState & {
+  agentsSelectedId: string | null;
+  settings: UiSettings;
+  sessions: SessionCapability;
+  setRoute: ReturnType<typeof vi.fn>;
+  modelAuthStatusResult?: ChatModelControlsState["modelAuthStatusResult"];
+  toolsEffectiveLoading: boolean;
+  toolsEffectiveLoadingKey: string | null;
+  toolsEffectiveError: string | null;
+  toolsEffectiveResultKey: string | null;
+  toolsEffectiveResult: unknown;
+  applySettings(next: UiSettings): void;
+  onModelChanged(): void | Promise<void>;
+};
 
 function requireFirstAttachmentsChange(
   onAttachmentsChange: ReturnType<typeof vi.fn>,
@@ -246,7 +265,7 @@ function createChatHeaderState(
     thinkingDefault?: string;
     omitSessionFromList?: boolean;
   } = {},
-): { state: AppViewState; request: ReturnType<typeof vi.fn> } {
+): { state: ChatHeaderTestState; request: ReturnType<typeof vi.fn> } {
   let currentModel = overrides.model ?? null;
   let currentModelProvider = overrides.modelProvider ?? (currentModel ? "openai" : null);
   const omitSessionFromList = overrides.omitSessionFromList ?? false;
@@ -340,23 +359,26 @@ function createChatHeaderState(
     }
     throw new Error(`Unexpected request: ${method}`);
   });
+  const client = { request } as unknown as GatewayBrowserClient;
+  const sessions = createSessionCapability({
+    snapshot: { client, connected: true },
+    subscribe: () => () => undefined,
+    subscribeEvents: () => () => undefined,
+  });
+  const initialSessionsResult = createSessionsListResult({
+    model: currentModel,
+    modelProvider: currentModelProvider,
+    defaultsThinkingDefault: overrides.defaultsThinkingDefault,
+    thinkingDefault: overrides.thinkingDefault,
+    omitSessionFromList,
+  });
   const state = {
     sessionKey: "main",
     connected: true,
-    sessionsHideCron: true,
-    sessionsIncludeGlobal: true,
-    sessionsIncludeUnknown: false,
-    sessionsShowArchived: false,
-    sessionsResult: createSessionsListResult({
-      model: currentModel,
-      modelProvider: currentModelProvider,
-      defaultsThinkingDefault: overrides.defaultsThinkingDefault,
-      thinkingDefault: overrides.thinkingDefault,
-      omitSessionFromList,
-    }),
+    sessionsResult: initialSessionsResult,
     chatModelCatalog: catalog,
     chatModelsLoading: false,
-    client: { request } as unknown as GatewayBrowserClient,
+    client,
     settings: {
       gatewayUrl: "",
       token: "",
@@ -367,9 +389,11 @@ function createChatHeaderState(
       themeMode: "dark",
       splitRatio: 0.6,
       navCollapsed: false,
+      navWidth: 280,
       navGroupsCollapsed: {},
       borderRadius: 50,
       chatShowThinking: false,
+      chatShowToolCalls: true,
     },
     chatMessage: "",
     chatStream: null,
@@ -378,6 +402,7 @@ function createChatHeaderState(
     chatQueue: [],
     chatMessages: [],
     chatLoading: false,
+    chatSending: false,
     chatThinkingLevel: null,
     chatVerboseLevel: null,
     lastError: null,
@@ -387,12 +412,13 @@ function createChatHeaderState(
     agentsList: null,
     agentsPanel: "overview",
     agentsSelectedId: null,
+    sessions,
     toolsEffectiveLoading: false,
     toolsEffectiveLoadingKey: null,
     toolsEffectiveResultKey: null,
     toolsEffectiveError: null,
     toolsEffectiveResult: null,
-    applySettings(next: AppViewState["settings"]) {
+    applySettings(next: UiSettings) {
       state.settings = next;
     },
     setRoute: vi.fn(),
@@ -401,38 +427,10 @@ function createChatHeaderState(
     resetToolStream: vi.fn(),
     resetChatScroll: vi.fn(),
     onModelChanged: () => refreshVisibleToolsEffectiveForCurrentSessionMock(state),
-  } as unknown as AppViewState & {
-    client: GatewayBrowserClient;
-    settings: AppViewState["settings"];
-    sessions: SessionCapability;
-  };
-  const sessionState = {
-    result: state.sessionsResult,
-    agentId: null,
-    modelOverrides: {} as Record<string, string | null>,
-    loading: false,
-    error: null,
-    deletedKeys: [],
-  };
-  state.sessions = {
-    state: sessionState,
-    list: async (options = {}) => {
-      const result = (await request("sessions.list", options)) as SessionsListResult;
-      sessionState.result = result;
-      return result;
-    },
-    refresh: async (options = {}) => {
-      const result = (await request("sessions.list", options)) as SessionsListResult;
-      state.sessionsResult = result;
-      sessionState.result = result;
-    },
-    patch: async (key, patch, options = {}) =>
-      (await request("sessions.patch", { key, ...options, ...patch })) as Awaited<
-        ReturnType<SessionCapability["patch"]>
-      >,
-    subscribe: () => () => undefined,
-    dispose: () => undefined,
-  } as SessionCapability;
+  } satisfies ChatHeaderTestState;
+  sessions.subscribe((next) => {
+    state.sessionsResult = next.result;
+  });
   return { state, request };
 }
 

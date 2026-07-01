@@ -9,7 +9,7 @@ import type {
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../../api/types.ts";
-import { pathForRoute, searchForSession } from "../../app-routes.ts";
+import { pathForRoute } from "../../app-routes.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
@@ -24,6 +24,7 @@ import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
 import { parseAgentSessionKey } from "../../lib/session-key.ts";
 import { sessionModelMatchesDefaults } from "../../lib/session-model-defaults.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { searchForSession } from "../../lib/sessions/index.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

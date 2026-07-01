@@ -188,6 +188,7 @@ export {
   scopedAgentListParamsForRefreshTarget,
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
+  searchForSession,
   visibleSessionMatches,
 } from "./navigation.ts";
 export { reconcileSessionHistory } from "./reconcile.ts";

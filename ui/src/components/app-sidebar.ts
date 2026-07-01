@@ -10,7 +10,7 @@ import {
   SIDEBAR_SECTIONS,
   titleForRoute,
 } from "../app-navigation.ts";
-import { pathForRoute, searchForSession, type RouteId } from "../app-routes.ts";
+import { pathForRoute, type RouteId } from "../app-routes.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import "./theme-mode-toggle.ts";
@@ -21,7 +21,7 @@ import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
-import { resolveSessionNavigation } from "../lib/sessions/index.ts";
+import { resolveSessionNavigation, searchForSession } from "../lib/sessions/index.ts";
 import { icons } from "./icons.ts";
 
 type SidebarRecentSession = {

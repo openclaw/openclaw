@@ -3,7 +3,6 @@ import { html, LitElement, type TemplateResult } from "lit";
 import { property } from "lit/decorators.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { AgentsListResult, ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
-import { searchForSession } from "../../app-routes.ts";
 import {
   fetchAssistantIdentity,
   loadLocalAssistantIdentity,
@@ -34,6 +33,7 @@ import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
   resolveSessionKey,
+  searchForSession,
   scopedAgentParamsForSession,
   type SessionCapability,
 } from "../../lib/sessions/index.ts";

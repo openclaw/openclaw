@@ -9,13 +9,14 @@ import "../components/gateway-url-confirmation.ts";
 import "../components/login-gate.ts";
 import "../components/tooltip.ts";
 import "../components/update-banner.ts";
-import { searchForSession, type RouteId } from "../app-routes.ts";
+import type { RouteId } from "../app-routes.ts";
 import {
   COMMAND_PALETTE_TARGET_EVENT,
   type CommandPalette,
   type CommandPaletteTargetDetail,
 } from "../components/command-palette.ts";
 import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
+import { searchForSession } from "../lib/sessions/index.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
 import {
   applicationContext,
