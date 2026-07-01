@@ -1,4 +1,5 @@
 // Reconciles configured plugin installs after the core package update has completed.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { repairMissingConfiguredPluginInstalls } from "../../commands/doctor/shared/missing-configured-plugin-install.js";
 import { UPDATE_POST_CORE_CONVERGENCE_ENV } from "../../commands/doctor/shared/update-phase.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -107,10 +108,13 @@ export async function runPostCorePluginConvergence(params: {
   baselineInstallRecords?: Record<string, PluginInstallRecord>;
   acknowledgeClawHubRisk?: boolean;
   onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
+  compatibilityHostVersion?: string | null;
 }): Promise<PostCoreConvergenceResult> {
+  const compatibilityHostVersion =
+    normalizeOptionalString(params.compatibilityHostVersion) ?? VERSION;
   const env: NodeJS.ProcessEnv = {
     ...params.env,
-    OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION,
+    OPENCLAW_COMPATIBILITY_HOST_VERSION: compatibilityHostVersion,
     [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1",
   };
   const prunedBaseline = params.baselineInstallRecords

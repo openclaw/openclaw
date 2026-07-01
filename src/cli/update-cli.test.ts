@@ -1408,6 +1408,44 @@ describe("update-cli", () => {
     }
   });
 
+  it("pins the compatibility host version to the upgraded target during current-process post-core plugin convergence (#93908)", async () => {
+    const upgradedRoot = createCaseDir("openclaw-upgraded-compat-root");
+    setupUpdatedRootRefresh({
+      gatewayUpdateImpl: async () =>
+        makeOkUpdateResult({
+          mode: "npm",
+          root: upgradedRoot,
+          before: { version: "2026.5.28" },
+          after: { version: "2026.6.8" },
+        }),
+    });
+    readPackageVersion.mockImplementation(async (pkgRoot: string) =>
+      pkgRoot === upgradedRoot ? "2026.6.8" : "2026.5.28",
+    );
+    vi.mocked(resolveNpmChannelTag).mockResolvedValue({ tag: "latest", version: "2026.6.8" });
+
+    delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+    let hostVersionDuringPluginUpdate: string | undefined = "unset";
+    updateNpmInstalledPlugins.mockImplementation(async () => {
+      hostVersionDuringPluginUpdate = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+      return { changed: false, config: baseConfig, outcomes: [] };
+    });
+
+    try {
+      await updateCommand({ yes: true, tag: "2026.6.8", restart: false });
+
+      expect(spawn).not.toHaveBeenCalled();
+      expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
+      expect(hostVersionDuringPluginUpdate).toBe("2026.6.8");
+      expect(postCorePluginConvergence.runPostCorePluginConvergence).toHaveBeenCalledWith(
+        expect.objectContaining({ compatibilityHostVersion: "2026.6.8" }),
+      );
+      expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
+    } finally {
+      delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+    }
+  });
+
   it("fails the update when the fresh process exits non-zero", async () => {
     setupUpdatedRootRefresh();
     spawn.mockImplementationOnce(() => {
