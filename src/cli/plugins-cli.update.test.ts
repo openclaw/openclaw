@@ -766,6 +766,83 @@ describe("plugins cli update", () => {
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
   });
 
+  it("rolls back persisted install records when records-only update invalidates config", async () => {
+    const cfg = {
+      plugins: {
+        entries: {
+          brave: {
+            enabled: true,
+            config: {
+              oldOption: true,
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const previousRecords = {
+      brave: {
+        source: "npm",
+        spec: "@openclaw/brave-plugin@2026.6.11-beta.2",
+        installPath: "/tmp/brave-beta",
+        resolvedName: "@openclaw/brave-plugin",
+        resolvedVersion: "2026.6.11-beta.2",
+      },
+    } as const;
+    const nextRecords = {
+      brave: {
+        ...previousRecords.brave,
+        spec: "@openclaw/brave-plugin@2026.6.11",
+        installPath: "/tmp/brave-stable",
+        resolvedVersion: "2026.6.11",
+      },
+    } as const;
+    const initialSnapshot = primeUpdateConfigSnapshot({ config: cfg });
+    const invalidSnapshot = {
+      ...initialSnapshot,
+      snapshot: {
+        ...initialSnapshot.snapshot,
+        valid: false,
+        issues: [
+          {
+            path: "plugins.entries.brave.config.oldOption",
+            message: "invalid config for plugin brave: must NOT have additional properties",
+          },
+        ],
+      },
+    };
+    readConfigFileSnapshotForWrite
+      .mockResolvedValueOnce(initialSnapshot)
+      .mockResolvedValueOnce(invalidSnapshot);
+    setInstalledPluginIndexInstallRecords(previousRecords);
+    updateNpmInstalledPlugins.mockResolvedValue({
+      config: {
+        ...cfg,
+        plugins: {
+          ...cfg.plugins,
+          installs: nextRecords,
+        },
+      } as OpenClawConfig,
+      changed: true,
+      outcomes: [{ pluginId: "brave", status: "updated", message: "Updated brave." }],
+    });
+
+    await expect(runPluginsCommand(["plugins", "update", "brave"])).rejects.toThrow(
+      "invalid config for plugin brave",
+    );
+
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
+      1,
+      nextRecords,
+    );
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenNthCalledWith(
+      2,
+      previousRecords,
+    );
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(refreshPluginRegistry).not.toHaveBeenCalled();
+  });
+
   it("blocks legacy plugin id migration before updater side effects", async () => {
     const cfg = {
       plugins: {
