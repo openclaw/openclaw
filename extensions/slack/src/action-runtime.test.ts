@@ -3,6 +3,8 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleSlackAction, slackActionRuntime } from "./action-runtime.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
+import { resetSlackChannelTypeCacheForTest } from "./channel-type.js";
+import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
 
 const originalSlackActionRuntime = { ...slackActionRuntime };
 const deleteSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
@@ -19,6 +21,17 @@ const removeOwnSlackReactions = vi.fn(async (..._args: unknown[]) => ["thumbsup"
 const removeSlackReaction = vi.fn(async (..._args: unknown[]) => ({}));
 const sendSlackMessage = vi.fn(async (..._args: unknown[]) => ({ channelId: "C123" }));
 const unpinSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
+const conversationsInfoMock = vi.fn();
+const conversationsOpenMock = vi.fn();
+
+vi.mock("./client.js", () => ({
+  createSlackWebClient: vi.fn(() => ({
+    conversations: {
+      info: conversationsInfoMock,
+      open: conversationsOpenMock,
+    },
+  })),
+}));
 
 describe("handleSlackAction", () => {
   function slackConfig(overrides?: Record<string, unknown>): OpenClawConfig {
@@ -201,6 +214,9 @@ describe("handleSlackAction", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    conversationsInfoMock.mockReset();
+    conversationsOpenMock.mockReset();
+    resetSlackChannelTypeCacheForTest();
     Object.assign(slackActionRuntime, originalSlackActionRuntime, {
       deleteSlackMessage,
       downloadSlackFile,
@@ -992,6 +1008,139 @@ describe("handleSlackAction", () => {
     await handleSlackAction({ action: "readMessages", channelId: "C_ALLOWED" }, cfg);
 
     expect(requireMockArg(readSlackMessages, "readSlackMessages", 0, 0)).toBe("C_ALLOWED");
+  });
+
+  it("resolves name-allowlisted reads from a core-shaped Slack threading context", async () => {
+    conversationsInfoMock.mockResolvedValueOnce({
+      channel: {
+        id: "C0123456789",
+        name: "allowed-channel",
+      },
+    });
+    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      dangerouslyAllowNameMatching: true,
+      channels: {
+        "#allowed-channel": { enabled: true },
+      },
+    });
+    const context = buildSlackThreadingToolContext({
+      cfg,
+      accountId: null,
+      context: {
+        ChatType: "channel",
+        Channel: "slack",
+        To: "channel:C0123456789",
+      },
+    });
+
+    await handleSlackAction({ action: "readMessages", channelId: "C0123456789" }, cfg, context);
+
+    expect(conversationsInfoMock).toHaveBeenCalledWith({ channel: "C0123456789" });
+    expect(requireMockArg(readSlackMessages, "readSlackMessages", 0, 0)).toBe("C0123456789");
+  });
+
+  it("does not treat the core Channel provider value as a Slack room name", async () => {
+    conversationsInfoMock.mockResolvedValueOnce({
+      channel: {
+        id: "C0123456789",
+        name: "actual-room",
+      },
+    });
+
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      dangerouslyAllowNameMatching: true,
+      channels: {
+        "#slack": { enabled: true },
+      },
+    });
+    const context = buildSlackThreadingToolContext({
+      cfg,
+      accountId: null,
+      context: {
+        ChatType: "channel",
+        Channel: "slack",
+        To: "channel:C0123456789",
+      },
+    });
+
+    await expect(
+      handleSlackAction({ action: "readMessages", channelId: "C0123456789" }, cfg, context),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(conversationsInfoMock).toHaveBeenCalledWith({ channel: "C0123456789" });
+    expect(readSlackMessages).not.toHaveBeenCalled();
+  });
+
+  it("does not authorize different Slack targets with the current context channel ID", async () => {
+    conversationsInfoMock.mockResolvedValueOnce({
+      channel: {
+        id: "C9876543210",
+        name: "other-channel",
+      },
+    });
+
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      dangerouslyAllowNameMatching: true,
+      channels: {
+        "#allowed-channel": { enabled: true },
+      },
+    });
+
+    await expect(
+      handleSlackAction({ action: "readMessages", channelId: "C9876543210" }, cfg, {
+        currentChannelId: "C0123456789",
+      }),
+    ).rejects.toThrow("Slack read target channel is not allowed.");
+    expect(readSlackMessages).not.toHaveBeenCalled();
+  });
+
+  it("resolves Slack target channel names before rejecting name-allowlisted reads", async () => {
+    conversationsInfoMock.mockResolvedValueOnce({
+      channel: {
+        id: "C0123456789",
+        name: "allowed-channel",
+      },
+    });
+    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      dangerouslyAllowNameMatching: true,
+      channels: {
+        "#allowed-channel": { enabled: true },
+      },
+    });
+    await handleSlackAction({ action: "readMessages", channelId: "C0123456789" }, cfg);
+
+    expect(conversationsInfoMock).toHaveBeenCalledWith({ channel: "C0123456789" });
+    expect(requireMockArg(readSlackMessages, "readSlackMessages", 0, 0)).toBe("C0123456789");
+  });
+
+  it("resolves Slack target channel names before applying wildcard fallback denial", async () => {
+    conversationsInfoMock.mockResolvedValueOnce({
+      channel: {
+        id: "C0123456789",
+        name: "allowed-channel",
+      },
+    });
+    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+
+    const cfg = slackConfig({
+      groupPolicy: "allowlist",
+      dangerouslyAllowNameMatching: true,
+      channels: {
+        "*": { enabled: false },
+        "#allowed-channel": { enabled: true },
+      },
+    });
+    await handleSlackAction({ action: "readMessages", channelId: "C0123456789" }, cfg);
+
+    expect(conversationsInfoMock).toHaveBeenCalledWith({ channel: "C0123456789" });
+    expect(requireMockArg(readSlackMessages, "readSlackMessages", 0, 0)).toBe("C0123456789");
   });
 
   it("rejects Slack reads for non-allowlisted target channels", async () => {
