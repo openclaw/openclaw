@@ -165,7 +165,7 @@ export function createGatewayHooksRequestHandler(params: {
           job,
           message: value.message,
           sessionKey,
-          lane: "cron",
+          lane: value.lane ?? "cron",
         });
         const summary = resolveHookRunSummary(result);
         const prefix =
