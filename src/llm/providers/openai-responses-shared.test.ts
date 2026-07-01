@@ -67,7 +67,7 @@ const gpt56SolModel = {
   ...nativeOpenAIModel,
   id: "gpt-5.6-sol",
   name: "GPT-5.6 Sol",
-  thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+  thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
 } satisfies Model<"openai-responses">;
 
 function createAssistantOutput(): AssistantMessage {
@@ -247,6 +247,13 @@ describe("convertResponsesTools", () => {
 });
 
 describe("Responses reasoning effort", () => {
+  it("omits unsupported default-off reasoning for GPT-5.6 Sol", () => {
+    const params = {} as never;
+    applyCommonResponsesParams(params, gpt56SolModel, { messages: [] });
+
+    expect(params).not.toHaveProperty("reasoning");
+  });
+
   it("passes max through for GPT-5.6 Sol", () => {
     expect(resolveResponsesReasoningEffort(gpt56SolModel, "max")).toBe("max");
 

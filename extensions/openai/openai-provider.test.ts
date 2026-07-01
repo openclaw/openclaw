@@ -207,6 +207,7 @@ describe("buildOpenAIProvider", () => {
       "gpt-5.6-terra",
       "gpt-5.6-luna",
     ]);
+    expect(gpt56Models?.map((model) => model.thinkingLevelMap?.off)).toEqual([null, null, null]);
     expect(OPENAI_DEFAULT_MODEL).toBe("openai/gpt-5.5");
   });
 
@@ -451,7 +452,7 @@ describe("buildOpenAIProvider", () => {
         compat: {
           supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
         },
-        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+        thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
       });
       expect(openai?.models.find((model) => model.id === "gpt-5.3-codex-spark")).toMatchObject({
         name: "GPT-5.3 Codex Spark",
@@ -1031,17 +1032,17 @@ describe("buildOpenAIProvider", () => {
     {
       id: "gpt-5.6-sol",
       cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
-      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
     },
     {
       id: "gpt-5.6-terra",
       cost: { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 3.125 },
-      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
     },
     {
       id: "gpt-5.6-luna",
       cost: { input: 1, output: 6, cacheRead: 0.1, cacheWrite: 1.25 },
-      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
     },
   ])("resolves $id locally with preview metadata", ({ id, cost, thinkingLevelMap }) => {
     const provider = buildOpenAIProvider();

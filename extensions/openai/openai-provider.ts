@@ -120,6 +120,11 @@ const OPENAI_CHAT_LATEST_TEMPLATE_MODEL_IDS = [
   OPENAI_GPT_54_MODEL_ID,
 ] as const;
 const OPENAI_GPT_56_TEMPLATE_MODEL_IDS = [OPENAI_GPT_55_MODEL_ID] as const;
+const OPENAI_GPT_56_THINKING_LEVEL_MAP = {
+  off: null,
+  xhigh: "xhigh",
+  max: "max",
+} as const;
 const OPENAI_MODERN_MODEL_IDS = [
   OPENAI_CHAT_LATEST_MODEL_ID,
   OPENAI_GPT_56_SOL_MODEL_ID,
@@ -352,6 +357,7 @@ function buildOpenAICodexModelFromLiveRow(row: unknown): ModelDefinitionConfig |
       : fallback?.compat;
   const thinkingLevelMap = {
     ...fallback?.thinkingLevelMap,
+    ...(normalizeLowercaseStringOrEmpty(modelId).startsWith("gpt-5.6") ? { off: null } : {}),
     ...(reasoningLevels.includes("xhigh") ? { xhigh: "xhigh" as const } : {}),
     ...(reasoningLevels.includes("max") ? { max: "max" as const } : {}),
   };
@@ -608,7 +614,7 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
       contextWindow: OPENAI_GPT_56_CONTEXT_TOKENS,
       contextTokens: OPENAI_GPT_56_CONTEXT_TOKENS,
       maxTokens: OPENAI_GPT_54_MAX_TOKENS,
-      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      thinkingLevelMap: OPENAI_GPT_56_THINKING_LEVEL_MAP,
     };
   } else if (lower === OPENAI_GPT_55_MODEL_ID) {
     templateIds = [OPENAI_GPT_55_MODEL_ID, OPENAI_GPT_54_MODEL_ID];
