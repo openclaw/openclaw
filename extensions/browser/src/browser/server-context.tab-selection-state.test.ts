@@ -6,7 +6,6 @@ import "./server-context.chrome-test-harness.js";
 import { CDP_JSON_NEW_TIMEOUT_MS } from "./cdp-timeouts.js";
 import * as cdpHelpersModule from "./cdp.helpers.js";
 import * as cdpModule from "./cdp.js";
-import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import {
   createTestBrowserRouteContext,
   makeManagedTabsWithNew,
@@ -135,6 +134,7 @@ describe("browser server-context tab selection state", () => {
     expect(createTargetViaCdp).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18800",
       url: "http://127.0.0.1:8080",
+      allowLocalFileNavigation: true,
       ssrfPolicy: undefined,
     });
   });
@@ -179,6 +179,7 @@ describe("browser server-context tab selection state", () => {
     expect(createTargetViaCdp).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18800",
       url: "about:blank",
+      allowLocalFileNavigation: true,
       ssrfPolicy: undefined,
     });
   });
@@ -238,6 +239,7 @@ describe("browser server-context tab selection state", () => {
     expect(createTargetViaCdp).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18800",
       url: "about:blank",
+      allowLocalFileNavigation: true,
       ssrfPolicy: undefined,
     });
   });
@@ -349,9 +351,25 @@ describe("browser server-context tab selection state", () => {
     expect(opened.targetId).toBe("NEW");
   });
 
-  it("blocks unsupported non-network URLs before any HTTP tab-open fallback", async () => {
-    const fetchMock = vi.fn(async () => {
-      throw new Error("unexpected fetch");
+  it("allows local file URLs through the tab-open path", async () => {
+    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "FILE" });
+    const fetchMock = vi.fn(async (url: unknown) => {
+      const value = String(url);
+      if (value.includes("/json/list")) {
+        return {
+          ok: true,
+          json: async () => [
+            {
+              id: "FILE",
+              title: "Local Report",
+              url: "file:///tmp/openclaw-report.txt",
+              webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/FILE",
+              type: "page",
+            },
+          ],
+        } as unknown as Response;
+      }
+      throw new Error(`unexpected fetch: ${value}`);
     });
 
     global.fetch = withBrowserFetchPreconnect(fetchMock);
@@ -359,10 +377,11 @@ describe("browser server-context tab selection state", () => {
     const ctx = createTestBrowserRouteContext({ getState: () => state });
     const openclaw = ctx.forProfile("openclaw");
 
-    await expect(openclaw.openTab("file:///etc/passwd")).rejects.toBeInstanceOf(
-      InvalidBrowserNavigationUrlError,
-    );
-    expect(fetchMock).not.toHaveBeenCalled();
+    await expect(openclaw.openTab("file:///tmp/openclaw-report.txt")).resolves.toMatchObject({
+      targetId: "FILE",
+      url: "file:///tmp/openclaw-report.txt",
+    });
+    expect(fetchCallUrls(fetchMock)).toEqual(["http://127.0.0.1:18800/json/list"]);
   });
 
   it("uses the loopback CDP control policy for /json/new fallback requests", async () => {

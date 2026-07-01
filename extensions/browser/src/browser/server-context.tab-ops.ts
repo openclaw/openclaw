@@ -20,6 +20,7 @@ import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
   InvalidBrowserNavigationUrlError,
+  isSameBrowserNavigationUrl,
   requiresInspectableBrowserNavigationRedirectsForUrl,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
@@ -298,12 +299,20 @@ export function createProfileTabOps({
     const ssrfPolicyOpts = getNavigationPolicy();
 
     if (capabilities.usesChromeMcp) {
-      await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
+      await assertBrowserNavigationAllowed({
+        url,
+        allowLocalFileNavigation: true,
+        ...ssrfPolicyOpts,
+      });
       const { openChromeMcpTab } = await getChromeMcpModule();
       const page = await openChromeMcpTab(profile.name, url, profile);
       const profileState = getProfileState();
       profileState.lastTargetId = page.targetId;
-      await assertBrowserNavigationResultAllowed({ url: page.url, ...ssrfPolicyOpts });
+      await assertBrowserNavigationResultAllowed({
+        url: page.url,
+        allowLocalFileNavigation: isSameBrowserNavigationUrl(page.url, url),
+        ...ssrfPolicyOpts,
+      });
       return assignTabAlias({ profileState, tab: page, label: opts?.label });
     }
 
@@ -338,11 +347,16 @@ export function createProfileTabOps({
       );
     }
 
-    await assertBrowserNavigationAllowed({ url, ...ssrfPolicyOpts });
+    await assertBrowserNavigationAllowed({
+      url,
+      allowLocalFileNavigation: true,
+      ...ssrfPolicyOpts,
+    });
     const cdpActionTimeouts = getRemoteCdpActionTimeouts();
     const createTargetOpts: Parameters<typeof createTargetViaCdp>[0] = {
       cdpUrl: profile.cdpUrl,
       url,
+      allowLocalFileNavigation: true,
       ssrfPolicy: getCdpControlPolicy(),
     };
     if (cdpActionTimeouts) {
@@ -360,7 +374,11 @@ export function createProfileTabOps({
         const tabs = await listTabs().catch(() => [] as BrowserTab[]);
         const found = tabs.find((t) => t.targetId === createdViaCdp);
         if (found) {
-          await assertBrowserNavigationResultAllowed({ url: found.url, ...ssrfPolicyOpts });
+          await assertBrowserNavigationResultAllowed({
+            url: found.url,
+            allowLocalFileNavigation: isSameBrowserNavigationUrl(found.url, url),
+            ...ssrfPolicyOpts,
+          });
           triggerManagedTabLimit(found.targetId);
           return assignTabAlias({ profileState, tab: found, label: opts?.label });
         }

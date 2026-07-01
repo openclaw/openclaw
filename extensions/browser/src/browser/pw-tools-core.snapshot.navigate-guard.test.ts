@@ -2,7 +2,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import "../test-support/browser-security.mock.js";
-import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import {
   getPwToolsCoreSessionMocks,
   installPwToolsCoreTestHooks,
@@ -32,22 +31,25 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     vi.unstubAllEnvs();
   });
 
-  it("blocks unsupported non-network URLs before page lookup", async () => {
+  it("allows local file URLs", async () => {
     const goto = vi.fn(async () => {});
     setPwToolsCoreCurrentPage({
       goto,
-      url: vi.fn(() => "about:blank"),
+      url: vi.fn(() => "file:///tmp/openclaw-report.txt"),
     });
 
     await expect(
       mod.navigateViaPlaywright({
         cdpUrl: "http://127.0.0.1:18792",
-        url: "file:///etc/passwd",
+        url: "file:///tmp/openclaw-report.txt",
       }),
-    ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
+    ).resolves.toBeDefined();
 
-    expect(getPwToolsCoreSessionMocks().getPageForTargetId).not.toHaveBeenCalled();
-    expect(goto).not.toHaveBeenCalled();
+    expect(getPwToolsCoreSessionMocks().getPageForTargetId).toHaveBeenCalled();
+    expect(goto).toHaveBeenCalledWith(
+      "file:///tmp/openclaw-report.txt",
+      expect.objectContaining({ timeout: expect.any(Number) }),
+    );
   });
 
   it("navigates valid network URLs with clamped timeout", async () => {
@@ -76,6 +78,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     });
     expect(getPwToolsCoreSessionMocks().assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18792",
+      initialUrl: "https://example.com",
       page,
       response: null,
       ssrfPolicy: { allowPrivateNetwork: true },

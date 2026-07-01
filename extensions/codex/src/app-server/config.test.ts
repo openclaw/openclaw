@@ -10,6 +10,7 @@ import {
   CODEX_PLUGINS_CONFIG_KEYS,
   canUseCodexModelBackedApprovalsReviewerForModel,
   codexAppServerStartOptionsKey,
+  codexSandboxPolicyForTurn,
   fingerprintCodexAppServerNetworkProxyConfigPatch,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
@@ -69,6 +70,23 @@ function expectUiHintLabel(manifest: { uiHints: Record<string, unknown> }, key: 
 }
 
 describe("Codex app-server config", () => {
+  it("keeps workspace-write filesystem-scoped while allowing network egress", () => {
+    expect(codexSandboxPolicyForTurn("workspace-write", "/workspace")).toEqual({
+      type: "workspaceWrite",
+      writableRoots: ["/workspace"],
+      networkAccess: true,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    });
+  });
+
+  it("keeps read-only sandbox network-denied", () => {
+    expect(codexSandboxPolicyForTurn("read-only", "/workspace")).toEqual({
+      type: "readOnly",
+      networkAccess: false,
+    });
+  });
+
   it("only auto-approves app-server approvals for full yolo runtime policy", () => {
     expect(
       shouldAutoApproveCodexAppServerApprovals({
