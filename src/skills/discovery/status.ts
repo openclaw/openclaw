@@ -21,6 +21,7 @@ import {
   resolveSkillConfig,
   resolveSkillsInstallPreferences,
 } from "../loading/config.js";
+import { collectSkillLoadFailures, type SkillLoadFailure } from "../loading/local-loader.js";
 import { loadWorkspaceSkillEntries } from "../loading/workspace.js";
 import type {
   SkillEntry,
@@ -85,6 +86,51 @@ export type SkillStatusReport = {
   agentSkillFilter?: string[];
   skills: SkillStatusEntry[];
 };
+
+export type SkillLintReport = {
+  roots: string[];
+  failures: SkillLoadFailure[];
+};
+
+/**
+ * Scans skill roots (recursively, including nested skill groups) and reports SKILL.md
+ * directories that failed to load, so authors see why a skill was silently dropped:
+ * malformed YAML (strict), a parse error, or a missing required field.
+ */
+export function lintSkillRoots(roots: readonly string[]): SkillLintReport {
+  const seenRoots = new Set<string>();
+  const seenFailureFiles = new Set<string>();
+  const failures: SkillLoadFailure[] = [];
+  for (const root of roots) {
+    const resolved = path.resolve(root);
+    if (seenRoots.has(resolved)) {
+      continue;
+    }
+    seenRoots.add(resolved);
+    for (const failure of collectSkillLoadFailures({
+      dir: resolved,
+      source: "lint",
+      strictYaml: true,
+    })) {
+      // Overlapping roots can surface the same SKILL.md twice; report each file once.
+      if (seenFailureFiles.has(failure.filePath)) {
+        continue;
+      }
+      seenFailureFiles.add(failure.filePath);
+      failures.push(failure);
+    }
+  }
+  return { roots: [...seenRoots], failures };
+}
+
+/** Default skill roots linted when no explicit path is passed: workspace and managed dirs. */
+export function resolveDefaultSkillLintRoots(
+  workspaceDir: string,
+  opts?: { managedSkillsDir?: string },
+): string[] {
+  const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
+  return [path.join(workspaceDir, "skills"), managedSkillsDir];
+}
 
 export function resolveSkillStatusEntry(
   skills: readonly SkillStatusEntry[],

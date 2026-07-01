@@ -196,6 +196,25 @@ function extractFrontmatterBlock(content: string): string | undefined {
   return normalized.slice(4, endIndex);
 }
 
+/**
+ * Reports a YAML syntax error in the leading frontmatter block, or null when the block
+ * is absent or parses cleanly. `parseFrontmatterBlock` deliberately falls back to a
+ * permissive line parser on YAML errors (so runtime loading stays lenient); strict
+ * callers such as `skills lint` use this to surface malformed YAML the line parser hides.
+ */
+export function frontmatterYamlSyntaxError(content: string): string | null {
+  const block = extractFrontmatterBlock(content);
+  if (!block) {
+    return null;
+  }
+  try {
+    YAML.parse(block, { schema: "core" });
+    return null;
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+}
+
 /** Parses leading YAML frontmatter into string values used by skill and metadata loaders. */
 export function parseFrontmatterBlock(content: string): ParsedFrontmatter {
   const block = extractFrontmatterBlock(content);

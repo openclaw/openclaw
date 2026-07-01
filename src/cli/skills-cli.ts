@@ -248,6 +248,32 @@ function readVerifiedSkillCardUrl(
   return { ok: true, url };
 }
 
+function formatSkillsLint(report: {
+  roots: string[];
+  failures: Array<
+    | { dir: string; filePath: string; reason: "parse-error"; message: string }
+    | {
+        dir: string;
+        filePath: string;
+        reason: "missing-required-field";
+        field: "name" | "description";
+      }
+  >;
+}): string {
+  if (report.failures.length === 0) {
+    return `No skill load failures.\n`;
+  }
+  const lines: string[] = [theme.heading(`Failed to load (${report.failures.length}):`)];
+  for (const failure of report.failures) {
+    const detail =
+      failure.reason === "parse-error"
+        ? `parse error: ${failure.message}`
+        : `missing required field: ${failure.field}`;
+    lines.push(`  ${theme.error("✗")} ${failure.filePath}  ${theme.warn(`(${detail})`)}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
 function formatSkillProposalList(manifest: SkillProposalManifest): string {
   if (manifest.proposals.length === 0) {
     return "No skill proposals.\n";
@@ -958,6 +984,35 @@ export function registerSkillsCli(program: Command) {
       await runSkillsAction((report) => formatSkillsCheck(report, opts), {
         agentId: resolveAgentOption(command, opts),
       });
+    });
+
+  skills
+    .command("lint")
+    .description("Report SKILL.md directories that failed to load and why")
+    .argument("[path]", "Skill directory or skills root to lint (defaults to workspace + managed)")
+    .option("--json", "Output as JSON", false)
+    .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
+    .action(async (pathArg: string | undefined, opts: { json?: boolean; agent?: string }) => {
+      try {
+        const explicitPath = normalizeOptionalString(pathArg);
+        const { lintSkillRoots, resolveDefaultSkillLintRoots } =
+          await import("../skills/discovery/status.js");
+        const roots = explicitPath
+          ? [explicitPath]
+          : resolveDefaultSkillLintRoots(resolveActiveWorkspaceDir({ agentId: opts.agent }));
+        const report = lintSkillRoots(roots);
+        if (opts.json) {
+          defaultRuntime.writeJson(report);
+        } else {
+          defaultRuntime.writeStdout(formatSkillsLint(report));
+        }
+        if (report.failures.length > 0) {
+          defaultRuntime.exit(1);
+        }
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
     });
 
   // Default action (no subcommand) - show list
