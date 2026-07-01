@@ -71,6 +71,8 @@ export function createChatAbortContext(
     agentRunSeq: new Map<string, number>(),
     getRuntimeConfig: () => ({}),
     broadcast: vi.fn(),
+    broadcastToConnIds: vi.fn(),
+    getSessionEventSubscriberConnIds: () => new Set<string>(),
     nodeSendToSession: vi.fn(),
     logGateway: { warn: vi.fn() },
     ...overrides,
