@@ -51,6 +51,11 @@ type NativeLocaleSyncOptions = {
   translate?: NativeTranslator;
   translationsDir?: string;
 };
+type NativeI18nCommand = {
+  command: "check" | "sync";
+  locale?: string;
+  write: boolean;
+};
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
@@ -971,21 +976,37 @@ export async function syncNativeLocale(
   return { changed, translated: translated.size };
 }
 
-async function main() {
-  const [command, ...args] = process.argv.slice(2);
+export function parseNativeI18nCommand(argv: string[]): NativeI18nCommand {
+  const [command, ...args] = argv;
   if (command !== "check" && command !== "sync") {
     throw new Error(
       "usage: node --import tsx scripts/native-app-i18n.ts check|sync [--write] [--locale <code>]",
     );
   }
-  await syncNativeI18n({
-    checkOnly: command === "check",
-    write: command === "sync" && process.argv.includes("--write"),
-  });
-  const localeFlag = args.indexOf("--locale");
-  const locale = localeFlag >= 0 ? args[localeFlag + 1] : undefined;
+  let locale: string | undefined;
+  let write = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === "--write") {
+      write = true;
+      continue;
+    }
+    if (argument === "--locale") {
+      if (locale) {
+        throw new Error("native locale refresh accepts only one `--locale` value");
+      }
+      const value = args[index + 1];
+      if (!value || value.startsWith("-")) {
+        throw new Error("native locale refresh requires a locale value after `--locale`");
+      }
+      locale = value;
+      index += 1;
+      continue;
+    }
+    throw new Error(`unsupported native i18n argument: ${argument}`);
+  }
   if (locale) {
-    if (command !== "sync" || !process.argv.includes("--write")) {
+    if (command !== "sync" || !write) {
       throw new Error("native locale refresh requires `sync --write --locale <code>`");
     }
     if (!NATIVE_I18N_LOCALE_SET.has(locale)) {
@@ -993,7 +1014,21 @@ async function main() {
         `unsupported native locale "${locale}". Expected one of: ${NATIVE_I18N_LOCALES.join(", ")}`,
       );
     }
-    await syncNativeLocale(locale, await collectNativeI18nEntries());
+  }
+  if (command === "check" && write) {
+    throw new Error("native i18n check does not accept `--write`");
+  }
+  return { command, locale, write };
+}
+
+async function main() {
+  const parsed = parseNativeI18nCommand(process.argv.slice(2));
+  await syncNativeI18n({
+    checkOnly: parsed.command === "check",
+    write: parsed.command === "sync" && parsed.write,
+  });
+  if (parsed.locale) {
+    await syncNativeLocale(parsed.locale, await collectNativeI18nEntries());
   }
 }
 

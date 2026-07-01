@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   collectNativeI18nEntries,
   NATIVE_I18N_LOCALES,
+  parseNativeI18nCommand,
   syncNativeLocale,
   type NativeI18nEntry,
 } from "../../scripts/native-app-i18n.ts";
@@ -194,5 +195,25 @@ describe("native app i18n inventory", () => {
     } finally {
       await rm(translationsDir, { force: true, recursive: true });
     }
+  });
+
+  it("validates locale refresh arguments before write paths run", () => {
+    expect(parseNativeI18nCommand(["sync", "--write", "--locale", "sv"])).toEqual({
+      command: "sync",
+      locale: "sv",
+      write: true,
+    });
+    expect(() => parseNativeI18nCommand(["sync", "--write", "--locale"])).toThrow(
+      "requires a locale value",
+    );
+    expect(() => parseNativeI18nCommand(["sync", "--write", "--locale", "--write"])).toThrow(
+      "requires a locale value",
+    );
+    expect(() => parseNativeI18nCommand(["sync", "--write", "--locale", "xx"])).toThrow(
+      "unsupported native locale",
+    );
+    expect(() => parseNativeI18nCommand(["check", "--locale", "sv"])).toThrow(
+      "requires `sync --write",
+    );
   });
 });
