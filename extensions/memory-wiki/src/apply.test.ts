@@ -180,39 +180,55 @@ describe("applyMemoryWikiMutation", () => {
     await expect(fs.readFile(brokenPath, "utf8")).resolves.toBe(brokenPage);
   });
 
-  it("rejects a malformed write target without replacing its metadata (#96125)", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-apply-invalid-target-",
-    });
-    await fs.mkdir(path.join(rootDir, "syntheses"), { recursive: true });
-    const targetPath = path.join(rootDir, "syntheses", "conflicted.md");
-    const original = [
-      "---",
-      "pageType: synthesis",
-      "id: synthesis.conflicted",
-      "sourceIds:",
-      '  - **MEMORY.md line 235**:"some quoted, value"',
-      "---",
-      "",
-      "# Conflicted",
-      "",
-      "Keep this body.",
-    ].join("\n");
-    await fs.writeFile(targetPath, original, "utf8");
+  it.each([
+    {
+      name: "syntax-error",
+      frontmatterLines: [
+        "pageType: synthesis",
+        "id: synthesis.conflicted",
+        "sourceIds:",
+        '  - **MEMORY.md line 235**:"some quoted, value"',
+      ],
+      error: "Unexpected scalar",
+    },
+    {
+      name: "sequence-root",
+      frontmatterLines: ["- pageType: synthesis", "  id: synthesis.conflicted"],
+      error: "Wiki frontmatter must be a YAML mapping",
+    },
+  ])(
+    "rejects a malformed write target without replacing its metadata ($name) (#96125)",
+    async ({ frontmatterLines, error }) => {
+      const { rootDir, config } = await createVault({
+        prefix: "memory-wiki-apply-invalid-target-",
+      });
+      await fs.mkdir(path.join(rootDir, "syntheses"), { recursive: true });
+      const targetPath = path.join(rootDir, "syntheses", "conflicted.md");
+      const original = [
+        "---",
+        ...frontmatterLines,
+        "---",
+        "",
+        "# Conflicted",
+        "",
+        "Keep this body.",
+      ].join("\n");
+      await fs.writeFile(targetPath, original, "utf8");
 
-    await expect(
-      applyMemoryWikiMutation({
-        config,
-        mutation: {
-          op: "create_synthesis",
-          title: "Conflicted",
-          body: "Replacement body.",
-          sourceIds: ["source.new"],
-        },
-      }),
-    ).rejects.toThrow("Unexpected scalar");
-    await expect(fs.readFile(targetPath, "utf8")).resolves.toBe(original);
-  });
+      await expect(
+        applyMemoryWikiMutation({
+          config,
+          mutation: {
+            op: "create_synthesis",
+            title: "Conflicted",
+            body: "Replacement body.",
+            sourceIds: ["source.new"],
+          },
+        }),
+      ).rejects.toThrow(error);
+      await expect(fs.readFile(targetPath, "utf8")).resolves.toBe(original);
+    },
+  );
 
   it("updates page metadata without overwriting existing human notes", async () => {
     const { rootDir, config } = await createVault({

@@ -454,6 +454,26 @@ describe("toWikiPageSummary", () => {
     expect(() => parseWikiMarkdown(raw)).toThrow("Unexpected scalar");
   });
 
+  it.each([
+    { name: "sequence", frontmatter: "- pageType: synthesis" },
+    { name: "scalar", frontmatter: "synthesis" },
+  ])("reports and excludes $name frontmatter roots from page scans", ({ frontmatter }) => {
+    const raw = ["---", frontmatter, "---", "", "# Invalid Root"].join("\n");
+    const params = {
+      absolutePath: "/tmp/wiki/syntheses/invalid-root.md",
+      relativePath: "syntheses/invalid-root.md",
+      raw,
+    };
+    const result = scanWikiPageSummary(params);
+    if (result.status !== "invalid-frontmatter") {
+      throw new Error("expected invalid frontmatter result");
+    }
+
+    expect(result.error.message).toBe("Wiki frontmatter must be a YAML mapping");
+    expect(toWikiPageSummary(params)).toBeNull();
+    expect(() => parseWikiMarkdown(raw)).toThrow("Wiki frontmatter must be a YAML mapping");
+  });
+
   it("preserves frontmatter and body for valid YAML (#96125 control)", () => {
     const raw = [
       "---",

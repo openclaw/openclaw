@@ -189,12 +189,14 @@ export function parseWikiMarkdown(content: string): ParsedWikiMarkdown {
     return { hasFrontmatter: false, frontmatter: {}, body: content };
   }
   const parsed = YAML.parse(match[1]) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    // Every writer spreads this value back into YAML. Reject non-mapping roots
+    // so an edit cannot silently replace scalar or sequence frontmatter.
+    throw new TypeError("Wiki frontmatter must be a YAML mapping");
+  }
   return {
     hasFrontmatter: true,
-    frontmatter:
-      parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
-        : {},
+    frontmatter: parsed as Record<string, unknown>,
     body: content.slice(match[0].length),
   };
 }

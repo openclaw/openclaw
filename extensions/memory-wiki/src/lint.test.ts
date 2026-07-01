@@ -538,28 +538,44 @@ describe("lintMemoryWikiVault", () => {
     );
   });
 
-  it("rejects a malformed lint report without changing its bytes", async () => {
-    const { rootDir, config } = await createVault({
-      prefix: "memory-wiki-lint-malformed-report-",
-    });
-    const reportPath = path.join(rootDir, "reports", "lint.md");
-    await fs.mkdir(path.dirname(reportPath), { recursive: true });
-    const malformedReport = [
-      "---",
-      "pageType: report",
-      "id: report.lint",
-      "sourceIds:",
-      '  - **MEMORY.md line 235**:"some quoted, value"',
-      "---",
-      "",
-      "# Lint Report",
-      "",
-      "Existing report body.",
-      "",
-    ].join("\n");
-    await fs.writeFile(reportPath, malformedReport, "utf8");
+  it.each([
+    {
+      name: "syntax-error",
+      frontmatterLines: [
+        "pageType: report",
+        "id: report.lint",
+        "sourceIds:",
+        '  - **MEMORY.md line 235**:"some quoted, value"',
+      ],
+      error: "Unexpected scalar",
+    },
+    {
+      name: "sequence-root",
+      frontmatterLines: ["- pageType: report", "  id: report.lint"],
+      error: "Wiki frontmatter must be a YAML mapping",
+    },
+  ])(
+    "rejects a malformed lint report without changing its bytes ($name)",
+    async ({ frontmatterLines, error }) => {
+      const { rootDir, config } = await createVault({
+        prefix: "memory-wiki-lint-malformed-report-",
+      });
+      const reportPath = path.join(rootDir, "reports", "lint.md");
+      await fs.mkdir(path.dirname(reportPath), { recursive: true });
+      const malformedReport = [
+        "---",
+        ...frontmatterLines,
+        "---",
+        "",
+        "# Lint Report",
+        "",
+        "Existing report body.",
+        "",
+      ].join("\n");
+      await fs.writeFile(reportPath, malformedReport, "utf8");
 
-    await expect(lintMemoryWikiVault(config)).rejects.toThrow("Unexpected scalar");
-    await expect(fs.readFile(reportPath, "utf8")).resolves.toBe(malformedReport);
-  });
+      await expect(lintMemoryWikiVault(config)).rejects.toThrow(error);
+      await expect(fs.readFile(reportPath, "utf8")).resolves.toBe(malformedReport);
+    },
+  );
 });
