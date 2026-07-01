@@ -1079,6 +1079,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       modelRun?: boolean;
       promptMode?: "full" | "minimal" | "none";
       bootstrapContextMode?: "full" | "lightweight";
+      // Commitment fan-out scope is scheduler-internal and cannot be selected over Gateway RPC.
       bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
       acpTurnSource?: "manual_spawn";
       internalRuntimeHandoffId?: string;

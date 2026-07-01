@@ -121,6 +121,7 @@ import {
   isRelayableExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
+import { HEARTBEAT_RUN_SCOPE, type HeartbeatRunScope } from "./heartbeat-run-scope.js";
 import {
   computeNextHeartbeatPhaseDueMs,
   resolveHeartbeatPhaseMs,
@@ -1015,6 +1016,7 @@ async function resolveHeartbeatPreflight(params: {
   cfg: OpenClawConfig;
   agentId: string;
   heartbeat?: HeartbeatConfig;
+  runScope: HeartbeatRunScope;
   forcedSessionKey?: string;
   reason?: string;
   source?: HeartbeatWakeSource;
@@ -1030,7 +1032,8 @@ async function resolveHeartbeatPreflight(params: {
     params.heartbeat,
     params.forcedSessionKey,
   );
-  const pendingEventEntries = peekSystemEventEntries(session.sessionKey);
+  const pendingEventEntries =
+    params.runScope === "commitment-only" ? [] : peekSystemEventEntries(session.sessionKey);
   const dueCommitments = canHeartbeatDeliverCommitments(params.heartbeat)
     ? selectCommitmentDeliveryBatch(
         await listDueCommitmentsForSession({
@@ -1068,6 +1071,7 @@ async function resolveHeartbeatPreflight(params: {
     shouldInspectWakePendingEvents ||
     hasTaggedCronEvents;
   const shouldBypassFileGates =
+    params.runScope === "commitment-only" ||
     wakeFlags.isExecEventWake ||
     wakeFlags.isCronWake ||
     wakeFlags.isWakePayload ||
@@ -1221,7 +1225,7 @@ function resolveHeartbeatRunPrompt(params: {
   dueTasks: HeartbeatTask[];
   heartbeatFileContent?: string;
   useHeartbeatResponseTool: boolean;
-  isCommitmentWake?: boolean;
+  runScope: HeartbeatRunScope;
 }): HeartbeatPromptResolution {
   const pendingEventEntries = params.preflight.pendingEventEntries;
   const cronEvents = pendingEventEntries
@@ -1245,9 +1249,7 @@ function resolveHeartbeatRunPrompt(params: {
     useHeartbeatResponseTool: false,
   });
   const hasDueCommitments = Boolean(commitmentPrompt);
-  const isCommitmentWake = params.isCommitmentWake === true;
-
-  if (isCommitmentWake) {
+  if (params.runScope === "commitment-only") {
     if (commitmentPrompt) {
       return {
         prompt: commitmentPrompt,
@@ -1400,6 +1402,7 @@ export async function runHeartbeatOnce(opts: {
   source?: HeartbeatWakeSource;
   intent?: HeartbeatWakeIntent;
   reason?: string;
+  runScope?: HeartbeatRunScope;
   deps?: HeartbeatDeps;
 }): Promise<HeartbeatRunResult> {
   const cfg = opts.cfg ?? getRuntimeConfig();
@@ -1416,6 +1419,7 @@ export async function runHeartbeatOnce(opts: {
     source: opts.source,
     mergeRequestedHeartbeat: opts.source === "cron",
   });
+  const runScope = opts.runScope ?? "global";
   if (!areHeartbeatsEnabled()) {
     return { status: "skipped", reason: "disabled" };
   }
@@ -1507,6 +1511,7 @@ export async function runHeartbeatOnce(opts: {
     cfg,
     agentId,
     heartbeat,
+    runScope,
     forcedSessionKey: opts.sessionKey,
     source: opts.source,
     reason: opts.reason,
@@ -1546,8 +1551,8 @@ export async function runHeartbeatOnce(opts: {
   }
 
   const previousUpdatedAt = entry?.updatedAt;
-  const isCommitmentWake = opts.reason === "commitment";
-  const dueHeartbeatTasks = isCommitmentWake ? [] : resolveDueHeartbeatTasks(preflight, startedAt);
+  const dueHeartbeatTasks =
+    runScope === "commitment-only" ? [] : resolveDueHeartbeatTasks(preflight, startedAt);
 
   // When isolatedSession is enabled, create a fresh session via the same
   // pattern as cron sessionTarget: "isolated". This gives the heartbeat
@@ -1643,7 +1648,7 @@ export async function runHeartbeatOnce(opts: {
     dueTasks: dueHeartbeatTasks,
     heartbeatFileContent: preflight.heartbeatFileContent,
     useHeartbeatResponseTool: useHeartbeatResponseToolPrompt,
-    isCommitmentWake,
+    runScope,
   });
   const dueCommitmentIds = hasDueCommitments
     ? preflight.dueCommitments.map((commitment) => commitment.id)
@@ -1926,6 +1931,7 @@ export async function runHeartbeatOnce(opts: {
     const replyOperationRunState: ReplyOperationRunState = {};
     const replyOpts = {
       isHeartbeat: true,
+      [HEARTBEAT_RUN_SCOPE]: runScope,
       [REPLY_OPERATION_RUN_STATE]: replyOperationRunState,
       ...(heartbeatModelOverride ? { heartbeatModelOverride } : {}),
       suppressToolErrorWarnings,
@@ -2594,6 +2600,7 @@ export function startHeartbeatRunner(opts: {
             source: params.source,
             intent,
             reason,
+            runScope: "global",
             sessionKey: requestedSessionKey,
             deps: { runtime: state.runtime },
           });
@@ -2651,6 +2658,7 @@ export function startHeartbeatRunner(opts: {
             source: params.source,
             intent,
             reason,
+            runScope: "global",
             deps: { runtime: state.runtime },
           });
         } catch (err) {
@@ -2699,7 +2707,7 @@ export function startHeartbeatRunner(opts: {
               cfg: state.cfg,
               agentId: agent.agentId,
               heartbeat: agent.heartbeat,
-              reason: "commitment",
+              runScope: "commitment-only",
               sessionKey: dueSessionKey,
               deps: { runtime: state.runtime },
             });
