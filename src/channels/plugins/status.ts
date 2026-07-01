@@ -51,7 +51,9 @@ export async function buildChannelAccountSnapshotFromAccount<ResolvedAccount>(pa
     };
   }
 
+  const runtimeFields = projectSafeChannelAccountSnapshotFields(params.runtime);
   return {
+    ...runtimeFields,
     ...snapshot,
     accountId: normalizeOptionalString(snapshot.accountId) ? snapshot.accountId : params.accountId,
     enabled: snapshot.enabled ?? params.enabledFallback,
@@ -86,9 +88,12 @@ export async function buildChannelAccountSnapshot<ResolvedAccount>(params: {
   probe?: unknown;
   audit?: unknown;
 }): Promise<ChannelAccountSnapshot> {
-  const inspectedAccount = await inspectChannelAccount(params);
-  const account = (inspectedAccount ??
-    params.plugin.config.resolveAccount(params.cfg, params.accountId)) as ResolvedAccount;
+  const account = (
+    params.plugin.status?.buildAccountSnapshot
+      ? params.plugin.config.resolveAccount(params.cfg, params.accountId)
+      : ((await inspectChannelAccount(params)) ??
+        params.plugin.config.resolveAccount(params.cfg, params.accountId))
+  ) as ResolvedAccount;
   return await buildChannelAccountSnapshotFromAccount({
     ...params,
     account,
