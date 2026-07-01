@@ -33,6 +33,7 @@ import {
 import {
   createMattermostClient,
   fetchMattermostMe,
+  fetchMattermostThread,
   normalizeMattermostBaseUrl,
   updateMattermostPost,
   type MattermostClient,
@@ -116,6 +117,7 @@ import {
 import { sendMessageMattermost } from "./send.js";
 import { cleanupSlashCommands } from "./slash-commands.js";
 import { deactivateSlashCommands, getSlashCommandState } from "./slash-state.js";
+import { buildThreadBackfillEntries, shouldBackfillThreadFromServer } from "./thread-backfill.js";
 import {
   hasMattermostThreadParticipationWithPersistence,
   recordMattermostThreadParticipation,
@@ -869,6 +871,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const channelHistories = new Map<string, HistoryEntry[]>();
+  // Thread roots serviced this process lifetime. Used to distinguish a genuine
+  // restart/session-clear recovery (window never built here) from the ordinary
+  // empty window the turn kernel leaves after every successful dispatch.
+  const backfilledThreadRoots = new Set<string>();
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const { groupPolicy, providerMissingFallbackApplied } =
@@ -1580,6 +1586,71 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         let combinedBody = body;
         if (historyKey) {
           const channelHistory = createChannelHistoryWindow({ historyMap: channelHistories });
+          // Recovery backfill: when re-mentioned inside an existing thread but
+          // the in-memory history window is empty (gateway restart / session
+          // clear), fetch the thread from the server so the agent replies with
+          // context instead of blind. See issue #93204.
+          //
+          // Gated on first-sighting recovery (not a bare empty window): the
+          // turn kernel clears the pending-history window after every
+          // successful turn, so an empty window is also the normal steady
+          // state for an active thread. shouldBackfillThreadFromServer marks
+          // each root as serviced so the fetch fires at most once per root per
+          // process lifetime and never on ordinary post-turn empty windows.
+          if (
+            shouldBackfillThreadFromServer({
+              threadRootId,
+              historyLimit,
+              currentWindowSize: channelHistories.get(historyKey)?.length ?? 0,
+              seenThreadRoots: backfilledThreadRoots,
+            })
+          ) {
+            // shouldBackfillThreadFromServer returns true only when threadRootId
+            // is set; capture it as a non-optional local for the fetch call.
+            const recoveryRootId = threadRootId as string;
+            try {
+              const thread = await fetchMattermostThread(client, recoveryRootId);
+              const senderLabelCache = new Map<string, string | undefined>();
+              const resolveSenderLabel = (userId: string): string | undefined => {
+                if (senderLabelCache.has(userId)) {
+                  return senderLabelCache.get(userId);
+                }
+                const label = userId === senderId ? senderName : undefined;
+                senderLabelCache.set(userId, label);
+                return label;
+              };
+              const backfillEntries = buildThreadBackfillEntries({
+                thread,
+                currentPostId: post.id,
+                limit: historyLimit,
+                resolveSenderLabel,
+                isSystemPost,
+              });
+              // Resolve usernames for entries the cheap same-sender shortcut
+              // missed, then re-render so backfilled context uses @usernames.
+              for (const entry of backfillEntries) {
+                if (entry.sender && entry.messageId) {
+                  const threadPost = thread.posts?.[entry.messageId];
+                  const userId = normalizeOptionalString(threadPost?.user_id);
+                  if (userId && entry.sender === userId) {
+                    const username = normalizeOptionalString(
+                      (await resolveUserInfo(userId))?.username,
+                    );
+                    if (username) {
+                      entry.sender = username;
+                    }
+                  }
+                }
+              }
+              if (backfillEntries.length > 0) {
+                channelHistories.set(historyKey, backfillEntries);
+              }
+            } catch (err) {
+              logVerboseMessage(
+                `mattermost: thread backfill failed (channel=${channelId} root=${threadRootId}): ${String(err)}`,
+              );
+            }
+          }
           combinedBody = channelHistory.buildPendingContext({
             historyKey,
             limit: historyLimit,
