@@ -3,7 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runCommandWithTimeout, type CommandOptions } from "../process/exec.js";
+import { runCommandWithTimeout, type CommandOptions, type SpawnResult } from "../process/exec.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { installPackageDir } from "./install-package-dir.js";
 
@@ -179,6 +179,66 @@ describe("installPackageDir", () => {
   const fixtureRootTracker = createSuiteTempRootTracker({
     prefix: "openclaw-install-package-dir-",
   });
+  const emptyNpmFailureCases = [
+    {
+      label: "exit code",
+      npmResult: {
+        stdout: "",
+        stderr: "",
+        code: 1,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      },
+      expectedDetail: "exit code 1",
+    },
+    {
+      label: "signal",
+      npmResult: {
+        stdout: "",
+        stderr: "",
+        code: null,
+        signal: "SIGKILL",
+        killed: true,
+        termination: "signal",
+      },
+      expectedDetail: "signal SIGKILL",
+    },
+  ] satisfies Array<{
+    label: string;
+    npmResult: SpawnResult;
+    expectedDetail: string;
+  }>;
+
+  async function installWithNpmResult(npmResult: SpawnResult) {
+    await fixtureRootTracker.setup();
+    const fixtureRoot = await fixtureRootTracker.make("case");
+    const sourceDir = path.join(fixtureRoot, "source");
+    const targetDir = path.join(fixtureRoot, "plugins", "demo");
+    await fs.mkdir(sourceDir, { recursive: true });
+    await fs.writeFile(
+      path.join(sourceDir, "package.json"),
+      JSON.stringify({
+        name: "demo-plugin",
+        version: "1.0.0",
+        dependencies: {
+          zod: "^4.0.0",
+        },
+      }),
+      "utf-8",
+    );
+    vi.mocked(runCommandWithTimeout).mockResolvedValue(npmResult);
+
+    return await installPackageDir({
+      sourceDir,
+      targetDir,
+      mode: "install",
+      timeoutMs: 1_000,
+      copyErrorPrefix: "failed to copy plugin",
+      hasDeps: true,
+      depsLogMessage: "Installing deps…",
+    });
+  }
 
   afterEach(async () => {
     vi.restoreAllMocks();
@@ -745,97 +805,17 @@ describe("installPackageDir", () => {
     }
   });
 
-  it("includes exit code when npm dependency install fails with empty stdout and stderr", async () => {
-    // Regression for #98484: `openclaw plugins install @openclaw/acpx` surfaced
-    // `npm install failed:` with no trailing detail when npm exited non-zero but
-    // produced no output on either stream. Without an exit code, users get zero
-    // actionable signal (and the hook-pack fallback "missing openclaw.hooks"
-    // message becomes the only visible error, which is misleading for plugins).
-    await fixtureRootTracker.setup();
-    const fixtureRoot = await fixtureRootTracker.make("case");
-    const sourceDir = path.join(fixtureRoot, "source");
-    const targetDir = path.join(fixtureRoot, "plugins", "demo");
-    await fs.mkdir(sourceDir, { recursive: true });
-    await fs.writeFile(
-      path.join(sourceDir, "package.json"),
-      JSON.stringify({
-        name: "demo-plugin",
-        version: "1.0.0",
-        dependencies: {
-          zod: "^4.0.0",
-        },
-      }),
-      "utf-8",
-    );
+  it.each(emptyNpmFailureCases)(
+    "includes $label when npm dependency install fails without output",
+    async ({ npmResult, expectedDetail }) => {
+      const result = await installWithNpmResult(npmResult);
 
-    vi.mocked(runCommandWithTimeout).mockResolvedValue({
-      stdout: "",
-      stderr: "",
-      code: 1,
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
-
-    const result = await installPackageDir({
-      sourceDir,
-      targetDir,
-      mode: "install",
-      timeoutMs: 1_000,
-      copyErrorPrefix: "failed to copy plugin",
-      hasDeps: true,
-      depsLogMessage: "Installing deps…",
-    });
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("npm install failed:");
-      expect(result.error).toContain("exit code 1");
-      expect(result.error.replace(/\s+/g, " ").trim()).not.toMatch(/npm install failed:\s*$/);
-    }
-  });
-
-  it("includes signal detail when npm dependency install is killed by a signal", async () => {
-    await fixtureRootTracker.setup();
-    const fixtureRoot = await fixtureRootTracker.make("case");
-    const sourceDir = path.join(fixtureRoot, "source");
-    const targetDir = path.join(fixtureRoot, "plugins", "demo");
-    await fs.mkdir(sourceDir, { recursive: true });
-    await fs.writeFile(
-      path.join(sourceDir, "package.json"),
-      JSON.stringify({
-        name: "demo-plugin",
-        version: "1.0.0",
-        dependencies: {
-          zod: "^4.0.0",
-        },
-      }),
-      "utf-8",
-    );
-
-    vi.mocked(runCommandWithTimeout).mockResolvedValue({
-      stdout: "",
-      stderr: "",
-      code: null,
-      signal: "SIGKILL",
-      killed: true,
-      termination: "signal",
-    });
-
-    const result = await installPackageDir({
-      sourceDir,
-      targetDir,
-      mode: "install",
-      timeoutMs: 1_000,
-      copyErrorPrefix: "failed to copy plugin",
-      hasDeps: true,
-      depsLogMessage: "Installing deps…",
-    });
-
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("npm install failed:");
-      expect(result.error).toContain("SIGKILL");
-    }
-  });
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain("npm install failed:");
+        expect(result.error).toContain(expectedDetail);
+        expect(result.error.replace(/\s+/g, " ").trim()).not.toMatch(/npm install failed:\s*$/);
+      }
+    },
+  );
 });
