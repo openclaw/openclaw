@@ -1035,6 +1035,154 @@ describe("agentLoop tool termination", () => {
     ]);
     expect(events.at(-1)).toMatchObject({ type: "agent_end" });
   });
+
+  it("stops message.send cascade: first delivery no terminate, second terminates", async () => {
+    // Simulates the message_tool_only cascade scenario documented in #96827:
+    // Turn 1: model sends message.send → hook records delivery, no terminate.
+    // Turn 2: model sends message.send again → hook records + terminate → batch ends.
+    // Without the guard, this would loop 7+ times.
+    const executed: string[] = [];
+    let hasDelivered = false;
+    let turn = 0;
+    const streamFn: StreamFn = () => {
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          turn === 1
+            ? makeAssistantMessage([
+                {
+                  type: "toolCall",
+                  id: "call-msg-1",
+                  name: "message",
+                  arguments: {},
+                },
+              ])
+            : turn === 2
+              ? makeAssistantMessage([
+                  {
+                    type: "toolCall",
+                    id: "call-msg-2",
+                    name: "message",
+                    arguments: {},
+                  },
+                ])
+              : makeAssistantMessage([{ type: "text", text: "should not reach this" }]);
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+
+    const stream = agentLoop(
+      [{ role: "user", content: "hello", timestamp: 1 }],
+      {
+        systemPrompt: "",
+        messages: [],
+        tools: [makeTool("message", executed)],
+      },
+      {
+        ...config,
+        afterToolCall: async ({ toolCall }) => {
+          if (toolCall.name === "message") {
+            if (hasDelivered) {
+              return { terminate: true };
+            }
+            hasDelivered = true;
+          }
+          return undefined;
+        },
+      },
+      undefined,
+      streamFn,
+    );
+
+    const events = await collectEvents(stream);
+
+    // Cascade prevented: loop stops after 2 turns, not 3+.
+    expect(turn).toBe(2);
+    expect(executed).toEqual(["message", "message"]);
+    expect(events.at(-1)).toMatchObject({ type: "agent_end" });
+  });
+
+  it("preserves Slack follow-up: first message.send does not terminate, allows follow-up tool", async () => {
+    // After PR #92343, the first message.send in message_tool_only mode
+    // must NOT terminate the batch so follow-up tools (e.g. Slack actions)
+    // can still execute. Second message.send terminates to prevent cascade.
+    const executed: string[] = [];
+    let hasDelivered = false;
+    let turn = 0;
+    const streamFn: StreamFn = () => {
+      turn += 1;
+      const stream = createAssistantMessageEventStream();
+      queueMicrotask(() => {
+        const message =
+          turn === 1
+            ? makeAssistantMessage([
+                {
+                  type: "toolCall",
+                  id: "call-msg",
+                  name: "message",
+                  arguments: {},
+                },
+              ])
+            : turn === 2
+              ? makeAssistantMessage([
+                  {
+                    type: "toolCall",
+                    id: "call-exec",
+                    name: "exec",
+                    arguments: {},
+                  },
+                ])
+              : makeAssistantMessage([{ type: "text", text: "all done" }]);
+        stream.push({
+          type: "done",
+          reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
+          message,
+        });
+        stream.end();
+      });
+      return stream;
+    };
+
+    const stream = agentLoop(
+      [{ role: "user", content: "reply and run a command", timestamp: 1 }],
+      {
+        systemPrompt: "",
+        messages: [],
+        tools: [makeTool("message", executed), makeTool("exec", executed)],
+      },
+      {
+        ...config,
+        afterToolCall: async ({ toolCall }) => {
+          if (toolCall.name === "message") {
+            if (hasDelivered) {
+              return { terminate: true };
+            }
+            hasDelivered = true;
+          }
+          return undefined;
+        },
+      },
+      undefined,
+      streamFn,
+    );
+
+    const events = await collectEvents(stream);
+
+    // All 3 turns complete: message → exec → text.
+    expect(turn).toBe(3);
+    expect(executed).toEqual(["message", "exec"]);
+    expect(
+      events.filter((e) => e.type === "tool_execution_start"),
+    ).toHaveLength(2);
+    expect(events.at(-1)).toMatchObject({ type: "agent_end" });
+  });
 });
 
 describe("agentLoop thinking state", () => {
