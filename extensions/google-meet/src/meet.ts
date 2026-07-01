@@ -1,3 +1,4 @@
+// Google Meet plugin module implements meet behavior.
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { exportGoogleDriveDocumentText, extractGoogleDriveDocumentId } from "./drive.js";
@@ -282,10 +283,8 @@ async function fetchGoogleMeetJson<T>(params: {
   });
   try {
     if (!response.ok) {
-      const detail = await response.text();
       throw await googleApiError({
         response,
-        detail,
         prefix: params.errorPrefix,
         scopes: [GOOGLE_MEET_MEDIA_SCOPE],
       });
@@ -349,10 +348,8 @@ export async function fetchGoogleMeetSpace(params: {
   });
   try {
     if (!response.ok) {
-      const detail = await response.text();
       throw await googleApiError({
         response,
-        detail,
         prefix: "Google Meet spaces.get",
         scopes: [GOOGLE_MEET_SPACE_SCOPE],
       });
@@ -391,10 +388,8 @@ export async function createGoogleMeetSpace(params: {
   });
   try {
     if (!response.ok) {
-      const detail = await response.text();
       throw await googleApiError({
         response,
-        detail,
         prefix: "Google Meet spaces.create",
         scopes:
           params.config && Object.keys(params.config).length > 0
@@ -441,10 +436,8 @@ export async function endGoogleMeetActiveConference(params: {
   });
   try {
     if (!response.ok) {
-      const detail = await response.text();
       throw await googleApiError({
         response,
-        detail,
         prefix: "Google Meet spaces.endActiveConference",
         scopes: [GOOGLE_MEET_SPACE_CREATED_SCOPE],
       });

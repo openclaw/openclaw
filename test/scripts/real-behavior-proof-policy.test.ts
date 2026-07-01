@@ -1,15 +1,21 @@
+// PR Context And Evidence Policy tests cover GitHub PR-body policy behavior.
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
-  MOCK_ONLY_PROOF_LABEL,
-  NEEDS_REAL_BEHAVIOR_PROOF_LABEL,
+  NEEDS_PR_CONTEXT_LABEL,
   PROOF_OVERRIDE_LABEL,
-  PROOF_SUPPLIED_LABEL,
   evaluateClawSweeperExactHeadProof,
-  evaluateRealBehaviorProof,
+  evaluatePullRequestContext,
   hasClawSweeperExactHeadProof,
   isMaintainerTeamMember,
-  labelsForRealBehaviorProof,
+  labelsForPullRequestContext,
+  readBoundedGitHubApiJson,
 } from "../../scripts/github/real-behavior-proof-policy.mjs";
+
+const blankTemplateBody = readFileSync(
+  new URL("../../.github/pull_request_template.md", import.meta.url),
+  "utf8",
+);
 
 function externalPr(body: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -26,24 +32,72 @@ function externalPr(body: string, overrides: Record<string, unknown> = {}) {
 
 function proofBody(evidence: string, overrides: Record<string, string> = {}) {
   const fields = {
-    behavior: "Gateway startup no longer drops the configured Discord channel.",
-    environment: "macOS 15.4, Node 24, local OpenClaw gateway with a redacted Discord token.",
-    steps: "pnpm openclaw gateway restart, then pnpm openclaw gateway status",
+    problem: "The gateway dropped the configured Discord channel during startup.",
     evidence,
-    observedResult: "The gateway stayed connected and the Discord channel showed ready.",
-    notTested: "No known gaps.",
     ...overrides,
   };
   return [
-    "## Real behavior proof",
+    "## What Problem This Solves",
     "",
-    `- Behavior or issue addressed: ${fields.behavior}`,
-    `- Real environment tested: ${fields.environment}`,
-    `- Exact steps or command run after this patch: ${fields.steps}`,
-    `- Evidence after fix: ${fields.evidence}`,
-    `- Observed result after fix: ${fields.observedResult}`,
-    `- What was not tested: ${fields.notTested}`,
+    fields.problem,
+    "",
+    "## Evidence",
+    "",
+    fields.evidence,
   ].join("\n");
+}
+
+function stalledResponse() {
+  let keepAlive: ReturnType<typeof setTimeout> | undefined;
+  const reader = {
+    read: () =>
+      new Promise<ReadableStreamReadResult<Uint8Array>>(() => {
+        keepAlive = setTimeout(() => {}, 10_000);
+      }),
+    cancel: vi.fn(() => {
+      if (keepAlive) {
+        clearTimeout(keepAlive);
+      }
+      return Promise.resolve();
+    }),
+    releaseLock: vi.fn(),
+  };
+  return {
+    ok: true,
+    status: 200,
+    headers: new Headers(),
+    body: {
+      getReader: () => reader,
+    },
+  };
+}
+
+function contentLengthResponse(contentLength: number) {
+  const cancel = vi.fn(() => Promise.resolve());
+  return {
+    headers: new Headers({ "content-length": String(contentLength) }),
+    body: { cancel },
+    cancel,
+  };
+}
+
+function chunkedResponse(chunks: Uint8Array[]) {
+  const cancel = vi.fn(() => Promise.resolve());
+  const read = vi.fn();
+  for (const chunk of chunks) {
+    read.mockResolvedValueOnce({ done: false, value: chunk });
+  }
+  read.mockResolvedValueOnce({ done: true, value: undefined });
+  return {
+    headers: new Headers(),
+    body: {
+      getReader: () => ({
+        read,
+        cancel,
+        releaseLock: vi.fn(),
+      }),
+    },
+  };
 }
 
 describe("real-behavior-proof-policy", () => {
@@ -54,17 +108,17 @@ describe("real-behavior-proof-policy", () => {
     ["Terminal transcript:", "```text", "$ openclaw gateway status", "discord ready", "```"].join(
       "\n",
     ),
-  ])("passes external PRs with real after-fix evidence: %s", (evidence) => {
-    const evaluation = evaluateRealBehaviorProof({
+  ])("passes external PRs with evidence: %s", (evidence) => {
+    const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(proofBody(evidence)),
     });
 
     expect(evaluation.status).toBe("passed");
-    expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
+    expect(labelsForPullRequestContext(evaluation)).toEqual([]);
   });
 
   it("passes CRLF-formatted external PRs with screenshot proof", () => {
-    const evaluation = evaluateRealBehaviorProof({
+    const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(
         proofBody("![after](https://github.com/user-attachments/assets/gateway-ready)").replace(
           /\n/g,
@@ -74,18 +128,145 @@ describe("real-behavior-proof-policy", () => {
     });
 
     expect(evaluation.status).toBe("passed");
-    expect(evaluation.fields).toStrictEqual({
-      behavior: "Gateway startup no longer drops the configured Discord channel.",
-      evidence: "![after](https://github.com/user-attachments/assets/gateway-ready)",
-      environment: "macOS 15.4, Node 24, local OpenClaw gateway with a redacted Discord token.",
-      notTested: "No known gaps.",
-      observedResult: "The gateway stayed connected and the Discord channel showed ready.",
-      steps: "pnpm openclaw gateway restart, then pnpm openclaw gateway status",
-    });
-    expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
+    expect(labelsForPullRequestContext(evaluation)).toEqual([]);
   });
 
-  it("uses the latest real behavior proof section when duplicates exist", () => {
+  it("requires authored problem content instead of template comments", () => {
+    const evaluation = evaluatePullRequestContext({
+      pullRequest: externalPr(
+        proofBody("![after](https://github.com/user-attachments/assets/gateway-ready)").replace(
+          "The gateway dropped the configured Discord channel during startup.",
+          "<!-- Describe the concrete user, product, or operational problem. -->",
+        ),
+      ),
+    });
+
+    expect(evaluation.status).toBe("missing");
+    expect(evaluation.missingSections).toEqual(["What Problem This Solves"]);
+  });
+
+  it("does not accept the untouched current template", () => {
+    const evaluation = evaluatePullRequestContext({
+      pullRequest: externalPr(blankTemplateBody),
+    });
+
+    expect(evaluation.status).toBe("missing");
+    expect(evaluation.missingSections).toEqual(["What Problem This Solves", "Evidence"]);
+  });
+
+  it("does not accept sections hidden by an unclosed HTML comment", () => {
+    const evaluation = evaluatePullRequestContext({
+      pullRequest: externalPr(`<!--\n${proofBody("pnpm test passed.")}`),
+    });
+
+    expect(evaluation.status).toBe("missing");
+    expect(evaluation.missingSections).toEqual(["What Problem This Solves", "Evidence"]);
+  });
+
+  it("accepts literal HTML comments inside fenced evidence", () => {
+    const evaluation = evaluatePullRequestContext({
+      pullRequest: externalPr(
+        proofBody(["```html", "<!-- captured fragment", "<p>ready</p>", "```"].join("\n")),
+      ),
+    });
+
+    expect(evaluation.status).toBe("passed");
+  });
+
+  it("accepts nested Markdown headings inside Evidence", () => {
+    const evaluation = evaluatePullRequestContext({
+      pullRequest: externalPr(
+        proofBody(["### Focused tests", "", "`pnpm test` passed."].join("\n")),
+      ),
+    });
+
+    expect(evaluation.status).toBe("passed");
+  });
+
+  it("rejects None as evidence", () => {
+    const evaluation = evaluatePullRequestContext({
+      pullRequest: externalPr(proofBody("None")),
+    });
+
+    expect(evaluation.status).toBe("missing");
+    expect(evaluation.missingSections).toEqual(["Evidence"]);
+  });
+
+  it("rejects Markdown separators as context and evidence", () => {
+    const evaluation = evaluatePullRequestContext({
+      pullRequest: externalPr(proofBody("---", { problem: "***" })),
+    });
+
+    expect(evaluation.status).toBe("missing");
+    expect(evaluation.missingSections).toEqual(["What Problem This Solves", "Evidence"]);
+  });
+
+  it("does not accept legacy fields hidden by HTML comments", () => {
+    const evaluation = evaluatePullRequestContext({
+      pullRequest: externalPr(
+        [
+          "## Real behavior proof",
+          "",
+          "<!--",
+          "Behavior addressed: The gateway dropped the configured Discord channel during startup.",
+          "Evidence after fix: pnpm test passed.",
+          "-->",
+        ].join("\n"),
+      ),
+    });
+
+    expect(evaluation.status).toBe("missing");
+    expect(evaluation.missingSections).toEqual(["What Problem This Solves", "Evidence"]);
+  });
+
+  it("accepts legacy behavior fields while open PRs still use the old template", () => {
+    const evaluation = evaluatePullRequestContext({
+      pullRequest: externalPr(
+        [
+          "## Real behavior proof",
+          "",
+          "- Behavior addressed: The gateway dropped the configured Discord channel during startup.",
+          "- Real environment tested: macOS 15.4, Node 24, local OpenClaw gateway.",
+          "- Exact steps or command run after this patch: pnpm openclaw gateway restart",
+          "- Evidence after fix: ![after](https://github.com/user-attachments/assets/gateway-ready)",
+          "- Observed result after fix: The gateway stayed connected and Discord reported ready.",
+          "- What was not tested: No known gaps.",
+        ].join("\n"),
+      ),
+    });
+
+    expect(evaluation.status).toBe("passed");
+  });
+
+  it("accepts Markdown headings copied inside fenced evidence", () => {
+    const body = proofBody(
+      [
+        "Terminal transcript:",
+        "```text",
+        "compiled system prompt:",
+        "```js",
+        "console.log('not a closing fence')",
+        "## Real behavior proof",
+        "Behavior addressed: copied prompt content, not a PR proof section.",
+        "## TOOLS.md",
+        "Observed result: ```",
+        "Observed result: not tested",
+        "What was not tested: copied template text",
+        "not tested",
+        "openclaw gateway status",
+        "discord ready",
+        "```",
+      ].join("\n"),
+    );
+    const evaluation = evaluatePullRequestContext({
+      pullRequest: externalPr(body),
+    });
+
+    expect(evaluation.status).toBe("passed");
+    expect(labelsForPullRequestContext(evaluation)).toEqual([]);
+  });
+
+  it("uses the latest Evidence section when duplicates exist", () => {
     const validProof = proofBody(
       [
         "Terminal transcript:",
@@ -96,36 +277,35 @@ describe("real-behavior-proof-policy", () => {
         "```",
       ].join("\n"),
     );
-    const mockOnlyProof = proofBody("Focused tests passed: 2 files, 36 tests.", {
-      steps: "pnpm test",
-      observedResult: "CI passes.",
-    });
+    const testEvidence = proofBody("Focused tests passed: 2 files, 36 tests.");
 
-    const laterValid = evaluateRealBehaviorProof({
+    const laterValid = evaluatePullRequestContext({
       pullRequest: externalPr(
-        [mockOnlyProof, "## Summary", "- Keep the detailed proof below.", validProof].join("\n\n"),
+        [testEvidence, "## Summary", "- Keep the detailed proof below.", validProof].join("\n\n"),
       ),
     });
-    const laterInvalid = evaluateRealBehaviorProof({
+    const laterInvalid = evaluatePullRequestContext({
       pullRequest: externalPr(
-        [validProof, "## Summary", "- Latest edit replaced proof with tests.", mockOnlyProof].join(
+        [validProof, "## Evidence", "<!-- Add the most useful validation evidence. -->"].join(
           "\n\n",
         ),
       ),
     });
 
     expect(laterValid.status).toBe("passed");
-    expect(laterValid.fields?.evidence).toContain("openclaw doctor --non-interactive");
-    expect(labelsForRealBehaviorProof(laterValid)).toEqual([PROOF_SUPPLIED_LABEL]);
-    expect(laterInvalid.status).toBe("mock_only");
-    expect(labelsForRealBehaviorProof(laterInvalid)).toEqual([MOCK_ONLY_PROOF_LABEL]);
+    expect(labelsForPullRequestContext(laterValid)).toEqual([]);
+    expect(laterInvalid.status).toBe("missing");
+    expect(laterInvalid.missingSections).toEqual(["Evidence"]);
   });
 
   it("accepts out-of-scope follow-ups as not-tested proof detail", () => {
     const body = [
-      "## Real behavior proof",
+      "## What Problem This Solves",
       "",
-      "- Behavior addressed: Cron validation keeps Google Gemini 3 low thinking.",
+      "Cron validation should retain the configured low thinking level.",
+      "",
+      "## Evidence",
+      "",
       "- Real environment tested: Local macOS source checkout, Node 24.",
       "- Exact steps or command run after this patch:",
       "  1. Built the local checkout with `node scripts/build-all.mjs`.",
@@ -141,22 +321,22 @@ describe("real-behavior-proof-policy", () => {
       "- No live systemd cron schedule was tested.",
       "- No real Google provider request was sent.",
     ].join("\n");
-    const evaluation = evaluateRealBehaviorProof({
+    const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(body),
     });
 
     expect(evaluation.status).toBe("passed");
-    expect(evaluation.fields?.notTested).toBe(
-      "- No live systemd cron schedule was tested.\n- No real Google provider request was sent.",
-    );
-    expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
+    expect(labelsForPullRequestContext(evaluation)).toEqual([]);
   });
 
   it("accepts source PR proof when explicit gaps live in out-of-scope follow-ups", () => {
     const body = [
-      "## Real behavior proof",
+      "## What Problem This Solves",
       "",
-      '- Behavior addressed: Cron/provider thinking validation no longer downgrades `google/gemini-3-flash-preview` `thinkingDefault: "low"` to `"off"` when cached catalog metadata says `reasoning:false` but the Google provider policy says Gemini 3 supports low thinking.',
+      "Cron validation downgraded Google Gemini 3 low thinking to off.",
+      "",
+      "## Evidence",
+      "",
       "- Real environment tested: Local macOS source checkout, Node v24.8.0, OpenClaw 2026.5.21 (c8a35c4), local `openclaw` shim pointed at the freshly built checkout. No channel credentials or provider API keys were used.",
       "- Exact steps or command run after this patch:",
       "  1. Built the local checkout with `node scripts/build-all.mjs`.",
@@ -175,99 +355,49 @@ describe("real-behavior-proof-policy", () => {
       "- No catalog refresh or provider model-list behavior is changed in this PR.",
       "- No channel, gateway allowlist, credential, or auth-profile behavior is changed in this PR.",
     ].join("\n");
-    const evaluation = evaluateRealBehaviorProof({
+    const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(body),
     });
 
     expect(evaluation.status).toBe("passed");
-    expect(evaluation.fields?.notTested).toBe(
-      [
-        "- No live systemd cron schedule is added in this PR.",
-        "- No real Google provider request is sent in this PR.",
-        "- No catalog refresh or provider model-list behavior is changed in this PR.",
-        "- No channel, gateway allowlist, credential, or auth-profile behavior is changed in this PR.",
-      ].join("\n"),
-    );
-    expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
+    expect(labelsForPullRequestContext(evaluation)).toEqual([]);
   });
 
-  it("fails external PRs without a real behavior proof section", () => {
-    const evaluation = evaluateRealBehaviorProof({
+  it("fails external PRs without required context and evidence", () => {
+    const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr("## Summary\n\n- Fixed startup."),
     });
 
     expect(evaluation.status).toBe("missing");
-    expect(labelsForRealBehaviorProof(evaluation)).toEqual([NEEDS_REAL_BEHAVIOR_PROOF_LABEL]);
+    expect(labelsForPullRequestContext(evaluation)).toEqual([NEEDS_PR_CONTEXT_LABEL]);
   });
 
   it("fails external PRs that say the changed behavior was not tested", () => {
-    const evaluation = evaluateRealBehaviorProof({
+    const evaluation = evaluatePullRequestContext({
       pullRequest: externalPr(proofBody("not tested")),
     });
 
     expect(evaluation.status).toBe("missing");
-    expect(labelsForRealBehaviorProof(evaluation)).toEqual([NEEDS_REAL_BEHAVIOR_PROOF_LABEL]);
+    expect(labelsForPullRequestContext(evaluation)).toEqual([NEEDS_PR_CONTEXT_LABEL]);
   });
 
-  it("fails external PRs whose proof is only tests, mocks, snapshots, lint, typecheck, or CI", () => {
-    const evaluation = evaluateRealBehaviorProof({
-      pullRequest: externalPr(
-        proofBody("pnpm test passed and Vitest mocks cover the branch.", {
-          steps: "pnpm test",
-          observedResult: "CI passes.",
-        }),
-      ),
+  it("accepts focused test and CI evidence", () => {
+    const evaluation = evaluatePullRequestContext({
+      pullRequest: externalPr(proofBody("pnpm test passed and CI is green.")),
     });
 
-    expect(evaluation.status).toBe("mock_only");
-    expect(labelsForRealBehaviorProof(evaluation)).toEqual([MOCK_ONLY_PROOF_LABEL]);
+    expect(evaluation.status).toBe("passed");
+    expect(labelsForPullRequestContext(evaluation)).toEqual([]);
   });
 
-  it("fails external PRs whose only copied output is a fenced test or CI transcript", () => {
-    const evaluation = evaluateRealBehaviorProof({
-      pullRequest: externalPr(
-        proofBody(["```text", "$ pnpm test", "CI passed with Vitest mocks", "```"].join("\n"), {
-          steps: "pnpm test",
-          observedResult: "CI passes.",
-        }),
-      ),
-    });
-
-    expect(evaluation.status).toBe("mock_only");
-    expect(labelsForRealBehaviorProof(evaluation)).toEqual([MOCK_ONLY_PROOF_LABEL]);
-  });
-
-  it("fails external PRs whose terminal label only contains test or CI output", () => {
-    const evaluation = evaluateRealBehaviorProof({
-      pullRequest: externalPr(
-        proofBody(
-          [
-            "Terminal transcript:",
-            "```text",
-            "$ pnpm test",
-            "CI passed with Vitest mocks",
-            "```",
-          ].join("\n"),
-          {
-            steps: "pnpm test",
-            observedResult: "CI passes.",
-          },
-        ),
-      ),
-    });
-
-    expect(evaluation.status).toBe("mock_only");
-    expect(labelsForRealBehaviorProof(evaluation)).toEqual([MOCK_ONLY_PROOF_LABEL]);
-  });
-
-  it("passes maintainer, bot, and override cases", () => {
+  it("skips maintainer and bot PRs but requires context from external PRs", () => {
     expect(
-      evaluateRealBehaviorProof({
+      evaluatePullRequestContext({
         pullRequest: externalPr("", { author_association: "MEMBER" }),
       }).status,
     ).toBe("skipped");
     expect(
-      evaluateRealBehaviorProof({
+      evaluatePullRequestContext({
         pullRequest: externalPr("", {
           user: {
             login: "renovate[bot]",
@@ -277,10 +407,10 @@ describe("real-behavior-proof-policy", () => {
       }).status,
     ).toBe("skipped");
     expect(
-      evaluateRealBehaviorProof({
+      evaluatePullRequestContext({
         pullRequest: externalPr("", { labels: [{ name: PROOF_OVERRIDE_LABEL }] }),
       }).status,
-    ).toBe("override");
+    ).toBe("missing");
   });
 
   it("accepts ClawSweeper pass verdict comments only for the exact PR head", () => {
@@ -406,11 +536,7 @@ describe("real-behavior-proof-policy", () => {
 
 describe("isMaintainerTeamMember", () => {
   function jsonResponse(status: number, body: unknown = {}) {
-    return {
-      ok: status >= 200 && status < 300,
-      status,
-      json: () => Promise.resolve(body),
-    };
+    return new Response(JSON.stringify(body), { status });
   }
 
   it("returns true for active members", async () => {
@@ -444,6 +570,22 @@ describe("isMaintainerTeamMember", () => {
     expect(await isMaintainerTeamMember({ token: "t", org: "o", login: "u", fetch })).toBe(false);
   });
 
+  it("cancels 404 membership response bodies", async () => {
+    let canceled = false;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { status: 404 },
+    );
+    const fetch = vi.fn().mockResolvedValue(response);
+
+    expect(await isMaintainerTeamMember({ token: "t", org: "o", login: "u", fetch })).toBe(false);
+    expect(canceled).toBe(true);
+  });
+
   it("returns false when the token, org, or login is missing", async () => {
     const fetch = vi.fn();
     expect(await isMaintainerTeamMember({ org: "o", login: "u", fetch })).toBe(false);
@@ -459,10 +601,30 @@ describe("isMaintainerTeamMember", () => {
     ).rejects.toThrow(/500/);
   });
 
+  it("cancels unexpected HTTP error response bodies", async () => {
+    let canceled = false;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { status: 500 },
+    );
+    const fetch = vi.fn().mockResolvedValue(response);
+
+    await expect(
+      isMaintainerTeamMember({ token: "t", org: "o", login: "u", fetch }),
+    ).rejects.toThrow(/500/);
+    expect(canceled).toBe(true);
+  });
+
   it("aborts stalled membership fetches", async () => {
     const fetch = vi.fn((_url: string, init: RequestInit) => {
       return new Promise((_resolve, reject) => {
-        init.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+        init.signal?.addEventListener("abort", () =>
+          reject(toLintErrorObject(init.signal?.reason, "Non-Error rejection")),
+        );
       });
     });
 
@@ -478,11 +640,7 @@ describe("isMaintainerTeamMember", () => {
   });
 
   it("times out stalled membership response bodies", async () => {
-    const fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: () => new Promise(() => {}),
-    });
+    const fetch = vi.fn().mockResolvedValue(stalledResponse());
 
     await expect(
       isMaintainerTeamMember({
@@ -495,3 +653,53 @@ describe("isMaintainerTeamMember", () => {
     ).rejects.toThrow(/maintainer membership response for u timed out after 5ms/);
   });
 });
+
+describe("readBoundedGitHubApiJson", () => {
+  it("reads bounded JSON response bodies", async () => {
+    await expect(
+      readBoundedGitHubApiJson(new Response('{"state":"active"}'), "GitHub API", 1024),
+    ).resolves.toEqual({ state: "active" });
+  });
+
+  it("rejects oversized JSON bodies by content length", async () => {
+    const response = contentLengthResponse(1025);
+
+    await expect(
+      readBoundedGitHubApiJson(response as unknown as Response, "GitHub API", 1024),
+    ).rejects.toMatchObject({
+      code: "ETOOBIG",
+      message: "GitHub API response body exceeded 1024 bytes",
+    });
+    expect(response.cancel).toHaveBeenCalled();
+  });
+
+  it("rejects oversized streamed JSON bodies", async () => {
+    const encoder = new TextEncoder();
+    const response = chunkedResponse([
+      encoder.encode('{"body":"'),
+      encoder.encode("x".repeat(1024)),
+      encoder.encode('"}'),
+    ]);
+
+    await expect(
+      readBoundedGitHubApiJson(response as unknown as Response, "GitHub API", 1024),
+    ).rejects.toMatchObject({
+      code: "ETOOBIG",
+      message: "GitHub API response body exceeded 1024 bytes",
+    });
+  });
+});
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

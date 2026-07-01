@@ -1,3 +1,4 @@
+/** Lazy runtime facade for isolated cron agent execution dependencies. */
 export {
   resolveEffectiveModelFallbacks,
   resolveSubagentModelFallbacksOverride,
@@ -22,6 +23,7 @@ async function loadCronExecutionCliRuntime() {
   return await cronExecutionCliRuntimeLoader.load();
 }
 
+/** Lazily resolves CLI session ids without loading the cron CLI runner at module import time. */
 export async function getCliSessionId(
   ...args: Parameters<typeof import("../../agents/cli-session.js").getCliSessionId>
 ): Promise<ReturnType<typeof import("../../agents/cli-session.js").getCliSessionId>> {
@@ -29,6 +31,7 @@ export async function getCliSessionId(
   return runtime.getCliSessionId(...args);
 }
 
+/** Lazily runs the CLI-backed agent path used by isolated cron execution. */
 export async function runCliAgent(
   ...args: Parameters<typeof import("../../agents/cli-runner.js").runCliAgent>
 ): ReturnType<typeof import("../../agents/cli-runner.js").runCliAgent> {

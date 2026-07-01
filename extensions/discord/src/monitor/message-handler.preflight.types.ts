@@ -1,3 +1,4 @@
+// Discord type declarations define plugin contracts.
 import type { InboundEventKind } from "openclaw/plugin-sdk/channel-inbound";
 import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
@@ -8,6 +9,7 @@ import type { ChannelType, Client, User } from "../internal/discord.js";
 import type { DiscordChannelConfigResolved, DiscordGuildEntryResolved } from "./allow-list.js";
 import type { DiscordChannelInfo } from "./message-utils.js";
 import type { DiscordThreadBindingLookup } from "./reply-delivery.js";
+import type { DiscordReplyTypingFeedback } from "./reply-typing-feedback.js";
 import type { DiscordSenderIdentity } from "./sender-identity.js";
 
 export type { DiscordSenderIdentity } from "./sender-identity.js";
@@ -95,6 +97,7 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
 
   historyEntry?: HistoryEntry;
   threadBindings: DiscordThreadBindingLookup;
+  replyTypingFeedback?: DiscordReplyTypingFeedback;
   discordRestFetch?: typeof fetch;
   botLoopProtection?: ChannelBotLoopProtectionFacts;
 };

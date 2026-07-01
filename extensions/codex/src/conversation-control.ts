@@ -1,12 +1,15 @@
+// Codex plugin module implements conversation control behavior.
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import {
   isCodexFastServiceTier,
+  resolveCodexModelBackedReviewerPolicyContext,
   resolveCodexAppServerRuntimeOptions,
   type CodexAppServerApprovalPolicy,
   type CodexAppServerSandboxMode,
 } from "./app-server/config.js";
 import type { CodexServiceTier, CodexThreadResumeResponse } from "./app-server/protocol.js";
 import {
+  isCodexAppServerNativeAuthProfile,
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
 } from "./app-server/session-binding.js";
@@ -14,6 +17,10 @@ import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
 } from "./app-server/shared-client.js";
+import {
+  resolveCodexAppServerRequestModelSelection,
+  resolveCodexBindingModelProviderFallback,
+} from "./app-server/thread-lifecycle.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 
 type ActiveTurn = {
@@ -138,24 +145,54 @@ export async function setCodexConversationModel(params: {
   }
   const lookup = buildBindingLookup(params);
   const binding = await requireThreadBinding(params.sessionFile, lookup);
-  const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig: params.pluginConfig });
-  const response = await resumeThreadWithOverrides({
+  const reviewerPolicyContext = resolveCodexModelBackedReviewerPolicyContext({
+    provider: "codex",
+    model,
+    bindingModelProvider: binding.modelProvider,
+    bindingModel: binding.model,
+    nativeAuthProfile: isCodexAppServerNativeAuthProfile({
+      authProfileId: binding.authProfileId,
+      ...lookup,
+    }),
+  });
+  const runtime = resolveCodexAppServerRuntimeOptions({
     pluginConfig: params.pluginConfig,
+    modelProvider: reviewerPolicyContext.modelProvider,
+    model: reviewerPolicyContext.model,
+    config: params.config,
+    agentDir: params.agentDir,
+  });
+  const modelProvider = resolveConversationControlModelProvider({
+    authProfileId: binding.authProfileId,
+    bindingModel: binding.model,
+    bindingModelProvider: binding.modelProvider,
+    currentModel: model,
+    ...lookup,
+  });
+  const modelSelection = resolveCodexAppServerRequestModelSelection({
+    model,
+    modelProvider,
+    authProfileId: binding.authProfileId,
+    ...lookup,
+  });
+  const response = await resumeThreadWithOverrides({
+    runtime,
     threadId: binding.threadId,
     authProfileId: binding.authProfileId,
     ...lookup,
-    model,
+    model: modelSelection.model,
+    modelProvider: modelSelection.modelProvider,
   });
   await writeCodexAppServerBinding(
     params.sessionFile,
     {
       ...binding,
       cwd: response.thread.cwd ?? binding.cwd,
-      model: response.model ?? model,
-      modelProvider: response.modelProvider ?? binding.modelProvider,
+      model: response.model ?? modelSelection.model,
+      modelProvider: response.modelProvider ?? modelSelection.modelProvider,
       approvalPolicy: binding.approvalPolicy,
       sandbox: binding.sandbox,
-      serviceTier: binding.serviceTier ?? runtime.serviceTier,
+      serviceTier: binding.serviceTier ?? runtime.serviceTier ?? undefined,
     },
     lookup,
   );
@@ -261,17 +298,18 @@ async function requireThreadBinding(sessionFile: string, lookup: CodexAppServerB
 }
 
 async function resumeThreadWithOverrides(params: {
-  pluginConfig?: unknown;
+  runtime: ReturnType<typeof resolveCodexAppServerRuntimeOptions>;
   threadId: string;
   authProfileId?: string;
   agentDir?: string;
   config?: CodexAppServerBindingLookup["config"];
   model?: string;
+  modelProvider?: string | null;
   approvalPolicy?: CodexAppServerApprovalPolicy;
   sandbox?: CodexAppServerSandboxMode;
   serviceTier?: CodexServiceTier;
 }): Promise<CodexThreadResumeResponse> {
-  const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig: params.pluginConfig });
+  const runtime = params.runtime;
   const client = await getLeasedSharedCodexAppServerClient({
     startOptions: runtime.start,
     timeoutMs: runtime.requestTimeoutMs,
@@ -284,6 +322,7 @@ async function resumeThreadWithOverrides(params: {
       {
         threadId: params.threadId,
         ...(params.model ? { model: params.model } : {}),
+        ...(params.modelProvider ? { modelProvider: params.modelProvider } : {}),
         approvalPolicy: params.approvalPolicy ?? runtime.approvalPolicy,
         sandbox: params.sandbox ?? runtime.sandbox,
         approvalsReviewer: runtime.approvalsReviewer,
@@ -306,6 +345,28 @@ function buildBindingLookup(params: {
     ...(agentDir ? { agentDir } : {}),
     ...(params.config ? { config: params.config } : {}),
   };
+}
+
+function resolveConversationControlModelProvider(params: {
+  authProfileId?: string;
+  bindingModel?: string;
+  bindingModelProvider?: string;
+  currentModel?: string;
+  agentDir?: string;
+  config?: CodexAppServerBindingLookup["config"];
+}): string | undefined {
+  const modelProvider = resolveCodexBindingModelProviderFallback({
+    currentModel: params.currentModel,
+    bindingModel: params.bindingModel,
+    bindingModelProvider: params.bindingModelProvider,
+  })?.trim();
+  if (!modelProvider || modelProvider.toLowerCase() === "codex") {
+    return undefined;
+  }
+  if (isCodexAppServerNativeAuthProfile(params) && modelProvider.toLowerCase() === "openai") {
+    return undefined;
+  }
+  return modelProvider.toLowerCase() === "openai" ? "openai" : modelProvider;
 }
 
 function permissionsForMode(mode: PermissionsMode): {

@@ -1,3 +1,4 @@
+// Memory Host SDK tests cover post json behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { postJson } from "./post-json.js";
 import { withRemoteHttpResponse } from "./remote-http.js";
@@ -19,6 +20,7 @@ function textResponse(body: string, status: number): Response {
 function streamingTextResponse(params: {
   body: string;
   status: number;
+  headers?: HeadersInit;
   onCancel: () => void;
 }): Response {
   const encoded = new TextEncoder().encode(params.body);
@@ -30,7 +32,24 @@ function streamingTextResponse(params: {
       params.onCancel();
     },
   });
-  return new Response(stream, { status: params.status });
+  return new Response(stream, { status: params.status, headers: params.headers });
+}
+
+function stallingSuccessResponse(onCancel: () => void): Response {
+  const reader = {
+    read: () => new Promise<ReadableStreamReadResult<Uint8Array>>(() => {}),
+    cancel: async () => {
+      onCancel();
+    },
+    releaseLock: () => undefined,
+  } as ReadableStreamDefaultReader<Uint8Array>;
+
+  return {
+    body: { getReader: () => reader },
+    headers: new Headers(),
+    ok: true,
+    status: 200,
+  } as Response;
 }
 
 describe("postJson", () => {
@@ -69,6 +88,35 @@ describe("postJson", () => {
       errorPrefix: "post failed",
       parse: (payload) => payload,
     });
+  });
+
+  it("applies abort signals while reading successful response bodies", async () => {
+    let canceled = false;
+    const controller = new AbortController();
+    remoteHttpMock.mockImplementationOnce(async (params) => {
+      return await params.onResponse(
+        stallingSuccessResponse(() => {
+          canceled = true;
+        }),
+      );
+    });
+
+    const read = postJson({
+      url: "https://memory.example/v1/post",
+      headers: {},
+      body: {},
+      signal: controller.signal,
+      errorPrefix: "post failed",
+      parse: () => ({}),
+    });
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    controller.abort(new Error("body aborted"));
+
+    await expect(read).rejects.toThrow("body aborted");
+    expect(canceled).toBe(true);
   });
 
   it("attaches status to thrown error when requested", async () => {
@@ -135,5 +183,60 @@ describe("postJson", () => {
         parse: () => ({}),
       }),
     ).rejects.toThrow("post failed: malformed JSON response");
+  });
+
+  it("rejects successful JSON responses with oversized content-length", async () => {
+    let canceled = false;
+    remoteHttpMock.mockImplementationOnce(async (params) => {
+      return await params.onResponse(
+        streamingTextResponse({
+          body: "{}",
+          status: 200,
+          headers: { "content-length": "32" },
+          onCancel: () => {
+            canceled = true;
+          },
+        }),
+      );
+    });
+
+    await expect(
+      postJson({
+        url: "https://memory.example/v1/post",
+        headers: {},
+        body: {},
+        errorPrefix: "post failed",
+        maxResponseBytes: 8,
+        parse: () => ({}),
+      }),
+    ).rejects.toThrow("post failed: response body too large: 32 bytes (limit: 8 bytes)");
+    expect(canceled).toBe(true);
+  });
+
+  it("cancels successful JSON responses that exceed the streaming byte cap", async () => {
+    let canceled = false;
+    remoteHttpMock.mockImplementationOnce(async (params) => {
+      return await params.onResponse(
+        streamingTextResponse({
+          body: `{"data":"${"x".repeat(32)}"}`,
+          status: 200,
+          onCancel: () => {
+            canceled = true;
+          },
+        }),
+      );
+    });
+
+    await expect(
+      postJson({
+        url: "https://memory.example/v1/post",
+        headers: {},
+        body: {},
+        errorPrefix: "post failed",
+        maxResponseBytes: 16,
+        parse: () => ({}),
+      }),
+    ).rejects.toThrow("post failed: response body too large");
+    expect(canceled).toBe(true);
   });
 });

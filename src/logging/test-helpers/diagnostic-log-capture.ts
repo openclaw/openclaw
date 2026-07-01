@@ -1,16 +1,22 @@
+// Diagnostic log capture helpers collect emitted diagnostic logs for tests.
 import {
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
 
-export type CapturedDiagnosticLogRecord = Extract<DiagnosticEventPayload, { type: "log.record" }>;
+/** Captured diagnostic event shape for emitted log records. */
+type CapturedDiagnosticLogRecord = Extract<DiagnosticEventPayload, { type: "log.record" }>;
 
+/** Flushes asynchronous diagnostic log record delivery. */
 export async function flushDiagnosticLogRecords(): Promise<void> {
   for (let index = 0; index < 3; index += 1) {
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
   }
 }
 
+/** Captures diagnostic log records until cleanup is called. */
 export function createDiagnosticLogRecordCapture() {
   const records: CapturedDiagnosticLogRecord[] = [];
   const unsubscribe = onInternalDiagnosticEvent((event) => {

@@ -1,3 +1,4 @@
+// Ensure Cli Startup Build tests cover ensure cli startup build script behavior.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -167,21 +168,19 @@ describe("ensure-cli-startup-build", () => {
 });
 
 describe("resolveCliStartupBuildTimeoutMs", () => {
-  it("uses a positive environment timeout", () => {
+  it("parses only positive integer environment timeouts", () => {
+    expect(resolveCliStartupBuildTimeoutMs({})).toBe(10 * 60 * 1000);
+    expect(resolveCliStartupBuildTimeoutMs({ OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS: "" })).toBe(
+      10 * 60 * 1000,
+    );
     expect(resolveCliStartupBuildTimeoutMs({ OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS: "4321" })).toBe(
       4321,
     );
-  });
 
-  it("falls back when the environment timeout is invalid", () => {
-    expect(resolveCliStartupBuildTimeoutMs({ OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS: "nope" })).toBe(
-      10 * 60 * 1000,
-    );
-  });
-
-  it("falls back when the environment timeout has a numeric prefix", () => {
-    expect(resolveCliStartupBuildTimeoutMs({ OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS: "10m" })).toBe(
-      10 * 60 * 1000,
-    );
+    for (const raw of ["nope", "10m", "1e3", "0", "-1", "9007199254740992"]) {
+      expect(() =>
+        resolveCliStartupBuildTimeoutMs({ OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS: raw }),
+      ).toThrow(`invalid OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS: ${raw}`);
+    }
   });
 });

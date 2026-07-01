@@ -58,6 +58,11 @@ results may be scope-limited.
 
 `sessions_history` fetches the conversation transcript for a specific session.
 By default, tool results are excluded -- pass `includeTools: true` to see them.
+Use `limit` for the newest bounded tail. Pass `offset: 0` when you need
+pagination metadata, then pass returned `nextOffset` values to page backward
+through older OpenClaw transcript windows without reading raw transcript files.
+Explicit offset pages do not merge external CLI fallback imports; use the
+default newest-tail view when you need that merged display history.
 The returned view is intentionally bounded and safety-filtered:
 
 - assistant text is normalized before recall:
@@ -78,7 +83,7 @@ The returned view is intentionally bounded and safety-filtered:
 - very large histories can drop older rows or replace an oversized row with
   `[sessions_history omitted: message too large]`
 - the tool reports summary flags such as `truncated`, `droppedMessages`,
-  `contentTruncated`, `contentRedacted`, and `bytes`
+  `contentTruncated`, `contentRedacted`, `bytes`, and pagination metadata
 
 Both tools accept either a **session key** (like `"main"`) or a **session ID**
 from a previous list call.
@@ -119,6 +124,19 @@ sparse token/cache counters from the latest transcript usage entry, and
 `model=default` clears a per-session override. Use `sessionKey="current"` for
 the caller's current session; visible client labels such as `openclaw-tui` are
 not session keys.
+
+When route metadata is available, `session_status` also includes a visible
+`Route context` JSON block and matching structured `details` fields. These
+fields disambiguate the session key from the route that is currently handling
+the live run:
+
+- `origin` is where the session was created, or the provider inferred from a
+  deliverable session-key prefix when older state lacks stored origin metadata.
+- `active` is the current live-run route. It is only reported for the live or
+  current session being handled now.
+- `deliveryContext` is the persisted delivery route stored on the session,
+  which OpenClaw can reuse for later delivery even when the active surface
+  differs.
 
 `sessions_yield` intentionally ends the current turn so the next message can be
 the follow-up event you are waiting for. Use it after spawning sub-agents when

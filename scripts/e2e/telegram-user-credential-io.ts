@@ -1,4 +1,7 @@
-import { spawn } from "node:child_process";
+// Telegram User Credential Io script supports OpenClaw repository automation.
+import { spawn, spawnSync } from "node:child_process";
+import { readBoundedResponseText } from "../lib/bounded-response.ts";
+import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
 
 export type JsonObject = Record<string, unknown>;
 
@@ -19,7 +22,66 @@ type RunCommandOptions = {
 
 const DEFAULT_OUTPUT_LIMIT = 128 * 1024;
 const DEFAULT_FETCH_BODY_LIMIT = 1024 * 1024;
-const KILL_GRACE_MS = 5_000;
+const KILL_GRACE_MS = readKillGraceMs();
+const PROCESS_TREE_EXIT_POLL_MS = 50;
+const SIGNAL_EXIT_CODES = {
+  SIGHUP: 129,
+  SIGINT: 130,
+  SIGTERM: 143,
+};
+const ACTIVE_CHILD_TREE_KILLERS = new Set<(signal: NodeJS.Signals) => void>();
+let forwardedSignalExitCode: number | undefined;
+let forwardedSignalForceKillTimer: NodeJS.Timeout | undefined;
+
+function readKillGraceMs() {
+  const raw = process.env.OPENCLAW_QA_CREDENTIAL_KILL_GRACE_MS?.trim();
+  if (!raw) {
+    return 5_000;
+  }
+  if (!/^\d+$/u.test(raw)) {
+    throw new Error(
+      `OPENCLAW_QA_CREDENTIAL_KILL_GRACE_MS must be a non-negative integer; got: ${raw}`,
+    );
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(
+      `OPENCLAW_QA_CREDENTIAL_KILL_GRACE_MS must be a non-negative integer; got: ${raw}`,
+    );
+  }
+  return parsed;
+}
+
+function finishForwardedSignalIfIdle() {
+  if (forwardedSignalExitCode === undefined || ACTIVE_CHILD_TREE_KILLERS.size > 0) {
+    return;
+  }
+  if (forwardedSignalForceKillTimer) {
+    clearTimeout(forwardedSignalForceKillTimer);
+    forwardedSignalForceKillTimer = undefined;
+  }
+  process.exit(forwardedSignalExitCode);
+}
+
+for (const signal of Object.keys(SIGNAL_EXIT_CODES) as Array<keyof typeof SIGNAL_EXIT_CODES>) {
+  process.on(signal, () => {
+    forwardedSignalExitCode ??= SIGNAL_EXIT_CODES[signal];
+    if (ACTIVE_CHILD_TREE_KILLERS.size === 0) {
+      finishForwardedSignalIfIdle();
+      return;
+    }
+    const activeKillers = Array.from(ACTIVE_CHILD_TREE_KILLERS);
+    for (const killChildTree of activeKillers) {
+      killChildTree(signal);
+    }
+    forwardedSignalForceKillTimer ??= setTimeout(() => {
+      for (const killChildTree of activeKillers) {
+        killChildTree("SIGKILL");
+      }
+      process.exit(forwardedSignalExitCode);
+    }, KILL_GRACE_MS);
+  });
+}
 
 function timeoutError(message: string) {
   return Object.assign(new Error(message), { code: "ETIMEDOUT" });
@@ -69,17 +131,20 @@ export function runCommand(
   options: RunCommandOptions,
 ) {
   return new Promise<void>((resolve, reject) => {
+    const useProcessGroup = process.platform !== "win32";
     const child = spawn(command, args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
+      detached: useProcessGroup,
     });
+    const activeChildTree = registerActiveChildProcessTree(child);
     const outputLimit = options.outputLimit ?? DEFAULT_OUTPUT_LIMIT;
     let stdout = "";
     let stderr = "";
     let settled = false;
-    let timeout: NodeJS.Timeout;
     let killTimer: NodeJS.Timeout | undefined;
     let timedOutError: Error | undefined;
+    let forceKillAt: number | undefined;
     const timeoutMs = Math.max(1, options.timeoutMs);
     const timeoutKillGraceMs = Math.max(0, options.timeoutKillGraceMs ?? KILL_GRACE_MS);
     const clearTimers = () => {
@@ -94,20 +159,23 @@ export function runCommand(
       }
       settled = true;
       clearTimers();
+      activeChildTree.unregister();
       reject(error);
     };
-    timeout = setTimeout(() => {
+    const timeout: NodeJS.Timeout = setTimeout(() => {
       if (settled) {
         return;
       }
       timedOutError = timeoutError(
         `${command} ${args.join(" ")} timed out after ${timeoutMs}ms\n${stdout}${stderr}`,
       );
-      child.kill("SIGTERM");
+      activeChildTree.killChildTree("SIGTERM");
+      forceKillAt = Date.now() + timeoutKillGraceMs;
       killTimer = setTimeout(() => {
-        child.kill("SIGKILL");
+        killTimer = undefined;
+        forceKillAt = undefined;
+        activeChildTree.killChildTree("SIGKILL");
       }, timeoutKillGraceMs);
-      killTimer.unref?.();
     }, timeoutMs);
     timeout.unref?.();
 
@@ -122,8 +190,24 @@ export function runCommand(
       if (settled) {
         return;
       }
+      if (forwardedSignalExitCode !== undefined) {
+        activeChildTree.unregister({
+          finishForwardedSignal: !childProcessTreeMayStillExist(child),
+        });
+        return;
+      }
+      if (timedOutError && killTimer && childProcessTreeMayStillExist(child)) {
+        const error = timedOutError;
+        void finishTimedOutChildProcessTree(child, activeChildTree, {
+          forceKillAt,
+          killTimer,
+          timeoutKillGraceMs,
+        }).then(() => fail(error), fail);
+        return;
+      }
       settled = true;
       clearTimers();
+      activeChildTree.unregister();
       if (timedOutError) {
         reject(timedOutError);
         return;
@@ -138,44 +222,109 @@ export function runCommand(
   });
 }
 
-async function readBoundedResponseText(
-  response: Response,
-  label: string,
-  byteLimit: number,
-  timeoutPromise: Promise<never>,
+async function finishTimedOutChildProcessTree(
+  child: ReturnType<typeof spawn>,
+  activeChildTree: ReturnType<typeof registerActiveChildProcessTree>,
+  options: {
+    forceKillAt: number | undefined;
+    killTimer: NodeJS.Timeout;
+    timeoutKillGraceMs: number;
+  },
 ) {
-  const contentLength = response.headers.get("content-length");
-  if (contentLength) {
-    const parsedLength = Number(contentLength);
-    if (Number.isSafeInteger(parsedLength) && parsedLength > byteLimit) {
-      await response.body?.cancel().catch(() => {});
-      throw bodyTooLargeError(`${label} response body exceeded ${byteLimit} bytes`);
-    }
+  const graceRemainingMs =
+    options.forceKillAt === undefined
+      ? options.timeoutKillGraceMs
+      : Math.max(0, options.forceKillAt - Date.now());
+  if (graceRemainingMs > 0) {
+    await waitForChildProcessTreeExit(child, graceRemainingMs);
   }
-  if (!response.body) {
-    return "";
+  clearTimeout(options.killTimer);
+  if (childProcessTreeMayStillExist(child)) {
+    activeChildTree.killChildTree("SIGKILL");
+    await waitForChildProcessTreeExit(child, options.timeoutKillGraceMs);
   }
+}
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let byteCount = 0;
-  let text = "";
-  try {
-    while (true) {
-      const { done, value } = await Promise.race([reader.read(), timeoutPromise]);
-      if (done) {
-        return text + decoder.decode();
-      }
-      byteCount += value.byteLength;
-      if (byteCount > byteLimit) {
-        await reader.cancel().catch(() => {});
-        throw bodyTooLargeError(`${label} response body exceeded ${byteLimit} bytes`);
-      }
-      text += decoder.decode(value, { stream: true });
+type ChildProcessTreeTarget = Pick<ReturnType<typeof spawn>, "kill" | "pid">;
+
+export function signalChildProcessTree(
+  child: ChildProcessTreeTarget,
+  signal: NodeJS.Signals,
+  {
+    platform = process.platform,
+    runTaskkill = spawnSync,
+    useProcessGroup = platform !== "win32",
+  }: {
+    platform?: NodeJS.Platform;
+    runTaskkill?: typeof spawnSync;
+    useProcessGroup?: boolean;
+  } = {},
+) {
+  if (useProcessGroup && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The process group can disappear between timeout and cleanup.
     }
-  } finally {
-    reader.releaseLock();
   }
+  if (platform === "win32" && typeof child.pid === "number") {
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const taskkillPath = resolveWindowsTaskkillPath();
+    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
+    if (!result?.error && result?.status === 0) {
+      return;
+    }
+    if (signal !== "SIGKILL") {
+      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
+      if (!forceResult?.error && forceResult?.status === 0) {
+        return;
+      }
+    }
+  }
+  child.kill(signal);
+}
+
+function childProcessTreeMayStillExist(child: ReturnType<typeof spawn>) {
+  if (process.platform === "win32" || !child.pid) {
+    return false;
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForChildProcessTreeExit(child: ReturnType<typeof spawn>, timeoutMs: number) {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (!childProcessTreeMayStillExist(child)) {
+      return true;
+    }
+    await new Promise((resolvePoll) => {
+      setTimeout(resolvePoll, PROCESS_TREE_EXIT_POLL_MS);
+    });
+  }
+  return !childProcessTreeMayStillExist(child);
+}
+
+function registerActiveChildProcessTree(child: ReturnType<typeof spawn>) {
+  const killChildTree = (signal: NodeJS.Signals) => signalChildProcessTree(child, signal);
+  ACTIVE_CHILD_TREE_KILLERS.add(killChildTree);
+  return {
+    killChildTree,
+    unregister: (options: { finishForwardedSignal?: boolean } = {}) => {
+      ACTIVE_CHILD_TREE_KILLERS.delete(killChildTree);
+      if (options.finishForwardedSignal ?? true) {
+        finishForwardedSignalIfIdle();
+      }
+    },
+  };
 }
 
 export async function fetchJsonWithTimeout(params: FetchJsonParams) {
@@ -200,12 +349,10 @@ export async function fetchJsonWithTimeout(params: FetchJsonParams) {
       }),
       timeoutPromise,
     ]);
-    const rawPayload = await readBoundedResponseText(
-      response,
-      params.label,
-      maxBodyBytes,
+    const rawPayload = await readBoundedResponseText(response, params.label, maxBodyBytes, {
+      createTooLargeError: bodyTooLargeError,
       timeoutPromise,
-    );
+    });
     const payload = JSON.parse(rawPayload) as JsonObject;
     return { payload, response };
   } finally {

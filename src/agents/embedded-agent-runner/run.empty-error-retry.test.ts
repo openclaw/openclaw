@@ -1,7 +1,9 @@
+// Coverage for retrying empty errored assistant turns in runEmbeddedAgent.
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
+  mockedClassifyAssistantFailoverReason,
   mockedClassifyFailoverReason,
   mockedGlobalHookRunner,
   mockedRunEmbeddedAttempt,
@@ -10,43 +12,48 @@ import {
 } from "./run.overflow-compaction.harness.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
-// Regression coverage for the silent-error retry in runEmbeddedAgent.
-//
-// Symptom: ollama/glm-5.1 occasionally ends a turn with stopReason="error" and
-// zero output tokens after a successful tool-call sequence. The user sees no
-// reply and has to nudge. This suite locks in a narrower model-agnostic
-// resubmission for errored turns, separate from the visible-answer retry used
-// for stopReason="stop" empty zero-token turns.
-
 let runEmbeddedAgent: typeof import("./run.js").runEmbeddedAgent;
+
+type AssistantContent = NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>["content"];
 
 function emptyErrorAttempt(
   provider: string,
   model: string,
   outputTokens = 0,
+  content: AssistantContent = [],
+  errorMessage?: string,
 ): EmbeddedRunAttemptResult {
+  // Models can report stopReason=error with no output after tool activity; that
+  // is replay-safe only when the attempt metadata records no side effects.
+  const assistant = {
+    role: "assistant",
+    stopReason: "error",
+    provider,
+    model,
+    content,
+    usage: { input: 100, output: outputTokens, totalTokens: 100 + outputTokens },
+    ...(errorMessage ? { errorMessage } : {}),
+  } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
   return makeAttemptResult({
     assistantTexts: [],
-    lastAssistant: {
-      stopReason: "error",
-      provider,
-      model,
-      content: [],
-      usage: { input: 100, output: outputTokens, totalTokens: 100 + outputTokens },
-    } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    lastAssistant: assistant,
+    currentAttemptAssistant: assistant,
   });
 }
 
 function successAttempt(provider: string, model: string): EmbeddedRunAttemptResult {
+  const assistant = {
+    role: "assistant",
+    stopReason: "stop",
+    provider,
+    model,
+    content: [{ type: "text", text: "Done." }],
+    usage: { input: 100, output: 5, totalTokens: 105 },
+  } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
   return makeAttemptResult({
     assistantTexts: ["Done."],
-    lastAssistant: {
-      stopReason: "stop",
-      provider,
-      model,
-      content: [{ type: "text", text: "Done." }],
-      usage: { input: 100, output: 5, totalTokens: 105 },
-    } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    lastAssistant: assistant,
+    currentAttemptAssistant: assistant,
   });
 }
 
@@ -74,6 +81,118 @@ describe("runEmbeddedAgent silent-error retry", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
     expect(result.payloads).toBeUndefined();
+  });
+
+  it("retries when stopReason=error emitted only thinking blocks and output tokens", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      emptyErrorAttempt("anthropic", "claude-opus-4-8", 1120, [
+        {
+          type: "thinking",
+          thinking: "internal reasoning before provider error",
+          thinkingSignature: JSON.stringify({ id: "rs_error", type: "reasoning" }),
+        },
+      ]),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(successAttempt("anthropic", "claude-opus-4-8"));
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      runId: "run-empty-error-retry-thinking-only",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads).toBeUndefined();
+  });
+
+  it("retries thinking-only unknown provider errors before assistant failover", async () => {
+    mockedClassifyFailoverReason.mockReturnValue("timeout");
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      emptyErrorAttempt(
+        "anthropic",
+        "claude-opus-4-8",
+        1120,
+        [
+          {
+            type: "thinking",
+            thinking: "internal reasoning before provider error",
+            thinkingSignature: JSON.stringify({ id: "rs_error", type: "reasoning" }),
+          },
+        ],
+        "An unknown error occurred",
+      ),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(successAttempt("anthropic", "claude-opus-4-8"));
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      runId: "run-empty-error-retry-before-assistant-failover",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads).toBeUndefined();
+  });
+
+  it.each([
+    ["timeout", "LLM request timed out."],
+    ["server_error", "Internal server error"],
+  ] as const)("does not intercept recognized %s failover errors", async (reason, errorMessage) => {
+    mockedClassifyAssistantFailoverReason.mockReturnValue(reason);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      emptyErrorAttempt(
+        "anthropic",
+        "claude-opus-4-8",
+        1120,
+        [
+          {
+            type: "thinking",
+            thinking: "internal reasoning before provider error",
+            thinkingSignature: JSON.stringify({ id: "rs_error", type: "reasoning" }),
+          },
+        ],
+        errorMessage,
+      ),
+    );
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      runId: `run-empty-error-retry-${reason}`,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not intercept concrete non-transient failover errors", async () => {
+    mockedClassifyFailoverReason.mockReturnValue("model_not_found");
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      emptyErrorAttempt(
+        "anthropic",
+        "missing-model",
+        1120,
+        [
+          {
+            type: "thinking",
+            thinking: "internal reasoning before provider error",
+            thinkingSignature: JSON.stringify({ id: "rs_missing_model", type: "reasoning" }),
+          },
+        ],
+        "model not found",
+      ),
+    );
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "anthropic",
+      model: "missing-model",
+      runId: "run-empty-error-retry-non-transient",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
   });
 
   it("caps retries at MAX_EMPTY_ERROR_RETRIES and surfaces incomplete-turn error", async () => {
@@ -118,6 +237,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
       makeAttemptResult({
         assistantTexts: [],
         lastAssistant: {
+          role: "assistant",
           stopReason: "stop",
           provider: "plain-provider",
           model: "plain-model",
@@ -155,15 +275,13 @@ describe("runEmbeddedAgent silent-error retry", () => {
   });
 
   it("does not retry when the failed attempt recorded side effects", async () => {
-    // If the errored turn already sent a message / added a cron / ran a
-    // mutating tool whose result wasn't captured as replay-safe,
-    // resubmission would duplicate those actions. Mirror the gate used by
-    // the other retry resolvers (resolveEmptyResponseRetryInstruction et al.)
-    // and surface the incomplete-turn error instead of retrying blind.
+    // Resubmission would duplicate side effects when replay metadata cannot
+    // prove the failed turn is safe to replay.
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
         lastAssistant: {
+          role: "assistant",
           stopReason: "error",
           provider: "ollama",
           model: "glm-5.1:cloud",
@@ -186,5 +304,90 @@ describe("runEmbeddedAgent silent-error retry", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(result.payloads?.[0]?.isError).toBe(true);
+  });
+
+  it.each([
+    [
+      "client tool calls",
+      { clientToolCalls: [{ name: "browser", params: { url: "https://example.com" } }] },
+    ],
+    ["yield", { yieldDetected: true }],
+    ["approval prompts", { didSendDeterministicApprovalPrompt: true }],
+    [
+      "heartbeat responses",
+      {
+        heartbeatToolResponse: {
+          outcome: "progress",
+          notify: false,
+          summary: "Still working",
+        },
+      },
+    ],
+    ["tool media", { toolMediaUrls: ["file:///tmp/render.png"] }],
+    ["voice media", { toolAudioAsVoice: true }],
+    ["trusted local media", { toolTrustedLocalMedia: true }],
+    [
+      "source reply payloads",
+      { messagingToolSourceReplyPayloads: [{ text: "Delivered through the source reply." }] },
+    ],
+    ["delivered source replies", { didDeliverSourceReplyViaMessageTool: true }],
+    ["tool errors", { lastToolError: { toolName: "read", error: "read failed" } }],
+  ] satisfies Array<[string, Partial<EmbeddedRunAttemptResult>]>)(
+    "does not retry after terminal %s",
+    async (_label, attemptState) => {
+      mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+        makeAttemptResult({
+          ...emptyErrorAttempt("anthropic", "claude-opus-4-8", 1120, [
+            {
+              type: "thinking",
+              thinking: "internal reasoning before provider error",
+              thinkingSignature: JSON.stringify({ id: "rs_error", type: "reasoning" }),
+            },
+          ]),
+          ...attemptState,
+        }),
+      );
+
+      await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        provider: "anthropic",
+        model: "claude-opus-4-8",
+        runId: `run-empty-error-retry-terminal-${_label.replaceAll(" ", "-")}`,
+      });
+
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("does not mark incomplete turns fallback-safe after a terminal heartbeat response", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        ...emptyErrorAttempt("anthropic", "claude-opus-4-8", 1120, [
+          {
+            type: "thinking",
+            thinking: "internal reasoning before provider error",
+            thinkingSignature: JSON.stringify({ id: "rs_heartbeat_error", type: "reasoning" }),
+          },
+        ]),
+        heartbeatToolResponse: {
+          outcome: "progress",
+          notify: false,
+          summary: "Still working",
+        },
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      runId: "run-terminal-heartbeat-not-fallback-safe",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.meta.error).toMatchObject({
+      kind: "incomplete_turn",
+      fallbackSafe: false,
+    });
   });
 });

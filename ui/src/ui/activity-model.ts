@@ -1,3 +1,4 @@
+// Control UI module implements activity model behavior.
 import { formatUnknownText, truncateText } from "./format.ts";
 
 export const ACTIVITY_ENTRY_LIMIT = 100;
@@ -213,10 +214,4 @@ export function updateActivityFromToolEvent(host: ActivityHost, payload: ToolEve
     ? host.activityEntries.map((entry) => (entry.id === id ? nextEntry : entry))
     : [...host.activityEntries, nextEntry];
   host.activityEntries = next.slice(-ACTIVITY_ENTRY_LIMIT);
-}
-
-export function resetActivityEntries(host: ActivityHost) {
-  if (Array.isArray(host.activityEntries)) {
-    host.activityEntries = [];
-  }
 }

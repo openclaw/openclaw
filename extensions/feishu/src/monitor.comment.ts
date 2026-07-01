@@ -1,5 +1,7 @@
+// Feishu plugin module implements monitor.comment behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { asBoolean as readBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { raceWithTimeoutAndAbort } from "./async.js";
 import { createFeishuClient } from "./client.js";
@@ -182,7 +184,9 @@ function truncatePromptText(
   if (!normalized) {
     return "";
   }
-  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}…` : normalized;
+  return normalized.length > maxLength
+    ? `${sliceUtf16Safe(normalized, 0, maxLength - 1)}…`
+    : normalized;
 }
 
 function formatPromptTextValue(text: string | undefined): string {
@@ -331,7 +335,7 @@ async function resolveParsedCommentContent(params: {
               resolvedObjToken: objToken,
             };
           })
-          .catch((error) => {
+          .catch((error: unknown) => {
             params.logger?.(
               `feishu[${params.accountId}]: wiki link resolution threw token=${link.wikiNodeToken} error=${formatErrorMessage(error)}`,
             );
@@ -361,7 +365,9 @@ async function resolveParsedCommentContent(params: {
 }
 
 async function delayMs(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function buildDriveCommentTargetUrl(params: {
@@ -483,7 +489,7 @@ async function requestFeishuOpenApi<T>(params: {
     { timeoutMs: params.timeoutMs },
   )
     .then((resolved) => (resolved.status === "resolved" ? resolved.value : null))
-    .catch((error) => {
+    .catch((error: unknown) => {
       params.logger?.(`${params.errorLabel}: ${formatErrorDetails(error)}`);
       return null;
     });
@@ -1358,7 +1364,7 @@ export async function resolveDriveCommentEventTurn(
     nearestBotWholeCommentAfter: resolved.context.nearestBotWholeCommentAfter,
     nearestBotWholeCommentBefore: resolved.context.nearestBotWholeCommentBefore,
   });
-  const preview = prompt.replace(/\s+/g, " ").slice(0, 160);
+  const preview = truncateUtf16Safe(prompt.replace(/\s+/g, " "), 160);
   return {
     eventId: resolved.eventId,
     messageId: `drive-comment:${resolved.eventId}`,

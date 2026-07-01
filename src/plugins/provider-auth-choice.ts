@@ -1,3 +1,5 @@
+// Formats provider authentication choices exposed by plugin setup flows.
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   resolveDefaultAgentId,
   resolveAgentDir,
@@ -8,8 +10,9 @@ import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-share
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { openUrl } from "../infra/browser-open.js";
+import { isRemoteEnvironment } from "../infra/remote-env.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { enablePluginInConfig } from "./enable.js";
@@ -26,7 +29,6 @@ import {
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
 import { resolveProviderInstallCatalogEntry } from "./provider-install-catalog.js";
 import { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
-import { isRemoteEnvironment, openUrl } from "./setup-browser.js";
 import type { ProviderAuthMethod, ProviderAuthOptionBag, ProviderPlugin } from "./types.js";
 
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
@@ -189,13 +191,14 @@ async function applyDefaultModelFromAuthChoice(params: {
       });
       nextConfig = migrationResult.config;
     }
-    const { ensureCopilotSdkForModelSelection } =
-      await import("../commands/copilot-sdk-install.js");
-    const copilotInstall = await ensureCopilotSdkForModelSelection({
+    const { ensureCopilotRuntimePluginForModelSelection } =
+      await import("../commands/copilot-runtime-plugin-install.js");
+    const copilotInstall = await ensureCopilotRuntimePluginForModelSelection({
       cfg: nextConfig,
       model: params.selectedModel,
       prompter: params.prompter,
       runtime: params.runtime,
+      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
     });
     nextConfig = copilotInstall.cfg;
   }

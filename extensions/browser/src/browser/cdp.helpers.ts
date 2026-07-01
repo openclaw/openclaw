@@ -1,3 +1,9 @@
+/**
+ * Chrome DevTools Protocol URL, fetch, and socket helpers.
+ *
+ * Handles CDP URL normalization, SSRF-guarded HTTP discovery, credential
+ * redaction/headers, and request/response correlation over WebSocket.
+ */
 import { parseBrowserHttpUrl, redactCdpUrl } from "openclaw/plugin-sdk/browser-config";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import WebSocket from "ws";
@@ -16,6 +22,7 @@ import { CDP_HTTP_REQUEST_TIMEOUT_MS, CDP_WS_HANDSHAKE_TIMEOUT_MS } from "./cdp-
 import { BrowserCdpEndpointBlockedError } from "./errors.js";
 import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
 import { withAllowedHostname } from "./ssrf-policy-helpers.js";
+import { normalizeBrowserTimerDelayMs } from "./timer-delay.js";
 
 export { isLoopbackHost };
 export { parseBrowserHttpUrl, redactCdpUrl };
@@ -122,6 +129,7 @@ function rawCdpMessageToString(data: WebSocket.RawData): string {
   return Buffer.from(data).toString("utf8");
 }
 
+/** Merge URL basic-auth credentials into headers without overriding explicit auth. */
 export function getHeadersWithAuth(url: string, headers: Record<string, string> = {}) {
   const mergedHeaders = { ...headers };
   try {
@@ -156,6 +164,7 @@ function stripUrlCredentials(url: string): string {
   }
 }
 
+/** Append a JSON endpoint path to a CDP HTTP base URL. */
 export function appendCdpPath(cdpUrl: string, path: string): string {
   const url = new URL(cdpUrl);
   const basePath = url.pathname.replace(/\/$/, "");
@@ -164,6 +173,7 @@ export function appendCdpPath(cdpUrl: string, path: string): string {
   return url.toString();
 }
 
+/** Normalize ws/wss and direct devtools URLs back to the HTTP JSON endpoint base. */
 export function normalizeCdpHttpBaseForJsonEndpoints(cdpUrl: string): string {
   try {
     const url = new URL(cdpUrl);
@@ -196,7 +206,7 @@ function createCdpSender(ws: WebSocket, opts?: { commandTimeoutMs?: number }) {
   const pending = new Map<number, Pending>();
   const commandTimeoutMs =
     typeof opts?.commandTimeoutMs === "number" && Number.isFinite(opts.commandTimeoutMs)
-      ? Math.max(1, Math.floor(opts.commandTimeoutMs))
+      ? normalizeBrowserTimerDelayMs(opts.commandTimeoutMs)
       : undefined;
 
   const clearPendingTimer = (p: Pending) => {
@@ -219,6 +229,8 @@ function createCdpSender(ws: WebSocket, opts?: { commandTimeoutMs?: number }) {
       }
       const entry: Pending = { resolve, reject };
       if (commandTimeoutMs !== undefined) {
+        // A timed-out command closes the whole socket so pending calls do not
+        // hang on a connection whose CDP command stream is no longer reliable.
         entry.timer = setTimeout(() => {
           closeWithError(new Error(`CDP command ${method} timed out after ${commandTimeoutMs}ms`));
         }, commandTimeoutMs);
@@ -285,6 +297,7 @@ function createCdpSender(ws: WebSocket, opts?: { commandTimeoutMs?: number }) {
   return { send, closeWithError };
 }
 
+/** Fetch and parse a CDP JSON endpoint through the configured SSRF guard. */
 export async function fetchJson<T>(
   url: string,
   timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
@@ -299,6 +312,7 @@ export async function fetchJson<T>(
   }
 }
 
+/** Fetch a CDP endpoint and return the response with an idempotent release hook. */
 export async function fetchCdpChecked(
   url: string,
   timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
@@ -306,7 +320,7 @@ export async function fetchCdpChecked(
   ssrfPolicy?: SsrFPolicy,
 ): Promise<CdpFetchResult> {
   const ctrl = new AbortController();
-  const t = setTimeout(ctrl.abort.bind(ctrl), timeoutMs);
+  const t = setTimeout(ctrl.abort.bind(ctrl), normalizeBrowserTimerDelayMs(timeoutMs));
   let guardedRelease: (() => Promise<void>) | undefined;
   let released = false;
   const release = async () => {
@@ -323,6 +337,8 @@ export async function fetchCdpChecked(
     const res = await withManagedProxyForCdpUrl(fetchUrl, () =>
       withNoProxyForCdpUrl(url, async () => {
         const parsedUrl = new URL(fetchUrl);
+        // Loopback CDP is an OpenClaw control plane, not page navigation. Allow
+        // its exact host while preserving the caller's policy for remote hosts.
         const policy = isLoopbackHost(parsedUrl.hostname)
           ? withAllowedHostname(ssrfPolicy, parsedUrl.hostname)
           : (ssrfPolicy ?? { allowPrivateNetwork: true });
@@ -354,6 +370,7 @@ export async function fetchCdpChecked(
   }
 }
 
+/** Probe that a CDP endpoint responds with an OK HTTP status. */
 export async function fetchOk(
   url: string,
   timeoutMs = CDP_HTTP_REQUEST_TIMEOUT_MS,
@@ -364,6 +381,7 @@ export async function fetchOk(
   await release();
 }
 
+/** Open a CDP WebSocket with URL basic-auth and proxy bypass handling. */
 export function openCdpWebSocket(
   wsUrl: string,
   opts?: { headers?: Record<string, string>; handshakeTimeoutMs?: number },
@@ -396,7 +414,9 @@ type CdpSocketOptions = {
 };
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function normalizeRetryCount(value: number | undefined, fallback: number): number {
@@ -417,6 +437,8 @@ function computeHandshakeRetryDelayMs(attempt: number, opts?: CdpSocketOptions):
       ? Math.max(baseDelayMs, Math.floor(opts.handshakeMaxRetryDelayMs))
       : 3000;
   const raw = Math.min(maxDelayMs, baseDelayMs * 2 ** Math.max(0, attempt - 1));
+  // Jitter keeps several browser sessions from retrying handshakes in lockstep
+  // after a shared Chrome or network hiccup.
   const jitterScale = 0.8 + Math.random() * 0.4;
   return Math.max(1, Math.floor(raw * jitterScale));
 }
@@ -485,6 +507,8 @@ export async function withCdpSocket<T>(
       if (attempt >= maxHandshakeRetries || !shouldRetryCdpHandshakeError(err)) {
         throw err;
       }
+      // Retry only handshake failures. Once CDP commands are flowing, callers
+      // own retry semantics because commands may already have side effects.
       await sleep(computeHandshakeRetryDelayMs(attempt + 1, opts));
       continue;
     }

@@ -1,9 +1,12 @@
+// Prompt image tests cover local reference parsing, sandbox-aware loading, and
+// attachment ordering for embedded runs that send images to vision models.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
+import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../../test-helpers/unsafe-mounted-sandbox.js";
 import {
@@ -35,6 +38,8 @@ function expectImageReferenceCount(prompt: string, count: number) {
 }
 
 function expectSingleImageReference(prompt: string) {
+  // Most parser cases should find exactly one local image ref; this helper
+  // keeps failures about over-detection obvious.
   const refs = expectImageReferenceCount(prompt, 1);
   return refs[0];
 }
@@ -83,6 +88,8 @@ describe("detectImageReferences", () => {
   });
 
   it("ignores OpenClaw CLI image cache paths from prior prompt transcripts", () => {
+    // Cache paths from generated tool reminders are replay artifacts, not new
+    // user attachments to hydrate again.
     const refs = detectImageReferences(
       [
         '<system-reminder>Called the Read tool with {"file_path":"/Users/ada/.openclaw/workspace/.openclaw-cli-images/stale.png"}</system-reminder>',
@@ -194,6 +201,8 @@ describe("detectImageReferences", () => {
   });
 
   it("dedupe casing follows host filesystem conventions", () => {
+    // Windows resolves these as the same path, while POSIX hosts preserve both
+    // candidates because case can identify different files.
     const prompt = "Look at /tmp/Image.png and /tmp/image.png";
     if (process.platform === "win32") {
       expect(detectImageReferences(prompt)).toStrictEqual([
@@ -403,6 +412,8 @@ describe("modelSupportsImages", () => {
 
 describe("loadImageFromRef", () => {
   it("hydrates managed inbound media URIs before workspace path resolution", async () => {
+    // Managed media URIs are canonical inbound attachment handles and should
+    // work even when workspaceOnly would reject ordinary outside paths.
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-uri-"));
     const workspaceDir = path.join(stateDir, "workspace-agent");
     const inboundDir = path.join(stateDir, "media", "inbound");
@@ -410,7 +421,8 @@ describe("loadImageFromRef", () => {
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.mkdir(inboundDir, { recursive: true });
     await fs.writeFile(path.join(inboundDir, mediaId), Buffer.from(TINY_PNG_BASE64, "base64"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
 
     try {
       const image = await loadImageFromRef(
@@ -427,7 +439,7 @@ describe("loadImageFromRef", () => {
       expect(image?.mimeType).toBe("image/png");
       expect(image?.data).toBe(TINY_PNG_BASE64);
     } finally {
-      vi.unstubAllEnvs();
+      envSnapshot.restore();
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
@@ -575,6 +587,8 @@ describe("detectAndLoadPromptImages", () => {
   });
 
   it("preserves attachment order when offloaded refs and inline images are mixed", () => {
+    // The model receives images in the user's attachment order, not grouped by
+    // storage mechanism.
     const merged = mergePromptAttachmentImages({
       imageOrder: ["offloaded", "inline"],
       existingImages: [{ type: "image", data: "small-b", mimeType: "image/png" }],
@@ -616,6 +630,8 @@ describe("detectAndLoadPromptImages", () => {
   });
 
   it("blocks prompt image refs outside workspace when sandbox workspaceOnly is enabled", async () => {
+    // Sandbox workspaceOnly uses the bridge to validate mounted paths; ordinary
+    // prompt refs outside the workspace are detected but intentionally skipped.
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-sandbox-"));
     const sandboxRoot = path.join(stateDir, "sandbox");
     const agentRoot = path.join(stateDir, "agent");
@@ -656,7 +672,8 @@ describe("detectAndLoadPromptImages", () => {
     const imagePath = path.join(inboundDir, "signal-replay.png");
     const pngB64 = TINY_PNG_BASE64;
     await fs.writeFile(imagePath, Buffer.from(pngB64, "base64"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
 
     try {
       const result = await detectAndLoadPromptImages({
@@ -671,7 +688,7 @@ describe("detectAndLoadPromptImages", () => {
       expect(result.skippedCount).toBe(0);
       expect(result.images).toHaveLength(1);
     } finally {
-      vi.unstubAllEnvs();
+      envSnapshot.restore();
       await fs.rm(stateDir, { recursive: true, force: true });
     }
   });

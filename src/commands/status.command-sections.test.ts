@@ -1,3 +1,4 @@
+// Status command section tests cover footer, health, and report section rendering.
 import { describe, expect, it } from "vitest";
 import type { HealthSummary } from "./health.js";
 import {
@@ -166,7 +167,7 @@ describe("status.command-sections", () => {
       "  Configured default: zhipu/glm-4.5-air",
       "  Session selected: deepseek/deepseek-v4-flash",
       "  Reason: session override",
-      "  Clear with: /model zhipu/glm-4.5-air or /reset",
+      "  Clear with: /model default",
       "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
     ]);
   });

@@ -1,3 +1,4 @@
+// Google Meet plugin entrypoint registers its OpenClaw integration.
 import {
   optionalPositiveIntegerSchema,
   readPositiveIntegerParam,
@@ -20,6 +21,7 @@ import {
 } from "./src/calendar.js";
 import {
   resolveGoogleMeetConfig,
+  resolveGoogleMeetGatewayOperationTimeoutMs,
   type GoogleMeetConfig,
   type GoogleMeetMode,
   type GoogleMeetTransport,
@@ -33,8 +35,25 @@ import {
   fetchGoogleMeetSpace,
 } from "./src/meet.js";
 import { handleGoogleMeetNodeHostCommand } from "./src/node-host.js";
+import {
+  createGoogleMeetChromeNodeInvokePolicy,
+  GOOGLE_MEET_CHROME_NODE_COMMAND,
+} from "./src/node-invoke-policy.js";
 import { GoogleMeetRuntime } from "./src/runtime.js";
 import { isGoogleMeetBrowserManualActionError } from "./src/transports/chrome-create.js";
+
+let googleMeetCreateModulePromise: Promise<typeof import("./src/create.js")> | null = null;
+let googleMeetCliModulePromise: Promise<typeof import("./src/cli.js")> | null = null;
+
+const loadGoogleMeetCreateModule = async () => {
+  googleMeetCreateModulePromise ??= import("./src/create.js");
+  return await googleMeetCreateModulePromise;
+};
+
+const loadGoogleMeetCliModule = async () => {
+  googleMeetCliModulePromise ??= import("./src/cli.js");
+  return await googleMeetCliModulePromise;
+};
 
 const googleMeetConfigSchema = {
   parse(value: unknown) {
@@ -384,6 +403,7 @@ export const testing = {
     googleMeetToolDeps.platform = next ?? (() => process.platform);
   },
   isGoogleMeetAgentToolActionUnsupportedOnHost,
+  resolveGoogleMeetGatewayOperationTimeoutMs,
 };
 
 /** @deprecated Use `testing`. */
@@ -455,14 +475,6 @@ function assertGoogleMeetAgentToolActionSupported(params: {
   );
 }
 
-function resolveGoogleMeetToolGatewayTimeoutMs(config: GoogleMeetConfig): number {
-  return Math.max(
-    60_000,
-    config.chrome.joinTimeoutMs + 30_000,
-    config.voiceCall.requestTimeoutMs + 10_000,
-  );
-}
-
 function readGatewayErrorDetails(err: unknown): unknown {
   if (!err || typeof err !== "object" || !("details" in err)) {
     return undefined;
@@ -480,7 +492,7 @@ async function callGoogleMeetGatewayFromTool(params: {
       googleMeetGatewayMethodForToolAction(params.action),
       {
         json: true,
-        timeout: String(resolveGoogleMeetToolGatewayTimeoutMs(params.config)),
+        timeout: String(resolveGoogleMeetGatewayOperationTimeoutMs(params.config)),
       },
       params.raw,
       { progress: false },
@@ -499,7 +511,7 @@ async function createMeetFromParams(params: {
   runtime: OpenClawPluginApi["runtime"];
   raw: Record<string, unknown>;
 }) {
-  const create = await import("./src/create.js");
+  const create = await loadGoogleMeetCreateModule();
   return create.createMeetFromParams(params);
 }
 
@@ -509,7 +521,7 @@ async function createAndJoinMeetFromParams(params: {
   raw: Record<string, unknown>;
   ensureRuntime: () => Promise<GoogleMeetRuntime>;
 }) {
-  const create = await import("./src/create.js");
+  const create = await loadGoogleMeetCreateModule();
   return create.createAndJoinMeetFromParams(params);
 }
 
@@ -621,7 +633,7 @@ async function exportGoogleMeetBundleFromParams(
     }),
   ]);
   const { buildGoogleMeetExportManifest, googleMeetExportFileNames, writeMeetExportBundle } =
-    await import("./src/cli.js");
+    await loadGoogleMeetCliModule();
   const calendarId = normalizeOptionalString(raw.calendarId);
   const request = {
     ...(resolved.meeting ? { meeting: resolved.meeting } : {}),
@@ -1188,14 +1200,16 @@ export default definePluginEntry({
     );
 
     api.registerNodeHostCommand({
-      command: "googlemeet.chrome",
+      command: GOOGLE_MEET_CHROME_NODE_COMMAND,
       cap: "google-meet",
+      dangerous: true,
       handle: handleGoogleMeetNodeHostCommand,
     });
+    api.registerNodeInvokePolicy(createGoogleMeetChromeNodeInvokePolicy(config));
 
     api.registerCli(
       async ({ program }) => {
-        const { registerGoogleMeetCli } = await import("./src/cli.js");
+        const { registerGoogleMeetCli } = await loadGoogleMeetCliModule();
         registerGoogleMeetCli({
           program,
           config,

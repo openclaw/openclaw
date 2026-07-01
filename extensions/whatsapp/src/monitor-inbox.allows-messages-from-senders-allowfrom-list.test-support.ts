@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements monitor inbox.allows messages from senders allowfrom list support behavior.
 import "./monitor-inbox.test-harness.js";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -116,9 +117,17 @@ describe("web monitor inbox", () => {
     // Should call onMessage for authorized senders
     expect(onMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        body: "authorized message",
-        from: "+999",
-        senderE164: "+999",
+        admission: expect.objectContaining({
+          conversation: expect.objectContaining({
+            id: "+999",
+          }),
+        }),
+        payload: expect.objectContaining({
+          body: "authorized message",
+        }),
+        platform: expect.objectContaining({
+          senderE164: "+999",
+        }),
       }),
     );
 
@@ -145,7 +154,16 @@ describe("web monitor inbox", () => {
 
     // Should allow self-messages even if not in allowFrom
     expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ body: "self message", from: "+123" }),
+      expect.objectContaining({
+        admission: expect.objectContaining({
+          conversation: expect.objectContaining({
+            id: "+123",
+          }),
+        }),
+        payload: expect.objectContaining({
+          body: "self message",
+        }),
+      }),
     );
 
     await listener.close();
@@ -204,11 +222,46 @@ describe("web monitor inbox", () => {
     expect(onMessage).toHaveBeenCalledTimes(1);
     expect(onMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        body: "self ping",
-        from: "+123",
-        to: "+123",
+        admission: expect.objectContaining({
+          conversation: expect.objectContaining({
+            id: "+123",
+          }),
+        }),
+        payload: expect.objectContaining({
+          body: "self ping",
+        }),
+        platform: expect.objectContaining({
+          recipientJid: "+123",
+        }),
       }),
     );
+
+    await listener.close();
+  });
+
+  it("still sends pairing replies when live DMs have null timestamps", async () => {
+    mockLoadConfig.mockReturnValue({});
+    upsertPairingRequestMock.mockResolvedValueOnce({ code: "PAIRCODE", created: true });
+
+    const { onMessage, listener, sock } = await openInboxMonitor();
+
+    const upsertBlocked = buildNotifyMessageUpsert({
+      id: "no-config-null-ts",
+      remoteJid: "999@s.whatsapp.net",
+      text: "ping",
+      timestamp: null as never,
+    });
+
+    sock.ev.emit("messages.upsert", upsertBlocked);
+    await vi.waitFor(
+      () => {
+        expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 5_000, interval: 5 },
+    );
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expectPairingPromptSent(sock, "999@s.whatsapp.net", "+999");
 
     await listener.close();
   });
@@ -262,11 +315,19 @@ describe("web monitor inbox", () => {
 
     expect(onMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        body: "/status",
-        chatType: "group",
-        from: "120363@g.us",
-        fromMe: true,
-        senderE164: "+123",
+        admission: expect.objectContaining({
+          conversation: expect.objectContaining({
+            kind: "group",
+            id: "120363@g.us",
+          }),
+        }),
+        payload: expect.objectContaining({
+          body: "/status",
+        }),
+        platform: expect.objectContaining({
+          fromMe: true,
+          senderE164: "+123",
+        }),
       }),
     );
 

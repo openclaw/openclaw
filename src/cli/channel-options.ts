@@ -1,4 +1,5 @@
-import { uniqueStrings } from "../shared/string-normalization.js";
+// CLI channel option formatter backed by generated startup metadata when available.
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { readCliStartupMetadata } from "./startup-metadata.js";
 
 function dedupe(values: string[]): string[] {
@@ -41,4 +42,3 @@ export const testing = {
     precomputedChannelOptions = undefined;
   },
 };
-export { testing as __testing };

@@ -1,10 +1,14 @@
+// Slack plugin module implements interactions.block actions behavior.
 import type { SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
 import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
-import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import {
+  parseStrictFiniteNumber,
+  timestampMsToIsoString,
+} from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeOptionalString,
   normalizeUniqueTrimmedStringList,
@@ -17,6 +21,7 @@ import {
   SLACK_REPLY_BUTTON_ACTION_ID,
   SLACK_REPLY_SELECT_ACTION_ID,
 } from "../../reply-action-ids.js";
+import { truncateSlackText } from "../../truncate.js";
 import {
   authorizeSlackSystemEventSender,
   resolveSlackCommandIngress,
@@ -169,7 +174,7 @@ function summarizeRichTextPreview(value: unknown): string | undefined {
     return undefined;
   }
   const max = 120;
-  return joined.length <= max ? joined : `${joined.slice(0, max - 1)}…`;
+  return joined.length <= max ? joined : truncateSlackText(joined, max);
 }
 
 function readInteractionAction(raw: unknown) {
@@ -319,7 +324,10 @@ function formatInteractionSelectionLabel(params: {
     return params.summary.selectedTime;
   }
   if (typeof params.summary.selectedDateTime === "number") {
-    return new Date(params.summary.selectedDateTime * 1000).toISOString();
+    const selectedDateTime = timestampMsToIsoString(params.summary.selectedDateTime * 1000);
+    if (selectedDateTime) {
+      return selectedDateTime;
+    }
   }
   if (params.summary.richTextPreview) {
     return params.summary.richTextPreview;

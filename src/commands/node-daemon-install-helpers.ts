@@ -1,3 +1,4 @@
+/** Node-based daemon install plan builder for managed gateway services. */
 import { formatNodeServiceDescription } from "../daemon/constants.js";
 import { resolveNodeProgramArguments } from "../daemon/program-args.js";
 import { buildNodeServiceEnvironment } from "../daemon/service-env.js";
@@ -8,7 +9,7 @@ import {
   resolveDaemonNodeBinDir,
 } from "./daemon-install-plan.shared.js";
 import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
-import type { NodeDaemonRuntime } from "./node-daemon-runtime.js";
+import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
 type NodeInstallPlan = {
   programArguments: string[];
@@ -27,6 +28,7 @@ function buildNodeInstallEnvironmentValueSources(): Record<
   };
 }
 
+/** Builds launch arguments, environment, and metadata for a Node daemon service install. */
 export async function buildNodeInstallPlan(params: {
   env: Record<string, string | undefined>;
   host: string;
@@ -35,7 +37,7 @@ export async function buildNodeInstallPlan(params: {
   tlsFingerprint?: string;
   nodeId?: string;
   displayName?: string;
-  runtime: NodeDaemonRuntime;
+  runtime: GatewayDaemonRuntime;
   devMode?: boolean;
   nodePath?: string;
   warn?: DaemonInstallWarnFn;

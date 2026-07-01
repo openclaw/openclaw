@@ -1,3 +1,4 @@
+// Browser tests cover register.form wait eval plugin behavior.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as browserCliSharedModule from "../browser-cli-shared.js";
@@ -35,6 +36,43 @@ function createActionInputProgram(): Command {
   return program;
 }
 
+function getLastActionBody(): Record<string, unknown> | undefined {
+  return (mocks.callBrowserRequest.mock.calls.at(-1)?.[1] as { body?: Record<string, unknown> })
+    ?.body;
+}
+
+describe("browser action input fill command", () => {
+  beforeEach(() => {
+    mocks.callBrowserRequest.mockClear();
+    getBrowserCliRuntimeCapture().resetRuntimeCapture();
+  });
+
+  it("sends normalized fill fields and target id to the act route", async () => {
+    const program = createActionInputProgram();
+
+    await program.parseAsync(
+      [
+        "browser",
+        "fill",
+        "--fields",
+        '[{"ref":"name","value":"Ada"},{"ref":"enabled","value":true}]',
+        "--target-id",
+        "tab-1",
+      ],
+      { from: "user" },
+    );
+
+    expect(getLastActionBody()).toMatchObject({
+      kind: "fill",
+      fields: [
+        { ref: "name", type: "text", value: "Ada" },
+        { ref: "enabled", type: "text", value: true },
+      ],
+      targetId: "tab-1",
+    });
+  });
+});
+
 describe("browser action input wait command", () => {
   beforeEach(() => {
     mocks.callBrowserRequest.mockClear();
@@ -44,7 +82,7 @@ describe("browser action input wait command", () => {
   it("keeps the outer request open longer than a time-based wait", async () => {
     const program = createActionInputProgram();
 
-    await program.parseAsync(["browser", "wait", "--time", "25000"], { from: "user" });
+    await program.parseAsync(["browser", "wait", "--time", "+025000"], { from: "user" });
 
     const options = mocks.callBrowserRequest.mock.calls.at(-1)?.[2] as
       | { timeoutMs?: number }
@@ -98,11 +136,36 @@ describe("browser action input evaluate command", () => {
     getBrowserCliRuntimeCapture().resetRuntimeCapture();
   });
 
+  it("sends evaluate function, ref, and target id to the act route", async () => {
+    const program = createActionInputProgram();
+
+    await program.parseAsync(
+      [
+        "browser",
+        "evaluate",
+        "--fn",
+        "el => el.textContent",
+        "--ref",
+        "button-1",
+        "--target-id",
+        "tab-2",
+      ],
+      { from: "user" },
+    );
+
+    expect(getLastActionBody()).toMatchObject({
+      kind: "evaluate",
+      fn: "el => el.textContent",
+      ref: "button-1",
+      targetId: "tab-2",
+    });
+  });
+
   it("passes timeout-ms through to the evaluate action and outer request", async () => {
     const program = createActionInputProgram();
 
     await program.parseAsync(
-      ["browser", "evaluate", "--fn", "() => true", "--timeout-ms", "30000"],
+      ["browser", "evaluate", "--fn", "() => true", "--timeout-ms", "+030000"],
       { from: "user" },
     );
 

@@ -1,5 +1,7 @@
+// Run main tests cover CLI main entrypoint behavior and process error handling.
 import { describe, expect, it } from "vitest";
 import type { PluginManifestCommandAliasRegistry } from "../plugins/manifest-command-aliases.js";
+import { resolveGatewayRunPreBootstrapOptions } from "./gateway-run-argv.js";
 import {
   resolvePrecomputedSubcommandHelpFastPath,
   rewriteUpdateFlagArgv,
@@ -71,6 +73,32 @@ describe("isGatewayRunFastPathArgv", () => {
     expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--help"])).toBe(false);
     expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--port"])).toBe(false);
     expect(isGatewayRunFastPathArgv(["node", "openclaw", "gateway", "--unknown"])).toBe(false);
+  });
+});
+
+describe("resolveGatewayRunPreBootstrapOptions", () => {
+  it("resolves destructive gateway flags across fast and full Commander paths", () => {
+    expect(
+      resolveGatewayRunPreBootstrapOptions(["node", "openclaw", "gateway", "run", "--force"]),
+    ).toEqual({ force: true, reset: false });
+    expect(
+      resolveGatewayRunPreBootstrapOptions([
+        "node",
+        "openclaw",
+        "--log-level",
+        "debug",
+        "gateway",
+        "run",
+        "--force",
+        "--reset",
+      ]),
+    ).toEqual({ force: true, reset: true });
+  });
+
+  it("does not treat malformed required option values as destructive flags", () => {
+    expect(
+      resolveGatewayRunPreBootstrapOptions(["node", "openclaw", "gateway", "--token", "--force"]),
+    ).toEqual({ force: false, reset: false });
   });
 });
 
@@ -291,6 +319,12 @@ describe("resolvePrecomputedSubcommandHelpFastPath", () => {
     expect(
       resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "plugins", "--help"]),
     ).toBe("plugins");
+    expect(
+      resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "sessions", "--help"]),
+    ).toBe("sessions");
+    expect(resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "tasks", "-h"])).toBe(
+      "tasks",
+    );
     expect(
       resolvePrecomputedSubcommandHelpFastPath(["node", "openclaw", "doctor", "--version"]),
     ).toBeNull();

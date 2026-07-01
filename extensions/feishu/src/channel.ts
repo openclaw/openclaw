@@ -1,3 +1,4 @@
+// Feishu plugin module implements channel behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
@@ -13,6 +14,7 @@ import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   defineChannelMessageAdapter,
   createRuntimeOutboundDelegates,
+  createAccountStatusSink,
   type ChannelMessageSendResult,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -28,8 +30,10 @@ import {
 } from "openclaw/plugin-sdk/directory-runtime";
 import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { PluginRuntime } from "../runtime-api.js";
 import {
   inspectFeishuCredentials,
   listEnabledFeishuAccounts,
@@ -557,25 +561,14 @@ function readFirstString(
   return undefined;
 }
 
-function isPositiveSafeInteger(value: number): boolean {
-  return Number.isSafeInteger(value) && value > 0;
-}
-
 function readOptionalPositiveInteger(
   params: Record<string, unknown>,
   keys: string[],
 ): number | undefined {
   for (const key of keys) {
-    const value = params[key];
-    if (typeof value === "number" && isPositiveSafeInteger(value)) {
-      return value;
-    }
-    if (typeof value === "string" && value.trim()) {
-      const trimmed = value.trim();
-      const parsed = /^\d+$/.test(trimmed) ? Number(trimmed) : Number.NaN;
-      if (isPositiveSafeInteger(parsed)) {
-        return parsed;
-      }
+    const parsed = parseStrictPositiveInteger(params[key]);
+    if (parsed !== undefined) {
+      return parsed;
     }
   }
   return undefined;
@@ -1326,11 +1319,21 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           ctx.log?.info(
             `starting feishu[${ctx.accountId}] (mode: ${account.config?.connectionMode ?? "websocket"})`,
           );
+          // Publish Feishu connected state and event recency through the
+          // shared channel status sink.
+          const statusSink = createAccountStatusSink({
+            accountId: ctx.accountId,
+            setStatus: ctx.setStatus,
+          });
           return monitorFeishuProvider({
             config: ctx.cfg,
             runtime: ctx.runtime,
+            // Gateway provides the full channel runtime here; the public SDK type
+            // stays context-only for external compatibility.
+            channelRuntime: ctx.channelRuntime as PluginRuntime["channel"] | undefined,
             abortSignal: ctx.abortSignal,
             accountId: ctx.accountId,
+            statusSink,
           });
         },
       },

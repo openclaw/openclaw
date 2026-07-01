@@ -5,7 +5,7 @@
 
 import { Text } from "@earendil-works/pi-tui";
 
-export interface VisualTruncateResult {
+interface VisualTruncateResult {
   /** The visual lines to display */
   visualLines: string[];
   /** Number of visual lines that were skipped (hidden) */
@@ -28,7 +28,7 @@ export function truncateToVisualLines(
   text: string,
   maxVisualLines: number,
   width: number,
-  paddingX: number = 0,
+  paddingX = 0,
 ): VisualTruncateResult {
   if (!text) {
     return { visualLines: [], skippedCount: 0 };

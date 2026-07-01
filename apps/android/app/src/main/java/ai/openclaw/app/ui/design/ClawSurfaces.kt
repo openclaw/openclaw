@@ -15,6 +15,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
+/**
+ * Standard inset panel for grouped Android app content.
+ */
 @Composable
 internal fun ClawPanel(
   modifier: Modifier = Modifier,
@@ -24,9 +27,11 @@ internal fun ClawPanel(
   Surface(
     modifier = modifier.fillMaxWidth(),
     shape = RoundedCornerShape(ClawTheme.radii.panel),
-    color = ClawTheme.colors.surfaceRaised,
+    color = ClawTheme.colors.surfaceRaised.copy(alpha = 0.82f),
     contentColor = ClawTheme.colors.text,
-    border = BorderStroke(1.dp, ClawTheme.colors.border),
+    border = null,
+    tonalElevation = 2.dp,
+    shadowElevation = 4.dp,
   ) {
     Column(modifier = Modifier.padding(contentPadding)) {
       content()
@@ -34,25 +39,9 @@ internal fun ClawPanel(
   }
 }
 
-@Composable
-internal fun ClawSheetSurface(
-  modifier: Modifier = Modifier,
-  contentPadding: PaddingValues = PaddingValues(18.dp),
-  content: @Composable () -> Unit,
-) {
-  Surface(
-    modifier = modifier.fillMaxWidth(),
-    shape = RoundedCornerShape(topStart = ClawTheme.radii.sheet, topEnd = ClawTheme.radii.sheet),
-    color = ClawTheme.colors.surface,
-    contentColor = ClawTheme.colors.text,
-    border = BorderStroke(1.dp, ClawTheme.colors.border),
-  ) {
-    Column(modifier = Modifier.padding(contentPadding)) {
-      content()
-    }
-  }
-}
-
+/**
+ * Shared empty state used when a screen has no records but can still offer an action.
+ */
 @Composable
 internal fun ClawEmptyState(
   title: String,
@@ -73,6 +62,9 @@ internal fun ClawEmptyState(
   }
 }
 
+/**
+ * Shared loading placeholder that keeps async screen states visually consistent.
+ */
 @Composable
 internal fun ClawLoadingState(
   title: String,
@@ -90,6 +82,9 @@ internal fun ClawLoadingState(
   }
 }
 
+/**
+ * Shared recoverable error block with the app's attention styling.
+ */
 @Composable
 internal fun ClawErrorState(
   title: String,

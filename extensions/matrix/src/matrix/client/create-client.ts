@@ -1,3 +1,4 @@
+// Matrix plugin module implements create client behavior.
 import fs from "node:fs";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import {
@@ -93,7 +94,7 @@ export async function createMatrixClient(params: {
     encryption: params.encryption,
     localTimeoutMs: params.localTimeoutMs,
     initialSyncLimit: params.initialSyncLimit,
-    storagePath: storagePaths?.storagePath,
+    storageRootDir: storagePaths?.rootDir,
     recoveryKeyPath: storagePaths?.recoveryKeyPath,
     idbSnapshotPath: storagePaths?.idbSnapshotPath,
     cryptoDatabasePrefix,

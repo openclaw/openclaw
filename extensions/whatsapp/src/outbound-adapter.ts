@@ -1,4 +1,5 @@
-import { type ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
+// Whatsapp plugin module implements outbound adapter behavior.
+import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { chunkText } from "openclaw/plugin-sdk/reply-chunking";
 import { shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { createWhatsAppOutboundBase } from "./outbound-base.js";

@@ -1,9 +1,11 @@
+// Google provider module implements model/runtime integration.
 import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { cloneFirstTemplateModel } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeGoogleModelId } from "./model-id.js";
 
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GOOGLE_ANTIGRAVITY_PROVIDER_ID = "google-antigravity";
@@ -15,6 +17,7 @@ const GEMINI_3_1_FLASH_LITE_PREFIX = "gemini-3.1-flash-lite";
 const GEMINI_3_1_FLASH_PREFIX = "gemini-3.1-flash";
 const GEMINI_3_FLASH_LITE_PREFIX = "gemini-3-flash-lite";
 const GEMINI_3_FLASH_PREFIX = "gemini-3-flash";
+const GEMINI_3_5_FLASH_PREFIX = "gemini-3.5-flash";
 const GEMINI_PRO_LATEST_ID = "gemini-pro-latest";
 const GEMINI_FLASH_LATEST_ID = "gemini-flash-latest";
 const GEMINI_FLASH_LITE_LATEST_ID = "gemini-flash-lite-latest";
@@ -40,6 +43,9 @@ function normalizeGeminiProRequestId(id: string): string {
   }
   if (id === "gemini-3-pro" || id === "gemini-3-pro-preview" || id === "gemini-3.1-pro") {
     return "gemini-3.1-pro-preview";
+  }
+  if (id === "gemma-4-26b") {
+    return normalizeGoogleModelId(id);
   }
   return id;
 }
@@ -183,6 +189,7 @@ export function resolveGoogleGeminiForwardCompatModel(params: {
     };
   } else if (
     lower.startsWith(GEMINI_3_1_FLASH_PREFIX) ||
+    lower.startsWith(GEMINI_3_5_FLASH_PREFIX) ||
     lower.startsWith(GEMINI_3_FLASH_PREFIX) ||
     lower === GEMINI_FLASH_LATEST_ID
   ) {

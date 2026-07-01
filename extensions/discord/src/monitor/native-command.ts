@@ -1,4 +1,6 @@
+// Discord plugin module implements native command behavior.
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
+import { loadModelCatalog } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
@@ -14,6 +16,7 @@ import {
   type NativeCommandSpec,
 } from "openclaw/plugin-sdk/native-command-registry";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
+import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import {
@@ -31,9 +34,7 @@ import {
   type StringSelectMenuInteraction,
 } from "../internal/discord.js";
 import {
-  resolveDiscordChannelConfigWithFallback,
   resolveDiscordChannelPolicyCommandAuthorizer,
-  resolveDiscordGuildEntry,
   resolveDiscordOwnerAccess,
 } from "./allow-list.js";
 import { resolveDiscordChannelTopicSafe } from "./channel-access.js";
@@ -44,7 +45,7 @@ import {
   resolveDiscordCommandOwnerAllowFrom,
   resolveDiscordGuildNativeCommandAuthorized,
   resolveDiscordNativeAutocompleteAuthorized,
-  resolveDiscordNativeCommandAllowlistAccess,
+  resolveDiscordNativeCommandChannelAccessContext,
   resolveDiscordNativeGroupDmAccess,
 } from "./native-command-auth.js";
 import {
@@ -113,13 +114,15 @@ export function createDiscordNativeCommand(params: {
           includeBundledChannelFallback: false,
         }) ?? fallbackCommandDefinition);
   const argDefinitions = commandDefinition.args ?? command.args;
+  const resolveCurrentConfig = () => getRuntimeConfigSnapshot() ?? cfg;
   const commandOptions = buildDiscordCommandOptions({
     command: commandDefinition,
     cfg,
+    resolveConfig: resolveCurrentConfig,
     authorizeChoiceContext: async (interaction) =>
       await resolveDiscordNativeAutocompleteAuthorized({
         interaction,
-        cfg,
+        cfg: resolveCurrentConfig(),
         discordConfig,
         accountId,
         skipCommandOwnerAllowFrom: pluginCommandMatch !== null,
@@ -127,7 +130,7 @@ export function createDiscordNativeCommand(params: {
     resolveChoiceContext: async (interaction) =>
       resolveDiscordNativeChoiceContext({
         interaction,
-        cfg,
+        cfg: resolveCurrentConfig(),
         accountId,
         threadBindings,
       }),
@@ -216,7 +219,7 @@ async function dispatchDiscordCommandInteraction(params: {
     prompt,
     command,
     commandArgs,
-    cfg,
+    cfg: inputConfig,
     discordConfig,
     accountId,
     sessionPrefix,
@@ -225,6 +228,7 @@ async function dispatchDiscordCommandInteraction(params: {
     responseEphemeral,
     suppressReplies,
   } = params;
+  const cfg = getRuntimeConfigSnapshot() ?? inputConfig;
   const commandName = command.nativeName ?? command.key;
   const respond = async (content: string, options?: { ephemeral?: boolean }) => {
     const ephemeral = options?.ephemeral ?? responseEphemeral;
@@ -297,41 +301,22 @@ async function dispatchDiscordCommandInteraction(params: {
   const senderIsCommandOwner = commandOwnerOk || commandOwnerAllowAll;
   const ownerAllowListConfigured = discordOwnerAllowList != null;
   const ownerOk = discordOwnerOk;
-  const commandsAllowFromAccess = resolveDiscordNativeCommandAllowlistAccess({
-    cfg,
-    accountId,
-    sender: {
-      id: sender.id,
-      name: sender.name,
-      tag: sender.tag,
-    },
-    chatType: isDirectMessage
-      ? "direct"
-      : isThreadChannel
-        ? "thread"
-        : interaction.guild
-          ? "channel"
-          : "group",
-    conversationId: rawChannelId || undefined,
-    guildId: interaction.guild?.id,
-  });
-  const guildInfo = resolveDiscordGuildEntry({
-    guild: interaction.guild ?? undefined,
-    guildId: interaction.guild?.id ?? undefined,
-    guildEntries: discordConfig?.guilds,
-  });
-  const channelConfig = interaction.guild
-    ? resolveDiscordChannelConfigWithFallback({
-        guildInfo,
-        channelId: rawChannelId,
-        channelName,
-        channelSlug,
-        parentId: threadParentId,
-        parentName: threadParentName,
-        parentSlug: threadParentSlug,
-        scope: isThreadChannel ? "thread" : "channel",
-      })
-    : null;
+  const { commandsAllowFromAccess, guildInfo, channelConfig } =
+    resolveDiscordNativeCommandChannelAccessContext({
+      cfg,
+      discordConfig,
+      accountId,
+      sender,
+      isDirectMessage,
+      isThreadChannel,
+      guild: interaction.guild ?? null,
+      rawChannelId,
+      channelName,
+      channelSlug,
+      threadParentId,
+      threadParentName,
+      threadParentSlug,
+    });
   let nativeRouteStatePromise:
     | ReturnType<typeof nativeCommandRuntime.resolveDiscordNativeInteractionRouteState>
     | undefined;
@@ -501,12 +486,18 @@ async function dispatchDiscordCommandInteraction(params: {
         threadBindings,
       })
     : null;
+  // Native /think choices need live-discovery metadata; empty keeps config fallback.
+  const menuModelCatalog =
+    command.key === "think" && menuNeedsModelContext
+      ? await loadModelCatalog({ config: cfg })
+      : undefined;
   const menu = resolveCommandArgMenu({
     command,
     args: commandArgs,
     cfg,
     provider: menuModelContext?.provider,
     model: menuModelContext?.model,
+    ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
   });
   if (menu) {
     const menuPayload = buildDiscordCommandArgMenu({

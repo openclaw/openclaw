@@ -1,9 +1,13 @@
+/**
+ * File chooser, dialog, and download helpers for Playwright-backed browser
+ * tools.
+ */
 import crypto from "node:crypto";
 import path from "node:path";
 import type { Page } from "playwright-core";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { writeExternalFileWithinOutputRoot } from "./output-files.js";
-import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
+import { resolveStrictExistingUploadPaths } from "./paths.js";
 import {
   armObservedDialogResponseOnPage,
   ensurePageState,
@@ -29,6 +33,8 @@ function buildTempDownloadPath(fileName: string): string {
 
 function createPageDownloadWaiter(page: Page, timeoutMs: number) {
   const state = ensurePageState(page);
+  // Depth tracks active download waiters so page teardown can distinguish an
+  // expected download transition from an unobserved lost event.
   state.downloadWaiterDepth += 1;
   let done = false;
   let timer: NodeJS.Timeout | undefined;
@@ -127,6 +133,7 @@ async function awaitDownloadPayload(params: {
   }
 }
 
+/** Arms the next page file chooser and fills it with strict existing paths. */
 export async function armFileUploadViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -140,6 +147,8 @@ export async function armFileUploadViaPlaywright(opts: {
   state.armIdUpload = bumpUploadArmId();
   const armId = state.armIdUpload;
 
+  // The waiter is intentionally detached: the tool call arms future browser UI,
+  // while the later user click opens the chooser.
   void page
     .waitForEvent("filechooser", { timeout })
     .then(async (fileChooser) => {
@@ -155,10 +164,8 @@ export async function armFileUploadViaPlaywright(opts: {
         }
         return;
       }
-      const uploadPathsResult = await resolveStrictExistingPathsWithinRoot({
-        rootDir: DEFAULT_UPLOAD_DIR,
+      const uploadPathsResult = await resolveStrictExistingUploadPaths({
         requestedPaths: opts.paths,
-        scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
       });
       if (!uploadPathsResult.ok) {
         try {
@@ -189,6 +196,7 @@ export async function armFileUploadViaPlaywright(opts: {
     });
 }
 
+/** Accepts or dismisses a pending dialog, or arms the next matching dialog response. */
 export async function armDialogViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -222,6 +230,7 @@ export async function armDialogViaPlaywright(opts: {
   });
 }
 
+/** Waits for the next page download and writes it under the configured output root. */
 export async function waitForDownloadViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -250,6 +259,7 @@ export async function waitForDownloadViaPlaywright(opts: {
   });
 }
 
+/** Clicks an element ref and saves the download triggered by that click. */
 export async function downloadViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;

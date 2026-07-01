@@ -1,3 +1,4 @@
+// Voice Call tests cover index plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -177,6 +178,22 @@ function expectWarningIncludes(text: string): void {
   expect(noopLogger.warn.mock.calls.map(([message]) => String(message)).join("\n")).toContain(text);
 }
 
+function expectRedactedVoiceCallStatus(value: unknown): void {
+  expect(value).toEqual({
+    callId: "call-1",
+    provider: "mock",
+    direction: "outbound",
+    state: "active",
+    startedAt: Date.UTC(2026, 4, 2, 9, 0, 0),
+  });
+  expect(value).not.toHaveProperty("from");
+  expect(value).not.toHaveProperty("to");
+  expect(value).not.toHaveProperty("sessionKey");
+  expect(value).not.toHaveProperty("transcript");
+  expect(value).not.toHaveProperty("processedEventIds");
+  expect(value).not.toHaveProperty("metadata");
+}
+
 async function registerVoiceCallCli(
   program: Command,
   pluginConfig: Record<string, unknown> = { provider: "mock" },
@@ -250,7 +267,7 @@ describe("voice-call plugin", () => {
     await handler?.({ params: { message: "Hi" }, respond });
 
     expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
-    expect(runtimeStub.manager.initiateCall).toHaveBeenCalledTimes(1);
+    expect(runtimeStub.manager["initiateCall"]).toHaveBeenCalledTimes(1);
     expect(respond).toHaveBeenCalledWith(true, { callId: "call-1", initiated: true });
   });
 
@@ -393,7 +410,7 @@ describe("voice-call plugin", () => {
       | undefined;
     const respond = vi.fn();
     await handler?.({ params: { message: "Hi" }, respond });
-    expect(runtimeStub.manager.initiateCall).toHaveBeenCalled();
+    expect(runtimeStub.manager["initiateCall"]).toHaveBeenCalled();
     const [ok, payload] = firstRespondCall(respond);
     expect(ok).toBe(true);
     expect(payload?.callId).toBe("call-1");
@@ -435,7 +452,7 @@ describe("voice-call plugin", () => {
       },
       respond,
     });
-    expect(runtimeStub.manager.initiateCall).toHaveBeenCalledWith("+15550001234", undefined, {
+    expect(runtimeStub.manager["initiateCall"]).toHaveBeenCalledWith("+15550001234", undefined, {
       dtmfSequence: "ww123456#",
       message: "Hi",
       mode: "conversation",
@@ -461,7 +478,7 @@ describe("voice-call plugin", () => {
       },
       respond,
     });
-    expect(runtimeStub.manager.initiateCall).toHaveBeenCalledWith(
+    expect(runtimeStub.manager["initiateCall"]).toHaveBeenCalledWith(
       "+15550001234",
       "voice:google-meet:meet-1",
       {
@@ -474,7 +491,21 @@ describe("voice-call plugin", () => {
     expect(firstRespondCall(respond)[0]).toBe(true);
   });
 
-  it("returns call status", async () => {
+  it("returns redacted call status", async () => {
+    const call = createCallRecord({
+      metadata: { requesterSessionKey: "agent:main:discord:channel:general" },
+      processedEventIds: ["evt-1"],
+      sessionKey: "agent:main:voice:call-1",
+      transcript: [
+        {
+          timestamp: Date.UTC(2026, 4, 2, 9, 1, 0),
+          speaker: "user",
+          text: "private call transcript",
+          isFinal: true,
+        },
+      ],
+    });
+    runtimeStub.manager.getCall = vi.fn(() => call);
     const { methods } = setup({ provider: "mock" });
     const handler = methods.get("voicecall.status") as
       | ((ctx: {
@@ -487,6 +518,41 @@ describe("voice-call plugin", () => {
     const [ok, payload] = firstRespondCall(respond);
     expect(ok).toBe(true);
     expect(payload?.found).toBe(true);
+    expectRedactedVoiceCallStatus(payload?.call);
+  });
+
+  it("returns redacted active call status list", async () => {
+    const call = createCallRecord({
+      metadata: { requesterSessionKey: "agent:main:discord:channel:general" },
+      processedEventIds: ["evt-1"],
+      sessionKey: "agent:main:voice:call-1",
+      transcript: [
+        {
+          timestamp: Date.UTC(2026, 4, 2, 9, 1, 0),
+          speaker: "user",
+          text: "private call transcript",
+          isFinal: true,
+        },
+      ],
+    });
+    runtimeStub.manager.getActiveCalls = vi.fn(() => [call]);
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.status") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+
+    await handler?.({ params: {}, respond });
+
+    const [ok, payload] = firstRespondCall(respond);
+    expect(ok).toBe(true);
+    expect(payload?.found).toBe(true);
+    const calls = (payload?.calls as unknown[] | undefined) ?? [];
+    expect(calls).toHaveLength(1);
+    expectRedactedVoiceCallStatus(calls[0]);
   });
 
   it("sends DTMF via voicecall.dtmf", async () => {
@@ -501,7 +567,7 @@ describe("voice-call plugin", () => {
 
     await handler?.({ params: { callId: "call-1", digits: "ww123#" }, respond });
 
-    expect(runtimeStub.manager.sendDtmf).toHaveBeenCalledWith("call-1", "ww123#");
+    expect(runtimeStub.manager["sendDtmf"]).toHaveBeenCalledWith("call-1", "ww123#");
     expect(firstRespondCall(respond)).toEqual([true, { success: true }]);
   });
 
@@ -524,7 +590,7 @@ describe("voice-call plugin", () => {
 
     await handler?.({ params: { callId: "CA123", message: "hello" }, respond });
 
-    expect(runtimeStub.manager.speak).toHaveBeenCalledWith("call-1", "hello");
+    expect(runtimeStub.manager["speak"]).toHaveBeenCalledWith("call-1", "hello");
     expect(firstRespondCall(respond)).toEqual([true, { success: true }]);
   });
 
@@ -544,8 +610,8 @@ describe("voice-call plugin", () => {
       respond,
     });
 
-    expect(runtimeStub.webhookServer.speakRealtime).toHaveBeenCalledWith("call-1", "hello");
-    expect(runtimeStub.manager.speak).not.toHaveBeenCalled();
+    expect(runtimeStub.webhookServer["speakRealtime"]).toHaveBeenCalledWith("call-1", "hello");
+    expect(runtimeStub.manager["speak"]).not.toHaveBeenCalled();
     expect(firstRespondCall(respond)).toEqual([
       true,
       { success: false, error: "No active realtime bridge for call" },
@@ -580,7 +646,38 @@ describe("voice-call plugin", () => {
     expect(error?.message).toContain("call is not active");
     expect(error?.message).toContain("last state=completed");
     expect(error?.message).toContain("endReason=completed");
-    expect(runtimeStub.manager.speak).not.toHaveBeenCalled();
+    expect(runtimeStub.manager["speak"]).not.toHaveBeenCalled();
+  });
+
+  it("reports stale call history with invalid ended timestamps", async () => {
+    runtimeStub.manager.getCall = vi.fn(() => undefined);
+    runtimeStub.manager.getCallByProviderCallId = vi.fn(() => undefined);
+    runtimeStub.manager.getCallHistory = vi.fn(async () => [
+      createCallRecord({
+        callId: "call-1",
+        providerCallId: "CA123",
+        state: "completed",
+        endReason: "completed",
+        endedAt: Number.POSITIVE_INFINITY,
+      }),
+    ]);
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.speak") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+
+    await handler?.({ params: { callId: "CA123", message: "hello" }, respond });
+
+    const [ok, , error] = firstRespondCall(respond);
+    expect(ok).toBe(false);
+    expect(error?.message).toContain("call is not active");
+    expect(error?.message).toContain("last state=completed");
+    expect(error?.message).toContain("endReason=completed");
+    expect(error?.message).not.toContain("endedAt=");
   });
 
   it("normalizes legacy config through runtime creation and warns to run doctor", async () => {
@@ -618,6 +715,20 @@ describe("voice-call plugin", () => {
   });
 
   it("tool get_status returns json payload", async () => {
+    const call = createCallRecord({
+      metadata: { requesterSessionKey: "agent:main:discord:channel:general" },
+      processedEventIds: ["evt-1"],
+      sessionKey: "agent:main:voice:call-1",
+      transcript: [
+        {
+          timestamp: Date.UTC(2026, 4, 2, 9, 1, 0),
+          speaker: "user",
+          text: "private call transcript",
+          isFinal: true,
+        },
+      ],
+    });
+    runtimeStub.manager.getCall = vi.fn(() => call);
     const { tools } = setup({ provider: "mock" });
     const tool = tools[0] as {
       execute: (id: string, params: unknown) => Promise<unknown>;
@@ -625,8 +736,9 @@ describe("voice-call plugin", () => {
     const result = (await tool.execute("id", {
       action: "get_status",
       callId: "call-1",
-    })) as { details: { found?: boolean } };
+    })) as { details: { found?: boolean; call?: unknown } };
     expect(result.details.found).toBe(true);
+    expectRedactedVoiceCallStatus(result.details.call);
   });
 
   it("tool send_dtmf returns json payload", async () => {
@@ -639,7 +751,7 @@ describe("voice-call plugin", () => {
       callId: "call-1",
       digits: "ww123#",
     })) as { details: { success?: boolean } };
-    expect(runtimeStub.manager.sendDtmf).toHaveBeenCalledWith("call-1", "ww123#");
+    expect(runtimeStub.manager["sendDtmf"]).toHaveBeenCalledWith("call-1", "ww123#");
     expect(result.details.success).toBe(true);
   });
 
@@ -870,7 +982,7 @@ describe("voice-call plugin", () => {
     );
     expect(startPayload?.status).toBe("pending");
     expect(startPayload?.pollTimeoutMs).toBe(180000);
-    expect(runtimeStub.manager.continueCall).toHaveBeenCalledWith("call-1", "Hello");
+    expect(runtimeStub.manager["continueCall"]).toHaveBeenCalledWith("call-1", "Hello");
 
     const pendingRespond = vi.fn();
     await result?.({
@@ -1040,7 +1152,7 @@ describe("voice-call plugin", () => {
         from: "user",
       });
       expect(stdout.output()).toContain("live-call: dry run for +15550009999");
-      expect(runtimeStub.manager.initiateCall).not.toHaveBeenCalled();
+      expect(runtimeStub.manager["initiateCall"]).not.toHaveBeenCalled();
     } finally {
       stdout.restore();
     }
@@ -1063,7 +1175,7 @@ describe("voice-call plugin", () => {
       await program.parseAsync(["voicecall", "smoke", "--to", "+15550009999", "--yes"], {
         from: "user",
       });
-      expect(runtimeStub.manager.initiateCall).toHaveBeenCalledWith("+15550009999", undefined, {
+      expect(runtimeStub.manager["initiateCall"]).toHaveBeenCalledWith("+15550009999", undefined, {
         message: "OpenClaw voice call smoke test.",
         mode: "notify",
       });

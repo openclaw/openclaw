@@ -1,3 +1,5 @@
+// Gateway node pairing auto-approval policy.
+// Allows first-time node pairing from configured CIDRs while rejecting upgrades/browser paths.
 import { isTrustedProxyAddress } from "./net.js";
 
 export type NodePairingAutoApproveReason =
@@ -12,6 +14,7 @@ type NodePairingAutoApproveClientIpSource =
   | "loopback-trusted-proxy"
   | "none";
 
+/** Classifies how the gateway learned the client IP for node auto-approval. */
 export function resolveNodePairingClientIpSource(params: {
   reportedClientIp?: string;
   hasProxyHeaders: boolean;
@@ -27,6 +30,7 @@ export function resolveNodePairingClientIpSource(params: {
   return params.remoteIsLoopback ? "loopback-trusted-proxy" : "trusted-proxy";
 }
 
+/** Returns true when a node pairing request can be auto-approved by trusted CIDR policy. */
 export function shouldAutoApproveNodePairingFromTrustedCidrs(params: {
   existingPairedDevice: boolean;
   role: string;

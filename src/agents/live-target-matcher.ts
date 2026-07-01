@@ -1,11 +1,16 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-id-normalize.js";
+/**
+ * Builds provider/model filters for live test lanes. Provider matches can
+ * follow plugin ownership aliases so scoped live runs include equivalent
+ * provider IDs.
+ */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeGooglePreviewModelId } from "@openclaw/model-catalog-core/provider-model-id-normalize";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { liveProvidersShareOwningPlugin } from "./live-provider-owner.js";
-import { normalizeProviderId } from "./provider-id.js";
 
 type ModelTarget = {
   raw: string;
@@ -63,6 +68,7 @@ function parseModelTarget(raw: string): ModelTarget | null {
   };
 }
 
+/** Creates provider/model predicates for live test target filters. */
 export function createLiveTargetMatcher(params: {
   providerFilter: Set<string> | null;
   modelFilter: Set<string> | null;

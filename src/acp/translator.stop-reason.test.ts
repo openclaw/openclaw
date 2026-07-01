@@ -1,7 +1,8 @@
+/** Tests Gateway final/error states to ACP prompt stopReason mapping. */
 import type { PromptRequest } from "@agentclientprotocol/sdk";
+import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
-import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
 import {
   createChatEvent,
@@ -473,7 +474,6 @@ describe("acp translator stop reason mapping", () => {
   it("finishes terminal prompts while rejecting stale pre-ack prompts", async () => {
     vi.useFakeTimers();
     try {
-      let acceptedRunId: string | undefined;
       let acceptedWaitCount = 0;
       const requestMock = vi.fn(async (method: string, params?: Record<string, unknown>) => {
         if (method === "chat.send") {
@@ -520,7 +520,7 @@ describe("acp translator stop reason mapping", () => {
       void preAckPrompt.catch(() => {});
 
       await Promise.resolve();
-      acceptedRunId = requestMock.mock.calls.find((call) => {
+      const acceptedRunId: string | undefined = requestMock.mock.calls.find((call) => {
         const [method, requestParams] = call;
         return method === "chat.send" && requestParams?.sessionKey === "agent:main:first";
       })?.[1]?.idempotencyKey as string | undefined;
@@ -560,6 +560,64 @@ describe("acp translator stop reason mapping", () => {
       kind: "resolve",
       value: { stopReason: "end_turn" },
     });
+  });
+
+  it("ignores stale send close errors while reconnect finish is settling the same prompt", async () => {
+    let rejectChatSend: ((err: Error) => void) | undefined;
+    const chatSendPromise = new Promise<never>((_, reject) => {
+      rejectChatSend = reject;
+    });
+    const request = vi.fn((method: string) => {
+      if (method === "chat.send") {
+        return chatSendPromise;
+      }
+      if (method === "agent.wait") {
+        return Promise.resolve({ status: "ok" });
+      }
+      return Promise.resolve({});
+    }) as GatewayClient["request"];
+    let releaseSessionUpdate: (() => void) | undefined;
+    let blockNextSessionUpdate = true;
+    const sessionUpdate = vi.fn(() => {
+      if (!blockNextSessionUpdate) {
+        return Promise.resolve();
+      }
+      blockNextSessionUpdate = false;
+      return new Promise<void>((resolve) => {
+        releaseSessionUpdate = resolve;
+      });
+    });
+    const connection = createAcpConnection();
+    connection.sessionUpdate = sessionUpdate as typeof connection.sessionUpdate;
+    const sessionStore = createInMemorySessionStore();
+    const sessionId = "session-1";
+    sessionStore.createSession({
+      sessionId,
+      sessionKey: "agent:main:main",
+      cwd: "/tmp",
+    });
+    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
+      sessionStore,
+    });
+
+    agent.handleGatewayDisconnect("1006: connection lost");
+    const promptPromise = promptAgent(agent, sessionId);
+    await Promise.resolve();
+    agent.handleGatewayReconnect();
+
+    await vi.waitFor(() => {
+      expect(sessionUpdate).toHaveBeenCalled();
+    });
+    rejectChatSend?.(new Error("gateway closed (1006): connection lost"));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    await expect(Promise.race([promptPromise, Promise.resolve("pending")])).resolves.toBe(
+      "pending",
+    );
+
+    releaseSessionUpdate?.();
+    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
   });
 
   it("does not let a stale disconnect deadline reject a newer prompt on the same session", async () => {

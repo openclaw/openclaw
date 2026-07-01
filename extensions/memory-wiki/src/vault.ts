@@ -1,3 +1,4 @@
+// Memory Wiki plugin module implements vault behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -7,6 +8,8 @@ import {
 import { FsSafeError, pathExists, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
+import { WIKI_RAW_SOURCE_MARKER } from "./markdown.js";
+import { resolveMemoryWikiTimestamp } from "./time.js";
 
 export const WIKI_VAULT_DIRECTORIES = [
   "entities",
@@ -17,7 +20,6 @@ export const WIKI_VAULT_DIRECTORIES = [
   "_attachments",
   "_views",
   ".openclaw-wiki",
-  ".openclaw-wiki/locks",
   ".openclaw-wiki/cache",
 ] as const;
 
@@ -64,6 +66,7 @@ This vault is maintained by the OpenClaw memory-wiki plugin.
 
 ## Architecture
 - Raw sources remain the evidence layer.
+- To keep unmanaged raw Markdown in \`sources/\`, add \`${WIKI_RAW_SOURCE_MARKER}\` near the top of the page.
 - Wiki pages are the human-readable synthesis layer.
 - \`.openclaw-wiki/cache/agent-digest.json\` is the agent-facing compiled digest.
 
@@ -121,28 +124,12 @@ export async function initializeMemoryWikiVault(
     withTrailingNewline("# Inbox\n\nDrop raw ideas, questions, and source links here.\n"),
     createdFiles,
   );
-  await writeFileIfMissing(
-    rootDir,
-    ".openclaw-wiki/state.json",
-    withTrailingNewline(
-      JSON.stringify(
-        {
-          version: 1,
-          createdAt: new Date(options?.nowMs ?? Date.now()).toISOString(),
-          renderMode: config.vault.renderMode,
-        },
-        null,
-        2,
-      ),
-    ),
-    createdFiles,
-  );
   await writeFileIfMissing(rootDir, ".openclaw-wiki/log.jsonl", "", createdFiles);
 
   if (createdDirectories.length > 0 || createdFiles.length > 0) {
     await appendMemoryWikiLog(rootDir, {
       type: "init",
-      timestamp: new Date(options?.nowMs ?? Date.now()).toISOString(),
+      timestamp: resolveMemoryWikiTimestamp(options?.nowMs),
       details: {
         createdDirectories: createdDirectories.map((dir) => path.relative(rootDir, dir) || "."),
         createdFiles: createdFiles.map((file) => path.relative(rootDir, file)),

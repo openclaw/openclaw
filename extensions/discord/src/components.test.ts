@@ -1,5 +1,8 @@
+// Discord tests cover components plugin behavior.
 import { ButtonStyle, MessageFlags } from "discord-api-types/v10";
+import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DiscordComponentEntry, DiscordModalEntry } from "./components.js";
 
 let clearDiscordComponentEntries: typeof import("./components-registry.js").clearDiscordComponentEntries;
 let registerDiscordComponentEntries: typeof import("./components-registry.js").registerDiscordComponentEntries;
@@ -145,6 +148,28 @@ describe("discord components", () => {
       disabled: true,
     });
     expect(result.entries).toHaveLength(0);
+  });
+
+  it("omits unset optional fields from persisted button entries", () => {
+    const spec = readDiscordComponentSpec({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [{ label: "Allow Once", style: "success" }],
+        },
+      ],
+    });
+    if (!spec) {
+      throw new Error("Expected component spec to be parsed");
+    }
+
+    const result = buildDiscordComponentMessage({ spec });
+    const entry = result.entries[0];
+    if (!entry) {
+      throw new Error("Expected button entry");
+    }
+
+    expect(Object.entries(entry).filter(([, value]) => value === undefined)).toEqual([]);
   });
 
   it("requires options for modal select fields", () => {
@@ -356,6 +381,36 @@ describe("discord component registry", () => {
     second.clearDiscordComponentEntries();
   });
 
+  it("expires component entries registered while the process clock is invalid", () => {
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    try {
+      registerDiscordComponentEntries({
+        entries: [{ id: "btn_invalid_clock", kind: "button", label: "Invalid clock" }],
+        modals: [],
+        ttlMs: 1000,
+      });
+
+      expect(resolveDiscordComponentEntry({ id: "btn_invalid_clock", consume: false })).toBeNull();
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+
+  it("expires component entries whose calculated expiry exceeds the Date range", () => {
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(MAX_DATE_TIMESTAMP_MS);
+    try {
+      registerDiscordComponentEntries({
+        entries: [{ id: "btn_overflow", kind: "button", label: "Overflow" }],
+        modals: [],
+        ttlMs: 1000,
+      });
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+
+    expect(resolveDiscordComponentEntry({ id: "btn_overflow", consume: false })).toBeNull();
+  });
+
   it("persists component and modal entries when runtime state is available", async () => {
     const componentRegister = vi.fn().mockResolvedValue(undefined);
     const modalRegister = vi.fn().mockResolvedValue(undefined);
@@ -444,6 +499,92 @@ describe("discord component registry", () => {
     expect(componentLookup).toHaveBeenCalledWith("btn_persisted");
     expect(modalLookup).toHaveBeenCalledWith("mdl_persisted");
     expect(openKeyedStore).toHaveBeenCalledTimes(4);
+  });
+
+  it("omits undefined component fields before persisting registry state", async () => {
+    const componentRegister = vi.fn().mockResolvedValue(undefined);
+    const modalRegister = vi.fn().mockResolvedValue(undefined);
+    const componentStore = {
+      register: componentRegister,
+      lookup: vi.fn(),
+      consume: vi.fn(),
+      delete: vi.fn(),
+      entries: vi.fn(),
+      clear: vi.fn(),
+    };
+    const modalStore = {
+      register: modalRegister,
+      lookup: vi.fn(),
+      consume: vi.fn(),
+      delete: vi.fn(),
+      entries: vi.fn(),
+      clear: vi.fn(),
+    };
+    const openKeyedStore = vi.fn((opts: { namespace: string }) =>
+      opts.namespace === "discord.components" ? componentStore : modalStore,
+    );
+    const { setDiscordRuntime } = await import("./runtime.js");
+    setDiscordRuntime({
+      state: { openKeyedStore },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+
+    const componentEntry = Object.assign(
+      {
+        id: "btn_undefined",
+        kind: "button",
+        label: "Approve",
+        callbackData: "approve",
+      } satisfies DiscordComponentEntry,
+      { modalId: undefined, sessionKey: undefined },
+    );
+    const modalEntry = Object.assign(
+      {
+        id: "mdl_undefined",
+        title: "Details",
+        fields: [
+          Object.assign(
+            {
+              id: "fld_undefined",
+              name: "reason",
+              label: "Reason",
+              type: "text",
+            } satisfies DiscordModalEntry["fields"][number],
+            { description: undefined, placeholder: undefined },
+          ),
+        ],
+      } satisfies DiscordModalEntry,
+      { sessionKey: undefined },
+    );
+
+    registerDiscordComponentEntries({
+      entries: [componentEntry],
+      modals: [modalEntry],
+      ttlMs: 1000,
+    });
+
+    await vi.waitFor(() => expect(componentRegister).toHaveBeenCalledTimes(1));
+    expect(modalRegister).toHaveBeenCalledTimes(1);
+
+    const persistedComponent = componentRegister.mock.calls[0]?.[1] as
+      | { entry: Record<string, unknown> }
+      | undefined;
+    expect(persistedComponent?.entry.callbackData).toBe("approve");
+    expect(persistedComponent?.entry).not.toHaveProperty("modalId");
+    expect(persistedComponent?.entry).not.toHaveProperty("sessionKey");
+    expect(persistedComponent?.entry).not.toHaveProperty("messageId");
+
+    const modalPayload = modalRegister.mock.calls[0]?.[1] as
+      | { entry: { fields?: Array<Record<string, unknown>> } }
+      | undefined;
+    expect(modalPayload?.entry.fields?.[0]).not.toHaveProperty("description");
+    expect(modalPayload?.entry.fields?.[0]).not.toHaveProperty("placeholder");
+    expect(modalPayload?.entry).not.toHaveProperty("sessionKey");
+    expect(modalPayload?.entry).not.toHaveProperty("messageId");
+
+    const inMemoryComponent = resolveDiscordComponentEntry({ id: "btn_undefined", consume: false });
+    expect(inMemoryComponent).toHaveProperty("modalId", undefined);
+    expect(inMemoryComponent).toHaveProperty("sessionKey", undefined);
   });
 
   it("deletes sibling persistent component entries when a group entry is consumed", async () => {

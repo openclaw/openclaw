@@ -3,7 +3,6 @@ import SwiftUI
 struct TalkPermissionPromptView: View {
     enum Style {
         case card
-        case settings
         case sheet
     }
 
@@ -36,7 +35,7 @@ struct TalkPermissionPromptView: View {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: self.iconSystemName)
                     .font(.title3.weight(.semibold))
-                    .foregroundStyle(self.requestIsPending ? Color.orange : Color.accentColor)
+                    .foregroundStyle(self.requestIsPending ? OpenClawBrand.warn : OpenClawBrand.accent)
                     .frame(width: 28, height: 28)
 
                 VStack(alignment: .leading, spacing: 6) {
@@ -52,7 +51,7 @@ struct TalkPermissionPromptView: View {
             if let failureMessage = self.state.failureMessage {
                 Label(failureMessage, systemImage: "exclamationmark.triangle.fill")
                     .font(.footnote)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(OpenClawBrand.danger)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
@@ -100,7 +99,7 @@ struct TalkPermissionPromptView: View {
         .overlay {
             if self.style == .card || self.style == .sheet {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color.accentColor.opacity(0.20), lineWidth: 1)
+                    .stroke(OpenClawBrand.accent.opacity(0.20), lineWidth: 1)
             }
         }
         .task(id: self.pollTaskKey) {
@@ -147,8 +146,8 @@ struct TalkPermissionPromptView: View {
         case .upgradeRequested:
             "Approve this request on your gateway. Talk will start automatically when approval lands."
         default:
-            "This iPhone needs gateway approval before Talk can use realtime voice. Audio will go directly from " +
-                "this phone to the voice provider."
+            "This device needs gateway approval before Talk can use realtime voice. Audio will go directly from " +
+                "this device to the voice provider."
         }
     }
 

@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentMessage, AgentTool, QueueMode, ThinkingLevel } from "../index.js";
+// Agent Core type module defines shared TypeScript contracts.
 import type {
   ImageContent,
   Model,
@@ -6,7 +6,8 @@ import type {
   StreamFn,
   TextContent,
   Transport,
-} from "../llm.js";
+} from "../../../llm-core/src/index.js";
+import type { AgentEvent, AgentMessage, AgentTool, QueueMode, ThinkingLevel } from "../index.js";
 import type { AgentCoreCompletionRuntimeDeps, AgentCoreRuntimeDeps } from "../runtime-deps.js";
 import type { Session } from "./session/session.js";
 
@@ -21,21 +22,6 @@ export function ok<TValue, TError>(value: TValue): Result<TValue, TError> {
 /** Create a failed {@link Result}. */
 export function err<TValue, TError>(error: TError): Result<TValue, TError> {
   return { ok: false, error };
-}
-
-/** Return the success value or throw the failure error. Intended for tests and explicit adapter boundaries. */
-export function getOrThrow<TValue, TError>(result: Result<TValue, TError>): TValue {
-  if (!result.ok) {
-    throw result.error;
-  }
-  return result.value;
-}
-
-/** Return the success value or `undefined`. Only object values are allowed to avoid truthiness bugs with primitives. */
-export function getOrUndefined<TValue extends object, TError>(
-  result: Result<TValue, TError>,
-): TValue | undefined {
-  return result.ok ? result.value : undefined;
 }
 
 /** Normalize unknown thrown values into Error instances before using them as typed error causes. */
@@ -56,8 +42,8 @@ export function toError(error: unknown): Error {
 /**
  * Skill loaded from a `SKILL.md` file or provided by an application.
  *
- * `name`, `description`, and `filePath` are inserted into the system prompt in an XML-formatted block as suggested by agentskills.io.
- * Use {@link formatSkillsForSystemPrompt} to generate the spec-compatible system prompt block.
+ * `name`, `description`, `filePath`, and optional `promptVersion` are available to host-owned prompt builders and
+ * direct skill invocation.
  */
 export interface Skill {
   /** Stable skill name used for lookup and model-visible listings. */
@@ -68,6 +54,8 @@ export interface Skill {
   content: string;
   /** Absolute path to the skill file. Used for model-visible location and resolving relative references. */
   filePath: string;
+  /** Deterministic marker for the skill content, rendered as <version> when available. */
+  promptVersion?: string;
   /** Exclude this skill from model-visible skill lists while still allowing explicit application invocation. */
   disableModelInvocation?: boolean;
 }
@@ -361,29 +349,40 @@ export interface Shell {
 /** Filesystem and process execution environment used by the harness. */
 export interface ExecutionEnv extends FileSystem, Shell {}
 
+/** Base fields shared by append-only session tree entries. */
 export interface SessionTreeEntryBase {
+  /** Entry discriminator used for JSONL persistence and typed narrowing. */
   type: string;
+  /** Stable entry id unique within a session file. */
   id: string;
+  /** Parent entry id, or null for a root entry. */
   parentId: string | null;
+  /** ISO timestamp string used for persistence and sorting. */
   timestamp: string;
+  /** This row consumes the raw side cursor instead of the visible leaf. */
+  appendMode?: "side";
 }
 
+/** Persisted transcript message entry. */
 export interface MessageEntry extends SessionTreeEntryBase {
   type: "message";
   message: AgentMessage;
 }
 
+/** Persisted thinking-level selection marker. */
 export interface ThinkingLevelChangeEntry extends SessionTreeEntryBase {
   type: "thinking_level_change";
   thinkingLevel: string;
 }
 
+/** Persisted model selection marker. */
 export interface ModelChangeEntry extends SessionTreeEntryBase {
   type: "model_change";
   provider: string;
   modelId: string;
 }
 
+/** Persisted summary that replaces older transcript history in context. */
 export interface CompactionEntry<T = unknown> extends SessionTreeEntryBase {
   type: "compaction";
   summary: string;
@@ -393,6 +392,7 @@ export interface CompactionEntry<T = unknown> extends SessionTreeEntryBase {
   fromHook?: boolean;
 }
 
+/** Persisted summary of an abandoned branch when navigating the session tree. */
 export interface BranchSummaryEntry<T = unknown> extends SessionTreeEntryBase {
   type: "branch_summary";
   fromId: string;
@@ -401,12 +401,14 @@ export interface BranchSummaryEntry<T = unknown> extends SessionTreeEntryBase {
   fromHook?: boolean;
 }
 
+/** Persisted harness/application marker that is not replayed into model context. */
 export interface CustomEntry<T = unknown> extends SessionTreeEntryBase {
   type: "custom";
   customType: string;
   data?: T;
 }
 
+/** Persisted harness/application message that can be replayed into model context. */
 export interface CustomMessageEntry<T = unknown> extends SessionTreeEntryBase {
   type: "custom_message";
   customType: string;
@@ -415,22 +417,29 @@ export interface CustomMessageEntry<T = unknown> extends SessionTreeEntryBase {
   display: boolean;
 }
 
+/** Append-only label update for another session entry. */
 export interface LabelEntry extends SessionTreeEntryBase {
   type: "label";
   targetId: string;
   label: string | undefined;
 }
 
+/** Persisted session metadata marker. */
 export interface SessionInfoEntry extends SessionTreeEntryBase {
-  type: "session_info"; // legacy name, kept for backwards compatibility
+  // The persisted discriminator predates the public "session name" wording.
+  type: "session_info";
   name?: string;
 }
 
+/** Append-only marker that changes the active visible leaf. */
 export interface LeafEntry extends SessionTreeEntryBase {
   type: "leaf";
   targetId: string | null;
+  /** Raw parent for the next append when it differs from the visible leaf. */
+  appendParentId?: string | null;
 }
 
+/** All persisted session tree entry variants. */
 export type SessionTreeEntry =
   | MessageEntry
   | ThinkingLevelChangeEntry
@@ -463,6 +472,7 @@ export interface JsonlSessionMetadata extends SessionMetadata {
 export interface SessionStorage<TMetadata extends SessionMetadata = SessionMetadata> {
   getMetadata(): Promise<TMetadata>;
   getLeafId(): Promise<string | null>;
+  getAppendParentId?(): Promise<string | null>;
   /** Persist a leaf entry that records the active session-tree leaf. */
   setLeafId(leafId: string | null): Promise<void>;
   createEntryId(): Promise<string>;
@@ -477,46 +487,6 @@ export interface SessionStorage<TMetadata extends SessionMetadata = SessionMetad
 }
 
 export type { Session } from "./session/session.js";
-
-export interface SessionCreateOptions {
-  id?: string;
-}
-
-export interface SessionForkOptions {
-  entryId?: string;
-  position?: "before" | "at";
-  id?: string;
-}
-
-export interface SessionRepo<
-  TMetadata extends SessionMetadata = SessionMetadata,
-  TCreateOptions extends SessionCreateOptions = SessionCreateOptions,
-  TListOptions = void,
-> {
-  create(options: TCreateOptions): Promise<Session<TMetadata>>;
-  open(metadata: TMetadata): Promise<Session<TMetadata>>;
-  list(options?: TListOptions): Promise<TMetadata[]>;
-  delete(metadata: TMetadata): Promise<void>;
-  fork(
-    source: TMetadata,
-    options: SessionForkOptions & TCreateOptions,
-  ): Promise<Session<TMetadata>>;
-}
-
-export interface JsonlSessionCreateOptions extends SessionCreateOptions {
-  cwd: string;
-  parentSessionPath?: string;
-}
-
-export interface JsonlSessionListOptions {
-  cwd?: string;
-}
-
-export interface JsonlSessionRepoApi extends SessionRepo<
-  JsonlSessionMetadata,
-  JsonlSessionCreateOptions,
-  JsonlSessionListOptions
-> {}
 
 export type AgentHarnessPhase = "idle" | "turn" | "compaction" | "branch_summary" | "retry";
 
@@ -679,28 +649,36 @@ export type AgentHarnessEvent<
   TPromptTemplate extends PromptTemplate = PromptTemplate,
 > = AgentEvent | AgentHarnessOwnEvent<TSkill, TPromptTemplate>;
 
+/** Hook result for mutating the initial prompt run before the agent starts. */
 export interface BeforeAgentStartResult {
+  /** Replacement messages for the prompt run. */
   messages?: AgentMessage[];
+  /** Replacement system prompt for the prompt run. */
   systemPrompt?: string;
 }
 
+/** Hook result for replacing the full context message list before provider conversion. */
 export interface ContextResult {
   messages: AgentMessage[];
 }
 
+/** Hook result for patching provider request options before payload construction. */
 export interface BeforeProviderRequestResult {
   streamOptions?: AgentHarnessStreamOptionsPatch;
 }
 
+/** Hook result for replacing the provider payload after construction. */
 export interface BeforeProviderPayloadResult {
   payload: unknown;
 }
 
+/** Hook result for blocking a tool call before execution. */
 export interface ToolCallResult {
   block?: boolean;
   reason?: string;
 }
 
+/** Hook patch for a completed tool result before it is persisted/emitted. */
 export interface ToolResultPatch {
   content?: Array<TextContent | ImageContent>;
   details?: unknown;
@@ -708,11 +686,13 @@ export interface ToolResultPatch {
   terminate?: boolean;
 }
 
+/** Hook result for cancelling or replacing a planned compaction. */
 export interface SessionBeforeCompactResult {
   cancel?: boolean;
   compaction?: CompactResult;
 }
 
+/** Hook result for cancelling, labeling, or supplying branch-summary behavior before tree navigation. */
 export interface SessionBeforeTreeResult {
   cancel?: boolean;
   summary?: { summary: string; details?: unknown };
@@ -721,6 +701,7 @@ export interface SessionBeforeTreeResult {
   label?: string;
 }
 
+/** Typed return values expected from AgentHarness hook handlers by event type. */
 export type AgentHarnessEventResultMap = {
   before_agent_start: BeforeAgentStartResult | undefined;
   context: ContextResult | undefined;
@@ -742,15 +723,13 @@ export type AgentHarnessEventResultMap = {
   settled: undefined;
 };
 
-export interface AgentHarnessPromptOptions {
-  images?: ImageContent[];
-}
-
+/** Queued messages removed by an abort operation. */
 export interface AbortResult {
   clearedSteer: AgentMessage[];
   clearedFollowUp: AgentMessage[];
 }
 
+/** Compaction data supplied by hooks or returned from compaction preparation. */
 export interface CompactResult {
   summary: string;
   firstKeptEntryId: string;
@@ -758,18 +737,21 @@ export interface CompactResult {
   details?: unknown;
 }
 
+/** Result of moving the active session-tree leaf. */
 export interface NavigateTreeResult {
   cancelled: boolean;
   editorText?: string;
   summaryEntry?: BranchSummaryEntry;
 }
 
+/** Settings that control automatic context compaction. */
 export interface CompactionSettings {
   enabled: boolean;
   reserveTokens: number;
   keepRecentTokens: number;
 }
 
+/** Prepared compaction inputs exposed to hooks before a summary is generated. */
 export interface CompactionPreparation {
   firstKeptEntryId: string;
   messagesToSummarize: AgentMessage[];
@@ -781,12 +763,14 @@ export interface CompactionPreparation {
   settings: CompactionSettings;
 }
 
+/** File operations accumulated from summarized transcript ranges. */
 export interface FileOperations {
   read: Set<string>;
   written: Set<string>;
   edited: Set<string>;
 }
 
+/** Prepared branch navigation inputs exposed to hooks before a summary is generated. */
 export interface TreePreparation {
   targetId: string;
   oldLeafId: string | null;
@@ -798,6 +782,7 @@ export interface TreePreparation {
   label?: string;
 }
 
+/** Options for generating a branch summary. */
 export interface GenerateBranchSummaryOptions {
   model: Model;
   apiKey: string;
@@ -810,12 +795,14 @@ export interface GenerateBranchSummaryOptions {
   reserveTokens?: number;
 }
 
+/** Generated branch summary text and file-operation metadata. */
 export interface BranchSummaryResult {
   summary: string;
   readFiles: string[];
   modifiedFiles: string[];
 }
 
+/** Construction options for AgentHarness. */
 export interface AgentHarnessOptions<
   TSkill extends Skill = Skill,
   TPromptTemplate extends PromptTemplate = PromptTemplate,
@@ -852,4 +839,4 @@ export interface AgentHarnessOptions<
   followUpMode?: QueueMode;
 }
 
-export type { AgentHarness } from "./agent-harness.js";
+export type { CoreAgentHarness as AgentHarness } from "./agent-harness.js";

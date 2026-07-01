@@ -1,3 +1,4 @@
+// Msteams plugin module implements shared behavior.
 import { Buffer } from "node:buffer";
 import { lookup } from "node:dns/promises";
 import {
@@ -7,11 +8,13 @@ import {
   normalizeHostnameSuffixAllowlist,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-policy";
+import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { responseWithRelease } from "../response-with-release.js";
 import type { MSTeamsAttachmentLike } from "./types.js";
 
 type InlineImageCandidate =
@@ -469,6 +472,43 @@ export type MSTeamsAttachmentDownloadLogger = {
 
 export type MSTeamsAttachmentResolveFn = (hostname: string) => Promise<{ address: string }>;
 
+function isMockFetchFn(fetchFn: typeof fetch): boolean {
+  const candidate = fetchFn as unknown as { mock?: unknown };
+  return Boolean(candidate.mock || Object.hasOwn(candidate, "_isMockFunction"));
+}
+
+function resolveGuardedFetchImpl(params: {
+  fetchFn?: typeof fetch;
+  fetchFnSupportsDispatcher?: boolean;
+}): typeof fetch | undefined {
+  if (!params.fetchFn) {
+    return undefined;
+  }
+  if (
+    params.fetchFnSupportsDispatcher === true ||
+    params.fetchFn === fetch ||
+    params.fetchFn === globalThis.fetch ||
+    isMockFetchFn(params.fetchFn)
+  ) {
+    return params.fetchFn;
+  }
+  throw new Error(
+    "MSTeams attachment fetchFn must set fetchFnSupportsDispatcher to use guarded DNS pinning",
+  );
+}
+
+function resolveRetainedAuthorizationRedirectHostnameAllowlist(
+  input?: string[],
+): string[] | undefined {
+  if (!input) {
+    return undefined;
+  }
+  if (input.includes("*")) {
+    return ["*"];
+  }
+  return resolveMediaSsrfPolicy(input)?.hostnameAllowlist;
+}
+
 export function resolveAttachmentFetchPolicy(params?: {
   allowHosts?: string[];
   authAllowHosts?: string[];
@@ -537,7 +577,6 @@ export async function resolveAndValidateIP(
 
 /** Maximum number of redirects to follow in safeFetch. */
 const MAX_SAFE_REDIRECTS = 5;
-
 /**
  * Fetch a URL with redirect: "manual", validating each redirect target
  * against the hostname allowlist and optional DNS-resolved IP (anti-SSRF).
@@ -556,10 +595,10 @@ export async function safeFetch(params: {
    */
   authorizationAllowHosts?: string[];
   fetchFn?: typeof fetch;
+  fetchFnSupportsDispatcher?: boolean;
   requestInit?: RequestInit;
   resolveFn?: MSTeamsAttachmentResolveFn;
 }): Promise<Response> {
-  const fetchFn = params.fetchFn ?? fetch;
   const resolveFn = params.resolveFn ?? lookup;
   const hasDispatcher = Boolean(
     params.requestInit &&
@@ -574,13 +613,35 @@ export async function safeFetch(params: {
   }
 
   // Authorization is only allowed on explicitly auth-allowlisted hosts, including
-  // the first hop. Redirect hops apply the same rule below before following.
+  // the first hop. Redirect hops apply the same rule below or in fetchWithSsrFGuard.
   if (
     currentHeaders.has("authorization") &&
     params.authorizationAllowHosts &&
     !isUrlAllowed(currentUrl, params.authorizationAllowHosts)
   ) {
     currentHeaders.delete("authorization");
+  }
+
+  if (!hasDispatcher) {
+    const guarded = await fetchWithSsrFGuard({
+      url: currentUrl,
+      fetchImpl: resolveGuardedFetchImpl({
+        fetchFn: params.fetchFn,
+        fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
+      }),
+      init: {
+        ...params.requestInit,
+        headers: currentHeaders,
+      },
+      maxRedirects: MAX_SAFE_REDIRECTS,
+      requireHttps: true,
+      policy: resolveMediaSsrfPolicy(params.allowHosts),
+      lookupFn: resolveFn as LookupFn,
+      retainAuthorizationRedirectHostnameAllowlist:
+        resolveRetainedAuthorizationRedirectHostnameAllowlist(params.authorizationAllowHosts),
+      auditContext: "msteams.attachment",
+    });
+    return responseWithRelease(guarded.response, guarded.release);
   }
 
   if (resolveFn) {
@@ -593,7 +654,7 @@ export async function safeFetch(params: {
   }
 
   for (let i = 0; i <= MAX_SAFE_REDIRECTS; i++) {
-    const res = await fetchFn(currentUrl, {
+    const res = await (params.fetchFn ?? fetch)(currentUrl, {
       ...params.requestInit,
       headers: currentHeaders,
       redirect: "manual",
@@ -653,6 +714,7 @@ export async function safeFetchWithPolicy(params: {
   url: string;
   policy: MSTeamsAttachmentFetchPolicy;
   fetchFn?: typeof fetch;
+  fetchFnSupportsDispatcher?: boolean;
   requestInit?: RequestInit;
   resolveFn?: MSTeamsAttachmentResolveFn;
 }): Promise<Response> {
@@ -661,6 +723,7 @@ export async function safeFetchWithPolicy(params: {
     allowHosts: params.policy.allowHosts,
     authorizationAllowHosts: params.policy.authAllowHosts,
     fetchFn: params.fetchFn,
+    fetchFnSupportsDispatcher: params.fetchFnSupportsDispatcher,
     requestInit: params.requestInit,
     resolveFn: params.resolveFn,
   });

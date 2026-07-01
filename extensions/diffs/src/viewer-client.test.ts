@@ -55,16 +55,17 @@ const viewerPayload = JSON.stringify({
     unsafeCSS: "",
   },
   langs: ["text"],
-  oldFile: { fileName: "a.ts", lang: "text", content: "old" },
-  newFile: { fileName: "a.ts", lang: "text", content: "new" },
+  oldFile: { name: "a.ts", lang: "text", contents: "old" },
+  newFile: { name: "a.ts", lang: "text", contents: "new" },
 });
 
-function renderCard(): void {
+function renderCard(payloadOverride?: string): void {
+  const payload = payloadOverride ?? viewerPayload;
   document.body.insertAdjacentHTML(
     "beforeend",
     `<section class="oc-diff-card">
       <div data-openclaw-diff-host></div>
-      <script type="application/json" data-openclaw-diff-payload>${viewerPayload}</script>
+      <script type="application/json" data-openclaw-diff-payload>${payload}</script>
     </section>`,
   );
 }
@@ -99,10 +100,9 @@ describe("createToolbarButton icon safety", () => {
 
   it("SVG strings in toolbarIconSvg contain no XSS patterns", () => {
     for (const pattern of XSS_PATTERNS) {
-      expect(
-        VIEWER_CLIENT_SRC.includes(pattern),
-        `source must not contain "${pattern}"`,
-      ).toBe(false);
+      expect(VIEWER_CLIENT_SRC.includes(pattern), `source must not contain "${pattern}"`).toBe(
+        false,
+      );
     }
   });
 
@@ -171,5 +171,320 @@ describe("hydrateViewer", () => {
     );
     expect(document.documentElement.dataset.openclawDiffsError).toBeUndefined();
     warn.mockRestore();
+  });
+
+  it("replaces stale controllers when hydrating the current cards again", async () => {
+    renderCard();
+    const { controllers, hydrateViewer } = await import("./viewer-client.js");
+    controllers.splice(0);
+
+    await hydrateViewer();
+    expect(controllers).toHaveLength(1);
+    const firstController = controllers[0];
+
+    document.body.innerHTML = "";
+    renderCard();
+    await hydrateViewer();
+
+    expect(controllers).toHaveLength(1);
+    expect(controllers[0]).not.toBe(firstController);
+    expect(fileDiffHydrateMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("viewerState initialization", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+    delete document.documentElement.dataset.openclawDiffsError;
+    delete document.documentElement.dataset.openclawDiffsReady;
+    delete document.body.dataset.theme;
+    vi.clearAllMocks();
+  });
+
+  it("seeds viewerState from firstPayload options and syncs document theme", async () => {
+    const customPayload = JSON.stringify({
+      prerenderedHTML: "<div>diff</div>",
+      options: {
+        theme: { light: "pierre-light", dark: "pierre-dark" },
+        diffStyle: "split",
+        diffIndicators: "bars",
+        disableLineNumbers: false,
+        expandUnchanged: false,
+        themeType: "light",
+        backgroundEnabled: false,
+        overflow: "scroll",
+        unsafeCSS: "",
+      },
+      langs: ["text"],
+      oldFile: { name: "a.ts", lang: "text", contents: "old" },
+      newFile: { name: "a.ts", lang: "text", contents: "new" },
+    });
+    renderCard(customPayload);
+    const { hydrateViewer } = await import("./viewer-client.js");
+
+    await hydrateViewer();
+
+    expect(document.body.dataset.theme).toBe("light");
+
+    const opts = fileDiffSetOptionsMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(opts.diffStyle).toBe("split");
+    expect(opts.themeType).toBe("light");
+    expect(opts.overflow).toBe("scroll");
+    expect(opts.disableBackground).toBe(true);
+  });
+
+  it("defaults viewerState to dark/unified/wrap/background when firstPayload uses defaults", async () => {
+    renderCard();
+    const { hydrateViewer } = await import("./viewer-client.js");
+
+    await hydrateViewer();
+
+    expect(document.body.dataset.theme).toBe("dark");
+
+    const opts = fileDiffSetOptionsMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(opts.diffStyle).toBe("unified");
+    expect(opts.themeType).toBe("dark");
+    expect(opts.overflow).toBe("wrap");
+    expect(opts.disableBackground).toBe(false);
+  });
+
+  it("preloadHighlighter receives merged language set from all cards", async () => {
+    const payload1 = JSON.stringify({
+      prerenderedHTML: "<div>diff1</div>",
+      options: {
+        theme: { light: "pierre-light", dark: "pierre-dark" },
+        diffStyle: "unified",
+        diffIndicators: "bars",
+        disableLineNumbers: false,
+        expandUnchanged: false,
+        themeType: "dark",
+        backgroundEnabled: true,
+        overflow: "wrap",
+        unsafeCSS: "",
+      },
+      langs: ["typescript"],
+      oldFile: { name: "a.ts", lang: "typescript", contents: "old" },
+      newFile: { name: "a.ts", lang: "typescript", contents: "new" },
+    });
+    const payload2 = JSON.stringify({
+      prerenderedHTML: "<div>diff2</div>",
+      options: {
+        theme: { light: "pierre-light", dark: "pierre-dark" },
+        diffStyle: "unified",
+        diffIndicators: "bars",
+        disableLineNumbers: false,
+        expandUnchanged: false,
+        themeType: "dark",
+        backgroundEnabled: true,
+        overflow: "wrap",
+        unsafeCSS: "",
+      },
+      langs: ["python"],
+      oldFile: { name: "b.py", lang: "python", contents: "old" },
+      newFile: { name: "b.py", lang: "python", contents: "new" },
+    });
+    renderCard(payload1);
+    renderCard(payload2);
+    const { hydrateViewer } = await import("./viewer-client.js");
+
+    await hydrateViewer();
+
+    const preloadArg = (preloadHighlighterMock.mock.calls as unknown[][])[0]?.[0] as
+      | { langs: string[]; themes: string[] }
+      | undefined;
+    expect(preloadArg).toBeDefined();
+    expect(preloadArg!.langs).toContain("typescript");
+    expect(preloadArg!.langs).toContain("python");
+    expect(preloadArg!.themes).toEqual(["pierre-light", "pierre-dark"]);
+  });
+});
+
+describe("toolbar button toggles", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+    delete document.body.dataset.theme;
+    vi.clearAllMocks();
+  });
+
+  it("layout toggle switches between unified and split", async () => {
+    renderCard();
+    const { hydrateViewer } = await import("./viewer-client.js");
+    await hydrateViewer();
+
+    const opts1 = fileDiffSetOptionsMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(opts1.diffStyle).toBe("unified");
+
+    const renderHeaderMetadata = opts1.renderHeaderMetadata as () => HTMLElement;
+    const toolbar = renderHeaderMetadata();
+    const buttons = toolbar.querySelectorAll("button");
+
+    buttons[0].click();
+
+    expect(fileDiffRerenderMock).toHaveBeenCalled();
+
+    const opts2 = fileDiffSetOptionsMock.mock.calls[
+      fileDiffSetOptionsMock.mock.calls.length - 1
+    ]?.[0] as Record<string, unknown>;
+    expect(opts2.diffStyle).toBe("split");
+  });
+
+  it("theme toggle switches between dark and light", async () => {
+    renderCard();
+    const { hydrateViewer } = await import("./viewer-client.js");
+    await hydrateViewer();
+
+    const opts1 = fileDiffSetOptionsMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(opts1.themeType).toBe("dark");
+
+    const renderHeaderMetadata = opts1.renderHeaderMetadata as () => HTMLElement;
+    const toolbar = renderHeaderMetadata();
+    const buttons = toolbar.querySelectorAll("button");
+
+    buttons[3].click();
+
+    const lastOpts = fileDiffSetOptionsMock.mock.calls[
+      fileDiffSetOptionsMock.mock.calls.length - 1
+    ]?.[0] as Record<string, unknown>;
+    expect(lastOpts.themeType).toBe("light");
+    expect(document.body.dataset.theme).toBe("light");
+  });
+
+  it("wrap toggle switches between wrap and scroll", async () => {
+    renderCard();
+    const { hydrateViewer } = await import("./viewer-client.js");
+    await hydrateViewer();
+
+    const opts1 = fileDiffSetOptionsMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(opts1.overflow).toBe("wrap");
+
+    const renderHeaderMetadata = opts1.renderHeaderMetadata as () => HTMLElement;
+    const toolbar = renderHeaderMetadata();
+    const buttons = toolbar.querySelectorAll("button");
+
+    buttons[1].click();
+
+    const lastOpts = fileDiffSetOptionsMock.mock.calls[
+      fileDiffSetOptionsMock.mock.calls.length - 1
+    ]?.[0] as Record<string, unknown>;
+    expect(lastOpts.overflow).toBe("scroll");
+  });
+
+  it("background toggle inverts disableBackground", async () => {
+    renderCard();
+    const { hydrateViewer } = await import("./viewer-client.js");
+    await hydrateViewer();
+
+    const opts1 = fileDiffSetOptionsMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(opts1.disableBackground).toBe(false);
+
+    const renderHeaderMetadata = opts1.renderHeaderMetadata as () => HTMLElement;
+    const toolbar = renderHeaderMetadata();
+    const buttons = toolbar.querySelectorAll("button");
+
+    buttons[2].click();
+
+    const lastOpts = fileDiffSetOptionsMock.mock.calls[
+      fileDiffSetOptionsMock.mock.calls.length - 1
+    ]?.[0] as Record<string, unknown>;
+    expect(lastOpts.disableBackground).toBe(true);
+  });
+});
+
+describe("ensureShadowRoot", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+    vi.clearAllMocks();
+  });
+
+  it("attaches shadow root from template and removes template element", async () => {
+    renderCard();
+    const host = document.querySelector<HTMLElement>("[data-openclaw-diff-host]")!;
+    const template = document.createElement("template");
+    template.setAttribute("shadowrootmode", "open");
+    template.innerHTML = "<div>shadow content</div>";
+    host.append(template);
+
+    const { hydrateViewer } = await import("./viewer-client.js");
+    await hydrateViewer();
+
+    expect(host.shadowRoot).toBeDefined();
+    expect(host.shadowRoot!.querySelector("div")?.textContent).toBe("shadow content");
+    expect(host.querySelector("template")).toBeNull();
+  });
+
+  it("skips shadow root attachment when no template is present", async () => {
+    renderCard();
+    const host = document.querySelector<HTMLElement>("[data-openclaw-diff-host]")!;
+
+    const { hydrateViewer } = await import("./viewer-client.js");
+    await hydrateViewer();
+
+    expect(host.shadowRoot).toBeNull();
+    expect(fileDiffHydrateMock).toHaveBeenCalled();
+  });
+
+  it("skips shadow root when already attached", async () => {
+    renderCard();
+    const host = document.querySelector<HTMLElement>("[data-openclaw-diff-host]")!;
+    host.attachShadow({ mode: "open" });
+    host.shadowRoot!.innerHTML = "<span>existing</span>";
+
+    const template = document.createElement("template");
+    template.setAttribute("shadowrootmode", "open");
+    template.innerHTML = "<div>new content</div>";
+    host.append(template);
+
+    const { hydrateViewer } = await import("./viewer-client.js");
+    await hydrateViewer();
+
+    expect(host.shadowRoot!.querySelector("span")?.textContent).toBe("existing");
+    expect(host.querySelector("template")).not.toBeNull();
+  });
+});
+
+describe("getHydrateProps branching", () => {
+  beforeEach(() => {
+    document.body.innerHTML = "";
+    vi.clearAllMocks();
+  });
+
+  it("passes fileDiff directly when payload has fileDiff", async () => {
+    const fileDiffPayload = JSON.stringify({
+      prerenderedHTML: "<div>diff</div>",
+      options: {
+        theme: { light: "pierre-light", dark: "pierre-dark" },
+        diffStyle: "unified",
+        diffIndicators: "bars",
+        disableLineNumbers: false,
+        expandUnchanged: false,
+        themeType: "dark",
+        backgroundEnabled: true,
+        overflow: "wrap",
+        unsafeCSS: "",
+      },
+      langs: ["text"],
+      fileDiff: { name: "patch.diff", lang: "text", hunks: [] },
+    });
+    renderCard(fileDiffPayload);
+    const { hydrateViewer } = await import("./viewer-client.js");
+
+    await hydrateViewer();
+
+    const hydrateArg = fileDiffHydrateMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(hydrateArg.fileDiff).toEqual({ name: "patch.diff", lang: "text", hunks: [] });
+    expect(hydrateArg.oldFile).toBeUndefined();
+    expect(hydrateArg.newFile).toBeUndefined();
+  });
+
+  it("passes oldFile and newFile when payload has them without fileDiff", async () => {
+    renderCard();
+    const { hydrateViewer } = await import("./viewer-client.js");
+
+    await hydrateViewer();
+
+    const hydrateArg = fileDiffHydrateMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(hydrateArg.fileDiff).toBeUndefined();
+    expect(hydrateArg.oldFile).toEqual({ name: "a.ts", lang: "text", contents: "old" });
+    expect(hydrateArg.newFile).toEqual({ name: "a.ts", lang: "text", contents: "new" });
   });
 });

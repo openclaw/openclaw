@@ -1,3 +1,4 @@
+// Tests applying parsed directives to get-reply execution options.
 import { describe, expect, it } from "vitest";
 import { formatModelOverrideResetEvent } from "./get-reply-directives-apply.js";
 
@@ -19,5 +20,17 @@ describe("formatModelOverrideResetEvent", () => {
         initialModelLabel: "github-copilot/gpt-4o",
       }),
     ).toBe("Model override not allowed for this agent; reverted to github-copilot/gpt-4o.");
+  });
+
+  it("does not tell users to edit the allowlist for stale session overrides", () => {
+    expect(
+      formatModelOverrideResetEvent({
+        rejectedRef: "openai/gpt-5.5",
+        initialModelLabel: "openai/gpt-5.4",
+        reason: "stale",
+      }),
+    ).toBe(
+      "Stored model override openai/gpt-5.5 is stale for this session; reverted to openai/gpt-5.4. Pick a model again with /model if you still want to override the default.",
+    );
   });
 });

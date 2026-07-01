@@ -1,4 +1,7 @@
+// Exposes archive extraction helpers after applying fs-safe defaults.
 import "./fs-safe-defaults.js";
+
+// Archive extraction facade for size limits, staged writes, and traversal checks.
 export {
   ARCHIVE_LIMIT_ERROR_CODE,
   ArchiveLimitError,
@@ -7,21 +10,13 @@ export {
   DEFAULT_MAX_ENTRIES,
   DEFAULT_MAX_EXTRACTED_BYTES,
   DEFAULT_MAX_ENTRY_BYTES,
-  createArchiveSymlinkTraversalError,
   createTarEntryPreflightChecker,
   extractArchive,
   loadZipArchiveWithPreflight,
   mergeExtractedTreeIntoDestination,
   prepareArchiveDestinationDir,
-  prepareArchiveOutputPath,
-  readZipCentralDirectoryEntryCount,
   resolveArchiveKind,
   resolvePackedRootDir,
   withStagedArchiveDestination,
-  type ArchiveExtractLimits,
-  type ArchiveKind,
-  type ArchiveLimitErrorCode,
   type ArchiveLogger,
-  type ArchiveSecurityErrorCode,
-  type TarEntryInfo,
 } from "@openclaw/fs-safe/archive";

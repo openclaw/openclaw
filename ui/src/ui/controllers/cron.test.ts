@@ -1,3 +1,4 @@
+// Control UI tests cover cron behavior.
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CRON_FORM } from "../app-defaults.ts";
 import {
@@ -404,6 +405,108 @@ describe("cron controller", () => {
     });
   });
 
+  it("sends explicit null model/thinking clears when blanking stored overrides on edit", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: "job-clear-overrides" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "job-clear-overrides" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+
+    const state = createState({
+      client: {
+        request,
+      } as unknown as CronState["client"],
+      cronEditingJobId: "job-clear-overrides",
+      cronJobs: [
+        {
+          id: "job-clear-overrides",
+          payload: {
+            kind: "agentTurn",
+            message: "do work",
+            model: "openai/gpt-5.5",
+            thinking: "high",
+          },
+        } as unknown as CronState["cronJobs"][number],
+      ],
+      cronForm: {
+        ...DEFAULT_CRON_FORM,
+        name: "clear overrides",
+        scheduleKind: "every",
+        everyAmount: "30",
+        everyUnit: "minutes",
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payloadKind: "agentTurn",
+        payloadText: "do work",
+        payloadModel: "",
+        payloadThinking: "",
+      },
+    });
+
+    await addCronJob(state);
+
+    const updateCall = findRequestCall(request.mock.calls, "cron.update");
+    expectNestedRecordFields(requestPatch(updateCall), "payload", {
+      kind: "agentTurn",
+      message: "do work",
+      model: null,
+      thinking: null,
+    });
+  });
+
+  it("does not send null model/thinking for a new job with blank fields", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.add") {
+        return { id: "job-new-blank" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "job-new-blank" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+
+    const state = createState({
+      client: {
+        request,
+      } as unknown as CronState["client"],
+      cronForm: {
+        ...DEFAULT_CRON_FORM,
+        name: "new blank",
+        scheduleKind: "every",
+        everyAmount: "30",
+        everyUnit: "minutes",
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payloadKind: "agentTurn",
+        payloadText: "do work",
+        payloadModel: "",
+        payloadThinking: "",
+      },
+    });
+
+    await addCronJob(state);
+
+    const addCall = findRequestCall(request.mock.calls, "cron.add");
+    // A new job never had a stored override, so a blank field stays omitted
+    // (no explicit null clear) rather than being mistaken for a cleared value.
+    expectNestedRecordFields(requestPayload(addCall), "payload", {
+      kind: "agentTurn",
+      message: "do work",
+      model: undefined,
+      thinking: undefined,
+    });
+  });
+
   it("does not submit stale announce delivery when unsupported", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "cron.add") {
@@ -597,6 +700,47 @@ describe("cron controller", () => {
     expect(state.cronForm.deliveryChannel).toBe("telegram");
     expect(state.cronForm.deliveryTo).toBe("123");
     expect(state.cronForm.deliveryAccountId).toBe("bot-2");
+  });
+
+  it("preserves command payloads when editing Control UI metadata", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "cron.update") {
+        return { id: "job-command" };
+      }
+      if (method === "cron.list") {
+        return { jobs: [{ id: "job-command" }] };
+      }
+      if (method === "cron.status") {
+        return { enabled: true, jobs: 1, nextWakeAtMs: null };
+      }
+      return {};
+    });
+    const job = {
+      id: "job-command",
+      name: "Command",
+      enabled: true,
+      createdAtMs: 0,
+      updatedAtMs: 0,
+      schedule: { kind: "every" as const, everyMs: 600_000 },
+      sessionTarget: "isolated" as const,
+      wakeMode: "next-heartbeat" as const,
+      payload: { kind: "command" as const, argv: ["sh", "-lc", "echo ok"] },
+      delivery: { mode: "announce" as const, channel: "telegram", to: "123" },
+      state: {},
+    };
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+      cronJobs: [job],
+    });
+
+    startCronEdit(state, job);
+    state.cronForm.name = "Command renamed";
+    await addCronJob(state);
+
+    const updateCall = findRequestCall(request.mock.calls, "cron.update");
+    const patch = requestPatch(updateCall);
+    expect(patch.name).toBe("Command renamed");
+    expect(patch).not.toHaveProperty("payload");
   });
 
   it('keeps implicit announce delivery implicit when editing a job that shows "last" in the form', async () => {

@@ -1,26 +1,28 @@
+// Transcript echo delivery sends best-effort preflight audio transcripts back
+// through deliverable message channels.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 
 let messageRuntimePromise: Promise<typeof import("../channels/message/runtime.js")> | null = null;
 
 function loadMessageRuntime() {
+  // The message runtime is heavy and only needed when echo delivery actually
+  // proceeds to a deliverable channel.
   messageRuntimePromise ??= import("../channels/message/runtime.js");
   return messageRuntimePromise;
 }
 
+/** Default operator-visible transcript echo format for preflight audio transcription. */
 export const DEFAULT_ECHO_TRANSCRIPT_FORMAT = '📝 "{transcript}"';
 
 function formatEchoTranscript(transcript: string, format: string): string {
   return format.replace("{transcript}", transcript);
 }
 
-/**
- * Sends the transcript echo back to the originating chat.
- * Best-effort: logs on failure, never throws.
- */
+/** Sends a best-effort transcript echo back to the originating deliverable chat. */
 export async function sendTranscriptEcho(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;

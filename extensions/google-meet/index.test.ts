@@ -1,3 +1,4 @@
+// Google Meet tests cover index plugin behavior.
 import { EventEmitter } from "node:events";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -854,7 +855,7 @@ describe("google-meet plugin", () => {
   });
 
   it("registers the node-host command used by chrome-node transport", () => {
-    const { nodeHostCommands } = setup();
+    const { nodeHostCommands, nodeInvokePolicies } = setup();
 
     const command = nodeHostCommands.find(
       (entry): entry is Record<string, unknown> =>
@@ -864,7 +865,13 @@ describe("google-meet plugin", () => {
       throw new Error("expected googlemeet.chrome node host command");
     }
     expect(command.cap).toBe("google-meet");
+    expect(command.dangerous).toBe(true);
     expect(typeof command.handle).toBe("function");
+    expect(nodeInvokePolicies).toHaveLength(1);
+    expect(nodeInvokePolicies[0]).toMatchObject({
+      commands: ["googlemeet.chrome"],
+      dangerous: true,
+    });
   });
 
   it("keeps the agent tool visible on non-macOS hosts but blocks local Chrome talk-back joins", async () => {
@@ -1997,7 +2004,9 @@ describe("google-meet plugin", () => {
         "Chrome observe-only mode does not require a realtime audio bridge",
       );
       expect(
-        result.details.checks?.filter((check) => check.id === "chrome-local-audio-device"),
+        result.details.checks?.filter(
+          (checkLocal) => checkLocal.id === "chrome-local-audio-device",
+        ),
       ).toStrictEqual([]);
       expect(runCommandWithTimeout).not.toHaveBeenCalled();
     } finally {
@@ -2236,6 +2245,9 @@ describe("google-meet plugin", () => {
     try {
       const { methods, runCommandWithTimeout } = setup({
         defaultMode: "transcribe",
+        chrome: {
+          browserProfile: "meet-devtools",
+        },
       });
       const callGatewayFromCli = mockLocalMeetBrowserRequest({
         inCall: true,
@@ -2272,7 +2284,7 @@ describe("google-meet plugin", () => {
       expectRespondedOk(respond);
       expect(runCommandWithTimeout).not.toHaveBeenCalled();
       const openCall = callGatewayFromCli.mock.calls.find(
-        ([, , request]) => requireRecord(request, "browser request").path === "/tabs/open",
+        (call) => requireRecord(call[2], "browser request").path === "/tabs/open",
       );
       if (!openCall) {
         throw new Error("Expected browser /tabs/open request");
@@ -2287,7 +2299,7 @@ describe("google-meet plugin", () => {
       expect(openCall[3]).toEqual({ progress: false });
       expect(
         callGatewayFromCli.mock.calls.some(
-          ([, , request]) => (request as { path?: string }).path === "/permissions/grant",
+          (call) => (call[2] as { path?: string }).path === "/permissions/grant",
         ),
       ).toBe(false);
       const payload = requireRespondPayload(respond, "join response payload");
@@ -2305,7 +2317,7 @@ describe("google-meet plugin", () => {
       expect(transcriptLine.speaker).toBe("Alice");
       expect(transcriptLine.text).toBe("Can everyone hear the agent?");
       const actCall = callGatewayFromCli.mock.calls.find(
-        ([, , request]) => (request as { path?: string }).path === "/act",
+        (call) => (call[2] as { path?: string }).path === "/act",
       );
       expect(String((actCall?.[2] as { body?: { fn?: string } } | undefined)?.body?.fn)).toContain(
         "const allowMicrophone = false",
@@ -2351,7 +2363,7 @@ describe("google-meet plugin", () => {
 
       expectRespondedOk(respond);
       const grantCall = callGatewayFromCli.mock.calls.find(
-        ([, , request]) => requireRecord(request, "browser request").path === "/permissions/grant",
+        (call) => requireRecord(call[2], "browser request").path === "/permissions/grant",
       );
       if (!grantCall) {
         throw new Error("Expected browser /permissions/grant request");
@@ -2643,7 +2655,7 @@ describe("google-meet plugin", () => {
     expect(status.session?.chrome?.health?.transcriptLines).toBe(1);
     expect(status.session?.chrome?.health?.lastCaptionText).toBe("Please capture this.");
     const focusCall = callGatewayFromCli.mock.calls.find(
-      ([, , request]) => requireRecord(request, "browser request").path === "/tabs/focus",
+      (call) => requireRecord(call[2], "browser request").path === "/tabs/focus",
     );
     if (!focusCall) {
       throw new Error("Expected browser /tabs/focus request");
@@ -3425,7 +3437,12 @@ describe("google-meet plugin", () => {
       },
     );
     chromeTransportTesting.setDepsForTest({ callGatewayFromCli });
-    const { tools, nodesInvoke } = setup({ defaultTransport: "chrome" });
+    const { tools, nodesInvoke } = setup({
+      defaultTransport: "chrome",
+      chrome: {
+        browserProfile: "meet-devtools",
+      },
+    });
     const tool = tools[0] as {
       execute: (
         id: string,
@@ -3447,7 +3464,7 @@ describe("google-meet plugin", () => {
     expect(browser.manualActionRequired).toBe(true);
     expect(browser.manualActionReason).toBe("meet-admission-required");
     const focusCall = callGatewayFromCli.mock.calls.find(
-      ([, , request]) => requireRecord(request, "browser request").path === "/tabs/focus",
+      (call) => requireRecord(call[2], "browser request").path === "/tabs/focus",
     );
     if (!focusCall) {
       throw new Error("Expected browser /tabs/focus request");
@@ -3455,6 +3472,7 @@ describe("google-meet plugin", () => {
     expect(focusCall[0]).toBe("browser.request");
     expect(requireRecord(focusCall[2], "focus request").method).toBe("POST");
     expect(requireRecord(focusCall[2], "focus request").path).toBe("/tabs/focus");
+    expect(requireRecord(focusCall[2], "focus request").query).toBeUndefined();
     expect(focusCall[3]).toEqual({ progress: false });
     expect(nodesInvoke).not.toHaveBeenCalled();
   });

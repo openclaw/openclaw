@@ -1,13 +1,14 @@
+/** Tests ACP translator replay ledger recording and load-session replay behavior. */
 import type {
   LoadSessionRequest,
   NewSessionRequest,
   PromptRequest,
 } from "@agentclientprotocol/sdk";
+import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { createInMemoryAcpEventLedger, type AcpEventLedger } from "./event-ledger.js";
-import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
 

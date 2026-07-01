@@ -1,3 +1,4 @@
+// Voice Call plugin module implements runtime behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
@@ -12,6 +13,7 @@ import {
 import type { VoiceCallConfig } from "./config.js";
 import {
   resolveVoiceCallEffectiveConfig,
+  resolveVoiceCallNumberRouteKeyForCall,
   resolveVoiceCallSessionKey,
   resolveTwilioAuthToken,
   resolveVoiceCallConfig,
@@ -24,6 +26,7 @@ import type { TwilioProvider } from "./providers/twilio.js";
 import { buildRealtimeVoiceInstructions } from "./realtime-agent-context.js";
 import { resolveRealtimeFastContextConsult } from "./realtime-fast-context.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
+import { setVoiceCallStateRuntime, type VoiceCallStateRuntime } from "./runtime-state.js";
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 import { createTelephonyTtsProvider } from "./telephony-tts.js";
 import { startTunnel, type TunnelResult } from "./tunnel.js";
@@ -109,20 +112,19 @@ function loadRealtimeHandler(): Promise<RealtimeHandlerModule> {
 
 function resolveVoiceCallConsultSessionKey(call: {
   config: VoiceCallConfig;
+  coreSession?: OpenClawConfig["session"];
   sessionKey?: string;
   from?: string;
   to?: string;
   direction?: "inbound" | "outbound";
   callId: string;
 }): string {
-  if (call.sessionKey) {
-    return call.sessionKey;
-  }
-  const phone = call.direction === "outbound" ? call.to : call.from;
   return resolveVoiceCallSessionKey({
     config: call.config,
     callId: call.callId,
-    phone,
+    phone: call.direction === "outbound" ? call.to : call.from,
+    explicitSessionKey: call.sessionKey,
+    coreSession: call.coreSession,
   });
 }
 
@@ -265,10 +267,19 @@ export async function createVoiceCallRuntime(params: {
   coreConfig: CoreConfig;
   fullConfig?: OpenClawConfig;
   agentRuntime: CoreAgentDeps;
+  stateRuntime?: VoiceCallStateRuntime["state"];
   ttsRuntime?: TelephonyTtsRuntime;
   logger?: Logger;
 }): Promise<VoiceCallRuntime> {
-  const { config: rawConfig, coreConfig, fullConfig, agentRuntime, ttsRuntime, logger } = params;
+  const {
+    config: rawConfig,
+    coreConfig,
+    fullConfig,
+    agentRuntime,
+    stateRuntime,
+    ttsRuntime,
+    logger,
+  } = params;
   const log = logger ?? {
     info: console.log,
     warn: console.warn,
@@ -295,7 +306,10 @@ export async function createVoiceCallRuntime(params: {
   }
 
   const provider = await resolveProvider(config);
-  const manager = new CallManager(config);
+  if (stateRuntime) {
+    setVoiceCallStateRuntime({ state: stateRuntime });
+  }
+  const manager = new CallManager(config, undefined, cfg.session);
   const realtimeProvider = config.realtime.enabled
     ? await resolveRealtimeProvider({
         config,
@@ -344,15 +358,13 @@ export async function createVoiceCallRuntime(params: {
           if (!call) {
             return { error: `Call "${callId}" not found` };
           }
-          const numberRouteKey =
-            typeof call.metadata?.numberRouteKey === "string"
-              ? call.metadata.numberRouteKey
-              : call.to;
+          const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
           const effectiveConfig = resolveVoiceCallEffectiveConfig(config, numberRouteKey).config;
           const agentId = effectiveConfig.agentId ?? "main";
           const sessionKey = resolveVoiceCallConsultSessionKey({
             ...call,
             config: effectiveConfig,
+            coreSession: cfg.session,
           });
           const requesterSessionKey =
             typeof call.metadata?.requesterSessionKey === "string"

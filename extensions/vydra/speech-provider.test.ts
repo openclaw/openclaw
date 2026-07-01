@@ -1,3 +1,4 @@
+// Vydra tests cover speech provider plugin behavior.
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildVydraSpeechProvider } from "./speech-provider.js";
@@ -6,6 +7,12 @@ describe("vydra speech provider", () => {
   installPinnedHostnameTestHooks();
 
   const provider = buildVydraSpeechProvider();
+
+  const oversizedJsonResponse = () =>
+    new Response(Buffer.alloc(16 * 1024 * 1024 + 1, 0x20), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
 
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -68,5 +75,52 @@ describe("vydra speech provider", () => {
     expect(result.outputFormat).toBe("mp3");
     expect(result.fileExtension).toBe(".mp3");
     expect(result.audioBuffer).toEqual(Buffer.from("mp3-data"));
+  });
+
+  it("rejects generated audio downloads that exceed the configured media cap", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            audioUrl: "https://cdn.vydra.ai/generated/test.mp3",
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(Buffer.from("too-large"), {
+          status: 200,
+          headers: { "Content-Type": "audio/mpeg" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      provider.synthesize({
+        text: "OpenClaw test",
+        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } } as never,
+        providerConfig: { apiKey: "vydra-test-key" },
+        target: "audio-file",
+        timeoutMs: 30_000,
+      }),
+    ).rejects.toThrow("Vydra audio download exceeds 1 bytes");
+  });
+
+  it("rejects speech synthesis JSON responses that exceed the provider cap", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(oversizedJsonResponse()));
+
+    await expect(
+      provider.synthesize({
+        text: "OpenClaw test",
+        cfg: {} as never,
+        providerConfig: { apiKey: "vydra-test-key" },
+        target: "audio-file",
+        timeoutMs: 30_000,
+      }),
+    ).rejects.toThrow("Vydra speech synthesis: JSON response exceeds 16777216 bytes");
   });
 });

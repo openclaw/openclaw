@@ -1,3 +1,4 @@
+// Control UI chat module implements realtime talk google live behavior.
 import { base64ToBytes, bytesToBase64, floatToPcm16 } from "./realtime-talk-audio.ts";
 import { RealtimeTalkPcmOutputQueue } from "./realtime-talk-pcm-output.ts";
 import type { RealtimeTalkJsonPcmWebSocketSessionResult } from "./realtime-talk-shared.ts";
@@ -228,7 +229,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
           text: content.inputTranscription.text,
           emitTalkEvent: this.emitTalkEvent,
           onControlResult: (result) => this.stopOutputForSuppressedControl(result),
-          speakControlResult: (message) => this.sendControlSpeechMessage(message),
+          speakControlResult: (messageLocal) => this.sendControlSpeechMessage(messageLocal),
           suppressSpeechForModes: ["cancel"],
         });
       }
@@ -404,7 +405,8 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 }
 
-async function decodeGoogleLiveMessageData(data: unknown): Promise<string> {
+async function decodeGoogleLiveMessageData(dataInput: unknown): Promise<string> {
+  let data = dataInput;
   if (typeof data === "string") {
     return data;
   }

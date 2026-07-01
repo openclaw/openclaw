@@ -1,14 +1,17 @@
+// Doctor scan for personal Codex CLI assets that native Codex-mode agents do not auto-load.
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
 import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { isRecord as hasRecord } from "../../../shared/record-coerce.js";
-import { normalizeOptionalLowercaseString as normalizeString } from "../../../shared/string-coerce.js";
 
-export type CodexNativeAssetHit = {
+type CodexNativeAssetHit = {
+  /** Native Codex asset category discovered under Codex or personal agent homes. */
   kind: "skill" | "plugin" | "config" | "hooks";
+  /** Absolute path to the asset or asset container. */
   path: string;
 };
 
@@ -68,6 +71,7 @@ async function discoverSkillHits(root: string): Promise<CodexNativeAssetHit[]> {
       return;
     }
     if (depth === 1 && path.basename(dir) === ".system") {
+      // Built-in Codex system skills are not user assets that migration should promote.
       return;
     }
     if (await exists(path.join(dir, "SKILL.md"))) {
@@ -131,6 +135,7 @@ function shouldScanCodexNativeAssets(cfg: OpenClawConfig, env: NodeJS.ProcessEnv
   return isCodexRuntimeConfigured(cfg, env) || isCodexPluginConfigured(cfg);
 }
 
+/** Discover personal Codex skills, plugins, config, and hooks relevant to Codex-mode agents. */
 export async function scanCodexNativeAssets(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -175,6 +180,7 @@ function plural(count: number, singular: string): string {
   return `${count} ${singular}${count === 1 ? "" : "s"}`;
 }
 
+/** Build an informational doctor note when personal Codex CLI assets need migration review. */
 export async function collectCodexNativeAssetInfoNotes(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;

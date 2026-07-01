@@ -1,3 +1,5 @@
+// Embedded run helper tests cover final assistant text extraction and error
+// metadata assembly shared by normal exits and failure paths.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { createUsageAccumulator } from "../usage-accumulator.js";
@@ -5,12 +7,16 @@ import {
   buildErrorAgentMeta,
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
+  resolveNextSameModelRateLimitRetryCount,
+  resolveSameModelRateLimitRetryDelayMs,
 } from "./helpers.js";
 
 function makeAssistantMessage(
   content: AssistantMessage["content"],
   phase?: string,
 ): AssistantMessage {
+  // Minimal assistant fixture with usage fields required by the SDK type; the
+  // tested helpers only care about content, phase, and final metadata.
   return {
     api: "responses",
     provider: "openai",
@@ -33,6 +39,8 @@ function makeAssistantMessage(
 
 describe("resolveFinalAssistantVisibleText", () => {
   it("prefers final_answer text over commentary blocks", () => {
+    // Commentary can be streamed before the final answer; user-visible result
+    // extraction must choose the signed final phase when present.
     const lastAssistant = makeAssistantMessage([
       {
         type: "text",
@@ -79,8 +87,83 @@ describe("resolveFinalAssistantVisibleText", () => {
   });
 });
 
+describe("resolveSameModelRateLimitRetryDelayMs", () => {
+  it("waits 10s/20s/30s linearly before the 1st/2nd/3rd same-model retry", () => {
+    expect(resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 0 })).toBe(10_000);
+    expect(resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 1 })).toBe(20_000);
+    expect(resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 2 })).toBe(30_000);
+  });
+
+  it("caps at 60s if the retry count is ever raised further", () => {
+    expect(resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 10 })).toBe(60_000);
+  });
+
+  it("is deterministic so RPM windows clear predictably", () => {
+    expect(resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 2 })).toBe(
+      resolveSameModelRateLimitRetryDelayMs({ retriesSoFar: 2 }),
+    );
+  });
+
+  it("honors a short provider Retry-After when it is longer than the fixed backoff", () => {
+    expect(
+      resolveSameModelRateLimitRetryDelayMs({
+        retriesSoFar: 0,
+        retryAfterSeconds: 30,
+      }),
+    ).toBe(30_000);
+  });
+
+  it("keeps the existing fixed backoff when Retry-After is shorter", () => {
+    expect(
+      resolveSameModelRateLimitRetryDelayMs({
+        retriesSoFar: 1,
+        retryAfterSeconds: 5,
+      }),
+    ).toBe(20_000);
+  });
+
+  it("caps provider Retry-After at the same short-window retry ceiling", () => {
+    expect(
+      resolveSameModelRateLimitRetryDelayMs({
+        retriesSoFar: 0,
+        retryAfterSeconds: 120,
+      }),
+    ).toBe(60_000);
+  });
+});
+
+describe("resolveNextSameModelRateLimitRetryCount", () => {
+  it("counts only consecutive same-model rate-limit retries", () => {
+    let retriesSoFar = 0;
+
+    retriesSoFar = resolveNextSameModelRateLimitRetryCount({
+      retriesSoFar,
+      retriedSameModelRateLimit: true,
+    });
+    retriesSoFar = resolveNextSameModelRateLimitRetryCount({
+      retriesSoFar,
+      retriedSameModelRateLimit: true,
+    });
+    expect(retriesSoFar).toBe(2);
+
+    retriesSoFar = resolveNextSameModelRateLimitRetryCount({
+      retriesSoFar,
+      retriedSameModelRateLimit: false,
+    });
+    expect(retriesSoFar).toBe(0);
+
+    retriesSoFar = resolveNextSameModelRateLimitRetryCount({
+      retriesSoFar,
+      retriedSameModelRateLimit: true,
+    });
+    expect(retriesSoFar).toBe(1);
+  });
+});
+
 describe("buildErrorAgentMeta", () => {
   it("preserves active session file for error exits after transcript rotation", () => {
+    // Error metadata follows the active session after transcript rotation so
+    // diagnostics and resume links point at the file that contains the failure.
     expect(
       buildErrorAgentMeta({
         sessionId: "session-rotated",

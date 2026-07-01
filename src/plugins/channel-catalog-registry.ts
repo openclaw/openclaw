@@ -1,5 +1,6 @@
+// Maintains channel catalog entries advertised by plugins.
+import { normalizeOptionalString as resolveOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { normalizeOptionalString as resolveOptionalString } from "../shared/string-coerce.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import type { PluginPackageChannel, PluginPackageInstall } from "./manifest.js";
@@ -20,6 +21,7 @@ export function listChannelCatalogEntries(
     origin?: PluginOrigin;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
+    extraPaths?: string[];
     /**
      * Optional override.  When omitted and `origin !== "bundled"`, the persisted
      * plugin install ledger is loaded synchronously so that npm-installed
@@ -36,6 +38,7 @@ export function listChannelCatalogEntries(
     discoverOpenClawPlugins({
       workspaceDir: params.workspaceDir,
       env: params.env,
+      extraPaths: params.extraPaths,
       ...(installRecords && Object.keys(installRecords).length > 0 ? { installRecords } : {}),
     });
   return discovery.candidates.flatMap((candidate) => {

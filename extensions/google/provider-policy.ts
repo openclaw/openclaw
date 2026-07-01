@@ -1,3 +1,4 @@
+// Google provider module implements model/runtime integration.
 import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderThinkingProfile,
@@ -12,6 +13,7 @@ type GoogleApiCarrier = {
 };
 
 type GoogleProviderConfigLike = GoogleApiCarrier & {
+  baseUrl?: string | null;
   models?: ReadonlyArray<GoogleApiCarrier | null | undefined> | null;
 };
 
@@ -35,6 +37,34 @@ function isGoogleGenerativeAiUrl(url: URL): boolean {
 function stripUrlUserInfo(url: URL): void {
   url.username = "";
   url.password = "";
+}
+
+const GOOGLE_VERTEX_HOST = "aiplatform.googleapis.com";
+const GOOGLE_VERTEX_REGION_HOST_SUFFIX = "-aiplatform.googleapis.com";
+const GOOGLE_VERTEX_MULTI_REGION_HOSTS = new Set([
+  "aiplatform.eu.rep.googleapis.com",
+  "aiplatform.us.rep.googleapis.com",
+]);
+
+export function isGoogleVertexHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return (
+    normalized === GOOGLE_VERTEX_HOST ||
+    normalized.endsWith(GOOGLE_VERTEX_REGION_HOST_SUFFIX) ||
+    GOOGLE_VERTEX_MULTI_REGION_HOSTS.has(normalized)
+  );
+}
+
+export function isGoogleVertexBaseUrl(baseUrl?: string | null): boolean {
+  const raw = normalizeOptionalString(baseUrl);
+  if (!raw) {
+    return false;
+  }
+  try {
+    return isGoogleVertexHostname(new URL(raw).hostname);
+  } catch {
+    return false;
+  }
 }
 
 export function normalizeGoogleApiBaseUrl(baseUrl?: string): string {
@@ -82,12 +112,19 @@ export function normalizeGoogleGenerativeAiBaseUrl(baseUrl?: string): string | u
 }
 
 export function resolveGoogleGenerativeAiTransport<TApi extends string | null | undefined>(params: {
+  provider?: string;
   api: TApi;
   baseUrl?: string;
-}): { api: TApi; baseUrl?: string } {
+}): { api: TApi | "google-generative-ai" | "google-vertex"; baseUrl?: string } {
+  const api =
+    params.api ??
+    (params.provider === "google-vertex" && isGoogleVertexBaseUrl(params.baseUrl)
+      ? "google-vertex"
+      : undefined) ??
+    (params.provider === "google" && params.baseUrl ? "google-generative-ai" : params.api);
   return {
-    api: params.api,
-    baseUrl: isGoogleGenerativeAiApi(params.api)
+    api,
+    baseUrl: isGoogleGenerativeAiApi(api)
       ? normalizeGoogleGenerativeAiBaseUrl(params.baseUrl)
       : params.baseUrl,
   };
@@ -103,6 +140,9 @@ export function shouldNormalizeGoogleGenerativeAiProviderConfig(
   providerKey: string,
   provider: GoogleProviderConfigLike,
 ): boolean {
+  if (providerKey === "google-vertex" && isGoogleVertexBaseUrl(provider.baseUrl)) {
+    return false;
+  }
   if (isGoogleGenerativeAiApi(provider.api)) {
     return true;
   }

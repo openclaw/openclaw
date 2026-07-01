@@ -1,23 +1,48 @@
-import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
-import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
-import { redactSensitiveFieldValue, redactToolPayloadText } from "../logging/redact.js";
-import { splitMediaFromOutput } from "../media/parse.js";
-import { asOptionalRecord as readRecord } from "../shared/record-coerce.js";
+/**
+ * Sanitizes, extracts, and classifies embedded-agent tool execution results.
+ */
+import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  normalizeOptionalStringifiedId,
   readStringValue,
-} from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
+import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeTargetForProvider } from "../infra/outbound/target-normalization.js";
+import { normalizeInteractiveReply, normalizeMessagePresentation } from "../interactive/payload.js";
+import { redactSensitiveFieldValue, redactToolPayloadText } from "../logging/redact.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
-import { isMessageToolSendActionName } from "./embedded-agent-messaging.js";
-import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
+import { isMessagingToolTargetEvidenceAction } from "./embedded-agent-messaging.js";
+import type {
+  MessagingToolSend,
+  MessagingToolSourceReplyPayload,
+} from "./embedded-agent-messaging.types.js";
 import { normalizeToolName } from "./tool-policy.js";
+import {
+  isToolResultError,
+  readToolResultDetails,
+  readToolResultStatus,
+} from "./tool-result-error.js";
+
+export { isToolResultError };
 
 const TOOL_RESULT_MAX_CHARS = 8000;
 const TOOL_ERROR_MAX_CHARS = 400;
 const TOOL_DENIAL_ERROR_CODES = ["SYSTEM_RUN_DENIED", "INVALID_REQUEST"] as const;
+const OPAQUE_STRUCTURED_RESULT_FIELDS = new Set(["encrypted_content", "encrypted_stdout"]);
+const SENSITIVE_STRUCTURED_HEADER_FIELDS = new Set([
+  "authorization",
+  "proxy-authorization",
+  "cookie",
+  "set-cookie",
+  "x-api-key",
+  "x-auth-token",
+]);
 
 function truncateToolText(text: string): string {
   if (text.length <= TOOL_RESULT_MAX_CHARS) {
@@ -255,25 +280,280 @@ export function sanitizeToolResult(result: unknown): unknown {
   return out;
 }
 
+function redactInlineDataUriValue(value: string): string {
+  const trimmed = value.trimStart();
+  if (!trimmed.toLowerCase().startsWith("data:")) {
+    return value;
+  }
+  return `[inline data URI: ${value.length} chars]`;
+}
+
+function carriesBinaryData(record: Record<string, unknown>): boolean {
+  const type = normalizeOptionalLowercaseString(record.type);
+  if (type === "audio" || type === "image" || type === "base64") {
+    return true;
+  }
+  const mediaType = normalizeOptionalLowercaseString(record.media_type ?? record.mimeType);
+  return (
+    mediaType?.startsWith("image/") === true ||
+    mediaType?.startsWith("audio/") === true ||
+    mediaType?.startsWith("video/") === true ||
+    mediaType === "application/pdf"
+  );
+}
+
+function sanitizeStructuredToolResultValue(
+  value: unknown,
+  key = "",
+  parentCarriesBinaryData = false,
+  seen = new WeakSet<object>(),
+): unknown {
+  if (typeof value === "string") {
+    if (SENSITIVE_STRUCTURED_HEADER_FIELDS.has(key.toLowerCase())) {
+      return "***";
+    }
+    if (key === "blob" || (key === "data" && parentCarriesBinaryData)) {
+      return `[binary omitted: ${value.length} chars]`;
+    }
+    // Claude CLI result blocks carry replay-only ciphertext that is not useful display text.
+    if (OPAQUE_STRUCTURED_RESULT_FIELDS.has(key)) {
+      return `[opaque data omitted: ${value.length} chars]`;
+    }
+    return truncateToolText(redactInlineDataUriValue(redactSensitiveFieldValue(key, value)));
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  if (seen.has(value)) {
+    return "[Circular]";
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    // Keep the owning key so arrays of credentials inherit the same redaction policy.
+    return value.map((item) =>
+      sanitizeStructuredToolResultValue(item, key, parentCarriesBinaryData, seen),
+    );
+  }
+  const record = value as Record<string, unknown>;
+  const hasBinaryData = carriesBinaryData(record);
+  return Object.fromEntries(
+    Object.entries(record).map(([childKey, child]) => [
+      childKey,
+      sanitizeStructuredToolResultValue(child, childKey, hasBinaryData, seen),
+    ]),
+  );
+}
+
+function stringifyStructuredToolResultContent(block: unknown): string | undefined {
+  if (!block || typeof block !== "object") {
+    return undefined;
+  }
+  const record = block as Record<string, unknown>;
+  const type = readStringValue(record.type);
+  if (type === "text" || type === "image" || type === "image_url" || type === "audio") {
+    return undefined;
+  }
+  try {
+    const serialized = JSON.stringify(sanitizeStructuredToolResultValue(record));
+    const redacted = serialized ? redactToolPayloadText(serialized) : serialized;
+    return redacted && redacted !== "{}" ? redacted : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveToolResultContentBlocks(result: object): unknown[] {
+  if (Array.isArray(result)) {
+    return result;
+  }
+  const record = result as Record<string, unknown>;
+  // Typed provider blocks own their `content`; only untyped tool-result envelopes unwrap it.
+  if (readStringValue(record.type)) {
+    return [record];
+  }
+  if (Array.isArray(record.content)) {
+    return record.content;
+  }
+  if (record.content && typeof record.content === "object") {
+    return [record.content];
+  }
+  return [record];
+}
+
 export function extractToolResultText(result: unknown): string | undefined {
   if (!result || typeof result !== "object") {
     return undefined;
   }
-  const record = result as Record<string, unknown>;
-  const texts = collectTextContentBlocks(record.content)
+  const content = resolveToolResultContentBlocks(result);
+  const texts = collectTextContentBlocks(content)
     .map((item) => {
       const trimmed = item.trim();
       return trimmed ? trimmed : undefined;
     })
     .filter((value): value is string => Boolean(value));
-  if (texts.length === 0) {
+  if (texts.length > 0) {
+    return truncateToolText(texts.join("\n"));
+  }
+  const structuredTexts: string[] = [];
+  for (const item of content) {
+    const structured = stringifyStructuredToolResultContent(item);
+    if (structured) {
+      structuredTexts.push(structured);
+    }
+  }
+  if (structuredTexts.length === 0) {
     return undefined;
   }
-  return texts.join("\n");
+  return truncateToolText(structuredTexts.join("\n"));
 }
 
-// Core tool names that are allowed to emit local MEDIA: paths. Plugin tools
-// must be explicitly passed as trusted run-local names by the caller.
+function pushUniqueMessagingMediaUrl(urls: string[], seen: Set<string>, value: unknown): void {
+  if (typeof value !== "string") {
+    return;
+  }
+  const normalized = value.trim();
+  if (!normalized || seen.has(normalized)) {
+    return;
+  }
+  seen.add(normalized);
+  urls.push(normalized);
+}
+
+/** Collects messaging attachment references from tool-call arguments or result records. */
+export function collectMessagingMediaUrlsFromRecord(record: Record<string, unknown>): string[] {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  const pushAttachment = (value: unknown) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return;
+    }
+    const attachment = value as Record<string, unknown>;
+    for (const candidate of [
+      attachment.media,
+      attachment.mediaUrl,
+      attachment.path,
+      attachment.filePath,
+      attachment.fileUrl,
+      attachment.url,
+    ]) {
+      pushUniqueMessagingMediaUrl(urls, seen, candidate);
+    }
+  };
+
+  for (const candidate of [
+    record.media,
+    record.mediaUrl,
+    record.path,
+    record.filePath,
+    record.fileUrl,
+  ]) {
+    pushUniqueMessagingMediaUrl(urls, seen, candidate);
+  }
+  if (Array.isArray(record.mediaUrls)) {
+    for (const mediaUrl of record.mediaUrls) {
+      pushUniqueMessagingMediaUrl(urls, seen, mediaUrl);
+    }
+  }
+  if (Array.isArray(record.attachments)) {
+    for (const attachment of record.attachments) {
+      pushAttachment(attachment);
+    }
+  }
+  return urls;
+}
+
+/** Collects messaging attachment references from a completed tool result. */
+export function collectMessagingMediaUrlsFromToolResult(result: unknown): string[] {
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  const appendFromRecord = (value: unknown) => {
+    if (!value || typeof value !== "object") {
+      return;
+    }
+    for (const url of collectMessagingMediaUrlsFromRecord(value as Record<string, unknown>)) {
+      if (!seen.has(url)) {
+        seen.add(url);
+        urls.push(url);
+      }
+    }
+  };
+
+  appendFromRecord(result);
+  if (result && typeof result === "object") {
+    appendFromRecord((result as Record<string, unknown>).details);
+  }
+  const outputText = extractToolResultText(result);
+  if (outputText) {
+    try {
+      appendFromRecord(JSON.parse(outputText));
+    } catch {
+      // Ignore non-JSON tool output.
+    }
+  }
+  return urls;
+}
+
+/** Extract an internal source-reply payload from a completed message tool result. */
+export function extractMessagingToolSourceReplyPayload(
+  result: unknown,
+): MessagingToolSourceReplyPayload | undefined {
+  const details = readToolResultDetails(result);
+  if (!details || details.sourceReplySink !== "internal-ui") {
+    return undefined;
+  }
+  const status = normalizeOptionalLowercaseString(details.deliveryStatus);
+  if (status && status !== "sent") {
+    return undefined;
+  }
+  const sourceReply = readRecord(details.sourceReply) ?? details;
+  const payload: MessagingToolSourceReplyPayload = {};
+  const text = readStringValue(sourceReply.text) ?? readStringValue(details.message);
+  if (text) {
+    payload.text = text;
+  }
+  const mediaUrl = readStringValue(sourceReply.mediaUrl) ?? readStringValue(details.mediaUrl);
+  if (mediaUrl) {
+    payload.mediaUrl = mediaUrl;
+  }
+  const rawMediaUrls = Array.isArray(sourceReply.mediaUrls)
+    ? sourceReply.mediaUrls
+    : Array.isArray(details.mediaUrls)
+      ? details.mediaUrls
+      : [];
+  const mediaUrls = uniqueStrings(
+    rawMediaUrls.filter((value): value is string => typeof value === "string"),
+  );
+  if (mediaUrls.length > 0) {
+    payload.mediaUrls = mediaUrls;
+  }
+  if (sourceReply.audioAsVoice === true || details.audioAsVoice === true) {
+    payload.audioAsVoice = true;
+  }
+  const presentation = normalizeMessagePresentation(sourceReply.presentation);
+  if (presentation) {
+    payload.presentation = presentation;
+  }
+  const interactive = normalizeInteractiveReply(sourceReply.interactive);
+  if (interactive) {
+    payload.interactive = interactive;
+  }
+  const channelData = readRecord(sourceReply.channelData);
+  if (channelData) {
+    payload.channelData = { ...channelData };
+  }
+  const idempotencyKey =
+    readStringValue(sourceReply.idempotencyKey) ?? readStringValue(details.idempotencyKey);
+  if (idempotencyKey) {
+    payload.idempotencyKey = idempotencyKey;
+  }
+  return Object.keys(payload).length > 0 ? payload : undefined;
+}
+
+// Core tool names that are allowed to emit trusted local media artifacts.
+// Plugin tools must be explicitly passed as trusted run-local names by the caller.
 const TRUSTED_TOOL_RESULT_MEDIA = new Set([
   "agents_list",
   "apply_patch",
@@ -307,26 +587,11 @@ const TRUSTED_TOOL_RESULT_MEDIA = new Set([
 ]);
 const HTTP_URL_RE = /^https?:\/\//i;
 
-export function isCoreToolResultMediaTrustedName(toolName?: string): boolean {
+function isCoreToolResultMediaTrustedName(toolName?: string): boolean {
   if (!toolName) {
     return false;
   }
   return TRUSTED_TOOL_RESULT_MEDIA.has(normalizeToolName(toolName));
-}
-
-function readToolResultDetails(result: unknown): Record<string, unknown> | undefined {
-  if (!result || typeof result !== "object") {
-    return undefined;
-  }
-  const record = result as Record<string, unknown>;
-  return record.details && typeof record.details === "object" && !Array.isArray(record.details)
-    ? (record.details as Record<string, unknown>)
-    : undefined;
-}
-
-function readToolResultStatus(result: unknown): string | undefined {
-  const status = readToolResultDetails(result)?.status;
-  return normalizeOptionalLowercaseString(status);
 }
 
 function isExternalToolResult(result: unknown): boolean {
@@ -388,7 +653,7 @@ export function filterToolResultMediaUrls(
   if (isToolResultMediaTrusted(toolName, result, trustedLocalMediaToolNames)) {
     // When the current run provides its exact trusted local-media tool names,
     // require the raw emitted tool name to match one of them before allowing
-    // local MEDIA: paths.
+    // local media paths.
     // This blocks normalized aliases and case-variant collisions such as
     // "Bash" -> "bash" or "Web_Search" -> "web_search" from inheriting a
     // registered tool's media trust. TTS-generated local files carry a
@@ -412,8 +677,7 @@ export function filterToolResultMediaUrls(
  *
  * Strategy (first match wins):
  * 1. Read structured `details.media` attachments from tool details.
- * 2. Parse `MEDIA:` directive tokens from text content blocks.
- * 3. Fall back to `details.path` when image content exists (legacy imageResult).
+ * 2. Fall back to `details.path` when image content exists (legacy imageResult).
  *
  * Returns an empty array when no media is found (e.g. embedded `read` tool
  * returns base64 image data but no file path; those need a different delivery
@@ -459,9 +723,12 @@ function collectStructuredMediaUrls(media: Record<string, unknown>): string[] {
     pushString(attachment.filePath);
     pushString(attachment.fileUrl);
   };
-  if (typeof media.mediaUrl === "string" && media.mediaUrl.trim()) {
-    urls.push(media.mediaUrl.trim());
-  }
+  pushString(media.media);
+  pushString(media.path);
+  pushString(media.url);
+  pushString(media.mediaUrl);
+  pushString(media.filePath);
+  pushString(media.fileUrl);
   if (Array.isArray(media.mediaUrls)) {
     for (const value of media.mediaUrls) {
       pushString(value);
@@ -479,42 +746,17 @@ function isNonOutboundToolResultMedia(media: Record<string, unknown>): boolean {
   return media.outbound === false;
 }
 
-function extractTextContentMediaArtifact(content: unknown[]): {
-  mediaUrls: string[];
-  audioAsVoice?: boolean;
-  hasImageContent: boolean;
-} {
-  const mediaUrls: string[] = [];
-  let audioAsVoice = false;
-  let hasImageContent = false;
-
+function hasImageContentBlock(content: unknown[]): boolean {
   for (const item of content) {
     if (!item || typeof item !== "object") {
       continue;
     }
     const entry = item as Record<string, unknown>;
     if (entry.type === "image") {
-      hasImageContent = true;
-      continue;
-    }
-    if (entry.type !== "text" || typeof entry.text !== "string") {
-      continue;
-    }
-
-    const parsed = splitMediaFromOutput(entry.text);
-    if (parsed.audioAsVoice) {
-      audioAsVoice = true;
-    }
-    if (parsed.mediaUrls?.length) {
-      mediaUrls.push(...parsed.mediaUrls);
+      return true;
     }
   }
-
-  return {
-    mediaUrls,
-    ...(audioAsVoice ? { audioAsVoice: true } : {}),
-    hasImageContent,
-  };
+  return false;
 }
 
 export function extractToolResultMediaArtifact(
@@ -544,18 +786,9 @@ export function extractToolResultMediaArtifact(
     return undefined;
   }
 
-  const textMedia = extractTextContentMediaArtifact(content);
-
-  if (textMedia.mediaUrls.length > 0) {
-    return {
-      mediaUrls: textMedia.mediaUrls,
-      ...(textMedia.audioAsVoice ? { audioAsVoice: true } : {}),
-    };
-  }
-
   // Fall back to legacy details.path when image content exists but no
-  // structured media details or MEDIA: text.
-  if (textMedia.hasImageContent) {
+  // structured media details.
+  if (hasImageContentBlock(content)) {
     const details = record.details as Record<string, unknown> | undefined;
     const p = normalizeOptionalString(details?.path) ?? "";
     if (p) {
@@ -564,18 +797,6 @@ export function extractToolResultMediaArtifact(
   }
 
   return undefined;
-}
-
-export function extractToolResultMediaPaths(result: unknown): string[] {
-  return extractToolResultMediaArtifact(result)?.mediaUrls ?? [];
-}
-
-export function isToolResultError(result: unknown): boolean {
-  const normalized = readToolResultStatus(result);
-  if (!normalized) {
-    return false;
-  }
-  return normalized === "error" || normalized === "timeout";
 }
 
 export function extractToolErrorCode(result: unknown): string | undefined {
@@ -631,56 +852,193 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
   if (fromRootStatus) {
     return fromRootStatus;
   }
+  const status = readToolResultStatus(result);
+  if (status && !isToolResultError(result)) {
+    return undefined;
+  }
   return text ? normalizeToolErrorText(text) : undefined;
 }
 
-function resolveMessageToolTarget(args: Record<string, unknown>): string | undefined {
-  const toRaw = readStringValue(args.to);
-  if (toRaw) {
-    return toRaw;
+function resolveMessageToolTarget(params: {
+  action: string;
+  args: Record<string, unknown>;
+  providerId: string | null;
+  currentChannelId?: string;
+  currentMessagingTarget?: string;
+}): string | undefined {
+  const directTarget =
+    normalizeOptionalString(params.args.target) ??
+    normalizeOptionalString(params.args.to) ??
+    normalizeOptionalString(params.args.channelId);
+  if (directTarget) {
+    return directTarget;
   }
-  return readStringValue(args.target);
+  const aliases = params.providerId
+    ? getChannelPlugin(params.providerId)?.actions?.messageActionTargetAliases?.[
+        params.action as ChannelMessageActionName
+      ]?.deliveryTargetAliases
+    : undefined;
+  for (const alias of aliases ?? []) {
+    const aliasTarget = normalizeOptionalStringifiedId(params.args[alias]);
+    if (aliasTarget) {
+      return aliasTarget;
+    }
+  }
+  return params.currentMessagingTarget ?? params.currentChannelId;
+}
+
+function resolveMessagingToolThreadEvidence(params: {
+  providerId: string;
+  to: string;
+  accountId?: string;
+  threadId?: string;
+  replyToId?: string;
+  allowImplicitThread: boolean;
+  threadSuppressed: boolean;
+  options?: {
+    config?: OpenClawConfig;
+    currentChannelId?: string;
+    currentMessagingTarget?: string;
+    currentThreadId?: string;
+    currentMessageId?: string | number;
+    replyToMode?: "off" | "first" | "all" | "batched";
+    hasRepliedRef?: { value: boolean };
+  };
+}): Pick<MessagingToolSend, "threadId" | "threadImplicit" | "threadSuppressed"> {
+  const threading = getChannelPlugin(params.providerId)?.threading;
+  const autoThreadResolver = params.allowImplicitThread
+    ? threading?.resolveAutoThreadId
+    : undefined;
+  const replyTransport = params.replyToId
+    ? threading?.resolveReplyTransport?.({
+        cfg: params.options?.config ?? {},
+        accountId: params.accountId,
+        threadId: params.threadId,
+        replyToId: params.replyToId,
+      })
+    : undefined;
+  const transportThreadId = normalizeOptionalStringifiedId(replyTransport?.threadId);
+  const replyToThreadId =
+    replyTransport?.threadId === null
+      ? normalizeOptionalString(replyTransport.replyToId)
+      : undefined;
+  const explicitThreadId = transportThreadId ?? replyToThreadId ?? params.threadId;
+  const currentChannelId = normalizeOptionalString(params.options?.currentChannelId);
+  const currentMessagingTarget = normalizeOptionalString(params.options?.currentMessagingTarget);
+  const currentThreadId = normalizeOptionalString(params.options?.currentThreadId);
+  const replyToMode = params.options?.replyToMode ?? (currentThreadId ? "all" : undefined);
+  const canResolveCurrentThread = Boolean(
+    (currentChannelId || currentMessagingTarget) && currentThreadId,
+  );
+  const resolvedCurrentThreadId =
+    !explicitThreadId && !params.threadSuppressed && autoThreadResolver && canResolveCurrentThread
+      ? autoThreadResolver({
+          cfg: params.options?.config ?? {},
+          accountId: params.accountId,
+          to: params.to,
+          replyToId: params.replyToId,
+          toolContext: {
+            currentChannelId,
+            currentMessagingTarget,
+            currentThreadTs: currentThreadId,
+            currentMessageId: params.options?.currentMessageId,
+            replyToMode,
+            hasRepliedRef: params.options?.hasRepliedRef,
+          },
+        })
+      : undefined;
+  const threadImplicit =
+    !explicitThreadId &&
+    !params.threadSuppressed &&
+    Boolean(autoThreadResolver) &&
+    (!canResolveCurrentThread || Boolean(resolvedCurrentThreadId));
+  return {
+    ...((explicitThreadId ?? resolvedCurrentThreadId)
+      ? { threadId: explicitThreadId ?? resolvedCurrentThreadId }
+      : {}),
+    ...(threadImplicit ? { threadImplicit: true } : {}),
+    ...(params.threadSuppressed ? { threadSuppressed: true } : {}),
+  };
 }
 
 export function extractMessagingToolSend(
   toolName: string,
   args: Record<string, unknown>,
+  options?: {
+    config?: OpenClawConfig;
+    currentChannelId?: string;
+    currentMessagingTarget?: string;
+    currentThreadId?: string;
+    currentMessageId?: string | number;
+    replyToMode?: "off" | "first" | "all" | "batched";
+    hasRepliedRef?: { value: boolean };
+  },
 ): MessagingToolSend | undefined {
   // Provider docking: new provider tools must implement plugin.actions.extractToolSend.
   const action = normalizeOptionalString(args.action) ?? "";
   const accountId = normalizeOptionalString(args.accountId);
   if (toolName === "message") {
-    if (!isMessageToolSendActionName(action)) {
-      return undefined;
-    }
-    const toRaw = resolveMessageToolTarget(args);
-    if (!toRaw) {
+    if (!isMessagingToolTargetEvidenceAction(toolName, args)) {
       return undefined;
     }
     const providerRaw = normalizeOptionalString(args.provider) ?? "";
     const channelRaw = normalizeOptionalString(args.channel) ?? "";
     const providerHint = providerRaw || channelRaw;
     const providerId = providerHint ? normalizeChannelId(providerHint) : null;
+    const toRaw = resolveMessageToolTarget({
+      action,
+      args,
+      providerId,
+      currentChannelId: options?.currentChannelId,
+      currentMessagingTarget: options?.currentMessagingTarget,
+    });
+    if (!toRaw) {
+      return undefined;
+    }
     const provider = providerId ?? normalizeOptionalLowercaseString(providerHint) ?? "message";
     const to = normalizeTargetForProvider(provider, toRaw);
-    const threadId = normalizeOptionalString(args.threadId);
-    const threadSuppressed = args.topLevel === true || args.threadId === null;
-    const threadImplicit =
-      !threadId &&
-      !threadSuppressed &&
-      Boolean(providerId && getChannelPlugin(providerId)?.threading?.resolveAutoThreadId);
+    const pluginExtractionArgs = { ...args, to: toRaw };
+    const pluginExtracted = providerId
+      ? getChannelPlugin(providerId)?.actions?.extractToolSend?.({ args: pluginExtractionArgs })
+      : null;
+    const resolvedAccountId = normalizeOptionalString(pluginExtracted?.accountId) ?? accountId;
+    const threadId =
+      normalizeOptionalString(pluginExtracted?.threadId) ?? normalizeOptionalString(args.threadId);
+    const replyToId = normalizeOptionalString(args.replyTo);
+    // Normal sends use prepared core delivery, where provider transport owns
+    // reply/thread precedence. Other send-like actions use plugin dispatch.
+    const outboundReplyToId = action === "send" ? replyToId : undefined;
+    const threadSuppressed =
+      pluginExtracted?.threadSuppressed === true ||
+      args.topLevel === true ||
+      args.threadId === null;
     return to
       ? {
           tool: toolName,
           provider,
-          accountId,
+          accountId: resolvedAccountId,
           to,
-          ...(threadId ? { threadId } : {}),
-          ...(threadImplicit ? { threadImplicit: true } : {}),
-          ...(threadSuppressed ? { threadSuppressed: true } : {}),
+          ...(providerId
+            ? resolveMessagingToolThreadEvidence({
+                providerId,
+                to,
+                accountId: resolvedAccountId,
+                threadId,
+                replyToId: outboundReplyToId,
+                allowImplicitThread: pluginExtracted
+                  ? pluginExtracted.threadImplicit === true
+                  : true,
+                threadSuppressed,
+                options,
+              })
+            : {
+                ...(threadId ? { threadId } : {}),
+                ...(threadSuppressed ? { threadSuppressed: true } : {}),
+              }),
         }
       : undefined;
   }
+
   const providerId = normalizeChannelId(toolName);
   if (!providerId) {
     return undefined;
@@ -692,13 +1050,69 @@ export function extractMessagingToolSend(
   }
   const to = normalizeTargetForProvider(providerId, extracted.to);
   const threadId = normalizeOptionalString(extracted.threadId);
+  const threadSuppressed = extracted.threadSuppressed === true;
+  const extractedAccountId = normalizeOptionalString(extracted.accountId) ?? accountId;
+  const nativeReplyToMode = options?.replyToMode;
+  const nativeSingleUseMode = nativeReplyToMode === "first" || nativeReplyToMode === "batched";
+  const canResolveNativeImplicitThread =
+    extracted.threadImplicit === true &&
+    nativeReplyToMode !== undefined &&
+    (!nativeSingleUseMode || options?.hasRepliedRef !== undefined);
   return to
     ? {
         tool: toolName,
         provider: providerId,
-        accountId: extracted.accountId ?? accountId,
+        accountId: extractedAccountId,
         to,
-        ...(threadId ? { threadId } : {}),
+        ...resolveMessagingToolThreadEvidence({
+          providerId,
+          to,
+          accountId: extractedAccountId,
+          threadId,
+          allowImplicitThread: canResolveNativeImplicitThread,
+          threadSuppressed,
+          options,
+        }),
       }
     : undefined;
+}
+
+/** Reconciles pending send evidence with the provider's successful action result. */
+export function extractMessagingToolSendResult(
+  pending: MessagingToolSend,
+  result: unknown,
+): MessagingToolSend {
+  const providerId = normalizeChannelId(pending.provider);
+  const extracted = providerId
+    ? getChannelPlugin(providerId)?.actions?.extractToolSendResult?.({
+        result,
+        send: {
+          to: pending.to ?? "",
+          accountId: pending.accountId,
+          threadId: pending.threadId,
+          threadImplicit: pending.threadImplicit,
+          threadSuppressed: pending.threadSuppressed,
+        },
+      })
+    : null;
+  if (!extracted?.to) {
+    return pending;
+  }
+  const extractedThreadId = normalizeOptionalString(extracted.threadId);
+  const providerReportedThread =
+    extractedThreadId != null ||
+    extracted.threadImplicit === true ||
+    extracted.threadSuppressed === true;
+  // Thread route fields are one state. Mixing provider and pending values can
+  // create contradictory implicit and suppressed evidence.
+  const threadEvidence = providerReportedThread ? extracted : pending;
+  return {
+    ...pending,
+    ...extracted,
+    accountId: normalizeOptionalString(extracted.accountId) ?? pending.accountId,
+    to: normalizeTargetForProvider(providerId ?? pending.provider, extracted.to),
+    threadId: normalizeOptionalString(threadEvidence.threadId),
+    threadImplicit: threadEvidence.threadImplicit === true ? true : undefined,
+    threadSuppressed: threadEvidence.threadSuppressed === true ? true : undefined,
+  };
 }

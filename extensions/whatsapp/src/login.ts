@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements login behavior.
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { logInfo } from "openclaw/plugin-sdk/logging-core";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
@@ -26,7 +27,7 @@ export async function loginWeb(
       .then((output) => {
         runtime.log(output.endsWith("\n") ? output.slice(0, -1) : output);
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         runtime.error(`failed rendering WhatsApp QR: ${String(err)}`);
       });
   };

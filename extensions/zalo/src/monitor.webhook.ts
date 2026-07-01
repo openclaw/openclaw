@@ -1,3 +1,4 @@
+// Zalo plugin module implements monitor.webhook behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
@@ -266,7 +267,7 @@ export async function handleZaloWebhookRequest(
         update,
         processUpdate,
         nowMs,
-      }).catch((err) => {
+      }).catch((err: unknown) => {
         target.runtime.error?.(`[${target.account.accountId}] Zalo webhook failed: ${String(err)}`);
       });
 

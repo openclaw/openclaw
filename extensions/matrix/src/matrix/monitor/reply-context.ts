@@ -1,3 +1,5 @@
+// Matrix plugin module implements reply context behavior.
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { MatrixClient } from "../sdk.js";
 import { summarizeMatrixMessageContextEvent, trimMatrixMaybeString } from "./context-summary.js";
 import type { MatrixRawEvent } from "./types.js";
@@ -15,7 +17,7 @@ function truncateReplyBody(value: string): string {
   if (value.length <= MAX_REPLY_BODY_LENGTH) {
     return value;
   }
-  return `${value.slice(0, MAX_REPLY_BODY_LENGTH - 3)}...`;
+  return `${sliceUtf16Safe(value, 0, MAX_REPLY_BODY_LENGTH - 3)}...`;
 }
 
 export function summarizeMatrixReplyEvent(event: MatrixRawEvent): string | undefined {
@@ -56,12 +58,14 @@ export function createMatrixReplyContextResolver(params: {
       return cached;
     }
 
-    const event = await params.client.getEvent(input.roomId, input.eventId).catch((err) => {
-      params.logVerboseMessage(
-        `matrix: failed resolving reply context room=${input.roomId} id=${input.eventId}: ${String(err)}`,
-      );
-      return null;
-    });
+    const event = await params.client
+      .getEvent(input.roomId, input.eventId)
+      .catch((err: unknown) => {
+        params.logVerboseMessage(
+          `matrix: failed resolving reply context room=${input.roomId} id=${input.eventId}: ${String(err)}`,
+        );
+        return null;
+      });
     if (!event) {
       // Do not cache failures so transient errors can be retried on the next
       // message that references the same event.

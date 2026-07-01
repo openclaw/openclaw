@@ -1,6 +1,12 @@
+// Slack plugin module implements messages behavior.
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import {
+  createSubsystemLogger,
+  danger,
+  logVerbose,
+  shouldLogVerbose,
+} from "openclaw/plugin-sdk/runtime-env";
 import {
   asOptionalRecord as asRecord,
   normalizeOptionalString as asString,
@@ -13,6 +19,22 @@ import type { SlackMessageHandler } from "../message-handler.js";
 import type { SlackMessageChangedEvent } from "../types.js";
 import { resolveSlackMessageSubtypeHandler } from "./message-subtype-handlers.js";
 import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
+
+// Mirrors the Telegram `[telegram]` inbound logger so cross-channel journal-grep
+// workflows are uniform; the `gateway/channels/slack` subsystem renders as `[slack]`.
+const slackInboundLog = createSubsystemLogger("gateway/channels/slack").child("inbound");
+
+export function formatSlackInboundLogLine(params: {
+  workspaceId: string;
+  channelId: string;
+  channelType: string;
+  userId: string;
+  botUserId: string;
+  bodyChars: number;
+}): string {
+  const from = `slack:${params.workspaceId}:channel:${params.channelId}:user:${params.userId}`;
+  return `Inbound app_mention ${from} -> bot:${params.botUserId} (${params.channelType}, ${params.bodyChars} chars)`;
+}
 
 type SlackAssistantMessageRecord = {
   bot_id?: unknown;
@@ -215,6 +237,21 @@ export function registerSlackMessageEvents(params: {
       if (channelType === "im" || channelType === "mpim") {
         return;
       }
+
+      // Emit a per-inbound receipt before dispatch so a silently-dropped mention
+      // (e.g. router consumes it without a tool call) still leaves journal evidence,
+      // matching the Telegram inbound log. Runs after the DM drop above, so duplicate
+      // DM app_mention events (already handled via message.im) produce no line.
+      slackInboundLog.info(
+        formatSlackInboundLogLine({
+          workspaceId: ctx.teamId,
+          channelId: mention.channel,
+          channelType: channelType ?? "channel",
+          userId: asString(mention.user) ?? "unknown",
+          botUserId: ctx.botUserId,
+          bodyChars: asString(mention.text)?.length ?? 0,
+        }),
+      );
 
       await handleSlackMessage(mention as unknown as SlackMessageEvent, {
         source: "app_mention",

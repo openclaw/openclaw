@@ -1,4 +1,5 @@
-import { isPositionalSeg, resolvePositionalSeg } from "../oc-path.js";
+// OC Path module implements resolve value behavior.
+import { isPositionalSeg, parseArrayIndexSegment, resolvePositionalSeg } from "../oc-path.js";
 import type { JsoncEntry, JsoncValue } from "./ast.js";
 
 export type JsoncValueOcPathMatch =
@@ -38,8 +39,8 @@ export function resolveJsoncValueOcPath(
       continue;
     }
     if (current.kind === "array") {
-      const idx = Number(seg);
-      if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) {
+      const idx = parseArrayIndexSegment(seg, current.items.length);
+      if (idx === null) {
         return null;
       }
       lastEntry = null;

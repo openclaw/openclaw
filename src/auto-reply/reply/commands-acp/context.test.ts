@@ -1,3 +1,4 @@
+// Tests ACP context command output and session metadata handling.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
@@ -12,11 +13,7 @@ import {
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
 import { buildCommandTestParams } from "../commands-spawn.test-harness.js";
-import {
-  resolveAcpCommandBindingContext,
-  resolveAcpCommandConversationId,
-  resolveAcpCommandParentConversationId,
-} from "./context.js";
+import { resolveAcpCommandBindingContext, resolveAcpCommandConversationId } from "./context.js";
 
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
@@ -662,7 +659,6 @@ describe("commands-acp context", () => {
       parentConversationId: "!room:example.org",
     });
     expect(resolveAcpCommandConversationId(params)).toBe("$thread-root");
-    expect(resolveAcpCommandParentConversationId(params)).toBe("!room:example.org");
   });
 
   it("resolves iMessage DM conversation ids from current targets", () => {
@@ -700,24 +696,6 @@ describe("commands-acp context", () => {
       parentConversationId: undefined,
     });
     expect(resolveAcpCommandConversationId(params)).toBe("iMessage;+;chat123");
-  });
-
-  it("resolves iMessage DM conversation ids from current targets", () => {
-    const params = buildCommandTestParams("/acp status", baseCfg, {
-      Provider: "imessage",
-      Surface: "imessage",
-      OriginatingChannel: "imessage",
-      OriginatingTo: "imessage:+15555550123",
-    });
-
-    expect(resolveAcpCommandBindingContext(params)).toEqual({
-      channel: "imessage",
-      accountId: "default",
-      threadId: undefined,
-      conversationId: "+15555550123",
-      parentConversationId: undefined,
-    });
-    expect(resolveAcpCommandConversationId(params)).toBe("+15555550123");
   });
 
   it("resolves iMessage group conversation ids from chat_id targets", () => {
@@ -891,7 +869,6 @@ describe("commands-acp context", () => {
       AccountId: "work",
     });
 
-    expect(resolveAcpCommandParentConversationId(params)).toBeUndefined();
     expect(resolveAcpCommandBindingContext(params)).toEqual({
       channel: "feishu",
       accountId: "work",

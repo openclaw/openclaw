@@ -337,9 +337,9 @@ candidate contains redacted secret placeholders such as `***`.
   </Accordion>
 
   <Accordion title="Enable relay-backed push for official iOS builds">
-    Relay-backed push is configured in `openclaw.json`.
+    Relay-backed push for public App Store/TestFlight builds uses the hosted OpenClaw relay: `https://ios-push-relay.openclaw.ai`.
 
-    Set this in gateway config:
+    Custom relay deployments require a deliberately separate iOS build/deployment path whose relay URL matches the gateway relay URL. If you are using a custom relay build, set this in gateway config:
 
     ```json5
     {
@@ -369,12 +369,12 @@ candidate contains redacted secret placeholders such as `***`.
     - Uses a registration-scoped send grant forwarded by the paired iOS app. The gateway does not need a deployment-wide relay token.
     - Binds each relay-backed registration to the gateway identity that the iOS app paired with, so another gateway cannot reuse the stored registration.
     - Keeps local/manual iOS builds on direct APNs. Relay-backed sends apply only to official distributed builds that registered through the relay.
-    - Must match the relay base URL baked into the official/TestFlight iOS build, so registration and send traffic reach the same relay deployment.
+    - Must match the relay base URL baked into the iOS build, so registration and send traffic reach the same relay deployment.
 
     End-to-end flow:
 
-    1. Install an official/TestFlight iOS build that was compiled with the same relay base URL.
-    2. Configure `gateway.push.apns.relay.baseUrl` on the gateway.
+    1. Install an official/TestFlight iOS build.
+    2. Optional: configure `gateway.push.apns.relay.baseUrl` on the gateway only when using a deliberately separate custom relay build.
     3. Pair the iOS app to the gateway and let both node and operator sessions connect.
     4. The iOS app fetches the gateway identity, registers with the relay using App Attest plus the app receipt, and then publishes the relay-backed `push.apns.register` payload to the paired gateway.
     5. The gateway stores the relay handle and send grant, then uses them for `push.test`, wake nudges, and reconnect wakes.
@@ -387,6 +387,7 @@ candidate contains redacted secret placeholders such as `***`.
     Compatibility note:
 
     - `OPENCLAW_APNS_RELAY_BASE_URL` and `OPENCLAW_APNS_RELAY_TIMEOUT_MS` still work as temporary env overrides.
+    - Custom gateway relay URLs must match the relay base URL baked into the iOS build. The public App Store release lane rejects custom iOS relay URL overrides.
     - `OPENCLAW_APNS_RELAY_ALLOW_HTTP=true` remains a loopback-only development escape hatch; do not persist HTTP relay URLs in config.
 
     See [iOS App](/platforms/ios#relay-backed-push-for-official-builds) for the end-to-end flow and [Authentication and trust flow](/platforms/ios#authentication-and-trust-flow) for the relay security model.
@@ -430,7 +431,7 @@ candidate contains redacted secret placeholders such as `***`.
     ```
 
     - `sessionRetention`: prune completed isolated run sessions from `sessions.json` (default `24h`; set `false` to disable).
-    - `runLog`: prune `cron/runs/<jobId>.jsonl` by size and retained lines.
+    - `runLog`: prune retained cron run-history rows per job. `maxBytes` remains accepted for older file-backed run logs.
     - See [Cron jobs](/automation/cron-jobs) for feature overview and CLI examples.
 
   </Accordion>
@@ -600,7 +601,8 @@ For tooling that writes config over the gateway API, prefer this flow:
   summaries)
 - `config.get` to fetch the current snapshot plus `hash`
 - `config.patch` for partial updates (JSON merge patch: objects merge, `null`
-  deletes, arrays replace)
+  deletes, arrays replace when explicitly confirmed with `replacePaths` if
+  entries would be removed)
 - `config.apply` only when you intend to replace the entire config
 - `update.run` for explicit self-update plus restart; include `continuationMessage` when the post-restart session should run one follow-up turn
 - `update.status` to inspect the latest update restart sentinel and verify the running version after a restart
@@ -631,6 +633,14 @@ openclaw gateway call config.patch --params '{
 Both `config.apply` and `config.patch` accept `raw`, `baseHash`, `sessionKey`,
 `note`, and `restartDelayMs`. `baseHash` is required for both methods when a
 config already exists.
+
+`config.patch` also accepts `replacePaths`, an array of config paths whose array
+replacement is intentional. If a patch would replace or delete an existing array
+with fewer entries, the Gateway rejects the write unless that exact path appears
+in `replacePaths`; nested arrays under array entries use `[]`, such as
+`agents.list[].skills`. This prevents truncated `config.get` snapshots from
+silently clobbering routing or allowlist arrays. Use `config.apply` when you
+intend to replace the full config.
 
 ## Environment variables
 

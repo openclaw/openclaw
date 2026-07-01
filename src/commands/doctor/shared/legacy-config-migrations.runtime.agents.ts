@@ -1,4 +1,10 @@
-import { normalizeProviderId } from "../../../agents/provider-id.js";
+// Legacy runtime agent config migrations for memory, heartbeat, sandbox, and runtime policy keys.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  isCanonicalToolProviderPolicyKey,
+  normalizeToolProviderPolicyKey,
+} from "../../../agents/provider-tool-policy.js";
 import { isKnownCoreToolId } from "../../../agents/tool-catalog.js";
 import { isToolAllowedByPolicyName } from "../../../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../../../agents/tool-policy-shared.js";
@@ -11,8 +17,7 @@ import {
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
-import { isBlockedObjectKey } from "../../../config/prototype-keys.js";
-import { uniqueStrings } from "../../../shared/string-normalization.js";
+import { isBlockedObjectKey } from "../../../infra/prototype-keys.js";
 import { listLegacyRuntimeModelProviderAliases } from "./legacy-runtime-model-providers.js";
 
 const AGENT_HEARTBEAT_KEYS = new Set([
@@ -63,6 +68,25 @@ const LEGACY_MEMORY_SEARCH_AUTO_PROVIDER_RULES: LegacyConfigRule[] = [
     message:
       'agents.list[].memorySearch.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
     match: hasAgentListLegacyMemorySearchAutoProvider,
+  },
+];
+
+const LEGACY_MEMORY_SEARCH_STORE_PATH_RULES: LegacyConfigRule[] = [
+  {
+    path: ["memorySearch", "store", "path"],
+    message:
+      'memorySearch.store.path is legacy; memory indexes now live in each agent database. Run "openclaw doctor --fix".',
+  },
+  {
+    path: ["agents", "defaults", "memorySearch", "store", "path"],
+    message:
+      'agents.defaults.memorySearch.store.path is legacy; memory indexes now live in each agent database. Run "openclaw doctor --fix".',
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'agents.list[].memorySearch.store.path is legacy; memory indexes now live in each agent database. Run "openclaw doctor --fix".',
+    match: hasAgentListMemorySearchStorePath,
   },
 ];
 
@@ -207,7 +231,7 @@ const SILENT_REPLY_LEGACY_RULES: LegacyConfigRule[] = [
     path: ["agents", "defaults", "silentReply"],
     message:
       'agents.defaults.silentReply.direct was removed; direct chats never receive NO_REPLY prompt guidance. Run "openclaw doctor --fix" to remove it.',
-    match: (value) => Object.prototype.hasOwnProperty.call(getRecord(value) ?? {}, "direct"),
+    match: (value) => Object.hasOwn(getRecord(value) ?? {}, "direct"),
   },
   {
     path: ["surfaces"],
@@ -297,7 +321,7 @@ function mergeLegacyIntoDefaults(params: {
 
 function hasLegacySandboxPerSession(value: unknown): boolean {
   const sandbox = getRecord(value);
-  return Boolean(sandbox && Object.prototype.hasOwnProperty.call(sandbox, "perSession"));
+  return Boolean(sandbox && Object.hasOwn(sandbox, "perSession"));
 }
 
 function hasLegacyAgentListSandboxPerSession(value: unknown): boolean {
@@ -332,14 +356,12 @@ function hasAgentListSystemPromptOverride(value: unknown): boolean {
   if (!Array.isArray(value)) {
     return false;
   }
-  return value.some((agent) =>
-    Object.prototype.hasOwnProperty.call(getRecord(agent) ?? {}, "systemPromptOverride"),
-  );
+  return value.some((agent) => Object.hasOwn(getRecord(agent) ?? {}, "systemPromptOverride"));
 }
 
 function hasOwnTimeoutMs(value: unknown): boolean {
   const record = getRecord(value);
-  return Boolean(record && Object.prototype.hasOwnProperty.call(record, "timeoutMs"));
+  return Boolean(record && Object.hasOwn(record, "timeoutMs"));
 }
 
 function hasAgentListModelTimeout(value: unknown): boolean {
@@ -392,6 +414,30 @@ function hasAgentListLegacyMemorySearchAutoProvider(value: unknown): boolean {
   );
 }
 
+function hasMemorySearchStorePath(value: unknown): boolean {
+  return typeof getRecord(getRecord(value)?.store)?.path === "string";
+}
+
+function hasAgentListMemorySearchStorePath(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.some((agent) => hasMemorySearchStorePath(getRecord(agent)?.memorySearch))
+  );
+}
+
+function removeLegacyMemorySearchStorePath(
+  memorySearch: Record<string, unknown> | null,
+  pathLabel: string,
+  changes: string[],
+): void {
+  const store = getRecord(memorySearch?.store);
+  if (!store || typeof store.path !== "string") {
+    return;
+  }
+  delete store.path;
+  changes.push(`Removed ${pathLabel}.store.path; memory indexes now use each agent database.`);
+}
+
 function rewriteLegacyMemorySearchAutoProvider(
   memorySearch: Record<string, unknown> | null,
   pathLabel: string,
@@ -409,7 +455,7 @@ function migrateLegacySandboxPerSession(
   pathLabel: string,
   changes: string[],
 ): void {
-  if (!Object.prototype.hasOwnProperty.call(sandbox, "perSession")) {
+  if (!Object.hasOwn(sandbox, "perSession")) {
     return;
   }
   const rawPerSession = sandbox.perSession;
@@ -551,7 +597,7 @@ function removeIgnoredAgentModelTimeout(
   changes: string[],
 ): void {
   const modelRecord = getRecord(model);
-  if (!modelRecord || !Object.prototype.hasOwnProperty.call(modelRecord, "timeoutMs")) {
+  if (!modelRecord || !Object.hasOwn(modelRecord, "timeoutMs")) {
     return;
   }
   delete modelRecord.timeoutMs;
@@ -560,7 +606,7 @@ function removeIgnoredAgentModelTimeout(
 
 function hasOwnRecordProperty(value: unknown, key: string): boolean {
   const record = getRecord(value);
-  return Boolean(record && Object.prototype.hasOwnProperty.call(record, key));
+  return Boolean(record && Object.hasOwn(record, key));
 }
 
 function hasSurfaceSilentReplyRewrite(value: unknown): boolean {
@@ -580,17 +626,14 @@ function hasSurfaceSilentReplyDirect(value: unknown): boolean {
     return false;
   }
   return Object.values(surfaces).some((surface) =>
-    Object.prototype.hasOwnProperty.call(
-      getRecord(getRecord(surface)?.silentReply) ?? {},
-      "direct",
-    ),
+    Object.hasOwn(getRecord(getRecord(surface)?.silentReply) ?? {}, "direct"),
   );
 }
 
 function removeLegacySilentReplyConfig(raw: Record<string, unknown>, changes: string[]): void {
   const defaults = getRecord(getRecord(raw.agents)?.defaults);
   const defaultSilentReply = getRecord(defaults?.silentReply);
-  if (defaultSilentReply && Object.prototype.hasOwnProperty.call(defaultSilentReply, "direct")) {
+  if (defaultSilentReply && Object.hasOwn(defaultSilentReply, "direct")) {
     delete defaultSilentReply.direct;
     changes.push("Removed agents.defaults.silentReply.direct; direct chats never use NO_REPLY.");
   }
@@ -612,7 +655,7 @@ function removeLegacySilentReplyConfig(raw: Record<string, unknown>, changes: st
       continue;
     }
     const silentReply = getRecord(surface.silentReply);
-    if (silentReply && Object.prototype.hasOwnProperty.call(silentReply, "direct")) {
+    if (silentReply && Object.hasOwn(silentReply, "direct")) {
       delete silentReply.direct;
       changes.push(
         `Removed surfaces.${surfaceId}.silentReply.direct; direct chats never use NO_REPLY.`,
@@ -628,7 +671,7 @@ function removeLegacySilentReplyConfig(raw: Record<string, unknown>, changes: st
 function removeLegacySystemPromptOverride(raw: Record<string, unknown>, changes: string[]): void {
   const agents = getRecord(raw.agents);
   const defaults = getRecord(agents?.defaults);
-  if (defaults && Object.prototype.hasOwnProperty.call(defaults, "systemPromptOverride")) {
+  if (defaults && Object.hasOwn(defaults, "systemPromptOverride")) {
     delete defaults.systemPromptOverride;
     changes.push("Removed agents.defaults.systemPromptOverride.");
   }
@@ -638,10 +681,7 @@ function removeLegacySystemPromptOverride(raw: Record<string, unknown>, changes:
   }
   for (const [index, agent] of agents.list.entries()) {
     const agentRecord = getRecord(agent);
-    if (
-      !agentRecord ||
-      !Object.prototype.hasOwnProperty.call(agentRecord, "systemPromptOverride")
-    ) {
+    if (!agentRecord || !Object.hasOwn(agentRecord, "systemPromptOverride")) {
       continue;
     }
     delete agentRecord.systemPromptOverride;
@@ -992,21 +1032,6 @@ function addHandledProviderPolicyKey(handledProviders: Set<string>, providerKey:
   handledProviders.add(normalizeToolProviderPolicyKey(providerKey));
 }
 
-function normalizeToolProviderPolicyKey(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  const slashIndex = normalized.indexOf("/");
-  if (slashIndex <= 0) {
-    return normalizeProviderId(normalized);
-  }
-  const provider = normalizeProviderId(normalized.slice(0, slashIndex));
-  const modelId = normalized.slice(slashIndex + 1);
-  return modelId ? `${provider}/${modelId}` : provider;
-}
-
-function isCanonicalToolProviderPolicyKey(value: string): boolean {
-  return value.trim().toLowerCase() === normalizeToolProviderPolicyKey(value);
-}
-
 function buildInheritedProviderPolicyLookup(
   inheritedByProvider: Record<string, unknown> | null | undefined,
 ): Map<
@@ -1144,6 +1169,7 @@ function addProfileConfiguredSectionGrantsWithConfiguredGrants(
   }
 }
 
+/** Legacy config migration specs for agent/runtime-owned config keys. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "tools.profile-configured-sections-alsoAllow",
@@ -1363,6 +1389,32 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
         rewriteLegacyMemorySearchAutoProvider(
           getRecord(getRecord(agent)?.memorySearch),
           `agents.list.${index}.memorySearch`,
+          changes,
+        );
+      }
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "memorySearch.store.path->agent-database",
+    describe: "Remove legacy memory search sidecar index paths",
+    legacyRules: LEGACY_MEMORY_SEARCH_STORE_PATH_RULES,
+    apply: (raw, changes) => {
+      removeLegacyMemorySearchStorePath(getRecord(raw.memorySearch), "memorySearch", changes);
+
+      const agents = getRecord(raw.agents);
+      removeLegacyMemorySearchStorePath(
+        getRecord(getRecord(agents?.defaults)?.memorySearch),
+        "agents.defaults.memorySearch",
+        changes,
+      );
+
+      if (!Array.isArray(agents?.list)) {
+        return;
+      }
+      for (const [index, agent] of agents.list.entries()) {
+        removeLegacyMemorySearchStorePath(
+          getRecord(getRecord(agent)?.memorySearch),
+          `agents.list[${index}].memorySearch`,
           changes,
         );
       }

@@ -1,3 +1,4 @@
+// Schedule identity tests cover stable identity derivation for cron schedules.
 import { describe, expect, it } from "vitest";
 import { cronSchedulingInputsEqual, tryCronScheduleIdentity } from "./schedule-identity.js";
 
@@ -13,16 +14,14 @@ describe("tryCronScheduleIdentity", () => {
     });
 
     expect(stringNumeric).toBe(numeric);
+    const stringNumericInput = {
+      schedule: { kind: "every", everyMs: "60000", anchorMs: "123" },
+    } as unknown as Parameters<typeof cronSchedulingInputsEqual>[1];
+
     expect(
       cronSchedulingInputsEqual(
         { schedule: { kind: "every", everyMs: 60_000, anchorMs: 123 } },
-        {
-          schedule: {
-            kind: "every",
-            everyMs: "60000" as unknown as number,
-            anchorMs: "123" as unknown as number,
-          },
-        },
+        stringNumericInput,
       ),
     ).toBe(true);
   });

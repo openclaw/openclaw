@@ -1,3 +1,9 @@
+/**
+ * Tool display metadata registry.
+ *
+ * Agent UIs use this config to map tool names/actions to stable titles,
+ * icons, and detail keys without embedding presentation data in tool handlers.
+ */
 import type { ToolDisplaySpec as ToolDisplaySpecBase } from "./tool-display-common.js";
 
 type ToolDisplaySpec = ToolDisplaySpecBase & {
@@ -10,6 +16,7 @@ type ToolDisplayConfig = {
   tools: Record<string, ToolDisplaySpec>;
 };
 
+/** Static display metadata for known tools plus fallback detail-key selection. */
 export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
   version: 1,
   fallback: {
@@ -66,6 +73,11 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       emoji: "📎",
       title: "Attach",
       detailKeys: ["path", "url", "fileName"],
+    },
+    api: {
+      emoji: "🌐",
+      title: "API",
+      detailKeys: ["url", "endpoint", "path", "method", "name"],
     },
     browser: {
       emoji: "🌐",
@@ -211,6 +223,10 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
           label: "screen record",
           detailKeys: ["node", "nodeId", "duration", "durationMs", "fps", "screenIndex"],
         },
+        screen_snapshot: {
+          label: "screen snapshot",
+          detailKeys: ["node", "nodeId", "screenIndex", "maxWidth"],
+        },
       },
     },
     cron: {
@@ -249,10 +265,30 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         },
       },
     },
+    get_goal: {
+      emoji: "🎯",
+      title: "Get Goal",
+      detailKeys: [],
+    },
+    create_goal: {
+      emoji: "🎯",
+      title: "Create Goal",
+      detailKeys: ["objective", "token_budget"],
+    },
+    update_goal: {
+      emoji: "🎯",
+      title: "Update Goal",
+      detailKeys: ["status"],
+    },
     update_plan: {
       emoji: "🗺️",
       title: "Update Plan",
       detailKeys: ["explanation", "plan.0.step"],
+    },
+    skill_workshop: {
+      emoji: "🧰",
+      title: "Skill Workshop",
+      detailKeys: ["action", "name", "proposal_id"],
     },
     gateway: {
       emoji: "🔌",

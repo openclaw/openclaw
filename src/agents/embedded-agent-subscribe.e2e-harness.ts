@@ -1,3 +1,6 @@
+/**
+ * E2E harness helpers for subscribed embedded-agent event streams.
+ */
 import { expect } from "vitest";
 import type { AssistantMessage } from "../llm/types.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
@@ -14,6 +17,7 @@ export const THINKING_TAG_CASES = [
   { tag: "thought", open: "<thought>", close: "</thought>" },
   { tag: "antthinking", open: "<antthinking>", close: "</antthinking>" },
   { tag: "antml:thinking", open: "<antml:thinking>", close: "</antml:thinking>" },
+  { tag: "mm:think", open: "<mm:think>", close: "</mm:think>" },
 ] as const;
 
 export function createStubSessionHarness(): {

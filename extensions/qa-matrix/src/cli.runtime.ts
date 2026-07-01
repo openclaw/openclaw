@@ -1,7 +1,9 @@
+// Qa Matrix plugin module implements cli behavior.
 import {
   printLiveTransportQaArtifacts,
   startLiveTransportQaOutputTee,
 } from "openclaw/plugin-sdk/qa-runtime";
+import { ensureRepoBoundDirectory } from "./cli-paths.js";
 import { runMatrixQaLive } from "./runners/contract/runtime.js";
 import type { LiveTransportQaCommandOptions } from "./shared/live-transport-cli.js";
 import { resolveLiveTransportQaRunOptions } from "./shared/live-transport-cli.runtime.js";
@@ -56,12 +58,18 @@ export async function runQaMatrixCommand(opts: LiveTransportQaCommandOptions) {
     );
   }
 
-  const outputTee = await createMatrixQaCommandOutputTee(runOptions.outputDir);
+  const outputDir = await ensureRepoBoundDirectory(
+    runOptions.repoRoot,
+    runOptions.outputDir,
+    "Matrix QA output dir",
+  );
+  const checkedRunOptions = { ...runOptions, outputDir };
+  const outputTee = await createMatrixQaCommandOutputTee(checkedRunOptions.outputDir);
   let primaryError: unknown;
   let outputTeeError: unknown;
   try {
     process.stdout.write(`Matrix QA output: ${outputTee.outputPath}\n`);
-    const result = await runMatrixQaLive(runOptions);
+    const result = await runMatrixQaLive(checkedRunOptions);
     printLiveTransportQaArtifacts("Matrix QA", {
       report: result.reportPath,
       summary: result.summaryPath,
@@ -83,9 +91,23 @@ export async function runQaMatrixCommand(opts: LiveTransportQaCommandOptions) {
         `Matrix QA output log error: ${formatMatrixQaOutputTeeError(outputTeeError)}\n`,
       );
     }
-    throw primaryError;
+    throw toLintErrorObject(primaryError, "Non-Error thrown");
   }
   if (outputTeeError) {
-    throw outputTeeError;
+    throw toLintErrorObject(outputTeeError, "Non-Error thrown");
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

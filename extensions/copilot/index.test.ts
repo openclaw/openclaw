@@ -1,3 +1,4 @@
+// Copilot tests cover index plugin behavior.
 import fs from "node:fs";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
@@ -21,6 +22,12 @@ function loadManifest(): Record<string, unknown> {
 
 function registerWithPluginConfig(pluginConfig: Record<string, unknown> | undefined) {
   const registerAgentHarness = vi.fn();
+  const sessionStore = {
+    register: vi.fn(),
+    lookup: vi.fn(),
+    delete: vi.fn(),
+  };
+  const openSyncKeyedStore = vi.fn(() => sessionStore);
   plugin.register(
     createTestPluginApi({
       id: "copilot",
@@ -28,7 +35,7 @@ function registerWithPluginConfig(pluginConfig: Record<string, unknown> | undefi
       source: "test",
       config: {},
       pluginConfig,
-      runtime: {} as never,
+      runtime: { state: { openSyncKeyedStore } } as never,
       registerAgentHarness,
     }),
   );
@@ -41,7 +48,7 @@ function registerWithPluginConfig(pluginConfig: Record<string, unknown> | undefi
       requestedRuntime?: string;
     }): { supported: true; priority?: number } | { supported: false; reason?: string };
   };
-  return { registerAgentHarness, harness };
+  return { registerAgentHarness, harness, openSyncKeyedStore, sessionStore };
 }
 
 describe("copilot plugin", () => {
@@ -76,7 +83,7 @@ describe("copilot plugin", () => {
         source: "test",
         config: {},
         pluginConfig: {},
-        runtime: {} as never,
+        runtime: { state: { openSyncKeyedStore: vi.fn(() => ({})) } } as never,
         registerAgentHarness,
         registerProvider,
         registerModelCatalogProvider,
@@ -134,7 +141,23 @@ describe("copilot plugin", () => {
     registerWithPluginConfig({ pool: { idleTtlMs: 2500 } });
     registerWithPluginConfig({ pool: { idleTtlMs: 0 } });
 
-    expect(createHarness).toHaveBeenNthCalledWith(1, { poolOptions: { idleTtlMs: 2500 } });
-    expect(createHarness.mock.calls[1]?.[0]).toBeUndefined();
+    expect(createHarness).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ poolOptions: { idleTtlMs: 2500 } }),
+    );
+    expect(createHarness.mock.calls[1]?.[0]).not.toHaveProperty("poolOptions");
+  });
+
+  it("opens the durable Copilot SDK session binding store", () => {
+    const createHarness = vi.mocked(createCopilotAgentHarness);
+    createHarness.mockClear();
+    const { openSyncKeyedStore, sessionStore } = registerWithPluginConfig({});
+
+    expect(openSyncKeyedStore).toHaveBeenCalledWith({
+      namespace: "sdk-sessions",
+      maxEntries: 5000,
+      defaultTtlMs: 90 * 24 * 60 * 60 * 1000,
+    });
+    expect(createHarness).toHaveBeenCalledWith(expect.objectContaining({ sessionStore }));
   });
 });

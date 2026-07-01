@@ -60,21 +60,26 @@ final class TalkModeManager: NSObject {
     var gatewayTalkVoiceModeTitle: String = "Not loaded"
     var gatewayTalkVoiceModeSubtitle: String?
     var gatewayTalkVoiceModeAccessibilityValue: String = "Not loaded"
+    var gatewayTalkActiveModeTitle: String = "Not active"
+    var gatewayTalkActiveModeSubtitle: String?
+    var gatewayTalkLastIssueText: String?
+    var gatewayTalkCurrentFallbackIssue: TalkRuntimeIssue?
     var gatewayTalkPermissionState: TalkGatewayPermissionState = .unknown
 
     var isGatewayConnected: Bool {
         self.gatewayConnected
     }
 
-    var hasActiveAudioCapture: Bool {
-        self.isEnabled || self.isListening || self.isPushToTalkActive || self.realtimeRelaySession != nil
-            || self.realtimeRelayStartInFlight
-    }
-
     private enum CaptureMode {
         case idle
         case continuous
         case pushToTalk
+    }
+
+    private enum RealtimeStartResult {
+        case started
+        case unavailable(TalkRuntimeIssue)
+        case ignored
     }
 
     private var isStarting = false
@@ -129,6 +134,8 @@ final class TalkModeManager: NSObject {
         voiceId: nil,
         transport: nil,
         isRealtime: false)
+    private var pendingRealtimeIssue: TalkRuntimeIssue?
+    private var realtimeRelayStartIssue: TalkRuntimeIssue?
     private var apiKey: String?
     private var voiceAliases: [String: String] = [:]
     private var interruptOnSpeech: Bool = true
@@ -163,7 +170,7 @@ final class TalkModeManager: NSObject {
     private var incrementalSpeechPrefetch: IncrementalSpeechPrefetchState?
     private var incrementalSpeechPrefetchMonitorTask: Task<Void, Never>?
 
-    private let logger = Logger(subsystem: "ai.openclaw", category: "TalkMode")
+    private let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "TalkMode")
 
     private static func nowSeconds() -> TimeInterval {
         ProcessInfo.processInfo.systemUptime
@@ -192,6 +199,8 @@ final class TalkModeManager: NSObject {
             }
         } else {
             self.stopRealtimeSession()
+            self.gatewayTalkActiveModeTitle = "Not active"
+            self.gatewayTalkActiveModeSubtitle = nil
             if self.isEnabled, !self.isSpeaking {
                 self.statusText = "Offline"
             }
@@ -209,6 +218,34 @@ final class TalkModeManager: NSObject {
         if self.gatewayConnected, self.isEnabled {
             Task { await self.subscribeChatIfNeeded(sessionKey: trimmed) }
         }
+    }
+
+    func enterScreenshotFixtureMode() {
+        self.updateGatewayConnected(true)
+        self.isEnabled = false
+        self.isListening = false
+        self.isSpeaking = false
+        self.isUserSpeechDetected = false
+        self.statusText = "Ready"
+        self.gatewayTalkConfigLoaded = true
+        self.gatewayTalkApiKeyConfigured = true
+        self.gatewayTalkDefaultModelId = "gpt-realtime-2"
+        self.gatewayTalkDefaultVoiceId = "marin"
+        self.gatewayTalkProviderLabel = "OpenAI"
+        self.gatewayTalkTransportLabel = "Gateway Relay"
+        self.gatewayTalkUsesRealtime = true
+        self.gatewayTalkUsesRealtimeRelay = true
+        self.gatewayTalkRealtimeProviderLabel = "OpenAI"
+        self.gatewayTalkRealtimeModelId = "gpt-realtime-2"
+        self.gatewayTalkRealtimeVoiceId = "marin"
+        self.gatewayTalkVoiceModeTitle = "Realtime Voice"
+        self.gatewayTalkVoiceModeSubtitle = "Gateway relay ready"
+        self.gatewayTalkVoiceModeAccessibilityValue = "Realtime Voice, Gateway relay ready"
+        self.gatewayTalkActiveModeTitle = "Ready"
+        self.gatewayTalkActiveModeSubtitle = "Listening starts from this phone"
+        self.gatewayTalkLastIssueText = nil
+        self.gatewayTalkCurrentFallbackIssue = nil
+        self.gatewayTalkPermissionState = .ready
     }
 
     func setEnabled(_ enabled: Bool) {
@@ -299,11 +336,15 @@ final class TalkModeManager: NSObject {
             return
         }
         if self.realtimeWebRTCEnabled {
-            let started = self.executionMode == .realtimeRelay
+            let realtimeStart = self.executionMode == .realtimeRelay
                 ? await self.startRealtimeRelayIfAvailable()
                 : await self.startRealtimeIfAvailable()
-            if started {
+            switch realtimeStart {
+            case .started, .ignored:
                 return
+            case let .unavailable(issue):
+                self.pendingRealtimeIssue = issue
+                self.gatewayTalkLastIssueText = issue.diagnosticSummary
             }
         }
 
@@ -324,7 +365,11 @@ final class TalkModeManager: NSObject {
             self.captureMode = .continuous
             try self.startRecognition()
             self.isListening = true
-            self.statusText = "Listening"
+            if let issue = self.pendingRealtimeIssue {
+                self.markNativeFallbackActive(after: issue)
+            } else {
+                self.markNativeTalkActive()
+            }
             self.startSilenceMonitor()
             await self.subscribeChatIfNeeded(sessionKey: self.mainSessionKey)
             self.logger.info("listening")
@@ -379,6 +424,11 @@ final class TalkModeManager: NSObject {
         self.isPushToTalkActive = false
         self.captureMode = .idle
         self.statusText = "Off"
+        self.pendingRealtimeIssue = nil
+        self.gatewayTalkCurrentFallbackIssue = nil
+        self.gatewayTalkActiveModeTitle = "Not active"
+        self.gatewayTalkActiveModeSubtitle = nil
+        self.gatewayTalkLastIssueText = nil
         self.lastTranscript = ""
         self.lastHeard = nil
         self.silenceTask?.cancel()
@@ -425,6 +475,8 @@ final class TalkModeManager: NSObject {
         self.isPushToTalkActive = false
         self.captureMode = .idle
         self.statusText = "Paused"
+        self.gatewayTalkActiveModeTitle = "Paused"
+        self.gatewayTalkActiveModeSubtitle = nil
         self.lastTranscript = ""
         self.lastHeard = nil
         self.silenceTask?.cancel()
@@ -446,26 +498,11 @@ final class TalkModeManager: NSObject {
         return wasActive
     }
 
-    func setForegroundAudioCaptureAllowed(_ allowed: Bool) {
-        self.foregroundAudioCaptureAllowed = allowed
-        if !allowed {
-            self.cancelPendingStart()
-        }
-    }
-
     func resumeAfterBackground(wasSuspended: Bool, wasKeptActive: Bool = false) async {
         if wasKeptActive { return }
         guard wasSuspended else { return }
         guard self.isEnabled else { return }
         await self.start()
-    }
-
-    func userTappedOrb() {
-        if let realtimeSession {
-            realtimeSession.cancelResponse()
-        }
-        self.realtimeRelaySession?.cancelOutput()
-        self.stopSpeaking()
     }
 
     func beginPushToTalk() async throws -> OpenClawTalkPTTStartPayload {
@@ -971,39 +1008,60 @@ final class TalkModeManager: NSObject {
             self.logger.info(
                 "chat.send start sessionKey=\(sessionKey, privacy: .public) chars=\(prompt.count, privacy: .public)")
             GatewayDiagnostics.log("talk: chat.send start sessionKey=\(sessionKey) chars=\(prompt.count)")
-            let runId = try await self.sendChat(prompt, gateway: gateway)
-            self.logger.info("chat.send ok runId=\(runId, privacy: .public)")
-            GatewayDiagnostics.log("talk: chat.send ok runId=\(runId)")
+            let ack = try await self.sendChat(prompt, gateway: gateway)
+            let runId = ack.runId
+            let normalizedStatus = Self.normalizedChatSendStatus(ack.status)
+            self.logger.info(
+                "chat.send ok runId=\(runId, privacy: .public) status=\(normalizedStatus, privacy: .public)")
+            GatewayDiagnostics.log("talk: chat.send ok runId=\(runId) status=\(normalizedStatus)")
+            if Self.isTerminalChatSendFailure(ack.status) {
+                self.statusText = normalizedStatus == "error" ? "Chat error" : "Aborted"
+                self.logger.warning(
+                    "chat.send terminal ack runId=\(runId, privacy: .public) status=\(normalizedStatus, privacy: .public)")
+                GatewayDiagnostics.log(
+                    "talk: chat.send terminal ack runId=\(runId) status=\(normalizedStatus)")
+                if restartAfter {
+                    await self.start()
+                }
+                return
+            }
+
             let shouldIncremental = self.shouldUseIncrementalTTS()
             var streamingTask: Task<Void, Never>?
-            if shouldIncremental {
-                self.resetIncrementalSpeech()
-                streamingTask = Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    await self.streamAssistant(runId: runId, gateway: gateway)
+            let completion: ChatCompletionResult
+            if Self.isTerminalChatSendSuccess(ack.status) {
+                GatewayDiagnostics.log("talk: chat.send terminal ok runId=\(runId); using history fallback")
+                completion = ChatCompletionResult(state: .final, assistantText: nil)
+            } else {
+                if shouldIncremental {
+                    self.resetIncrementalSpeech()
+                    streamingTask = Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        await self.streamAssistant(runId: runId, gateway: gateway)
+                    }
                 }
-            }
-            let completion = await waitForChatCompletion(runId: runId, gateway: gateway, timeoutSeconds: 120)
-            if completion.state == .timeout {
-                self.logger.warning(
-                    "chat completion timeout runId=\(runId, privacy: .public); attempting history fallback")
-                GatewayDiagnostics.log("talk: chat completion timeout runId=\(runId)")
-            } else if completion.state == .aborted {
-                self.statusText = "Aborted"
-                self.logger.warning("chat completion aborted runId=\(runId, privacy: .public)")
-                GatewayDiagnostics.log("talk: chat completion aborted runId=\(runId)")
-                streamingTask?.cancel()
-                await self.finishIncrementalSpeech()
-                await self.start()
-                return
-            } else if completion.state == .error {
-                self.statusText = "Chat error"
-                self.logger.warning("chat completion error runId=\(runId, privacy: .public)")
-                GatewayDiagnostics.log("talk: chat completion error runId=\(runId)")
-                streamingTask?.cancel()
-                await self.finishIncrementalSpeech()
-                await self.start()
-                return
+                completion = await self.waitForChatCompletion(runId: runId, gateway: gateway, timeoutSeconds: 120)
+                if completion.state == .timeout {
+                    self.logger.warning(
+                        "chat completion timeout runId=\(runId, privacy: .public); attempting history fallback")
+                    GatewayDiagnostics.log("talk: chat completion timeout runId=\(runId)")
+                } else if completion.state == .aborted {
+                    self.statusText = "Aborted"
+                    self.logger.warning("chat completion aborted runId=\(runId, privacy: .public)")
+                    GatewayDiagnostics.log("talk: chat completion aborted runId=\(runId)")
+                    streamingTask?.cancel()
+                    await self.finishIncrementalSpeech()
+                    await self.start()
+                    return
+                } else if completion.state == .error {
+                    self.statusText = "Chat error"
+                    self.logger.warning("chat completion error runId=\(runId, privacy: .public)")
+                    GatewayDiagnostics.log("talk: chat completion error runId=\(runId)")
+                    streamingTask?.cancel()
+                    await self.finishIncrementalSpeech()
+                    await self.start()
+                    return
+                }
             }
 
             var assistantText = completion.assistantText
@@ -1016,7 +1074,7 @@ final class TalkModeManager: NSObject {
             if assistantText == nil {
                 assistantText = try await self.waitForAssistantTextFromHistory(
                     gateway: gateway,
-                    since: startedAt,
+                    since: Self.chatSendHistorySince(response: ack, startedAt: startedAt),
                     timeoutSeconds: completion.state == .final ? 12 : 25)
             }
             guard let assistantText else {
@@ -1047,8 +1105,10 @@ final class TalkModeManager: NSObject {
         }
     }
 
-    private func startRealtimeIfAvailable() async -> Bool {
-        guard let gateway else { return false }
+    private func startRealtimeIfAvailable() async -> RealtimeStartResult {
+        guard let gateway else {
+            return .unavailable(self.realtimeIssue(message: "Gateway not connected", phase: "start"))
+        }
         let startedAt = Self.nowSeconds()
         if self.prefetchedRealtimeSession == nil, let prefetchTask = self.realtimePrefetchTask {
             GatewayDiagnostics.log("talk.timeline realtime awaiting in-flight prefetch")
@@ -1069,49 +1129,53 @@ final class TalkModeManager: NSObject {
                 prefetchedSession: prefetchedSession)
             guard self.realtimeSession === session, self.isEnabled else {
                 session.stop()
-                return true
+                return .ignored
             }
             self.isListening = true
             self.captureMode = .continuous
-            self.statusText = "Listening"
+            self.markRealtimeActive()
             GatewayDiagnostics.log(
                 "talk.timeline realtime start ready elapsedMs=\(Self.elapsedMs(since: startedAt))")
             GatewayDiagnostics.log("talk realtime: started direct OpenAI WebRTC session")
-            return true
+            return .started
         } catch {
             guard self.realtimeSession === session, self.isEnabled else {
                 session.stop()
-                return true
+                return .ignored
             }
             self.stopRealtimeSession()
+            let issue = self.realtimeIssue(from: error, phase: "start")
             GatewayDiagnostics
                 .log("talk realtime: unavailable; falling back to speech pipeline error=\(error.localizedDescription)")
             GatewayDiagnostics.log(
                 "talk.timeline realtime start failed elapsedMs=\(Self.elapsedMs(since: startedAt)) "
                     + "error=\(error.localizedDescription)")
-            return false
+            return .unavailable(issue)
         }
     }
 
-    private func startRealtimeRelayIfAvailable() async -> Bool {
-        guard let gateway else { return false }
+    private func startRealtimeRelayIfAvailable() async -> RealtimeStartResult {
+        guard let gateway else {
+            return .unavailable(self.realtimeIssue(message: "Gateway not connected", phase: "start"))
+        }
         guard self.foregroundAudioCaptureAllowed else {
             self.statusText = "Paused"
             GatewayDiagnostics.log("talk realtime ignored: app backgrounded")
-            return true
+            return .ignored
         }
         if self.realtimeRelaySession != nil {
             self.captureMode = .continuous
             self.isListening = true
             GatewayDiagnostics.log("talk realtime ignored: already active")
-            return true
+            return .started
         }
         guard !self.realtimeRelayStartInFlight else {
             GatewayDiagnostics.log("talk realtime ignored: already starting")
-            return true
+            return .ignored
         }
         self.realtimeRelayStartInFlight = true
         defer { self.realtimeRelayStartInFlight = false }
+        self.prepareRealtimeRelayStart()
         GatewayDiagnostics.log("talk.timeline realtime relay start attempt sessionKey=\(self.mainSessionKey)")
         let startedAt = Self.nowSeconds()
         let relaySession = RealtimeTalkRelaySession(
@@ -1124,13 +1188,15 @@ final class TalkModeManager: NSObject {
             pcmPlayer: self.pcmPlayer,
             onStatus: { [weak self] status in
                 guard let self else { return }
-                self.statusText = status
-                self.isListening = status.localizedCaseInsensitiveContains("listening")
-                if status.localizedCaseInsensitiveContains("thinking") {
-                    self.isListening = false
-                    self.isSpeaking = false
-                    self.isUserSpeechDetected = false
-                }
+                self.handleRealtimeRelayStatus(status)
+            },
+            onIssue: { [weak self] issue in
+                guard let self else { return }
+                self.realtimeRelayStartIssue = issue
+                self.pendingRealtimeIssue = issue
+                self.gatewayTalkLastIssueText = issue.diagnosticSummary
+                self.gatewayTalkActiveModeTitle = "Realtime unavailable"
+                self.gatewayTalkActiveModeSubtitle = issue.displayMessage
             },
             onSpeakingChanged: { [weak self] speaking in
                 guard let self else { return }
@@ -1141,27 +1207,39 @@ final class TalkModeManager: NSObject {
             })
         self.realtimeRelaySession = relaySession
         do {
-            try Self.configureAudioSession()
+            try Self.configureRealtimeAudioSession()
             try await relaySession.start()
             guard self.realtimeRelaySession === relaySession, self.isEnabled else {
                 relaySession.stop()
-                return true
+                return .ignored
+            }
+            if let issue = self.realtimeRelayStartIssue {
+                self.realtimeRelaySession = nil
+                relaySession.stop()
+                GatewayDiagnostics.log(
+                    "talk.timeline realtime relay start unavailable elapsedMs=\(Self.elapsedMs(since: startedAt)) "
+                        + "issue=\(issue.code.rawValue)")
+                return .unavailable(issue)
             }
             self.isListening = true
             self.captureMode = .continuous
+            self.realtimeRelayStartIssue = nil
             GatewayDiagnostics.log(
                 "talk.timeline realtime relay start ready elapsedMs=\(Self.elapsedMs(since: startedAt))")
-            return true
+            return .started
         } catch {
             guard self.realtimeRelaySession === relaySession, self.isEnabled else {
                 relaySession.stop()
-                return true
+                return .ignored
             }
             self.realtimeRelaySession = nil
+            let issue = self.realtimeRelayStartIssue
+                ?? self.realtimeIssue(from: error, phase: "start")
+            self.realtimeRelayStartIssue = nil
             GatewayDiagnostics.log(
                 "talk.timeline realtime relay start failed elapsedMs=\(Self.elapsedMs(since: startedAt)) "
                     + "error=\(error.localizedDescription)")
-            return false
+            return .unavailable(issue)
         }
     }
 
@@ -1286,8 +1364,27 @@ final class TalkModeManager: NSObject {
         var assistantText: String?
     }
 
-    private func sendChat(_ message: String, gateway: GatewayNodeSession) async throws -> String {
-        struct SendResponse: Decodable { let runId: String }
+    private static func normalizedChatSendStatus(_ status: String) -> String {
+        status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func isTerminalChatSendSuccess(_ status: String) -> Bool {
+        self.normalizedChatSendStatus(status) == "ok"
+    }
+
+    private static func isTerminalChatSendFailure(_ status: String) -> Bool {
+        let normalized = self.normalizedChatSendStatus(status)
+        return normalized == "timeout" || normalized == "error"
+    }
+
+    private static func chatSendHistorySince(
+        response: OpenClawChatSendResponse,
+        startedAt: Double) -> Double?
+    {
+        self.isTerminalChatSendSuccess(response.status) ? nil : startedAt
+    }
+
+    private func sendChat(_ message: String, gateway: GatewayNodeSession) async throws -> OpenClawChatSendResponse {
         let payload: [String: Any] = [
             "sessionKey": mainSessionKey,
             "message": message,
@@ -1303,8 +1400,7 @@ final class TalkModeManager: NSObject {
                 userInfo: [NSLocalizedDescriptionKey: "Failed to encode chat payload"])
         }
         let res = try await gateway.request(method: "chat.send", paramsJSON: json, timeoutSeconds: 30)
-        let decoded = try JSONDecoder().decode(SendResponse.self, from: res)
-        return decoded.runId
+        return try JSONDecoder().decode(OpenClawChatSendResponse.self, from: res)
     }
 
     private func waitForChatCompletion(
@@ -1383,7 +1479,7 @@ final class TalkModeManager: NSObject {
 
     private func waitForAssistantTextFromHistory(
         gateway: GatewayNodeSession,
-        since: Double,
+        since: Double?,
         timeoutSeconds: Int) async throws -> String?
     {
         let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
@@ -2363,6 +2459,103 @@ extension TalkModeManager {
         self.gatewayTalkVoiceModeAccessibilityValue = descriptor.accessibilityValue
     }
 
+    private func markRealtimeActive() {
+        self.pendingRealtimeIssue = nil
+        self.gatewayTalkCurrentFallbackIssue = nil
+        self.gatewayTalkLastIssueText = nil
+        self.gatewayTalkActiveModeTitle = self.configuredVoiceModeDescriptor.title
+        self.gatewayTalkActiveModeSubtitle = self.configuredVoiceModeDescriptor.subtitle
+        self.statusText = "Listening (Realtime)"
+    }
+
+    private func handleRealtimeRelayStatus(_ status: String) {
+        if status == "Listening (Realtime)" {
+            self.markRealtimeActive()
+        } else {
+            self.statusText = status
+            if status == "Ready" {
+                self.realtimeRelaySession = nil
+                self.gatewayTalkActiveModeTitle = "Not active"
+                self.gatewayTalkActiveModeSubtitle = nil
+                self.isListening = false
+                self.isSpeaking = false
+                self.isUserSpeechDetected = false
+            }
+        }
+        self.isListening = status.localizedCaseInsensitiveContains("listening")
+        if status.localizedCaseInsensitiveContains("thinking") {
+            self.isListening = false
+            self.isSpeaking = false
+            self.isUserSpeechDetected = false
+        }
+    }
+
+    private func prepareRealtimeRelayStart() {
+        self.realtimeRelayStartIssue = nil
+        self.pendingRealtimeIssue = nil
+        self.gatewayTalkCurrentFallbackIssue = nil
+    }
+
+    private func markNativeTalkActive() {
+        self.pendingRealtimeIssue = nil
+        self.gatewayTalkCurrentFallbackIssue = nil
+        self.gatewayTalkActiveModeTitle = "iOS Speech + TTS"
+        self.gatewayTalkActiveModeSubtitle = nil
+        self.statusText = "Listening"
+    }
+
+    private func markNativeFallbackActive(after issue: TalkRuntimeIssue) {
+        self.gatewayTalkActiveModeTitle = "iOS Speech fallback"
+        self.gatewayTalkActiveModeSubtitle = issue.displayMessage
+        self.gatewayTalkCurrentFallbackIssue = issue
+        self.gatewayTalkLastIssueText = issue.diagnosticSummary
+        self.statusText = issue.fallbackStatusText
+    }
+
+    private func realtimeIssue(message: String, phase: String) -> TalkRuntimeIssue {
+        TalkRuntimeIssue.realtimeUnavailable(
+            message: message,
+            provider: self.realtimeProvider,
+            model: self.realtimeModelId,
+            transport: self.executionMode == .realtimeRelay ? "gateway-relay" : "webrtc",
+            phase: phase)
+    }
+
+    private func realtimeIssue(from error: Error, phase: String) -> TalkRuntimeIssue {
+        if let gatewayError = error as? GatewayResponseError,
+           let issue = Self.talkRuntimeIssue(
+               from: gatewayError,
+               fallbackProvider: self.realtimeProvider,
+               fallbackModel: self.realtimeModelId,
+               fallbackTransport: self.executionMode == .realtimeRelay ? "gateway-relay" : "webrtc",
+               fallbackPhase: phase)
+        {
+            return issue
+        }
+        return self.realtimeIssue(message: error.localizedDescription, phase: phase)
+    }
+
+    private static func talkRuntimeIssue(
+        from gatewayError: GatewayResponseError,
+        fallbackProvider: String?,
+        fallbackModel: String?,
+        fallbackTransport: String?,
+        fallbackPhase: String) -> TalkRuntimeIssue?
+    {
+        guard let rawIssue = gatewayError.details["talkIssue"]?.dictionaryValue else { return nil }
+        let message = rawIssue["message"]?.stringValue ?? gatewayError.message
+        let provider = rawIssue["provider"]?.stringValue ?? fallbackProvider
+        let model = rawIssue["model"]?.stringValue ?? fallbackModel
+        let transport = rawIssue["transport"]?.stringValue ?? fallbackTransport
+        let phase = rawIssue["phase"]?.stringValue ?? fallbackPhase
+        return TalkRuntimeIssue.realtimeUnavailable(
+            message: message,
+            provider: provider,
+            model: model,
+            transport: transport,
+            phase: phase)
+    }
+
     private func restoreConfiguredVoiceModeDescriptor() {
         self.applyVoiceModeDescriptor(self.configuredVoiceModeDescriptor)
     }
@@ -2836,7 +3029,11 @@ extension TalkModeManager: TalkRealtimeWebRTCSessionDelegate {
     func realtimeSession(_ session: TalkRealtimeWebRTCSession, didChangeStatus status: String) {
         guard session === self.realtimeSession else { return }
         GatewayDiagnostics.log("talk.timeline realtime status=\(status)")
-        self.statusText = status
+        if status == "Listening" {
+            self.markRealtimeActive()
+        } else {
+            self.statusText = status
+        }
         self.isListening = status == "Listening"
         self.isSpeaking = status == "Speaking"
         if status == "Thinking" {
@@ -2877,6 +3074,8 @@ extension TalkModeManager: TalkRealtimeWebRTCSessionDelegate {
         self.isListening = false
         self.isSpeaking = false
         self.isUserSpeechDetected = false
+        self.gatewayTalkActiveModeTitle = "Not active"
+        self.gatewayTalkActiveModeSubtitle = nil
         if self.isEnabled {
             self.statusText = self.gatewayConnected ? "Ready" : "Offline"
         }
@@ -2909,21 +3108,47 @@ extension TalkModeManager {
         self.gatewayTalkUsesRealtimeRelay
     }
 
-    func _test_seedTranscript(_ transcript: String) {
-        self.lastTranscript = transcript
-        self.lastHeard = Date()
+    func _test_markNativeFallbackActive(after issue: TalkRuntimeIssue) {
+        self.markNativeFallbackActive(after: issue)
     }
 
-    func _test_handleTranscript(_ transcript: String, isFinal: Bool) async {
-        await self.handleTranscript(transcript: transcript, isFinal: isFinal)
+    func _test_recordRealtimeIssue(_ issue: TalkRuntimeIssue) {
+        self.pendingRealtimeIssue = issue
+        self.gatewayTalkLastIssueText = issue.diagnosticSummary
+        self.gatewayTalkActiveModeTitle = "Realtime unavailable"
+        self.gatewayTalkActiveModeSubtitle = issue.displayMessage
     }
 
-    func _test_backdateLastHeard(seconds: TimeInterval) {
-        self.lastHeard = Date().addingTimeInterval(-seconds)
+    func _test_handleRealtimeRelayStatus(_ status: String) {
+        self.handleRealtimeRelayStatus(status)
     }
 
-    func _test_runSilenceCheck() async {
-        await self.checkSilence()
+    func _test_prepareRealtimeRelayStart() {
+        self.prepareRealtimeRelayStart()
+    }
+
+    func _test_realtimeIssue(from error: Error, phase: String) -> TalkRuntimeIssue {
+        self.realtimeIssue(from: error, phase: phase)
+    }
+
+    func _test_hasPendingRealtimeIssue() -> Bool {
+        self.pendingRealtimeIssue != nil
+    }
+
+    func _test_gatewayTalkActiveModeTitle() -> String {
+        self.gatewayTalkActiveModeTitle
+    }
+
+    func _test_gatewayTalkActiveModeSubtitle() -> String? {
+        self.gatewayTalkActiveModeSubtitle
+    }
+
+    func _test_gatewayTalkLastIssueText() -> String? {
+        self.gatewayTalkLastIssueText
+    }
+
+    func _test_gatewayTalkCurrentFallbackIssue() -> TalkRuntimeIssue? {
+        self.gatewayTalkCurrentFallbackIssue
     }
 
     func _test_incrementalReset() {

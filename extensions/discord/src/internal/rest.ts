@@ -1,6 +1,13 @@
+// Discord plugin module implements rest behavior.
 import { randomBytes } from "node:crypto";
 import { inspect } from "node:util";
-import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import { gunzipSync } from "node:zlib";
+import {
+  clampTimerTimeoutMs,
+  parseFiniteNumber,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { serializeRequestBody } from "./rest-body.js";
 import {
   DiscordError,
@@ -34,6 +41,7 @@ export type RequestClientOptions = {
   baseUrl?: string;
   apiVersion?: number;
   userAgent?: string;
+  signal?: AbortSignal;
   timeout?: number;
   queueRequests?: boolean;
   maxQueueSize?: number;
@@ -83,6 +91,28 @@ const defaultLaneOptions: Record<RestRequestPriority, { staleAfterMs?: number; w
   background: { staleAfterMs: 20_000, weight: 1 },
 };
 
+// Cap the REST response body well above any legitimate Discord JSON payload
+// (bulk message/member fetches stay in the low hundreds of KB) so a controlled
+// or hijacked endpoint cannot flood the body into an unbounded buffer (OOM).
+const DISCORD_REST_RESPONSE_BODY_MAX_BYTES = 8 * 1024 * 1024;
+const GZIP_MAGIC = [0x1f, 0x8b] as const;
+
+function createResponseBodyOverflowError(size: number | "decompressed output"): Error {
+  return new Error(
+    `Discord REST response body exceeds ${DISCORD_REST_RESPONSE_BODY_MAX_BYTES} bytes (received ${size})`,
+  );
+}
+
+async function readResponseBodyText(response: Response, idleTimeoutMs: number): Promise<string> {
+  const buffer = await readResponseWithLimit(response, DISCORD_REST_RESPONSE_BODY_MAX_BYTES, {
+    chunkTimeoutMs: idleTimeoutMs,
+    onOverflow: ({ size }) => createResponseBodyOverflowError(size),
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(`Discord REST response stalled: no data received for ${chunkTimeoutMs}ms`),
+  });
+  return decodeResponseBody(buffer);
+}
+
 function coerceResponseBody(raw: string): unknown {
   if (!raw) {
     return undefined;
@@ -92,6 +122,33 @@ function coerceResponseBody(raw: string): unknown {
   } catch {
     return raw;
   }
+}
+
+function decodeResponseBody(buffer: Buffer): string {
+  if (!buffer.byteLength) {
+    return "";
+  }
+  if (buffer[0] === GZIP_MAGIC[0] && buffer[1] === GZIP_MAGIC[1]) {
+    try {
+      return gunzipSync(buffer, {
+        maxOutputLength: DISCORD_REST_RESPONSE_BODY_MAX_BYTES,
+      }).toString("utf8");
+    } catch (err: unknown) {
+      if (isZlibMaxOutputLengthError(err)) {
+        throw createResponseBodyOverflowError("decompressed output");
+      }
+      throw err;
+    }
+  }
+  return buffer.toString("utf8");
+}
+
+function isZlibMaxOutputLengthError(err: unknown): boolean {
+  return (
+    err instanceof RangeError &&
+    "code" in err &&
+    (err as { code?: unknown }).code === "ERR_BUFFER_TOO_LARGE"
+  );
 }
 
 function escapeMultipartQuotedValue(value: string): string {
@@ -232,15 +289,18 @@ export class RequestClient {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.options.timeout ?? 15_000);
     timeout.unref?.();
+    const signal = this.options.signal
+      ? AbortSignal.any([this.options.signal, controller.signal])
+      : controller.signal;
     this.requestControllers.add(controller);
     try {
       const response = await (this.customFetch ?? fetch)(url, {
         method,
         headers,
         body: await normalizeFetchBody(body, headers),
-        signal: controller.signal,
+        signal,
       });
-      const text = await response.text();
+      const text = await readResponseBodyText(response, this.options.timeout ?? 15_000);
       const parsed = coerceResponseBody(text);
       this.scheduler.recordResponse(routeKey, path, response, parsed);
       if (response.status === 204) {
@@ -310,7 +370,8 @@ function normalizeRequestClientOptions(
   return {
     ...merged,
     apiVersion: normalizeIntegerOption(merged.apiVersion, defaultOptions.apiVersion, { min: 1 }),
-    timeout: normalizeIntegerOption(merged.timeout, defaultOptions.timeout, { min: 1 }),
+    timeout:
+      clampTimerTimeoutMs(merged.timeout, 1) ?? resolveTimerTimeoutMs(defaultOptions.timeout, 1),
     maxQueueSize: normalizeIntegerOption(merged.maxQueueSize, defaultOptions.maxQueueSize, {
       min: 1,
     }),

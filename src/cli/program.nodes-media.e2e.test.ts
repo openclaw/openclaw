@@ -1,10 +1,10 @@
+// Program nodes media e2e tests cover media-oriented node commands through the full CLI program.
 import * as fs from "node:fs/promises";
 import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { IOS_NODE, createIosNodeListResponse } from "./program.nodes-test-helpers.js";
-import { callGateway, installBaseProgramMocks, runtime } from "./program.test-mocks.js";
+import { callGateway, runtime } from "./program.test-mocks.js";
 
-installBaseProgramMocks();
 let registerNodesCli: typeof import("./nodes-cli.js").registerNodesCli;
 
 function getFirstRuntimeLogLine(): string {
@@ -20,7 +20,7 @@ async function expectLoggedSingleMediaFile(params?: {
   expectedPathPattern?: RegExp;
 }): Promise<string> {
   const out = getFirstRuntimeLogLine();
-  const mediaPath = out.replace(/^MEDIA:/, "").trim();
+  const mediaPath = out.trim();
   if (params?.expectedPathPattern) {
     expect(mediaPath).toMatch(params.expectedPathPattern);
   }
@@ -141,10 +141,10 @@ describe("cli program (nodes media)", () => {
     const out = getFirstRuntimeLogLine();
     const mediaPaths: string[] = [];
     for (const line of out.split("\n")) {
-      if (!line.startsWith("MEDIA:")) {
+      const mediaPath = line.trim();
+      if (!mediaPath) {
         continue;
       }
-      const mediaPath = line.replace(/^MEDIA:/, "");
       if (mediaPath.length > 0) {
         mediaPaths.push(mediaPath);
       }

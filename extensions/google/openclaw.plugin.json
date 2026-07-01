@@ -1,5 +1,6 @@
 {
   "id": "google",
+  "icon": "https://cdn.simpleicons.org/google",
   "activation": {
     "onStartup": false
   },
@@ -564,6 +565,16 @@
       "endpointClass": "google-vertex",
       "hosts": ["aiplatform.googleapis.com"],
       "googleVertexRegion": "global"
+    },
+    {
+      "endpointClass": "google-vertex",
+      "hosts": ["aiplatform.eu.rep.googleapis.com"],
+      "googleVertexRegion": "eu"
+    },
+    {
+      "endpointClass": "google-vertex",
+      "hosts": ["aiplatform.us.rep.googleapis.com"],
+      "googleVertexRegion": "us"
     },
     {
       "endpointClass": "google-vertex",

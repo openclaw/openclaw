@@ -138,14 +138,15 @@ describe("loadSettings default gateway URL derivation", () => {
       gatewayUrl: "wss://gateway.example:8443/openclaw",
       theme: "claw",
       themeMode: "system",
-      chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
+      chatPersistCommentary: false,
       chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 220,
       navGroupsCollapsed: {},
+      recentSessionsCollapsed: false,
       borderRadius: 50,
       textScale: 100,
       sessionsByGateway: {
@@ -173,7 +174,6 @@ describe("loadSettings default gateway URL derivation", () => {
       lastActiveSessionKey: "main",
       theme: "claw",
       themeMode: "system",
-      chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
       chatAutoScroll: "near-bottom",
@@ -206,7 +206,6 @@ describe("loadSettings default gateway URL derivation", () => {
       lastActiveSessionKey: "main",
       theme: "claw",
       themeMode: "system",
-      chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
       chatAutoScroll: "near-bottom",
@@ -224,7 +223,6 @@ describe("loadSettings default gateway URL derivation", () => {
       lastActiveSessionKey: "main",
       theme: "claw",
       themeMode: "system",
-      chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
       chatAutoScroll: "near-bottom",
@@ -255,7 +253,6 @@ describe("loadSettings default gateway URL derivation", () => {
       lastActiveSessionKey: "main",
       theme: "claw",
       themeMode: "system",
-      chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
       splitRatio: 0.6,
@@ -273,14 +270,15 @@ describe("loadSettings default gateway URL derivation", () => {
       gatewayUrl: gwUrl,
       theme: "claw",
       themeMode: "system",
-      chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
+      chatPersistCommentary: false,
       chatAutoScroll: "near-bottom",
       splitRatio: 0.6,
       navCollapsed: false,
       navWidth: 220,
       navGroupsCollapsed: {},
+      recentSessionsCollapsed: false,
       borderRadius: 50,
       textScale: 100,
       sessionsByGateway: {
@@ -291,6 +289,63 @@ describe("loadSettings default gateway URL derivation", () => {
       },
     });
     expect(sessionStorage.length).toBe(1);
+  });
+
+  it("persists recent sessions collapse state across save and load", () => {
+    setTestLocation({
+      protocol: "https:",
+      host: "gateway.example:8443",
+      pathname: "/",
+    });
+
+    const gwUrl = expectedGatewayUrl("");
+    saveSettings({
+      gatewayUrl: gwUrl,
+      token: "",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+      theme: "claw",
+      themeMode: "system",
+      chatShowThinking: true,
+      chatShowToolCalls: true,
+      chatAutoScroll: "near-bottom",
+      splitRatio: 0.6,
+      navCollapsed: false,
+      navWidth: 220,
+      navGroupsCollapsed: {},
+      recentSessionsCollapsed: true,
+      borderRadius: 50,
+      textScale: 100,
+    });
+
+    expect(loadSettings().recentSessionsCollapsed).toBe(true);
+
+    saveSettings({
+      gatewayUrl: gwUrl,
+      token: "",
+      sessionKey: "main",
+      lastActiveSessionKey: "main",
+      theme: "claw",
+      themeMode: "system",
+      chatShowThinking: true,
+      chatShowToolCalls: true,
+      chatAutoScroll: "near-bottom",
+      splitRatio: 0.6,
+      navCollapsed: false,
+      navWidth: 220,
+      navGroupsCollapsed: {},
+      recentSessionsCollapsed: false,
+      borderRadius: 50,
+      textScale: 100,
+    });
+
+    const scopedKey = `openclaw.control.settings.v1:${gwUrl}`;
+    const persisted = JSON.parse(localStorage.getItem(scopedKey) ?? "{}") as Record<
+      string,
+      unknown
+    >;
+    expect(persisted.recentSessionsCollapsed).toBe(false);
+    expect(loadSettings().recentSessionsCollapsed).toBe(false);
   });
 
   it("normalizes persisted text scale to the nearest supported stop", () => {
@@ -354,7 +409,6 @@ describe("loadSettings default gateway URL derivation", () => {
       lastActiveSessionKey: "main",
       theme: "claw",
       themeMode: "system",
-      chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
       splitRatio: 0.6,
@@ -370,7 +424,6 @@ describe("loadSettings default gateway URL derivation", () => {
       lastActiveSessionKey: "main",
       theme: "claw",
       themeMode: "system",
-      chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
       splitRatio: 0.6,
@@ -399,7 +452,6 @@ describe("loadSettings default gateway URL derivation", () => {
       lastActiveSessionKey: "main",
       theme: "dash",
       themeMode: "light",
-      chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
       splitRatio: 0.6,
@@ -435,7 +487,6 @@ describe("loadSettings default gateway URL derivation", () => {
       lastActiveSessionKey: "main",
       theme: "custom",
       themeMode: "system",
-      chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
       splitRatio: 0.6,
@@ -466,7 +517,6 @@ describe("loadSettings default gateway URL derivation", () => {
         gatewayUrl: gwUrl,
         theme: "custom",
         themeMode: "dark",
-        chatFocusMode: false,
         chatShowThinking: true,
         chatShowToolCalls: true,
         splitRatio: 0.6,
@@ -511,7 +561,6 @@ describe("loadSettings default gateway URL derivation", () => {
       lastActiveSessionKey: "agent:test_old:main",
       theme: "claw",
       themeMode: "system",
-      chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
       splitRatio: 0.6,
@@ -555,7 +604,6 @@ describe("loadSettings default gateway URL derivation", () => {
       lastActiveSessionKey: "agent:current:main",
       theme: "claw",
       themeMode: "system",
-      chatFocusMode: false,
       chatShowThinking: true,
       chatShowToolCalls: true,
       splitRatio: 0.6,

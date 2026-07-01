@@ -1,3 +1,5 @@
+// Qa Lab tests cover credential lease plugin behavior.
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   acquireQaCredentialLease,
@@ -163,6 +165,168 @@ describe("credential lease runtime", () => {
     expect(chunkRequest.leaseToken).toBe("lease-chunked");
   });
 
+  it("validates chunked convex payload length as utf8 bytes", async () => {
+    const serialized = JSON.stringify({
+      groupId: "-100123",
+      driverToken: "driv\u00e9r",
+      sutToken: "sut",
+    });
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: "ok",
+          credentialId: "cred-utf8",
+          leaseToken: "lease-utf8",
+          payload: {
+            __openclawQaCredentialPayloadChunksV1: true,
+            byteLength: Buffer.byteLength(serialized, "utf8"),
+            chunkCount: 1,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ status: "ok", data: serialized }));
+
+    const lease = await acquireQaCredentialLease({
+      kind: "telegram",
+      source: "convex",
+      role: "ci",
+      env: {
+        OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
+        OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
+      },
+      fetchImpl,
+      resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
+      parsePayload: (payload) =>
+        payload as { groupId: string; driverToken: string; sutToken: string },
+    });
+
+    expect(lease.payload.driverToken).toBe("driv\u00e9r");
+  });
+
+  it("rejects chunked convex payload markers above the configured chunk cap", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: "ok",
+          credentialId: "cred-many-chunks",
+          leaseToken: "lease-many-chunks",
+          payload: {
+            __openclawQaCredentialPayloadChunksV1: true,
+            byteLength: 1,
+            chunkCount: 3,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ status: "ok" }));
+
+    await expect(
+      acquireQaCredentialLease({
+        kind: "telegram",
+        source: "convex",
+        role: "ci",
+        env: {
+          OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
+          OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
+          OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_CHUNKS: "2",
+        },
+        fetchImpl,
+        resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
+        parsePayload: (payload) =>
+          payload as { groupId: string; driverToken: string; sutToken: string },
+      }),
+    ).rejects.toThrow("Chunked credential payload marker exceeds 2 chunks.");
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchUrl(fetchImpl, 1)).toBe(
+      "https://qa-cred.example.convex.site/qa-credentials/v1/release",
+    );
+  });
+
+  it("rejects chunked convex payload markers above the configured byte cap", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: "ok",
+          credentialId: "cred-large-payload",
+          leaseToken: "lease-large-payload",
+          payload: {
+            __openclawQaCredentialPayloadChunksV1: true,
+            byteLength: 33,
+            chunkCount: 1,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ status: "ok" }));
+
+    await expect(
+      acquireQaCredentialLease({
+        kind: "telegram",
+        source: "convex",
+        role: "ci",
+        env: {
+          OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
+          OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
+          OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES: "32",
+        },
+        fetchImpl,
+        resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
+        parsePayload: (payload) =>
+          payload as { groupId: string; driverToken: string; sutToken: string },
+      }),
+    ).rejects.toThrow("Chunked credential payload marker exceeds 32 bytes.");
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchUrl(fetchImpl, 1)).toBe(
+      "https://qa-cred.example.convex.site/qa-credentials/v1/release",
+    );
+  });
+
+  it("stops chunked convex payload hydration when chunk data exceeds the marker", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          status: "ok",
+          credentialId: "cred-overrun",
+          leaseToken: "lease-overrun",
+          payload: {
+            __openclawQaCredentialPayloadChunksV1: true,
+            byteLength: 2,
+            chunkCount: 2,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse({ status: "ok", data: "abc" }))
+      .mockResolvedValueOnce(jsonResponse({ status: "ok" }));
+
+    await expect(
+      acquireQaCredentialLease({
+        kind: "telegram",
+        source: "convex",
+        role: "ci",
+        env: {
+          OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
+          OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
+        },
+        fetchImpl,
+        resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
+        parsePayload: (payload) =>
+          payload as { groupId: string; driverToken: string; sutToken: string },
+      }),
+    ).rejects.toThrow("Chunked credential payload exceeded declared byteLength.");
+
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(fetchUrl(fetchImpl, 1)).toBe(
+      "https://qa-cred.example.convex.site/qa-credentials/v1/payload-chunk",
+    );
+    expect(fetchUrl(fetchImpl, 2)).toBe(
+      "https://qa-cred.example.convex.site/qa-credentials/v1/release",
+    );
+  });
+
   it("defaults convex credential role to maintainer outside CI", async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
       jsonResponse({
@@ -318,6 +482,37 @@ describe("credential lease runtime", () => {
     });
 
     expect(fetchUrl(fetchImpl)).toBe("http://127.0.0.1:3210/qa-credentials/v1/acquire");
+  });
+
+  it("caps oversized convex HTTP timeouts before creating abort signals", async () => {
+    const timeoutController = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      jsonResponse({
+        status: "ok",
+        credentialId: "cred-timeout",
+        leaseToken: "lease-timeout",
+        payload: { groupId: "-100123", driverToken: "driver", sutToken: "sut" },
+      }),
+    );
+
+    await acquireQaCredentialLease({
+      kind: "telegram",
+      source: "convex",
+      role: "maintainer",
+      env: {
+        OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
+        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
+        OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS: String(Number.MAX_SAFE_INTEGER),
+      },
+      fetchImpl,
+      resolveEnvPayload: () => ({ groupId: "-1", driverToken: "unused", sutToken: "unused" }),
+      parsePayload: (payload) =>
+        payload as { groupId: string; driverToken: string; sutToken: string },
+    });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
+    expect(fetchInit(fetchImpl).signal).toBe(timeoutController.signal);
   });
 
   it("rejects unsafe endpoint prefix overrides", async () => {

@@ -1,7 +1,13 @@
+// Covers gateway port availability and diagnostics behavior.
 import net from "node:net";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { stripAnsi } from "../terminal/ansi.js";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import {
+  getWindowsPowerShellExePath,
+  getWindowsSystem32ExePath,
+  getWindowsWmicExePath,
+} from "./windows-install-roots.js";
 
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 
@@ -72,7 +78,22 @@ describe("ports helpers", () => {
     }
     const port = address.port;
     await expect(ensurePortAvailable(port)).rejects.toBeInstanceOf(PortInUseError);
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  });
+
+  it("ensurePortAvailable rejects when an explicitly scoped IPv4 loopback is busy", async () => {
+    const server = net.createServer();
+    const address = await listenServer(server, 0, "127.0.0.1");
+    if (!address) {
+      return;
+    }
+    const port = address.port;
+    await expect(ensurePortAvailable(port, "127.0.0.1")).rejects.toBeInstanceOf(PortInUseError);
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   });
 
   it("handlePortError exits nicely on EADDRINUSE", async () => {
@@ -129,7 +150,9 @@ describeUnix("inspectPortUsage", () => {
       const enoentErrors = (result.errors ?? []).filter((err) => err.includes("ENOENT"));
       expect(enoentErrors.length).toBeGreaterThan(0);
     } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 
@@ -190,7 +213,9 @@ describeUnix("inspectPortUsage", () => {
       expect(result.listeners[0]?.commandLine).toContain("openclaw");
       expect(result.errors).toBeUndefined();
     } finally {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 
@@ -402,7 +427,7 @@ describe("inspectPortUsage on Windows", () => {
     setPlatform("win32");
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const [command] = argv;
-      if (command === "netstat") {
+      if (command === getWindowsSystem32ExePath("netstat.exe")) {
         return {
           stdout:
             "  TCP    127.0.0.1:50123    127.0.0.1:18789    ESTABLISHED    4242\r\n" +
@@ -411,10 +436,10 @@ describe("inspectPortUsage on Windows", () => {
           code: 0,
         };
       }
-      if (command === "tasklist") {
+      if (command === getWindowsSystem32ExePath("tasklist.exe")) {
         return { stdout: "Image Name: node.exe\r\n", stderr: "", code: 0 };
       }
-      if (command === "powershell") {
+      if (command === getWindowsPowerShellExePath()) {
         return {
           stdout:
             '"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js logs --follow\r\n',
@@ -440,17 +465,17 @@ describe("inspectPortUsage on Windows", () => {
     setPlatform("win32");
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const [command] = argv;
-      if (command === "netstat") {
+      if (command === getWindowsSystem32ExePath("netstat.exe")) {
         return {
           stdout: "  TCP    127.0.0.1:18789    0.0.0.0:0    LISTENING    4242\r\n",
           stderr: "",
           code: 0,
         };
       }
-      if (command === "tasklist") {
+      if (command === getWindowsSystem32ExePath("tasklist.exe")) {
         return { stdout: "Image Name: node.exe\r\n", stderr: "", code: 0 };
       }
-      if (command === "powershell") {
+      if (command === getWindowsPowerShellExePath()) {
         return {
           stdout:
             '"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js gateway run\r\n',
@@ -476,7 +501,7 @@ describe("inspectPortUsage on Windows", () => {
     setPlatform("win32");
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const [command] = argv;
-      if (command === "netstat") {
+      if (command === getWindowsSystem32ExePath("netstat.exe")) {
         return {
           stdout:
             "  TCP    127.0.0.1:187890    0.0.0.0:0    LISTENING    9000\r\n" +
@@ -497,20 +522,20 @@ describe("inspectPortUsage on Windows", () => {
     setPlatform("win32");
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
       const [command] = argv;
-      if (command === "netstat") {
+      if (command === getWindowsSystem32ExePath("netstat.exe")) {
         return {
           stdout: "  TCP    127.0.0.1:18789    0.0.0.0:0    LISTENING    4242\r\n",
           stderr: "",
           code: 0,
         };
       }
-      if (command === "tasklist") {
+      if (command === getWindowsSystem32ExePath("tasklist.exe")) {
         return { stdout: "Image Name: node.exe\r\n", stderr: "", code: 0 };
       }
-      if (command === "powershell") {
+      if (command === getWindowsPowerShellExePath()) {
         return { stdout: "", stderr: "access denied", code: 1 };
       }
-      if (command === "wmic") {
+      if (command === getWindowsWmicExePath()) {
         return {
           stdout: "CommandLine=node.exe C:\\openclaw\\dist\\index.js gateway run\r\n",
           stderr: "",
@@ -524,6 +549,6 @@ describe("inspectPortUsage on Windows", () => {
 
     expect(result.listeners[0]?.commandLine).toContain("openclaw");
     const commandNames = runCommandWithTimeoutMock.mock.calls.map(([argv]) => argv[0]);
-    expect(commandNames).toContain("wmic");
+    expect(commandNames).toContain(getWindowsWmicExePath());
   });
 });

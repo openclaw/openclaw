@@ -1,14 +1,19 @@
+/**
+ * Tool Search catalog compaction.
+ *
+ * Presents large OpenClaw/MCP/client tool inventories through search, describe, call, and optional code-mode tools.
+ */
 import { spawn } from "node:child_process";
 import os from "node:os";
-import { Type } from "typebox";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getPluginToolMeta } from "../plugins/tools.js";
-import { isRecord } from "../shared/record-coerce.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeStringEntries,
   uniqueStrings,
   uniqueValues,
-} from "../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-normalization";
+import { Type } from "typebox";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tools.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
   type HookContext,
@@ -31,14 +36,30 @@ const TOOL_SEARCH_CONTROL_TOOL_NAMES = new Set([
   TOOL_CALL_RAW_TOOL_NAME,
 ]);
 
+const TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES = new Set([
+  TOOL_SEARCH_RAW_TOOL_NAME,
+  TOOL_DESCRIBE_RAW_TOOL_NAME,
+  TOOL_CALL_RAW_TOOL_NAME,
+]);
+
 const DEFAULT_CODE_TIMEOUT_MS = 10_000;
 const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_MAX_SEARCH_LIMIT = 20;
 const MAX_REUSABLE_CATALOG_SNAPSHOTS = 256;
+const MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS = 18_000;
+const TOOL_DIRECTORY_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/u;
 
-type ToolSearchMode = "code" | "tools";
+type ToolSearchMode = "code" | "tools" | "directory";
 type CatalogSource = "openclaw" | "mcp" | "client";
 type CatalogTool = AnyAgentTool | ToolDefinition;
+type CatalogVisibilityOptions = {
+  includeMcp?: boolean;
+};
+type UnknownToolRecoverySurface = "raw-tools" | "code-mode" | "tools";
+type UnknownToolErrorOptions = {
+  exactIdOnly?: boolean;
+  recoverySurface?: UnknownToolRecoverySurface;
+};
 
 type ReusableCatalogSnapshot = {
   entries: ToolSearchCatalogEntry[];
@@ -48,6 +69,8 @@ type ReusableCatalogSnapshot = {
 export type ToolSearchCatalogToolExecutor = (params: {
   tool: CatalogTool;
   toolName: string;
+  source: CatalogSource;
+  sourceName?: string;
   toolCallId: string;
   parentToolCallId?: string;
   input: unknown;
@@ -55,6 +78,7 @@ export type ToolSearchCatalogToolExecutor = (params: {
   onUpdate?: AgentToolUpdateCallback;
 }) => Promise<AgentToolResult<unknown>>;
 
+/** Transcript projection for target tool calls made through Tool Search. */
 export type ToolSearchTargetTranscriptProjection = {
   parentToolCallId?: string;
   toolCallId: string;
@@ -65,6 +89,7 @@ export type ToolSearchTargetTranscriptProjection = {
   timestamp?: number;
 };
 
+/** Resolved Tool Search config after defaults, limits, and runtime support checks. */
 export type ToolSearchConfig = {
   enabled: boolean;
   mode: ToolSearchMode;
@@ -73,6 +98,7 @@ export type ToolSearchConfig = {
   maxSearchLimit: number;
 };
 
+/** Per-run/session context used by Tool Search control tools. */
 export type ToolSearchToolContext = {
   config?: OpenClawConfig;
   runtimeConfig?: OpenClawConfig;
@@ -85,16 +111,30 @@ export type ToolSearchToolContext = {
   executeTool?: ToolSearchCatalogToolExecutor;
 };
 
+/** Catalog entry retained behind compacted Tool Search control tools. */
 export type ToolSearchCatalogEntry = {
   id: string;
   source: CatalogSource;
   sourceName?: string;
+  mcp?: PluginToolMcpMeta;
   name: string;
   label?: string;
   description: string;
   parameters?: unknown;
   tool: CatalogTool;
 };
+
+type ToolSearchDirectoryIntent = {
+  tokens: Set<string>;
+  hasUrl: boolean;
+  hasFilePath: boolean;
+  hasMention: boolean;
+  hasSchedule: boolean;
+  hasCurrentFact: boolean;
+  hasMemoryRecall: boolean;
+};
+
+type ToolDirectoryFamily = "memory" | "web";
 
 export type ToolSearchCatalogSession = {
   entries: ToolSearchCatalogEntry[];
@@ -213,6 +253,8 @@ function buildModelScriptSource(code) {
 }
 
 function buildControllerSource() {
+  // The controller returns promise-like bridge handles. The model code can await
+  // them naturally, while the parent process serializes real tool calls.
   return (
     '"use strict";\n' +
     "(() => {\n" +
@@ -403,6 +445,7 @@ function readInteger(value: unknown, fallback: number): number {
 }
 
 let toolSearchCodeModeSupportedForTest: boolean | undefined;
+let toolSearchMinCodeTimeoutMsForTest: number | undefined;
 
 function isToolSearchCodeModeSupported(): boolean {
   if (toolSearchCodeModeSupportedForTest !== undefined) {
@@ -411,11 +454,15 @@ function isToolSearchCodeModeSupported(): boolean {
   return process.allowedNodeEnvironmentFlags.has("--permission");
 }
 
+function resolveMinCodeTimeoutMs(): number {
+  return toolSearchMinCodeTimeoutMsForTest ?? 1000;
+}
+
 export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConfig {
   const raw = readToolSearchConfig(config);
   const rawMode = typeof raw.mode === "string" ? raw.mode : "code";
   const requestedMode: ToolSearchMode =
-    rawMode === "tools" || rawMode === "code" ? rawMode : "code";
+    rawMode === "tools" || rawMode === "directory" || rawMode === "code" ? rawMode : "code";
   const mode: ToolSearchMode =
     requestedMode === "code" && !isToolSearchCodeModeSupported() ? "tools" : requestedMode;
   const configured = Object.keys(raw).some((key) => key !== "enabled");
@@ -427,7 +474,7 @@ export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConf
     enabled: readBoolean(raw.enabled, configured),
     mode,
     codeTimeoutMs: Math.max(
-      1000,
+      resolveMinCodeTimeoutMs(),
       Math.min(60_000, readInteger(raw.codeTimeoutMs, DEFAULT_CODE_TIMEOUT_MS)),
     ),
     searchDefaultLimit: Math.max(
@@ -512,12 +559,15 @@ function catalogToolIdentity(tool: CatalogTool): number {
 }
 
 function catalogEntriesFingerprint(entries: readonly ToolSearchCatalogEntry[]): string {
+  // Fingerprints include object identity for executable tools because function
+  // bodies are not JSON-stable but catalog reuse must not bind stale executors.
   return entries
     .map((entry) =>
       [
         entry.id,
         entry.source,
         entry.sourceName ?? "",
+        stableJsonFingerprint(entry.mcp),
         entry.name,
         entry.label ?? "",
         entry.description,
@@ -597,11 +647,20 @@ function rememberReusableCatalog(key: string | undefined, catalog: ToolSearchCat
   }
 }
 
-function classifyTool(tool: CatalogTool): { source: CatalogSource; sourceName?: string } {
+function classifyTool(tool: CatalogTool): {
+  source: CatalogSource;
+  sourceName?: string;
+  mcp?: PluginToolMcpMeta;
+} {
   const meta = getPluginToolMeta(tool as AnyAgentTool);
   const pluginId = meta?.pluginId?.trim();
   if (pluginId === "bundle-mcp") {
-    return { source: "mcp", sourceName: pluginId };
+    const mcp = meta?.mcp;
+    return {
+      source: "mcp",
+      sourceName: pluginId,
+      ...(mcp ? { mcp } : {}),
+    };
   }
   if (pluginId) {
     return { source: "openclaw", sourceName: pluginId };
@@ -635,6 +694,7 @@ function toCatalogEntry(
     id: makeCatalogId(tool, source, sourceName),
     source,
     sourceName,
+    ...(source === "mcp" && classified.mcp ? { mcp: classified.mcp } : {}),
     name: tool.name,
     label: tool.label,
     description: tool.description ?? "",
@@ -648,6 +708,20 @@ function shouldCatalogTool(tool: AnyAgentTool): boolean {
     return false;
   }
   return true;
+}
+
+export function collectUniqueCatalogToolNames(tools: readonly AnyAgentTool[]): Set<string> {
+  const nameCounts = new Map<string, number>();
+  for (const tool of tools) {
+    if (shouldCatalogTool(tool)) {
+      nameCounts.set(tool.name, (nameCounts.get(tool.name) ?? 0) + 1);
+    }
+  }
+  return new Set(
+    Array.from(nameCounts)
+      .filter(([, count]) => count === 1)
+      .map(([name]) => name),
+  );
 }
 
 function shouldExposeControlTool(name: string, mode: ToolSearchMode): boolean {
@@ -807,10 +881,12 @@ export function projectToolSearchTargetTranscriptMessages(
   return projected;
 }
 
+/** Create an explicit catalog holder for callers that cannot rely on session keys. */
 export function createToolSearchCatalogRef(): ToolSearchCatalogRef {
   return {};
 }
 
+/** Replace visible tools with Tool Search controls and register hidden catalog entries. */
 export function applyToolSearchCatalog(params: {
   tools: AnyAgentTool[];
   config?: OpenClawConfig;
@@ -837,6 +913,94 @@ export function applyToolSearchCatalog(params: {
   });
 }
 
+/** Keep tool names discoverable while deferring heavyweight JSON schemas behind describe/call. */
+export function applyToolSchemaDirectoryCatalog(params: {
+  tools: AnyAgentTool[];
+  config?: OpenClawConfig;
+  sessionId?: string;
+  sessionKey?: string;
+  agentId?: string;
+  runId?: string;
+  catalogRef?: ToolSearchCatalogRef;
+  toolHookContext?: HookContext;
+  hydrateToolNames?: Iterable<string>;
+}): {
+  tools: AnyAgentTool[];
+  compacted: boolean;
+  catalogToolCount: number;
+  catalogRegistered: boolean;
+  catalogReused: boolean;
+} {
+  const config = resolveToolSearchConfig(params.config);
+  if (!config.enabled) {
+    return {
+      tools: params.tools,
+      compacted: false,
+      catalogToolCount: 0,
+      catalogRegistered: false,
+      catalogReused: false,
+    };
+  }
+  if (!params.tools.some((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME)) {
+    return {
+      tools: params.tools.filter((tool) => !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)),
+      compacted: false,
+      catalogToolCount: 0,
+      catalogRegistered: false,
+      catalogReused: false,
+    };
+  }
+  const hydrateToolNames = new Set(
+    normalizeStringEntries(Array.from(params.hydrateToolNames ?? [])),
+  );
+  const uniqueCatalogToolNames = collectUniqueCatalogToolNames(params.tools);
+  return applyToolCatalogCompaction({
+    ...params,
+    enabled: config.enabled,
+    isVisibleControlTool: (tool) => TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES.has(tool.name),
+    isVisibleCatalogTool: (tool) =>
+      hydrateToolNames.has(tool.name) && uniqueCatalogToolNames.has(tool.name),
+  });
+}
+
+export function buildToolSchemaDirectoryPrompt(
+  ctx: ToolSearchToolContext,
+  options?: CatalogVisibilityOptions,
+): string {
+  const runtime = new ToolSearchRuntime(
+    ctx,
+    resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config),
+  );
+  return formatToolSearchCatalogDirectory(runtime.all(options));
+}
+
+/** Resolve an exact hidden catalog tool name without exposing fuzzy search or catalog ids. */
+export function resolveToolSearchCatalogTool(
+  ctx: ToolSearchToolContext,
+  name: unknown,
+  options?: CatalogVisibilityOptions,
+): AnyAgentTool | undefined {
+  if (typeof name !== "string") {
+    return undefined;
+  }
+  const needle = name.trim();
+  if (!needle) {
+    return undefined;
+  }
+  try {
+    const matches = visibleCatalogEntries(resolveCatalog(ctx), options).filter(
+      (entry) => entry.name === needle,
+    );
+    return matches.length === 1 ? (matches[0]?.tool as AnyAgentTool | undefined) : undefined;
+  } catch (error) {
+    if (error instanceof ToolInputError) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+/** Move client-provided tools into an existing Tool Search catalog. */
 export function addClientToolsToToolSearchCatalog(params: {
   tools: ToolDefinition[];
   config?: OpenClawConfig;
@@ -846,12 +1010,17 @@ export function addClientToolsToToolSearchCatalog(params: {
   runId?: string;
   catalogRef?: ToolSearchCatalogRef;
 }): { tools: ToolDefinition[]; compacted: boolean; catalogToolCount: number } {
+  const config = resolveToolSearchConfig(params.config);
+  if (config.mode === "directory") {
+    return { tools: params.tools, compacted: false, catalogToolCount: 0 };
+  }
   return addClientToolsToToolCatalog({
     ...params,
-    enabled: resolveToolSearchConfig(params.config).enabled,
+    enabled: config.enabled,
   });
 }
 
+/** Register catalog entries under run/session keys and optional direct refs. */
 export function registerToolSearchCatalog(params: {
   sessionId?: string;
   sessionKey?: string;
@@ -893,6 +1062,7 @@ export function registerToolSearchCatalog(params: {
   return next;
 }
 
+/** Clear Tool Search catalog state for a run/session/ref. */
 export function clearToolSearchCatalog(params: {
   sessionId?: string;
   sessionKey?: string;
@@ -948,10 +1118,381 @@ function compactEntry(entry: ToolSearchCatalogEntry) {
     id: entry.id,
     source: entry.source,
     sourceName: entry.sourceName,
+    ...(entry.mcp ? { mcp: entry.mcp } : {}),
     name: entry.name,
     label: entry.label,
     description: entry.description,
   };
+}
+
+function compactDirectoryDescription(description: string): string {
+  const normalized = description.replace(/\s+/g, " ").trim();
+  if (normalized.length <= 180) {
+    return normalized;
+  }
+  return `${normalized.slice(0, 177).trimEnd()}...`;
+}
+
+function formatToolDirectoryIdentifier(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed && TOOL_DIRECTORY_IDENTIFIER_RE.test(trimmed) ? trimmed : undefined;
+}
+
+function formatToolDirectoryEntry(entry: ReturnType<typeof compactEntry>): string | undefined {
+  if (entry.source !== "openclaw") {
+    return undefined;
+  }
+  const name = formatToolDirectoryIdentifier(entry.name);
+  if (!name) {
+    return undefined;
+  }
+  const description = compactDirectoryDescription(entry.description);
+  const ownerName = formatToolDirectoryIdentifier(entry.sourceName);
+  const owner = ownerName ? ` (${ownerName})` : "";
+  return `- ${name}${owner}: ${description || "No description."}`;
+}
+
+function renderToolSearchCatalogDirectory(lines: string[], total: number): string {
+  const omitted = total - lines.length;
+  const footer =
+    omitted > 0
+      ? `${omitted} additional tools omitted. Use tool_search to find them, then tool_describe to load a full schema before tool_call.`
+      : "Call tool_describe with a listed tool name to load its full schema before using tool_call.";
+  return ["Available deferred-schema tools:", ...lines, "", footer].join("\n");
+}
+
+function formatToolSearchCatalogDirectory(entries: Array<ReturnType<typeof compactEntry>>): string {
+  if (entries.length === 0) {
+    return "Available deferred-schema tools: none.";
+  }
+  const nameCounts = new Map<string, number>();
+  for (const entry of entries) {
+    nameCounts.set(entry.name, (nameCounts.get(entry.name) ?? 0) + 1);
+  }
+  const lines = entries
+    .filter((entry) => nameCounts.get(entry.name) === 1)
+    .toSorted((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+    .map(formatToolDirectoryEntry)
+    .filter((line): line is string => Boolean(line));
+  const fullDirectory = renderToolSearchCatalogDirectory(lines, entries.length);
+  if (fullDirectory.length <= MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS) {
+    return fullDirectory;
+  }
+
+  // Keep the directory deterministic and bounded; omitted names remain
+  // discoverable through the visible tool_search control.
+  let low = 0;
+  let high = lines.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (
+      renderToolSearchCatalogDirectory(lines.slice(0, middle), entries.length).length <=
+      MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS
+    ) {
+      low = middle;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return renderToolSearchCatalogDirectory(lines.slice(0, low), entries.length);
+}
+
+const TOOL_DIRECTORY_HYDRATION_KEYWORDS: Array<{
+  terms: readonly string[];
+  toolHints: readonly string[];
+  weight: number;
+}> = [
+  {
+    terms: ["search", "lookup", "look", "find", "current", "today", "price", "latest", "news"],
+    toolHints: ["searxng", "web"],
+    weight: 8,
+  },
+  {
+    terms: ["url", "link", "page", "fetch", "read", "article", "http", "https"],
+    toolHints: ["fetch", "browser"],
+    weight: 8,
+  },
+  {
+    terms: ["send", "reply", "message", "post", "react", "embed", "discord", "imessage"],
+    toolHints: ["message", "session", "send"],
+    weight: 7,
+  },
+  {
+    terms: ["file", "path", "read", "write", "edit", "patch", "grep", "list"],
+    toolHints: ["read", "write", "edit", "grep", "find", "ls", "patch"],
+    weight: 6,
+  },
+  {
+    terms: ["run", "command", "shell", "terminal", "build", "test", "pnpm", "git"],
+    toolHints: ["exec", "process"],
+    weight: 7,
+  },
+  {
+    terms: [
+      "remember",
+      "recall",
+      "memory",
+      "memories",
+      "known",
+      "history",
+      "previous",
+      "prior",
+      "earlier",
+      "decided",
+      "decision",
+      "discussed",
+    ],
+    toolHints: ["memory"],
+    weight: 6,
+  },
+  {
+    terms: ["remind", "schedule", "later", "tomorrow", "daily", "weekly", "cron"],
+    toolHints: ["cron", "automation", "heartbeat"],
+    weight: 8,
+  },
+  {
+    terms: ["image", "picture", "photo", "meme", "gif", "screenshot", "visual"],
+    toolHints: ["image", "vision", "browser"],
+    weight: 6,
+  },
+  {
+    terms: ["audio", "voice", "speak", "tts", "transcribe"],
+    toolHints: ["audio", "voice", "tts"],
+    weight: 6,
+  },
+];
+
+function readToolDirectoryIntent(query: string): ToolSearchDirectoryIntent {
+  const tokens = new Set(tokenize(query));
+  const hasCurrentFact = ["current", "today", "latest", "price", "weather", "news"].some((term) =>
+    tokens.has(term),
+  );
+  const hasExplicitMemoryRecall = [
+    "remember",
+    "recall",
+    "memory",
+    "memories",
+    "known",
+    "history",
+    "previous",
+    "prior",
+    "earlier",
+    "decided",
+    "decision",
+    "discussed",
+  ].some((term) => tokens.has(term));
+  const hasIdentityRecall =
+    /\b(?:do you know|who (?:is|are|was)|what did (?:we|i|you|they)|when did (?:we|i|you|they))\b/iu.test(
+      query,
+    );
+  return {
+    tokens,
+    hasUrl: tokens.has("http") || tokens.has("https") || /https?:\/\//iu.test(query),
+    hasFilePath: tokens.has("/") || /(^|\s)(\.{1,2}\/|\/|[a-z]:\\)/iu.test(query),
+    hasMention: /<@!?\d+>/u.test(query) || tokens.has("discord"),
+    hasSchedule: ["remind", "schedule", "later", "tomorrow", "daily", "weekly", "cron"].some(
+      (term) => tokens.has(term),
+    ),
+    hasCurrentFact,
+    hasMemoryRecall: hasExplicitMemoryRecall || (hasIdentityRecall && !hasCurrentFact),
+  };
+}
+
+function classifyDirectoryToolFamilies(
+  tool: Pick<AnyAgentTool, "name" | "description">,
+  intent: ToolSearchDirectoryIntent,
+): Set<ToolDirectoryFamily> {
+  const toolText = `${tool.name} ${tool.description ?? ""}`.toLowerCase();
+  const families = new Set<ToolDirectoryFamily>();
+  if (TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)) {
+    return families;
+  }
+  const hasMemoryToolSignal =
+    /\b(?:memory|memories|recall|remember|history|prior|knowledge|libravdb)\b/iu.test(toolText) ||
+    /(?:^|_)(?:memory|recall|remember|libravdb)(?:_|$)/iu.test(tool.name);
+  const hasWebToolSignal =
+    /\b(?:web|internet|online|browser|url|http|https|page|article|fetch|crawl|searxng|google|bing|brave|tavily|duckduckgo|serp)\b/iu.test(
+      toolText,
+    ) ||
+    /(?:^|_)(?:web|fetch|browser|searxng|google|bing|brave|tavily|duckduckgo|serp)(?:_|$)/iu.test(
+      tool.name,
+    );
+  const hasWebIntent =
+    intent.hasUrl ||
+    intent.hasCurrentFact ||
+    ["search", "lookup", "look", "find", "current", "today", "price", "latest", "news"].some(
+      (term) => intent.tokens.has(term),
+    );
+  if (hasWebToolSignal && hasWebIntent) {
+    families.add("web");
+  }
+  if (hasMemoryToolSignal && intent.hasMemoryRecall) {
+    families.add("memory");
+  }
+  return families;
+}
+
+function scoreDirectoryTool(
+  tool: Pick<AnyAgentTool, "name" | "description">,
+  intent: ToolSearchDirectoryIntent,
+) {
+  const toolText = `${tool.name} ${tool.description ?? ""}`.toLowerCase();
+  const toolTokens = new Set(tokenize(toolText));
+  let score = 0;
+  // Iterate catalog text so large prompts do not multiply scoring work for every tool.
+  for (const token of toolTokens) {
+    if (intent.tokens.has(token)) {
+      score += 2;
+    }
+  }
+  for (const group of TOOL_DIRECTORY_HYDRATION_KEYWORDS) {
+    if (!group.terms.some((term) => intent.tokens.has(term))) {
+      continue;
+    }
+    if (group.toolHints.some((hint) => toolText.includes(hint))) {
+      score += group.weight;
+    }
+  }
+  if (intent.hasUrl && /fetch|browser|web/iu.test(toolText)) {
+    score += 10;
+  }
+  if (intent.hasFilePath && /read|write|edit|grep|find|ls|file|patch/iu.test(toolText)) {
+    score += 8;
+  }
+  if (intent.hasMention && /message|discord|react|send/iu.test(toolText)) {
+    score += 8;
+  }
+  if (intent.hasSchedule && /cron|schedule|remind|heartbeat|automation/iu.test(toolText)) {
+    score += 8;
+  }
+  if (
+    intent.hasCurrentFact &&
+    /searxng|web|internet|online|fetch|weather|finance|price|google|bing|brave|tavily|duckduckgo|serp/iu.test(
+      toolText,
+    )
+  ) {
+    score += 8;
+  }
+  if (
+    intent.hasMemoryRecall &&
+    /memory|memories|recall|remember|history|prior|knowledge|libravdb/iu.test(toolText)
+  ) {
+    score += 8;
+  }
+  return score;
+}
+
+function expandDirectoryHydrationGroups(params: {
+  selectedNames: readonly string[];
+  tools: readonly Pick<AnyAgentTool, "name" | "description">[];
+  intent: ToolSearchDirectoryIntent;
+  maxTools: number;
+}): string[] {
+  if (params.maxTools <= 0) {
+    return [];
+  }
+  const emitted = new Set<string>();
+  const expandedFamilies = new Set<ToolDirectoryFamily>();
+  const expanded: string[] = [];
+  const toolsByName = new Map(params.tools.map((tool) => [tool.name, tool]));
+  const toolsByFamily = new Map<ToolDirectoryFamily, string[]>();
+  const selectedRank = new Map(params.selectedNames.map((name, index) => [name, index]));
+  for (const tool of params.tools) {
+    for (const family of classifyDirectoryToolFamilies(tool, params.intent)) {
+      const names = toolsByFamily.get(family) ?? [];
+      names.push(tool.name);
+      toolsByFamily.set(family, names);
+    }
+  }
+  for (const names of toolsByFamily.values()) {
+    names.sort(
+      (a, b) =>
+        (selectedRank.get(a) ?? Number.MAX_SAFE_INTEGER) -
+          (selectedRank.get(b) ?? Number.MAX_SAFE_INTEGER) || a.localeCompare(b),
+    );
+  }
+  for (const selectedName of params.selectedNames) {
+    if (expanded.length >= params.maxTools) {
+      break;
+    }
+    if (!emitted.has(selectedName)) {
+      expanded.push(selectedName);
+      emitted.add(selectedName);
+    }
+    if (expanded.length >= params.maxTools) {
+      break;
+    }
+    const selectedTool = toolsByName.get(selectedName);
+    if (!selectedTool) {
+      continue;
+    }
+    for (const family of classifyDirectoryToolFamilies(selectedTool, params.intent)) {
+      if (expandedFamilies.has(family)) {
+        continue;
+      }
+      expandedFamilies.add(family);
+      for (const groupedName of toolsByFamily.get(family) ?? []) {
+        if (expanded.length >= params.maxTools) {
+          return expanded;
+        }
+        if (emitted.has(groupedName)) {
+          continue;
+        }
+        expanded.push(groupedName);
+        emitted.add(groupedName);
+      }
+    }
+  }
+  return expanded;
+}
+
+export function estimateToolSchemaDirectoryToolNames(params: {
+  tools: readonly AnyAgentTool[];
+  query?: string;
+  maxTools?: number;
+  requiredToolNames?: Iterable<string>;
+}): string[] {
+  const maxTools = Math.max(0, Math.min(12, params.maxTools ?? 4));
+  const hydratableTools: AnyAgentTool[] = [];
+  const externalToolNames = new Set<string>();
+  const uniqueCatalogToolNames = collectUniqueCatalogToolNames(params.tools);
+  for (const tool of params.tools) {
+    if (!uniqueCatalogToolNames.has(tool.name)) {
+      continue;
+    }
+    // MCP descriptions are untrusted; keep their schemas deferred until explicit describe/call.
+    if (classifyTool(tool).source === "mcp") {
+      externalToolNames.add(tool.name);
+      continue;
+    }
+    hydratableTools.push(tool);
+  }
+  const required = normalizeStringEntries(Array.from(params.requiredToolNames ?? [])).filter(
+    (name) => !externalToolNames.has(name),
+  );
+  const requiredSet = new Set(required);
+  const query = params.query?.trim() ?? "";
+  if (!query && required.length >= maxTools) {
+    return required.slice(0, maxTools);
+  }
+  const intent = readToolDirectoryIntent(query);
+  const scored = hydratableTools
+    .filter((tool) => !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name))
+    .map((tool) => ({
+      name: tool.name,
+      score: requiredSet.has(tool.name)
+        ? Number.MAX_SAFE_INTEGER
+        : scoreDirectoryTool(tool, intent),
+    }))
+    .filter((entry) => entry.score > 0)
+    .toSorted((a, b) => b.score - a.score || a.name.localeCompare(b.name));
+  const selected = uniqueStrings([...required, ...scored.map((entry) => entry.name)]);
+  return expandDirectoryHydrationGroups({
+    selectedNames: selected,
+    tools: hydratableTools,
+    intent,
+    maxTools,
+  });
 }
 
 function describeEntry(entry: ToolSearchCatalogEntry) {
@@ -994,13 +1535,112 @@ function scoreEntry(entry: ToolSearchCatalogEntry, terms: string[]): number {
   return score;
 }
 
-function findEntry(catalog: ToolSearchCatalogSession, id: string): ToolSearchCatalogEntry {
-  const needle = id.trim();
-  const entry = catalog.entries.find(
-    (candidate) => candidate.id === needle || candidate.name === needle,
+function visibleCatalogEntries(
+  catalog: ToolSearchCatalogSession,
+  options?: CatalogVisibilityOptions,
+): ToolSearchCatalogEntry[] {
+  return options?.includeMcp === false
+    ? catalog.entries.filter((entry) => entry.source !== "mcp")
+    : catalog.entries;
+}
+
+function tokenizeLookupValue(input: string): Set<string> {
+  return new Set(normalizeStringEntries(input.toLowerCase().split(/[^a-z0-9]+/u)));
+}
+
+function scoreUnknownToolSuggestion(needle: string, entry: ToolSearchCatalogEntry): number {
+  const normalizedNeedle = needle.toLowerCase();
+  const name = entry.name.toLowerCase();
+  const id = entry.id.toLowerCase();
+  const label = (entry.label ?? "").toLowerCase();
+  const description = entry.description.toLowerCase();
+  const needleTokens = tokenizeLookupValue(needle);
+  const entryTokens = tokenizeLookupValue(
+    `${entry.name} ${entry.id} ${entry.label ?? ""} ${entry.description}`,
   );
+  let score = 0;
+  if ((name && normalizedNeedle.includes(name)) || id.includes(normalizedNeedle)) {
+    score += 40;
+  }
+  if (name && needleTokens.has(name)) {
+    score += 40;
+  }
+  for (const token of needleTokens) {
+    if (entryTokens.has(token)) {
+      score += 12;
+    }
+  }
+  if (label.includes(normalizedNeedle) || description.includes(normalizedNeedle)) {
+    score += 8;
+  }
+  return score;
+}
+
+function formatUnknownToolIdError(
+  needle: string,
+  entries: readonly ToolSearchCatalogEntry[],
+  options: UnknownToolErrorOptions = {},
+): string {
+  const nameCounts = new Map<string, number>();
+  for (const entry of entries) {
+    nameCounts.set(entry.name, (nameCounts.get(entry.name) ?? 0) + 1);
+  }
+  const suggestions = uniqueStrings(
+    entries
+      .map((entry) => ({
+        value: options.exactIdOnly || (nameCounts.get(entry.name) ?? 0) > 1 ? entry.id : entry.name,
+        score: scoreUnknownToolSuggestion(needle, entry),
+      }))
+      .filter((candidate) => candidate.score > 0)
+      .toSorted((a, b) => b.score - a.score || a.value.localeCompare(b.value))
+      .map((candidate) => candidate.value),
+  ).slice(0, 3);
+  const recoveryText =
+    options.recoverySurface === "code-mode"
+      ? "Use openclaw.tools.search to find a tool, openclaw.tools.describe to inspect it, then openclaw.tools.call with the exact id or name."
+      : options.recoverySurface === "tools"
+        ? "Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name."
+        : "Use tool_search to find a tool, tool_describe to inspect it, then tool_call with the exact id or name.";
+  if (suggestions.length === 0) {
+    return `Unknown tool id: ${needle}. ${recoveryText}`;
+  }
+  return `Unknown tool id: ${needle}. Did you mean: ${suggestions.join(", ")}? ${recoveryText}`;
+}
+
+function findEntry(
+  catalog: ToolSearchCatalogSession,
+  id: string,
+  options?: CatalogVisibilityOptions,
+  errorOptions?: UnknownToolErrorOptions,
+): ToolSearchCatalogEntry {
+  const needle = id.trim();
+  const entries = visibleCatalogEntries(catalog, options);
+  const exactIdEntry = entries.find((candidate) => candidate.id === needle);
+  if (exactIdEntry) {
+    return exactIdEntry;
+  }
+  const namedEntries = entries.filter((candidate) => candidate.name === needle);
+  if (namedEntries.length > 1) {
+    throw new ToolInputError(`Ambiguous tool name: ${needle}; use an exact tool id.`);
+  }
+  const namedEntry = namedEntries[0];
+  if (!namedEntry) {
+    throw new ToolInputError(formatUnknownToolIdError(needle, entries, errorOptions));
+  }
+  return namedEntry;
+}
+
+function findEntryByExactId(
+  catalog: ToolSearchCatalogSession,
+  id: string,
+  errorOptions: UnknownToolErrorOptions = {},
+): ToolSearchCatalogEntry {
+  const needle = id.trim();
+  const entry = catalog.entries.find((candidate) => candidate.id === needle);
   if (!entry) {
-    throw new ToolInputError(`Unknown tool id: ${needle}`);
+    throw new ToolInputError(
+      formatUnknownToolIdError(needle, catalog.entries, { ...errorOptions, exactIdOnly: true }),
+    );
   }
   return entry;
 }
@@ -1078,12 +1718,12 @@ export class ToolSearchRuntime {
     private readonly config: ToolSearchConfig,
   ) {}
 
-  search = async (query: string, options?: { limit?: number }) => {
+  search = async (query: string, options?: { limit?: number } & CatalogVisibilityOptions) => {
     const catalog = resolveCatalog(this.ctx);
     catalog.searchCount += 1;
     const limit = readLimit(options?.limit, this.config);
     const terms = tokenize(query);
-    return catalog.entries
+    return visibleCatalogEntries(catalog, options)
       .map((entry) => ({ entry, score: scoreEntry(entry, terms) }))
       .filter((hit) => hit.score > 0)
       .toSorted((a, b) => b.score - a.score || a.entry.id.localeCompare(b.entry.id))
@@ -1091,15 +1731,24 @@ export class ToolSearchRuntime {
       .map((hit) => compactEntry(hit.entry));
   };
 
-  all = () => {
+  all = (options?: CatalogVisibilityOptions) => {
     const catalog = resolveCatalog(this.ctx);
-    return catalog.entries.map((entry) => compactEntry(entry));
+    return visibleCatalogEntries(catalog, options).map((entry) => compactEntry(entry));
   };
 
-  describe = async (id: string) => {
+  namespaceEntries = () => {
+    const catalog = resolveCatalog(this.ctx);
+    return catalog.entries.map((entry) =>
+      Object.assign(compactEntry(entry), {
+        parameters: entry.parameters ?? {},
+      }),
+    );
+  };
+
+  describe = async (id: string, options?: CatalogVisibilityOptions & UnknownToolErrorOptions) => {
     const catalog = resolveCatalog(this.ctx);
     catalog.describeCount += 1;
-    return describeEntry(findEntry(catalog, id));
+    return describeEntry(findEntry(catalog, id, options, options));
   };
 
   call = async (
@@ -1109,10 +1758,39 @@ export class ToolSearchRuntime {
       parentToolCallId?: string;
       signal?: AbortSignal;
       onUpdate?: AgentToolUpdateCallback;
+      recoverySurface?: UnknownToolRecoverySurface;
     },
   ) => {
     const catalog = resolveCatalog(this.ctx);
-    const entry = findEntry(catalog, id);
+    const entry = findEntry(catalog, id, undefined, options);
+    return await this.callEntry(catalog, entry, input, options);
+  };
+
+  callExactId = async (
+    id: string,
+    input?: unknown,
+    options?: {
+      parentToolCallId?: string;
+      signal?: AbortSignal;
+      onUpdate?: AgentToolUpdateCallback;
+      recoverySurface?: UnknownToolRecoverySurface;
+    },
+  ) => {
+    const catalog = resolveCatalog(this.ctx);
+    const entry = findEntryByExactId(catalog, id, options);
+    return await this.callEntry(catalog, entry, input, options);
+  };
+
+  private readonly callEntry = async (
+    catalog: ToolSearchCatalogSession,
+    entry: ToolSearchCatalogEntry,
+    input?: unknown,
+    options?: {
+      parentToolCallId?: string;
+      signal?: AbortSignal;
+      onUpdate?: AgentToolUpdateCallback;
+    },
+  ) => {
     catalog.callCount += 1;
     const parentId = sanitizeToolCallIdPart(options?.parentToolCallId ?? "direct");
     const toolCallId = `tool_search_code:${parentId}:${entry.name}:${++this.callSequence}`;
@@ -1129,6 +1807,8 @@ export class ToolSearchRuntime {
     const result = await executeTool({
       tool: entry.tool,
       toolName: entry.name,
+      source: entry.source,
+      sourceName: entry.sourceName,
       toolCallId,
       parentToolCallId: options?.parentToolCallId,
       input: input ?? {},
@@ -1146,6 +1826,7 @@ export class ToolSearchRuntime {
   }
 }
 
+/** Compact a native tool list into visible control tools plus hidden catalog entries. */
 export function applyToolCatalogCompaction(params: {
   tools: AnyAgentTool[];
   enabled: boolean;
@@ -1156,6 +1837,7 @@ export function applyToolCatalogCompaction(params: {
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: HookContext;
   isVisibleControlTool: (tool: AnyAgentTool) => boolean;
+  isVisibleCatalogTool?: (tool: AnyAgentTool) => boolean;
   shouldCatalogTool?: (tool: AnyAgentTool) => boolean;
 }): {
   tools: AnyAgentTool[];
@@ -1198,7 +1880,9 @@ export function applyToolCatalogCompaction(params: {
     }
     if (shouldCatalog(tool)) {
       catalog.push(toCatalogEntry(tool, undefined, params.toolHookContext));
-      continue;
+      if (!params.isVisibleCatalogTool?.(tool)) {
+        continue;
+      }
     }
     visible.push(tool);
   }
@@ -1269,6 +1953,7 @@ export function applyToolCatalogCompaction(params: {
   };
 }
 
+/** Append client-side tool definitions to an already registered catalog. */
 export function addClientToolsToToolCatalog(params: {
   tools: ToolDefinition[];
   enabled: boolean;
@@ -1303,7 +1988,8 @@ function toJsonSafe(value: unknown): unknown {
     return null;
   }
   try {
-    return JSON.parse(JSON.stringify(value)) as unknown;
+    const serialized = JSON.stringify(value);
+    return serialized === undefined ? null : (JSON.parse(serialized) as unknown);
   } catch {
     if (value instanceof Error) {
       return value.message;
@@ -1381,9 +2067,9 @@ async function runCodeModeBridgeRequest(
       if (typeof query !== "string") {
         throw new ToolInputError("search query must be a string.");
       }
-      const options = isRecord(values[1]) ? values[1] : undefined;
+      const optionsLocal = isRecord(values[1]) ? values[1] : undefined;
       return await runtime.search(query, {
-        limit: typeof options?.limit === "number" ? options.limit : undefined,
+        limit: typeof optionsLocal?.limit === "number" ? optionsLocal.limit : undefined,
       });
     }
     case "describe": {
@@ -1391,14 +2077,17 @@ async function runCodeModeBridgeRequest(
       if (typeof id !== "string") {
         throw new ToolInputError("describe id must be a string.");
       }
-      return await runtime.describe(id);
+      return await runtime.describe(id, { recoverySurface: "code-mode" });
     }
     case "call": {
       const id = values[0];
       if (typeof id !== "string") {
         throw new ToolInputError("call id must be a string.");
       }
-      return await runtime.call(id, values[1] ?? {}, options);
+      return await runtime.call(id, values[1] ?? {}, {
+        ...options,
+        recoverySurface: "code-mode",
+      });
     }
   }
   throw new ToolInputError("Unsupported tool_search_code bridge method.");
@@ -1422,10 +2111,8 @@ function runCodeModeChild(params: {
     const stderr: string[] = [];
     let settled = false;
     let timedOut = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
     let exitRejectionTimer: ReturnType<typeof setTimeout> | undefined;
     const bridgeAbortController = new AbortController();
-    let abortFromParent: () => void;
     const settle = (callback: () => void) => {
       if (settled) {
         return;
@@ -1441,22 +2128,22 @@ function runCodeModeChild(params: {
       child.kill();
       callback();
     };
-    abortFromParent = () => {
+    const abortFromParent: () => void = () => {
       bridgeAbortController.abort(params.signal?.reason);
       child.kill("SIGKILL");
       settle(() => reject(new Error("tool_search_code aborted")));
     };
-    if (params.signal?.aborted) {
-      abortFromParent();
-      return;
-    }
-    params.signal?.addEventListener("abort", abortFromParent, { once: true });
-    timer = setTimeout(() => {
+    const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
       timedOut = true;
       bridgeAbortController.abort(new Error("tool_search_code timed out"));
       child.kill("SIGKILL");
       settle(() => reject(new Error("tool_search_code timed out")));
     }, params.config.codeTimeoutMs);
+    params.signal?.addEventListener("abort", abortFromParent, { once: true });
+    if (params.signal?.aborted) {
+      abortFromParent();
+      return;
+    }
 
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk: string) => {
@@ -1484,6 +2171,8 @@ function runCodeModeChild(params: {
         );
       };
       if (code === 0 && signal === null) {
+        // A clean exit can race the final IPC result. Wait briefly before
+        // treating it as failure so flushed bridge/result messages can arrive.
         exitRejectionTimer = setTimeout(rejectOnExit, 250);
         return;
       }
@@ -1567,6 +2256,7 @@ function readCode(args: unknown): string {
   return code;
 }
 
+/** Create Tool Search control tools for the current run/session context. */
 export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[] {
   const config = resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config);
   const runtime = new ToolSearchRuntime(ctx, config);
@@ -1647,10 +2337,17 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
 export const testing = {
   sessionCatalogs,
   reusableCatalogSnapshots,
+  maxToolSchemaDirectoryPromptChars: MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS,
   resolveToolSearchConfig,
   isToolSearchCodeModeSupported,
   setToolSearchCodeModeSupportedForTest: (value: boolean | undefined) => {
     toolSearchCodeModeSupportedForTest = value;
+  },
+  setToolSearchMinCodeTimeoutMsForTest: (value: number | undefined) => {
+    toolSearchMinCodeTimeoutMsForTest =
+      typeof value === "number" && Number.isFinite(value) && value > 0
+        ? Math.floor(value)
+        : undefined;
   },
   applyToolSearchCatalog,
   addClientToolsToToolSearchCatalog,

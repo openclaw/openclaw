@@ -1,3 +1,4 @@
+// Gateway Client tests cover client.watchdog behavior.
 import { createServer as createHttpsServer } from "node:https";
 import { createServer } from "node:net";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -5,6 +6,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { GatewayClient, resolveGatewayClientConnectChallengeTimeoutMs } from "./client.js";
 import {
   DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS,
+  MAX_SAFE_TIMEOUT_DELAY_MS,
   MAX_CONNECT_CHALLENGE_TIMEOUT_MS,
   MIN_CONNECT_CHALLENGE_TIMEOUT_MS,
 } from "./timeouts.js";
@@ -81,13 +83,17 @@ describe("GatewayClient", () => {
       for (const client of wss.clients) {
         client.terminate();
       }
-      await new Promise<void>((resolve) => wss?.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        wss?.close(() => resolve());
+      });
       wss = null;
     }
     if (httpsServer) {
       httpsServer.closeAllConnections?.();
       httpsServer.closeIdleConnections?.();
-      await new Promise<void>((resolve) => httpsServer?.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        httpsServer?.close(() => resolve());
+      });
       httpsServer = null;
     }
   });
@@ -119,6 +125,11 @@ describe("GatewayClient", () => {
         preauthHandshakeTimeoutMs: 30_000,
       }),
     ).toBe(30_000);
+    expect(
+      resolveGatewayClientConnectChallengeTimeoutMs({
+        env: { OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS: "6000" },
+      }),
+    ).toBe(6_000);
   });
 
   test("closes on missing ticks", async () => {
@@ -252,6 +263,39 @@ describe("GatewayClient", () => {
     }
   });
 
+  test("clamps oversized tick watchdog intervals before scheduling", () => {
+    vi.useFakeTimers();
+    try {
+      const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+      const client = new GatewayClient({
+        tickWatchMinIntervalMs: 5,
+      });
+      Object.assign(
+        client as unknown as { ws: unknown; tickIntervalMs: number; lastTick: number },
+        {
+          ws: {
+            readyState: WebSocket.OPEN,
+            send: vi.fn(),
+            close: vi.fn(),
+          },
+          tickIntervalMs: Number.MAX_SAFE_INTEGER,
+          lastTick: Date.now(),
+        },
+      );
+
+      (
+        client as unknown as {
+          startTickWatch: () => void;
+        }
+      ).startTickWatch();
+
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
+      client.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("times out unresolved requests and clears pending state", async () => {
     vi.useFakeTimers();
     try {
@@ -271,6 +315,27 @@ describe("GatewayClient", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  test("cleans pending request state when websocket send throws", async () => {
+    const client = new GatewayClient({
+      requestTimeoutMs: 25,
+    });
+    const sendError = new Error("synthetic send failure");
+    (
+      client as unknown as {
+        ws: WebSocket | { readyState: number; send: () => void; close: () => void };
+      }
+    ).ws = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn(() => {
+        throw sendError;
+      }),
+      close: vi.fn(),
+    };
+
+    await expect(client.request("status")).rejects.toThrow("synthetic send failure");
+    expect(getPendingCount(client)).toBe(0);
   });
 
   test("does not auto-timeout expectFinal requests", async () => {
@@ -415,6 +480,33 @@ describe("GatewayClient", () => {
       await expect(requestPromise).rejects.toThrow("gateway client stopped");
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  test("clamps oversized stopAndWait timeouts before scheduling", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = new GatewayClient({});
+      const ws = {
+        readyState: WebSocket.OPEN,
+        close: vi.fn(),
+        terminate: vi.fn(),
+      };
+      (client as unknown as { ws: unknown }).ws = ws;
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+
+      const stopPromise = client.stopAndWait({ timeoutMs: Number.MAX_SAFE_INTEGER });
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(ws.terminate).not.toHaveBeenCalled();
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
+
+      await vi.advanceTimersByTimeAsync(249);
+      await expect(stopPromise).resolves.toBeUndefined();
+      expect(ws.terminate).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
     }
   });
 

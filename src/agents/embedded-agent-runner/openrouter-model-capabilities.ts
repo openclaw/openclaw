@@ -6,7 +6,7 @@
  *
  * Cache layers (checked in order):
  * 1. In-memory Map (instant, cleared on process restart)
- * 2. On-disk JSON file (<stateDir>/cache/openrouter-models.json)
+ * 2. Shared SQLite state cache
  * 3. OpenRouter API fetch (populates both layers)
  *
  * Model capabilities are assumed stable — the cache has no TTL expiry.
@@ -18,21 +18,24 @@
  * capabilities instead of the text-only fallback.
  */
 
-import { existsSync, readFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
-import { resolveStateDir } from "../../config/paths.js";
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveProxyFetchFromEnv } from "../../infra/net/proxy-fetch.js";
 import { parseStrictFiniteNumber } from "../../infra/parse-finite-number.js";
-import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createCorePluginStateSyncKeyedStore } from "../../plugin-state/plugin-state-store.js";
 
 const log = createSubsystemLogger("openrouter-model-capabilities");
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const FETCH_TIMEOUT_MS = 10_000;
-const DISK_CACHE_FILENAME = "openrouter-models.json";
-const DISK_CACHE_VERSION = 3;
+// Cap the catalog body so an untrusted/oversized OpenRouter response cannot force
+// the runtime to buffer an unbounded payload before parsing. Mirrors the bound
+// applied to the sibling pricing-cache endpoint (16 MiB).
+const OPENROUTER_MODELS_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+const SQLITE_CACHE_OWNER_ID = "core:openrouter-model-capabilities";
+const SQLITE_CACHE_NAMESPACE = "models.v3";
+const SQLITE_CACHE_MAX_ENTRIES = 10_000;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -76,36 +79,9 @@ export interface OpenRouterModelCapabilities {
   };
 }
 
-interface DiskCachePayload {
-  version?: number;
-  models: Record<string, OpenRouterModelCapabilities>;
-}
-
 // ---------------------------------------------------------------------------
-// Disk cache
+// SQLite cache
 // ---------------------------------------------------------------------------
-
-function resolveDiskCacheDir(): string {
-  return join(resolveStateDir(), "cache");
-}
-
-function resolveDiskCachePath(): string {
-  return join(resolveDiskCacheDir(), DISK_CACHE_FILENAME);
-}
-
-function writeDiskCache(map: Map<string, OpenRouterModelCapabilities>): void {
-  try {
-    const cachePath = resolveDiskCachePath();
-    const payload: DiskCachePayload = {
-      version: DISK_CACHE_VERSION,
-      models: Object.fromEntries(map),
-    };
-    privateFileStoreSync(dirname(cachePath)).writeJson(basename(cachePath), payload);
-  } catch (err: unknown) {
-    const message = formatErrorMessage(err);
-    log.debug(`Failed to write OpenRouter disk cache: ${message}`);
-  }
-}
 
 function isValidCapabilities(value: unknown): value is OpenRouterModelCapabilities {
   if (!value || typeof value !== "object") {
@@ -121,33 +97,43 @@ function isValidCapabilities(value: unknown): value is OpenRouterModelCapabiliti
   );
 }
 
-function readDiskCache(): Map<string, OpenRouterModelCapabilities> | undefined {
+function openSqliteCacheStore() {
+  return createCorePluginStateSyncKeyedStore<OpenRouterModelCapabilities>({
+    ownerId: SQLITE_CACHE_OWNER_ID,
+    namespace: SQLITE_CACHE_NAMESPACE,
+    maxEntries: SQLITE_CACHE_MAX_ENTRIES,
+  });
+}
+
+function writeSqliteCache(map: Map<string, OpenRouterModelCapabilities>): void {
   try {
-    const cachePath = resolveDiskCachePath();
-    if (!existsSync(cachePath)) {
-      return undefined;
+    const store = openSqliteCacheStore();
+    store.clear();
+    for (const [id, capabilities] of map) {
+      store.register(id, capabilities);
     }
-    const raw = readFileSync(cachePath, "utf-8");
-    const payload = JSON.parse(raw) as unknown;
-    if (!payload || typeof payload !== "object") {
-      return undefined;
-    }
-    const cachePayload = payload as DiskCachePayload;
-    if (cachePayload.version !== DISK_CACHE_VERSION) {
-      return undefined;
-    }
-    const models = cachePayload.models;
-    if (!models || typeof models !== "object") {
+  } catch (err: unknown) {
+    const message = formatErrorMessage(err);
+    log.debug(`Failed to write OpenRouter SQLite cache: ${message}`);
+  }
+}
+
+function readSqliteCache(): Map<string, OpenRouterModelCapabilities> | undefined {
+  try {
+    const entries = openSqliteCacheStore().entries();
+    if (entries.length === 0) {
       return undefined;
     }
     const map = new Map<string, OpenRouterModelCapabilities>();
-    for (const [id, caps] of Object.entries(models)) {
-      if (isValidCapabilities(caps)) {
-        map.set(id, caps);
+    for (const { key, value } of entries) {
+      if (isValidCapabilities(value)) {
+        map.set(key, value);
       }
     }
     return map.size > 0 ? map : undefined;
-  } catch {
+  } catch (err: unknown) {
+    const message = formatErrorMessage(err);
+    log.debug(`Failed to read OpenRouter SQLite cache: ${message}`);
     return undefined;
   }
 }
@@ -191,6 +177,12 @@ function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
   };
 }
 
+async function cancelUnreadResponseBody(response: Response | undefined): Promise<void> {
+  if (response && !response.bodyUsed) {
+    await response.body?.cancel().catch(() => undefined);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // API fetch
 // ---------------------------------------------------------------------------
@@ -198,10 +190,11 @@ function parseModel(model: OpenRouterApiModel): OpenRouterModelCapabilities {
 async function doFetch(): Promise<void> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+  let response: Response | undefined;
   try {
     const fetchFn = resolveProxyFetchFromEnv() ?? globalThis.fetch;
 
-    const response = await fetchFn(OPENROUTER_MODELS_URL, {
+    response = await fetchFn(OPENROUTER_MODELS_URL, {
       signal: controller.signal,
     });
 
@@ -210,7 +203,10 @@ async function doFetch(): Promise<void> {
       return;
     }
 
-    const data = (await response.json()) as { data?: OpenRouterApiModel[] };
+    const bytes = await readResponseWithLimit(response, OPENROUTER_MODELS_RESPONSE_MAX_BYTES, {
+      onOverflow: ({ size }) => new Error(`OpenRouter models response too large: ${size} bytes`),
+    });
+    const data = JSON.parse(bytes.toString("utf8")) as { data?: OpenRouterApiModel[] };
     const models = data.data ?? [];
     const map = new Map<string, OpenRouterModelCapabilities>();
 
@@ -222,13 +218,14 @@ async function doFetch(): Promise<void> {
     }
 
     cache = map;
-    writeDiskCache(map);
+    writeSqliteCache(map);
     log.debug(`Cached ${map.size} OpenRouter models from API`);
   } catch (err: unknown) {
     const message = formatErrorMessage(err);
     log.warn(`Failed to fetch OpenRouter models: ${message}`);
   } finally {
     clearTimeout(timeout);
+    await cancelUnreadResponseBody(response);
   }
 }
 
@@ -246,7 +243,7 @@ function triggerFetch(): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Ensure the cache is populated. Checks in-memory first, then disk, then
+ * Ensure the cache is populated. Checks in-memory first, then SQLite, then
  * triggers a background API fetch as a last resort.
  * Does not block — returns immediately.
  */
@@ -255,11 +252,10 @@ function ensureOpenRouterModelCache(): void {
     return;
   }
 
-  // Try loading from disk before hitting the network.
-  const disk = readDiskCache();
-  if (disk) {
-    cache = disk;
-    log.debug(`Loaded ${disk.size} OpenRouter models from disk cache`);
+  const stored = readSqliteCache();
+  if (stored) {
+    cache = stored;
+    log.debug(`Loaded ${stored.size} OpenRouter models from SQLite cache`);
     return;
   }
 
@@ -302,12 +298,17 @@ export async function loadOpenRouterModelCapabilities(modelId: string): Promise<
 export function getOpenRouterModelCapabilities(
   modelId: string,
 ): OpenRouterModelCapabilities | undefined {
-  ensureOpenRouterModelCache();
+  // A failed awaited load, such as an oversized catalog body, already attempted
+  // a refresh. Do not let the follow-up sync lookup immediately retry it.
+  const skipMissRefresh = skipNextMissRefresh.delete(modelId);
+  if (!skipMissRefresh) {
+    ensureOpenRouterModelCache();
+  }
   const result = cache?.get(modelId);
 
   // Model not found but cache exists — may be a newly added model.
   // Trigger a refresh so the next call picks it up.
-  if (!result && skipNextMissRefresh.delete(modelId)) {
+  if (!result && skipMissRefresh) {
     return undefined;
   }
   if (!result && cache && !fetchInFlight) {

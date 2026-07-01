@@ -22,9 +22,8 @@ import { debugLog, debugWarn } from "./log.js";
  * 3. PlatformAdapter.getTempDir() as a last resort
  *
  * This is the *operating-system* home and intentionally ignores
- * `OPENCLAW_HOME`. Persistent QQ Bot data (sessions, known users, refs) is
- * keyed on this value to keep upgrades from hiding existing state when an
- * operator later sets `OPENCLAW_HOME`.
+ * `OPENCLAW_HOME`. QQ Bot still checks this tree for legacy state imports and
+ * media-path remaps from older releases.
  */
 export function getHomeDir(): string {
   try {
@@ -78,11 +77,10 @@ function resolveOpenClawHome(): string {
 }
 
 /**
- * Return a path under `~/.openclaw/qqbot` without creating it.
+ * Return a legacy path under `~/.openclaw/qqbot` without creating it.
  *
- * Anchored on the OS home (not `OPENCLAW_HOME`) so persisted QQ Bot data
- * (sessions, known users, ref index, credential backups) does not silently
- * disappear when an operator adds `OPENCLAW_HOME` after the fact.
+ * Current QQ Bot runtime state lives in plugin SQLite KV. This path remains for
+ * legacy imports and media-path remaps from older releases.
  */
 export function getQQBotDataPath(...subPaths: string[]): string {
   return path.join(getHomeDir(), ".openclaw", "qqbot", ...subPaths);
@@ -132,18 +130,6 @@ export function getQQBotMediaDir(...subPaths: string[]): string {
  */
 function getOpenClawMediaDir(): string {
   return path.join(resolveOpenClawHome(), ".openclaw", "media");
-}
-
-// ---- Basic platform information ----
-
-type PlatformType = "darwin" | "linux" | "win32" | "other";
-
-export function getPlatform(): PlatformType {
-  const p = process.platform;
-  if (p === "darwin" || p === "linux" || p === "win32") {
-    return p;
-  }
-  return "other";
 }
 
 export function isWindows(): boolean {

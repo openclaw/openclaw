@@ -1,3 +1,4 @@
+// Control UI tests cover app settings behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
@@ -38,7 +39,6 @@ type SettingsHost = {
     lastActiveSessionKey: string;
     theme: ThemeName;
     themeMode: ThemeMode;
-    chatFocusMode: boolean;
     chatShowThinking: boolean;
     chatShowToolCalls: boolean;
     splitRatio: number;
@@ -138,7 +138,6 @@ const createHost = (tab: Tab): SettingsHost => ({
     lastActiveSessionKey: "main",
     theme: "claw",
     themeMode: "system",
-    chatFocusMode: false,
     chatShowThinking: true,
     chatShowToolCalls: true,
     splitRatio: 0.6,

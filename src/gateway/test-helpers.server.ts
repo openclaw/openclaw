@@ -1,9 +1,13 @@
+// Gateway server test helpers create isolated config/state dirs, start gateway
+// servers/clients, and provide common RPC/session fixtures.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import "./test-helpers.mocks.js";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
-import "./test-helpers.mocks.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { parseConfigJson5, resetConfigRuntimeState } from "../config/config.js";
 import {
@@ -32,8 +36,6 @@ import {
   parseAgentSessionKey,
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resetTaskRegistryForTests } from "../tasks/runtime-internal.js";
 import { resetTaskFlowRegistryForTests } from "../tasks/task-flow-runtime-internal.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -93,6 +95,9 @@ let lastSyncedSessionStorePath: string | undefined;
 let lastSyncedSessionConfigJson: string | undefined;
 let activeSuiteGatewayServerCount = 0;
 let activeSuiteHookScopeCount = 0;
+// Gateway tests exercise RPC/server behavior, not production bind auto-detection by default.
+// Keep suite fixtures loopback-stable inside containers; bind-specific tests opt in explicitly.
+const DEFAULT_GATEWAY_TEST_BIND = "loopback" as const;
 
 function resolveGatewayTestMainSessionKeys(): string[] {
   const resolved = resolveMainSessionKeyFromConfig();
@@ -164,7 +169,7 @@ async function persistTestSessionConfig(): Promise<void> {
   }
   const nextStoreValue =
     typeof testState.sessionStorePath === "string"
-      ? preservedTemplateStore || testState.sessionStorePath
+      ? testState.sessionStorePath
       : preservedTemplateStore;
   for (const configPath of configPaths) {
     const config = { ...parsedConfigs.get(configPath) };
@@ -221,8 +226,9 @@ export async function writeSessionStore(params: {
   // file directly; clear the in-process cache so handlers reload the seeded state.
   clearSessionStoreCacheForTest();
   await persistTestSessionConfig();
+  const serializedStore = JSON.stringify(store, null, 2);
   await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+  await fs.writeFile(storePath, serializedStore, "utf-8");
   clearSessionStoreCacheForTest();
 }
 
@@ -313,7 +319,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   sessionStoreSaveDelayMs.value = 0;
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
-  testState.gatewayBind = undefined;
+  testState.gatewayBind = DEFAULT_GATEWAY_TEST_BIND;
   testState.gatewayAuth = { mode: "token", token: "test-gateway-token-1234567890" };
   testState.gatewayControlUi = undefined;
   testState.hooksConfig = undefined;
@@ -404,7 +410,7 @@ async function resetGatewayTestRuntimeOnly() {
   sessionStoreSaveDelayMs.value = 0;
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
-  testState.gatewayBind = undefined;
+  testState.gatewayBind = DEFAULT_GATEWAY_TEST_BIND;
   testState.gatewayAuth = { mode: "token", token: "test-gateway-token-1234567890" };
   testState.gatewayControlUi = undefined;
   testState.hooksConfig = undefined;
@@ -459,6 +465,7 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
   const scope = options?.scope ?? "test";
   if (scope === "suite") {
     beforeAll(async () => {
+      vi.useRealTimers();
       if (activeSuiteHookScopeCount === 0) {
         await setupGatewayTestHome();
         await resetGatewayTestState({ uniqueConfigRoot: false });
@@ -466,6 +473,7 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
       activeSuiteHookScopeCount += 1;
     });
     beforeEach(async () => {
+      vi.useRealTimers();
       if (activeSuiteGatewayServerCount > 0) {
         await resetGatewayTestRuntimeOnly();
         return;
@@ -489,6 +497,7 @@ export function installGatewayTestHooks(options?: { scope?: "test" | "suite" }) 
   }
 
   beforeEach(async () => {
+    vi.useRealTimers();
     await setupGatewayTestHome();
     await resetGatewayTestState({ uniqueConfigRoot: false });
   }, 60_000);
@@ -553,7 +562,6 @@ export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
   timeoutMs = 10_000,
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout>;
     function cleanup() {
       clearTimeout(timer);
       ws.off("message", handler);
@@ -570,7 +578,7 @@ export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
         resolve(obj);
       }
     }
-    timer = setTimeout(() => {
+    const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
       cleanup();
       reject(new Error("timeout"));
     }, timeoutMs);
@@ -1183,7 +1191,9 @@ export async function waitForSystemEvent(timeoutMs = 2000) {
         return events;
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
   }
   throw new Error("timeout waiting for system event");
 }

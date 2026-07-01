@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
+import type {
+  ForkSessionEntryFromParentParams,
+  ForkSessionEntryFromParentResult,
+} from "../auto-reply/reply/session-fork.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import {
   setRealtimeVoiceAgentConsultDepsForTest,
   consultRealtimeVoiceAgent,
@@ -266,13 +271,47 @@ describe("realtime voice agent consult runtime", () => {
       maxTokens: 100_000,
       parentTokens: 100,
     }));
-    const forkSessionFromParent = vi.fn(async () => ({
-      sessionId: "forked-session",
-      sessionFile: "/tmp/forked.jsonl",
-    }));
+    const forkSessionEntryFromParent = vi.fn(
+      async (
+        params: ForkSessionEntryFromParentParams,
+      ): Promise<ForkSessionEntryFromParentResult> => {
+        const fork = {
+          sessionId: "forked-session",
+          sessionFile: "/tmp/forked.jsonl",
+        };
+        const parentEntry = sessionStore["agent:main:main"];
+        if (!parentEntry?.sessionId) {
+          return { status: "missing-parent" };
+        }
+        const typedParentEntry: SessionEntry = {
+          ...parentEntry,
+          sessionId: parentEntry.sessionId,
+          updatedAt: parentEntry.updatedAt ?? Date.now(),
+        };
+        const decision = {
+          status: "fork" as const,
+          maxTokens: 100_000,
+        };
+        const entry = params.fallbackEntry ?? { sessionId: "", updatedAt: Date.now() };
+        const sessionEntry: SessionEntry = {
+          ...entry,
+          ...params.patch?.({ entry, parentEntry: typedParentEntry, fork, decision }),
+          sessionId: fork.sessionId,
+          sessionFile: fork.sessionFile,
+          forkedFromParent: true,
+        };
+        sessionStore[params.sessionKey] = sessionEntry;
+        return {
+          status: "forked" as const,
+          fork,
+          parentEntry: typedParentEntry,
+          sessionEntry,
+          decision,
+        };
+      },
+    );
     setRealtimeVoiceAgentConsultDepsForTest({
-      resolveParentForkDecision,
-      forkSessionFromParent,
+      forkSessionEntryFromParent,
     });
 
     await consultRealtimeVoiceAgent({
@@ -292,15 +331,16 @@ describe("realtime voice agent consult runtime", () => {
       userLabel: "Participant",
     });
 
-    expect(resolveParentForkDecision).toHaveBeenCalledWith({
-      parentEntry: sessionStore["agent:main:main"],
-      storePath: "/tmp/sessions.json",
-    });
-    expect(forkSessionFromParent).toHaveBeenCalledWith({
-      parentEntry: sessionStore["agent:main:main"],
-      agentId: "main",
-      sessionsDir: "/tmp",
-    });
+    expect(resolveParentForkDecision).not.toHaveBeenCalled();
+    expect(forkSessionEntryFromParent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parentSessionKey: "agent:main:main",
+        agentId: "main",
+        config: {},
+        sessionKey: "agent:main:subagent:google-meet:meet-1",
+      }),
+    );
+    expect(runtime.session.patchSessionEntry).not.toHaveBeenCalled();
     const forkedEntry = sessionStore["agent:main:subagent:google-meet:meet-1"];
     if (!forkedEntry) {
       throw new Error("Expected forked consult session entry");
@@ -315,7 +355,75 @@ describe("realtime voice agent consult runtime", () => {
     expectPositiveTimestamp(forkedEntry.updatedAt);
     const call = requireEmbeddedAgentCall(runEmbeddedAgent);
     expect(call.sessionId).toBe("forked-session");
-    expect(call.sessionFile).toBe("/tmp/forked.jsonl");
+    expect(call.sessionFile).toBeUndefined();
+    expect(call.sessionTarget).toMatchObject({
+      agentId: "main",
+      sessionId: "forked-session",
+      sessionKey: "agent:main:subagent:google-meet:meet-1",
+      storePath: "/tmp/sessions.json",
+    });
+    expect(call.spawnedBy).toBe("agent:main:main");
+  });
+
+  it("falls back to a fresh isolated consult session when requester context is too large", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime();
+    const warn = vi.fn();
+    const forkSessionEntryFromParent = vi.fn(
+      async (
+        params: ForkSessionEntryFromParentParams,
+      ): Promise<ForkSessionEntryFromParentResult> => ({
+        status: "skipped",
+        reason: "decision-skip",
+        sessionEntry: {
+          ...(params.fallbackEntry ?? { sessionId: "", updatedAt: Date.now() }),
+          sessionId: "",
+          updatedAt: Date.now(),
+        },
+        decision: {
+          status: "skip",
+          reason: "parent-too-large",
+          maxTokens: 100_000,
+          parentTokens: 150_000,
+          message:
+            "Parent context is too large to fork (150000/100000 tokens); starting with isolated context instead.",
+        },
+      }),
+    );
+    setRealtimeVoiceAgentConsultDepsForTest({
+      forkSessionEntryFromParent,
+      randomUUID: () => "00000000-0000-4000-8000-000000000000",
+    });
+
+    await consultRealtimeVoiceAgent({
+      cfg: {} as never,
+      agentRuntime: runtime as never,
+      logger: { warn },
+      agentId: "main",
+      sessionKey: "agent:main:subagent:google-meet:meet-1",
+      spawnedBy: "agent:main:main",
+      contextMode: "fork",
+      messageProvider: "google-meet",
+      lane: "google-meet",
+      runIdPrefix: "google-meet:meet-1",
+      args: { question: "What should I say?" },
+      transcript: [],
+      surface: "a private Google Meet",
+      userLabel: "Participant",
+    });
+
+    expect(warn).toHaveBeenCalledWith(
+      "[talk] Parent context is too large to fork (150000/100000 tokens); starting with isolated context instead.",
+    );
+    expect(runtime.session.patchSessionEntry).toHaveBeenCalled();
+    const call = requireEmbeddedAgentCall(runEmbeddedAgent);
+    expect(call.sessionId).toBe("00000000-0000-4000-8000-000000000000");
+    expect(call.sessionFile).toBeUndefined();
+    expect(call.sessionTarget).toMatchObject({
+      agentId: "main",
+      sessionId: "00000000-0000-4000-8000-000000000000",
+      sessionKey: "agent:main:subagent:google-meet:meet-1",
+      storePath: "/tmp/sessions.json",
+    });
     expect(call.spawnedBy).toBe("agent:main:main");
   });
 

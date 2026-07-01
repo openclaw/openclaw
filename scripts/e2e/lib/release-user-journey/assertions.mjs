@@ -1,98 +1,93 @@
+// Assertions for release user-journey E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   assertAgentReplyContainsMarker,
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
-import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
+import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "../bounded-response-text.mjs";
+import {
+  applyMockOpenAiModelConfig,
+  parseMockOpenAiPort,
+} from "../fixtures/mock-openai-config.mjs";
+import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
+import {
+  ERROR_DETAIL_TAIL_BYTES,
+  fileContainsText,
+  readJson,
+} from "../release-assertion-files.mjs";
+import { readTextFileTail } from "../text-file-utils.mjs";
 
-const command = process.argv[2];
-const CLICKCLACK_HTTP_TIMEOUT_MS = readPositiveInt(
-  process.env.OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS,
-  5000,
-);
-const CLICKCLACK_HTTP_BODY_MAX_BYTES = readPositiveInt(
-  process.env.OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES,
-  1024 * 1024,
-);
-
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
+function clickClackHttpTimeoutMs() {
+  return readPositiveInt(
+    process.env.OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS,
+    5000,
+    "OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS",
+  );
 }
 
-function readPositiveInt(raw, fallback) {
+function clickClackHttpBodyMaxBytes() {
+  return readPositiveInt(
+    process.env.OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES,
+    1024 * 1024,
+    "OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES",
+  );
+}
+
+function readPositiveInt(raw, fallback, label) {
   const text = String(raw ?? "").trim();
-  if (!/^\d+$/u.test(text)) {
+  if (!text) {
     return fallback;
   }
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(text)}`);
+  }
   const parsed = Number(text);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(text)}`);
+  }
+  return parsed;
 }
 
 async function withClickClackFixtureResponse(url, init, consume, options = {}) {
-  const timeoutMs = options.timeoutMs ?? CLICKCLACK_HTTP_TIMEOUT_MS;
+  const timeoutMs = options.timeoutMs ?? clickClackHttpTimeoutMs();
   const controller = new AbortController();
-  const timer = setTimeout(() => {
-    controller.abort();
-  }, timeoutMs);
+  const timeoutError = new Error(`${url} timed out after ${timeoutMs}ms`);
+  let timer;
+  let response;
+  const timeoutPromise = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, timeoutMs);
+  });
   try {
-    const response = await fetch(url, {
-      ...init,
-      signal: controller.signal,
-    });
-    return await consume(response);
+    response = await Promise.race([
+      fetch(url, {
+        ...init,
+        signal: controller.signal,
+      }),
+      timeoutPromise,
+    ]);
+    return await consume(response, { timeoutPromise });
   } finally {
     clearTimeout(timer);
+    await response?.body?.cancel?.().catch(() => undefined);
   }
-}
-
-function bodyTooLargeError(label, byteLimit) {
-  return Object.assign(new Error(`${label} response body exceeded ${byteLimit} bytes`), {
-    code: "ETOOBIG",
-  });
 }
 
 async function readBoundedResponseText(
   response,
   label,
-  byteLimit = CLICKCLACK_HTTP_BODY_MAX_BYTES,
+  byteLimit = clickClackHttpBodyMaxBytes(),
+  options = {},
 ) {
-  const contentLength = response.headers.get("content-length");
-  if (contentLength) {
-    const parsedLength = Number(contentLength);
-    if (Number.isSafeInteger(parsedLength) && parsedLength > byteLimit) {
-      await response.body?.cancel().catch(() => {});
-      throw bodyTooLargeError(label, byteLimit);
-    }
-  }
-  if (!response.body) {
-    return "";
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let byteCount = 0;
-  let text = "";
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        return text + decoder.decode();
-      }
-      byteCount += value.byteLength;
-      if (byteCount > byteLimit) {
-        await reader.cancel().catch(() => {});
-        throw bodyTooLargeError(label, byteLimit);
-      }
-      text += decoder.decode(value, { stream: true });
-    }
-  } finally {
-    reader.releaseLock();
-  }
+  return await readBoundedResponseTextWithLimit(response, label, byteLimit, options.timeoutPromise);
 }
 
-async function readBoundedResponseJson(response, label) {
-  return JSON.parse(await readBoundedResponseText(response, label));
+async function readBoundedResponseJson(response, label, options = {}) {
+  return JSON.parse(await readBoundedResponseText(response, label, undefined, options));
 }
 
 function resolveHomePath(value) {
@@ -136,9 +131,7 @@ function writeConfig(cfg) {
 }
 
 function installRecords() {
-  const recordsPath = path.join(process.env.HOME ?? "", ".openclaw", "plugins", "installs.json");
-  const records = fs.existsSync(recordsPath) ? readJson(recordsPath) : {};
-  return records.installRecords ?? records.records ?? {};
+  return readPluginInstallRecords({ configPath: configPath() });
 }
 
 function assertOnboard() {
@@ -156,7 +149,7 @@ function assertOnboard() {
 }
 
 function configureMockModel() {
-  const mockPort = Number(process.argv[3]);
+  const mockPort = parseMockOpenAiPort(process.argv[3]);
   const cfg = readJson(configPath());
   applyMockOpenAiModelConfig(cfg, { mockPort });
   writeConfig(cfg);
@@ -173,8 +166,10 @@ function assertAgentTurn() {
 function assertFileContains() {
   const file = process.argv[3];
   const needle = process.argv[4];
-  const raw = fs.readFileSync(file, "utf8");
-  assert(raw.includes(needle), `${file} did not contain ${needle}. Output: ${raw}`);
+  assert(
+    fileContainsText(file, needle),
+    `${file} did not contain ${needle}. Output tail: ${readTextFileTail(file, ERROR_DETAIL_TAIL_BYTES)}`,
+  );
 }
 
 function rememberPluginInstallPath() {
@@ -298,8 +293,10 @@ async function postClickClackInbound() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ body }),
     },
-    async (response) => {
-      const text = response.ok ? "" : await readBoundedResponseText(response, "ClickClack inbound");
+    async (response, options) => {
+      const text = response.ok
+        ? ""
+        : await readBoundedResponseText(response, "ClickClack inbound", undefined, options);
       assert(response.ok, `fixture inbound failed: ${response.status} ${text}`);
     },
   );
@@ -307,19 +304,23 @@ async function postClickClackInbound() {
 
 async function waitClickClackSocket() {
   const baseUrl = process.argv[3];
-  const timeoutSeconds = Number(process.argv[4] ?? 30);
+  const timeoutSeconds = readPositiveInt(
+    process.argv[4],
+    30,
+    "ClickClack websocket timeout seconds",
+  );
   const deadline = Date.now() + timeoutSeconds * 1000;
   while (Date.now() < deadline) {
     const remainingMs = Math.max(1, deadline - Date.now());
     const state = await withClickClackFixtureResponse(
       `${baseUrl}/fixture/state`,
       {},
-      async (response) =>
+      async (response, options) =>
         response.ok
-          ? await readBoundedResponseJson(response, "ClickClack fixture state")
+          ? await readBoundedResponseJson(response, "ClickClack fixture state", options)
           : undefined,
       {
-        timeoutMs: Math.min(CLICKCLACK_HTTP_TIMEOUT_MS, remainingMs),
+        timeoutMs: Math.min(clickClackHttpTimeoutMs(), remainingMs),
       },
     ).catch(() => undefined);
     if (state) {
@@ -327,7 +328,9 @@ async function waitClickClackSocket() {
         return;
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
   }
   throw new Error(`Timed out waiting for ClickClack websocket connection at ${baseUrl}`);
 }
@@ -344,7 +347,7 @@ function assertClickClackState() {
 async function waitClickClackReply() {
   const statePath = process.argv[3];
   const marker = process.argv[4];
-  const timeoutSeconds = Number(process.argv[5] ?? 30);
+  const timeoutSeconds = readPositiveInt(process.argv[5], 30, "ClickClack reply timeout seconds");
   const deadline = Date.now() + timeoutSeconds * 1000;
   while (Date.now() < deadline) {
     if (fs.existsSync(statePath)) {
@@ -353,7 +356,9 @@ async function waitClickClackReply() {
         return;
       }
     }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
   }
   const state = fs.existsSync(statePath) ? fs.readFileSync(statePath, "utf8") : "<missing>";
   throw new Error(`Timed out waiting for ClickClack reply marker ${marker}. State: ${state}`);
@@ -374,8 +379,20 @@ const commands = {
   "wait-clickclack-reply": waitClickClackReply,
 };
 
-const fn = commands[command];
-if (!fn) {
-  throw new Error(`unknown release-user-journey assertion command: ${command ?? "<missing>"}`);
+export async function runReleaseUserJourneyAssertion(command, args = []) {
+  const fn = commands[command];
+  if (!fn) {
+    throw new Error(`unknown release-user-journey assertion command: ${command ?? "<missing>"}`);
+  }
+  const previousArgv = process.argv;
+  process.argv = [previousArgv[0] ?? "node", fileURLToPath(import.meta.url), command, ...args];
+  try {
+    await fn();
+  } finally {
+    process.argv = previousArgv;
+  }
 }
-await fn();
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await runReleaseUserJourneyAssertion(process.argv[2], process.argv.slice(3));
+}

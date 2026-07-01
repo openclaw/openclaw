@@ -1,7 +1,16 @@
+// Check Openclaw Package Tarball tests cover check openclaw package tarball script behavior.
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
 
@@ -67,6 +76,76 @@ function withTarball(
 }
 
 describe("check-openclaw-package-tarball", () => {
+  it("prints help before touching tarball state", () => {
+    const result = spawnSync("node", [CHECK_SCRIPT, "--help"], { encoding: "utf8" });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain(
+      "Usage: node scripts/check-openclaw-package-tarball.mjs <openclaw.tgz>",
+    );
+    expect(result.stderr).toBe("");
+  });
+
+  it("rejects option-like and extra arguments before tar inspection", () => {
+    const unknown = spawnSync("node", [CHECK_SCRIPT, "--tag"], { encoding: "utf8" });
+
+    expect(unknown.status).not.toBe(0);
+    expect(unknown.stderr).toContain("Unknown OpenClaw package tarball check option: --tag");
+    expect(unknown.stderr).not.toContain("OpenClaw package tarball does not exist");
+
+    const extra = spawnSync("node", [CHECK_SCRIPT, "openclaw.tgz", "extra"], {
+      encoding: "utf8",
+    });
+
+    expect(extra.status).not.toBe(0);
+    expect(extra.stderr).toContain("Unexpected OpenClaw package tarball check argument: extra");
+    expect(extra.stderr).not.toContain("OpenClaw package tarball does not exist");
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "removes the extract dir when tar extraction fails",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "openclaw-package-tarball-extract-fail-"));
+      try {
+        const fakeBin = join(root, "bin");
+        mkdirSync(fakeBin);
+        const extractDirFile = join(root, "extract-dir.txt");
+        const fakeTar = join(fakeBin, "tar");
+        writeFileSync(
+          fakeTar,
+          [
+            "#!/usr/bin/env node",
+            "const fs = require('node:fs');",
+            "const args = process.argv.slice(2);",
+            "if (args[0] === '-tf') { console.log('package/package.json'); process.exit(0); }",
+            "const outputDir = args[args.indexOf('-C') + 1];",
+            "fs.writeFileSync(process.env.OPENCLAW_TEST_EXTRACT_DIR_FILE, outputDir);",
+            "console.error('extract denied');",
+            "process.exit(7);",
+          ].join("\n"),
+        );
+        chmodSync(fakeTar, 0o755);
+        const tarball = join(root, "openclaw.tgz");
+        writeFileSync(tarball, "not used by fake tar");
+
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            OPENCLAW_TEST_EXTRACT_DIR_FILE: extractDirFile,
+            PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ""}`,
+          },
+        });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("extract denied");
+        expect(existsSync(readFileSync(extractDirFile, "utf8"))).toBe(false);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("allows legacy private QA inventory entries omitted from shipped tarballs through 2026.4.25", () => {
     withTarball(
       ["dist/index.js", "dist/extensions/qa-channel/runtime-api.js"],
@@ -187,6 +266,107 @@ describe("check-openclaw-package-tarball", () => {
         expect(result.stderr).toContain(
           "inventory omits imported dist file dist/memory-state-current.js",
         );
+      },
+      "2026.4.27",
+    );
+  });
+
+  it("rejects CommonJS require chunks omitted from the postinstall inventory", () => {
+    withTarball(
+      ["dist/index.cjs"],
+      {
+        "dist/index.cjs": 'module.exports = require("./chunk.cjs");\n',
+        "dist/chunk.cjs": "module.exports = {};\n",
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("inventory omits imported dist file dist/chunk.cjs");
+      },
+      "2026.4.27",
+    );
+  });
+
+  it("rejects dist files with missing import.meta.url URL dependencies", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": 'const worker = new URL("./worker.js", import.meta.url);\n' },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("dist/index.js imports missing dist/worker.js");
+      },
+      "2026.4.27",
+    );
+  });
+
+  it("rejects formatted import.meta.url URL dependencies", () => {
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js": [
+          "const worker = new URL(",
+          '  "./worker.js",',
+          "  import.meta.url,",
+          ");",
+          "",
+        ].join("\n"),
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("dist/index.js imports missing dist/worker.js");
+      },
+      "2026.4.27",
+    );
+  });
+
+  it("rejects import.meta.url URL dependencies omitted from the postinstall inventory", () => {
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js": 'const worker = new URL("./worker.js", import.meta.url);\n',
+        "dist/worker.js": "export {};\n",
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("inventory omits imported dist file dist/worker.js");
+      },
+      "2026.4.27",
+    );
+  });
+
+  it("allows import.meta.url package-root probes", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": 'const root = new URL("../..", import.meta.url);\n' },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
+      },
+      "2026.4.27",
+    );
+  });
+
+  it("allows import.meta.url source helper probes", () => {
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js":
+          'const shim = new URL("./capability-runtime-vitest-shims/config-runtime.ts", import.meta.url);\n',
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain("OpenClaw package tarball integrity passed.");
       },
       "2026.4.27",
     );

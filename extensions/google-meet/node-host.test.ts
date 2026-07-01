@@ -1,3 +1,4 @@
+// Google Meet tests cover node host plugin behavior.
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -85,6 +86,41 @@ describe("google-meet node host bridge sessions", () => {
       expect(start).toEqual({ launched: false });
       expect(spawnSync).not.toHaveBeenCalled();
       expect(children).toHaveLength(0);
+    } finally {
+      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+    }
+  });
+
+  it("passes the Meet URL before Chrome profile args when launching a profiled browser", async () => {
+    const originalPlatform = process.platform;
+    children.length = 0;
+    vi.mocked(spawnSync).mockClear();
+
+    Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });
+    try {
+      const start = JSON.parse(
+        await handleGoogleMeetNodeHostCommand(
+          JSON.stringify({
+            action: "start",
+            url: "https://meet.google.com/xyz-abcd-uvw",
+            mode: "transcribe",
+            browserProfile: "Profile 2",
+          }),
+        ),
+      );
+
+      expect(start.launched).toBe(true);
+      expect(spawnSync).toHaveBeenCalledWith(
+        "open",
+        [
+          "-a",
+          "Google Chrome",
+          "https://meet.google.com/xyz-abcd-uvw",
+          "--args",
+          "--profile-directory=Profile 2",
+        ],
+        expect.objectContaining({ encoding: "utf8" }),
+      );
     } finally {
       Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
     }

@@ -1,5 +1,6 @@
-import { isRecord } from "../shared/record-coerce.js";
-import { sortUniqueStrings } from "../shared/string-normalization.js";
+// Extracts provider contract public artifacts from plugin manifests.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
 import type { ProviderPlugin } from "./types.js";
 

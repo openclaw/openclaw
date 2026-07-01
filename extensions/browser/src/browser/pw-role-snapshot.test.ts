@@ -1,3 +1,4 @@
+// Browser tests cover pw role snapshot plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildRoleSnapshotFromAiSnapshot,
@@ -43,6 +44,16 @@ describe("pw-role-snapshot", () => {
     expect(res.snapshot).toContain('- region "Main"');
     expect(res.snapshot).toContain("  - group");
     expect(res.snapshot).not.toContain("button");
+  });
+
+  it("keeps named branches with refs and drops empty branches when compact", () => {
+    const aria = ['- list "Menu":', '  - button "Save"', '- list "Empty":', "  - generic"].join(
+      "\n",
+    );
+
+    const res = buildRoleSnapshotFromAriaSnapshot(aria, { compact: true });
+
+    expect(res.snapshot).toBe('- list "Menu":\n  - button "Save" [ref=e1]');
   });
 
   it("computes stats", () => {

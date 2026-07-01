@@ -1,3 +1,4 @@
+// Release configured plugin install tests cover doctor checks for release-time plugin installs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -256,6 +257,197 @@ describe("configured plugin install release step", () => {
     expect(result.channelIds).toStrictEqual([]);
   });
 
+  it("collects external speech and web-fetch plugins selected by config", async () => {
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "groq/llama-3.3-70b-versatile",
+          },
+        },
+        messages: {
+          tts: {
+            provider: "gradium",
+            providers: {
+              inworld: {},
+            },
+          },
+        },
+        tools: {
+          web: {
+            fetch: {
+              provider: "firecrawl",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.pluginIds).toEqual(["firecrawl", "gradium", "groq", "inworld"]);
+    expect(result.channelIds).toStrictEqual([]);
+  });
+
+  it("collects an external media-understanding plugin selected only by media config", async () => {
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        tools: {
+          media: {
+            audio: {
+              models: [{ provider: "groq", model: "whisper-large-v3-turbo" }],
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.pluginIds).toEqual(["groq"]);
+    expect(result.channelIds).toStrictEqual([]);
+  });
+
+  it("collects an external speech plugin selected only by voiceModel", async () => {
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        agents: {
+          defaults: {
+            voiceModel: { primary: "gradium/tts-default" },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.pluginIds).toEqual(["gradium"]);
+    expect(result.channelIds).toStrictEqual([]);
+  });
+
+  it("collects env-only web provider plugins before auto-detection", async () => {
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {},
+      env: {
+        EXA_API_KEY: "exa-key",
+        FIRECRAWL_API_KEY: "firecrawl-key",
+      },
+    });
+
+    expect(result.pluginIds).toEqual(["exa", "firecrawl"]);
+    expect(result.channelIds).toStrictEqual([]);
+  });
+
+  it("does not collect env-only web provider plugins when search is disabled", async () => {
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        tools: {
+          web: {
+            search: {
+              enabled: false,
+            },
+            fetch: {
+              enabled: false,
+            },
+          },
+        },
+      },
+      env: {
+        EXA_API_KEY: "exa-key",
+        FIRECRAWL_API_KEY: "firecrawl-key",
+      },
+    });
+
+    expect(result.pluginIds).toEqual([]);
+    expect(result.channelIds).toStrictEqual([]);
+  });
+
+  it("collects Firecrawl for env-only web fetch when search is disabled", async () => {
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        tools: {
+          web: {
+            search: {
+              enabled: false,
+            },
+          },
+        },
+      },
+      env: {
+        FIRECRAWL_API_KEY: "firecrawl-key",
+      },
+    });
+
+    expect(result.pluginIds).toEqual(["firecrawl"]);
+    expect(result.channelIds).toStrictEqual([]);
+  });
+
+  it("collects env-only external provider plugins before model discovery", async () => {
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {},
+      env: {
+        GROQ_API_KEY: "groq-key",
+        MODELSTUDIO_API_KEY: "qwen-key",
+      },
+    });
+
+    expect(result.pluginIds).toEqual(["groq", "qwen"]);
+    expect(result.channelIds).toStrictEqual([]);
+  });
+
+  it("collects provider plugins from documented external provider aliases", async () => {
+    mocks.resolveProviderInstallCatalogEntries.mockReturnValue([
+      {
+        pluginId: "gmi",
+        providerId: "gmi",
+        providerAliases: ["gmi-cloud", "gmicloud"],
+      },
+    ]);
+
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "gmi-cloud/google/gemini-3.1-flash-lite",
+          },
+        },
+        auth: {
+          profiles: {
+            gmi: {
+              provider: "gmi-cloud",
+              mode: "api_key",
+            },
+          },
+        },
+        models: {
+          providers: {
+            gmicloud: {
+              baseUrl: "https://api.gmi-serving.com/v1",
+              models: [],
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.pluginIds).toEqual(["gmi"]);
+    expect(result.channelIds).toStrictEqual([]);
+  });
+
   it("collects Codex from selectable OpenAI agent models even without integration discovery", async () => {
     const { collectReleaseConfiguredPluginIds } =
       await import("./release-configured-plugin-installs.js");
@@ -385,12 +577,47 @@ describe("configured plugin install release step", () => {
     expect(result.completed).toBe(true);
   });
 
+  it("surfaces non-fatal repair notices without blocking release repair completion", async () => {
+    const reviewNotice = "REVIEW RECOMMENDED - ClawHub has not completed a fresh clean check";
+    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
+      changes: ['Installed missing configured plugin "codex".'],
+      warnings: [],
+      notices: [reviewNotice],
+    });
+
+    const { maybeRunConfiguredPluginInstallReleaseStep } =
+      await import("./release-configured-plugin-installs.js");
+    const result = await maybeRunConfiguredPluginInstallReleaseStep({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.4",
+            agentRuntime: { id: "codex" },
+          },
+        },
+      },
+      currentVersion: "2026.5.2-beta.1",
+      touchedVersion: "2026.5.1",
+      env: {},
+    });
+
+    expect(result).toEqual({
+      changes: ['Installed missing configured plugin "codex".'],
+      warnings: [reviewNotice],
+      completed: true,
+      touchedConfig: true,
+    });
+  });
+
   it("does not stamp config during update-time deferred install repair", async () => {
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
       changes: [
         'Skipped package-manager repair for configured plugin "codex" during package update; rerun "openclaw doctor --fix" after the update completes.',
       ],
       warnings: [],
+      deferredRepairDetails: [
+        'Skipped package-manager repair for configured plugin "codex" during package update; rerun "openclaw doctor --fix" after the update completes.',
+      ],
     });
 
     const { maybeRunConfiguredPluginInstallReleaseStep } =
@@ -425,13 +652,60 @@ describe("configured plugin install release step", () => {
       warnings: [],
       completed: false,
       touchedConfig: false,
+      postInstallDoctorResult: {
+        status: "advisory",
+        advisory: expect.objectContaining({
+          kind: "package-post-install-doctor",
+          reason: "deferred-configured-plugin-repair",
+          details: [
+            'Skipped package-manager repair for configured plugin "codex" during package update; rerun "openclaw doctor --fix" after the update completes.',
+          ],
+        }),
+      },
+    });
+  });
+
+  it("does not report an advisory for update-time repair changes that were not deferred", async () => {
+    mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
+      changes: ['Removed stale managed install record for bundled plugin "matrix".'],
+      warnings: [],
+    });
+
+    const { maybeRunConfiguredPluginInstallReleaseStep } =
+      await import("./release-configured-plugin-installs.js");
+    const result = await maybeRunConfiguredPluginInstallReleaseStep({
+      cfg: {
+        plugins: {
+          entries: {
+            matrix: { enabled: true },
+          },
+        },
+      },
+      currentVersion: "2026.5.2-beta.1",
+      touchedVersion: "2026.5.1",
+      env: {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
+      },
+    });
+
+    expect(result).toEqual({
+      changes: ['Removed stale managed install record for bundled plugin "matrix".'],
+      warnings: [],
+      completed: false,
+      touchedConfig: false,
     });
   });
 
   it("defers package-manager plugin release completion for writable legacy parents", async () => {
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
-      changes: ['Installed missing configured plugin "discord".'],
+      changes: [
+        'Skipped package-manager repair for configured plugin "discord" during package update; rerun "openclaw doctor --fix" after the update completes.',
+      ],
       warnings: [],
+      deferredRepairDetails: [
+        'Skipped package-manager repair for configured plugin "discord" during package update; rerun "openclaw doctor --fix" after the update completes.',
+      ],
     });
 
     const { maybeRunConfiguredPluginInstallReleaseStep } =
@@ -457,10 +731,22 @@ describe("configured plugin install release step", () => {
       OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
     });
     expect(result).toEqual({
-      changes: ['Installed missing configured plugin "discord".'],
+      changes: [
+        'Skipped package-manager repair for configured plugin "discord" during package update; rerun "openclaw doctor --fix" after the update completes.',
+      ],
       warnings: [],
       completed: false,
       touchedConfig: false,
+      postInstallDoctorResult: {
+        status: "advisory",
+        advisory: expect.objectContaining({
+          kind: "package-post-install-doctor",
+          reason: "deferred-configured-plugin-repair",
+          details: [
+            'Skipped package-manager repair for configured plugin "discord" during package update; rerun "openclaw doctor --fix" after the update completes.',
+          ],
+        }),
+      },
     });
   });
 

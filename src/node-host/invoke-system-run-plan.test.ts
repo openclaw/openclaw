@@ -1,9 +1,11 @@
+/** Tests system.run approval plans, cwd snapshots, and mutable script operand binding. */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { formatExecCommand } from "../infra/system-run-command.js";
+import { withEnv } from "../test-utils/env.js";
 import {
   buildSystemRunApprovalPlan,
   hardenApprovedExecutionPaths,
@@ -153,17 +155,10 @@ function withFakeRuntimeBins<T>(params: {
     writeFakeRuntimeBin(sharedRuntimeBinDir, binName);
     sharedRuntimeBins.add(binName);
   }
-  const oldPath = process.env.PATH;
-  process.env.PATH = `${sharedRuntimeBinDir}${path.delimiter}${oldPath ?? ""}`;
-  try {
-    return params.run();
-  } finally {
-    if (oldPath === undefined) {
-      delete process.env.PATH;
-    } else {
-      process.env.PATH = oldPath;
-    }
-  }
+  return withEnv(
+    { PATH: `${sharedRuntimeBinDir}${path.delimiter}${process.env.PATH ?? ""}` },
+    params.run,
+  );
 }
 
 function uniqueRuntimeBinNames(
@@ -460,17 +455,9 @@ describe("hardenApprovedExecutionPaths", () => {
     for (const testCase of cases) {
       runNamedCase(testCase.name, () => {
         const tmp = createFixtureDir("openclaw-approval-hardening-");
-        const oldPath = process.env.PATH;
         let pathToken: PathTokenSetup | null = null;
-        if (testCase.withPathToken) {
-          const binDir = path.join(tmp, "bin");
-          fs.mkdirSync(binDir, { recursive: true });
-          const link = path.join(binDir, "poccmd");
-          fs.symlinkSync("/bin/echo", link);
-          pathToken = { expected: fs.realpathSync(link) };
-          process.env.PATH = `${binDir}${path.delimiter}${oldPath ?? ""}`;
-        }
-        try {
+
+        const checkCase = () => {
           if (testCase.mode === "build-plan") {
             const prepared = buildSystemRunApprovalPlan({
               command: testCase.argv,
@@ -507,15 +494,21 @@ describe("hardenApprovedExecutionPaths", () => {
           if (typeof testCase.expectedArgvChanged === "boolean") {
             expect(hardened.argvChanged).toBe(testCase.expectedArgvChanged);
           }
-        } finally {
-          if (testCase.withPathToken) {
-            if (oldPath === undefined) {
-              delete process.env.PATH;
-            } else {
-              process.env.PATH = oldPath;
-            }
-          }
+        };
+
+        if (testCase.withPathToken) {
+          const binDir = path.join(tmp, "bin");
+          fs.mkdirSync(binDir, { recursive: true });
+          const link = path.join(binDir, "poccmd");
+          fs.symlinkSync("/bin/echo", link);
+          pathToken = { expected: fs.realpathSync(link) };
+          return withEnv(
+            { PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}` },
+            checkCase,
+          );
         }
+
+        return checkCase();
       });
     }
   });
@@ -913,7 +906,7 @@ describe("hardenApprovedExecutionPaths", () => {
     withFakeRuntimeBins({
       binNames: ["pnpm", "eslint"],
       run: () => {
-        const cases = [
+        const casesResult = [
           {
             prefix: "openclaw-pnpm-dlx-package-bin-",
             command: ["pnpm", "dlx", "cowsay", "hello"],
@@ -942,7 +935,7 @@ describe("hardenApprovedExecutionPaths", () => {
             },
           },
         ];
-        for (const testCase of cases) {
+        for (const testCase of casesResult) {
           const tmp = createFixtureDir(testCase.prefix);
           testCase.setup?.(tmp);
           expectApprovalPlanWithoutMutableOperand(testCase.command, tmp);
@@ -975,7 +968,7 @@ describe("hardenApprovedExecutionPaths", () => {
   });
 
   it("captures the real shell script operand after value-taking shell flags", () => {
-    const cases = [
+    const casesValue = [
       {
         name: "separate set option",
         argv: ["/bin/bash", "-o", "errexit", "./run.sh"],
@@ -1020,7 +1013,7 @@ describe("hardenApprovedExecutionPaths", () => {
       },
     ];
 
-    for (const testCase of cases) {
+    for (const testCase of casesValue) {
       runNamedCase(testCase.name, () => {
         const tmp = createFixtureDir("openclaw-shell-option-value-");
         const scriptPath = path.join(tmp, "run.sh");
@@ -1055,7 +1048,7 @@ describe("hardenApprovedExecutionPaths", () => {
   });
 
   it("captures fish script operands with plus-prefixed filenames", () => {
-    const cases = [
+    const casesLocal = [
       {
         name: "plus-prefixed fish script",
         argv: ["fish", "+setup.fish"],
@@ -1066,7 +1059,7 @@ describe("hardenApprovedExecutionPaths", () => {
       },
     ];
 
-    for (const testCase of cases) {
+    for (const testCase of casesLocal) {
       runNamedCase(testCase.name, () => {
         const tmp = createFixtureDir("openclaw-fish-plus-script-");
         const scriptPath = path.join(tmp, "+setup.fish");

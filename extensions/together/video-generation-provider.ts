@@ -1,3 +1,4 @@
+// Together provider module implements model/runtime integration.
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -8,10 +9,12 @@ import {
   fetchProviderDownloadResponse,
   pollProviderOperationJson,
   postJsonRequest,
+  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   asSafeIntegerInRange,
   normalizeOptionalString,
@@ -31,6 +34,7 @@ const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
 const TOGETHER_MIN_DURATION_SECONDS = 1;
 const TOGETHER_MAX_DURATION_SECONDS = 10;
+const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
 
 type TogetherVideoResponse = {
   id?: string;
@@ -50,6 +54,18 @@ type TogetherVideoResponse = {
         url?: string;
       }>;
 };
+
+// Reads the Together create-video response through the shared provider JSON
+// reader so a provider that streams an unbounded JSON body cannot force the
+// runtime to buffer the whole payload before parsing it on the success path.
+// The shared helper applies the established 16 MiB provider JSON cap and the
+// standard malformed-JSON wrapping instead of a provider-local reimplementation.
+async function readTogetherVideoJson(response: Response): Promise<TogetherVideoResponse> {
+  return (await readProviderJsonResponse(
+    response,
+    "Together video generation failed",
+  )) as TogetherVideoResponse;
+}
 
 function resolveTogetherVideoBaseUrl(req: VideoGenerationRequest): string {
   const configuredBaseUrl = normalizeOptionalString(req.cfg?.models?.providers?.together?.baseUrl);
@@ -97,6 +113,14 @@ function resolveTogetherDurationSeconds(value: unknown): string | undefined {
   return duration === undefined ? undefined : String(duration);
 }
 
+function resolveGeneratedVideoMaxBytes(req: VideoGenerationRequest): number {
+  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
+  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured * 1024 * 1024);
+  }
+  return DEFAULT_GENERATED_VIDEO_MAX_BYTES;
+}
+
 async function pollTogetherVideo(params: {
   videoId: string;
   headers: Headers;
@@ -130,6 +154,7 @@ async function downloadTogetherVideo(params: {
   url: string;
   timeoutMs?: ProviderOperationTimeoutMs;
   fetchFn: typeof fetch;
+  maxBytes: number;
 }): Promise<GeneratedVideoAsset> {
   const response = await fetchProviderDownloadResponse({
     url: params.url,
@@ -140,9 +165,12 @@ async function downloadTogetherVideo(params: {
     requestFailedMessage: "Together generated video download failed",
   });
   const mimeType = normalizeOptionalString(response.headers.get("content-type")) ?? "video/mp4";
-  const arrayBuffer = await response.arrayBuffer();
+  const buffer = await readResponseWithLimit(response, params.maxBytes, {
+    onOverflow: ({ maxBytes }) =>
+      new Error(`Together generated video download exceeds ${maxBytes} bytes`),
+  });
   return {
-    buffer: Buffer.from(arrayBuffer),
+    buffer,
     mimeType,
     fileName: `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
   };
@@ -262,7 +290,7 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
       });
       try {
         await assertOkOrThrowHttpError(response, "Together video generation failed");
-        const submitted = (await response.json()) as TogetherVideoResponse;
+        const submitted = await readTogetherVideoJson(response);
         const videoId = normalizeOptionalString(submitted.id);
         if (!videoId) {
           throw new Error("Together video generation response missing id");
@@ -288,6 +316,7 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
             defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
           }),
           fetchFn,
+          maxBytes: resolveGeneratedVideoMaxBytes(req),
         });
         return {
           videos: [video],

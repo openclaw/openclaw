@@ -1,9 +1,11 @@
+// Talk Voice tests cover index plugin behavior.
 import type { OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
 import { describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "./api.js";
 import register from "./index.js";
 
-function createHarness(config: Record<string, unknown>) {
+function createHarness(initialConfig: Record<string, unknown>) {
+  let config = initialConfig;
   let command: OpenClawPluginCommandDefinition | undefined;
   const runtime = {
     config: {
@@ -50,8 +52,9 @@ function createHarness(config: Record<string, unknown>) {
 
 function createCommandContext(
   args: string,
-  channel: string = "discord",
+  channel = "discord",
   gatewayClientScopes?: string[],
+  senderIsOwner?: boolean,
 ) {
   return {
     args,
@@ -59,6 +62,7 @@ function createCommandContext(
     channelId: channel,
     isAuthorizedSender: true,
     gatewayClientScopes,
+    senderIsOwner,
     commandBody: args ? `/voice ${args}` : "/voice",
     config: {},
     requestConversationBinding: vi.fn(),
@@ -110,6 +114,12 @@ describe("talk-voice plugin", () => {
     });
   });
 
+  it("exposes owner status for mutating voice commands", () => {
+    const { command } = createHarness({});
+
+    expect(command.exposeSenderIsOwner).toBe(true);
+  });
+
   it("lists voices from the active provider", async () => {
     const { command, runtime } = createHarness({
       talk: {
@@ -127,7 +137,7 @@ describe("talk-voice plugin", () => {
       { id: "voice-b", name: "Bert" },
     ]);
 
-    const result = await command.handler(createCommandContext("list 1"));
+    const result = await command.handler(createCommandContext("list +01"));
 
     expect(runtime.tts.listVoices).toHaveBeenCalledWith({
       provider: "elevenlabs",
@@ -309,17 +319,62 @@ describe("talk-voice plugin", () => {
     expect(runtime.config.mutateConfigFile).not.toHaveBeenCalled();
   });
 
-  it("allows /voice set from non-gateway channels without operator.admin", async () => {
-    const { runtime, run } = createElevenlabsVoiceSetHarness("telegram");
+  it.each(["telegram", "discord"])(
+    "rejects /voice set from %s channel without operator.admin",
+    async (channel) => {
+      const { runtime, run } = createElevenlabsVoiceSetHarness(channel);
+      const result = await run();
+
+      expect(result.text).toContain("requires operator.admin");
+      expect(runtime.config.mutateConfigFile).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps read-only voice commands available without operator.admin", async () => {
+    const { command, runtime } = createHarness({
+      talk: {
+        provider: "elevenlabs",
+        providers: {
+          elevenlabs: {
+            apiKey: "sk-eleven",
+          },
+        },
+      },
+    });
+    vi.mocked(runtime.tts.listVoices).mockResolvedValue([{ id: "voice-a", name: "Claudia" }]);
+
+    const status = await command.handler(createCommandContext("status", "telegram"));
+    const list = await command.handler(createCommandContext("list", "telegram"));
+
+    expect(status.text).toContain("Talk voice status:");
+    expect(list.text).toContain("ElevenLabs voices: 1");
+    expect(runtime.config.mutateConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("allows /voice set when operator.admin is present on a non-webchat channel", async () => {
+    const { runtime, run } = createElevenlabsVoiceSetHarness("telegram", ["operator.admin"]);
     const result = await run();
 
     expect(runtime.config.mutateConfigFile).toHaveBeenCalled();
     expect(result.text).toContain("voice-a");
   });
 
-  it("allows /voice set when operator.admin is present on a non-webchat channel", async () => {
-    const { runtime, run } = createElevenlabsVoiceSetHarness("telegram", ["operator.admin"]);
-    const result = await run();
+  it("allows /voice set from an owner non-gateway channel without scopes", async () => {
+    const { command, runtime } = createHarness({
+      talk: {
+        provider: "elevenlabs",
+        providers: {
+          elevenlabs: {
+            apiKey: "sk-eleven",
+          },
+        },
+      },
+    });
+    vi.mocked(runtime.tts.listVoices).mockResolvedValue([{ id: "voice-a", name: "Claudia" }]);
+
+    const result = await command.handler(
+      createCommandContext("set Claudia", "telegram", undefined, true),
+    );
 
     expect(runtime.config.mutateConfigFile).toHaveBeenCalled();
     expect(result.text).toContain("voice-a");

@@ -1,3 +1,8 @@
+/**
+ * Optional Anthropic request/usage JSONL diagnostics.
+ * Redacts payload content before writing and stores digests for correlation
+ * without persisting raw secret-bearing request bodies.
+ */
 import crypto from "node:crypto";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
@@ -6,7 +11,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
-import { sanitizeDiagnosticPayload } from "./payload-redaction.js";
+import { redactAgentDiagnosticPayload } from "./diagnostic-redaction.js";
 import { getQueuedFileWriter, type QueuedFileWriter } from "./queued-file-writer.js";
 import type { AgentMessage, StreamFn } from "./runtime/index.js";
 
@@ -53,23 +58,25 @@ function getWriter(filePath: string): PayloadLogWriter {
 
 function formatError(error: unknown): string | undefined {
   if (error instanceof Error) {
-    const redacted = sanitizeDiagnosticPayload(error.message);
+    const redacted = redactAgentDiagnosticPayload(error.message);
     return typeof redacted === "string" ? redacted : error.message;
   }
   if (typeof error === "string") {
-    const redacted = sanitizeDiagnosticPayload(error);
+    const redacted = redactAgentDiagnosticPayload(error);
     return typeof redacted === "string" ? redacted : error;
   }
   if (typeof error === "number" || typeof error === "boolean" || typeof error === "bigint") {
     return String(error);
   }
   if (error && typeof error === "object") {
-    return safeJsonStringify(sanitizeDiagnosticPayload(error)) ?? "unknown error";
+    return safeJsonStringify(redactAgentDiagnosticPayload(error)) ?? "unknown error";
   }
   return undefined;
 }
 
 function digest(value: unknown): string | undefined {
+  // Hash the redacted payload so repeated requests can be correlated even when
+  // payload bodies are too sensitive to inspect directly.
   const serialized = safeJsonStringify(value);
   if (!serialized) {
     return undefined;
@@ -82,6 +89,8 @@ function isAnthropicModel(model: Model | undefined | null): boolean {
 }
 
 function findLastAssistantUsage(messages: AgentMessage[]): Record<string, unknown> | null {
+  // Usage is attached to assistant messages after streaming; walk backwards to
+  // avoid logging stale usage from an earlier assistant turn.
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const msg = messages[i] as { role?: unknown; usage?: unknown };
     if (msg?.role === "assistant" && msg.usage && typeof msg.usage === "object") {
@@ -97,6 +106,7 @@ type AnthropicPayloadLogger = {
   recordUsage: (messages: AgentMessage[], error?: unknown) => void;
 };
 
+/** Create an Anthropic payload/usage logger when the env flag is enabled. */
 export function createAnthropicPayloadLogger(params: {
   env?: NodeJS.ProcessEnv;
   runId?: string;
@@ -139,7 +149,9 @@ export function createAnthropicPayloadLogger(params: {
         return streamFn(model, context, options);
       }
       const nextOnPayload = (payload: unknown) => {
-        const redactedPayload = sanitizeDiagnosticPayload(payload);
+        // Forward the original payload to the provider hook, but persist only
+        // the redacted diagnostic copy.
+        const redactedPayload = redactAgentDiagnosticPayload(payload);
         record({
           ...base,
           ts: new Date().toISOString(),
@@ -175,7 +187,7 @@ export function createAnthropicPayloadLogger(params: {
       ...base,
       ts: new Date().toISOString(),
       stage: "usage",
-      usage: sanitizeDiagnosticPayload(usage) as Record<string, unknown>,
+      usage: redactAgentDiagnosticPayload(usage),
       error: errorMessage,
     });
     log.info("anthropic usage", {

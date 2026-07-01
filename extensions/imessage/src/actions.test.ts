@@ -1,3 +1,4 @@
+// Imessage tests cover actions plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -12,6 +13,11 @@ const runtimeMock = vi.hoisted(() => ({
   sendReaction: vi.fn(),
   sendRichMessage: vi.fn(),
   sendAttachment: vi.fn(),
+  renameGroup: vi.fn(),
+  setGroupIcon: vi.fn(),
+  addParticipant: vi.fn(),
+  removeParticipant: vi.fn(),
+  leaveGroup: vi.fn(),
 }));
 
 const rememberIMessageReplyCacheMock = vi.hoisted(() => vi.fn());
@@ -89,6 +95,11 @@ describe("imessage message actions", () => {
     runtimeMock.sendReaction.mockReset();
     runtimeMock.sendRichMessage.mockReset();
     runtimeMock.sendAttachment.mockReset();
+    runtimeMock.renameGroup.mockReset();
+    runtimeMock.setGroupIcon.mockReset();
+    runtimeMock.addParticipant.mockReset();
+    runtimeMock.removeParticipant.mockReset();
+    runtimeMock.leaveGroup.mockReset();
     rememberIMessageReplyCacheMock.mockReset();
     probeMock.getCachedIMessagePrivateApiStatus.mockReset();
     probeMock.probeIMessagePrivateApi.mockReset();
@@ -180,6 +191,100 @@ describe("imessage message actions", () => {
     expect(described?.actions).not.toContain("react");
     expect(described?.actions).not.toContain("reply");
     expect(described?.actions).toContain("edit");
+  });
+
+  it("requires a trusted requester for group management from iMessage turns", () => {
+    for (const action of [
+      "renameGroup",
+      "setGroupIcon",
+      "addParticipant",
+      "removeParticipant",
+      "leaveGroup",
+    ] as const) {
+      expect(
+        imessageMessageActions.requiresTrustedRequesterSender?.({
+          action,
+          toolContext: { currentChannelProvider: "imessage" },
+        }),
+      ).toBe(true);
+    }
+    expect(
+      imessageMessageActions.requiresTrustedRequesterSender?.({
+        action: "renameGroup",
+        toolContext: { currentChannelProvider: "discord" },
+      }),
+    ).toBe(false);
+    expect(
+      imessageMessageActions.requiresTrustedRequesterSender?.({
+        action: "react",
+        toolContext: { currentChannelProvider: "imessage" },
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["renameGroup", { name: "Unauthorized rename" }, runtimeMock.renameGroup],
+    [
+      "setGroupIcon",
+      { buffer: Buffer.from("unauthorized icon").toString("base64"), filename: "icon.png" },
+      runtimeMock.setGroupIcon,
+    ],
+    ["addParticipant", { address: "+15551230001" }, runtimeMock.addParticipant],
+    ["removeParticipant", { address: "+15551230002" }, runtimeMock.removeParticipant],
+    ["leaveGroup", {}, runtimeMock.leaveGroup],
+  ] as const)(
+    "rejects %s from non-owner non-admin callers before native mutation",
+    async (action, params, runtimeAction) => {
+      probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+        available: true,
+        v2Ready: true,
+        selectors: {},
+      });
+      await expect(
+        imessageMessageActions.handleAction?.({
+          action,
+          cfg: cfg(),
+          params: { chatGuid: "iMessage;+;chat0000", ...params },
+          senderIsOwner: false,
+          gatewayClientScopes: ["operator.write"],
+        } as never),
+      ).rejects.toThrow("iMessage group management requires an owner or operator.admin requester.");
+      expect(runtimeAction).not.toHaveBeenCalled();
+    },
+  );
+
+  it("allows owner and operator.admin group management", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+    });
+    runtimeMock.renameGroup.mockResolvedValue(undefined);
+    runtimeMock.leaveGroup.mockResolvedValue(undefined);
+
+    await imessageMessageActions.handleAction?.({
+      action: "renameGroup",
+      cfg: cfg(),
+      params: { chatGuid: "iMessage;+;chat0000", name: "Renamed group" },
+      senderIsOwner: true,
+    } as never);
+    await imessageMessageActions.handleAction?.({
+      action: "leaveGroup",
+      cfg: cfg(),
+      params: { chatGuid: "iMessage;+;chat0000" },
+      senderIsOwner: false,
+      gatewayClientScopes: ["operator.admin"],
+    } as never);
+
+    expect(runtimeMock.renameGroup).toHaveBeenCalledWith({
+      chatGuid: "iMessage;+;chat0000",
+      displayName: "Renamed group",
+      options: imsgOptions("iMessage;+;chat0000"),
+    });
+    expect(runtimeMock.leaveGroup).toHaveBeenCalledWith({
+      chatGuid: "iMessage;+;chat0000",
+      options: imsgOptions("iMessage;+;chat0000"),
+    });
   });
 
   it("emits a channels/imessage WARN when the private API bridge is unavailable", async () => {

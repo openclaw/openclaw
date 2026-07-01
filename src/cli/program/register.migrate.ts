@@ -1,4 +1,6 @@
+// Migration command registration: list, plan, and apply migration providers.
 import type { Command } from "commander";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   migrateApplyCommand,
   migrateDefaultCommand,
@@ -6,7 +8,6 @@ import {
   migratePlanCommand,
 } from "../../commands/migrate.js";
 import { defaultRuntime } from "../../runtime.js";
-import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { formatHelpExamples } from "../help-format.js";
 
@@ -87,6 +88,7 @@ function readVerifyPluginApps(value: unknown): boolean {
   return value === true;
 }
 
+/** Register migration commands and shared provider/item selection flags. */
 export function registerMigrateCommand(program: Command) {
   const migrate = addVerifyPluginAppsOption(
     program

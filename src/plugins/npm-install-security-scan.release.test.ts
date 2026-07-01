@@ -1,10 +1,11 @@
+/** Release-lane coverage for npm plugin install security scanning. */
 import { execFile, spawnSync } from "node:child_process";
 import fs, { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { beforeAll, describe, expect, it, test } from "vitest";
-import { isScannable, scanDirectoryWithSummary } from "../security/skill-scanner.js";
+import { isScannable, scanDirectoryWithSummary } from "../skills/security/scanner.js";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoPath, toRepoRelativePath } from "../test-utils/repo-files.js";
 
@@ -33,6 +34,8 @@ const REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS = new Set([
   "@openclaw/google-meet:dangerous-exec:src/node-host.ts",
   "@openclaw/google-meet:dangerous-exec:src/realtime.ts",
   "@openclaw/matrix:dangerous-exec:src/matrix/deps.ts",
+  "@openclaw/raft:dangerous-exec:src/gateway.ts",
+  "@openclaw/signal:dangerous-exec:src/daemon.ts",
   "@openclaw/voice-call:dangerous-exec:src/tunnel.ts",
   "@openclaw/voice-call:dangerous-exec:src/webhook/tailscale.ts",
 ]);

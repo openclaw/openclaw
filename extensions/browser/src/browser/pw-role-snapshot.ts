@@ -1,3 +1,9 @@
+/**
+ * Playwright role snapshot helpers.
+ *
+ * Converts ARIA or AI snapshots into compact role/name text with stable refs
+ * and duplicate disambiguation for agent actions.
+ */
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
@@ -8,6 +14,7 @@ type RoleRef = {
   nth?: number;
 };
 
+/** Mapping from generated role refs to role/name metadata. */
 export type RoleRefMap = Record<string, RoleRef>;
 
 type RoleSnapshotStats = {
@@ -17,6 +24,7 @@ type RoleSnapshotStats = {
   interactive: number;
 };
 
+/** Options for filtering and compacting role snapshots. */
 export type RoleSnapshotOptions = {
   /** Only include interactive elements (buttons, links, inputs, etc.). */
   interactive?: boolean;
@@ -26,6 +34,7 @@ export type RoleSnapshotOptions = {
   compact?: boolean;
 };
 
+/** Compute snapshot line/char/ref statistics. */
 export function getRoleSnapshotStats(snapshot: string, refs: RoleRefMap): RoleSnapshotStats {
   const interactive = Object.values(refs).filter((r) => INTERACTIVE_ROLES.has(r.role)).length;
   return {
@@ -53,7 +62,9 @@ function matchInteractiveSnapshotLine(
   if (!match) {
     return null;
   }
-  const [, , roleRaw, name, suffix] = match;
+  const roleRaw = match[2];
+  const name = match[3];
+  const suffix = match[4];
   if (roleRaw.startsWith("/")) {
     return null;
   }
@@ -120,37 +131,42 @@ function removeNthFromNonDuplicates(refs: RoleRefMap, tracker: RoleNameTracker) 
 
 function compactTree(tree: string) {
   const lines = tree.split("\n");
-  const result: string[] = [];
+  const entries: Array<{ line: string; keep: boolean; hasRef: boolean; indent: number }> = [];
+  const stack: Array<{ entry: (typeof entries)[number]; indent: number }> = [];
 
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i];
-    if (line.includes("[ref=")) {
-      result.push(line);
-      continue;
+  const finishEntry = () => {
+    const current = stack.pop();
+    if (!current) {
+      return;
     }
-    if (line.includes(":") && !line.trimEnd().endsWith(":")) {
-      result.push(line);
-      continue;
+    current.entry.keep ||= current.entry.hasRef;
+    if (current.entry.hasRef && stack.length > 0) {
+      stack[stack.length - 1].entry.hasRef = true;
     }
+  };
 
-    const currentIndent = getIndentLevel(line);
-    let hasRelevantChildren = false;
-    for (let j = i + 1; j < lines.length; j += 1) {
-      const childIndent = getIndentLevel(lines[j]);
-      if (childIndent <= currentIndent) {
-        break;
-      }
-      if (lines[j]?.includes("[ref=")) {
-        hasRelevantChildren = true;
-        break;
-      }
+  for (const line of lines) {
+    const indent = getIndentLevel(line);
+    while (stack.length > 0 && stack[stack.length - 1].indent >= indent) {
+      finishEntry();
     }
-    if (hasRelevantChildren) {
-      result.push(line);
-    }
+    const entry = {
+      line,
+      keep: line.includes("[ref=") || (line.includes(":") && !line.trimEnd().endsWith(":")),
+      hasRef: line.includes("[ref="),
+      indent,
+    };
+    entries.push(entry);
+    stack.push({ entry, indent });
+  }
+  while (stack.length > 0) {
+    finishEntry();
   }
 
-  return result.join("\n");
+  return entries
+    .filter((entry) => entry.keep)
+    .map((entry) => entry.line)
+    .join("\n");
 }
 
 function processLine(
@@ -255,6 +271,7 @@ function buildInteractiveSnapshotLines(params: {
   return out;
 }
 
+/** Normalize a role snapshot ref accepted by browser actions. */
 export function parseRoleRef(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -274,6 +291,7 @@ export function parseRoleRef(raw: string): string | null {
   return null;
 }
 
+/** Build a role snapshot and refs from Playwright ARIA snapshot text. */
 export function buildRoleSnapshotFromAriaSnapshot(
   ariaSnapshot: string,
   options: RoleSnapshotOptions = {},
@@ -346,6 +364,7 @@ function parseAiSnapshotRef(suffix: string): string | null {
  * Build a role snapshot from Playwright's AI snapshot output while preserving Playwright's own
  * aria-ref ids (e.g. ref=e13). This makes the refs self-resolving across calls.
  */
+/** Build a role snapshot and refs from Playwright AI snapshot text. */
 export function buildRoleSnapshotFromAiSnapshot(
   aiSnapshot: string,
   options: RoleSnapshotOptions = {},
@@ -384,7 +403,9 @@ export function buildRoleSnapshotFromAiSnapshot(
       out.push(line);
       continue;
     }
-    const [, , roleRaw, name, suffix] = match;
+    const roleRaw = match[2];
+    const name = match[3];
+    const suffix = match[4];
     if (roleRaw.startsWith("/")) {
       out.push(line);
       continue;

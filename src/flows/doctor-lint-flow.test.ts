@@ -1,3 +1,4 @@
+// Doctor lint flow tests cover lint diagnostics surfaced by doctor.
 import { describe, expect, it } from "vitest";
 import { exitCodeFromFindings, runDoctorLintChecks } from "./doctor-lint-flow.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
@@ -38,6 +39,57 @@ describe("runDoctorLintChecks", () => {
     expect(result.findings.map((finding) => finding.checkId)).toEqual(["a"]);
   });
 
+  it("skips default-disabled checks unless explicitly selected", async () => {
+    const defaultDisabled = normalizeHealthCheck({
+      ...check("targeted", async () => [
+        { checkId: "targeted", severity: "warning" as const, message: "warn" },
+      ]),
+      defaultEnabled: false,
+    });
+
+    await expect(
+      runDoctorLintChecks(ctx, {
+        checks: [defaultDisabled],
+      }),
+    ).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+      findings: [],
+    });
+
+    await expect(
+      runDoctorLintChecks(ctx, {
+        checks: [defaultDisabled],
+        onlyIds: ["targeted"],
+      }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [expect.objectContaining({ checkId: "targeted" })],
+    });
+  });
+
+  it("runs default-disabled checks when all checks are requested", async () => {
+    const defaultDisabled = normalizeHealthCheck({
+      ...check("targeted", async () => [
+        { checkId: "targeted", severity: "warning" as const, message: "warn" },
+      ]),
+      defaultEnabled: false,
+    });
+    const defaultEnabled = check("regular", async () => []);
+
+    const result = await runDoctorLintChecks(ctx, {
+      checks: [defaultDisabled, defaultEnabled],
+      includeAllChecks: true,
+    });
+
+    expect(result).toMatchObject({
+      checksRun: 2,
+      checksSkipped: 0,
+      findings: [expect.objectContaining({ checkId: "targeted" })],
+    });
+  });
+
   it("supports single-run checks in lint mode", async () => {
     const runnable: RunnableHealthCheck = {
       id: "run-check",
@@ -59,9 +111,9 @@ describe("runDoctorLintChecks", () => {
         };
       },
     };
-    const check = normalizeHealthCheck(runnable);
+    const checkLocal = normalizeHealthCheck(runnable);
 
-    const result = await runDoctorLintChecks(ctx, { checks: [check] });
+    const result = await runDoctorLintChecks(ctx, { checks: [checkLocal] });
 
     expect(result.findings.map((finding) => finding.checkId)).toEqual(["run-check"]);
   });

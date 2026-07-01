@@ -1,3 +1,4 @@
+// Builds reset prompts that preserve session context and bootstrap mode.
 import { resolveBootstrapMode, type BootstrapMode } from "../../agents/bootstrap-mode.js";
 import {
   buildFullBootstrapPromptLines,
@@ -112,6 +113,3 @@ export function buildBareSessionResetPrompt(
     nowMs ?? Date.now(),
   );
 }
-
-/** @deprecated Use buildBareSessionResetPrompt(cfg) instead */
-export const BARE_SESSION_RESET_PROMPT = BARE_SESSION_RESET_PROMPT_BASE;

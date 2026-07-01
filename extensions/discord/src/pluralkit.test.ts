@@ -1,3 +1,4 @@
+// Discord tests cover pluralkit plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { fetchPluralKitMessageInfo } from "./pluralkit.js";
 
@@ -6,6 +7,8 @@ type MockResponse = {
   ok: boolean;
   text: () => Promise<string>;
   json: () => Promise<unknown>;
+  body: null;
+  arrayBuffer: () => Promise<Buffer>;
 };
 
 const buildResponse = (params: { status: number; body?: unknown }): MockResponse => {
@@ -16,8 +19,32 @@ const buildResponse = (params: { status: number; body?: unknown }): MockResponse
     ok: params.status >= 200 && params.status < 300,
     text: async () => textPayload,
     json: async () => body ?? {},
+    body: null,
+    arrayBuffer: async () => Buffer.from(textPayload),
   };
 };
+
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
 
 describe("fetchPluralKitMessageInfo", () => {
   it("returns null when disabled", async () => {
@@ -63,5 +90,31 @@ describe("fetchPluralKitMessageInfo", () => {
 
     expect(result?.member?.id).toBe("mem_1");
     expect(receivedHeaders?.Authorization).toBe("pk_test");
+  });
+
+  it("bounds PluralKit API error bodies without using response.text()", async () => {
+    const tracked = cancelTrackedResponse(`${"plural failure ".repeat(1024)}tail`, {
+      status: 500,
+      headers: { "content-type": "text/plain" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    const fetcher = vi.fn(async () => tracked.response);
+
+    let caught: Error | undefined;
+    try {
+      await fetchPluralKitMessageInfo({
+        messageId: "boom",
+        config: { enabled: true },
+        fetcher: fetcher as unknown as typeof fetch,
+      });
+    } catch (error) {
+      caught = error as Error;
+    }
+
+    expect(caught?.message).toContain("PluralKit API failed (500): plural failure");
+    expect(caught?.message).not.toContain("tail");
+    expect(caught?.message.length).toBeLessThan(8_400);
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
   });
 });

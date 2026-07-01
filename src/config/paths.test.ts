@@ -1,10 +1,14 @@
+// Covers config path resolution across env, home, and agent roots.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
+  CONFIG_PATH,
   DEFAULT_GATEWAY_PORT,
+  isNixMode,
   normalizeStateDirEnv,
+  pinRuntimePaths,
   resolveDefaultConfigCandidates,
   resolveConfigPathCandidate,
   resolveConfigPath,
@@ -13,6 +17,7 @@ import {
   resolveOAuthDir,
   resolveOAuthPath,
   resolveStateDir,
+  STATE_DIR,
 } from "./paths.js";
 
 function envWith(overrides: Record<string, string | undefined>): NodeJS.ProcessEnv {
@@ -164,6 +169,37 @@ describe("state + config path candidates", () => {
 
     expect(normalized).toBe(path.resolve("relative-state"));
     expect(resolveStateDir(env, () => "/srv/other-home")).toBe(normalized);
+  });
+
+  it("re-pins exported runtime paths after startup environment selection", () => {
+    const originalConfigPath = CONFIG_PATH;
+    const originalNixMode = isNixMode;
+    const originalStateDir = STATE_DIR;
+    const selectedStateDir = path.resolve("/tmp/openclaw-selected-runtime-state");
+    const selectedConfigPath = path.join(selectedStateDir, "selected.json");
+    try {
+      const pinned = pinRuntimePaths({
+        OPENCLAW_CONFIG_PATH: selectedConfigPath,
+        OPENCLAW_NIX_MODE: "1",
+        OPENCLAW_STATE_DIR: selectedStateDir,
+        OPENCLAW_TEST_FAST: "1",
+      });
+
+      expect(pinned).toEqual({
+        configPath: selectedConfigPath,
+        stateDir: selectedStateDir,
+      });
+      expect(CONFIG_PATH).toBe(selectedConfigPath);
+      expect(isNixMode).toBe(true);
+      expect(STATE_DIR).toBe(selectedStateDir);
+    } finally {
+      pinRuntimePaths({
+        OPENCLAW_CONFIG_PATH: originalConfigPath,
+        OPENCLAW_NIX_MODE: originalNixMode ? "1" : undefined,
+        OPENCLAW_STATE_DIR: originalStateDir,
+        OPENCLAW_TEST_FAST: "1",
+      });
+    }
   });
 
   it("uses OPENCLAW_HOME for default state/config locations", () => {

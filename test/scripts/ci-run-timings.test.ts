@@ -1,5 +1,8 @@
+// Ci Run Timings tests cover ci run timings script behavior.
 import { describe, expect, it } from "vitest";
 import {
+  collectRunJobsFromPages,
+  isRetryableGhJsonErrorMessage,
   parseRunTimingArgs,
   selectLatestMainPushCiRun,
   summarizePnpmStoreWarmupBarrier,
@@ -52,6 +55,18 @@ describe("scripts/ci-run-timings.mjs", () => {
     ]);
   });
 
+  it("rejects empty CI job payloads instead of printing empty timing evidence", () => {
+    expect(() =>
+      summarizeRunTimings({
+        conclusion: "success",
+        createdAt: "2026-04-22T10:00:00Z",
+        jobs: [],
+        status: "completed",
+        updatedAt: "2026-04-22T10:01:30Z",
+      }),
+    ).toThrow("CI run timing summary requires at least one job");
+  });
+
   it("selects the push CI run for the current main SHA", () => {
     expect(
       selectLatestMainPushCiRun(
@@ -79,6 +94,69 @@ describe("scripts/ci-run-timings.mjs", () => {
       event: "push",
       headSha: "current",
     });
+  });
+
+  it("normalizes paginated GitHub Actions job payloads", () => {
+    expect(
+      collectRunJobsFromPages([
+        {
+          jobs: [
+            {
+              completed_at: "2026-06-01T13:26:16Z",
+              conclusion: "success",
+              id: 101,
+              name: "preflight",
+              started_at: "2026-06-01T13:25:16Z",
+              status: "completed",
+            },
+          ],
+        },
+        {
+          jobs: [
+            {
+              completedAt: "2026-06-01T13:28:00Z",
+              conclusion: "failure",
+              databaseId: 102,
+              name: "ci-timings-summary",
+              startedAt: "2026-06-01T13:27:00Z",
+              status: "completed",
+            },
+          ],
+        },
+      ]),
+    ).toEqual([
+      {
+        completedAt: "2026-06-01T13:26:16Z",
+        conclusion: "success",
+        databaseId: 101,
+        name: "preflight",
+        startedAt: "2026-06-01T13:25:16Z",
+        status: "completed",
+      },
+      {
+        completedAt: "2026-06-01T13:28:00Z",
+        conclusion: "failure",
+        databaseId: 102,
+        name: "ci-timings-summary",
+        startedAt: "2026-06-01T13:27:00Z",
+        status: "completed",
+      },
+    ]);
+  });
+
+  it("retries transient GitHub API failures while preserving auth failures", () => {
+    for (const message of [
+      "gh: API secondary rate limit exceeded (HTTP 403)",
+      "gh: HTTP 429: too many requests",
+      "Command failed: gh api repos/openclaw/openclaw/actions/runs/1/jobs\nHTTP 502",
+      "read ECONNRESET",
+    ]) {
+      expect(isRetryableGhJsonErrorMessage(message)).toBe(true);
+    }
+
+    expect(
+      isRetryableGhJsonErrorMessage("gh: Resource not accessible by integration (HTTP 403)"),
+    ).toBe(false);
   });
 
   it("summarizes the pnpm store warmup fanout barrier", () => {
@@ -177,5 +255,47 @@ describe("scripts/ci-run-timings.mjs", () => {
       recentLimit: null,
       useLatestMain: true,
     });
+  });
+
+  it("parses strict positive integer monitor limits", () => {
+    expect(parseRunTimingArgs(["123456", "--limit=7", "--recent", "4"])).toEqual({
+      explicitRunId: "123456",
+      limit: 7,
+      recentLimit: 4,
+      useLatestMain: false,
+    });
+  });
+
+  it("rejects malformed monitor limits instead of falling back", () => {
+    for (const args of [
+      ["--limit", "3jobs"],
+      ["--limit", "0"],
+      ["--limit=1e3"],
+      ["--recent", "recent"],
+      ["--recent", "0"],
+    ]) {
+      expect(() => parseRunTimingArgs(args)).toThrow("must be a positive integer");
+    }
+  });
+
+  it("rejects missing monitor limits instead of treating flags as values", () => {
+    for (const args of [
+      ["--limit"],
+      ["--limit", "--recent", "4"],
+      ["--limit", "-h"],
+      ["--recent"],
+      ["--recent", "-h"],
+    ]) {
+      expect(() => parseRunTimingArgs(args)).toThrow("requires a value");
+    }
+  });
+
+  it("rejects unknown monitor flags and duplicate run ids", () => {
+    expect(() => parseRunTimingArgs(["--run-id", "123456"])).toThrow(
+      "Unknown CI run timing option: --run-id",
+    );
+    expect(() => parseRunTimingArgs(["123456", "789012"])).toThrow(
+      "Unexpected CI run id argument: 789012",
+    );
   });
 });

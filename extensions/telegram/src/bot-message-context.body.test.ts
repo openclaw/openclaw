@@ -1,9 +1,20 @@
+// Telegram tests cover bot message context.body plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { normalizeAllowFrom } from "./bot-access.js";
 
-const { transcribeFirstAudioMock, triggerInternalHookMock } = vi.hoisted(() => ({
+const {
+  resolveStickerVisionSupportRuntimeMock,
+  transcribeFirstAudioMock,
+  triggerInternalHookMock,
+} = vi.hoisted(() => ({
+  resolveStickerVisionSupportRuntimeMock: vi.fn(async (_params: unknown) => false),
   transcribeFirstAudioMock: vi.fn(),
   triggerInternalHookMock: vi.fn<(event: unknown) => Promise<void>>(async () => undefined),
+}));
+
+vi.mock("./sticker-vision.runtime.js", () => ({
+  resolveStickerVisionSupportRuntime: (params: unknown) =>
+    resolveStickerVisionSupportRuntimeMock(params),
 }));
 
 vi.mock("./media-understanding.runtime.js", () => ({
@@ -72,6 +83,50 @@ function transcribeCallContext(index = 0): Record<string, unknown> {
 }
 
 describe("resolveTelegramInboundBody", () => {
+  it("delivers rich-message-only updates as a sanitized placeholder", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 0,
+        date: 1_700_000_000,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: { blocks: [{ type: "paragraph" }] },
+      } as never,
+    });
+
+    expect(result?.rawBody).toBe("[unsupported Telegram rich_message received]");
+    expect(result?.bodyText).toBe("[unsupported Telegram rich_message received]");
+  });
+
+  it("keeps rich-message placeholders quiet in requireMention groups", async () => {
+    const logger = { info: vi.fn() };
+    const result = await resolveTelegramBody({
+      cfg: {
+        channels: { telegram: {} },
+        messages: { groupChat: { mentionPatterns: ["\\btelegram\\b"] } },
+      } as never,
+      msg: {
+        message_id: 1,
+        date: 1_700_000_001,
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Group" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: { blocks: [{ type: "paragraph" }] },
+      } as never,
+      isGroup: true,
+      chatId: -1001234567890,
+      senderId: "42",
+      groupConfig: { requireMention: true } as never,
+      requireMention: true,
+      logger,
+    });
+
+    expect(logger.info).toHaveBeenCalledWith(
+      { chatId: -1001234567890, reason: "no-mention" },
+      "skipping group message",
+    );
+    expect(result).toBeNull();
+  });
+
   it("renders Telegram text entities before building the agent body", async () => {
     const result = await resolveTelegramBody({
       msg: {
@@ -163,6 +218,105 @@ describe("resolveTelegramInboundBody", () => {
     });
 
     expect(result?.bodyText).toBe("<media:document> (2 attachments)");
+  });
+
+  it("preserves cached sticker descriptions when downloaded media exists", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 6,
+        date: 1_700_000_006,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        sticker: {
+          file_id: "sticker-1",
+          file_unique_id: "sticker-u1",
+          type: "regular",
+          width: 256,
+          height: 256,
+          is_animated: false,
+          is_video: false,
+          emoji: "ok",
+          set_name: "test-set",
+        },
+      } as never,
+      allMedia: [
+        {
+          path: "/tmp/sticker.webp",
+          contentType: "image/webp",
+          stickerMetadata: {
+            emoji: "ok",
+            setName: "test-set",
+            cachedDescription: "Cached description",
+          },
+        },
+      ],
+    });
+
+    expect(result?.bodyText).toBe('[Sticker ok from "test-set"] Cached description');
+    expect(result?.stickerCacheHit).toBe(true);
+  });
+
+  it("includes cached sticker descriptions with user captions", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 7,
+        date: 1_700_000_007,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        caption: "What is this?",
+        sticker: {
+          file_id: "sticker-2",
+          file_unique_id: "sticker-u2",
+          type: "regular",
+          width: 256,
+          height: 256,
+          is_animated: false,
+          is_video: false,
+        },
+      } as never,
+      allMedia: [
+        {
+          path: "/tmp/sticker.webp",
+          contentType: "image/webp",
+          stickerMetadata: { cachedDescription: "Cached description" },
+        },
+      ],
+    });
+
+    expect(result?.bodyText).toBe("[Sticker] Cached description\nWhat is this?");
+    expect(result?.stickerCacheHit).toBe(true);
+  });
+
+  it("keeps cached sticker media available when the active model supports vision", async () => {
+    resolveStickerVisionSupportRuntimeMock.mockResolvedValueOnce(true);
+
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 8,
+        date: 1_700_000_008,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        sticker: {
+          file_id: "sticker-3",
+          file_unique_id: "sticker-u3",
+          type: "regular",
+          width: 256,
+          height: 256,
+          is_animated: false,
+          is_video: false,
+        },
+      } as never,
+      allMedia: [
+        {
+          path: "/tmp/sticker.webp",
+          contentType: "image/webp",
+          stickerMetadata: { cachedDescription: "Cached description" },
+        },
+      ],
+    });
+
+    expect(result?.bodyText).toBe("<media:image>");
+    expect(result?.stickerCacheHit).toBe(false);
   });
 
   it("lets catch-all mention patterns activate captionless group photos", async () => {

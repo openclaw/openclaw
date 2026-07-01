@@ -1,3 +1,4 @@
+// Tests miscellaneous run-reply-agent behaviors and artifact output.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -24,10 +25,15 @@ import {
   registerMemoryCapability,
   type MemoryFlushPlanResolver,
 } from "../../plugins/memory-state.js";
+import { GatewayDrainingError } from "../../process/command-queue.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { scheduleFollowupDrain } from "./queue.js";
-import { testing as replyRunRegistryTesting, replyRunRegistry } from "./reply-run-registry.js";
+import {
+  createReplyOperation,
+  testing as replyRunRegistryTesting,
+  replyRunRegistry,
+} from "./reply-run-registry.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 function createCliBackendTestConfig() {
@@ -99,6 +105,7 @@ vi.mock("../../agents/model-fallback.js", () => ({
 }));
 
 vi.mock("../../agents/model-auth.js", () => ({
+  isMissingProviderAuthError: () => false,
   resolveModelAuthMode: () => "api-key",
 }));
 
@@ -171,9 +178,12 @@ vi.mock("../../utils/provider-utils.js", () => ({
 
 const loadCronStoreMock = vi.fn();
 vi.mock("../../cron/store.js", () => {
+  const resolveCronPath = (storePath?: string) => storePath ?? "/tmp/openclaw-cron-store.json";
   return {
+    loadCronJobsStore: (...args: unknown[]) => loadCronStoreMock(...args),
     loadCronStore: (...args: unknown[]) => loadCronStoreMock(...args),
-    resolveCronStorePath: (storePath?: string) => storePath ?? "/tmp/openclaw-cron-store.json",
+    resolveCronJobsStorePath: resolveCronPath,
+    resolveCronStorePath: resolveCronPath,
   };
 });
 
@@ -189,6 +199,14 @@ vi.mock("../../agents/subagent-registry.js", () => ({
   listSubagentRunsForController: () => [],
   markSubagentRunTerminated: () => 0,
 }));
+
+// #85714: keep the real private-final decision but spy the WARN emitter so we
+// can assert it fires only through the substantive text suppression branch.
+const warnPrivateFinalSpy = vi.hoisted(() => vi.fn());
+vi.mock("./private-message-tool-final.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./private-message-tool-final.js")>();
+  return { ...actual, warnPrivateMessageToolFinal: warnPrivateFinalSpy };
+});
 
 import { runReplyAgent } from "./agent-runner.js";
 
@@ -244,6 +262,7 @@ beforeEach(() => {
   embeddedRunTesting.resetActiveEmbeddedRuns();
   replyRunRegistryTesting.resetReplyRunRegistry();
   runEmbeddedAgentMock.mockClear();
+  warnPrivateFinalSpy.mockClear();
   runCliAgentMock.mockClear();
   runWithModelFallbackMock.mockClear();
   runtimeErrorMock.mockClear();
@@ -426,6 +445,50 @@ describe("runReplyAgent auto-compaction token update", () => {
     expect(stored[sessionKey].totalTokens).toBe(55_000);
   }, 180_000);
 
+  it("keeps an unarmed preflight drain visible instead of dropping the reply", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-preflight-drain-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 200_000,
+    };
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+    compactState.compactEmbeddedAgentSessionMock.mockRejectedValueOnce(new GatewayDrainingError());
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath,
+      sessionEntry,
+    });
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expectReplyText(result, "⚠️ Gateway is restarting. Please wait a few seconds and try again.");
+  });
+
   it("starts queued followup drain only after clearing the active reply operation", async () => {
     const sessionKey = "main";
     const sessionEntry = {
@@ -473,6 +536,72 @@ describe("runReplyAgent auto-compaction token update", () => {
     });
 
     expectReplyText(result, "ok");
+    expect(scheduleFollowupDrain).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a provided reply operation active until final delivery completes", async () => {
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 50_000,
+    };
+    const replyOperation = createReplyOperation({
+      sessionKey,
+      sessionId: sessionEntry.sessionId,
+      resetTriggered: false,
+    });
+    const deliveryOrder: string[] = [];
+    runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { agentMeta: {} },
+    });
+
+    vi.mocked(scheduleFollowupDrain).mockImplementation((key) => {
+      expect(key).toBe(sessionKey);
+      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+      deliveryOrder.push("followup");
+    });
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath: "",
+      sessionEntry,
+    });
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+      replyOperation,
+    });
+
+    expectReplyText(result, "ok");
+    expect(replyRunRegistry.get(sessionKey)).toBe(replyOperation);
+    expect(replyOperation.result).toBeNull();
+    expect(scheduleFollowupDrain).not.toHaveBeenCalled();
+
+    deliveryOrder.push("final");
+    replyOperation.complete();
+
+    expect(deliveryOrder).toEqual(["final", "followup"]);
     expect(scheduleFollowupDrain).toHaveBeenCalledTimes(1);
   });
 
@@ -693,7 +822,10 @@ describe("runReplyAgent block streaming", () => {
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect((firstMockCallArg(onBlockReply, "block reply") as { text?: string }).text).toBe("Hello");
-    expect(result).toBeUndefined();
+    // The block pipeline streamed "Hello" but never sent "Final message",
+    // so the unsent text-only final is preserved (not dropped).
+    expect(result).toBeDefined();
+    expect((result as { text?: string }).text).toBe("Final message");
   });
 
   it("returns the final payload when onBlockReply times out", async () => {
@@ -2628,7 +2760,7 @@ describe("runReplyAgent response usage footer", () => {
     });
   }
 
-  it("appends session key when responseUsage=full", async () => {
+  it("uses the built-in compact footer when responseUsage=full", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {
@@ -2644,9 +2776,11 @@ describe("runReplyAgent response usage footer", () => {
     const res = await createRun({ responseUsage: "full", sessionKey });
     const payload = Array.isArray(res) ? res[0] : res;
     const text = payload?.text ?? "";
-    expect(text).toContain("Usage:");
-    expect(text).toContain("cache 4 cached / 2 new");
-    expect(text).toContain(`· session \`${sessionKey}\``);
+    expect(text).toContain("anthropic🤖 claude 🌘 🐌");
+    expect(text).toContain("↕️ 12/3");
+    expect(text).toContain("🗄 22%");
+    expect(text).not.toContain("Usage:");
+    expect(text).not.toContain("· session ");
   });
 
   it("does not append session key when responseUsage=tokens", async () => {
@@ -2691,6 +2825,61 @@ describe("runReplyAgent response usage footer", () => {
     expect(text).not.toContain("· session ");
   });
 
+  it("keeps partial token counts in the built-in full footer", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+          usage: { output: 125 },
+        },
+      },
+    });
+
+    const res = await createRun({
+      responseUsage: "full",
+      sessionKey: "agent:main:whatsapp:dm:+1000",
+    });
+    const payload = Array.isArray(res) ? res[0] : res;
+    const text = payload?.text ?? "";
+    expect(text).toContain("↕️ ?/125");
+    expect(text).not.toContain("Usage:");
+  });
+
+  it("shows aggregate-only token totals in the built-in full footer", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+          usage: { total: 1250 },
+        },
+      },
+    });
+
+    const res = await createRun({
+      responseUsage: "full",
+      sessionKey: "agent:main:whatsapp:dm:+1000",
+      config: {
+        models: {
+          providers: {
+            anthropic: {
+              models: [{ id: "claude", cost: { input: 3, output: 15 } }],
+            },
+          },
+        },
+      },
+    });
+    const payload = Array.isArray(res) ? res[0] : res;
+    const text = payload?.text ?? "";
+    expect(text).toContain("↕️ 1.3k");
+    expect(text).not.toContain("↕️ ?/?");
+    expect(text).not.toContain("💰");
+    expect(text).not.toContain("Usage:");
+  });
+
   it("shows configured costs for aws-sdk providers when responseUsage=full", async () => {
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
@@ -2733,10 +2922,12 @@ describe("runReplyAgent response usage footer", () => {
     const payload = Array.isArray(res) ? res[0] : res;
     const text = payload?.text ?? "";
 
-    expect(text).toContain("Usage: 1.0k in / 2.0k out");
-    expect(text).toContain("cache 500 cached / 2.0k new");
-    expect(text).toContain("est $0.04");
-    expect(text).toContain(`· session \`${sessionKey}\``);
+    expect(text).toContain("amazon-bedrock🤖 us.anthropic.claude-sonnet-4-6 🌘 🐌");
+    expect(text).toContain("↕️ 1.0k/2.0k");
+    expect(text).toContain("🗄 14%");
+    expect(text).toContain("💰0.0406");
+    expect(text).not.toContain("Usage:");
+    expect(text).not.toContain("· session ");
   });
 });
 
@@ -2982,5 +3173,131 @@ describe("runReplyAgent mid-turn rate-limit fallback", () => {
       "media-only retry-limit payload",
     );
     expect(payload?.text).toBeUndefined();
+  });
+});
+
+describe("runReplyAgent private message_tool_only final warning (#85714)", () => {
+  async function runPrivateFinalCase(params: {
+    messagingToolSentTargets?: unknown[];
+    finalAssistantText?: string;
+    payloadText?: string;
+    successfulCronAdds?: number;
+  }) {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stranded-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "stranded";
+    const sessionEntry = { sessionId: "session", updatedAt: Date.now(), totalTokens: 1_000 };
+    await fs.writeFile(storePath, JSON.stringify({ [sessionKey]: sessionEntry }, null, 2), "utf-8");
+
+    const finalAssistantText =
+      params.finalAssistantText ??
+      "Here is the answer the user asked for. It includes enough detail to read like a user-facing response rather than a short private note. This should have been sent with the message tool if the channel expected a visible reply.";
+    runEmbeddedAgentMock.mockResolvedValue({
+      // payloadText can differ from the assistant text to simulate metadata-only
+      // payloads (verbose notices, usage line) that must NOT trigger the warn —
+      // detection keys off the assistant final text, not the payload bundle.
+      payloads: [{ text: params.payloadText ?? finalAssistantText }],
+      meta: { agentMeta: {}, finalAssistantVisibleText: finalAssistantText },
+      ...(params.messagingToolSentTargets
+        ? { messagingToolSentTargets: params.messagingToolSentTargets }
+        : {}),
+      ...(params.successfulCronAdds === undefined
+        ? {}
+        : { successfulCronAdds: params.successfulCronAdds }),
+    });
+
+    const sessionCtx = {
+      Provider: "whatsapp",
+      OriginatingTo: "+15550001111",
+      AccountId: "primary",
+      MessageSid: "msg",
+      ChatType: "direct",
+    } as unknown as TemplateContext;
+    const followupRun = {
+      prompt: "hello",
+      summaryLine: "hello",
+      enqueuedAt: Date.now(),
+      run: {
+        agentId: "main",
+        agentDir: "/tmp/agent",
+        sessionId: "session",
+        sessionKey,
+        messageProvider: "whatsapp",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: tmp,
+        // Direct chat + visibleReplies=message_tool resolves to message_tool_only,
+        // so the final text is kept private (no automatic delivery).
+        config: { messages: { visibleReplies: "message_tool" } },
+        skillsSnapshot: {},
+        provider: "anthropic",
+        model: "claude",
+        thinkLevel: "low",
+        reasoningLevel: "on",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: { enabled: false, allowed: false, defaultLevel: "off" },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue: { mode: "interrupt" } as unknown as QueueSettings,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing: createMockTypingController(),
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+  }
+
+  it("warns when a substantive private final reply never used the message tool", async () => {
+    await runPrivateFinalCase({});
+    expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
+    expect(warnPrivateFinalSpy.mock.calls[0]?.[0]).toMatchObject({ sessionKey: "stranded" });
+  });
+
+  it("does not warn for a short private final reply", async () => {
+    await runPrivateFinalCase({ finalAssistantText: "Nothing to send here." });
+    expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when the message tool delivered this turn", async () => {
+    await runPrivateFinalCase({
+      messagingToolSentTargets: [{ tool: "message", provider: "whatsapp", to: "+15550001111" }],
+    });
+    expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
+  });
+
+  it("still warns when only an unrelated cron side effect succeeded", async () => {
+    await runPrivateFinalCase({ successfulCronAdds: 1 });
+    expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not warn on an intentional NO_REPLY turn even when metadata payloads remain", async () => {
+    // Assistant went silent (NO_REPLY), but a verbose/usage metadata payload
+    // survives in finalPayloads. The warn must key off the assistant text, not
+    // the payload bundle, so no private-final warning should fire.
+    await runPrivateFinalCase({
+      finalAssistantText: "no_reply",
+      payloadText: "Auto-compaction complete (count 1).",
+    });
+    expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
   });
 });

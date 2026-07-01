@@ -1,26 +1,17 @@
+/** Loads and normalizes OpenClaw plugin manifests, including contracts and config schemas. */
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
+import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
+import type { ModelCatalog } from "@openclaw/model-catalog-core/model-catalog-types";
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
+import { ENV_SECRET_REF_ID_RE } from "../config/types.secrets.js";
 import { matchRootFileOpenFailure, openRootFileSync } from "../infra/boundary-file-read.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import {
-  normalizeModelCatalog,
-  normalizeModelCatalogProviderId,
-  type ModelCatalog,
-  type ModelCatalogAlias,
-  type ModelCatalogCost,
-  type ModelCatalogDiscovery,
-  type ModelCatalogInput,
-  type ModelCatalogModel,
-  type ModelCatalogProvider,
-  type ModelCatalogStatus,
-  type ModelCatalogSuppression,
-  type ModelCatalogTieredCost,
-} from "../model-catalog/index.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
 import { isRecord } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import {
@@ -31,10 +22,17 @@ import type { PluginConfigUiHint } from "./manifest-types.js";
 import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 
+/** Canonical plugin manifest filename inside plugin roots. */
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
 export const PLUGIN_MANIFEST_FILENAMES = [PLUGIN_MANIFEST_FILENAME] as const;
 export const MAX_PLUGIN_MANIFEST_BYTES = 256 * 1024;
 const MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES = 512;
+const MAX_SECRET_PROVIDER_EXEC_ARGS = 128;
+const MAX_SECRET_PROVIDER_EXEC_ARG_BYTES = 1024;
+const MAX_SECRET_PROVIDER_EXEC_TIMEOUT_MS = 120_000;
+const MAX_SECRET_PROVIDER_EXEC_OUTPUT_BYTES = 20 * 1024 * 1024;
+const MAX_SECRET_PROVIDER_EXEC_PASS_ENV = 128;
+const SECRET_PROVIDER_NODE_COMMAND_PLACEHOLDER = "${node}";
 
 type PluginManifestLoadCacheEntry = {
   result: PluginManifestLoadResult;
@@ -47,6 +45,7 @@ const pluginManifestLoadCache = new PluginLruCache<PluginManifestLoadCacheEntry>
   MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES,
 );
 
+/** Clears process-local manifest parse cache for tests and explicit refresh flows. */
 export function clearPluginManifestLoadCache(): void {
   pluginManifestLoadCache.clear();
 }
@@ -79,15 +78,6 @@ export type PluginManifestModelSupport = {
   modelPatterns?: string[];
 };
 
-export type PluginManifestModelCatalogInput = ModelCatalogInput;
-export type PluginManifestModelCatalogDiscovery = ModelCatalogDiscovery;
-export type PluginManifestModelCatalogStatus = ModelCatalogStatus;
-export type PluginManifestModelCatalogTieredCost = ModelCatalogTieredCost;
-export type PluginManifestModelCatalogCost = ModelCatalogCost;
-export type PluginManifestModelCatalogModel = ModelCatalogModel;
-export type PluginManifestModelCatalogProvider = ModelCatalogProvider;
-export type PluginManifestModelCatalogAlias = ModelCatalogAlias;
-export type PluginManifestModelCatalogSuppression = ModelCatalogSuppression;
 export type PluginManifestModelCatalog = ModelCatalog;
 
 export type PluginManifestModelPricingModelIdTransform = "version-dots";
@@ -152,6 +142,22 @@ export type PluginManifestProviderRequestProvider = {
 
 export type PluginManifestProviderRequest = {
   providers?: Record<string, PluginManifestProviderRequestProvider>;
+};
+
+export type PluginManifestSecretProviderIntegration = {
+  providerAlias?: string;
+  displayName?: string;
+  description?: string;
+  source: "exec";
+  command: "${node}";
+  args?: string[];
+  timeoutMs?: number;
+  noOutputTimeoutMs?: number;
+  maxOutputBytes?: number;
+  jsonOnly?: boolean;
+  env?: Record<string, string>;
+  passEnv?: string[];
+  allowInsecurePath?: boolean;
 };
 
 export type PluginManifestActivationCapability = "provider" | "channel" | "tool" | "hook";
@@ -325,6 +331,8 @@ export type PluginManifest = {
   providerEndpoints?: PluginManifestProviderEndpoint[];
   /** Cheap provider request metadata used before provider runtime loads. */
   providerRequest?: PluginManifestProviderRequest;
+  /** Declarative SecretRef provider presets owned by this plugin. */
+  secretProviderIntegrations?: Record<string, PluginManifestSecretProviderIntegration>;
   /** Cheap startup activation lookup for plugin-owned CLI inference backends. */
   cliBackends?: string[];
   /**
@@ -368,6 +376,8 @@ export type PluginManifest = {
   skills?: string[];
   name?: string;
   description?: string;
+  /** Optional HTTPS URL for marketplace/catalog card artwork. */
+  icon?: string;
   version?: string;
   uiHints?: Record<string, PluginConfigUiHint>;
   /**
@@ -396,6 +406,7 @@ export type PluginManifest = {
 export type PluginManifestContracts = {
   embeddedExtensionFactories?: string[];
   agentToolResultMiddleware?: string[];
+  trustedToolPolicies?: string[];
   /**
    * Provider ids whose external auth profile hook can contribute runtime-only
    * credentials. Declaring this lets auth-store overlays load only the owning
@@ -460,6 +471,7 @@ export type PluginManifestCapabilityProviderModeConfigSignal = {
 export type PluginManifestCapabilityProviderConfigSignal = {
   rootPath: string;
   overlayPath?: string;
+  overlayMapPath?: string;
   required?: string[];
   requiredAny?: string[];
   mode?: PluginManifestCapabilityProviderModeConfigSignal;
@@ -475,6 +487,8 @@ export type PluginManifestCapabilityProviderMetadata = {
 
 export type PluginManifestToolMetadata = PluginManifestCapabilityProviderMetadata & {
   optional?: boolean;
+  /** Tool execution is safe to repeat after an incomplete model turn. */
+  replaySafe?: boolean;
 };
 
 export type PluginManifestProviderAuthChoice = {
@@ -549,11 +563,11 @@ function normalizeStringRecord(value: unknown): Record<string, string> | undefin
   const normalized: Record<string, string> = Object.create(null);
   for (const [rawKey, rawValue] of Object.entries(value)) {
     const key = normalizeOptionalString(rawKey) ?? "";
-    const value = normalizeOptionalString(rawValue) ?? "";
-    if (!key || isBlockedObjectKey(key) || !value) {
+    const valueLocal = normalizeOptionalString(rawValue) ?? "";
+    if (!key || isBlockedObjectKey(key) || !valueLocal) {
       continue;
     }
-    normalized[key] = value;
+    normalized[key] = valueLocal;
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
@@ -716,12 +730,12 @@ function normalizeCapabilityProviderModeConfigSignal(
   if (!isRecord(value)) {
     return undefined;
   }
-  const path = normalizeOptionalString(value.path);
+  const pathResult = normalizeOptionalString(value.path);
   const defaultValue = normalizeOptionalString(value.default);
   const allowed = normalizeTrimmedStringList(value.allowed);
   const disallowed = normalizeTrimmedStringList(value.disallowed);
   const signal = {
-    ...(path ? { path } : {}),
+    ...(pathResult ? { path: pathResult } : {}),
     ...(defaultValue ? { default: defaultValue } : {}),
     ...(allowed.length > 0 ? { allowed } : {}),
     ...(disallowed.length > 0 ? { disallowed } : {}),
@@ -745,12 +759,14 @@ function normalizeCapabilityProviderConfigSignals(
       continue;
     }
     const overlayPath = normalizeOptionalString(rawSignal.overlayPath);
+    const overlayMapPath = normalizeOptionalString(rawSignal.overlayMapPath);
     const required = normalizeTrimmedStringList(rawSignal.required);
     const requiredAny = normalizeTrimmedStringList(rawSignal.requiredAny);
     const mode = normalizeCapabilityProviderModeConfigSignal(rawSignal.mode);
     const signal = {
       rootPath,
       ...(overlayPath ? { overlayPath } : {}),
+      ...(overlayMapPath ? { overlayMapPath } : {}),
       ...(required.length > 0 ? { required } : {}),
       ...(requiredAny.length > 0 ? { requiredAny } : {}),
       ...(mode ? { mode } : {}),
@@ -816,6 +832,7 @@ function normalizePluginToolMetadata(
     const metadata = {
       ...providerMetadata,
       ...(rawMetadata.optional === true ? { optional: true } : {}),
+      ...(rawMetadata.replaySafe === true ? { replaySafe: true } : {}),
     } satisfies PluginManifestToolMetadata;
     if (Object.keys(metadata).length > 0) {
       normalized[toolName] = metadata;
@@ -831,6 +848,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
 
   const embeddedExtensionFactories = normalizeTrimmedStringList(value.embeddedExtensionFactories);
   const agentToolResultMiddleware = normalizeTrimmedStringList(value.agentToolResultMiddleware);
+  const trustedToolPolicies = normalizeTrimmedStringList(value.trustedToolPolicies);
   const externalAuthProviders = normalizeTrimmedStringList(value.externalAuthProviders);
   const embeddingProviders = normalizeTrimmedStringList(value.embeddingProviders);
   const memoryEmbeddingProviders = normalizeTrimmedStringList(value.memoryEmbeddingProviders);
@@ -854,6 +872,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const contracts = {
     ...(embeddedExtensionFactories.length > 0 ? { embeddedExtensionFactories } : {}),
     ...(agentToolResultMiddleware.length > 0 ? { agentToolResultMiddleware } : {}),
+    ...(trustedToolPolicies.length > 0 ? { trustedToolPolicies } : {}),
     ...(externalAuthProviders.length > 0 ? { externalAuthProviders } : {}),
     ...(embeddingProviders.length > 0 ? { embeddingProviders } : {}),
     ...(memoryEmbeddingProviders.length > 0 ? { memoryEmbeddingProviders } : {}),
@@ -897,11 +916,11 @@ function normalizeManifestDangerousConfigFlags(
     if (!isRecord(entry)) {
       continue;
     }
-    const path = normalizeOptionalString(entry.path) ?? "";
-    if (!path || !isManifestConfigLiteral(entry.equals)) {
+    const pathValue = normalizeOptionalString(entry.path) ?? "";
+    if (!pathValue || !isManifestConfigLiteral(entry.equals)) {
       continue;
     }
-    normalized.push({ path, equals: entry.equals });
+    normalized.push({ path: pathValue, equals: entry.equals });
   }
   return normalized.length > 0 ? normalized : undefined;
 }
@@ -917,13 +936,13 @@ function normalizeManifestSecretInputPaths(
     if (!isRecord(entry)) {
       continue;
     }
-    const path = normalizeOptionalString(entry.path) ?? "";
-    if (!path) {
+    const pathLocal = normalizeOptionalString(entry.path) ?? "";
+    if (!pathLocal) {
       continue;
     }
     const expected = entry.expected === "string" ? entry.expected : undefined;
     normalized.push({
-      path,
+      path: pathLocal,
       ...(expected ? { expected } : {}),
     });
   }
@@ -1211,6 +1230,111 @@ function normalizeManifestProviderRequest(
   return Object.keys(providers).length > 0 ? { providers } : undefined;
 }
 
+function normalizeManifestStringArray(
+  value: unknown,
+  options?: { maxItems?: number; maxLength?: number; pattern?: RegExp },
+): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    if (options?.maxLength !== undefined && entry.length > options.maxLength) {
+      continue;
+    }
+    if (options?.pattern && !options.pattern.test(entry)) {
+      continue;
+    }
+    normalized.push(entry);
+    if (options?.maxItems !== undefined && normalized.length >= options.maxItems) {
+      break;
+    }
+  }
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeManifestTrimmedStringArray(
+  value: unknown,
+  options?: { maxItems?: number; pattern?: RegExp },
+): string[] | undefined {
+  const normalized = normalizeTrimmedStringList(value).filter(
+    (entry) => !options?.pattern || options.pattern.test(entry),
+  );
+  const limited =
+    options?.maxItems !== undefined ? normalized.slice(0, options.maxItems) : normalized;
+  return limited.length > 0 ? limited : undefined;
+}
+
+function normalizeManifestPositiveInteger(value: unknown, max: number): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= max
+    ? value
+    : undefined;
+}
+
+function normalizeManifestSecretProviderIntegrations(
+  value: unknown,
+): Record<string, PluginManifestSecretProviderIntegration> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, PluginManifestSecretProviderIntegration> = Object.create(null);
+  for (const [rawId, rawIntegration] of Object.entries(value)) {
+    const id = normalizeOptionalString(rawId) ?? "";
+    if (!id || isBlockedObjectKey(id) || !isRecord(rawIntegration)) {
+      continue;
+    }
+    const command = normalizeOptionalString(rawIntegration.command);
+    if (rawIntegration.source !== "exec" || command !== SECRET_PROVIDER_NODE_COMMAND_PLACEHOLDER) {
+      continue;
+    }
+    const providerAlias = normalizeOptionalString(rawIntegration.providerAlias);
+    const displayName = normalizeOptionalString(rawIntegration.displayName);
+    const description = normalizeOptionalString(rawIntegration.description);
+    const args = normalizeManifestStringArray(rawIntegration.args, {
+      maxItems: MAX_SECRET_PROVIDER_EXEC_ARGS,
+      maxLength: MAX_SECRET_PROVIDER_EXEC_ARG_BYTES,
+    });
+    const timeoutMs = normalizeManifestPositiveInteger(
+      rawIntegration.timeoutMs,
+      MAX_SECRET_PROVIDER_EXEC_TIMEOUT_MS,
+    );
+    const noOutputTimeoutMs = normalizeManifestPositiveInteger(
+      rawIntegration.noOutputTimeoutMs,
+      MAX_SECRET_PROVIDER_EXEC_TIMEOUT_MS,
+    );
+    const maxOutputBytes = normalizeManifestPositiveInteger(
+      rawIntegration.maxOutputBytes,
+      MAX_SECRET_PROVIDER_EXEC_OUTPUT_BYTES,
+    );
+    const env = normalizeStringRecord(rawIntegration.env);
+    const passEnv = normalizeManifestTrimmedStringArray(rawIntegration.passEnv, {
+      maxItems: MAX_SECRET_PROVIDER_EXEC_PASS_ENV,
+      pattern: ENV_SECRET_REF_ID_RE,
+    });
+    normalized[id] = {
+      ...(providerAlias ? { providerAlias } : {}),
+      ...(displayName ? { displayName } : {}),
+      ...(description ? { description } : {}),
+      source: "exec",
+      command,
+      ...(args ? { args } : {}),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(noOutputTimeoutMs !== undefined ? { noOutputTimeoutMs } : {}),
+      ...(maxOutputBytes !== undefined ? { maxOutputBytes } : {}),
+      ...(typeof rawIntegration.jsonOnly === "boolean"
+        ? { jsonOnly: rawIntegration.jsonOnly }
+        : {}),
+      ...(env ? { env } : {}),
+      ...(passEnv ? { passEnv } : {}),
+      ...(rawIntegration.allowInsecurePath === true ? { allowInsecurePath: true } : {}),
+    };
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 export function normalizeManifestActivation(value: unknown): PluginManifestActivation | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -1473,7 +1597,7 @@ function normalizeChannelConfigs(
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-function normalizeManifestChannelCommandDefaults(
+export function normalizeManifestChannelCommandDefaults(
   value: unknown,
 ): PluginManifestChannelCommandDefaults | undefined {
   if (!isRecord(value)) {
@@ -1642,6 +1766,7 @@ export function loadPluginManifest(
   );
   const name = normalizeOptionalString(raw.name);
   const description = normalizeOptionalString(raw.description);
+  const icon = normalizeOptionalString(raw.icon);
   const version = normalizeOptionalString(raw.version);
   const channels = normalizeTrimmedStringList(raw.channels);
   const providers = normalizeTrimmedStringList(raw.providers);
@@ -1661,6 +1786,9 @@ export function loadPluginManifest(
   const providerRequest = normalizeManifestProviderRequest(raw.providerRequest, {
     ownedProviders: new Set(providers),
   });
+  const secretProviderIntegrations = normalizeManifestSecretProviderIntegrations(
+    raw.secretProviderIntegrations,
+  );
   const syntheticAuthRefs = normalizeTrimmedStringList(raw.syntheticAuthRefs);
   const nonSecretAuthMarkers = normalizeTrimmedStringList(raw.nonSecretAuthMarkers);
   const commandAliases = normalizeManifestCommandAliases(raw.commandAliases);
@@ -1716,6 +1844,7 @@ export function loadPluginManifest(
       modelIdNormalization,
       providerEndpoints,
       providerRequest,
+      secretProviderIntegrations,
       cliBackends,
       syntheticAuthRefs,
       nonSecretAuthMarkers,
@@ -1730,6 +1859,7 @@ export function loadPluginManifest(
       skills,
       name,
       description,
+      icon,
       version,
       uiHints,
       contracts,
@@ -1810,6 +1940,7 @@ export type PluginPackageInstall = {
   minHostVersion?: string;
   expectedIntegrity?: string;
   allowInvalidConfigRecovery?: boolean;
+  requiredPlatformPackages?: string[];
 };
 
 export type OpenClawPackageStartup = {
