@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 export type NativeI18nSurface = "android" | "apple";
 
@@ -58,6 +58,8 @@ const APPLE_UI_CALLS =
   /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
 const APPLE_UI_MULTILINE_CALLS =
   /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*"""([\s\S]*?)"""/gu;
+const APPLE_UI_CALL_START =
+  /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*/gu;
 const APPLE_MODIFIER_CALLS =
   /\.(?:navigationTitle|accessibilityLabel|accessibilityHint|help|alert|confirmationDialog)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
 const APPLE_MODIFIER_MULTILINE_CALLS =
@@ -104,6 +106,13 @@ const CONDITIONAL_BRANCHES = [
   /\bif\s*\([^)]*\)\s*"((?:\\.|[^"\\])*)"\s*else\s*"((?:\\.|[^"\\])*)"/gu,
   /\?\s*"((?:\\.|[^"\\])*)"\s*:\s*"((?:\\.|[^"\\])*)"/gu,
 ];
+const UI_STRING_NAME_RE = /(?:title|subtitle|body|message|label|text|description|prompt|help)$/iu;
+const APPLE_STRING_PROPERTY = /\bvar\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*String\s*\{/gu;
+const APPLE_SWITCH_BRANCH =
+  /(?:\bcase\b[^:\n]+|\bdefault)\s*:\s*(?:return\s+)?"((?:\\.|[^"\\])*)"/gu;
+const ANDROID_STRING_FUNCTION =
+  /\bfun\s+([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\s*:\s*String\s*=\s*when\s*\([^)]*\)\s*\{/gu;
+const ANDROID_WHEN_BRANCH = /(?:[^\n{}]+|\belse)\s*->\s*"((?:\\.|[^"\\])*)"/gu;
 const ANDROID_RESOURCE_STRINGS = /<string\b[^>]*>([\s\S]*?)<\/string>/gu;
 const ANDROID_RESOURCE_COLLECTIONS =
   /<(?:string-array|plurals)\b[^>]*>([\s\S]*?)<\/(?:string-array|plurals)>/gu;
@@ -212,6 +221,108 @@ function lineNumber(source: string, offset: number): number {
   return source.slice(0, offset).split("\n").length;
 }
 
+function findClosingBrace(source: string, openingBrace: number): number | null {
+  let depth = 0;
+  let quoted = false;
+  let escaped = false;
+  for (let index = openingBrace; index < source.length; index += 1) {
+    const character = source[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quoted && character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (character === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (quoted) {
+      continue;
+    }
+    if (character === "{") {
+      depth += 1;
+    } else if (character === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+  return null;
+}
+
+function readSwiftStringLiteral(
+  source: string,
+  openingQuote: number,
+): { end: number; value: string } | null {
+  if (source[openingQuote] !== '"' || source.startsWith('"""', openingQuote)) {
+    return null;
+  }
+  let raw = "";
+  for (let index = openingQuote + 1; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "\\") {
+      const next = source[index + 1];
+      if (next === undefined) {
+        return null;
+      }
+      raw += character + next;
+      index += 1;
+      continue;
+    }
+    if (character === '"') {
+      const value = raw.replaceAll(/\\(["\\nrt])/gu, (_, escape: string) => {
+        if (escape === "n") return "\n";
+        if (escape === "r") return "\r";
+        if (escape === "t") return "\t";
+        return escape;
+      });
+      return { end: index + 1, value };
+    }
+    raw += character;
+  }
+  return null;
+}
+
+function extractConcatenatedSwiftUiCalls(entries: Candidate[], repoPath: string, source: string) {
+  for (const match of source.matchAll(APPLE_UI_CALL_START)) {
+    const offset = match.index ?? 0;
+    let cursor = offset + match[0].length;
+    const first = readSwiftStringLiteral(source, cursor);
+    if (!first) {
+      continue;
+    }
+    const values = [first.value];
+    cursor = first.end;
+    while (true) {
+      const separator = source.slice(cursor).match(/^\s*\+\s*/u)?.[0];
+      if (!separator) {
+        break;
+      }
+      cursor += separator.length;
+      const next = readSwiftStringLiteral(source, cursor);
+      if (!next) {
+        break;
+      }
+      values.push(next.value);
+      cursor = next.end;
+    }
+    if (values.length > 1) {
+      addCandidate(
+        entries,
+        "apple",
+        repoPath,
+        values.join(""),
+        "ui-call-concatenated",
+        lineNumber(source, offset),
+      );
+    }
+  }
+}
+
 function decodeMultilineLiteral(raw: string): string {
   const lines = raw.replaceAll("\r\n", "\n").split("\n");
   if (lines[0]?.trim() === "") {
@@ -312,6 +423,13 @@ function extractCandidates(
   for (const [pattern, kind] of patterns) {
     for (const match of source.matchAll(pattern)) {
       const offset = match.index ?? 0;
+      if (
+        surface === "apple" &&
+        kind === "ui-call" &&
+        /^\s*\+/u.test(source.slice(offset + match[0].length))
+      ) {
+        continue;
+      }
       for (const value of match.slice(1)) {
         if (value) {
           addCandidate(entries, surface, repoPath, value, kind, lineNumber(source, offset));
@@ -320,6 +438,31 @@ function extractCandidates(
     }
   }
   if (surface === "apple") {
+    extractConcatenatedSwiftUiCalls(entries, repoPath, source);
+    for (const property of source.matchAll(APPLE_STRING_PROPERTY)) {
+      const name = property[1];
+      const openingBrace = (property.index ?? 0) + property[0].lastIndexOf("{");
+      const closingBrace = findClosingBrace(source, openingBrace);
+      if (!name || !UI_STRING_NAME_RE.test(name) || closingBrace === null) {
+        continue;
+      }
+      const body = source.slice(openingBrace + 1, closingBrace);
+      if (!/\bswitch\b/u.test(body)) {
+        continue;
+      }
+      for (const branch of body.matchAll(APPLE_SWITCH_BRANCH)) {
+        if (branch[1]) {
+          addCandidate(
+            entries,
+            surface,
+            repoPath,
+            branch[1],
+            "conditional-branch",
+            lineNumber(source, openingBrace + 1 + (branch.index ?? 0)),
+          );
+        }
+      }
+    }
     for (const match of source.matchAll(APPLE_NAMED_LITERALS)) {
       const callName = enclosingCallName(source, match.index ?? 0);
       if (!callName || !uiCallNames.has(callName)) {
@@ -340,6 +483,27 @@ function extractCandidates(
     }
   }
   if (surface === "android") {
+    for (const helper of source.matchAll(ANDROID_STRING_FUNCTION)) {
+      const name = helper[1];
+      const openingBrace = (helper.index ?? 0) + helper[0].lastIndexOf("{");
+      const closingBrace = findClosingBrace(source, openingBrace);
+      if (!name || !UI_STRING_NAME_RE.test(name) || closingBrace === null) {
+        continue;
+      }
+      const body = source.slice(openingBrace + 1, closingBrace);
+      for (const branch of body.matchAll(ANDROID_WHEN_BRANCH)) {
+        if (branch[1]) {
+          addCandidate(
+            entries,
+            surface,
+            repoPath,
+            branch[1],
+            "conditional-branch",
+            lineNumber(source, openingBrace + 1 + (branch.index ?? 0)),
+          );
+        }
+      }
+    }
     for (const match of source.matchAll(ANDROID_NAMED_LITERALS)) {
       const callName = enclosingCallName(source, match.index ?? 0);
       if (!callName || !uiCallNames.has(callName) || !match[1]) {
@@ -540,6 +704,6 @@ async function main() {
   });
 }
 
-if (process.argv[1] && import.meta.url === `file://${path.resolve(process.argv[1])}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   await main();
 }
