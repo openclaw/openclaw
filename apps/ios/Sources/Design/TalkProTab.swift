@@ -96,7 +96,7 @@ struct TalkProTab: View {
                             .padding(.horizontal, OpenClawProMetric.pagePadding)
                     }
                     self.voiceHeroCard
-                    self.controlsCard
+                    self.controlBar
                 }
                 .padding(.top, 16)
                 .padding(.bottom, 18)
@@ -156,48 +156,55 @@ struct TalkProTab: View {
         .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
-    private var controlsCard: some View {
-        CommandPanel(padding: 0) {
-            VStack(spacing: 0) {
-                self.controlToggleRow("Speakerphone", isOn: self.talkSpeakerphoneBinding)
-                Divider().padding(.leading, 14)
-                self.controlToggleRow("Background listening", isOn: self.$talkBackgroundEnabled)
-                Divider().padding(.leading, 14)
+    private var controlBar: some View {
+        OpenClawGlassControlGroup {
+            HStack(spacing: 12) {
+                self.iconToggle(
+                    title: "Speakerphone",
+                    systemImage: self.talkSpeakerphoneEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill",
+                    isOn: self.talkSpeakerphoneBinding,
+                    accessibilityIdentifier: "talk-speakerphone-control")
+                self.iconToggle(
+                    title: "Background listening",
+                    systemImage: self.talkBackgroundEnabled ? "waveform" : "waveform.slash",
+                    isOn: self.$talkBackgroundEnabled,
+                    accessibilityIdentifier: "talk-background-listening-control")
                 Button(action: self.openVoiceSettings) {
-                    HStack {
-                        Label("Voice & Talk settings", systemImage: "slider.horizontal.3")
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(.secondary)
-                    }
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(width: 44, height: 44)
                 }
-                .buttonStyle(.plain)
+                .buttonBorderShape(.circle)
+                .openClawGlassButton()
+                .accessibilityLabel("Voice & Talk settings")
+                .accessibilityIdentifier("talk-voice-settings-control")
             }
         }
+        .frame(maxWidth: .infinity)
         .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
-    private func controlToggleRow(_ title: String, isOn: Binding<Bool>) -> some View {
-        Toggle(title, isOn: isOn)
-            .contentShape(Rectangle())
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .overlay {
-                // Keep Toggle semantics for accessibility while making the full visual row tappable.
-                Button {
-                    isOn.wrappedValue.toggle()
-                } label: {
-                    Rectangle()
-                        .fill(.clear)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityHidden(true)
-            }
+    private func iconToggle(
+        title: String,
+        systemImage: String,
+        isOn: Binding<Bool>,
+        accessibilityIdentifier: String) -> some View
+    {
+        Button {
+            isOn.wrappedValue.toggle()
+        } label: {
+            Image(systemName: systemImage)
+                .font(.system(size: 17, weight: .semibold))
+                .contentTransition(.symbolEffect(.replace))
+                .frame(width: 44, height: 44)
+        }
+        .buttonBorderShape(.circle)
+        .openClawGlassButton(
+            prominent: isOn.wrappedValue,
+            tint: isOn.wrappedValue ? Color(uiColor: .systemBlue) : nil)
+        .accessibilityLabel(title)
+        .accessibilityValue(isOn.wrappedValue ? "On" : "Off")
+        .accessibilityIdentifier(accessibilityIdentifier)
     }
 
     private var gatewayConnected: Bool {

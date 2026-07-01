@@ -336,7 +336,7 @@ struct OpenClawChatComposer: View {
             HStack(alignment: .bottom, spacing: 8) {
                 self.compactAccessory(self.attachmentPicker)
 
-                HStack(alignment: .bottom, spacing: 8) {
+                HStack(alignment: .center, spacing: 8) {
                     self.editorOverlay
                         .padding(.vertical, self.cleanEditorTextPadding)
                         .frame(minHeight: self.cleanEditorMinHeight)
@@ -396,6 +396,7 @@ struct OpenClawChatComposer: View {
         .disabled(!talkControl.isGatewayConnected && !talkControl.isEnabled)
         .accessibilityLabel(talkControl.isEnabled ? "Stop realtime chat" : "Start realtime chat")
         .accessibilityValue(self.talkAccessibilityValue(talkControl))
+        .accessibilityIdentifier("chat-realtime-control")
         .help(self.talkHelpText(talkControl))
     }
 
@@ -420,6 +421,7 @@ struct OpenClawChatComposer: View {
         .disabled(!talkControl.isGatewayConnected && !talkControl.isEnabled)
         .accessibilityLabel(talkControl.isEnabled ? "Stop realtime chat" : "Start realtime chat")
         .accessibilityValue(self.talkAccessibilityValue(talkControl))
+        .accessibilityIdentifier("chat-realtime-control")
         .help(self.talkHelpText(talkControl))
     }
 
@@ -528,6 +530,7 @@ struct OpenClawChatComposer: View {
                 .padding(.vertical, self.composerChrome == .clean ? 0 : 6)
                 .focused(self.$isFocused)
                 .disabled(!self.isComposerEnabled)
+                .accessibilityIdentifier("chat-message-input")
             #endif
         }
     }

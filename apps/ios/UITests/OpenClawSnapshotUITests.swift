@@ -67,10 +67,13 @@ final class OpenClawSnapshotUITests: XCTestCase {
             initialDestination: "chat",
             name: "chat-composer-growth"))
 
-        let textField = try XCTUnwrap(app?.textFields.firstMatch)
+        let textField = try XCTUnwrap(app?.textFields["chat-message-input"])
         XCTAssertTrue(textField.waitForExistence(timeout: 8))
+        let talkButton = try XCTUnwrap(app?.buttons["chat-realtime-control"])
+        XCTAssertTrue(talkButton.waitForExistence(timeout: 5))
         let compactHeight = textField.frame.height
         XCTAssertLessThanOrEqual(compactHeight, 44)
+        XCTAssertLessThanOrEqual(abs(talkButton.frame.midY - textField.frame.midY), 1)
         self.attachScreenshot(named: "chat-composer-compact")
 
         textField.tap()
@@ -84,6 +87,45 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         self.app?.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
         XCTAssertTrue(self.app?.keyboards.firstMatch.waitForNonExistence(timeout: 3) == true)
+    }
+
+    func testTalkUsesCompactIconControls() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone Talk controls only")
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "talk",
+            initialDestination: "talk",
+            name: "talk-icon-controls"))
+
+        let speakerphone = try XCTUnwrap(app?.buttons["talk-speakerphone-control"])
+        let backgroundListening = try XCTUnwrap(app?.buttons["talk-background-listening-control"])
+        let voiceSettings = try XCTUnwrap(app?.buttons["talk-voice-settings-control"])
+        XCTAssertTrue(speakerphone.waitForExistence(timeout: 8))
+        XCTAssertTrue(backgroundListening.exists)
+        XCTAssertTrue(voiceSettings.exists)
+        XCTAssertFalse(self.app?.switches["Speakerphone"].exists == true)
+        XCTAssertFalse(self.app?.switches["Background listening"].exists == true)
+
+        if speakerphone.value as? String == "Off" {
+            speakerphone.tap()
+        }
+        XCTAssertEqual(speakerphone.value as? String, "On")
+        self.attachScreenshot(named: "talk-icon-controls")
+
+        let initialValue = speakerphone.value as? String
+        speakerphone.tap()
+        XCTAssertNotEqual(speakerphone.value as? String, initialValue)
+    }
+
+    func testAppearancePickerHasNoRedundantDescription() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone Settings proof only")
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "settings",
+            initialDestination: "settings",
+            name: "appearance-compact"))
+
+        XCTAssertTrue(self.app?.segmentedControls["settings-appearance-picker"].waitForExistence(timeout: 8) == true)
+        XCTAssertFalse(self.app?.staticTexts["Always uses light appearance."].exists == true)
+        self.attachScreenshot(named: "appearance-compact")
     }
 
     func testLiveGatewayControlOverviewNavigation() throws {
