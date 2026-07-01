@@ -37,10 +37,17 @@ Focused validation observed on the PR2 branch:
   - 2 files, 4 tests passed.
 - `node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/state/openclaw-state-db.test.ts src/state/openclaw-agent-db.test.ts src/durable/sqlite-store.test.ts src/durable/recovery.test.ts`
   - 4 files, 47 tests passed, 2 skipped.
+- `node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/durable/sqlite-store.test.ts src/durable/recovery.test.ts src/durable/coordination-projection.test.ts src/durable/fan-in.test.ts src/durable/executor.test.ts src/durable/subagent.test.ts`
+  - covered the exact durable matrix requested on the previous durable-core PR.
+  - 6 files, 36 tests passed on PR2.
+- `node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/state/openclaw-state-db.test.ts src/state/openclaw-state-db.permissions.test.ts src/state/sqlite-query-plan.test.ts`
+  - 3 files, 26 tests passed, 1 skipped on PR2.
 - `node scripts/generate-kysely-types.mjs --verify`
   - passed.
 - `node scripts/check-kysely-guardrails.mjs`
   - passed with `Kysely guardrails OK`.
+- `./node_modules/.bin/oxfmt --check --threads=1 <changed durable/state/gateway files>`
+  - passed on 47 PR2 durable/state/gateway files.
 - `git diff --check`
   - passed.
 
