@@ -728,11 +728,9 @@ export function createSessionMcpRuntime(params: {
                 session.sharedAcrossCatalogGenerations = true;
               }
               session.catalogUseCount += 1;
-              let connectedForCatalog = false;
               try {
                 failIfDisposed();
                 await ensureSessionConnected(session, resolved.connectionTimeoutMs);
-                connectedForCatalog = true;
                 failIfDisposed();
                 const capabilities = summarizeServerCapabilities(
                   session.client.getServerCapabilities(),
@@ -817,19 +815,21 @@ export function createSessionMcpRuntime(params: {
                 ];
                 const sharedWithNewerGeneration =
                   session.sharedAcrossCatalogGenerations || session.catalogUseCount > 1;
-                if (!connectedForCatalog && !session.connected) {
-                  // Timed-out connects can still leave the SDK client bound to a
-                  // transport. Delete before async close so future catalogs start fresh.
-                  await retireSessionIfCurrent(serverName, session);
-                } else if (reusedSession && !session.connected && !sharedWithNewerGeneration) {
-                  // A reused, previously-connected session died mid-refresh (e.g. the
-                  // child process was killed between ensureSessionConnected() returning
-                  // and listAllToolsBestEffort() finishing) — client.onclose already
-                  // flipped session.connected. Retire now instead of waiting for the
-                  // next catalog pass to notice, so a disconnected session is never
-                  // left reachable to a future reuse check.
+                if (!session.connected) {
+                  // The session ended up disconnected in this pass — either it never
+                  // connected (fresh session's connect failed, or a timed-out connect
+                  // still left the SDK client bound to a transport) or it was a reused,
+                  // previously-healthy session that died mid-refresh (e.g. the child
+                  // process was killed between ensureSessionConnected() returning and
+                  // listAllToolsBestEffort() finishing) — client.onclose already flipped
+                  // session.connected. Retiring is safe here regardless of
+                  // sharedWithNewerGeneration: that guard exists to protect a still-alive
+                  // session another generation is actively using, and a disconnected
+                  // transport isn't alive for any generation sharing it.
                   await retireSessionIfCurrent(serverName, session);
                 } else if (!reusedSession && !sharedWithNewerGeneration) {
+                  // Still connected, but this catalog build attempt itself failed for an
+                  // unrelated reason (e.g. a listTools timeout) on a brand-new session.
                   // Catalog invalidation can overlap generations; an older failed
                   // generation must not dispose a session a newer one already reused.
                   await retireSessionIfCurrent(serverName, session);
