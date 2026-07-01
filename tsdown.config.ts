@@ -137,6 +137,12 @@ function nodeBuildConfig(config: UserConfig): UserConfig {
   return {
     ...config,
     env,
+    // Explicit ESM format pin for OpenClaw's "type": "module" package.
+    // tsdown 0.22.1 already defaults to ESM for omitted format, so this
+    // is an explicit build-contract pin for consistency with the existing
+    // nodeWorkspacePackageBuildConfig() and defense-in-depth against any
+    // future tsdown default change.
+    format: "esm",
     fixedExtension: false,
     platform: "node",
     sourcemap: OUTPUT_SOURCE_MAPS,
