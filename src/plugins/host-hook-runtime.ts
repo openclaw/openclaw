@@ -302,11 +302,33 @@ export function dispatchPluginAgentEventSubscriptions(params: {
   const pendingHandlers: Promise<void>[] = [];
   const isTerminalEvent = isTerminalAgentRunEvent(params.event);
   for (const registration of subscriptions) {
-    const streams = registration.subscription.streams;
-    if (streams && streams.length > 0 && !streams.includes(params.event.stream)) {
+    let pluginId = "plugin-host";
+    let subscriptionId = "unknown";
+    let handler: PluginAgentEventSubscriptionRegistration["handle"] | undefined;
+    try {
+      pluginId = registration.pluginId;
+      const subscription = registration.subscription;
+      subscriptionId = normalizeOptionalString(subscription.id) ?? "unknown";
+      const streams = Array.isArray(subscription.streams) ? subscription.streams : undefined;
+      if (streams && streams.length > 0 && !streams.includes(params.event.stream)) {
+        continue;
+      }
+      handler = subscription.handle;
+      if (typeof handler !== "function") {
+        continue;
+      }
+    } catch (error) {
+      logAgentEventSubscriptionFailure({
+        pluginId,
+        subscriptionId,
+        error,
+      });
       continue;
     }
-    const pluginId = registration.pluginId;
+    const activeHandler = handler;
+    if (!activeHandler) {
+      continue;
+    }
     const runId = params.event.runId;
     let handlerActive = true;
     const ctx: PluginAgentEventSubscriptionContext = {
@@ -327,13 +349,11 @@ export function dispatchPluginAgentEventSubscriptions(params: {
       },
     };
     try {
-      const pending = Promise.resolve(
-        registration.subscription.handle(structuredClone(params.event), ctx),
-      )
+      const pending = Promise.resolve(activeHandler(structuredClone(params.event), ctx))
         .catch((error: unknown) => {
           logAgentEventSubscriptionFailure({
             pluginId,
-            subscriptionId: registration.subscription.id,
+            subscriptionId,
             error,
           });
         })
@@ -346,7 +366,7 @@ export function dispatchPluginAgentEventSubscriptions(params: {
       handlerActive = false;
       logAgentEventSubscriptionFailure({
         pluginId,
-        subscriptionId: registration.subscription.id,
+        subscriptionId,
         error,
       });
     }
