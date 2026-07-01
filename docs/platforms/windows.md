@@ -130,6 +130,12 @@ a generated `gateway.vbs` WScript wrapper so the background Gateway does not ope
 a visible console window. If task creation is denied, OpenClaw falls back to a
 per-user Startup-folder login item.
 
+Keep `OPENCLAW_STATE_DIR` on a local non-synced path such as
+`%USERPROFILE%\.openclaw`. Avoid OneDrive, Dropbox, Google Drive, and iCloud
+Drive for Gateway state because Files On-Demand, sync locks, and hydration delays
+can slow startup or block SQLite/session writes. `openclaw doctor` warns when it
+detects common Windows cloud-synced state paths.
+
 To install the Gateway service:
 
 ```powershell
