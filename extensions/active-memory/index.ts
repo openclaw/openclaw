@@ -37,6 +37,7 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_AGENT_ID = "main";
@@ -2570,7 +2571,7 @@ function truncateSummary(summary: string, maxSummaryChars: number): string {
     return ellipsis.slice(0, Math.max(0, maxSummaryChars));
   }
   const contentMaxChars = maxSummaryChars - ellipsis.length;
-  const bounded = trimmed.slice(0, contentMaxChars).trimEnd();
+  const bounded = sliceUtf16Safe(trimmed, 0, contentMaxChars).trimEnd();
   const nextChar = trimmed.charAt(contentMaxChars);
   if (!nextChar || /\s/.test(nextChar)) {
     return `${bounded}${ellipsis}`;
