@@ -21,6 +21,17 @@ const registryState = vi.hoisted(() => ({
   current: null as PluginRegistry | null,
 }));
 
+const hasApprovalTurnSourceRouteMock = vi.hoisted(() =>
+  vi.fn(
+    (params: { turnSourceChannel?: string | null; approvalKind?: "exec" | "plugin" }) =>
+      params.approvalKind === "plugin" && params.turnSourceChannel === "tui",
+  ),
+);
+
+vi.mock("../infra/approval-turn-source.js", () => ({
+  hasApprovalTurnSourceRoute: hasApprovalTurnSourceRouteMock,
+}));
+
 vi.mock("../plugins/active-runtime-registry.js", () => ({
   getActiveRuntimePluginRegistry: () => registryState.current,
 }));
@@ -41,6 +52,7 @@ function createNodeSession(): NodeSession {
 function createContext(opts?: {
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
   getApprovalClientConnIds?: GatewayRequestContext["getApprovalClientConnIds"];
+  hasExecApprovalClients?: GatewayRequestContext["hasExecApprovalClients"];
 }) {
   const invoke = vi.fn(async () => ({
     ok: true,
@@ -56,6 +68,7 @@ function createContext(opts?: {
       broadcastToConnIds: vi.fn(),
       pluginApprovalManager: opts?.pluginApprovalManager,
       getApprovalClientConnIds: opts?.getApprovalClientConnIds,
+      hasExecApprovalClients: opts?.hasExecApprovalClients,
     } as unknown as GatewayRequestContext,
     invoke,
   };
@@ -190,6 +203,7 @@ async function expectApprovalResolution(
 describe("applyPluginNodeInvokePolicy", () => {
   beforeEach(() => {
     registryState.current = null;
+    hasApprovalTurnSourceRouteMock.mockClear();
   });
 
   it("fails closed for dangerous plugin node commands without a policy", async () => {
@@ -260,6 +274,51 @@ describe("applyPluginNodeInvokePolicy", () => {
       visibleConnIds,
       { dropIfSlow: true },
     );
+
+    await expectApprovalResolution(resultPromise, manager, record);
+  });
+
+  it("keeps plugin policy approvals pending when only the originating turn source can approve", async () => {
+    const manager = new ExecApprovalManager<PluginApprovalRequestPayload>();
+    const getApprovalClientConnIds = vi.fn(() => new Set<string>());
+    setDangerousDemoCommandRegistry([createApprovalRequestPolicy()]);
+    const { context } = createContext({
+      pluginApprovalManager: manager,
+      getApprovalClientConnIds,
+      hasExecApprovalClients: vi.fn(() => false),
+    });
+    const resultPromise = applyPluginNodeInvokePolicy({
+      context,
+      client: createOperatorClient(),
+      nodeSession: createNodeSession(),
+      command: DEMO_COMMAND,
+      params: DEMO_PARAMS,
+      rawParams: {
+        ...DEMO_PARAMS,
+        turnSourceChannel: "tui",
+        turnSourceTo: "terminal",
+        turnSourceAccountId: "default",
+        turnSourceThreadId: 7,
+      },
+    });
+
+    const record = await expectSinglePendingApproval(manager);
+    expect(record.request.turnSourceChannel).toBe("tui");
+    expect(record.request.turnSourceTo).toBe("terminal");
+    expect(record.request.turnSourceAccountId).toBe("default");
+    expect(record.request.turnSourceThreadId).toBe(7);
+    expect(context.broadcast).not.toHaveBeenCalled();
+    expect(context.broadcastToConnIds).toHaveBeenCalledWith(
+      "plugin.approval.requested",
+      expect.objectContaining({ id: record.id }),
+      new Set<string>(),
+      { dropIfSlow: true },
+    );
+    expect(hasApprovalTurnSourceRouteMock).toHaveBeenCalledWith({
+      turnSourceChannel: "tui",
+      turnSourceAccountId: "default",
+      approvalKind: "plugin",
+    });
 
     await expectApprovalResolution(resultPromise, manager, record);
   });
