@@ -129,10 +129,12 @@ export async function sendWebhookMessageDiscord(
         `Discord webhook JSON response too large: ${size} bytes (limit: ${maxBytes} bytes)`,
       ),
   });
-  const payload = JSON.parse(body.toString("utf8")) as {
-    id?: string;
-    channel_id?: string;
-  };
+  let payload: { id?: string; channel_id?: string };
+  try {
+    payload = JSON.parse(body.toString("utf8")) as { id?: string; channel_id?: string };
+  } catch {
+    payload = {};
+  }
   try {
     recordChannelActivity({
       channel: "discord",
