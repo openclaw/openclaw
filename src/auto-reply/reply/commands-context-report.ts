@@ -18,6 +18,7 @@ import { readSessionMessages } from "../../gateway/session-utils.fs.js";
 import { estimateTokensFromChars } from "../../utils/cjk-chars.js";
 import type { ReplyPayload } from "../types.js";
 import type { HandleCommandsParams } from "./commands-types.js";
+import { readContextReportToolEntries } from "./context-report-tools.js";
 import { renderContextTreemapPng } from "./context-treemap.js";
 
 function formatInt(n: number): string {
@@ -224,7 +225,8 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
   const toolListLine = `Tool list (system prompt text): ${formatCharsAndTokens(report.tools.listChars)}`;
   const skillNameSet = new Set(report.skills.entries.map((s) => s.name));
   const skillNames = Array.from(skillNameSet);
-  const toolNames = report.tools.entries.map((t) => t.name);
+  const toolEntries = readContextReportToolEntries(report.tools.entries);
+  const toolNames = toolEntries.map((t) => t.name);
   const formatNameList = (names: string[], cap: number) =>
     names.length <= cap
       ? names.join(", ")
@@ -313,14 +315,14 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       30,
     );
     const perToolSchema = formatListTop(
-      report.tools.entries.map((t) => ({ name: t.name, value: t.schemaChars })),
+      toolEntries.map((t) => ({ name: t.name, value: t.schemaChars })),
       30,
     );
     const perToolSummary = formatListTop(
-      report.tools.entries.map((t) => ({ name: t.name, value: t.summaryChars })),
+      toolEntries.map((t) => ({ name: t.name, value: t.summaryChars })),
       30,
     );
-    const toolPropsLines = report.tools.entries
+    const toolPropsLines = toolEntries
       .filter((t) => t.propertiesCount != null)
       .toSorted((a, b) => (b.propertiesCount ?? 0) - (a.propertiesCount ?? 0))
       .slice(0, 30)

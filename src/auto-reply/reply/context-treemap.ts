@@ -6,6 +6,7 @@ import zlib from "node:zlib";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { estimateTokensFromChars } from "../../utils/cjk-chars.js";
+import { readContextReportToolEntries } from "./context-report-tools.js";
 
 /** PNG treemap renderer for visualizing prompt context size by section. */
 type Rect = {
@@ -342,8 +343,8 @@ function buildGroups(report: SessionSystemPromptReport): TreemapGroup[] {
   const projectFrameChars = Math.max(0, report.systemPrompt.projectContextChars - injectedTotal);
   const skillTotal = report.skills.entries.reduce((sum, skill) => sum + skill.blockChars, 0);
   const systemBaseChars = Math.max(0, report.systemPrompt.nonProjectContextChars - skillTotal);
-  const tools = report.tools.entries
-    .map((tool) => ({ name: tool.name, value: tool.schemaChars ?? 0 }))
+  const tools = readContextReportToolEntries(report.tools.entries)
+    .map((tool) => ({ name: tool.name, value: tool.schemaChars }))
     .filter((tool) => tool.value > 0);
   const currentTurnLeaves = report.currentTurn
     ? [
