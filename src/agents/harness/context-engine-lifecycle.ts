@@ -192,7 +192,63 @@ function ensureAssembleResultShape(result: unknown, engineId: string): AssembleR
       `context engine "${engineId}" assemble() returned an invalid result: expected an object with a "messages" array (got messages of type ${describeAssembleResultType(candidate.messages)})`,
     );
   }
+  validateReferenceContextShape(result, engineId);
   return result as AssembleResult;
+}
+
+function validateReferenceContextShape(result: object, engineId: string): void {
+  if (!("referenceContext" in result)) {
+    return;
+  }
+  const referenceContext = (result as { referenceContext?: unknown }).referenceContext;
+  if (referenceContext === undefined) {
+    return;
+  }
+  if (!Array.isArray(referenceContext)) {
+    throw new Error(
+      `context engine "${engineId}" assemble() returned an invalid result: expected "referenceContext" to be an array when present (got ${describeAssembleResultType(referenceContext)})`,
+    );
+  }
+  for (const [index, item] of referenceContext.entries()) {
+    validateReferenceContextItemShape(item, index, engineId);
+  }
+}
+
+function validateReferenceContextItemShape(item: unknown, index: number, engineId: string): void {
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    throw new Error(
+      `context engine "${engineId}" assemble() returned an invalid result: expected referenceContext[${index}] to be an object (got ${describeAssembleResultType(item)})`,
+    );
+  }
+  const record = item as Record<string, unknown>;
+  if (typeof record.kind !== "string") {
+    throw new Error(
+      `context engine "${engineId}" assemble() returned an invalid result: expected referenceContext[${index}].kind to be a string (got ${describeAssembleResultType(record.kind)})`,
+    );
+  }
+  if (typeof record.content !== "string") {
+    throw new Error(
+      `context engine "${engineId}" assemble() returned an invalid result: expected referenceContext[${index}].content to be a string (got ${describeAssembleResultType(record.content)})`,
+    );
+  }
+  for (const optionalStringKey of ["id", "trust"]) {
+    const value = record[optionalStringKey];
+    if (value !== undefined && typeof value !== "string") {
+      throw new Error(
+        `context engine "${engineId}" assemble() returned an invalid result: expected referenceContext[${index}].${optionalStringKey} to be a string when present (got ${describeAssembleResultType(value)})`,
+      );
+    }
+  }
+  const source = record.source;
+  if (
+    source !== undefined &&
+    typeof source !== "string" &&
+    (!source || typeof source !== "object" || Array.isArray(source))
+  ) {
+    throw new Error(
+      `context engine "${engineId}" assemble() returned an invalid result: expected referenceContext[${index}].source to be a string or object when present (got ${describeAssembleResultType(source)})`,
+    );
+  }
 }
 
 function describeAssembleResultType(value: unknown): string {

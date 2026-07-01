@@ -10,6 +10,14 @@ export type AssembleResult = {
   /** Estimated total tokens in assembled context */
   estimatedTokens: number;
   /**
+   * Optional host-owned historical/reference context for this turn.
+   *
+   * This lane is lower authority than system/developer/current-user input.
+   * Hosts that support it render the content as quoted reference data instead
+   * of treating it as fresh conversation messages or new instructions.
+   */
+  referenceContext?: ContextEngineReferenceContextItem[];
+  /**
    * Controls which token estimate the runner treats as authoritative for
    * preemptive overflow prechecks. The returned `messages` are always the
    * prompt sent to the model; this only affects the precheck's token comparison.
@@ -47,6 +55,19 @@ export type ContextEngineProjection = {
   fingerprint?: string;
 };
 
+export type ContextEngineReferenceContextItem = {
+  /** Stable plugin-local identifier for diagnostics or dedupe. */
+  id?: string;
+  /** Engine-defined category such as "summary", "memory", or "retrieval". */
+  kind: string;
+  /** Metadata only. Hosts must not use this to raise prompt authority. */
+  trust?: string;
+  /** Textual historical/reference content to render as lower-authority data. */
+  content: string;
+  /** Optional provenance metadata rendered as bounded diagnostics. */
+  source?: string | Record<string, unknown>;
+};
+
 export type ContextEngineOperation = "agent-run" | "manual-compact" | "subagent-spawn";
 
 export type ContextEngineRuntimeMode = "normal" | "fallback" | "degraded";
@@ -64,6 +85,7 @@ export type ContextEngineRuntimeReasonCode =
 export type ContextEngineHostCapability =
   | "bootstrap"
   | "assemble-before-prompt"
+  | "reference-context"
   | "after-turn"
   | "maintain"
   | "compact"

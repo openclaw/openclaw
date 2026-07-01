@@ -2,7 +2,11 @@
  * Projects OpenClaw context-engine assemblies into Codex prompt text while
  * preserving safety boundaries and redacting tool payloads.
  */
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  renderContextEngineReferenceContext,
+  type AgentMessage,
+  type ContextEngineReferenceContextItem,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { redactSensitiveFieldValue, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 
 type CodexContextProjection = {
@@ -43,6 +47,7 @@ export function projectContextEngineAssemblyForCodex(params: {
   originalHistoryMessages: AgentMessage[];
   prompt: string;
   systemPromptAddition?: string;
+  referenceContext?: ContextEngineReferenceContextItem[];
   maxRenderedContextChars?: number;
   toolPayloadMode?: "elide" | "preserve";
 }): CodexContextProjection {
@@ -56,6 +61,40 @@ export function projectContextEngineAssemblyForCodex(params: {
   const boundedContext = renderedContext
     ? truncateOlderContext(renderedContext, maxRenderedContextChars)
     : undefined;
+  const renderedReferenceContext = renderContextEngineReferenceContext(params.referenceContext, {
+    maxChars: maxRenderedContextChars,
+    maxItemChars: resolveTextPartMaxChars(maxRenderedContextChars),
+  });
+  if (renderedReferenceContext) {
+    const contextSections = [
+      ...(boundedContext
+        ? [
+            [
+              CONTEXT_HEADER,
+              CONTEXT_SAFETY_NOTE,
+              "",
+              CONTEXT_OPEN,
+              boundedContext,
+              CONTEXT_CLOSE,
+            ].join("\n"),
+          ]
+        : []),
+      renderedReferenceContext,
+    ];
+    const projectedContext = truncateOlderContext(
+      contextSections.join("\n\n"),
+      maxRenderedContextChars,
+    );
+    return {
+      ...(params.systemPromptAddition?.trim()
+        ? { developerInstructionAddition: params.systemPromptAddition.trim() }
+        : {}),
+      promptText: `${projectedContext}\n\n${REQUEST_HEADER}\n${prompt}`,
+      promptContextRange: { start: 0, end: projectedContext.length },
+      assembledMessages: params.assembledMessages,
+      prePromptMessageCount: params.originalHistoryMessages.length,
+    };
+  }
   const promptPrefix = boundedContext
     ? [CONTEXT_HEADER, CONTEXT_SAFETY_NOTE, "", CONTEXT_OPEN].join("\n") + "\n"
     : undefined;
