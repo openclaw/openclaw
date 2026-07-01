@@ -150,6 +150,10 @@ export function shouldUseEnvHttpProxyForUrl(
  * SSRF bypass.
  */
 export function matchesNoProxy(targetUrl: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  // Empty lowercase no_proxy shadows uppercase without falling through.
+  if ("no_proxy" in env && typeof env.no_proxy === "string" && env.no_proxy.trim() === "") {
+    return false;
+  }
   const raw = normalizeProxyEnvValue(env.no_proxy) ?? normalizeProxyEnvValue(env.NO_PROXY);
   if (!raw) {
     return false;
