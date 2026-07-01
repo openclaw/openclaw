@@ -95,6 +95,7 @@ async function waitForCronIsolatedRuns(count: number, timeoutMs = 2_000): Promis
 
 type HookCronRunCall = {
   sessionKey?: string;
+  lane?: string;
   job?: {
     agentId?: string;
     createdAtMs?: number;
@@ -290,6 +291,46 @@ describe("gateway server hooks", () => {
 
       const resBadJson = await postHook(port, "/hooks/wake", "{");
       expect(resBadJson.status).toBe(400);
+    });
+  });
+
+  test("routes hook agent runs through an explicit lane when configured", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["agent:", "hook:"],
+      mappings: [
+        {
+          match: { path: "jira-pickup" },
+          action: "agent",
+          name: "Jira Pickup",
+          messageTemplate: "Pickup {{payload.issue.key}}",
+          sessionKey: "agent:main:pickup:{{payload.issue.key}}",
+          lane: "jira-pickup",
+          deliver: false,
+        },
+      ],
+    };
+    setMainAndHooksAgents();
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOkOnce();
+      const direct = await postHook(port, "/hooks/agent", {
+        message: "Generic hook",
+        lane: "attacker-minted-lane",
+        deliver: false,
+      });
+      expect(direct.status).toBe(200);
+      await waitForCronIsolatedRuns(1);
+      expect(cronRunCall(0).lane).toBe("cron");
+
+      mockIsolatedRunOkOnce();
+      const mapped = await postHook(port, "/hooks/jira-pickup", { issue: { key: "FAD-1526" } });
+      expect(mapped.status).toBe(200);
+      await waitForCronIsolatedRuns(1);
+      const mappedCall = cronRunCall(0);
+      expect(mappedCall.sessionKey).toBe("agent:main:pickup:fad-1526");
+      expect(mappedCall.lane).toBe("jira-pickup");
     });
   });
 

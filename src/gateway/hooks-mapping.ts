@@ -29,6 +29,7 @@ export type HookMappingResolved = {
   model?: string;
   thinking?: string;
   timeoutSeconds?: number;
+  lane?: string;
   transform?: HookMappingTransformResolved;
 };
 
@@ -65,6 +66,7 @@ type HookAction =
       model?: string;
       thinking?: string;
       timeoutSeconds?: number;
+      lane?: string;
     };
 
 type HookSessionKeyTemplateSource = "static" | "templated";
@@ -108,6 +110,7 @@ type HookTransformResult = Partial<{
   model: string;
   thinking: string;
   timeoutSeconds: number;
+  lane: string;
 }> | null;
 
 type HookTransformFn = (
@@ -229,6 +232,7 @@ function normalizeHookMapping(
     model: mapping.model,
     thinking: mapping.thinking,
     timeoutSeconds: mapping.timeoutSeconds,
+    lane: normalizeOptionalString(mapping.lane),
     transform,
   };
 }
@@ -281,6 +285,7 @@ function buildActionFromMapping(
       model: renderOptional(mapping.model, ctx),
       thinking: renderOptional(mapping.thinking, ctx),
       timeoutSeconds: mapping.timeoutSeconds,
+      lane: mapping.lane,
     },
   };
 }
@@ -323,6 +328,7 @@ function mergeAction(
     model: override.model ?? baseAgent?.model,
     thinking: override.thinking ?? baseAgent?.thinking,
     timeoutSeconds: override.timeoutSeconds ?? baseAgent?.timeoutSeconds,
+    lane: normalizeOptionalString(override.lane) ?? baseAgent?.lane,
   });
 }
 

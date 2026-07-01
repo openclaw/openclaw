@@ -233,6 +233,8 @@ type HookAgentPayload = {
 export type HookAgentDispatchPayload = Omit<HookAgentPayload, "sessionKey"> & {
   sessionKey: string;
   sourcePath: string;
+  /** Trusted config/mapping-only lane override; not accepted from external request payloads. */
+  lane?: string;
   allowUnsafeExternalContent?: boolean;
   externalContentSource?: HookExternalContentSource;
 };
