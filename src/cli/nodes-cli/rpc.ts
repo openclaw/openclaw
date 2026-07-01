@@ -130,7 +130,12 @@ export const callNodeDiagnosticsGatewayCli = async (
       throw error;
     }
   }
-  return await callGatewayCli(method, opts, params, { scopes: fallbackScopes });
+  return await callGatewayCli(
+    method,
+    opts,
+    params,
+    fallbackScopes ? { scopes: fallbackScopes } : undefined,
+  );
 };
 
 /** Call pairing approval methods with explicit operator scopes. */
