@@ -73,5 +73,5 @@ Skip with terse reason. Do not pad with low-confidence fixes.
 
 ## Output Shape
 
-Ledger: `fixed-local`, `ready-to-merge`, `needs-fixup`, `skipped`, `needs-human`.
+Tracking log: `fixed-local`, `ready-to-merge`, `needs-fixup`, `skipped`, `needs-human`.
 Final: issue files left on disk, PRs ready for merge/automerge, tests/gates, skip reasons.
