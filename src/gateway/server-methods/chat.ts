@@ -161,6 +161,7 @@ import { resolveSessionHistoryTailReadOptions } from "../session-history-state.j
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import {
+  attachOpenClawTranscriptMeta,
   capArrayByJsonBytes,
   readRecentSessionMessagesWithStatsAsync,
   readSessionMessageByIdAsync,
@@ -194,7 +195,7 @@ import {
   loadOptionalServerMethodModelCatalog,
   startOptionalServerMethodModelCatalogLoad,
 } from "./optional-model-catalog.js";
-import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
+import { hasTrackedActiveSessionRun, hasVisibleActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type {
   GatewayClient,
@@ -1686,6 +1687,7 @@ export function buildOversizedHistoryPlaceholder(message?: unknown): Record<stri
       ? (rawMetadata as Record<string, unknown>)
       : {};
   const metadataId = typeof metadata.id === "string" ? metadata.id : undefined;
+  const metadataRunId = typeof metadata.runId === "string" ? metadata.runId : undefined;
   const metadataSeq = typeof metadata.seq === "number" ? metadata.seq : undefined;
   const metadataIdempotencyKey =
     typeof metadata.idempotencyKey === "string" ? metadata.idempotencyKey : undefined;
@@ -1695,6 +1697,7 @@ export function buildOversizedHistoryPlaceholder(message?: unknown): Record<stri
     content: [{ type: "text", text: CHAT_HISTORY_OVERSIZED_PLACEHOLDER }],
     __openclaw: {
       ...(metadataId ? { id: metadataId } : {}),
+      ...(metadataRunId ? { runId: metadataRunId } : {}),
       ...(metadataSeq !== undefined ? { seq: metadataSeq } : {}),
       ...(metadataIdempotencyKey ? { idempotencyKey: metadataIdempotencyKey } : {}),
       truncated: true,
@@ -1942,6 +1945,7 @@ async function appendAssistantTranscriptMessage(params: {
   agentId?: string;
   createIfMissing?: boolean;
   idempotencyKey?: string;
+  runId?: string;
   abortMeta?: {
     aborted: true;
     origin: AbortOrigin;
@@ -1991,6 +1995,7 @@ async function appendAssistantTranscriptMessage(params: {
     label: params.label,
     content: params.content,
     idempotencyKey: params.idempotencyKey,
+    runId: params.runId,
     abortMeta: params.abortMeta,
     ttsSupplement: params.ttsSupplement,
     config: params.cfg,
@@ -2073,6 +2078,7 @@ async function persistAbortedPartials(params: {
       ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
       createIfMissing: true,
       idempotencyKey: `${snapshot.runId}:assistant`,
+      runId: snapshot.runId,
       cfg,
       abortMeta: {
         aborted: true,
@@ -2512,19 +2518,29 @@ function broadcastChatFinal(params: {
   context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq"> &
     Partial<Pick<GatewayRequestContext, "getRuntimeConfig">>;
   runId: string;
+  sourceRunId?: string;
   sessionKey: string;
   agentId?: string;
   message?: Record<string, unknown>;
 }) {
   const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);
   const payloadAgentId = params.sessionKey === "global" ? params.agentId : undefined;
+  const projectedMessage = projectChatDisplayMessage(
+    params.message
+      ? attachOpenClawTranscriptMeta(params.message, {
+          runId: params.sourceRunId ?? params.runId,
+        })
+      : undefined,
+  );
+  const stopReason = normalizeUnknownText(projectedMessage?.stopReason);
   const payload = {
     runId: params.runId,
     sessionKey: params.sessionKey,
     ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
     seq,
     state: "final" as const,
-    message: projectChatDisplayMessage(params.message),
+    message: projectedMessage,
+    ...(stopReason ? { stopReason } : {}),
   };
   params.context.broadcast("chat", payload);
   sendGlobalAwareNodeChatPayload({
@@ -2576,6 +2592,7 @@ function broadcastChatError(params: {
   context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq"> &
     Partial<Pick<GatewayRequestContext, "getRuntimeConfig">>;
   runId: string;
+  sourceRunId?: string;
   sessionKey: string;
   agentId?: string;
   errorMessage?: string;
@@ -2604,9 +2621,12 @@ function broadcastChatError(params: {
               },
             ],
             timestamp: Date.now(),
+            stopReason: "error",
+            __openclaw: { runId: params.sourceRunId ?? params.runId },
           },
         }
       : {}),
+    stopReason: "error",
   };
   params.context.broadcast("chat", payload);
   sendGlobalAwareNodeChatPayload({
@@ -3042,10 +3062,11 @@ async function handleChatHistoryRequest({
   });
   const activeRunAgentId =
     canonicalKey === "global" ? (selectedAgent.agentId ?? defaultAgentId) : selectedAgent.agentId;
-  sessionInfo.hasActiveRun = hasTrackedActiveSessionRun({
+  sessionInfo.hasActiveRun = hasVisibleActiveSessionRun({
     context,
     requestedKey: sessionKey,
     canonicalKey,
+    sessionId: entry?.sessionId,
     ...(activeRunAgentId ? { agentId: activeRunAgentId } : {}),
     defaultAgentId,
   });
@@ -4000,6 +4021,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
       let appendedWebchatAgentMedia = false;
       let agentRunStarted = false;
+      let sourceAgentRunId = clientRunId;
       let pendingDispatchLifecycleError:
         | {
             endedAt: number;
@@ -4043,7 +4065,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         await measureDiagnosticsTimelineSpan(
           "gateway.chat_send.persist_user_transcript",
           async () => {
-            await userTurnRecorder.persistFallback();
+            await userTurnRecorder.persistFallback({ runId: sourceAgentRunId });
           },
           {
             phase: "agent-turn",
@@ -4134,6 +4156,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           agentId,
           createIfMissing: true,
           idempotencyKey: `${clientRunId}:assistant-media`,
+          runId: sourceAgentRunId,
           ttsSupplement: ttsSupplementMarker,
           cfg,
         });
@@ -4251,6 +4274,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
               onAgentRunStart: (runId) => {
                 agentRunStarted = true;
+                sourceAgentRunId = runId;
                 emitServerTiming(
                   "agent-run-started",
                   runId !== clientRunId ? { agentRunId: runId } : undefined,
@@ -4778,6 +4802,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                       agentId,
                       createIfMissing: true,
                       idempotencyKey: clientRunId,
+                      runId: sourceAgentRunId,
                       ttsSupplement: ttsSupplementMarker,
                       cfg,
                     });
@@ -5166,6 +5191,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                     broadcastChatFinal({
                       context,
                       runId: clientRunId,
+                      sourceRunId: sourceAgentRunId,
                       sessionKey,
                       agentId,
                       message,
@@ -5180,6 +5206,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                 broadcastChatError({
                   context,
                   runId: clientRunId,
+                  sourceRunId: sourceAgentRunId,
                   sessionKey,
                   agentId,
                   errorMessage: returnedAgentErrorMessage,
@@ -5265,6 +5292,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           broadcastChatError({
             context,
             runId: clientRunId,
+            sourceRunId: sourceAgentRunId,
             sessionKey,
             agentId,
             errorMessage,

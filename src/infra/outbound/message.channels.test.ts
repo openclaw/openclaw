@@ -327,6 +327,21 @@ describe("gateway url override hardening", () => {
       },
     },
     {
+      name: "forwards delivery mirror run ownership in gateway send params",
+      params: {
+        mirror: {
+          sessionKey: "agent:main:threadchat:channel:town-square",
+          runId: "run-gateway-send-1",
+        },
+      },
+      expected: {
+        params: {
+          sessionKey: "agent:main:threadchat:channel:town-square",
+          runId: "run-gateway-send-1",
+        },
+      },
+    },
+    {
       name: "forwards replyToId in gateway send params",
       params: {
         replyToId: "wamid.42",

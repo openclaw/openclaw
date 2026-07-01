@@ -3160,16 +3160,18 @@ describe("deliverOutboundPayloads", () => {
         text: "caption",
         mediaUrls: ["https://example.com/files/report.pdf?sig=1"],
         idempotencyKey: "idem-deliver-1",
+        runId: "run-deliver-1",
       },
     });
 
     const appendOptions = (
       mocks.appendAssistantMessageToSessionTranscript.mock.calls as unknown as Array<
-        [{ config?: unknown; idempotencyKey?: unknown; text?: unknown }]
+        [{ config?: unknown; idempotencyKey?: unknown; runId?: unknown; text?: unknown }]
       >
     )[0]?.[0];
     expect(appendOptions?.text).toBe("report.pdf");
     expect(appendOptions?.idempotencyKey).toBe("idem-deliver-1");
+    expect(appendOptions?.runId).toBe("run-deliver-1");
     expect(appendOptions?.config).toBe(cfg);
   });
 

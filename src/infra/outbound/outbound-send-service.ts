@@ -296,6 +296,7 @@ export async function executeSendAction(params: {
       await appendAssistantMessageToSessionTranscript({
         agentId: params.ctx.mirror.agentId,
         sessionKey: params.ctx.mirror.sessionKey,
+        ...(params.ctx.mirror.runId ? { runId: params.ctx.mirror.runId } : {}),
         text: mirrorText,
         mediaUrls: mirrorMediaUrls,
         idempotencyKey: params.ctx.mirror.idempotencyKey,

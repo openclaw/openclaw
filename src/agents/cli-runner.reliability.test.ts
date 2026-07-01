@@ -282,13 +282,17 @@ function expectTextMessage(value: unknown, fields: { role: string; content: stri
 }
 
 function readTranscriptMessages(sessionFile: string): unknown[] {
+  return readTranscriptEntries(sessionFile)
+    .map((entry) => entry.message)
+    .filter(Boolean);
+}
+
+function readTranscriptEntries(sessionFile: string): Array<Record<string, unknown>> {
   return fs
     .readFileSync(sessionFile, "utf-8")
     .trim()
     .split("\n")
-    .map((line) => JSON.parse(line) as { message?: unknown })
-    .map((entry) => entry.message)
-    .filter(Boolean);
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
 const CLI_RESEED_PROMPT =
@@ -798,6 +802,9 @@ describe("runCliAgent reliability", () => {
         idempotencyKey: "run-successful-source-reply:internal-source-reply:0",
       },
     });
+    expect(
+      getReplyPayloadMetadata(result.payloads?.[0] as object)?.sourceReplyTranscriptMirror,
+    ).not.toHaveProperty("runId");
     expect(result.meta.finalAssistantVisibleText).toBe("sent through source reply");
   });
 
@@ -2241,6 +2248,11 @@ describe("runCliAgent reliability", () => {
           idempotencyKey: "cli-assistant:run-persist-cli",
         }),
       );
+      expect(
+        readTranscriptEntries(sessionFile)
+          .filter((entry) => entry.type === "message")
+          .map((entry) => entry.runId),
+      ).toEqual(["run-persist-cli", undefined]);
       expect(JSON.stringify(messages)).not.toContain("runtime prompt");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -2436,7 +2448,7 @@ describe("runCliAgent reliability", () => {
       isBlocked: vi.fn(() => false),
       hasRuntimePersistencePending: vi.fn(() => false),
       waitForRuntimePersistence: vi.fn(async () => undefined),
-      persistApproved: vi.fn(async (options?: { target?: unknown }) => {
+      persistApproved: vi.fn(async (options?: { target?: unknown; runId?: string }) => {
         capturedTarget =
           typeof options?.target === "function" ? await options.target() : options?.target;
         return {
@@ -2472,6 +2484,9 @@ describe("runCliAgent reliability", () => {
 
       expect(result.payloads).toEqual([{ text: "hello from cli" }]);
       expect(recorder.persistApproved).toHaveBeenCalledOnce();
+      expect(recorder.persistApproved).toHaveBeenCalledWith(
+        expect.objectContaining({ runId: "run-persist-cli-cwd" }),
+      );
       expect(capturedTarget).toEqual(
         expect.objectContaining({
           transcriptPath: sessionFile,

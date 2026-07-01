@@ -4,6 +4,8 @@
 export type OutboundMirror = {
   sessionKey: string;
   agentId?: string;
+  /** Source agent run that owns this transcript-visible delivery. */
+  runId?: string;
   text?: string;
   mediaUrls?: string[];
   idempotencyKey?: string;

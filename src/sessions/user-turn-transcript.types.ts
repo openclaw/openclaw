@@ -67,6 +67,7 @@ export type UserTurnTranscriptPersistResult = {
   sessionEntry: UserTurnSessionEntry | undefined;
   messageId: string;
   message: PersistedUserTurnMessage;
+  runId?: string;
 };
 
 export type UserTurnTranscriptTargetResolver =
@@ -86,9 +87,11 @@ export type UserTurnTranscriptRecorder = {
   persistApproved: (params?: {
     target?: UserTurnTranscriptTargetResolver;
     updateMode?: UserTurnTranscriptUpdateMode;
+    runId?: string;
   }) => Promise<UserTurnTranscriptPersistResult | undefined>;
   persistFallback: (params?: {
     target?: UserTurnTranscriptTargetResolver;
     updateMode?: UserTurnTranscriptUpdateMode;
+    runId?: string;
   }) => Promise<UserTurnTranscriptPersistResult | undefined>;
 };

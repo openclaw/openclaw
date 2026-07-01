@@ -83,6 +83,9 @@ describe("mirrorCopilotTranscript", () => {
       ],
       timestamp: Date.now() + 2,
     }) as MirroredAgentMessage;
+    const userIdentity = `user:${expectedFingerprint(userMessage)}`;
+    const assistantIdentity = `assistant:${expectedFingerprint(assistantMessage)}`;
+    const toolIdentity = `toolResult:${expectedFingerprint(toolResultMessage)}`;
 
     await mirrorCopilotTranscript({
       sessionFile,
@@ -90,22 +93,25 @@ describe("mirrorCopilotTranscript", () => {
       sessionKey: "session-1",
       messages: [userMessage, assistantMessage, toolResultMessage],
       idempotencyScope: "copilot:session-1",
+      runIdByMessageIdentity: new Map([
+        [userIdentity, "run-1"],
+        [assistantIdentity, "run-1"],
+        [toolIdentity, "run-1"],
+      ]),
     });
 
     const raw = await fs.readFile(sessionFile, "utf8");
+    const messageRecords = parseJsonLines<Record<string, unknown>>(raw).filter(
+      (entry) => entry.type === "message",
+    );
+    expect(messageRecords.map((entry) => entry.runId)).toEqual(["run-1", "run-1", "run-1"]);
     expect(raw).toContain('"role":"user"');
     expect(raw).toContain('"role":"assistant"');
     expect(raw).toContain('"role":"toolResult"');
     expect(raw).toContain('"toolCallId":"call-1"');
-    expect(raw).toContain(
-      `"idempotencyKey":"copilot:session-1:user:${expectedFingerprint(userMessage)}"`,
-    );
-    expect(raw).toContain(
-      `"idempotencyKey":"copilot:session-1:assistant:${expectedFingerprint(assistantMessage)}"`,
-    );
-    expect(raw).toContain(
-      `"idempotencyKey":"copilot:session-1:toolResult:${expectedFingerprint(toolResultMessage)}"`,
-    );
+    expect(raw).toContain(`"idempotencyKey":"copilot:session-1:${userIdentity}"`);
+    expect(raw).toContain(`"idempotencyKey":"copilot:session-1:${assistantIdentity}"`);
+    expect(raw).toContain(`"idempotencyKey":"copilot:session-1:${toolIdentity}"`);
   });
 
   it("creates the transcript directory on first mirror", async () => {

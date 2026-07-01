@@ -79,7 +79,9 @@ function appendBranchEntry(params: {
 }): string {
   const { sessionManager, entry, rewrittenEntryIds, appendMessage } = params;
   if (entry.type === "message") {
-    return appendMessage(entry.message as Parameters<typeof sessionManager.appendMessage>[0]);
+    return appendMessage(entry.message as Parameters<typeof sessionManager.appendMessage>[0], {
+      runId: entry.runId,
+    });
   }
   if (entry.type === "compaction") {
     return sessionManager.appendCompaction(
@@ -134,7 +136,7 @@ function appendTranscriptStateBranchEntry(params: {
 }): SessionBranchEntry {
   const { state, entry, rewrittenEntryIds } = params;
   if (entry.type === "message") {
-    return state.appendMessage(entry.message);
+    return state.appendMessage(entry.message, { runId: entry.runId });
   }
   if (entry.type === "compaction") {
     return state.appendCompaction(
@@ -256,7 +258,9 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
             rewrittenEntryIds,
             appendMessage,
           })
-        : appendMessage(replacement as Parameters<typeof params.sessionManager.appendMessage>[0]);
+        : appendMessage(replacement as Parameters<typeof params.sessionManager.appendMessage>[0], {
+            runId: entry.type === "message" ? entry.runId : undefined,
+          });
     rewrittenEntryIds.set(entry.id, newEntryId);
   }
 
@@ -408,7 +412,9 @@ export function rewriteTranscriptEntriesInState(params: {
             entry,
             rewrittenEntryIds,
           })
-        : params.state.appendMessage(replacement);
+        : params.state.appendMessage(replacement, {
+            runId: entry.type === "message" ? entry.runId : undefined,
+          });
     rewrittenEntryIds.set(entry.id, newEntry.id);
     appendedEntries.push(newEntry);
   }

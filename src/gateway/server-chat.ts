@@ -947,12 +947,16 @@ export function createAgentEventHandler({
                 role: "assistant",
                 content: [{ type: "text", text }],
                 timestamp: Date.now(),
+                // Tool events retain the engine/source run while the chat
+                // envelope may expose a client run. Correlate on the source.
+                __openclaw: { runId: sourceRunId },
               }
             : undefined,
       };
       sendChatPayload(sessionKey, payload, opts);
       return;
     }
+    const errorMessage = buildChatErrorMessage(error);
     const payload = {
       runId: clientRunId,
       sessionKey,
@@ -960,8 +964,11 @@ export function createAgentEventHandler({
       ...(spawnedBy && { spawnedBy }),
       seq,
       state: "error" as const,
+      stopReason: "error",
       errorMessage: error ? formatForLog(error) : undefined,
-      message: buildChatErrorMessage(error),
+      message: errorMessage
+        ? { ...errorMessage, stopReason: "error", __openclaw: { runId: sourceRunId } }
+        : undefined,
       ...(errorKind && { errorKind }),
     };
     sendChatPayload(sessionKey, payload, opts);
@@ -1154,7 +1161,13 @@ export function createAgentEventHandler({
     const restartRecoveryAgentId = evt.agentId ?? sessionAgentId;
     const clientRunId = chatLink?.clientRunId ?? evt.runId;
     const eventRunId = chatLink?.clientRunId ?? evt.runId;
-    const eventForClients = chatLink ? { ...evt, runId: eventRunId } : evt;
+    const mappedToolData =
+      chatLink && evt.stream === "tool" && eventRunId !== evt.runId
+        ? { ...evt.data, sourceRunId: evt.runId }
+        : undefined;
+    const eventForClients = chatLink
+      ? { ...evt, runId: eventRunId, ...(mappedToolData ? { data: mappedToolData } : {}) }
+      : evt;
     const isAborted =
       isChatAbortMarkerCurrent(chatRunState.abortedRuns.get(clientRunId), chatLink) ||
       isChatAbortMarkerCurrent(chatRunState.abortedRuns.get(evt.runId), chatLink);

@@ -195,6 +195,43 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     ]);
   });
 
+  it("preserves run ownership on replacements and replayed suffixes", () => {
+    const sessionManager = SessionManager.inMemory();
+    sessionManager.appendMessage(
+      asAppendMessage({ role: "user", content: "run tool", timestamp: 1 }),
+    );
+    const toolResultEntryId = sessionManager.appendMessage(
+      asAppendMessage(createToolResultReplacement("exec", "before rewrite", 2)),
+      { runId: "run-rewrite" },
+    );
+    sessionManager.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: createTextContent("summarized"),
+        timestamp: 3,
+      }),
+      { runId: "run-rewrite" },
+    );
+
+    const result = rewriteTranscriptEntriesInSessionManager({
+      sessionManager,
+      replacements: [
+        {
+          entryId: toolResultEntryId,
+          message: createToolResultReplacement("exec", "after rewrite", 2),
+        },
+      ],
+    });
+
+    expect(result.changed).toBe(true);
+    expect(
+      sessionManager
+        .getBranch()
+        .filter((entry) => entry.type === "message")
+        .map((entry) => entry.runId),
+    ).toEqual([undefined, "run-rewrite", "run-rewrite"]);
+  });
+
   it("preserves active-branch labels after rewritten entries are re-appended", () => {
     const { sessionManager, toolResultEntryId } = createReadRewriteSession();
     const summaryEntry = requireValue(
@@ -325,27 +362,40 @@ describe("rewriteTranscriptEntriesInRuntimeTranscript", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-runtime-"));
     const storePath = path.join(dir, "sessions.json");
     const sessionManager = SessionManager.create(dir, dir);
-    const entryIds = appendSessionMessages(sessionManager, [
-      asAppendMessage({
-        role: "user",
-        content: "run tool",
-        timestamp: 1,
-      }),
-      asAppendMessage({
-        role: "toolResult",
-        toolCallId: "call_1",
-        toolName: "exec",
-        content: createTextContent("before rewrite"),
-        isError: false,
-        timestamp: 2,
-      }),
-      asAppendMessage({
-        role: "assistant",
-        content: createTextContent("summarized"),
-        timestamp: 3,
-      }),
-    ]);
+    const entryIds = [
+      sessionManager.appendMessage(
+        asAppendMessage({
+          role: "user",
+          content: "run tool",
+          timestamp: 1,
+        }),
+      ),
+      sessionManager.appendMessage(
+        asAppendMessage({
+          role: "toolResult",
+          toolCallId: "call_1",
+          toolName: "exec",
+          content: createTextContent("before rewrite"),
+          isError: false,
+          timestamp: 2,
+        }),
+        { runId: "run-runtime-rewrite" },
+      ),
+      sessionManager.appendMessage(
+        asAppendMessage({
+          role: "assistant",
+          content: createTextContent("summarized"),
+          timestamp: 3,
+        }),
+        { runId: "run-runtime-rewrite" },
+      ),
+    ];
     const sessionFile = requireString(sessionManager.getSessionFile(), "persisted session file");
+    const ownedLine = (await fs.readFile(sessionFile, "utf8"))
+      .split("\n")
+      .find((line) => line.includes('"runId":"run-runtime-rewrite"'));
+    expect(ownedLine).toBeDefined();
+    expect(ownedLine?.indexOf('"runId"')).toBeLessThan(ownedLine?.indexOf(',"message":') ?? -1);
     const resolvedSessionFile = await fs.realpath(sessionFile);
     const sessionId = path.basename(sessionFile, ".jsonl");
     await fs.writeFile(
@@ -411,6 +461,12 @@ describe("rewriteTranscriptEntriesInRuntimeTranscript", () => {
       expect((branchMessages[1] as Extract<AgentMessage, { role: "toolResult" }>).content).toEqual([
         { type: "text", text: "[runtime rewrite]" },
       ]);
+      expect(
+        rewrittenSession
+          .getBranch()
+          .filter((entry) => entry.type === "message")
+          .map((entry) => entry.runId),
+      ).toEqual([undefined, "run-runtime-rewrite", "run-runtime-rewrite"]);
     } finally {
       cleanup();
     }

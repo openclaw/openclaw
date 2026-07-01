@@ -2017,6 +2017,7 @@ async function deliverOutboundPayloadsCore(
         const mirrorResult = await appendAssistantMessageToSessionTranscript({
           agentId: params.mirror.agentId,
           sessionKey: params.mirror.sessionKey,
+          ...(params.mirror.runId ? { runId: params.mirror.runId } : {}),
           text: mirrorText,
           idempotencyKey: params.mirror.idempotencyKey,
           config: params.cfg,

@@ -3150,6 +3150,10 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
 
+    const sendParams = requireRecord(
+      mockArg(request, 0, 1, "chat.send params"),
+      "chat.send params",
+    );
     expect(getChatAttachmentDataUrl(attachment)).toBeNull();
     expect(getChatAttachmentPreviewUrl(attachment)).toBe("blob:brief");
     expect(host.chatMessages).toStrictEqual([
@@ -3168,6 +3172,7 @@ describe("handleSendChat", () => {
           },
         ],
         timestamp: expect.any(Number),
+        __openclaw: { runId: sendParams.idempotencyKey },
       },
     ]);
   });

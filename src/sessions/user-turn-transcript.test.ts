@@ -487,12 +487,20 @@ describe("user turn transcript persistence", () => {
       });
 
       const [first, second] = await Promise.all([
-        recorder.persistFallback(),
-        recorder.persistFallback(),
+        recorder.persistFallback({ runId: "run-fallback" }),
+        recorder.persistFallback({ runId: "run-fallback" }),
       ]);
 
       expect(first?.messageId).toBeTruthy();
+      expect(first?.runId).toBe("run-fallback");
       expect(second?.messageId).toBe(first?.messageId);
+      const messageEntry = fs
+        .readFileSync(transcriptPath, "utf-8")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+        .find((entry) => entry.type === "message");
+      expect(messageEntry?.runId).toBe("run-fallback");
       expect(readTranscriptMessages(transcriptPath)).toEqual([
         expect.objectContaining({
           role: "user",

@@ -260,6 +260,36 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
+  it("persists and publishes delivery-mirror run ownership outside message bytes", async () => {
+    writeTranscriptStore();
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+
+    try {
+      const result = await appendAssistantMessageToSessionTranscript({
+        sessionKey,
+        runId: "run-delivery-mirror",
+        text: "Visible source reply",
+        storePath: fixture.storePath(),
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        throw new Error(result.reason);
+      }
+      const messageLine = fs.readFileSync(result.sessionFile, "utf8").trim().split("\n")[1];
+      expect(messageLine).toBeDefined();
+      const entry = JSON.parse(messageLine ?? "{}") as Record<string, unknown>;
+      expect(entry.runId).toBe("run-delivery-mirror");
+      expect(entry.message).not.toHaveProperty("runId");
+      expect(messageLine?.indexOf('"runId"')).toBeLessThan(
+        messageLine?.indexOf(',"message":') ?? -1,
+      );
+      expect(requireTranscriptUpdateCall(emitSpy).runId).toBe("run-delivery-mirror");
+    } finally {
+      emitSpy.mockRestore();
+    }
+  });
+
   it("advances the session registry marker after managed transcript appends", async () => {
     const updatedAt = Date.parse("2026-05-18T09:00:00.000Z");
     const appendedAt = Date.parse("2026-05-18T09:05:00.000Z");

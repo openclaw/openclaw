@@ -326,6 +326,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
   text?: string;
   mediaUrls?: string[];
   idempotencyKey?: string;
+  runId?: string;
   deliveryMirror?: SessionTranscriptDeliveryMirror;
   /** Optional override for store path (mostly for tests). */
   storePath?: string;
@@ -352,6 +353,7 @@ export async function appendAssistantMessageToSessionTranscript(params: {
     ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
     storePath: params.storePath,
     idempotencyKey: params.idempotencyKey,
+    ...(params.runId ? { runId: params.runId } : {}),
     updateMode: params.updateMode,
     config: params.config,
     ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
@@ -388,6 +390,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   expectedSessionId?: string;
   message: SessionTranscriptAssistantMessage;
   idempotencyKey?: string;
+  runId?: string;
   storePath?: string;
   updateMode?: SessionTranscriptUpdateMode;
   config?: OpenClawConfig;
@@ -470,6 +473,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         messages: [
           {
             message: preparedUnkeyedMessage,
+            ...(params.runId ? { runId: params.runId } : {}),
             ...(explicitIdempotencyKey ? { idempotencyLookup: "scan" } : {}),
             ...(explicitIdempotencyKey && params.beforeMessageWrite
               ? {

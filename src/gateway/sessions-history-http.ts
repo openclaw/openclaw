@@ -345,6 +345,7 @@ export async function handleSessionHistoryHttpRequest(
             message: update.message,
             messageId: update.messageId,
             messageSeq: update.messageSeq,
+            runId: update.runId,
           });
           if (!nextEvent) {
             return;

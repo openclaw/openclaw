@@ -1150,6 +1150,7 @@ describe("gateway send mirroring", () => {
       channel: "slack",
       idempotencyKey: "idem-2",
       sessionKey: "agent:main:main",
+      runId: "run-send-2",
     });
 
     expect(deliveryCall()?.mirror?.sessionKey).toBe("agent:main:main");
@@ -1158,6 +1159,7 @@ describe("gateway send mirroring", () => {
       "https://example.com/files/report.pdf?sig=1",
     ]);
     expect(deliveryCall()?.mirror?.idempotencyKey).toBe("idem-2");
+    expect(deliveryCall()?.mirror?.runId).toBe("run-send-2");
   });
 
   it("mirrors MEDIA tags as attachments", async () => {
@@ -1699,6 +1701,7 @@ describe("gateway send mirroring", () => {
       },
       sessionKey: "agent:main:telegram:direct:chat-123",
       agentId: "main",
+      runId: "run-source-message-action",
       toolContext: {
         currentChannelProvider: "telegram",
         currentChannelId: "chat-123",
@@ -1710,6 +1713,7 @@ describe("gateway send mirroring", () => {
     expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
       agentId: "main",
       sessionKey: "agent:main:telegram:direct:chat-123",
+      runId: "run-source-message-action",
       text: "visible source reply",
       mediaUrls: undefined,
       idempotencyKey: "idem-source-message-action",

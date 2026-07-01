@@ -2,6 +2,11 @@
 // resolvers without importing delivery runtime.
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type {
+  OutboundSessionRoute,
+  ResolveOutboundSessionRouteParams,
+} from "./outbound-session.js";
+import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
 type AutoThreadResolver = (params: {
   cfg: OpenClawConfig;
@@ -124,19 +129,38 @@ export function createOutboundThreadingMock() {
       async ({
         actionParams,
         cfg,
+        channel,
         to,
         accountId,
         toolContext,
         agentId,
+        currentSessionKey,
+        dryRun,
+        resolvedTarget,
         resolveAutoThreadId,
+        resolveOutboundSessionRoute,
+        ensureOutboundSessionEntry,
       }: {
         actionParams: Record<string, unknown>;
         cfg: OpenClawConfig;
+        channel: ResolveOutboundSessionRouteParams["channel"];
         to: string;
         accountId?: string | null;
         toolContext?: Record<string, unknown>;
         agentId?: string;
+        currentSessionKey?: string;
+        dryRun?: boolean;
+        resolvedTarget?: ResolvedMessagingTarget;
         resolveAutoThreadId?: AutoThreadResolver;
+        resolveOutboundSessionRoute: (
+          params: ResolveOutboundSessionRouteParams,
+        ) => Promise<OutboundSessionRoute | null>;
+        ensureOutboundSessionEntry: (params: {
+          cfg: OpenClawConfig;
+          channel: ResolveOutboundSessionRouteParams["channel"];
+          accountId?: string | null;
+          route: OutboundSessionRoute;
+        }) => Promise<void>;
       }) => {
         const resolvedThreadId = resolveOutboundThreadId(actionParams, {
           cfg,
@@ -145,12 +169,29 @@ export function createOutboundThreadingMock() {
           toolContext,
           resolveAutoThreadId,
         });
+        const outboundRoute =
+          agentId && !dryRun
+            ? await resolveOutboundSessionRoute({
+                cfg,
+                channel,
+                agentId,
+                accountId,
+                target: to,
+                currentSessionKey,
+                resolvedTarget,
+                threadId: resolvedThreadId,
+              })
+            : null;
+        if (outboundRoute && agentId && !dryRun) {
+          await ensureOutboundSessionEntry({ cfg, channel, accountId, route: outboundRoute });
+          actionParams["__sessionKey"] = outboundRoute.sessionKey;
+        }
         if (agentId) {
           actionParams["__agentId"] = agentId;
         }
         return {
           resolvedThreadId,
-          outboundRoute: null,
+          outboundRoute,
         };
       },
     ),

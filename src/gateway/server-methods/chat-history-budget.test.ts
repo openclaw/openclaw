@@ -43,13 +43,19 @@ describe("enforceChatHistoryFinalBudget", () => {
       role: "assistant",
       timestamp: 1,
       content: [{ type: "text", text: "y".repeat(4000) }],
-      __openclaw: { id: "abc", seq: 7 },
+      __openclaw: { id: "abc", runId: "run-oversized", seq: 7 },
     };
     const result = enforceChatHistoryFinalBudget({ messages: [last], maxBytes: 2_000 });
     expect(result.messages).toHaveLength(1);
     expect(firstText(result.messages)).toContain("chat.history omitted: message too large");
     // The placeholder is a new object, not the oversized original.
     expect(result.messages[0]).not.toBe(last);
+    expect((result.messages[0] as { __openclaw?: unknown }).__openclaw).toMatchObject({
+      id: "abc",
+      runId: "run-oversized",
+      seq: 7,
+      truncated: true,
+    });
   });
 
   it("returns a metadata-free sentinel (never an empty transcript) when even the placeholder is over budget", () => {

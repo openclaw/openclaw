@@ -109,6 +109,7 @@ async function emitTranscriptUpdateAndCollectMessageEvent(params: {
   messageId: string;
   agentId?: string;
   messageSeq?: number;
+  runId?: string;
 }) {
   const messageEventPromise = waitForSessionMessageEvent(params.ws, params.sessionKey);
 
@@ -119,6 +120,7 @@ async function emitTranscriptUpdateAndCollectMessageEvent(params: {
     message: params.message,
     messageId: params.messageId,
     ...(typeof params.messageSeq === "number" ? { messageSeq: params.messageSeq } : {}),
+    ...(params.runId ? { runId: params.runId } : {}),
   });
 
   const messageEvent = await messageEventPromise;
@@ -647,6 +649,7 @@ describe("session.message websocket events", () => {
         },
         messageId: "msg-carried-seq",
         messageSeq: 7,
+        runId: "run-carried",
       });
       expectRecordFields(messageEvent.payload, {
         sessionKey: "agent:main:main",
@@ -655,7 +658,7 @@ describe("session.message websocket events", () => {
       });
       const payload = requireRecord(messageEvent.payload, "session.message payload");
       const message = requireRecord(payload.message, "session.message payload message");
-      expect((message["__openclaw"] as { seq?: unknown } | undefined)?.seq).toBe(7);
+      expect(message["__openclaw"]).toMatchObject({ runId: "run-carried", seq: 7 });
     });
   });
 

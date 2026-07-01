@@ -716,6 +716,7 @@ export async function runCopilotAttempt(
           developerInstructions: originalDeveloperInstructions,
           messages,
           ctx: hookContext,
+          bootstrapContextRunKind: input.bootstrapContextRunKind,
           ...("beforeAgentStartResult" in input
             ? { beforeAgentStartResult: input.beforeAgentStartResult }
             : {}),
@@ -1077,11 +1078,19 @@ export async function runCopilotAttempt(
           `${input.runId}:prompt`,
         )
       : undefined;
+  const messagesWithCurrentPromptIdentity =
+    syntheticUserText && syntheticUserText === tailUserText
+      ? messages.map((message, index) =>
+          index === messages.length - 1
+            ? attachCopilotMirrorIdentity(message, `${input.runId}:prompt`)
+            : message,
+        )
+      : messages;
   const taggedLastAssistant = lastAssistant
     ? attachCopilotMirrorIdentity(lastAssistant, `${input.runId}:assistant:final`)
     : undefined;
   const messagesSnapshot: AgentMessage[] = [
-    ...messages,
+    ...messagesWithCurrentPromptIdentity,
     ...(syntheticUser ? [syntheticUser] : []),
     ...(taggedLastAssistant ? [taggedLastAssistant] : []),
   ];
@@ -1121,6 +1130,16 @@ export async function runCopilotAttempt(
       const identityScope = sdkSessionId ?? mirrorScopeSessionId ?? "attempt";
       return attachCopilotMirrorIdentity(message, `${identityScope}:${message.role}:${index}`);
     });
+    const currentRunIdentityPrefix = `${input.runId}:`;
+    const runIdByMessageIdentity = new Map<string, string>();
+    // The snapshot also contains history. Attribute only identities issued by
+    // this attempt; stamping the whole snapshot would invent prior-run ownership.
+    for (const message of taggedMessages) {
+      const identity = readMirrorIdentity(message);
+      if (identity?.startsWith(currentRunIdentityPrefix)) {
+        runIdByMessageIdentity.set(identity, input.runId);
+      }
+    }
     await dualWriteCopilotTranscriptBestEffort({
       sessionFile: sessionFileForMirror,
       sessionId: openClawSessionIdForMirror,
@@ -1128,6 +1147,7 @@ export async function runCopilotAttempt(
       agentId: readString(input.agentId),
       messages: taggedMessages,
       idempotencyScope: mirrorScopeSessionId ? `copilot:${mirrorScopeSessionId}` : undefined,
+      ...(runIdByMessageIdentity.size > 0 ? { runIdByMessageIdentity } : {}),
       config: (input as { config?: unknown }).config as never,
     }).catch((mirrorError: unknown) => {
       // Defense-in-depth: the best-effort wrapper already swallows
@@ -1564,14 +1584,18 @@ function readTailUserText(messages: AgentMessage[]): string | undefined {
 // duplicate the read here instead of importing the helper to avoid
 // widening the module's public surface for what is otherwise a pure
 // guard. See attempt.ts dual-write tagging block.
-function hasMirrorIdentity(message: AgentMessage): boolean {
+function readMirrorIdentity(message: AgentMessage): string | undefined {
   const record = message as unknown as { __openclaw?: unknown };
   const meta = record["__openclaw"];
   if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
-    return false;
+    return undefined;
   }
   const id = (meta as Record<string, unknown>).mirrorIdentity;
-  return typeof id === "string" && id.length > 0;
+  return typeof id === "string" && id.length > 0 ? id : undefined;
+}
+
+function hasMirrorIdentity(message: AgentMessage): boolean {
+  return readMirrorIdentity(message) !== undefined;
 }
 
 function readSessionId(session: SessionLike | undefined): string | undefined {
@@ -1613,9 +1637,7 @@ export function resolveModelRef(params: AttemptParamsLike): ModelRef {
         readString((params as { provider?: unknown }).provider) ??
         "unknown-provider",
       baseUrl: readString(model.baseUrl),
-      azureApiVersion: readString(
-        model.azureApiVersion ?? model.params?.azureApiVersion,
-      ),
+      azureApiVersion: readString(model.azureApiVersion ?? model.params?.azureApiVersion),
       headers: model.headers,
       authHeader: model.authHeader,
       requestAuthMode: readString(requestTransport?.auth?.mode ?? rawRequest?.auth?.mode),

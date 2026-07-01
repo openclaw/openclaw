@@ -378,11 +378,13 @@ function buildOversizedTranscriptRecord(line: string): TailTranscriptRecord {
   const idempotencyKey =
     extractJsonStringFieldPrefix(prefix, "idempotencyKey") ??
     extractJsonStringFieldSuffix(line, "idempotencyKey");
+  const runId = extractJsonStringFieldPrefix(recordPrefix, "runId");
   const record: Record<string, unknown> = {
     ...(type ? { type } : {}),
     ...(id ? { id } : {}),
     ...(parentId !== undefined ? { parentId } : {}),
     ...(timestamp !== undefined ? { timestamp } : {}),
+    ...(runId ? { runId } : {}),
     message: {
       role,
       ...(idempotencyKey ? { idempotencyKey } : {}),
@@ -900,9 +902,11 @@ function parsedSessionEntryToMessage(parsed: unknown, seq: number): unknown {
           ? entry.timestamp
           : Number.NaN;
     const idempotencyKey = readTranscriptMessageIdempotencyKey(entry.message);
+    const runId = normalizeOptionalString(entry.runId);
     return attachOpenClawTranscriptMeta(entry.message, {
       ...(typeof entry.id === "string" ? { id: entry.id } : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
+      ...(runId ? { runId } : {}),
       ...(Number.isFinite(recordTimestampMs) ? { recordTimestampMs } : {}),
       seq,
     });

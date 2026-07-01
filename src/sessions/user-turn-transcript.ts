@@ -36,6 +36,7 @@ type AppendUserTurnTranscriptMessageParams = {
   transcriptPath: string;
   input?: UserTurnInput;
   message?: PersistedUserTurnMessage;
+  runId?: string;
   sessionId?: string;
   agentId?: string;
   sessionKey?: string;
@@ -48,6 +49,7 @@ type AppendUserTurnTranscriptMessageParams = {
 type PersistUserTurnTranscriptParams = {
   input?: UserTurnInput;
   message?: PersistedUserTurnMessage;
+  runId?: string;
   sessionId: string;
   sessionKey: string;
   sessionEntry: UserTurnSessionEntry | undefined;
@@ -349,6 +351,7 @@ export async function appendUserTurnTranscriptMessage(
       sessionFile: string;
       messageId: string;
       message: PersistedUserTurnMessage;
+      runId?: string;
     }
   | undefined
 > {
@@ -371,6 +374,7 @@ export async function appendUserTurnTranscriptMessage(
       messages: [
         {
           message: resolvedMessage,
+          ...(params.runId ? { runId: params.runId } : {}),
           idempotencyLookup: "scan",
           prepareMessageAfterIdempotencyCheck: (message) =>
             preparePersistedUserTurnMessageForTranscriptWrite(
@@ -385,6 +389,7 @@ export async function appendUserTurnTranscriptMessage(
     | {
         messageId: string;
         message: PersistedUserTurnMessage;
+        runId?: string;
       }
     | undefined;
   if (!appended) {
@@ -395,6 +400,7 @@ export async function appendUserTurnTranscriptMessage(
     sessionFile: params.transcriptPath,
     messageId: appended.messageId,
     message: appended.message,
+    ...(appended.runId ? { runId: appended.runId } : {}),
   };
 }
 
@@ -425,6 +431,7 @@ export async function persistUserTurnTranscript(
       messages: [
         {
           message,
+          ...(params.runId ? { runId: params.runId } : {}),
           idempotencyLookup: "scan",
           prepareMessageAfterIdempotencyCheck: (candidate) =>
             preparePersistedUserTurnMessageForTranscriptWrite(
@@ -439,6 +446,7 @@ export async function persistUserTurnTranscript(
     | {
         messageId: string;
         message: PersistedUserTurnMessage;
+        runId?: string;
       }
     | undefined;
   if (!appended) {
@@ -455,6 +463,7 @@ export async function persistUserTurnTranscript(
 async function appendFileTargetUserTurnTranscript(params: {
   target: UserTurnTranscriptFileTarget;
   message: PersistedUserTurnMessage;
+  runId?: string;
   updateMode: UserTurnTranscriptUpdateMode;
   beforeMessageWrite?: UserTurnBeforeMessageWrite;
 }): Promise<UserTurnTranscriptPersistResult | undefined> {
@@ -462,6 +471,7 @@ async function appendFileTargetUserTurnTranscript(params: {
   const appended = await appendUserTurnTranscriptMessage({
     ...target,
     message: params.message,
+    ...(params.runId ? { runId: params.runId } : {}),
     updateMode: params.updateMode,
     ...(config ? { config: config as OpenClawConfig } : {}),
     ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
@@ -553,6 +563,7 @@ export function createUserTurnTranscriptRecorder(
     skipWhenBlocked: boolean;
     target?: UserTurnTranscriptTargetResolver;
     updateMode?: UserTurnTranscriptUpdateMode;
+    runId?: string;
   }): Promise<UserTurnTranscriptPersistResult | undefined> => {
     if (persisted) {
       return persistedResult;
@@ -588,12 +599,14 @@ export function createUserTurnTranscriptRecorder(
         ? await appendFileTargetUserTurnTranscript({
             target,
             message: resolvedMessage,
+            ...(options.runId ? { runId: options.runId } : {}),
             updateMode,
             beforeMessageWrite: params.beforeMessageWrite,
           })
         : await persistUserTurnTranscript({
             ...target,
             message: resolvedMessage,
+            ...(options.runId ? { runId: options.runId } : {}),
             updateMode,
             ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
           });
@@ -639,6 +652,7 @@ export function createUserTurnTranscriptRecorder(
         skipWhenBlocked: true,
         target: options?.target,
         updateMode: options?.updateMode,
+        runId: options?.runId,
       }),
     persistFallback: async (options) =>
       await persistPrepared({
@@ -646,6 +660,7 @@ export function createUserTurnTranscriptRecorder(
         skipWhenBlocked: true,
         target: options?.target,
         updateMode: options?.updateMode,
+        runId: options?.runId,
       }),
   };
 }

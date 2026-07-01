@@ -98,7 +98,12 @@ describe("gateway chat.inject transcript writes", () => {
       sessionId: "sess-redact",
     });
     const fakeApiKey = "sk-proj-FAKEKEYFORTESTINGONLY1234567890";
-    const updates: Array<{ message?: unknown; sessionKey?: string; agentId?: string }> = [];
+    const updates: Array<{
+      message?: unknown;
+      sessionKey?: string;
+      agentId?: string;
+      runId?: string;
+    }> = [];
     const unsubscribe = onSessionTranscriptUpdate((update) => updates.push(update));
 
     try {
@@ -107,16 +112,22 @@ describe("gateway chat.inject transcript writes", () => {
         sessionKey: "global",
         agentId: "work",
         message: `Here is your key: ${fakeApiKey}`,
+        runId: "run-redact",
         config: { logging: { redactSensitive: "tools" } },
       });
 
       expect(appended.ok).toBe(true);
       expect(JSON.stringify(appended.message)).not.toContain(fakeApiKey);
       expect(updates).toHaveLength(1);
-      expect(updates[0]).toMatchObject({ sessionKey: "global", agentId: "work" });
+      expect(updates[0]).toMatchObject({
+        sessionKey: "global",
+        agentId: "work",
+        runId: "run-redact",
+      });
 
       const lines = readTranscriptLines(transcriptPath);
-      const last = JSON.parse(lines.at(-1) as string) as { message?: unknown };
+      const last = JSON.parse(lines.at(-1) as string) as { message?: unknown; runId?: string };
+      expect(last.runId).toBe("run-redact");
       expect(JSON.stringify(last.message)).not.toContain(fakeApiKey);
       expect(updates[0]?.message).toEqual(last.message);
       expect(JSON.stringify(updates[0]?.message)).not.toContain(fakeApiKey);

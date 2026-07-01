@@ -22,6 +22,7 @@ type SourceReplyTranscriptMirrorParams = {
   cfg: OpenClawConfig;
   sessionKey?: string;
   agentId?: string;
+  runId?: string;
   toolContext?: ChannelThreadingToolContext;
   idempotencyKey?: string;
   deliveredPayload?: unknown;
@@ -232,6 +233,7 @@ export async function mirrorDeliveredSourceReplyToTranscript(
   await appendAssistantMessageToSessionTranscript({
     agentId: params.agentId,
     sessionKey: params.sessionKey,
+    ...(params.runId ? { runId: params.runId } : {}),
     text: mirror.text,
     mediaUrls: mirror.mediaUrls.length ? mirror.mediaUrls : undefined,
     idempotencyKey: params.idempotencyKey,

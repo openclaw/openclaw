@@ -806,6 +806,7 @@ describe("repairSessionFileIfNeeded", () => {
       id: "msg-asst-process",
       parentId: "msg-1",
       timestamp: new Date().toISOString(),
+      runId: "run-process",
       message: {
         role: "assistant",
         provider: "openai",
@@ -851,6 +852,7 @@ describe("repairSessionFileIfNeeded", () => {
     const inserted = JSON.parse(lines[3]);
     expect(inserted.type).toBe("message");
     expect(inserted.parentId).toBe("msg-asst-process");
+    expect(inserted.runId).toBe("run-process");
     expect(inserted.message.role).toBe("toolResult");
     expect(inserted.message.toolCallId).toBe("call_process|fc_1");
     expect(inserted.message.toolName).toBe("process");

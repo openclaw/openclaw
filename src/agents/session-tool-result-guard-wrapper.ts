@@ -35,6 +35,7 @@ export function guardSessionManager(
   opts?: {
     agentId?: string;
     sessionKey?: string;
+    runId?: string;
     config?: OpenClawConfig;
     contextWindowTokens?: number;
     inputProvenance?: InputProvenance;
@@ -114,6 +115,7 @@ export function guardSessionManager(
   const guard = installSessionToolResultGuard(sessionManager, {
     sessionKey: opts?.sessionKey,
     agentId: opts?.agentId,
+    runId: opts?.runId,
     transformMessageForPersistence: (message) => {
       const withProvenance = applyInputProvenanceToUserMessage(message, opts?.inputProvenance);
       const prepared = pendingPreparedUserTurnMessage;

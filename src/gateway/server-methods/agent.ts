@@ -71,10 +71,13 @@ import {
   resolveSessionResetPolicy,
   resolveSessionResetType,
   type SessionEntry,
+  type SessionFreshness,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { emitDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   claimAgentRunContext,
@@ -1127,6 +1130,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       modelRun?: boolean;
       promptMode?: "full" | "minimal" | "none";
       bootstrapContextMode?: "full" | "lightweight";
+      // Commitment fan-out scope is scheduler-internal and cannot be selected over Gateway RPC.
       bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
       acpTurnSource?: "manual_spawn";
       internalRuntimeHandoffId?: string;
@@ -1513,6 +1517,12 @@ export const agentHandlers: GatewayRequestHandlers = {
           resolvedSessionId: currentSessionId,
         })
       ) {
+        emitDiagnosticEvent({
+          type: "exec.approval.followup_suppressed",
+          approvalId: execApprovalFollowupApprovalId,
+          reason: "session_rebound",
+          phase: "gateway_preflight",
+        });
         context.logGateway.info(
           `Dropping stale exec approval followup ${execApprovalFollowupApprovalId}: session ${requestedSessionKeyRaw} rebound (expected ${expectedSessionId}, current ${currentSessionId}) before the approval resolved`,
         );
@@ -1882,13 +1892,17 @@ export const agentHandlers: GatewayRequestHandlers = {
               agentId: canonicalSessionAgentId,
             })
           : undefined;
+        const skipImplicitExpiry =
+          resetPolicy.configured !== true && hasProviderOwnedSession(entry);
         let freshness = entry
-          ? evaluateSessionFreshness({
-              updatedAt: entry.updatedAt,
-              ...lifecycleTimestamps,
-              now,
-              policy: resetPolicy,
-            })
+          ? skipImplicitExpiry
+            ? ({ fresh: true } satisfies SessionFreshness)
+            : evaluateSessionFreshness({
+                updatedAt: entry.updatedAt,
+                ...lifecycleTimestamps,
+                now,
+                policy: resetPolicy,
+              })
           : undefined;
         const visibleRequest =
           request.bootstrapContextRunKind !== "cron" &&
@@ -2073,13 +2087,17 @@ export const agentHandlers: GatewayRequestHandlers = {
                 agentId: sessionAgent,
               })
             : undefined;
+          const freshSkipImplicitExpiry =
+            resetPolicy.configured !== true && hasProviderOwnedSession(freshEntry);
           const freshFreshness = freshEntry
-            ? evaluateSessionFreshness({
-                updatedAt: freshEntry.updatedAt,
-                ...freshLifecycleTimestamps,
-                now,
-                policy: resetPolicy,
-              })
+            ? freshSkipImplicitExpiry
+              ? ({ fresh: true } satisfies SessionFreshness)
+              : evaluateSessionFreshness({
+                  updatedAt: freshEntry.updatedAt,
+                  ...freshLifecycleTimestamps,
+                  now,
+                  policy: resetPolicy,
+                })
             : undefined;
           const freshRequestedSessionMatchesEntry = Boolean(
             requestedSessionId && freshEntry?.sessionId?.trim() === requestedSessionId,

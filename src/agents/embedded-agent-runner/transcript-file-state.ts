@@ -270,7 +270,8 @@ function isSessionEntry(entry: FileEntry): entry is SessionEntry {
       );
     }
     case "message": {
-      return isAgentMessage((entry as { message?: unknown }).message);
+      const candidate = entry as { message?: unknown; runId?: unknown };
+      return isOptionalString(candidate.runId) && isAgentMessage(candidate.message);
     }
     case "model_change": {
       const candidate = entry as { modelId?: unknown; provider?: unknown };
@@ -740,12 +741,18 @@ export class TranscriptFileState {
     this.appendMode = undefined;
   }
 
-  appendMessage(message: SessionMessageEntry["message"]): SessionMessageEntry {
+  appendMessage(
+    message: SessionMessageEntry["message"],
+    options?: { runId?: string },
+  ): SessionMessageEntry {
     return this.appendEntry({
       type: "message",
       id: generateEntryId(this.byId),
       parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
+      // Match SessionManager serialization: run ownership must remain in the
+      // bounded prefix even when the model-visible message is oversized.
+      ...(options?.runId ? { runId: options.runId } : {}),
       message,
     });
   }

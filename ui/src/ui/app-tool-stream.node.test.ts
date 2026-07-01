@@ -314,6 +314,152 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     vi.useRealTimers();
   });
 
+  it("stores keyed preamble item progress as stream segments", () => {
+    useToolStreamFakeTimers();
+    const host = createHost({ chatRunId: "run-1" });
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 1,
+      stream: "item",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        kind: "preamble",
+        itemId: "msg-preamble-1",
+        progressText: "Checking",
+      },
+    });
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 2,
+      stream: "item",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        kind: "preamble",
+        itemId: "msg-preamble-1",
+        progressText: "Checking the app-server stream",
+      },
+    });
+
+    expect(host.chatStreamSegments).toEqual([
+      {
+        text: "Checking the app-server stream",
+        ts: TOOL_STREAM_TEST_NOW,
+        itemId: "msg-preamble-1",
+      },
+    ]);
+    expect(host.chatStream).toBeNull();
+    vi.useRealTimers();
+  });
+
+  it("clears keyed preamble item progress on empty updates", () => {
+    useToolStreamFakeTimers();
+    const host = createHost({ chatRunId: "run-1" });
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 1,
+      stream: "item",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        kind: "preamble",
+        itemId: "msg-preamble-1",
+        progressText: "Checking",
+      },
+    });
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 2,
+      stream: "item",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        kind: "preamble",
+        itemId: "msg-preamble-1",
+        progressText: "",
+      },
+    });
+
+    expect(host.chatStreamSegments).toEqual([]);
+    vi.useRealTimers();
+  });
+
+  it("normalizes silent and directive-only keyed preamble progress", () => {
+    useToolStreamFakeTimers();
+    const host = createHost({ chatRunId: "run-1" });
+
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 1,
+      stream: "item",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        kind: "preamble",
+        itemId: "msg-preamble-1",
+        progressText: "Checking [[reply_to_current]]",
+      },
+    });
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 2,
+      stream: "item",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        kind: "preamble",
+        itemId: "msg-preamble-2",
+        progressText: "[[reply_to_current]]",
+      },
+    });
+    handleAgentEvent(host, {
+      runId: "run-1",
+      seq: 3,
+      stream: "item",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        kind: "preamble",
+        itemId: "msg-preamble-1",
+        progressText: "**NO_REPLY",
+      },
+    });
+
+    expect(host.chatStreamSegments).toEqual([]);
+    vi.useRealTimers();
+  });
+
+  it("uses mapped source run ownership for rendered tool messages", () => {
+    const host = createHost();
+
+    handleAgentEvent(host, {
+      runId: "run-client",
+      seq: 1,
+      stream: "tool",
+      ts: Date.now(),
+      sessionKey: "main",
+      data: {
+        phase: "result",
+        name: "exec",
+        toolCallId: "call-mapped",
+        sourceRunId: "run-source",
+        result: { content: [{ type: "text", text: "done" }] },
+      },
+    });
+
+    expect(host.toolStreamById.get("call-mapped")).toMatchObject({
+      runId: "run-source",
+      message: { runId: "run-source" },
+    });
+    expect(host.activityEntries?.[0]).toMatchObject({
+      id: "run-source:call-mapped",
+      runId: "run-source",
+    });
+  });
+
   it("records tool activity summaries without storing raw argument values", () => {
     useToolStreamFakeTimers();
     const host = createHost();

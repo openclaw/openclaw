@@ -717,6 +717,34 @@ describe("readSessionMessages", () => {
     });
   });
 
+  test("projects persisted transcript run ownership into __openclaw metadata", async () => {
+    const sessionId = "test-session-run-id";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        id: "entry-tool-1",
+        runId: "run-background",
+        message: {
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "exec",
+          content: [{ type: "text", text: "failed" }],
+          isError: true,
+        },
+      },
+    ]);
+
+    const result = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 5,
+      maxBytes: 2048,
+    });
+
+    expectMessageFields(result[0], {
+      openclaw: { id: "entry-tool-1", runId: "run-background" },
+    });
+    expect(result[0]).not.toHaveProperty("runId");
+  });
+
   test("honors byte caps for async recent-message reads", async () => {
     const sessionId = "test-session-recent-async-byte-cap";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
@@ -2677,6 +2705,7 @@ describe("oversized transcript line guards", () => {
         timestamp,
         id: "oversized-child",
         parentId: "root-msg",
+        runId: "run-oversized",
         message: {
           role: "assistant",
           content: oversizedContent,
@@ -2701,6 +2730,7 @@ describe("oversized transcript line guards", () => {
     const meta = (oversized as Record<string, Record<string, unknown>>)["__openclaw"];
     expect(meta?.id).toBe("oversized-child");
     expect(meta?.idempotencyKey).toBe("oversized-key");
+    expect(meta?.runId).toBe("run-oversized");
     expect(meta?.recordTimestampMs).toBe(Date.parse(timestamp));
     // parentId extraction is proven by the record being included:
     // if parentId was not extracted, the tree would orphan this node.
@@ -2708,6 +2738,9 @@ describe("oversized transcript line guards", () => {
     // The oversized content must NOT appear in the output.
     const serialized = JSON.stringify(out);
     expect(serialized).not.toContain(oversizedContent);
+
+    const index = await readSessionTranscriptIndex(transcriptPath, { cache: "skip" });
+    expect(index?.entries.at(-1)?.record.runId).toBe("run-oversized");
   });
 
   test("readSessionMessagesAsync keeps id-less oversized message placeholders", async () => {

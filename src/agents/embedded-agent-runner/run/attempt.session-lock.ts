@@ -225,6 +225,7 @@ function parsePromptReleasedMessageLine(
       id: parsed.id,
       parentId: parsed.parentId ?? null,
       timestamp: parsed.timestamp,
+      ...(typeof parsed.runId === "string" && parsed.runId.trim() ? { runId: parsed.runId } : {}),
       message: message as unknown as SessionMessageEntry["message"],
       ...(parsed.appendMode === "side" ? { appendMode: parsed.appendMode } : {}),
     };

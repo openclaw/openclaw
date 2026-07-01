@@ -20,6 +20,7 @@ type SessionTranscriptUpdateFields = {
   message?: unknown;
   messageId?: string;
   messageSeq?: number;
+  runId?: string;
 };
 
 /** Normalized transcript update emitted after a session transcript changes. */
@@ -92,6 +93,7 @@ function normalizeSessionTranscriptUpdate(
           message: update.message,
           messageId: update.messageId,
           messageSeq: update.messageSeq,
+          runId: update.runId,
         };
   const trimmed = normalizeOptionalString(normalized.sessionFile);
   const target = normalizeUpdateTarget(normalized);
@@ -113,6 +115,9 @@ function normalizeSessionTranscriptUpdate(
       ? { messageId: normalizeOptionalString(normalized.messageId) }
       : {}),
     ...(messageSeq !== undefined ? { messageSeq } : {}),
+    ...(normalizeOptionalString(normalized.runId)
+      ? { runId: normalizeOptionalString(normalized.runId) }
+      : {}),
   };
 }
 

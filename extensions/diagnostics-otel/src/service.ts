@@ -3823,6 +3823,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             case "exec.process.completed":
               recordExecProcessCompleted(evt);
               return;
+            case "exec.approval.followup_suppressed":
+              return;
             case "log.record":
               recordLogRecord?.(evt, metadata);
               return;

@@ -18,6 +18,7 @@ import {
 } from "../plugins/hook-agent-context.js";
 import { resolveBlockMessage } from "../plugins/hook-decision-types.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { isHeartbeatLifecycleRunKind } from "./bootstrap-mode.js";
 import type { CliOutput } from "./cli-output.js";
 import {
   attachCliMessagingDeliveryEvidence,
@@ -254,7 +255,10 @@ async function persistApprovedCliUserTurnTranscript(params: RunCliAgentParams): 
     cwd: params.cwd ?? params.workspaceDir,
     ...(params.config ? { config: params.config } : {}),
   };
-  const persisted = await params.userTurnTranscriptRecorder.persistApproved({ target });
+  const persisted = await params.userTurnTranscriptRecorder.persistApproved({
+    target,
+    runId: params.runId,
+  });
   if (persisted) {
     try {
       const notification = params.onUserMessagePersisted?.(persisted.message);
@@ -295,6 +299,8 @@ async function persistCliAssistantTranscript(params: {
       expectedSessionId: runParams.sessionId,
       storePath: runParams.storePath,
       idempotencyKey: `cli-assistant:${runParams.runId}`,
+      // Claude CLI imports tool rows without per-run ownership. Keep its terminal
+      // unkeyed too so recovered tools and their outcome stay in one chronology.
       config: runParams.config,
       beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
       message: buildAssistantMessage({
@@ -367,7 +373,7 @@ async function finalizeCliContextEngineTurn(params: {
     sessionIdUsed: runParams.sessionId,
     sessionKey: runParams.sessionKey,
     sessionFile: runParams.sessionFile,
-    isHeartbeat: runParams.bootstrapContextRunKind === "heartbeat",
+    isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
     messagesSnapshot: [...prePromptMessages, ...turnMessages],
     prePromptMessageCount: prePromptMessages.length,
     config: context.contextEngineConfig,
@@ -644,6 +650,12 @@ export async function runPreparedCliAgent(
       | "messagingToolSourceReplyPayloads"
     >,
   ): ReplyPayload[] => {
+    const sourceReplyPayloads = evidence.messagingToolSourceReplyPayloads?.map(
+      (payload, index) => ({
+        ...payload,
+        idempotencyKey: payload.idempotencyKey ?? `${params.runId}:internal-source-reply:${index}`,
+      }),
+    );
     return buildEmbeddedRunPayloads({
       assistantTexts: [],
       toolMetas: [],
@@ -654,10 +666,11 @@ export async function runPreparedCliAgent(
       model: context.modelId,
       didSendViaMessagingTool: evidence.didSendViaMessagingTool,
       didDeliverSourceReplyViaMessageTool: evidence.didDeliverSourceReplyViaMessageTool,
-      messagingToolSourceReplyPayloads: evidence.messagingToolSourceReplyPayloads,
+      messagingToolSourceReplyPayloads: sourceReplyPayloads,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       agentId: params.agentId,
-      runId: params.runId,
+      // Claude CLI imports cannot attribute external tool rows to one OpenClaw run.
+      // Keep source mirrors unkeyed so imported history stays internally consistent.
     });
   };
 

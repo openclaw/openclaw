@@ -64,8 +64,11 @@ describe("chat.send error broadcast", () => {
         runId: "test-run-1",
         state: "error",
         errorMessage: expect.stringContaining("LLM timeout"),
+        stopReason: "error",
         message: expect.objectContaining({
           role: "assistant",
+          stopReason: "error",
+          __openclaw: { runId: "test-run-1" },
           content: [
             expect.objectContaining({
               type: "text",

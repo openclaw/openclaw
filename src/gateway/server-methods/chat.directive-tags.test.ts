@@ -1480,6 +1480,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       sessionKey: "main",
       state: "final",
     });
+    expect(getMessage(broadcast)?.["__openclaw"]).toMatchObject({
+      runId: mockState.agentRunId,
+    });
     expect(extractFirstTextBlock(broadcast)).toBe("Codex source reply");
     const nodeSend = lastNodeSendCall(context);
     expect(nodeSend?.[0]).toBe("main");
@@ -1524,6 +1527,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       runId: "idem-agent-status-notice",
       sessionKey: "main",
       state: "final",
+    });
+    expect(getMessage(broadcast)?.["__openclaw"]).toMatchObject({
+      runId: mockState.agentRunId,
     });
     expect(extractFirstTextBlock(broadcast)).toBe("⚙️ Codex compaction started • Context 2k/200k");
     const assistantEntries = await readActiveAssistantTranscriptMessages();
@@ -2258,6 +2264,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       state: "error",
       errorMessage,
     });
+    expect(getMessage(broadcast)?.["__openclaw"]).toMatchObject({
+      runId: mockState.agentRunId,
+    });
     const finalBroadcasts = (
       context.broadcast as unknown as ReturnType<typeof vi.fn>
     ).mock.calls.filter(([, payload]) => (payload as { state?: unknown })?.state === "final");
@@ -2292,6 +2301,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       sessionKey: "main",
       state: "error",
       errorMessage,
+    });
+    expect(getMessage(broadcast)?.["__openclaw"]).toMatchObject({
+      runId: mockState.agentRunId,
     });
     const dedupe = context.dedupe.get("chat:idem-agent-returned-error");
     expect(dedupe?.ok).toBe(false);
@@ -3300,6 +3312,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     if (!getMessage(payload)) {
       throw new Error("Expected directive-only final message");
     }
+    expect(getMessage(payload)?.["__openclaw"]).toMatchObject({
+      runId: "idem-directive-only",
+    });
     expect(extractFirstTextBlock(payload)).toBe("");
   });
 

@@ -116,6 +116,8 @@ export const MessageActionParamsSchema = Type.Object(
     sessionId: Type.Optional(Type.String()),
     inboundTurnKind: Type.Optional(Type.String({ enum: ["user_request", "room_event"] })),
     agentId: Type.Optional(Type.String()),
+    /** Source agent run that owns any transcript-visible result of this action. */
+    runId: Type.Optional(NonEmptyString),
     toolContext: Type.Optional(MessageActionToolContextSchema),
     idempotencyKey: NonEmptyString,
   },
@@ -153,6 +155,8 @@ export const SendParamsSchema = Type.Object(
     parseMode: Type.Optional(Type.Literal("HTML")),
     /** Optional session key for mirroring delivered output back into the transcript. */
     sessionKey: Type.Optional(Type.String()),
+    /** Source agent run that owns any transcript-visible delivery mirror. */
+    runId: Type.Optional(NonEmptyString),
     idempotencyKey: NonEmptyString,
   },
   { additionalProperties: false },
@@ -217,6 +221,7 @@ export const AgentParamsSchema = Type.Object(
     bootstrapContextMode: Type.Optional(
       Type.Union([Type.Literal("full"), Type.Literal("lightweight")]),
     ),
+    // Commitment fan-out scope is scheduler-internal and cannot be selected over Gateway RPC.
     bootstrapContextRunKind: Type.Optional(
       Type.Union([Type.Literal("default"), Type.Literal("heartbeat"), Type.Literal("cron")]),
     ),

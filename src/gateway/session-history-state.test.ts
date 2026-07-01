@@ -154,6 +154,25 @@ describe("SessionHistorySseState", () => {
     });
   });
 
+  test("carries inline transcript run ownership into history metadata", () => {
+    const state = newState([]);
+
+    const appended = state.appendInlineMessage({
+      message: assistantTextMessage("owned message", 1),
+      messageId: "message-assistant-1",
+      messageSeq: 1,
+      runId: "run-1",
+    });
+
+    expect(appended?.message).toMatchObject({
+      __openclaw: {
+        id: "message-assistant-1",
+        runId: "run-1",
+        seq: 1,
+      },
+    });
+  });
+
   test("reuses one canonical array for items and messages", () => {
     const snapshot = buildSessionHistorySnapshot({
       rawMessages: [assistantTextMessage("first", 1), assistantTextMessage("second", 2)],

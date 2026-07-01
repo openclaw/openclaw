@@ -1,6 +1,7 @@
 // Gateway session-history projection state.
 // Tracks transcript sequence windows for paginated chat-history SSE updates.
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   projectChatDisplayMessages,
@@ -17,6 +18,7 @@ import {
 // incrementally updated until cursor/window semantics require a full refresh.
 type SessionHistoryTranscriptMeta = {
   idempotencyKey?: string;
+  runId?: string;
   seq?: number;
 };
 
@@ -254,6 +256,7 @@ export class SessionHistorySseState {
     message: unknown;
     messageId?: string;
     messageSeq?: number;
+    runId?: string;
   }): InlineSessionHistoryAppend | null {
     if (this.limit !== undefined || this.cursor !== undefined) {
       return null;
@@ -271,6 +274,9 @@ export class SessionHistorySseState {
     const nextMessage = attachOpenClawTranscriptMeta(update.message, {
       ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
+      ...(normalizeOptionalString(update.runId)
+        ? { runId: normalizeOptionalString(update.runId) }
+        : {}),
       seq: this.rawTranscriptSeq,
     });
     // Projection can split, drop, or rewrite raw transcript messages. When one

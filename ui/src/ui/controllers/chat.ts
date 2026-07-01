@@ -200,26 +200,58 @@ function materializeVisibleAssistantStreamMessages(
     includeCurrent?: boolean;
     requirePersistedTool?: boolean;
     replacementMessages?: unknown[];
+    messageMetadata?: Record<string, unknown>;
   } = {},
 ): unknown[] {
   return materializeVisibleStreamState(messages, state, {
     ...opts,
+    persistCommentary: chatPersistCommentaryEnabled(state),
     isHiddenAssistantMessage: shouldHideAssistantChatMessage,
     isHiddenStreamText: isHiddenAssistantStreamText,
   });
 }
 
-function hasTranscriptMeta(message: unknown): boolean {
-  return Boolean(
-    message &&
-    typeof message === "object" &&
-    (message as { __openclaw?: unknown })["__openclaw"] &&
-    typeof (message as { __openclaw?: unknown })["__openclaw"] === "object",
-  );
+function chatPersistCommentaryEnabled(state: ChatState): boolean {
+  return state.settings?.chatPersistCommentary === true;
+}
+
+function withAssistantRunMetadata(
+  message: Record<string, unknown>,
+  runId: string | null | undefined,
+  stopReason?: string,
+): Record<string, unknown> {
+  const openclaw =
+    message["__openclaw"] && typeof message["__openclaw"] === "object"
+      ? (message["__openclaw"] as Record<string, unknown>)
+      : {};
+  return {
+    ...message,
+    ...(stopReason ? { stopReason } : {}),
+    ...(runId ? { __openclaw: { ...openclaw, runId } } : {}),
+  };
+}
+
+function terminalStreamMetadata(
+  runId: string | null | undefined,
+  stopReason: string,
+): Record<string, unknown> {
+  return withAssistantRunMetadata({}, runId, stopReason);
+}
+
+function hasPersistedTranscriptIdentity(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const metadata = (message as { __openclaw?: unknown })["__openclaw"];
+  if (!metadata || typeof metadata !== "object") {
+    return false;
+  }
+  const record = metadata as { id?: unknown; seq?: unknown };
+  return typeof record.id === "string" || typeof record.seq === "number";
 }
 
 function isLocallyOptimisticHistoryMessage(message: unknown): boolean {
-  if (!message || typeof message !== "object" || hasTranscriptMeta(message)) {
+  if (!message || typeof message !== "object" || hasPersistedTranscriptIdentity(message)) {
     return false;
   }
   const role = normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role);
@@ -230,17 +262,22 @@ function messageDisplaySignature(message: unknown): string | null {
   if (!message || typeof message !== "object") {
     return null;
   }
-  const role = normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role);
+  const record = message as { role?: unknown; content?: unknown; __openclaw?: unknown };
+  const role = normalizeLowercaseStringOrEmpty(record.role);
   if (!role) {
     return null;
   }
+  const metadata =
+    record.__openclaw && typeof record.__openclaw === "object"
+      ? (record.__openclaw as { runId?: unknown })
+      : undefined;
+  const runId = typeof metadata?.runId === "string" ? metadata.runId : null;
   const text = extractText(message)?.trim();
   if (text) {
-    return `${role}:text:${text}`;
+    return JSON.stringify([role, runId, "text", text]);
   }
   try {
-    const content = JSON.stringify((message as { content?: unknown }).content ?? null);
-    return `${role}:content:${content}`;
+    return JSON.stringify([role, runId, "content", record.content ?? null]);
   } catch {
     return null;
   }
@@ -405,6 +442,7 @@ export type ChatState = {
   agentsList?: ChatAgentsListSnapshot | null;
   agentsSelectedId?: string | null;
   hello?: GatewayHelloOk | null;
+  settings?: { chatPersistCommentary?: boolean };
 };
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
@@ -435,6 +473,7 @@ export type ChatEventPayload = {
   deltaText?: string;
   replace?: boolean;
   errorMessage?: string;
+  stopReason?: string;
 };
 
 function setChatError(state: ChatState, error: string | null) {
@@ -768,6 +807,7 @@ async function loadChatHistoryUncached(
     const resetStream = !state.chatRunId || state.chatRunId === previousRunId;
     if (resetStream) {
       const streamReconciliation = {
+        persistCommentary: chatPersistCommentaryEnabled(state),
         isHiddenAssistantMessage: shouldHideAssistantChatMessage,
         isHiddenStreamText: isHiddenAssistantStreamText,
       };
@@ -1130,14 +1170,14 @@ export async function sendChatMessage(
   }
 
   const now = Date.now();
-  const optimisticMessage = appendUserChatMessage(state, msg, attachments, now);
+  const runId = generateUUID();
+  const optimisticMessage = appendUserChatMessage(state, msg, attachments, runId, now);
 
   state.chatSending = true;
   setChatError(state, null);
   reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
     clearRunStatus: true,
   });
-  const runId = generateUUID();
   state.chatRunId = runId;
   state.chatStream = "";
   state.chatStreamStartedAt = now;
@@ -1201,6 +1241,8 @@ export async function sendChatMessage(
         role: "assistant",
         content: [{ type: "text", text: "Error: " + error }],
         timestamp: Date.now(),
+        stopReason: "error",
+        __openclaw: { runId },
       },
     ];
     return null;
@@ -1212,13 +1254,15 @@ export async function sendChatMessage(
 export function appendUserChatMessage(
   state: ChatState,
   message: string,
-  attachments?: ChatAttachment[],
+  attachments: ChatAttachment[] | undefined,
+  runId: string,
   timestamp = Date.now(),
 ) {
   const entry = {
     role: "user" as const,
     content: buildUserChatMessageContentBlocks(message, attachments),
     timestamp,
+    __openclaw: { runId },
   };
   state.chatMessages = [...state.chatMessages, entry];
   return entry;
@@ -1365,9 +1409,22 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
+      if (
+        hasVisibleStreamParts(state, {
+          includeCurrent: false,
+          isHiddenStreamText: isHiddenAssistantStreamText,
+        })
+      ) {
+        state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
+          includeCurrent: false,
+        });
+        clearToolStreamSegments(state);
+      }
       state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, finalMessage);
     } else {
-      state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
+      state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
+        messageMetadata: terminalStreamMetadata(terminalRunId, payload.stopReason ?? "stop"),
+      });
     }
     reconcileTerminalRun("done", "done");
   } else if (payload.state === "aborted") {
@@ -1379,7 +1436,11 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       });
       state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, normalizedMessage);
     } else {
-      state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
+      state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
+        // `payload.stopReason` is the abort origin (`rpc`, `timeout`, ...), not
+        // an assistant terminal state. Keep the projected message canonical.
+        messageMetadata: terminalStreamMetadata(terminalRunId, "aborted"),
+      });
     }
     reconcileTerminalRun("interrupted", "killed");
   } else if (payload.state === "error") {
@@ -1397,9 +1458,20 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         visiblePayloadMessage,
       );
     } else {
-      const errorMessage = hadActiveRunBeforeEvent ? buildErrorAssistantMessage(payload) : null;
+      const fallbackErrorMessage = hadActiveRunBeforeEvent
+        ? buildErrorAssistantMessage(payload)
+        : null;
+      const errorMessage = fallbackErrorMessage
+        ? withAssistantRunMetadata(
+            fallbackErrorMessage,
+            terminalRunId,
+            payload.stopReason ?? "error",
+          )
+        : null;
       if (hadActiveRunBeforeEvent) {
-        state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);
+        state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
+          messageMetadata: terminalStreamMetadata(terminalRunId, payload.stopReason ?? "error"),
+        });
       }
       if (errorMessage) {
         state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, errorMessage);

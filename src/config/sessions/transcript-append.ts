@@ -420,6 +420,8 @@ export async function withSessionTranscriptAppendQueue<T>(
 export type AppendSessionTranscriptMessageParams<TMessage = unknown> = {
   transcriptPath: string;
   message: TMessage;
+  /** Source agent run that owns this transcript row. */
+  runId?: string;
   now?: number;
   sessionId?: string;
   cwd?: string;
@@ -437,6 +439,7 @@ export type AppendSessionTranscriptMessageResult<TMessage> = {
   messageId: string;
   message: TMessage;
   appended: boolean;
+  runId?: string;
 };
 
 export type SessionTranscriptAppendTransactionContext = {
@@ -693,13 +696,20 @@ async function appendSessionTranscriptMessageLocked<TMessage>(
     id: messageId,
     ...(shouldRawAppend ? {} : { parentId: leafInfo.leafId ?? null }),
     timestamp: resolveTimestampMsToIsoString(now),
+    // Keep ownership in the bounded prefix ahead of potentially oversized model bytes.
+    ...(params.runId ? { runId: params.runId } : {}),
     message: finalMessage,
     ...(leafInfo.appendMode === "side" && isTranscriptOnlyOpenClawAssistantMessage(finalMessage)
       ? { appendMode: "side" as const }
       : {}),
   };
   await appendJsonlEntry(params.transcriptPath, entry);
-  return { messageId, message: finalMessage, appended: true };
+  return {
+    messageId,
+    message: finalMessage,
+    appended: true,
+    ...(params.runId ? { runId: params.runId } : {}),
+  };
 }
 
 function readMessageIdempotencyKey(message: unknown): string | undefined {
@@ -713,12 +723,13 @@ function readMessageIdempotencyKey(message: unknown): string | undefined {
 async function findTranscriptMessageByIdempotencyKey(
   transcriptPath: string,
   idempotencyKey: string,
-): Promise<{ messageId: string; message: unknown } | undefined> {
+): Promise<{ messageId: string; message: unknown; runId?: string } | undefined> {
   for await (const line of streamSessionTranscriptLinesReverse(transcriptPath)) {
     try {
       const parsed = JSON.parse(line) as {
         id?: unknown;
         message?: unknown;
+        runId?: unknown;
       };
       const message = parsed.message;
       if (readMessageIdempotencyKey(message) !== idempotencyKey) {
@@ -728,6 +739,7 @@ async function findTranscriptMessageByIdempotencyKey(
         messageId:
           typeof parsed.id === "string" && parsed.id.trim().length > 0 ? parsed.id : idempotencyKey,
         message,
+        ...(typeof parsed.runId === "string" && parsed.runId.trim() ? { runId: parsed.runId } : {}),
       };
     } catch {
       continue;

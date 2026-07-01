@@ -859,6 +859,7 @@ describe("gateway server chat", () => {
       },
       {
         role: "assistant",
+        __openclaw: { runId: "run-message-tool" },
         content: [
           {
             type: "toolCall",
@@ -874,6 +875,7 @@ describe("gateway server chat", () => {
       },
       {
         role: "toolResult",
+        __openclaw: { runId: "run-message-tool" },
         toolName: "message",
         toolCallId: "call-message-transcript-only",
         content: { ok: true, messageId: "24271", chatId: "current-run" },
@@ -881,6 +883,7 @@ describe("gateway server chat", () => {
       },
       {
         role: "assistant",
+        __openclaw: { runId: "run-message-tool" },
         provider: "openclaw",
         model: "delivery-mirror",
         content: [{ type: "text", text: replyText }],
@@ -888,6 +891,7 @@ describe("gateway server chat", () => {
       },
       {
         role: "assistant",
+        __openclaw: { runId: "run-message-tool" },
         content: [{ type: "text", text: "NO_REPLY" }],
         timestamp: 5,
       },
@@ -904,6 +908,12 @@ describe("gateway server chat", () => {
     ).toBe(true);
     expect(historyMessages).not.toContainEqual(
       expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
+    );
+    expect(historyMessages).toContainEqual(
+      expect.objectContaining({
+        openclawMessageToolMirror: expect.any(Object),
+        __openclaw: expect.objectContaining({ runId: "run-message-tool" }),
+      }),
     );
   });
 

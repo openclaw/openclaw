@@ -440,6 +440,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       silent: params.silent,
       parseMode: params.parseMode,
       sessionKey: params.mirror?.sessionKey,
+      runId: params.mirror?.runId,
       idempotencyKey: await resolveGatewayIdempotencyKey(params.idempotencyKey),
     },
   });

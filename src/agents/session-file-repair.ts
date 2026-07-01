@@ -521,6 +521,9 @@ function makeSyntheticToolResultEntry(params: {
     id: `repair-${randomUUID()}`,
     parentId: typeof params.parent.id === "string" ? params.parent.id : undefined,
     timestamp: new Date().toISOString(),
+    ...(typeof params.parent.runId === "string" && params.parent.runId.trim()
+      ? { runId: params.parent.runId }
+      : {}),
     message: message as unknown as SessionMessageEntry["message"],
   };
 }

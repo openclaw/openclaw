@@ -337,6 +337,8 @@ describe("abortChatRunById", () => {
         role: "assistant",
         content: [{ type: "text", text: "  Partial reply  " }],
         timestamp: now.getTime(),
+        stopReason: "aborted",
+        __openclaw: { runId },
       },
     });
     expect(ops.nodeSendToSession).toHaveBeenCalledWith(sessionKey, "chat", payload);
@@ -450,6 +452,8 @@ describe("abortChatRunById", () => {
         role: "assistant",
         content: [{ type: "text", text: "streamed text" }],
         timestamp: now.getTime(),
+        stopReason: "aborted",
+        __openclaw: { runId },
       },
     });
   });

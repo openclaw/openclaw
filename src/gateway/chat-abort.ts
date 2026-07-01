@@ -433,6 +433,8 @@ function broadcastChatAborted(
           role: "assistant",
           content: [{ type: "text", text: partialText }],
           timestamp: Date.now(),
+          stopReason: "aborted",
+          __openclaw: { runId },
         }
       : undefined,
   };

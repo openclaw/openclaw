@@ -48,6 +48,8 @@ export type ReplyPayload = {
   /** Marks this payload as a reasoning/thinking block. Channels that do not
    *  have a dedicated reasoning lane (e.g. WhatsApp, web) should suppress it. */
   isReasoning?: boolean;
+  /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
+  isCommentary?: boolean;
   /** Reasoning stream text is a complete replacement snapshot, not a delta. */
   isReasoningSnapshot?: boolean;
   /** Marks this payload as a compaction status notice (start/end).
@@ -237,6 +239,8 @@ export type ReplyPayloadMetadata = {
   sourceReplyTranscriptMirror?: {
     sessionKey: string;
     agentId?: string;
+    /** Source agent run that owns this transcript-visible reply. */
+    runId?: string;
     text?: string;
     mediaUrls?: string[];
     idempotencyKey?: string;

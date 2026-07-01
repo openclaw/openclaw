@@ -107,6 +107,8 @@ export interface MirrorCopilotTranscriptParams {
    * entry collide with its existing on-disk key and be a true no-op.
    */
   idempotencyScope?: string;
+  /** Ownership keyed by the same stable identity used for mirror dedupe. */
+  runIdByMessageIdentity?: ReadonlyMap<string, string>;
   config?: SessionTranscriptWriteLockParams["config"];
 }
 
@@ -129,6 +131,7 @@ export async function mirrorCopilotTranscript(
       const existingIdempotencyKeys = readTranscriptIdempotencyKeys(await transcript.readEvents());
       for (const message of messages) {
         const dedupeIdentity = buildMirrorDedupeIdentity(message);
+        const runId = params.runIdByMessageIdentity?.get(dedupeIdentity);
         const idempotencyKey = params.idempotencyScope
           ? `${params.idempotencyScope}:${dedupeIdentity}`
           : undefined;
@@ -157,6 +160,7 @@ export async function mirrorCopilotTranscript(
         ) as AgentMessage;
         const appended = await transcript.appendMessage({
           message: messageToAppend,
+          ...(runId ? { runId } : {}),
           idempotencyLookup: idempotencyKey ? "caller-checked" : "scan",
         });
         if (!appended) {

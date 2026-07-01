@@ -31,6 +31,7 @@ describe("guardSessionManager transcript updates", () => {
     const guarded = guardSessionManager(sm, {
       agentId: "main",
       sessionKey: "agent:main:worker",
+      runId: "run-worker-1",
     });
     const appendMessage = guarded.appendMessage.bind(guarded) as unknown as (
       message: AgentMessage,
@@ -53,11 +54,17 @@ describe("guardSessionManager transcript updates", () => {
         },
         messageId: expect.any(String),
         messageSeq: 1,
+        runId: "run-worker-1",
         sessionFile,
         sessionKey: "agent:main:worker",
       },
     ]);
     expect(updates[0]?.messageId).not.toBe("");
+    expect(sm.getBranch().at(-1)).toMatchObject({
+      runId: "run-worker-1",
+      message: { role: "assistant" },
+    });
+    expect(updates[0]?.message).not.toHaveProperty("runId");
   });
 
   it("does not resolve transcript sequence when no session file is available", () => {

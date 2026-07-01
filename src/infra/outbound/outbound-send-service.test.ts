@@ -172,6 +172,7 @@ describe("executeSendAction", () => {
       sessionKey: string;
       text: string;
       idempotencyKey: string;
+      runId: string;
       mediaUrls: string[];
     }>,
   ) {
@@ -186,6 +187,7 @@ describe("executeSendAction", () => {
       sessionKey: string;
       agentId?: string;
       idempotencyKey?: string;
+      runId?: string;
     }>;
     mediaUrls?: string[];
   }) {
@@ -624,10 +626,11 @@ describe("executeSendAction", () => {
     });
   });
 
-  it("passes mirror idempotency keys through plugin-handled sends", async () => {
+  it("passes mirror ownership through plugin-handled sends", async () => {
     await executePluginMirroredSend({
       mirror: {
         idempotencyKey: "idem-plugin-send-1",
+        runId: "run-plugin-send-1",
       },
     });
 
@@ -635,6 +638,7 @@ describe("executeSendAction", () => {
       sessionKey: "agent:main:demo-outbound:channel:123",
       text: "hello",
       idempotencyKey: "idem-plugin-send-1",
+      runId: "run-plugin-send-1",
     });
   });
 

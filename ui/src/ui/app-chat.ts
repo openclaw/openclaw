@@ -1148,6 +1148,7 @@ async function sendQueuedChatMessage(
         host as unknown as ChatState,
         message,
         hasAttachments ? attachments : undefined,
+        runId,
         startedAt,
       );
       if (ack.status === "ok") {

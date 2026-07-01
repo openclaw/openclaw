@@ -63,6 +63,8 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   /** When set, used as the assistant `content` array (e.g. text + embedded audio blocks). */
   content?: Array<Record<string, unknown>>;
   idempotencyKey?: string;
+  /** Agent run that owns this injected terminal row, when it came from a run. */
+  runId?: string;
   abortMeta?: GatewayInjectedAbortMeta;
   ttsSupplement?: GatewayInjectedTtsSupplementMarker;
   now?: number;
@@ -130,6 +132,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
         messages: [
           {
             message: messageBody,
+            ...(params.runId ? { runId: params.runId } : {}),
             now,
             useRawWhenLinear: true,
           },

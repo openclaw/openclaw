@@ -128,6 +128,8 @@ export type RunMessageActionParams = {
   deps?: OutboundSendDeps;
   sessionKey?: string;
   agentId?: string;
+  /** Source agent run that owns transcript-visible output from this action. */
+  runId?: string;
   sandboxRoot?: string;
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -654,6 +656,7 @@ async function runGatewayPluginMessageActionOrNull(params: {
       sessionId: params.input.sessionId,
       inboundTurnKind: params.input.inboundEventKind,
       agentId: params.agentId,
+      ...(params.input.runId ? { runId: params.input.runId } : {}),
       toolContext: params.input.toolContext,
       idempotencyKey: await resolveGatewayActionIdempotencyKey(
         normalizeOptionalString(params.params.idempotencyKey),
@@ -1156,6 +1159,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
           ? {
               sessionKey: outboundRoute.sessionKey,
               agentId,
+              ...(input.runId ? { runId: input.runId } : {}),
               text: sendPayload.message,
               mediaUrls: sendPayload.mediaUrls,
               idempotencyKey: normalizeOptionalString(params.idempotencyKey) ?? undefined,

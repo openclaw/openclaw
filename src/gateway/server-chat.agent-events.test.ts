@@ -3978,6 +3978,7 @@ describe("agent event handler", () => {
       runId?: string;
     };
     expect(payload.runId).toBe("run-tool-client");
+    expectPayloadDataFields(payload, { sourceRunId: "run-tool-internal" });
     resetAgentRunContextForTest();
   });
 
@@ -4132,10 +4133,16 @@ describe("agent event handler", () => {
         "final chat call",
       );
       expectPayloadFields(finalCall[1], {
+        runId: "client-sub-final",
         sessionKey: "agent:coder:subagent:abc",
         spawnedBy: "agent:conductor:task:parent-1",
         state: "final",
       });
+      const finalMessage = requireRecord(
+        requireRecord(finalCall[1], "final chat payload").message,
+        "final chat message",
+      );
+      expect(finalMessage.__openclaw).toEqual({ runId: "run-sub-final" });
     });
 
     it("omits spawnedBy from chat broadcasts for non-subagent sessions", () => {
@@ -4270,10 +4277,18 @@ describe("agent event handler", () => {
         "error chat call",
       );
       expectPayloadFields(errorCall[1], {
+        runId: "client-sub-err",
         sessionKey: "agent:coder:subagent:err",
         spawnedBy: "agent:conductor:task:parent-err",
         state: "error",
+        stopReason: "error",
       });
+      const errorMessage = requireRecord(
+        requireRecord(errorCall[1], "error chat payload").message,
+        "error chat message",
+      );
+      expect(errorMessage.stopReason).toBe("error");
+      expect(errorMessage.__openclaw).toEqual({ runId: "run-sub-err" });
     });
 
     it("includes spawnedBy in flushed chat delta for subagent sessions", () => {

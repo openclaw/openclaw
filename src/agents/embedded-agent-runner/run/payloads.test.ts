@@ -339,6 +339,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       sourceReplyTranscriptMirror: {
         sessionKey: "agent:main",
         agentId: "main",
+        runId: "run-1",
         text: "sent through message tool",
         mediaUrls: ["/tmp/reply.png"],
         idempotencyKey: "run-1:internal-source-reply:0",
@@ -405,6 +406,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       sourceReplyTranscriptMirror: {
         sessionKey: "agent:main",
         agentId: "main",
+        runId: "run-1",
         idempotencyKey: "run-1:internal-source-reply:0",
       },
     });
@@ -413,6 +415,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       sourceReplyTranscriptMirror: {
         sessionKey: "agent:main",
         agentId: "main",
+        runId: "run-1",
         idempotencyKey: "run-1:internal-source-reply:1",
       },
     });

@@ -583,6 +583,68 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(null);
   });
 
+  it("clears keyed commentary with the final answer by default", () => {
+    const user = { role: "user", content: [{ type: "text", text: "Ask" }], timestamp: 1 };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [user],
+      chatStream: null,
+      chatStreamStartedAt: null,
+    }) as ChatState & {
+      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
+    };
+    state.chatStreamSegments = [{ text: "Looking into it.", ts: 2, itemId: "preamble-1" }];
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer." }],
+        timestamp: 5,
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toHaveLength(2);
+    expectTextChatMessage(state.chatMessages[0], "user", "Ask");
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Final answer.");
+    expect(state.chatStreamSegments).toEqual([]);
+  });
+
+  it("persists keyed commentary alongside the final answer when chatPersistCommentary is true", () => {
+    const user = { role: "user", content: [{ type: "text", text: "Ask" }], timestamp: 1 };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [user],
+      chatStream: null,
+      chatStreamStartedAt: null,
+      settings: { chatPersistCommentary: true },
+    }) as ChatState & {
+      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
+    };
+    state.chatStreamSegments = [{ text: "Looking into it.", ts: 2, itemId: "preamble-1" }];
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer." }],
+        timestamp: 5,
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toHaveLength(3);
+    expectTextChatMessage(state.chatMessages[0], "user", "Ask");
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Looking into it.");
+    expectTextChatMessage(state.chatMessages[2], "assistant", "Final answer.");
+    expect(state.chatStreamSegments).toEqual([]);
+  });
+
   it("reconciles cached run and indicator state on terminal events", () => {
     vi.useFakeTimers();
     try {
@@ -1067,7 +1129,7 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(null);
   });
 
-  it("does not materialize stream segments when final payload is renderable", () => {
+  it("keeps pre-final stream segments when final payload is renderable", () => {
     const state = createState({
       sessionKey: "main",
       chatRunId: "run-1",
@@ -1087,10 +1149,12 @@ describe("handleChatEvent", () => {
     };
 
     expect(handleChatEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toEqual([payload.message]);
+    expect(state.chatMessages).toHaveLength(2);
+    expectTextChatMessage(state.chatMessages[0], "assistant", "before tool");
+    expect(state.chatMessages[1]).toEqual(payload.message);
     expect(state.chatRunId).toBe(null);
     expect(state.chatStream).toBe(null);
-    expect(state.chatStreamSegments).toEqual([{ text: "before tool", ts: 1 }]);
+    expect(state.chatStreamSegments).toEqual([]);
   });
 
   it("processes aborted from own run and keeps partial assistant message", () => {
@@ -1147,6 +1211,7 @@ describe("handleChatEvent", () => {
       runId: "run-1",
       sessionKey: "main",
       state: "aborted",
+      stopReason: "rpc",
       message: "not-an-assistant-message",
     } as unknown as ChatEventPayload;
 
@@ -1157,6 +1222,9 @@ describe("handleChatEvent", () => {
     expect(state.chatMessages).toHaveLength(2);
     expect(state.chatMessages[0]).toEqual(existingMessage);
     expectTextChatMessage(state.chatMessages[1], "assistant", "Partial reply");
+    const partial = requireRecord(state.chatMessages[1]);
+    expect(partial.stopReason).toBe("aborted");
+    expect(requireRecord(partial.__openclaw).runId).toBe("run-1");
   });
 
   it("falls back to streamed partial when aborted payload has non-assistant role", () => {
@@ -2281,6 +2349,7 @@ describe("sendChatMessage", () => {
           },
         ],
         timestamp: expect.any(Number),
+        __openclaw: { runId: result },
       },
     ]);
   });
@@ -2324,6 +2393,7 @@ describe("sendChatMessage", () => {
         role: "user",
         content: [{ type: "text", text: "Attached image: photo.png" }],
         timestamp: expect.any(Number),
+        __openclaw: { runId: result },
       },
     ]);
     expect(JSON.stringify(state.chatMessages)).not.toContain("data:image/png;base64");
@@ -2354,6 +2424,7 @@ describe("sendChatMessage", () => {
           { type: "text", text: "Attached image: photo.png" },
         ],
         timestamp: expect.any(Number),
+        __openclaw: { runId: expect.stringMatching(UUID_V4_RE) },
       },
     ]);
     expect(JSON.stringify(captionedState.chatMessages)).not.toContain("data:image/png;base64");
@@ -2586,6 +2657,117 @@ describe("loadChatHistory retry handling", () => {
 
     expect(state.chatMessages).toEqual([persistedUser, optimisticUser, optimisticAssistant]);
     expect(state.chatStream).toBeNull();
+  });
+
+  it("keeps a run-owned local terminal when history reload returns a stale snapshot", async () => {
+    const persistedUser = {
+      role: "user",
+      content: [{ type: "text", text: "first" }],
+      __openclaw: { seq: 1 },
+    };
+    const localTerminal = {
+      role: "assistant",
+      content: [{ type: "text", text: "latest streamed answer" }],
+      timestamp: 11,
+      stopReason: "stop",
+      __openclaw: { runId: "run-local-terminal" },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [persistedUser],
+      thinkingLevel: "low",
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [persistedUser, localTerminal],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([persistedUser, localTerminal]);
+  });
+
+  it("keeps an identical local terminal when stale history belongs to another run", async () => {
+    const persistedUser = {
+      role: "user",
+      content: [{ type: "text", text: "first" }],
+      __openclaw: { seq: 1 },
+    };
+    const previousTerminal = {
+      role: "assistant",
+      content: [{ type: "text", text: "Done" }],
+      timestamp: 10,
+      stopReason: "stop",
+      __openclaw: { seq: 2, runId: "run-previous" },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "do it again" }],
+      timestamp: 11,
+    };
+    const localTerminal = {
+      role: "assistant",
+      content: [{ type: "text", text: "Done" }],
+      timestamp: 12,
+      stopReason: "stop",
+      __openclaw: { runId: "run-current" },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [persistedUser, previousTerminal],
+      thinkingLevel: "low",
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [persistedUser, previousTerminal, optimisticUser, localTerminal],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([
+      persistedUser,
+      previousTerminal,
+      optimisticUser,
+      localTerminal,
+    ]);
+  });
+
+  it("keeps a local terminal when stale history contains its persisted user", async () => {
+    const previousUser = {
+      role: "user",
+      content: [{ type: "text", text: "first" }],
+      __openclaw: { seq: 1 },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "do it" }],
+      timestamp: 10,
+      __openclaw: { runId: "run-current" },
+    };
+    const persistedUser = {
+      ...optimisticUser,
+      __openclaw: { seq: 2, runId: "run-current" },
+    };
+    const localTerminal = {
+      role: "assistant",
+      content: [{ type: "text", text: "Done" }],
+      timestamp: 11,
+      stopReason: "stop",
+      __openclaw: { runId: "run-current" },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [previousUser, persistedUser],
+      thinkingLevel: "low",
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [previousUser, optimisticUser, localTerminal],
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([previousUser, persistedUser, localTerminal]);
   });
 
   it("keeps active streamed assistant text when history reload returns a stale snapshot", async () => {

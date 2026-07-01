@@ -2643,10 +2643,15 @@ describe("runCopilotAttempt", () => {
         sessionId: string;
         messages: Array<{ role: string }>;
         idempotencyScope?: string;
+        runIdByMessageIdentity?: ReadonlyMap<string, string>;
       };
       expect(args.sessionFile).toBe("session.json");
       expect(args.sessionId).toBe("session-1");
       expect(args.idempotencyScope).toBe("copilot:sess-1");
+      expect([...Array.from(args.runIdByMessageIdentity?.entries() ?? [])]).toEqual([
+        ["run-1:prompt", "run-1"],
+        ["run-1:assistant:final", "run-1"],
+      ]);
       expect(args.messages.length).toBeGreaterThan(0);
       const roles = args.messages.map((m) => m.role);
       expect(roles).toContain("user");
@@ -2667,6 +2672,42 @@ describe("runCopilotAttempt", () => {
       await runCopilotAttempt(params as never, { pool });
 
       expect(dualWriteMock.dualWriteCopilotTranscriptBestEffort).not.toHaveBeenCalled();
+    });
+
+    it("attributes only current-turn identities when the mirror snapshot contains history", async () => {
+      const sdk = makeFakeSdk({
+        onCreateSession: (session) => {
+          session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
+        },
+      });
+      const pool = makeFakePool(sdk);
+
+      await runCopilotAttempt(
+        makeParams({
+          messages: [
+            { content: "older prompt", role: "user", timestamp: 1 },
+            { content: "older answer", role: "assistant", timestamp: 2 },
+            { content: "hello", role: "user", timestamp: 3 },
+          ],
+          runId: "run-current",
+        } as never),
+        { pool },
+      );
+
+      const args = dualWriteMock.dualWriteCopilotTranscriptBestEffort.mock.calls[0]?.[0] as {
+        messages: Array<{ __openclaw?: { mirrorIdentity?: string } }>;
+        runIdByMessageIdentity?: ReadonlyMap<string, string>;
+      };
+      expect(Array.from(args.runIdByMessageIdentity?.entries() ?? [])).toEqual([
+        ["run-current:prompt", "run-current"],
+        ["run-current:assistant:final", "run-current"],
+      ]);
+      expect(args.messages[0]?.__openclaw?.mirrorIdentity?.startsWith("run-current:")).not.toBe(
+        true,
+      );
+      expect(args.messages[1]?.__openclaw?.mirrorIdentity?.startsWith("run-current:")).not.toBe(
+        true,
+      );
     });
 
     it("tags mirrored messages with copilot mirror identity per role and position", async () => {
@@ -2692,12 +2733,11 @@ describe("runCopilotAttempt", () => {
           continue;
         }
         const identity = message["__openclaw"]?.mirrorIdentity ?? "";
-        // The terminal assistant carries the turn-stable
-        // `${runId}:assistant:final` identity attached by attempt.ts.
-        // Caller-passed history without an identity falls through to
-        // the positional `${scope}:role:idx`.
-        // fingerprint that the existing tagging map applies.
-        if (message.role === "assistant" && index === args.messages.length - 1) {
+        // Current prompt and terminal assistant carry turn-stable identities.
+        // Older caller-passed history falls through to the positional scope.
+        if (message.role === "user" && index === args.messages.length - 2) {
+          expect(identity).toBe("run-1:prompt");
+        } else if (message.role === "assistant" && index === args.messages.length - 1) {
           expect(identity).toMatch(/:assistant:final$/u);
           expect(identity).toContain("run-1");
         } else {

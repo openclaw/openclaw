@@ -570,6 +570,8 @@ export function installSessionToolResultGuard(
     sessionKey?: string;
     /** Optional agent id for selected-global transcript update broadcasts. */
     agentId?: string;
+    /** Agent run that owns every message persisted through this guarded manager. */
+    runId?: string;
     /**
      * Optional transform applied to any message before persistence.
      */
@@ -656,7 +658,10 @@ export function installSessionToolResultGuard(
     options?: AppendMessageOptions,
   ): { entryId: string; messageSeq?: number; sessionFile?: string | null } => {
     const parentEntryId = sessionManager.getLeafId();
-    const entryId = originalAppend(message as never, options);
+    const entryId = originalAppend(message as never, {
+      ...options,
+      ...(opts?.runId ? { runId: opts.runId } : {}),
+    });
     void opts?.onMessagePersisted?.(message);
     const sessionFile = getSessionFile();
     if (!sessionFile) {
@@ -873,6 +878,7 @@ export function installSessionToolResultGuard(
         sessionFile,
         sessionKey: opts?.sessionKey,
         ...(opts?.agentId ? { agentId: opts.agentId } : {}),
+        ...(opts?.runId ? { runId: opts.runId } : {}),
         message: finalMessage,
         messageId: typeof result === "string" ? result : undefined,
         ...(messageSeq !== undefined ? { messageSeq } : {}),

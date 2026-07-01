@@ -135,9 +135,14 @@ describe("mirrorCodexAppServerTranscript", () => {
       sessionKey: "session-1",
       messages: [userMessage, assistantMessage, toolResultMessage],
       idempotencyScope: "scope-1",
+      runId: "run-1",
     });
 
     const raw = await fs.readFile(sessionFile, "utf8");
+    const messageEntries = parseJsonLines<Record<string, unknown>>(raw).filter(
+      (entry) => entry.type === "message",
+    );
+    expect(messageEntries.map((entry) => entry.runId)).toEqual(["run-1", "run-1", "run-1"]);
     expect(raw).toContain('"role":"user"');
     expect(raw).toContain('"content":[{"type":"text","text":"hello"}]');
     expect(raw).toContain('"role":"assistant"');
@@ -170,6 +175,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       sessionKey: "agent:main:main",
       messages: [userMessage],
       idempotencyScope: "codex-app-server:thread-1",
+      runId: "run-1",
     });
     const secondMirror = await mirrorCodexAppServerTranscript({
       sessionFile,
@@ -177,6 +183,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       sessionKey: "agent:main:main",
       messages: [userMessage],
       idempotencyScope: "codex-app-server:thread-1",
+      runId: "run-1",
     });
 
     const updates = publishSessionTranscriptUpdateByIdentityMock.mock.calls.map(
@@ -192,6 +199,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       idempotencyKey: "codex-app-server:thread-1:turn-1:prompt",
     });
     expect(updates[0]?.update?.messageSeq).toBe(1);
+    expect(updates[0]?.update?.runId).toBe("run-1");
     expect(firstMirror.userMessagesPresent).toHaveLength(1);
     expect(firstMirror.userMessagesPresent[0]).toMatchObject({
       role: "user",

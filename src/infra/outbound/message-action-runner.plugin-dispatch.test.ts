@@ -91,6 +91,7 @@ const mocks = vi.hoisted(() => ({
   resolveOutboundChannelPlugin: vi.fn(),
   executeSendAction: vi.fn(),
   executePollAction: vi.fn(),
+  resolveOutboundSessionRoute: vi.fn(async () => null),
   callGatewayLeastPrivilege: vi.fn(),
   randomIdempotencyKey: vi.fn(() => "idem-gateway-action"),
   maybeApplyTtsToPayload: vi.fn(async (params: { payload: unknown }) => params.payload),
@@ -117,7 +118,7 @@ vi.mock("../../tts/tts.runtime.js", () => ({
 
 vi.mock("./outbound-session.js", () => ({
   ensureOutboundSessionEntry: vi.fn(async () => undefined),
-  resolveOutboundSessionRoute: vi.fn(async () => null),
+  resolveOutboundSessionRoute: mocks.resolveOutboundSessionRoute,
 }));
 
 vi.mock("../../channels/plugins/bootstrap-registry.js", () => ({
@@ -274,6 +275,8 @@ describe("runMessageAction plugin dispatch", () => {
       async ({ ctx }: { ctx: Parameters<typeof executePluginAction>[0]["ctx"] }) =>
         await executePluginAction({ action: "poll", ctx }),
     );
+    mocks.resolveOutboundSessionRoute.mockReset();
+    mocks.resolveOutboundSessionRoute.mockResolvedValue(null);
     mocks.callGatewayLeastPrivilege.mockReset();
     mocks.randomIdempotencyKey.mockClear();
     mocks.maybeApplyTtsToPayload.mockReset();
@@ -606,6 +609,7 @@ describe("runMessageAction plugin dispatch", () => {
         sessionKey: "agent:alpha:main",
         sessionId: "session-123",
         agentId: "alpha",
+        runId: "run-source-action",
         inboundEventKind: "room_event",
         toolContext: {
           currentChannelProvider: "gatewaychat",
@@ -633,6 +637,7 @@ describe("runMessageAction plugin dispatch", () => {
           sessionKey: "agent:alpha:main",
           sessionId: "session-123",
           agentId: "alpha",
+          runId: "run-source-action",
           inboundTurnKind: "room_event",
           idempotencyKey: "idem-gateway-action",
         },
@@ -1059,6 +1064,14 @@ describe("runMessageAction plugin dispatch", () => {
           mediaUrl: "buffer://message-send/attachment",
         },
       });
+      mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
+        sessionKey: "agent:main:gatewaydeliver:direct:user-123",
+        baseSessionKey: "agent:main:gatewaydeliver:direct:user-123",
+        peer: { kind: "direct", id: "user-123" },
+        chatType: "direct",
+        from: "gatewaydeliver:user-123",
+        to: "user:user-123",
+      });
 
       await runMessageAction({
         cfg: {
@@ -1080,6 +1093,9 @@ describe("runMessageAction plugin dispatch", () => {
           clientName: "cli",
           mode: "cli",
         },
+        sessionKey: "agent:main",
+        agentId: "main",
+        runId: "run-gateway-delivery-1",
       });
 
       const executeCall = readMockCallArg(mocks.executeSendAction, "execute send call");
@@ -1094,6 +1110,17 @@ describe("runMessageAction plugin dispatch", () => {
         },
         "execute send call",
       );
+      expect(
+        readRecordField(
+          readRecordField(executeCall, "ctx", "execute send context"),
+          "mirror",
+          "execute send mirror",
+        ),
+      ).toMatchObject({
+        sessionKey: "agent:main:gatewaydeliver:direct:user-123",
+        agentId: "main",
+        runId: "run-gateway-delivery-1",
+      });
     });
 
     it("applies TTS before gateway-executed plugin sends", async () => {

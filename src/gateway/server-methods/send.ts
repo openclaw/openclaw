@@ -468,6 +468,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       sessionId?: string;
       inboundTurnKind?: "user_request" | "room_event";
       agentId?: string;
+      runId?: string;
       toolContext?: {
         currentChannelId?: string;
         currentMessagingTarget?: string;
@@ -521,6 +522,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         const agentId =
           normalizeOptionalString(request.agentId) ??
           (sessionKey ? resolveSessionAgentId({ sessionKey, config: cfg }) : undefined);
+        const sourceRunId = normalizeOptionalString(request.runId) ?? undefined;
         const accountId = normalizeOptionalString(request.accountId) ?? undefined;
         if (request.action === "send") {
           await hydrateAttachmentParamsForAction({
@@ -573,6 +575,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             cfg,
             sessionKey,
             agentId,
+            ...(sourceRunId ? { runId: sourceRunId } : {}),
             toolContext: request.toolContext,
             idempotencyKey: request.idempotencyKey,
             deliveredPayload: payload,
@@ -618,6 +621,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       silent?: boolean;
       parseMode?: "HTML";
       sessionKey?: string;
+      runId?: string;
       idempotencyKey: string;
     };
     const inflight = resolveGatewayInflightRequest({
@@ -649,6 +653,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       return;
     }
     const accountId = normalizeOptionalString(request.accountId);
+    const sourceRunId = normalizeOptionalString(request.runId);
     const replyToId = normalizeOptionalString(request.replyToId);
     const threadId = normalizeOptionalString(request.threadId);
 
@@ -804,6 +809,7 @@ export const sendHandlers: GatewayRequestHandlers = {
             ? {
                 sessionKey: outboundSessionKey,
                 agentId: effectiveAgentId,
+                ...(sourceRunId ? { runId: sourceRunId } : {}),
                 text: mirrorText || message,
                 mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
                 idempotencyKey: idem,

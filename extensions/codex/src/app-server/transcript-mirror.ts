@@ -127,6 +127,7 @@ export async function mirrorTranscriptBestEffort(params: {
       // identity (not via the scope). Dropping `turnId` from the scope here is
       // what lets a re-emitted prior-turn entry collide with its existing key.
       idempotencyScope: `codex-app-server:${params.threadId}`,
+      runId: params.params.runId,
       config: params.params.config,
     });
     for (const message of mirrorResult.userMessagesPresent) {
@@ -207,6 +208,7 @@ export async function mirrorPromptAtTurnStartBestEffort(params: {
         cwd: params.cwd,
         messages: [userPromptMessage],
         idempotencyScope: `codex-app-server:${params.threadId}`,
+        runId: params.params.runId,
         config: params.params.config,
       });
       for (const message of mirrorResult.userMessagesPresent) {
@@ -279,6 +281,7 @@ export async function mirrorCodexAppServerTranscript(params: {
   agentId?: string;
   messages: AgentMessage[];
   idempotencyScope?: string;
+  runId?: string;
   config?: SessionTranscriptWriteLockParams["config"];
 }): Promise<CodexAppServerTranscriptMirrorResult> {
   const messages = params.messages.filter(
@@ -297,6 +300,7 @@ export async function mirrorCodexAppServerTranscript(params: {
         messageId: string;
         message: AgentMessage;
         messageSeq: number;
+        runId?: string;
       }> = [];
       const nextUserMessagesPresent: MirroredUserMessage[] = [];
       const mirrorState = readTranscriptMirrorState(await transcript.readEvents());
@@ -335,13 +339,14 @@ export async function mirrorCodexAppServerTranscript(params: {
         ) as AgentMessage;
         const appended = await transcript.appendMessage({
           message: messageToAppend,
+          ...(params.runId ? { runId: params.runId } : {}),
           idempotencyLookup: idempotencyKey ? "caller-checked" : "scan",
           cwd: params.cwd,
         });
         if (!appended) {
           continue;
         }
-        const { messageId, message: appendedMessage } = appended;
+        const { messageId, message: appendedMessage, runId } = appended;
         if (appendedMessage.role === "user") {
           nextUserMessagesPresent.push(appendedMessage);
           if (idempotencyKey) {
@@ -353,6 +358,7 @@ export async function mirrorCodexAppServerTranscript(params: {
           messageId,
           message: appendedMessage,
           messageSeq: nextMessageSeq,
+          ...(runId ? { runId } : {}),
         });
         if (idempotencyKey) {
           mirrorState.idempotencyKeys.add(idempotencyKey);
@@ -371,6 +377,7 @@ export async function mirrorCodexAppServerTranscript(params: {
         message: update.message,
         messageId: update.messageId,
         messageSeq: update.messageSeq,
+        ...(update.runId ? { runId: update.runId } : {}),
       },
     });
   }

@@ -139,6 +139,7 @@ import {
   resolveBootstrapFilesForRun,
   resolveContextInjectionMode,
 } from "../../bootstrap-files.js";
+import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
 import { createCacheTrace } from "../../cache-trace.js";
 import {
   getChannelAgentToolMeta,
@@ -1389,7 +1390,7 @@ export async function runEmbeddedAttempt(
     const shouldProbeContinuationSkip =
       !isRawModelRun &&
       contextInjectionMode === "continuation-skip" &&
-      (params.bootstrapContextRunKind ?? "default") !== "heartbeat" &&
+      !isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind) &&
       (await hasCompletedBootstrapTurnForAttempt(params.sessionFile));
     let preloadedBootstrapFiles: WorkspaceBootstrapFile[] | undefined;
     let bootstrapRouting =
@@ -1960,6 +1961,7 @@ export async function runEmbeddedAttempt(
       defaultAgentId,
       isDefaultAgent,
       trigger: params.trigger,
+      bootstrapContextRunKind: params.bootstrapContextRunKind,
     })
       ? resolveHeartbeatPromptForSystemPrompt({
           config: params.config,
@@ -1967,6 +1969,8 @@ export async function runEmbeddedAttempt(
           defaultAgentId,
         })
       : undefined;
+    const promptContributionTrigger =
+      params.bootstrapContextRunKind === "commitment-only" ? undefined : params.trigger;
     const promptContributionContext = {
       config: params.config,
       agentDir: params.agentDir,
@@ -1977,7 +1981,7 @@ export async function runEmbeddedAttempt(
       runtimeChannel,
       runtimeCapabilities,
       agentId: sessionAgentId,
-      trigger: params.trigger,
+      trigger: promptContributionTrigger,
     };
     const promptContribution =
       params.runtimePlan?.prompt.resolveSystemPromptContribution(promptContributionContext) ??
@@ -2184,6 +2188,7 @@ export async function runEmbeddedAttempt(
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
+        runId: params.runId,
         config: params.config,
         contextWindowTokens: params.contextTokenBudget,
         inputProvenance: params.inputProvenance,
@@ -2700,7 +2705,7 @@ export async function runEmbeddedAttempt(
                 }),
             }),
           runtimeSettings: contextEngineLoopRuntimeSettings,
-          isHeartbeat: params.bootstrapContextRunKind === "heartbeat",
+          isHeartbeat: isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind),
         });
         const removeGuard = installToolResultContextGuard({
           agent: activeSession.agent,
@@ -3581,6 +3586,7 @@ export async function runEmbeddedAttempt(
           onAgentToolResult: params.onAgentToolResult,
           onToolResult: params.onToolResult,
           onReasoningStream: params.onReasoningStream,
+          streamReasoningInNonStreamModes: params.streamReasoningInNonStreamModes,
           onReasoningEnd: params.onReasoningEnd,
           onBlockReply,
           onBlockReplyFlush,
@@ -3970,6 +3976,7 @@ export async function runEmbeddedAttempt(
               hookCtx,
               hookRunner,
               beforeAgentStartResult: params.beforeAgentStartResult,
+              bootstrapContextRunKind: params.bootstrapContextRunKind,
             });
         const promptBeforePromptBuildHooks = effectivePrompt;
         const promptBuildPrependContext = hookResult?.prependContext;
@@ -4133,7 +4140,13 @@ export async function runEmbeddedAttempt(
             log.debug(orphanRepairMessage);
           }
         }
-        if (params.sessionKey && !isRawModelRun) {
+        // Commitment fan-out must leave parent-turn steering queued for the
+        // next normal turn instead of consuming it as commitment context.
+        if (
+          params.sessionKey &&
+          !isRawModelRun &&
+          params.bootstrapContextRunKind !== "commitment-only"
+        ) {
           const leaseId = `${params.runId}:agent-steering`;
           const leased = leasePendingAgentSteeringItems({
             requesterSessionKey: params.sessionKey,
@@ -5192,7 +5205,7 @@ export async function runEmbeddedAttempt(
             sessionManager: activeSessionManager,
             config: params.config,
             warn: (message) => log.warn(message),
-            isHeartbeat: params.bootstrapContextRunKind === "heartbeat",
+            isHeartbeat: isHeartbeatLifecycleRunKind(params.bootstrapContextRunKind),
           });
         }
 
