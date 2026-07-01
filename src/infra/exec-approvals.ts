@@ -364,6 +364,34 @@ function hasUnmigratedLegacyExecApprovals(filePath: string): boolean {
 }
 
 function createUnmigratedLegacyExecApprovalsFallback(): ExecApprovalsFile {
+  try {
+    const legacyPath = resolveLegacyExecApprovalsPath();
+    if (fs.existsSync(legacyPath)) {
+      const raw = fs.readFileSync(legacyPath, "utf8");
+      const parsed = JSON.parse(raw) as ExecApprovalsFile;
+      const normalized = normalizeExecApprovals(parsed);
+      if (normalized.version === 1) {
+        // Apply the legacy file's settings on top of safe deny defaults.
+        // Use ?? so any explicit undefined from normalization does not
+        // clobber the safe fallback (e.g. askFallback missing in legacy).
+        const nd = normalized.defaults ?? {};
+        return normalizeExecApprovals({
+          version: 1,
+          defaults: {
+            security: nd.security ?? "deny",
+            ask: nd.ask ?? "always",
+            askFallback: nd.askFallback ?? "deny",
+            autoAllowSkills: nd.autoAllowSkills,
+          },
+          agents: normalized.agents,
+          socket: normalized.socket,
+        });
+      }
+    }
+  } catch {
+    // If legacy file can't be read (permissions, invalid JSON, etc.),
+    // fall through to safe deny-all defaults.
+  }
   return normalizeExecApprovals({
     version: 1,
     defaults: {
