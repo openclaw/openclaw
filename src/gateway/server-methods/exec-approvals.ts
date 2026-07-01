@@ -92,6 +92,26 @@ function toExecApprovalsPayload(snapshot: ExecApprovalsSnapshot) {
   };
 }
 
+function describeNodePlatform(platform: string | undefined): string {
+  const trimmed = typeof platform === "string" ? platform.trim() : "";
+  return trimmed || "unknown";
+}
+
+function buildExecApprovalsUnsupportedHint(params: {
+  command: "system.execApprovals.get" | "system.execApprovals.set";
+  nodeId: string;
+  platform?: string;
+}): string {
+  // Mirror node.invoke's "command not declared by node" hint so the CLI/UI
+  // surfaces an actionable capability mismatch instead of a generic transport
+  // failure when the node host does not implement the approvals RPCs.
+  return (
+    `node ${params.nodeId} does not support exec approvals management ` +
+    `(platform: ${describeNodePlatform(params.platform)}); ` +
+    `the node must advertise ${params.command}, or edit the node host approvals file directly`
+  );
+}
+
 async function respondWithExecApprovalsNodePayload<TParams extends { nodeId: string }>(params: {
   method: string;
   rawParams: unknown;
@@ -113,6 +133,30 @@ async function respondWithExecApprovalsNodePayload<TParams extends { nodeId: str
     return;
   }
   await respondUnavailableOnThrow(params.respond, async () => {
+    // Preflight the node's declared command surface so a missing
+    // system.execApprovals.{get,set} capability becomes a structured
+    // INVALID_REQUEST error instead of an opaque downstream failure when the
+    // node returns no payload. node.invoke applies the same guard via
+    // isNodeCommandAllowed; the approvals relay needs to match that contract.
+    const nodeSession = params.context.nodeRegistry.get(nodeId);
+    if (nodeSession) {
+      const declared = Array.isArray(nodeSession.commands) ? nodeSession.commands : [];
+      if (!declared.includes(params.command)) {
+        const hint = buildExecApprovalsUnsupportedHint({
+          command: params.command,
+          nodeId,
+          platform: nodeSession.platform,
+        });
+        params.respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, hint, {
+            details: { reason: "command not declared by node", command: params.command, nodeId },
+          }),
+        );
+        return;
+      }
+    }
     const res = await params.context.nodeRegistry.invoke({
       nodeId,
       command: params.command,
