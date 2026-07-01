@@ -67,40 +67,32 @@ extension AgentProTab {
     }
 
     var agentFilters: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            OpenClawGlassControlGroup {
-                HStack(spacing: 8) {
-                    ForEach(AgentRosterFilter.allCases) { filter in
-                        Button {
-                            withAnimation(.snappy(duration: 0.18)) {
-                                self.agentRosterFilter = filter
-                            }
-                        } label: {
-                            Text(filter.title)
-                                .font(.caption.weight(.semibold))
-                                .padding(.horizontal, 6)
-                                .frame(height: AgentLayout.filterHeight)
-                        }
-                        .buttonBorderShape(.capsule)
-                        .openClawGlassButton(
-                            prominent: self.agentRosterFilter == filter,
-                            tint: self.agentRosterFilter == filter ? OpenClawBrand.accent : nil)
-                    }
-
-                    if self.agentFiltersActive {
-                        self.headerIconButton(
-                            systemName: "xmark",
-                            label: "Clear filters",
-                            action: {
-                                self.agentRosterFilter = .all
-                                self.agentSearchText = ""
-                            })
-                            .frame(width: AgentLayout.filterHeight, height: AgentLayout.filterHeight)
-                    }
+        HStack(spacing: 10) {
+            Picker("Agent status", selection: self.$agentRosterFilter) {
+                ForEach(AgentRosterFilter.allCases) { filter in
+                    Text(filter.title).tag(filter)
                 }
             }
-            .padding(.horizontal, OpenClawProMetric.pagePadding)
+            .pickerStyle(.segmented)
+
+            if self.agentFiltersActive {
+                Button {
+                    withAnimation(.snappy(duration: 0.18)) {
+                        self.agentRosterFilter = .all
+                        self.agentSearchText = ""
+                    }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear filters")
+            }
         }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     var agentFiltersActive: Bool {
@@ -276,19 +268,12 @@ extension AgentProTab {
             Button {
                 self.appModel.setSelectedAgentId(agent.id)
             } label: {
-                Image(systemName: isActive ? "checkmark" : "arrow.right")
+                Image(systemName: isActive ? "checkmark.circle.fill" : "chevron.right")
                     .font(.caption.weight(.bold))
             }
             .buttonStyle(.plain)
-            .foregroundStyle(isActive ? OpenClawBrand.accent : .primary)
-            .frame(width: AgentLayout.actionButtonSize, height: AgentLayout.actionButtonSize)
-            .background {
-                Circle()
-                    .fill(self.iconButtonFill)
-                    .overlay {
-                        Circle().strokeBorder(self.iconButtonStroke, lineWidth: 1)
-                    }
-            }
+            .foregroundStyle(isActive ? OpenClawBrand.accent : .secondary)
+            .frame(width: 24, height: AgentLayout.actionButtonSize)
             .accessibilityLabel(isActive ? "Default agent" : "Set default agent")
         }
         .padding(.vertical, 14)
@@ -325,20 +310,13 @@ extension AgentProTab {
                 .frame(width: 48, height: 48)
                 .background(
                     Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    self.agentTint(for: agent, state: state),
-                                    Color.primary.opacity(0.38),
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing)))
+                        .fill(self.agentTint(for: agent, state: state).gradient))
                 .overlay(Circle().strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
 
             Circle()
                 .fill(state.color)
                 .frame(width: 10, height: 10)
-                .overlay(Circle().strokeBorder(Color.primary.opacity(0.15), lineWidth: 1))
+                .overlay(Circle().strokeBorder(Color(uiColor: .systemBackground), lineWidth: 2))
         }
     }
 

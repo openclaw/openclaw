@@ -128,51 +128,73 @@ extension SettingsProTab {
     }
 
     var settingsListSection: some View {
-        VStack(spacing: 10) {
-            self.settingsListRow(
-                icon: "checkmark.shield.fill",
-                title: "Approvals",
-                detail: self.approvalsDetail,
-                route: .approvals,
-                color: self.pendingApproval == nil ? .secondary : OpenClawBrand.warn,
-                badgeValue: self.pendingApproval == nil ? nil : "1")
-            self.settingsListRow(
-                icon: "person.2",
-                title: "Permissions",
-                detail: self.permissionsDetail,
-                route: .permissions)
-            self.settingsListRow(
-                icon: "point.3.connected.trianglepath.dotted",
-                title: "Channels / Integrations",
-                detail: "Message routing and external channel clients.",
-                route: .channels)
-            self.settingsListRow(
-                icon: "waveform",
-                title: "Voice & Talk",
-                detail: self.voiceDetail,
-                route: .voice)
-            self.settingsListRow(
-                icon: "globe",
-                title: "Diagnostics",
-                detail: self.diagnosticsDetail,
-                route: .diagnostics)
-            self.settingsListRow(
-                icon: "hand.raised",
-                title: "Privacy",
-                detail: self.privacyDetail,
-                route: .privacy)
-            self.settingsListRow(
-                icon: "bell",
-                title: "Notifications",
-                detail: self.notificationStatusText,
-                route: .notifications)
-            self.settingsListRow(
-                icon: "info.circle",
-                title: "About",
-                detail: DeviceInfoHelper.openClawVersionString(),
-                route: .about)
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 8) {
+                ProSectionHeader(title: "OpenClaw", uppercase: false)
+                ProCard(padding: 0, radius: SettingsLayout.cardRadius) {
+                    VStack(spacing: 0) {
+                        self.settingsListRow(
+                            icon: "checkmark.shield.fill",
+                            title: "Approvals",
+                            detail: self.approvalsDetail,
+                            route: .approvals,
+                            color: self.pendingApproval == nil ? .secondary : OpenClawBrand.warn,
+                            badgeValue: self.pendingApproval == nil ? nil : "1")
+                        Divider().padding(.leading, 58)
+                        self.settingsListRow(
+                            icon: "person.2",
+                            title: "Permissions",
+                            detail: self.permissionsDetail,
+                            route: .permissions)
+                        Divider().padding(.leading, 58)
+                        self.settingsListRow(
+                            icon: "point.3.connected.trianglepath.dotted",
+                            title: "Channels / Integrations",
+                            detail: "Message routing and external channel clients.",
+                            route: .channels)
+                        Divider().padding(.leading, 58)
+                        self.settingsListRow(
+                            icon: "waveform",
+                            title: "Voice & Talk",
+                            detail: self.voiceDetail,
+                            route: .voice)
+                    }
+                }
+                .padding(.horizontal, OpenClawProMetric.pagePadding)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                ProSectionHeader(title: "Device", uppercase: false)
+                ProCard(padding: 0, radius: SettingsLayout.cardRadius) {
+                    VStack(spacing: 0) {
+                        self.settingsListRow(
+                            icon: "globe",
+                            title: "Diagnostics",
+                            detail: self.diagnosticsDetail,
+                            route: .diagnostics)
+                        Divider().padding(.leading, 58)
+                        self.settingsListRow(
+                            icon: "hand.raised",
+                            title: "Privacy",
+                            detail: self.privacyDetail,
+                            route: .privacy)
+                        Divider().padding(.leading, 58)
+                        self.settingsListRow(
+                            icon: "bell",
+                            title: "Notifications",
+                            detail: self.notificationStatusText,
+                            route: .notifications)
+                        Divider().padding(.leading, 58)
+                        self.settingsListRow(
+                            icon: "info.circle",
+                            title: "About",
+                            detail: DeviceInfoHelper.openClawVersionString(),
+                            route: .about)
+                    }
+                }
+                .padding(.horizontal, OpenClawProMetric.pagePadding)
+            }
         }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
 
     func settingsListRow(
@@ -202,9 +224,10 @@ extension SettingsProTab {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
-            .padding(12)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
             .frame(maxWidth: .infinity, minHeight: SettingsLayout.rowHeight, alignment: .leading)
-            .proPanelSurface(radius: SettingsLayout.cardRadius)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -612,15 +635,12 @@ extension SettingsProTab {
                     .minimumScaleFactor(0.76)
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 34)
-            .foregroundStyle(color)
-            .background(color.opacity(0.09), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(color.opacity(0.14))
-            }
+            .frame(height: 32)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.roundedRectangle(radius: 8))
+        .tint(color)
+        .controlSize(.small)
         .disabled(isBusy || isDisabled)
     }
 

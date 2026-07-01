@@ -134,29 +134,19 @@ struct TalkProTab: View {
                 .fill(self.state.color)
                 .frame(width: 7, height: 7)
             Text(self.state.chipText)
-                .font(.caption.weight(.bold))
+                .font(.caption.weight(.semibold))
                 .foregroundStyle(self.state.color)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background {
-            Capsule(style: .continuous)
-                .fill(self.state.color.opacity(0.11))
-                .overlay {
-                    Capsule(style: .continuous)
-                        .strokeBorder(self.state.color.opacity(0.22), lineWidth: 1)
-                }
         }
     }
 
     private var voiceHeroCard: some View {
-        CommandPanel(tint: self.state.color, isProminent: true, padding: 16) {
-            VStack(alignment: .center, spacing: 16) {
+        CommandPanel(isProminent: true, padding: 16) {
+            VStack(alignment: .center, spacing: 14) {
                 TalkProOrb(
                     mode: self.state.waveformMode(micLevel: self.appModel.talkMode.micLevel),
                     color: self.state.color,
                     systemImage: self.state.icon)
-                    .frame(height: 188)
+                    .frame(height: 132)
                     .accessibilityHidden(true)
 
                 VStack(spacing: 5) {
@@ -574,7 +564,7 @@ struct TalkProState: Equatable {
             return OpenClawBrand.warn
         default:
             if !self.isConfigLoaded { return OpenClawBrand.warn }
-            return self.isEnabled ? OpenClawBrand.ok : OpenClawBrand.accentHot
+            return self.isEnabled ? OpenClawBrand.ok : .secondary
         }
     }
 
@@ -672,13 +662,13 @@ private struct TalkProOrb: View {
                 }
                 Circle()
                     .fill(self.color.opacity(0.13))
-                    .frame(width: 128, height: 128)
+                    .frame(width: 104, height: 104)
                     .overlay {
                         Circle()
                             .strokeBorder(self.color.opacity(0.30), lineWidth: 1)
                     }
-                TalkProWaveform(mode: self.mode, tint: self.color, barCount: 18)
-                    .frame(width: 116, height: 52)
+                TalkProWaveform(mode: self.mode, tint: self.color, barCount: 12)
+                    .frame(width: 92, height: 44)
                     .opacity(self.showsWaveform ? 1 : 0)
                 Image(systemName: self.systemImage)
                     .font(.system(size: 34, weight: .bold))

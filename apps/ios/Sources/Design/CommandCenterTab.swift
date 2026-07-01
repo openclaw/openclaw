@@ -119,14 +119,13 @@ struct CommandCenterTab: View {
             }
         } accessory: {
             Button(action: self.openSettings) {
-                ProCapsule(
-                    title: self.gatewayStateText,
-                    color: self.gatewayStatusColor,
-                    icon: self.gatewayConnected ? "checkmark.circle.fill" : "wifi.slash")
+                Image(systemName: "gearshape.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(width: OpenClawProMetric.compactControlSize, height: OpenClawProMetric.compactControlSize)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Gateway \(self.gatewayStateText)")
-            .accessibilityHint("Opens Settings / Gateway")
+            .openClawGlassButton()
+            .accessibilityLabel("Gateway settings")
+            .accessibilityHint("Opens gateway settings")
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
     }
@@ -150,17 +149,13 @@ struct CommandCenterTab: View {
     private var gatewayCard: some View {
         CommandPanel(isProminent: true, padding: 12) {
             VStack(alignment: .leading, spacing: 10) {
-                self.cardHeader(
-                    title: "Gateway",
-                    value: self.gatewayStateText,
-                    color: self.gatewayStatusColor,
-                    icon: self.gatewayConnected ? "checkmark.circle.fill" : "wifi.slash")
+                self.cardHeader(title: "Gateway")
 
                 HStack(spacing: 0) {
                     self.gatewayFact(
                         icon: "network",
                         title: "Connection",
-                        value: self.gatewayConnected ? "Online" : "Offline",
+                        value: self.gatewayConnectionText,
                         color: self.gatewayStatusColor)
                     Divider().frame(height: 38)
                     self.gatewayFact(
@@ -175,17 +170,7 @@ struct CommandCenterTab: View {
                         value: self.gatewayAgentCountText,
                         color: OpenClawBrand.accentHot)
                 }
-                .padding(.vertical, 9)
-                .background {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(self.colorScheme == .dark ? Color.black.opacity(0.16) : Color.black.opacity(0.026))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                                .strokeBorder(
-                                    Color.primary.opacity(self.colorScheme == .dark ? 0.08 : 0.045),
-                                    lineWidth: 1)
-                        }
-                }
+                .padding(.vertical, 7)
             }
         }
         .padding(.horizontal, OpenClawProMetric.pagePadding)
@@ -215,10 +200,7 @@ struct CommandCenterTab: View {
     private var defaultChatSessionSection: some View {
         CommandPanel(padding: 12) {
             VStack(spacing: 10) {
-                self.cardHeader(
-                    title: "Agent session",
-                    value: nil,
-                    color: OpenClawBrand.accent)
+                self.cardHeader(title: "Agent session")
 
                 Button {
                     self.open(.chat(nil))
@@ -233,10 +215,7 @@ struct CommandCenterTab: View {
     private var recentSessions: some View {
         CommandPanel(padding: 12) {
             VStack(spacing: 10) {
-                self.cardHeader(
-                    title: "Recent sessions",
-                    value: nil,
-                    color: .secondary)
+                self.cardHeader(title: "Recent sessions")
 
                 if self.recentSessionPreviewRows.isEmpty {
                     CommandEmptyStateRow(
@@ -276,64 +255,47 @@ struct CommandCenterTab: View {
         }
     }
 
-    private func cardHeader(
-        title: String,
-        value: String?,
-        color: Color,
-        icon: String? = nil,
-        badgeValue: String? = nil,
-        action: (() -> Void)? = nil) -> some View
-    {
+    private func cardHeader(title: String) -> some View {
         HStack(spacing: 8) {
             Text(title)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
-            if let badgeValue {
-                Text(badgeValue)
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(OpenClawBrand.accentHot, in: Capsule())
-            }
             Spacer(minLength: 8)
-            if let value {
-                if let action {
-                    Button(value, action: action)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(color)
-                } else {
-                    HStack(spacing: 4) {
-                        if let icon {
-                            Image(systemName: icon)
-                                .font(.caption2.weight(.bold))
-                        }
-                        Text(value)
-                    }
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(color)
-                }
-            }
         }
     }
 
     private var gatewayConnected: Bool {
-        GatewayStatusBuilder.build(appModel: self.appModel) == .connected
+        self.gatewayDisplayState == .connected
     }
 
-    private var gatewayStateText: String {
-        guard !self.gatewayConnected else { return "Healthy" }
-        let status = self.appModel.gatewayDisplayStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let lowercased = status.lowercased()
-        if lowercased.contains("approval") { return "Approval" }
-        if lowercased.contains("reconnect") { return "Reconnecting" }
-        if lowercased.contains("connect") { return "Connecting" }
-        if lowercased.contains("idle") { return "Idle" }
-        return "Offline"
+    private var gatewayDisplayState: GatewayDisplayState {
+        GatewayStatusBuilder.build(appModel: self.appModel)
+    }
+
+    private var gatewayConnectionText: String {
+        switch self.gatewayDisplayState {
+        case .connected:
+            "Online"
+        case .connecting:
+            "Connecting"
+        case .error:
+            "Attention"
+        case .disconnected:
+            "Offline"
+        }
     }
 
     private var gatewayStatusColor: Color {
-        self.gatewayConnected ? OpenClawBrand.ok : .secondary
+        switch self.gatewayDisplayState {
+        case .connected:
+            OpenClawBrand.ok
+        case .connecting:
+            OpenClawBrand.accent
+        case .error:
+            OpenClawBrand.warn
+        case .disconnected:
+            .secondary
+        }
     }
 
     private var gatewayAddressText: String {

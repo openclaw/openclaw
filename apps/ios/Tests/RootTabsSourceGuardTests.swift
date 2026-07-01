@@ -205,6 +205,48 @@ struct RootTabsSourceGuardTests {
         #expect(!cardSurface.contains("glassEffect"))
     }
 
+    @Test func `professional layout avoids nested pills and card stacks`() throws {
+        let componentsSource = try String(contentsOf: Self.proComponentsSourceURL(), encoding: .utf8)
+        let agentSource = try String(contentsOf: Self.agentProTabOverviewSourceURL(), encoding: .utf8)
+        let settingsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
+        let overviewSource = try String(contentsOf: Self.commandCenterSourceURL(), encoding: .utf8)
+        let overviewRowsSource = try String(contentsOf: Self.commandCenterSupportSourceURL(), encoding: .utf8)
+        let gatewayStatus = try Self.extract(
+            componentsSource,
+            from: "struct OpenClawGatewayCompactPill: View",
+            to: "struct ProMetricTile: View")
+        let agentFilters = try Self.extract(
+            agentSource,
+            from: "var agentFilters: some View",
+            to: "var agentFiltersActive: Bool")
+        let settingsList = try Self.extract(
+            settingsSource,
+            from: "var settingsListSection: some View",
+            to: "func settingsListRow(")
+        let settingsRow = try Self.extract(
+            settingsSource,
+            from: "func settingsListRow(",
+            to: "func destination(for route:")
+
+        #expect(gatewayStatus.contains("HStack(spacing: 6)"))
+        #expect(!gatewayStatus.contains("ProCapsule("))
+        #expect(!gatewayStatus.contains("Capsule()"))
+        #expect(agentFilters.contains("Picker(\"Agent status\""))
+        #expect(agentFilters.contains(".pickerStyle(.segmented)"))
+        #expect(!agentFilters.contains(".openClawGlassButton("))
+        #expect(settingsList.contains("ProSectionHeader(title: \"OpenClaw\""))
+        #expect(settingsList.contains("ProSectionHeader(title: \"Device\""))
+        #expect(settingsList.matches(of: /ProCard\(padding: 0/).count == 2)
+        #expect(settingsRow.contains(".contentShape(Rectangle())"))
+        #expect(!overviewSource.contains("ProCapsule("))
+        #expect(overviewSource.contains("value: self.gatewayConnectionText"))
+        #expect(overviewSource.contains("switch self.gatewayDisplayState"))
+        #expect(overviewSource.contains("case .connecting:"))
+        #expect(overviewSource.contains("case .error:"))
+        #expect(!overviewRowsSource.contains("private var rowFill"))
+        #expect(overviewRowsSource.matches(of: /.contentShape\(Rectangle\(\)\)/).count >= 2)
+    }
+
     @Test func `routed headers use shared adaptive layout`() throws {
         let componentsSource = try String(contentsOf: Self.proComponentsSourceURL(), encoding: .utf8)
         let featureChromeSource = try String(contentsOf: Self.iPadSidebarScreenChromeSourceURL(), encoding: .utf8)
@@ -278,7 +320,10 @@ struct RootTabsSourceGuardTests {
     @Test func `phone hub header stays task first`() throws {
         let source = try String(contentsOf: Self.phoneHubSourceURL(), encoding: .utf8)
 
-        #expect(source.contains("private var gatewayActionRow: some View"))
+        #expect(source.contains("private var headerCard: some View"))
+        #expect(source.contains(".accessibilityLabel(\"Gateway \\(self.gatewayStateText)\")"))
+        #expect(!source.contains("private var gatewayActionRow: some View"))
+        #expect(!source.contains("ProValuePill(value: self.gatewayStateText"))
         #expect(source.contains("self.openPhoneRootDestination(.gateway)"))
         #expect(source.contains("private var phoneDetailBackAction: OpenClawSidebarHeaderAction"))
         #expect(source.contains("accessibilityLabel: \"Back to Control\""))
@@ -535,6 +580,8 @@ struct RootTabsSourceGuardTests {
         #expect(chromeSource.contains("let gatewayAction: (() -> Void)?"))
         #expect(chromeSource.contains("private var gatewayPill: some View"))
         #expect(chromeSource.contains("Button(action: gatewayAction)"))
+        #expect(chromeSource.contains(".buttonBorderShape(.capsule)"))
+        #expect(chromeSource.contains(".openClawGlassButton()"))
         #expect(chromeSource.contains(".accessibilityHint(\"Opens Settings / Gateway\")"))
         #expect(featureSource.matches(of: /gatewayAction: self\.openSettings/).count == 2)
         #expect(rootSource.contains("IPadActivityScreen("))
@@ -562,7 +609,7 @@ struct RootTabsSourceGuardTests {
         #expect(!rootSource.contains("showGatewayActions"))
         #expect(!rootSource.contains("gatewayActionsDialog"))
         #expect(overviewSource.contains("Button(action: self.openSettings)"))
-        #expect(overviewSource.contains(".accessibilityHint(\"Opens Settings / Gateway\")"))
+        #expect(overviewSource.contains(".accessibilityHint(\"Opens gateway settings\")"))
         #expect(agentSource.contains("let openSettings: (() -> Void)?"))
         #expect(agentOverviewSource.contains("OpenClawGatewayCompactPill()"))
         #expect(agentOverviewSource.contains("Button(action: openSettings)"))
@@ -571,7 +618,11 @@ struct RootTabsSourceGuardTests {
             .count >= 3)
         #expect(chatSource.contains("let openSettings: (() -> Void)?"))
         #expect(chatSource.contains("private var connectionPillButton: some View"))
+        #expect(chatSource.contains(".buttonBorderShape(.capsule)"))
+        #expect(chatSource.contains(".openClawGlassButton()"))
         #expect(docsSource.contains("let gatewayAction: (() -> Void)?"))
+        #expect(docsSource.contains(".buttonBorderShape(.capsule)"))
+        #expect(docsSource.contains(".openClawGlassButton()"))
         #expect(settingsSource.contains("NavigationLink(value: SettingsRoute.gateway)"))
         #expect(rootSource.contains("case .settings:"))
         #expect(rootSource
@@ -770,6 +821,13 @@ struct RootTabsSourceGuardTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/Design/CommandCenterTab.swift")
+    }
+
+    private static func commandCenterSupportSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Design/CommandCenterSupport.swift")
     }
 
     private static func agentProTabSourceURL() -> URL {

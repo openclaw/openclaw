@@ -135,16 +135,9 @@ struct ChatProTab: View {
                 .frame(width: 38, height: 38)
                 .background(
                     Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    OpenClawBrand.accent,
-                                    OpenClawBrand.accentHot,
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing)))
+                        .fill(OpenClawBrand.accent.gradient))
                 .overlay(Circle().strokeBorder(.white.opacity(0.18), lineWidth: 1))
-                .shadow(color: OpenClawBrand.accent.opacity(0.18), radius: 10, y: 5)
+                .shadow(color: OpenClawBrand.accent.opacity(0.14), radius: 5, y: 2)
         } else {
             ProIconBadge(systemName: "bubble.left", color: OpenClawBrand.accent)
         }
@@ -208,7 +201,8 @@ struct ChatProTab: View {
             Button(action: openSettings) {
                 self.connectionPill
             }
-            .buttonStyle(.plain)
+            .buttonBorderShape(.capsule)
+            .openClawGlassButton()
             .accessibilityHint("Opens Settings / Gateway")
         } else {
             self.connectionPill
@@ -223,16 +217,8 @@ struct ChatProTab: View {
                 .lineLimit(1)
         }
         .foregroundStyle(self.gatewayPillColor)
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 4)
         .frame(height: 30)
-        .background {
-            Capsule()
-                .fill(self.gatewayPillColor.opacity(0.11))
-        }
-        .overlay {
-            Capsule()
-                .strokeBorder(self.gatewayPillColor.opacity(0.16), lineWidth: 1)
-        }
     }
 
     private var gatewayConnected: Bool {

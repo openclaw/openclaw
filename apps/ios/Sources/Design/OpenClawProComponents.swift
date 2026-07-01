@@ -1,10 +1,10 @@
 import SwiftUI
 
 enum OpenClawProMetric {
-    static let pagePadding: CGFloat = 18
-    static let cardRadius: CGFloat = 20
-    static let controlRadius: CGFloat = 14
-    static let compactControlSize: CGFloat = 38
+    static let pagePadding: CGFloat = 16
+    static let cardRadius: CGFloat = 16
+    static let controlRadius: CGFloat = 12
+    static let compactControlSize: CGFloat = 36
     static let bottomScrollInset: CGFloat = 96
 }
 
@@ -84,9 +84,9 @@ private struct ProPanelBackground: View {
 
     private var borderStyle: AnyShapeStyle {
         if let tint {
-            return AnyShapeStyle(tint.opacity(self.isProminent ? 0.24 : 0.15))
+            return AnyShapeStyle(tint.opacity(self.isProminent ? 0.18 : 0.10))
         }
-        return AnyShapeStyle(Color(uiColor: .separator).opacity(self.colorScheme == .dark ? 0.28 : 0.22))
+        return AnyShapeStyle(Color(uiColor: .separator).opacity(self.colorScheme == .dark ? 0.22 : 0.12))
     }
 }
 
@@ -204,9 +204,11 @@ private struct ProPanelSurfaceModifier: ViewModifier {
                     isProminent: self.isProminent)
             }
             .shadow(
-                color: self.colorScheme == .dark ? .black.opacity(0.16) : .black.opacity(0.035),
-                radius: self.isProminent ? 6 : 2,
-                y: self.isProminent ? 3 : 1)
+                color: self.isProminent
+                    ? (self.colorScheme == .dark ? .black.opacity(0.14) : .black.opacity(0.045))
+                    : .clear,
+                radius: self.isProminent ? 5 : 0,
+                y: self.isProminent ? 2 : 0)
     }
 }
 
@@ -559,11 +561,18 @@ struct OpenClawGatewayCompactPill: View {
     @Environment(NodeAppModel.self) private var appModel
 
     var body: some View {
-        ProCapsule(
-            title: self.title,
-            color: self.color,
-            icon: self.icon)
-            .accessibilityLabel("Gateway \(self.title)")
+        HStack(spacing: 6) {
+            Image(systemName: self.icon)
+                .font(.caption.weight(.semibold))
+            Text(self.title)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+        }
+        .foregroundStyle(self.color)
+        .padding(.horizontal, 4)
+        .frame(minHeight: 30)
+        .fixedSize(horizontal: true, vertical: false)
+        .accessibilityLabel("Gateway \(self.title)")
     }
 
     private var title: String {
