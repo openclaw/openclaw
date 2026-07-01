@@ -171,4 +171,25 @@ describe("renderAgents", () => {
 
     expect(skillsTab?.textContent?.trim()).toContain("1");
   });
+
+  it("renders agent actions inside the selected agent overview instead of the toolbar", async () => {
+    const container = document.createElement("div");
+    render(renderAgents(createProps()), container);
+    await Promise.resolve();
+
+    expect(container.querySelector(".agent-actions-toggle")).toBeNull();
+    expect(container.querySelector(".agents-control-actions")?.textContent?.trim()).toBe("Refresh");
+
+    const overview = container.querySelector(".agents-main");
+    const defaultButtons = Array.from(
+      overview?.querySelectorAll<HTMLButtonElement>("button") ?? [],
+    ).filter((button) => button.textContent?.trim() === "Set as default");
+    const copyButtons = Array.from(
+      overview?.querySelectorAll<HTMLButtonElement>("button") ?? [],
+    ).filter((button) => button.textContent?.trim() === "Copy agent ID");
+
+    expect(defaultButtons).toHaveLength(1);
+    expect(copyButtons).toHaveLength(1);
+    expect(defaultButtons[0]?.disabled).toBe(false);
+  });
 });

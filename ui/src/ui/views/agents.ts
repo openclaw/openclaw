@@ -160,43 +160,6 @@ export function renderAgents(props: AgentsProps) {
               </select>
             </div>
             <div class="agents-control-actions">
-              ${
-                selectedAgent
-                  ? html`
-                      <div class="agent-actions-wrap">
-                        <button
-                          class="agent-actions-toggle"
-                          type="button"
-                          @click=${() => {
-                            actionsMenuOpen = !actionsMenuOpen;
-                          }}
-                        >⋯</button>
-                        ${
-                          actionsMenuOpen
-                            ? html`
-                                <div class="agent-actions-menu">
-                                  <button type="button" @click=${() => {
-                                    void navigator.clipboard.writeText(selectedAgent.id);
-                                    actionsMenuOpen = false;
-                                  }}>Copy agent ID</button>
-                                  <button
-                                    type="button"
-                                    ?disabled=${Boolean(defaultId && selectedAgent.id === defaultId)}
-                                    @click=${() => {
-                                      props.onSetDefault(selectedAgent.id);
-                                      actionsMenuOpen = false;
-                                    }}
-                                  >
-                                    ${defaultId && selectedAgent.id === defaultId ? "Already default" : "Set as default"}
-                                  </button>
-                                </div>
-                              `
-                            : nothing
-                        }
-                      </div>
-                    `
-                  : nothing
-              }
               <button class="btn btn--sm agents-refresh-btn" ?disabled=${props.loading} @click=${props.onRefresh}>
                 ${props.loading ? "Loading…" : "Refresh"}
               </button>
@@ -239,6 +202,7 @@ export function renderAgents(props: AgentsProps) {
                         onModelChange: props.onModelChange,
                         onModelFallbacksChange: props.onModelFallbacksChange,
                         onSelectPanel: props.onSelectPanel,
+                        onSetDefault: props.onSetDefault,
                       })
                     : nothing
                 }
@@ -347,8 +311,6 @@ export function renderAgents(props: AgentsProps) {
     </div>
   `;
 }
-
-let actionsMenuOpen = false;
 
 function renderAgentTabs(
   active: AgentsPanel,

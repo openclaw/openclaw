@@ -28,6 +28,7 @@ export function renderAgentOverview(params: {
   onModelChange: (agentId: string, modelId: string | null) => void;
   onModelFallbacksChange: (agentId: string, fallbacks: string[]) => void;
   onSelectPanel: (panel: AgentsPanel) => void;
+  onSetDefault: (agentId: string) => void;
 }) {
   const {
     agent,
@@ -41,6 +42,7 @@ export function renderAgentOverview(params: {
     onModelChange,
     onModelFallbacksChange,
     onSelectPanel,
+    onSetDefault,
   } = params;
   const config = resolveAgentConfig(configForm, agent.id);
   const workspaceFromFiles =
@@ -105,6 +107,28 @@ export function renderAgentOverview(params: {
           <div class="label">Skills Filter</div>
           <div>${skillFilter ? `${skillCount} selected` : "all skills"}</div>
         </div>
+      </div>
+
+      <div class="agent-detail-actions" style="margin-top: 16px;">
+        <button
+          type="button"
+          class="btn btn--sm"
+          @click=${() => {
+            if (navigator.clipboard) {
+              void navigator.clipboard.writeText(agent.id);
+            }
+          }}
+        >
+          Copy agent ID
+        </button>
+        <button
+          type="button"
+          class="btn btn--sm"
+          ?disabled=${isDefault}
+          @click=${() => onSetDefault(agent.id)}
+        >
+          ${isDefault ? "Already default" : "Set as default"}
+        </button>
       </div>
 
       ${
