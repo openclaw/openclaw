@@ -30,7 +30,7 @@ extension SettingsProTab {
                         }
                     }
                     .pickerStyle(.segmented)
-                    Text("Follows iOS appearance.")
+                    Text(self.appearancePreference.detail)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
