@@ -610,6 +610,15 @@ describe("markdownToTelegramHtml", () => {
   });
 });
 
+it("strips model-generated parameter XML wrappers from rich HTML (regression for #98557)", () => {
+  const input = '<details><summary>Test</summary><parameter name="x">content</parameter></details>';
+  const result = sanitizeTelegramRichHtml(input);
+  expect(result).not.toContain("parameter");
+  expect(result).toContain("content");
+  expect(result).toContain("<details>");
+  expect(result).toContain("<summary>");
+});
+
 function containsLoneSurrogate(text: string): boolean {
   for (let index = 0; index < text.length; index += 1) {
     const code = text.charCodeAt(index);

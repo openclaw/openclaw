@@ -429,6 +429,9 @@ function escapeUnsupportedTelegramHtml(
   text: string,
   support: TelegramHtmlTagSupport = TELEGRAM_LEGACY_HTML_TAG_SUPPORT,
 ): string {
+  // Strip model-generated tool-call XML wrappers before any tag processing
+  // so they do not appear as escaped text in either rich or legacy output.
+  text = stripModelParameterWrappers(text);
   let result = "";
   let index = 0;
   const openTags: string[] = [];
@@ -728,6 +731,15 @@ export function renderTelegramHtmlText(
   }
   // markdownToTelegramHtml already wraps file references by default
   return markdownToTelegramHtml(text, { tableMode: options.tableMode });
+}
+
+// Model-generated tool-call XML wrappers leak into rich HTML output as
+// escaped &lt;parameter&gt;...&lt;/parameter&gt; text.  Strip the wrapper tags
+// while preserving inner content so only the payload text is visible.
+const MODEL_PARAMETER_WRAPPER_RE = /<\/?parameter\b[^>]*>/gi;
+
+function stripModelParameterWrappers(html: string): string {
+  return html.replace(MODEL_PARAMETER_WRAPPER_RE, "");
 }
 
 export function sanitizeTelegramRichHtml(html: string): string {
