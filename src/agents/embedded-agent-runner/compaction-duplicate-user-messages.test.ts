@@ -78,4 +78,38 @@ describe("compaction duplicate user message pruning", () => {
 
     expect(duplicateIds).toEqual(new Set(["entry-2"]));
   });
+
+  it("keeps same text from different senders inside the duplicate window (#98310)", () => {
+    const alice = {
+      role: "user",
+      content: "please run the deployment status check for production",
+      timestamp: 1_000,
+      senderId: "alice",
+    } as const;
+    const bob = {
+      role: "user",
+      content: "please run the deployment status check for production",
+      timestamp: 2_000,
+      senderId: "bob",
+    } as const;
+
+    expect(dedupeDuplicateUserMessagesForCompaction([alice, bob])).toEqual([alice, bob]);
+  });
+
+  it("still dedupes same sender inside the duplicate window", () => {
+    const first = {
+      role: "user",
+      content: "please run the deployment status check for production",
+      timestamp: 1_000,
+      senderId: "alice",
+    } as const;
+    const retry = {
+      role: "user",
+      content: "please run the deployment status check for production",
+      timestamp: 2_000,
+      senderId: "alice",
+    } as const;
+
+    expect(dedupeDuplicateUserMessagesForCompaction([first, retry])).toEqual([first]);
+  });
 });

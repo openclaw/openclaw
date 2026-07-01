@@ -10,6 +10,7 @@ type MessageLike = {
   role?: unknown;
   content?: unknown;
   timestamp?: unknown;
+  senderId?: unknown;
 };
 
 type EntryLike = {
@@ -52,8 +53,11 @@ function duplicateSignature(message: unknown): { key: string; timestamp: number 
   if (!text || text.length < MIN_DUPLICATE_USER_MESSAGE_CHARS) {
     return undefined;
   }
+  // Include sender identity in the dedup key so two different users who
+  // happen to send the same message within the window are both kept (#98310).
+  const senderId = typeof message.senderId === "string" ? message.senderId : "";
   return {
-    key: text.normalize("NFC").toLowerCase(),
+    key: `${senderId}|${text.normalize("NFC").toLowerCase()}`,
     timestamp: message.timestamp,
   };
 }
