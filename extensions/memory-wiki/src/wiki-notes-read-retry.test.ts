@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { applyMemoryWikiMutation } from "./apply.js";
+import { importChatGptConversations } from "./chatgpt-import.js";
 import { ingestMemoryWikiSource } from "./ingest.js";
 import { renderMarkdownFence, renderWikiMarkdown } from "./markdown.js";
 import { writeImportedSourcePage } from "./source-page-shared.js";
@@ -173,5 +175,124 @@ describe("memory-wiki existing-page read retry", () => {
     } finally {
       await fs.rm(suiteRoot, { recursive: true, force: true });
     }
+  });
+
+  it("preserves synthesis notes and frontmatter after a transient existing-page read failure", async () => {
+    const { rootDir, config } = await createVault({ prefix: "memory-wiki-apply-read-retry-" });
+
+    await applyMemoryWikiMutation({
+      config,
+      mutation: {
+        op: "create_synthesis",
+        title: "Release Plan",
+        body: "Initial summary v1.",
+        sourceIds: ["source.alpha"],
+      },
+    });
+
+    const pagePath = path.join(rootDir, "syntheses", "release-plan.md");
+    const userNote = "Ship gate: legal sign-off required before GA.";
+    let edited = (await fs.readFile(pagePath, "utf8")).replace(
+      "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
+      `<!-- openclaw:human:start -->\n${userNote}\n<!-- openclaw:human:end -->`,
+    );
+    edited = edited.replace(/^---\n/, "---\nprivacyTier: sensitive\n");
+    await fs.writeFile(pagePath, edited, "utf8");
+
+    securityRuntimeMock.failReadTextOnceFor = "syntheses/release-plan.md";
+
+    await applyMemoryWikiMutation({
+      config,
+      mutation: {
+        op: "create_synthesis",
+        title: "Release Plan",
+        body: "Updated summary v2.",
+        sourceIds: ["source.alpha"],
+      },
+    });
+
+    const after = await fs.readFile(pagePath, "utf8");
+    expect(securityRuntimeMock.readTextFailureInjected).toBe(true);
+    expect(after).toContain("Updated summary v2.");
+    expect(after).toContain(userNote);
+    expect(after).toContain("privacyTier: sensitive");
+  });
+
+  it("preserves chatgpt conversation notes after a transient existing-page read failure", async () => {
+    const { rootDir, config } = await createVault({ prefix: "memory-wiki-chatgpt-read-retry-" });
+    const exportDir = path.join(rootDir, "chatgpt-export");
+    await fs.mkdir(exportDir, { recursive: true });
+    const conversations = [
+      {
+        conversation_id: "12345678-1234-1234-1234-1234567890ab",
+        title: "Travel preference check",
+        create_time: 1_712_363_200,
+        update_time: 1_712_366_800,
+        current_node: "assistant-1",
+        mapping: {
+          root: {},
+          "user-1": {
+            parent: "root",
+            message: {
+              author: { role: "user" },
+              content: { parts: ["I prefer aisle seats."] },
+            },
+          },
+          "assistant-1": {
+            parent: "user-1",
+            message: {
+              author: { role: "assistant" },
+              content: { parts: ["Noted."] },
+            },
+          },
+        },
+      },
+    ];
+    await fs.writeFile(
+      path.join(exportDir, "conversations.json"),
+      `${JSON.stringify(conversations, null, 2)}\n`,
+      "utf8",
+    );
+
+    await importChatGptConversations({
+      config,
+      exportPath: exportDir,
+      nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
+    });
+
+    const sourceFiles = (await fs.readdir(path.join(rootDir, "sources"))).filter(
+      (entry) => entry !== "index.md",
+    );
+    expect(sourceFiles).toHaveLength(1);
+    const pagePath = path.join(rootDir, "sources", sourceFiles[0]);
+    const userNote = "HUMAN NOTE: verified against the airline booking.";
+    const edited = (await fs.readFile(pagePath, "utf8")).replace(
+      "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
+      `<!-- openclaw:human:start -->\n${userNote}\n<!-- openclaw:human:end -->`,
+    );
+    await fs.writeFile(pagePath, edited, "utf8");
+
+    const originalReadFile = fs.readFile.bind(fs);
+    let injectedFailure = false;
+    vi.spyOn(fs, "readFile").mockImplementation(
+      async (...args: Parameters<typeof fs.readFile>): ReturnType<typeof fs.readFile> => {
+        if (!injectedFailure && args[0] === pagePath && args[1] === "utf8") {
+          injectedFailure = true;
+          throw new Error("transient existing-page read failure");
+        }
+        return originalReadFile(...args);
+      },
+    );
+
+    const second = await importChatGptConversations({
+      config,
+      exportPath: exportDir,
+      nowMs: Date.UTC(2026, 3, 6, 12, 0, 0),
+    });
+
+    const after = await originalReadFile(pagePath, "utf8");
+    expect(injectedFailure).toBe(true);
+    expect(second.createdCount).toBe(0);
+    expect(after).toContain(userNote);
   });
 });
