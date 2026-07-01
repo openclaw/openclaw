@@ -2,7 +2,7 @@
 import { extractCanvasFromText } from "../../../../src/chat/canvas-render.js";
 import type { ToolCard } from "./chat-types.ts";
 import { extractTextCached } from "./message-extract.ts";
-import { isToolResultMessage } from "./role-normalizer.ts";
+import { isToolResultMessage } from "./message-normalizer.ts";
 
 export type ToolPreview = NonNullable<ToolCard["preview"]>;
 

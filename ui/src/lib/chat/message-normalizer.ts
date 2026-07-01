@@ -13,7 +13,34 @@ import {
 import { splitMediaFromOutput } from "../../../../src/media/parse.js";
 import { parseInlineDirectives } from "../../../../src/utils/directive-tags.js";
 import type { NormalizedMessage, MessageContentItem } from "./chat-types.ts";
-export { isToolResultMessage, normalizeRoleForGrouping } from "./role-normalizer.ts";
+
+export function normalizeRoleForGrouping(role: string): string {
+  const lower = role.toLowerCase();
+  if (lower === "user") {
+    return "user";
+  }
+  if (lower === "assistant") {
+    return "assistant";
+  }
+  if (lower === "system") {
+    return "system";
+  }
+  if (
+    lower === "toolresult" ||
+    lower === "tool_result" ||
+    lower === "tool" ||
+    lower === "function"
+  ) {
+    return "tool";
+  }
+  return role;
+}
+
+export function isToolResultMessage(message: unknown): boolean {
+  const m = message as Record<string, unknown>;
+  const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
+  return role === "toolresult" || role === "tool_result";
+}
 
 function isTextContentBlock(
   item: Record<string, unknown>,

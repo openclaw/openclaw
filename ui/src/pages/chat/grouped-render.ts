@@ -26,7 +26,7 @@ import { renderCopyAsMarkdownButton } from "../../components/copy-button.ts";
 import "../../components/tooltip.ts";
 import { extractThinkingCached, formatReasoningMarkdown } from "../../lib/chat/message-extract.ts";
 import { isToolResultMessage, normalizeMessage } from "../../lib/chat/message-normalizer.ts";
-import { normalizeRoleForGrouping } from "../../lib/chat/role-normalizer.ts";
+import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { formatCompactTokenCount } from "../../lib/chat/token-format.ts";
 import {
   extractToolCardsCached,

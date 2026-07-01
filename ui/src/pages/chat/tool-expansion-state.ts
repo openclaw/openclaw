@@ -1,6 +1,9 @@
 // Control UI chat module implements tool expansion state behavior.
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
-import { isToolResultMessage, normalizeRoleForGrouping } from "../../lib/chat/role-normalizer.ts";
+import {
+  isToolResultMessage,
+  normalizeRoleForGrouping,
+} from "../../lib/chat/message-normalizer.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { getOrCreateSessionCacheValue } from "./session-cache.ts";
 

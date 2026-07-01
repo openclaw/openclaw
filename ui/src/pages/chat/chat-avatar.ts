@@ -10,7 +10,7 @@ import {
 } from "../../app/user-identity.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
-import { normalizeRoleForGrouping } from "../../lib/chat/role-normalizer.ts";
+import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import {
   DEFAULT_AGENT_ID,
   isUiGlobalSessionKey,
