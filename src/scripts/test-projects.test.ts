@@ -859,6 +859,7 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.unit-fast.config.ts",
         forwardedArgs: [],
         includePatterns: [
+          "src/crestodian/operations.test.ts",
           "src/install-sh-version.test.ts",
           "src/proxy-capture/store.sqlite.test.ts",
           "test/scripts/android-version.test.ts",
@@ -870,6 +871,17 @@ describe("test-projects args", () => {
         config: "test/vitest/vitest.unit-fast-fake-timers.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/entry.compile-cache.test.ts"],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.unit.config.ts",
+        forwardedArgs: [
+          "src/state/openclaw-agent-db.test.ts",
+          "src/state/openclaw-state-db.test.ts",
+          "src/state/sqlite-query-plan.test.ts",
+          "src/transcripts/store.test.ts",
+        ],
+        includePatterns: null,
         watchMode: false,
       },
       {
@@ -899,6 +911,7 @@ describe("test-projects args", () => {
           "test/scripts/ios-team-id.test.ts",
           "test/scripts/ios-version.test.ts",
           "test/scripts/kitchen-sink-rpc-walk.test.ts",
+          "test/scripts/native-app-i18n.test.ts",
           "test/scripts/onboard-config-fixtures.test.ts",
           "test/scripts/parallels-lib-helpers.test.ts",
           "test/scripts/parallels-smoke-model.test.ts",
@@ -917,9 +930,29 @@ describe("test-projects args", () => {
         watchMode: false,
       },
       {
+        config: "test/vitest/vitest.gateway.config.ts",
+        forwardedArgs: [],
+        includePatterns: [
+          "src/gateway/hooks-mapping.test.ts",
+          "src/gateway/server-methods/chat.abort-persistence.test.ts",
+          "src/gateway/server.agent.gateway-server-agent-b.test.ts",
+          "src/gateway/server.sessions.permissions-hooks.test.ts",
+        ],
+        watchMode: false,
+      },
+      {
         config: "test/vitest/vitest.runtime-config.config.ts",
         forwardedArgs: [],
         includePatterns: ["src/config/sessions/entry-freshness.test.ts"],
+        watchMode: false,
+      },
+      {
+        config: "test/vitest/vitest.cron.config.ts",
+        forwardedArgs: [],
+        includePatterns: [
+          "src/cron/isolated-agent/run-session-state.test.ts",
+          "src/cron/run-log.error-reason.test.ts",
+        ],
         watchMode: false,
       },
       {

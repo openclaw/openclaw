@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import type { SessionCompactionCheckpoint } from "../config/sessions.js";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   embeddedRunMock,
@@ -793,75 +794,76 @@ test("sessions.compact maxLines aborts without truncating when an active run can
 });
 
 test("sessions.patch preserves nested model ids under provider overrides", async () => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-sessions-nested-"));
-  const storePath = path.join(dir, "sessions.json");
-  await fs.writeFile(
-    storePath,
-    JSON.stringify({
-      "agent:main:main": sessionStoreEntry("sess-main"),
-    }),
-    "utf-8",
-  );
+  await withTempDir({ prefix: "openclaw-gw-sessions-nested-" }, async (dir) => {
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        "agent:main:main": sessionStoreEntry("sess-main"),
+      }),
+      "utf-8",
+    );
 
-  await withEnvAsync({ OPENCLAW_CONFIG_PATH: undefined }, async () => {
-    const { clearConfigCache, clearRuntimeConfigSnapshot } = await getGatewayConfigModule();
-    clearConfigCache();
-    clearRuntimeConfigSnapshot();
-    const cfg = {
-      session: { store: storePath, mainKey: "main" },
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-test-a" },
+    await withEnvAsync({ OPENCLAW_CONFIG_PATH: undefined }, async () => {
+      const { clearConfigCache, clearRuntimeConfigSnapshot } = await getGatewayConfigModule();
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+      const cfg = {
+        session: { store: storePath, mainKey: "main" },
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-test-a" },
+          },
+          list: [{ id: "main", default: true, workspace: dir }],
         },
-        list: [{ id: "main", default: true, workspace: dir }],
-      },
-    };
-    const configPath = path.join(dir, "openclaw.json");
-    await fs.writeFile(configPath, JSON.stringify(cfg, null, 2), "utf-8");
+      };
+      const configPath = path.join(dir, "openclaw.json");
+      await fs.writeFile(configPath, JSON.stringify(cfg, null, 2), "utf-8");
 
-    await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
-      const started = await startConnectedServerWithClient();
-      const { server, ws } = started;
-      try {
-        agentDiscoveryMock.enabled = true;
-        agentDiscoveryMock.models = [
-          { id: "moonshotai/kimi-k2.5", name: "Kimi K2.5 (NVIDIA)", provider: "nvidia" },
-        ];
+      await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
+        const started = await startConnectedServerWithClient();
+        const { server, ws } = started;
+        try {
+          agentDiscoveryMock.enabled = true;
+          agentDiscoveryMock.models = [
+            { id: "moonshotai/kimi-k2.5", name: "Kimi K2.5 (NVIDIA)", provider: "nvidia" },
+          ];
 
-        const patched = await rpcReq<{
-          ok: true;
-          entry: {
-            modelOverride?: string;
-            providerOverride?: string;
-            model?: string;
-            modelProvider?: string;
-          };
-          resolved?: { model?: string; modelProvider?: string };
-        }>(ws, "sessions.patch", {
-          key: "agent:main:main",
-          model: "nvidia/moonshotai/kimi-k2.5",
-        });
-        expect(patched.ok).toBe(true);
-        expect(patched.payload?.entry.modelOverride).toBe("moonshotai/kimi-k2.5");
-        expect(patched.payload?.entry.providerOverride).toBe("nvidia");
-        expect(patched.payload?.entry.model).toBeUndefined();
-        expect(patched.payload?.entry.modelProvider).toBeUndefined();
-        expect(patched.payload?.resolved?.modelProvider).toBe("nvidia");
-        expect(patched.payload?.resolved?.model).toBe("moonshotai/kimi-k2.5");
+          const patched = await rpcReq<{
+            ok: true;
+            entry: {
+              modelOverride?: string;
+              providerOverride?: string;
+              model?: string;
+              modelProvider?: string;
+            };
+            resolved?: { model?: string; modelProvider?: string };
+          }>(ws, "sessions.patch", {
+            key: "agent:main:main",
+            model: "nvidia/moonshotai/kimi-k2.5",
+          });
+          expect(patched.ok).toBe(true);
+          expect(patched.payload?.entry.modelOverride).toBe("moonshotai/kimi-k2.5");
+          expect(patched.payload?.entry.providerOverride).toBe("nvidia");
+          expect(patched.payload?.entry.model).toBeUndefined();
+          expect(patched.payload?.entry.modelProvider).toBeUndefined();
+          expect(patched.payload?.resolved?.modelProvider).toBe("nvidia");
+          expect(patched.payload?.resolved?.model).toBe("moonshotai/kimi-k2.5");
 
-        const listed = await rpcReq<{
-          sessions: Array<{ key: string; modelProvider?: string; model?: string }>;
-        }>(ws, "sessions.list", {});
-        expect(listed.ok).toBe(true);
-        const mainSession = listed.payload?.sessions.find(
-          (session) => session.key === "agent:main:main",
-        );
-        expect(mainSession?.modelProvider).toBe("nvidia");
-        expect(mainSession?.model).toBe("moonshotai/kimi-k2.5");
-      } finally {
-        ws.close();
-        await server.close();
-      }
+          const listed = await rpcReq<{
+            sessions: Array<{ key: string; modelProvider?: string; model?: string }>;
+          }>(ws, "sessions.list", {});
+          expect(listed.ok).toBe(true);
+          const mainSession = listed.payload?.sessions.find(
+            (session) => session.key === "agent:main:main",
+          );
+          expect(mainSession?.modelProvider).toBe("nvidia");
+          expect(mainSession?.model).toBe("moonshotai/kimi-k2.5");
+        } finally {
+          ws.close();
+          await server.close();
+        }
+      });
     });
   });
 });
