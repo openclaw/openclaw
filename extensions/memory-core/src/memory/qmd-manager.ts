@@ -2719,7 +2719,18 @@ export class QmdMemoryManager implements MemorySearchManager {
       throw err;
     }
 
-    const parsedUnknown: unknown = JSON.parse(result.stdout);
+    let parsedUnknown: unknown;
+    try {
+      parsedUnknown = JSON.parse(result.stdout);
+    } catch (err) {
+      // mcporter (subprocess) can emit non-JSON stdout when output is truncated
+      // by maxOutputChars, a daemon warning bleeds onto stdout, or the CLI is
+      // killed early. Wrap the SyntaxError so callers get a typed domain error
+      // with a stdout snippet instead of a raw SyntaxError with no context.
+      throw new Error(
+        `qmd mcporter returned non-JSON stdout: ${(err as Error).message}; first 200 chars: ${result.stdout.slice(0, 200)}`,
+      );
+    }
     const parsedRecord = asRecord(parsedUnknown);
     const structuredContent = parsedRecord ? asRecord(parsedRecord.structuredContent) : null;
     const structured: unknown = structuredContent ?? parsedUnknown;
