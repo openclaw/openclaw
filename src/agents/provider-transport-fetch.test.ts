@@ -3,6 +3,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { Stream } from "openai/streaming";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.js";
 import { buildGuardedModelFetch, testing } from "./provider-transport-fetch.js";
 
 type ProviderRequestPolicyConfigMockResult = {
@@ -60,7 +61,9 @@ const {
     >(() => undefined),
     fetchWithSsrFGuardMock: vi.fn(),
     ensureModelProviderLocalServiceMock: vi.fn(),
-    getModelProviderRequestTransportMock: vi.fn(() => undefined),
+    getModelProviderRequestTransportMock: vi.fn<
+      () => ModelProviderRequestTransportOverrides | undefined
+    >(() => undefined),
     mergeModelProviderRequestOverridesMock: vi.fn((current, overrides) => ({
       ...current,
       ...overrides,
@@ -1041,6 +1044,75 @@ describe("buildGuardedModelFetch", () => {
       await vi.advanceTimersByTimeAsync(50);
       await vi.waitFor(() => expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2));
       await queued;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("allows zero-size queues to dispatch immediately", async () => {
+    vi.useFakeTimers();
+    try {
+      const model = {
+        id: "gpt-5.4",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">;
+      getModelProviderRequestTransportMock.mockReturnValue({
+        rateLimit: { minIntervalMs: 50, maxQueueSize: 0 },
+      });
+      fetchWithSsrFGuardMock.mockImplementation(async () => ({
+        response: new Response("ok", { status: 200 }),
+        finalUrl: "https://api.openai.com/v1/responses",
+        release: vi.fn(async () => undefined),
+      }));
+      const fetcher = buildGuardedModelFetch(model);
+
+      const first = await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
+      await first.text();
+      await expect(
+        fetcher("https://api.openai.com/v1/responses", { method: "POST" }),
+      ).rejects.toMatchObject({ status: 429, code: "provider_rate_limit_queue_full" });
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects aborted rate-limit waits with Error objects", async () => {
+    vi.useFakeTimers();
+    try {
+      const model = {
+        id: "gpt-5.4",
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      } as unknown as Model<"openai-responses">;
+      getModelProviderRequestTransportMock.mockReturnValue({ rateLimit: { minIntervalMs: 50 } });
+      fetchWithSsrFGuardMock.mockImplementation(async () => ({
+        response: new Response("ok", { status: 200 }),
+        finalUrl: "https://api.openai.com/v1/responses",
+        release: vi.fn(async () => undefined),
+      }));
+      const fetcher = buildGuardedModelFetch(model);
+      const first = await fetcher("https://api.openai.com/v1/responses", { method: "POST" });
+      await first.text();
+      const controller = new AbortController();
+      controller.abort("provider-canceled");
+
+      let error: unknown;
+      try {
+        await fetcher("https://api.openai.com/v1/responses", {
+          method: "POST",
+          signal: controller.signal,
+        });
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error).toMatchObject({ name: "AbortError", cause: "provider-canceled" });
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

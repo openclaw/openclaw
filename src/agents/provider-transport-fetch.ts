@@ -568,9 +568,22 @@ function resetProviderRequestRateLimitBucketsForTests(): void {
   providerRequestRateLimitBuckets.clear();
 }
 
+function createProviderRequestRateLimitAbortError(signal?: AbortSignal): Error {
+  const reason = signal?.reason;
+  if (reason instanceof Error) {
+    return reason;
+  }
+  const error =
+    reason === undefined
+      ? new Error("Request was aborted")
+      : new Error("Request was aborted", { cause: reason });
+  error.name = "AbortError";
+  return error;
+}
+
 function sleepForRateLimit(delayMs: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) {
-    return Promise.reject(signal.reason);
+    return Promise.reject(createProviderRequestRateLimitAbortError(signal));
   }
   return new Promise((resolve, reject) => {
     const timer = setTimeout(
@@ -582,7 +595,7 @@ function sleepForRateLimit(delayMs: number, signal?: AbortSignal): Promise<void>
     );
     const onAbort = () => {
       clearTimeout(timer);
-      reject(signal?.reason);
+      reject(createProviderRequestRateLimitAbortError(signal));
     };
     signal?.addEventListener("abort", onAbort, { once: true });
   });
@@ -626,6 +639,11 @@ async function waitForProviderRequestRateLimit(
   };
   providerRequestRateLimitBuckets.set(key, bucket);
   const maxQueueSize = config.maxQueueSize ?? Number.POSITIVE_INFINITY;
+  if (bucket.queued === 0 && resolveProviderRateLimitDelayMs(bucket, config) <= 0) {
+    bucket.lastDispatchAt = Date.now();
+    bucket.requestTimes.push(bucket.lastDispatchAt);
+    return;
+  }
   if (bucket.queued >= maxQueueSize) {
     throw new ProviderHttpError(
       `${model.provider}/${model.id}: provider request rate-limit queue is full`,
