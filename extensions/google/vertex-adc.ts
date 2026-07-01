@@ -275,7 +275,7 @@ async function refreshGoogleVertexAuthorizedUserAccessToken(params: {
   return token;
 }
 
-async function readGoogleOauthTokenResponsePayload(
+export async function readGoogleOauthTokenResponsePayload(
   response: Response,
 ): Promise<GoogleOauthTokenResponsePayload | undefined> {
   const bytes = await readResponseWithLimit(response, 16 * 1024 * 1024, {
