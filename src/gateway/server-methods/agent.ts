@@ -1892,13 +1892,18 @@ export const agentHandlers: GatewayRequestHandlers = {
               agentId: canonicalSessionAgentId,
             })
           : undefined;
+        const entryHasClosedMarker =
+          typeof entry?.sessionClosedAt === "number" && Number.isFinite(entry.sessionClosedAt);
         const skipImplicitExpiry =
-          resetPolicy.configured !== true && hasProviderOwnedSession(entry);
+          !entryHasClosedMarker &&
+          resetPolicy.configured !== true &&
+          hasProviderOwnedSession(entry);
         let freshness = entry
           ? skipImplicitExpiry
             ? ({ fresh: true } satisfies SessionFreshness)
             : evaluateSessionFreshness({
                 updatedAt: entry.updatedAt,
+                sessionClosedAt: entry.sessionClosedAt,
                 ...lifecycleTimestamps,
                 now,
                 policy: resetPolicy,
@@ -2087,13 +2092,19 @@ export const agentHandlers: GatewayRequestHandlers = {
                 agentId: sessionAgent,
               })
             : undefined;
+          const freshEntryHasClosedMarker =
+            typeof freshEntry?.sessionClosedAt === "number" &&
+            Number.isFinite(freshEntry.sessionClosedAt);
           const freshSkipImplicitExpiry =
-            resetPolicy.configured !== true && hasProviderOwnedSession(freshEntry);
+            !freshEntryHasClosedMarker &&
+            resetPolicy.configured !== true &&
+            hasProviderOwnedSession(freshEntry);
           const freshFreshness = freshEntry
             ? freshSkipImplicitExpiry
               ? ({ fresh: true } satisfies SessionFreshness)
               : evaluateSessionFreshness({
                   updatedAt: freshEntry.updatedAt,
+                  sessionClosedAt: freshEntry.sessionClosedAt,
                   ...freshLifecycleTimestamps,
                   now,
                   policy: resetPolicy,
@@ -2184,6 +2195,7 @@ export const agentHandlers: GatewayRequestHandlers = {
                   endedAt: undefined,
                   runtimeMs: undefined,
                   abortedLastRun: undefined,
+                  sessionClosedAt: undefined,
                   ...(shouldClearRotatedState ? { sessionFile: undefined } : {}),
                 }
               : {}),

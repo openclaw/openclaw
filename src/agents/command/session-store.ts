@@ -132,6 +132,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
         }),
   };
   if (entry.sessionId !== sessionId) {
+    delete next.sessionClosedAt;
     next.sessionFile =
       activeSessionFile ??
       resolveCompactionSessionFile({
@@ -278,12 +279,15 @@ export async function updateSessionStoreAfterAgentRun(params: {
   if (compactionsThisRun > 0 && !preserveUserFacingRunState) {
     next.compactionCount = (entry.compactionCount ?? 0) + compactionsThisRun;
   }
-  const metadataPatch = preserveUserFacingRunState
+  const metadataPatch: Partial<SessionEntry> = preserveUserFacingRunState
     ? {
         updatedAt: next.updatedAt,
         ...(touchInteraction ? { lastInteractionAt: next.lastInteractionAt } : {}),
       }
     : removeLifecycleStateFromMetadataPatch(next);
+  if (!preserveUserFacingRunState && entry.sessionId !== sessionId) {
+    metadataPatch.sessionClosedAt = undefined;
+  }
   const maintenanceConfig = resolveMaintenanceConfigFromInput(cfg.session?.maintenance);
   const persisted = await patchSessionEntry(
     {
