@@ -31,6 +31,8 @@ type ResolveOwningPluginIdsForProvider =
   typeof import("./providers.js").resolveOwningPluginIdsForProvider;
 type ResolveBundledProviderPolicySurface =
   typeof import("./provider-public-artifacts.js").resolveBundledProviderPolicySurface;
+type ConsumeBundledProviderPolicyHookFailure =
+  typeof import("./provider-public-artifacts.js").consumeBundledProviderPolicyHookFailure;
 
 const resolvePluginProvidersMock = vi.fn<ResolvePluginProviders>((_) => [] as ProviderPlugin[]);
 const isPluginProvidersLoadInFlightMock = vi.fn<IsPluginProvidersLoadInFlight>((_) => false);
@@ -46,6 +48,9 @@ const resolveOwningPluginIdsForProviderMock = vi.fn<ResolveOwningPluginIdsForPro
 );
 const resolveBundledProviderPolicySurfaceMock = vi.fn<ResolveBundledProviderPolicySurface>(
   (_) => null,
+);
+const consumeBundledProviderPolicyHookFailureMock = vi.fn<ConsumeBundledProviderPolicyHookFailure>(
+  () => false,
 );
 const providerRuntimeWarnMock = vi.fn();
 
@@ -285,6 +290,8 @@ describe("provider-runtime", () => {
   beforeAll(async () => {
     vi.resetModules();
     vi.doMock("./provider-public-artifacts.js", () => ({
+      consumeBundledProviderPolicyHookFailure: (hook: object | undefined) =>
+        consumeBundledProviderPolicyHookFailureMock(hook),
       resolveBundledProviderPolicySurface: (provider: string) =>
         resolveBundledProviderPolicySurfaceMock(provider),
     }));
@@ -385,6 +392,8 @@ describe("provider-runtime", () => {
     resolveOwningPluginIdsForProviderMock.mockReturnValue(undefined);
     resolveBundledProviderPolicySurfaceMock.mockReset();
     resolveBundledProviderPolicySurfaceMock.mockReturnValue(null);
+    consumeBundledProviderPolicyHookFailureMock.mockReset();
+    consumeBundledProviderPolicyHookFailureMock.mockReturnValue(false);
     providerRuntimeWarnMock.mockReset();
   });
 
@@ -1433,6 +1442,91 @@ describe("provider-runtime", () => {
 
     expect(normalizeConfig).toHaveBeenCalledTimes(1);
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to runtime provider hooks after bundled policy hook failures", () => {
+    const providerConfig: ModelProviderConfig = {
+      baseUrl: "https://api.fuzzplugin.example/v1",
+      api: "openai-completions",
+      models: [],
+    };
+    const normalizeConfig = vi.fn(() => undefined);
+    const resolveConfigApiKey = vi.fn(() => undefined);
+    const resolveThinkingProfile = vi.fn(() => undefined);
+    const applyConfigDefaults = vi.fn(() => undefined);
+    resolveBundledProviderPolicySurfaceMock.mockReturnValue({
+      normalizeConfig,
+      resolveConfigApiKey,
+      resolveThinkingProfile,
+      applyConfigDefaults,
+    });
+    consumeBundledProviderPolicyHookFailureMock.mockImplementation(
+      (hook) =>
+        hook === normalizeConfig ||
+        hook === resolveConfigApiKey ||
+        hook === resolveThinkingProfile ||
+        hook === applyConfigDefaults,
+    );
+    resolvePluginProvidersMock.mockReturnValue([
+      {
+        id: "fuzzplugin",
+        label: "Fuzz Plugin",
+        auth: [],
+        normalizeConfig: ({ providerConfig: config }) => ({
+          ...config,
+          baseUrl: "https://runtime.example.com/v1",
+        }),
+        resolveConfigApiKey: () => "runtime-api-key",
+        resolveThinkingProfile: () => ({
+          levels: [{ id: "low" }],
+          defaultLevel: "low",
+        }),
+        applyConfigDefaults: ({ config }) => ({
+          ...config,
+          pluginDefaultsApplied: true,
+        }),
+      },
+    ]);
+
+    expect(
+      normalizeProviderConfigWithPlugin({
+        provider: "fuzzplugin",
+        context: {
+          provider: "fuzzplugin",
+          providerConfig,
+        },
+      })?.baseUrl,
+    ).toBe("https://runtime.example.com/v1");
+    expect(
+      resolveProviderConfigApiKeyWithPlugin({
+        provider: "fuzzplugin",
+        context: {
+          provider: "fuzzplugin",
+          providerConfig,
+          env: {},
+        },
+      }),
+    ).toBe("runtime-api-key");
+    expect(
+      resolveProviderThinkingProfile({
+        provider: "fuzzplugin",
+        context: {
+          provider: "fuzzplugin",
+          modelId: "fuzz-model",
+          reasoning: true,
+        },
+      }),
+    ).toEqual({ levels: [{ id: "low" }], defaultLevel: "low" });
+    expect(
+      applyProviderConfigDefaultsWithPlugin({
+        provider: "fuzzplugin",
+        context: {
+          provider: "fuzzplugin",
+          config: {},
+          env: {},
+        },
+      }),
+    ).toEqual({ pluginDefaultsApplied: true });
   });
 
   it("resolves thinking profiles from bundled policy surface before runtime plugins", () => {
