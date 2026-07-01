@@ -133,6 +133,8 @@ export type RunMessageActionParams = {
   sessionKey?: string;
   agentId?: string;
   sandboxRoot?: string;
+  /** Container-side workspace root (default "/workspace"). */
+  containerWorkdir?: string;
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   inboundEventKind?: InboundEventKind;
@@ -957,6 +959,7 @@ async function buildSendPayloadParts(params: {
   const normalizedMediaUrls = await normalizeSandboxMediaList({
     values: mergedMediaUrls,
     sandboxRoot: input.sandboxRoot,
+    containerWorkdir: input.containerWorkdir,
   });
   mergedMediaUrls.length = 0;
   mergedMediaUrls.push(...normalizedMediaUrls);
@@ -1503,6 +1506,7 @@ export async function runMessageAction(
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
   const normalizationPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,
+    containerWorkdir: input.containerWorkdir,
     mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, resolvedAgentId),
   });
   const extraActionMediaSourceParamKeys = resolveExtraActionMediaSourceParamKeys({
@@ -1542,6 +1546,7 @@ export async function runMessageAction(
   });
   const mediaPolicy = resolveAttachmentMediaPolicy({
     sandboxRoot: input.sandboxRoot,
+    containerWorkdir: input.containerWorkdir,
     mediaAccess,
   });
   const gateway = resolveGateway(input);

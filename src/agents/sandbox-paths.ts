@@ -151,6 +151,11 @@ export async function resolveAllowedManagedMediaPath(
 export async function resolveSandboxedMediaSource(params: {
   media: string;
   sandboxRoot: string;
+  /** Container-side workspace root (default "/workspace").  Sandbox
+   * backends that use a different container workdir (e.g. OpenShell
+   * uses "/sandbox") provide this through the sandbox info contract
+   * so `file:///sandbox/...` URLs map to the correct host path. */
+  containerWorkdir?: string;
 }): Promise<string> {
   const raw = params.media.trim();
   if (!raw) {
@@ -160,10 +165,13 @@ export async function resolveSandboxedMediaSource(params: {
     return raw;
   }
   let candidate = raw;
+  const containerWdir =
+    (params.containerWorkdir ?? SANDBOX_CONTAINER_WORKDIR).replace(/\/+$/, "") || "/";
   if (/^file:\/\//i.test(candidate)) {
     const workspaceMappedFromUrl = mapContainerWorkspaceFileUrl({
       fileUrl: candidate,
       sandboxRoot: params.sandboxRoot,
+      containerWorkdir: containerWdir,
     });
     if (workspaceMappedFromUrl) {
       candidate = workspaceMappedFromUrl;
@@ -180,6 +188,7 @@ export async function resolveSandboxedMediaSource(params: {
   const containerWorkspaceMapped = mapContainerWorkspacePath({
     candidate,
     sandboxRoot: params.sandboxRoot,
+    containerWorkdir: containerWdir,
   });
   if (containerWorkspaceMapped) {
     candidate = containerWorkspaceMapped;
@@ -218,6 +227,7 @@ async function assertNoManagedMediaAliasEscape(params: {
 function mapContainerWorkspaceFileUrl(params: {
   fileUrl: string;
   sandboxRoot: string;
+  containerWorkdir: string;
 }): string | undefined {
   let parsed: URL;
   try {
@@ -235,35 +245,37 @@ function mapContainerWorkspaceFileUrl(params: {
   if (hasEncodedFileUrlSeparator(parsed.pathname)) {
     return undefined;
   }
-  // Sandbox paths are Linux-style (/workspace/*). Parse the URL path directly so
-  // Windows hosts can still accept file:///workspace/... media references.
+  // Sandbox paths are Linux-style (e.g. /workspace/* or /sandbox/*).
+  // Parse the URL path directly so Windows hosts can still accept
+  // file:///sandbox/... media references.
   let normalizedPathname: string;
   try {
     normalizedPathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
   } catch {
     return undefined;
   }
-  if (
-    normalizedPathname !== SANDBOX_CONTAINER_WORKDIR &&
-    !normalizedPathname.startsWith(`${SANDBOX_CONTAINER_WORKDIR}/`)
-  ) {
+  const wdir = params.containerWorkdir;
+  if (normalizedPathname !== wdir && !normalizedPathname.startsWith(`${wdir}/`)) {
     return undefined;
   }
   return mapContainerWorkspacePath({
     candidate: normalizedPathname,
     sandboxRoot: params.sandboxRoot,
+    containerWorkdir: wdir,
   });
 }
 
 function mapContainerWorkspacePath(params: {
   candidate: string;
   sandboxRoot: string;
+  containerWorkdir: string;
 }): string | undefined {
+  const wdir = params.containerWorkdir;
   const normalized = params.candidate.replace(/\\/g, "/");
-  if (normalized === SANDBOX_CONTAINER_WORKDIR) {
+  if (normalized === wdir) {
     return path.resolve(params.sandboxRoot);
   }
-  const prefix = `${SANDBOX_CONTAINER_WORKDIR}/`;
+  const prefix = `${wdir}/`;
   if (!normalized.startsWith(prefix)) {
     return undefined;
   }

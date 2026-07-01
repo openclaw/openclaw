@@ -876,6 +876,7 @@ type MessageToolOptions = {
   hasRepliedRef?: { value: boolean };
   sameChannelThreadRequired?: boolean;
   sandboxRoot?: string;
+  containerWorkdir?: string;
   requireExplicitTarget?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   inboundEventKind?: InboundEventKind;
@@ -1478,6 +1479,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           sessionId: options?.sessionId,
           agentId: resolvedAgentId,
           sandboxRoot: options?.sandboxRoot,
+          containerWorkdir: options?.containerWorkdir,
           sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
           inboundEventKind: options?.inboundEventKind,
           inboundAudio: options?.currentInboundAudio,
