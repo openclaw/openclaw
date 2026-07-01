@@ -259,6 +259,30 @@ describe("skill_workshop tool", () => {
     );
   });
 
+  it("rejects create proposals that look like existing skill patches", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
+    const existingSkillDir = path.join(workspaceDir, "skills", "weather-planner");
+    await fs.mkdir(existingSkillDir, { recursive: true });
+    await fs.writeFile(
+      path.join(existingSkillDir, "SKILL.md"),
+      "---\nname: weather-planner\ndescription: Existing weather skill\n---\n\n# Weather\n",
+      "utf8",
+    );
+    const tool = createSkillWorkshopTool({ workspaceDir, config: {}, agentId: "main" });
+
+    await expect(
+      tool.execute("call-create", {
+        action: "create",
+        name: "Weather Planner Hardening",
+        description: "Patch existing weather planner",
+        proposal_content:
+          "# Weather patch\n\nUpdate skills/weather-planner/SKILL.md with alert checks.\n",
+      }),
+    ).rejects.toThrow(
+      "Create proposal content references existing workspace skill paths: skills/weather-planner",
+    );
+  });
+
   it("applies, rejects, and quarantines proposals through the workshop service", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
     const tool = createSkillWorkshopTool({ workspaceDir, config: {}, agentId: "main" });

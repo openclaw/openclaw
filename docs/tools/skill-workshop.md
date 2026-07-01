@@ -27,7 +27,13 @@ plugin, ClawHub, extra-root, managed, personal-agent, or system skills.
   active skills.
 - **Workspace scoped:** creates target the workspace `skills/` root. Updates
   are allowed only for writable workspace skills.
+- **Single target:** create always proposes one new sibling skill, and update
+  targets one existing skill. Split multi-skill changes into separate update
+  proposals.
 - **No clobber:** create fails if the target skill already exists.
+- **Wrong-target guard:** create rejects proposal content that references
+  existing workspace skill paths such as `skills/trip-planning/SKILL.md`;
+  those changes belong in update proposals.
 - **Hash bound:** update proposals bind to the current target hash and become
   stale if the live skill changes before apply.
 - **Scanner gated:** apply reruns scanning before writing.
@@ -88,11 +94,19 @@ openclaw skills workshop propose-create \
   --proposal ./PROPOSAL.md
 ```
 
+`propose-create` always creates a new sibling under `skills/<name>/`. If the
+draft references an existing workspace skill path such as
+`skills/trip-planning/SKILL.md`, Skill Workshop rejects it so the update does
+not silently land in an unused sibling skill.
+
 Create an update proposal for an existing workspace skill:
 
 ```bash
 openclaw skills workshop propose-update trip-planning --proposal ./PROPOSAL.md
 ```
+
+For changes that touch multiple existing skills, create one update proposal per
+target skill.
 
 List and inspect:
 
@@ -166,6 +180,10 @@ The model uses `skill_workshop`:
 ```text
 action: create | update | revise | list | inspect | apply | reject | quarantine
 ```
+
+`action=create` is only for a brand-new workspace skill. `action=update` targets
+one existing skill through `skill_name`. Agents should split multi-skill patches
+into separate `action=update` calls before applying them.
 
 Agents must use `skill_workshop` for generated skill work. They must not create
 or change proposal files through `write`, `edit`, `exec`, shell commands, or

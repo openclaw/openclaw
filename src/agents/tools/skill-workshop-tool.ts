@@ -55,7 +55,7 @@ const SkillWorkshopToolSchema = Type.Object(
   {
     action: stringEnum(SKILL_WORKSHOP_ACTIONS, {
       description:
-        "create for a new skill proposal, update for an existing skill, revise for a pending proposal, list or inspect proposals for proposal discovery, apply/reject/quarantine for explicit proposal lifecycle actions.",
+        "create for a brand-new sibling skill proposal, update for one existing skill, revise for a pending proposal, list or inspect proposals for proposal discovery, apply/reject/quarantine for explicit proposal lifecycle actions. Split multi-skill changes into separate update calls.",
     }),
     proposal_id: Type.Optional(
       Type.String({
@@ -66,7 +66,7 @@ const SkillWorkshopToolSchema = Type.Object(
     name: Type.Optional(
       Type.String({
         description:
-          "Skill/proposal name. Required for action=create; optional resolver for action=inspect or action=revise when proposal_id is unknown.",
+          "Skill/proposal name. Required for action=create; create always targets a new workspace skills/<name>/ sibling. Optional resolver for action=inspect or action=revise when proposal_id is unknown.",
       }),
     ),
     query: Type.Optional(Type.String({ description: "Optional query for action=list." })),
@@ -90,12 +90,12 @@ const SkillWorkshopToolSchema = Type.Object(
       }),
     ),
     skill_name: Type.Optional(
-      Type.String({ description: "Existing skill name or key for action=update." }),
+      Type.String({ description: "Single existing skill name or key for action=update." }),
     ),
     proposal_content: Type.Optional(
       Type.String({
         description:
-          "Full proposed procedure markdown for action=create, action=update, or action=revise. It will be stored as PROPOSAL.md. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes.",
+          "Full proposed procedure markdown for action=create, action=update, or action=revise. It will be stored as PROPOSAL.md. action=create must describe only the new skill and rejects existing skills/<name>/ paths; use action=update separately for existing skills. Keep under configured skills.workshop.maxSkillBytes; default max is 40000 bytes.",
       }),
     ),
     support_files: Type.Optional(
@@ -138,7 +138,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
     name: "skill_workshop",
     displaySummary: "Propose a reusable skill",
     description:
-      "Create, update, revise, list, inspect, apply, reject, or quarantine Skill Workshop proposals when reusable procedures should be captured, improved, or explicitly approved.",
+      "Create, update, revise, list, inspect, apply, reject, or quarantine Skill Workshop proposals when reusable procedures should be captured, improved, or explicitly approved. Create always proposes a new sibling skill; update targets one existing skill.",
     parameters: SkillWorkshopToolSchema,
     execute: async (_toolCallId, args) => {
       const params = asToolParamsRecord(args);
