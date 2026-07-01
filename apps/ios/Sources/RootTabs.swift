@@ -269,7 +269,6 @@ struct RootTabs: View {
         VStack(spacing: 0) {
             self.sidebarIdentityHeader
             self.sidebarList
-            self.sidebarFooter
         }
         .safeAreaPadding(.top, 8)
         .safeAreaPadding(.bottom, 8)
@@ -342,26 +341,6 @@ struct RootTabs: View {
         .tint(OpenClawBrand.accent)
         .scrollContentBackground(.hidden)
         .background(Color(uiColor: .systemBackground))
-    }
-
-    private var sidebarFooter: some View {
-        VStack(spacing: 0) {
-            self.sidebarHorizontalSeparator
-            HStack(spacing: 10) {
-                Text("VERSION")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 8)
-                Text("v\(DeviceInfoHelper.openClawVersionString())")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.72)
-                ProStatusDot(color: self.sidebarGatewayStatusColor)
-            }
-            .padding(.horizontal, 18)
-            .padding(.vertical, 12)
-        }
     }
 
     private var sidebarHorizontalSeparator: some View {
@@ -1063,14 +1042,18 @@ extension RootTabs {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String {
-        if problem.canTrustRotatedCertificate { return "Trust certificate" }
-        return problem.retryable ? "Retry" : "Open Settings"
+    private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String? {
+        GatewayProblemPrimaryAction.title(
+            for: problem,
+            retryTitle: "Retry",
+            nonRetryableTitle: "Open Settings")
     }
 
     private func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) {
         if problem.canTrustRotatedCertificate {
             Task { await self.gatewayController.trustRotatedGatewayCertificate(from: problem) }
+        } else if GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem) {
+            return
         } else if problem.retryable {
             Task { await self.gatewayController.connectLastKnown() }
         } else {

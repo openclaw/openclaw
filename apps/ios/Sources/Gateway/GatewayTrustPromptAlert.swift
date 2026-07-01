@@ -3,33 +3,32 @@ import SwiftUI
 struct GatewayTrustPromptAlert: ViewModifier {
     @Environment(GatewayConnectionController.self) private var gatewayController: GatewayConnectionController
 
-    private var promptBinding: Binding<GatewayConnectionController.TrustPrompt?> {
-        Binding(
-            get: { self.gatewayController.pendingTrustPrompt },
-            set: { _ in
-                // Keep pending trust state until explicit user action.
-                // `alert(item:)` may set the binding to nil during dismissal, which can race with
-                // the button handler and cause accept to no-op.
-            })
-    }
-
     func body(content: Content) -> some View {
-        content.alert(item: self.promptBinding) { prompt in
-            Alert(
-                title: Text("Trust this gateway?"),
-                message: Text(
-                    """
-                    First-time TLS connection.
+        content.alert(
+            "Trust this gateway?",
+            isPresented: Binding(
+                get: { self.gatewayController.pendingTrustPrompt != nil },
+                set: { _ in
+                    // Keep pending trust state until explicit user action.
+                    // SwiftUI may set presentation bindings during dismissal; clearing here can
+                    // race with the trust button and make accept no-op.
+                }),
+            presenting: self.gatewayController.pendingTrustPrompt)
+        { _ in
+            Button("Cancel", role: .cancel) {
+                self.gatewayController.declinePendingTrustPrompt()
+            }
+            Button("Trust and connect") {
+                Task { await self.gatewayController.acceptPendingTrustPrompt() }
+            }
+        } message: { prompt in
+            Text(
+                """
+                First-time TLS connection.
 
-                    Verify this SHA-256 fingerprint out-of-band before trusting:
-                    \(prompt.fingerprintSha256)
-                    """),
-                primaryButton: .cancel(Text("Cancel")) {
-                    self.gatewayController.declinePendingTrustPrompt()
-                },
-                secondaryButton: .default(Text("Trust and connect")) {
-                    Task { await self.gatewayController.acceptPendingTrustPrompt() }
-                })
+                Verify this SHA-256 fingerprint out-of-band before trusting:
+                \(prompt.fingerprintSha256)
+                """)
         }
     }
 }

@@ -75,6 +75,31 @@ describe("runCronCommandJob", () => {
     });
   });
 
+  it("preserves early action-required command output when the captured tail is truncated", async () => {
+    const result = await runCronCommandJob({
+      job: makeCommandJob({
+        kind: "command",
+        argv: [
+          process.execPath,
+          "-e",
+          [
+            "process.stdout.write('Visit https://example.com/device and enter code ABCD-EFGH\\n')",
+            "process.stdout.write('x'.repeat(200))",
+          ].join(";"),
+        ],
+        timeoutSeconds: 5,
+        outputMaxBytes: 24,
+      }),
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.summary).toBe(
+      `action-required output preserved:\nVisit https://example.com/device and enter code ABCD-EFGH\n\n${"x".repeat(24)}`,
+    );
+    expect(result.diagnostics?.summary).toBe(result.summary);
+    expect(result.diagnostics?.entries[0]).toMatchObject({ truncated: true });
+  });
+
   it("marks command timeouts as cron errors", async () => {
     const result = await runCronCommandJob({
       job: makeCommandJob({

@@ -2,6 +2,7 @@ import Foundation
 import Network
 import OpenClawKit
 import Testing
+import os
 @testable import OpenClaw
 
 @Suite(.serialized) struct GatewayConnectionSecurityTests {
@@ -137,6 +138,127 @@ import Testing
         #expect(controller._test_resolveManualPort(host: "device.sample.ts.net", port: 0, useTLS: true) == 443)
         #expect(controller._test_resolveManualPort(host: "device.sample.ts.net.", port: 0, useTLS: true) == 443)
         #expect(controller._test_resolveManualPort(host: "device.sample.ts.net", port: 18789, useTLS: true) == 18789)
+    }
+
+    @Test @MainActor func manualFirstUseTLSProbeShowsTrustPromptAfterFingerprintCapture() async {
+        let host = "gateway-\(UUID().uuidString).example.com"
+        let port = 18789
+        let stableID = "manual|\(host.lowercased())|\(port)"
+        defer { clearTLSFingerprint(stableID: stableID) }
+        self.clearTLSFingerprint(stableID: stableID)
+
+        let appModel = NodeAppModel()
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            tcpReachabilityProbe: { _, _, _, _ in true },
+            tlsFingerprintProbe: { _ in .fingerprint("abc123") })
+
+        await controller.connectManual(host: host, port: port, useTLS: true)
+
+        #expect(controller.pendingTrustPrompt?.fingerprintSha256 == "abc123")
+        #expect(controller.pendingTrustPrompt?.host == host)
+        #expect(controller.pendingTrustPrompt?.port == port)
+        #expect(appModel.gatewayStatusText == "Verify gateway TLS fingerprint")
+    }
+
+    @Test @MainActor func manualFirstUseTLSProbeSkipsTLSWhenTCPIsUnreachable() async {
+        let host = "gateway-\(UUID().uuidString).example.com"
+        let port = 18789
+        let stableID = "manual|\(host.lowercased())|\(port)"
+        let tlsProbeCalls = OSAllocatedUnfairLock(initialState: 0)
+        defer { clearTLSFingerprint(stableID: stableID) }
+        self.clearTLSFingerprint(stableID: stableID)
+
+        let appModel = NodeAppModel()
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            tcpReachabilityProbe: { _, _, _, _ in false },
+            tlsFingerprintProbe: { _ in
+                tlsProbeCalls.withLock { $0 += 1 }
+                return .fingerprint("abc123")
+            })
+
+        await controller.connectManual(host: host, port: port, useTLS: true)
+
+        #expect(tlsProbeCalls.withLock { $0 } == 0)
+        #expect(controller.pendingTrustPrompt == nil)
+        #expect(appModel.gatewayStatusText == "Can't reach gateway at \(host):\(port). Check Tailscale or LAN.")
+    }
+
+    @Test @MainActor func manualFirstUseTLSProbeReportsHandshakeTimeoutWithoutTrustPrompt() async {
+        let host = "gateway-\(UUID().uuidString).example.com"
+        let port = 18789
+        let stableID = "manual|\(host.lowercased())|\(port)"
+        defer { clearTLSFingerprint(stableID: stableID) }
+        self.clearTLSFingerprint(stableID: stableID)
+
+        let appModel = NodeAppModel()
+        let staleProblem = GatewayConnectionProblem(
+            kind: .pairingRequired,
+            owner: .gateway,
+            title: "Pairing required",
+            message: "Approve an old request.",
+            requestId: "stale-request",
+            retryable: true,
+            pauseReconnect: true)
+        appModel._test_applyOperatorGatewayConnectionProblem(staleProblem)
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            tcpReachabilityProbe: { _, _, _, _ in true },
+            tlsFingerprintProbe: { _ in .failure(.tlsHandshakeTimeout) })
+
+        await controller.connectManual(host: host, port: port, useTLS: true)
+
+        #expect(controller.pendingTrustPrompt == nil)
+        #expect(appModel.lastGatewayProblem == nil)
+        #expect(appModel.gatewayStatusText.contains("TLS fingerprint verification timed out"))
+        #expect(appModel.gatewayStatusText.contains("\(host):\(port)"))
+    }
+
+    @Test @MainActor func discoveredFirstUseTLSProbeFailureClearsStaleTrustPrompt() async {
+        let staleHost = "stale-\(UUID().uuidString).example.com"
+        let stalePort = 18789
+        let staleStableID = "manual|\(staleHost.lowercased())|\(stalePort)"
+        let discoveredStableID = "discovered|\(UUID().uuidString)"
+        let discoveredHost = "gateway.tailnet.ts.net"
+        let discoveredPort = 443
+        defer {
+            clearTLSFingerprint(stableID: staleStableID)
+            clearTLSFingerprint(stableID: discoveredStableID)
+        }
+        self.clearTLSFingerprint(stableID: staleStableID)
+        self.clearTLSFingerprint(stableID: discoveredStableID)
+
+        let tlsResults = OSAllocatedUnfairLock(initialState: [
+            GatewayTLSFingerprintProbeResult.fingerprint("abc123"),
+            .failure(.tlsHandshakeTimeout),
+        ])
+        let appModel = NodeAppModel()
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            tcpReachabilityProbe: { _, _, _, _ in true },
+            tlsFingerprintProbe: { _ in tlsResults.withLock { $0.removeFirst() } },
+            serviceEndpointResolver: { _ in (host: discoveredHost, port: discoveredPort) })
+
+        await controller.connectManual(host: staleHost, port: stalePort, useTLS: true)
+        #expect(controller.pendingTrustPrompt?.fingerprintSha256 == "abc123")
+
+        let gateway = self.makeDiscoveredGateway(
+            stableID: discoveredStableID,
+            lanHost: nil,
+            tailnetDns: discoveredHost,
+            gatewayPort: discoveredPort,
+            fingerprint: nil)
+        let message = await controller.connectWithDiagnostics(gateway)
+
+        #expect(controller.pendingTrustPrompt == nil)
+        #expect(message?.contains("TLS fingerprint verification timed out") == true)
+        #expect(message?.contains("\(discoveredHost):\(discoveredPort)") == true)
+        #expect(appModel.gatewayStatusText == message)
     }
 
     @Test @MainActor func clearAllTLSFingerprints_removesStoredPins() async {
