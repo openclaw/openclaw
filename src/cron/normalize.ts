@@ -654,8 +654,8 @@ export function normalizeCronJobInput(
     if (
       "schedule" in next &&
       isRecord(next.schedule) &&
-      next.schedule.kind === "at" &&
-      !("deleteAfterRun" in next)
+      !("deleteAfterRun" in next) &&
+      (next.sessionTarget === "isolated" || next.schedule.kind === "at")
     ) {
       next.deleteAfterRun = true;
     }

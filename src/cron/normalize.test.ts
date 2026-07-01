@@ -208,6 +208,71 @@ describe("normalizeCronJobCreate", () => {
     expect(normalized.deleteAfterRun).toBe(true);
   });
 
+  it("defaults deleteAfterRun for recurring isolated agent jobs", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "recurring isolated",
+      enabled: true,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: {
+        kind: "agentTurn",
+        message: "hi",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.deleteAfterRun).toBe(true);
+  });
+
+  it("defaults deleteAfterRun for recurring isolated jobs from payload kind", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "recurring isolated default target",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      wakeMode: "now",
+      payload: {
+        kind: "command",
+        argv: ["echo", "hi"],
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.sessionTarget).toBe("isolated");
+    expect(normalized.deleteAfterRun).toBe(true);
+  });
+
+  it("preserves explicit deleteAfterRun=false for isolated jobs", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "keep isolated session",
+      enabled: true,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      deleteAfterRun: false,
+      payload: {
+        kind: "agentTurn",
+        message: "hi",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.deleteAfterRun).toBe(false);
+  });
+
+  it("does not default deleteAfterRun for recurring main jobs", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "recurring main",
+      enabled: true,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: {
+        kind: "systemEvent",
+        text: "hi",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.deleteAfterRun).toBeUndefined();
+  });
+
   it("normalizes delivery mode and channel", () => {
     const normalized = normalizeIsolatedAgentTurnCreateJob({
       name: "delivery",
