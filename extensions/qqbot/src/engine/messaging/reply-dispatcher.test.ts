@@ -134,4 +134,41 @@ describe("handleStructuredPayload", () => {
       }),
     );
   });
+
+  it.each(["/workspace/../media/secret.pdf", "../media/secret.pdf"])(
+    "rejects virtual workspace payload escapes before checking sibling media roots: %s",
+    async (payloadPath) => {
+      const ctx = {
+        ...makeReplyContext(),
+        mediaAccess: {
+          localRoots: ["/tmp/media"],
+          workspaceDir: "/tmp/agent-workspace",
+        },
+        mediaLocalRoots: ["/tmp/media"],
+      };
+      resolveLocalPathFromRootsSyncMock.mockImplementation(({ filePath }: { filePath: string }) =>
+        filePath === "/tmp/media/secret.pdf" ? { path: "/tmp/media/secret.pdf" } : null,
+      );
+
+      const handled = await handleStructuredPayload(
+        ctx,
+        `QQBOT_PAYLOAD:${JSON.stringify({
+          type: "media",
+          mediaType: "file",
+          source: "file",
+          path: payloadPath,
+        })}`,
+        vi.fn(),
+      );
+
+      expect(handled).toBe(true);
+      expect(resolveLocalPathFromRootsSyncMock).not.toHaveBeenCalledWith(
+        expect.objectContaining({ filePath: "/tmp/media/secret.pdf" }),
+      );
+      expect(sendMediaMock).not.toHaveBeenCalled();
+      expect(ctx.log.error).toHaveBeenCalledWith(
+        "Blocked file payload local path outside QQ Bot media storage",
+      );
+    },
+  );
 });

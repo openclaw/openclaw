@@ -159,6 +159,32 @@ describe("resolveOutboundMediaPath", () => {
       resolveLocalPathSpy.mockRestore();
     }
   });
+
+  it.each(["/workspace/../media/secret.pdf", "../media/secret.pdf"])(
+    "rejects virtual workspace escapes before checking sibling media roots: %s",
+    (mediaPath) => {
+      const resolveLocalPathSpy = vi
+        .spyOn(securityRuntime, "resolveLocalPathFromRootsSync")
+        .mockImplementation(({ filePath }) =>
+          filePath === "/tmp/media/secret.pdf"
+            ? { path: "/tmp/media/secret.pdf", root: "/tmp/media" }
+            : null,
+        );
+      try {
+        const result = resolveOutboundMediaPath(mediaPath, "media", {
+          extraLocalRoots: ["/tmp/media", "/tmp/agent-workspace"],
+          workspaceDir: "/tmp/agent-workspace",
+        });
+
+        expect(result.ok).toBe(false);
+        expect(resolveLocalPathSpy).not.toHaveBeenCalledWith(
+          expect.objectContaining({ filePath: "/tmp/media/secret.pdf" }),
+        );
+      } finally {
+        resolveLocalPathSpy.mockRestore();
+      }
+    },
+  );
 });
 
 describe("trySendViaHostRead error handling", () => {

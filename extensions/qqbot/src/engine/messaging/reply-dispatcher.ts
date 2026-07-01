@@ -214,7 +214,26 @@ function resolveStructuredPayloadLocalRoots(ctx: ReplyContext): string[] | undef
   return roots.length > 0 ? Array.from(new Set(roots)) : undefined;
 }
 
-function resolveStructuredPayloadCandidate(ctx: ReplyContext, payloadPath: string): string {
+function isPathWithinRoot(candidatePath: string, rootPath: string): boolean {
+  const resolvedRoot = path.resolve(rootPath);
+  if (resolvedRoot === path.parse(resolvedRoot).root) {
+    return false;
+  }
+  const relative = path.relative(resolvedRoot, path.resolve(candidatePath));
+  return (
+    relative === "" || (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
+  );
+}
+
+function resolvePathInsideWorkspace(
+  workspaceDir: string,
+  pathWithinWorkspace: string,
+): string | null {
+  const mappedPath = path.resolve(workspaceDir, pathWithinWorkspace);
+  return isPathWithinRoot(mappedPath, workspaceDir) ? mappedPath : null;
+}
+
+function resolveStructuredPayloadCandidate(ctx: ReplyContext, payloadPath: string): string | null {
   const normalizedPath = normalizePath(payloadPath);
   const workspaceDir = ctx.mediaAccess?.workspaceDir;
   if (!workspaceDir) {
@@ -224,17 +243,20 @@ function resolveStructuredPayloadCandidate(ctx: ReplyContext, payloadPath: strin
     return workspaceDir;
   }
   if (normalizedPath.startsWith("/workspace/")) {
-    return path.resolve(workspaceDir, normalizedPath.slice("/workspace/".length));
+    return resolvePathInsideWorkspace(workspaceDir, normalizedPath.slice("/workspace/".length));
   }
   if (path.isAbsolute(normalizedPath)) {
     return normalizedPath;
   }
-  return path.resolve(workspaceDir, normalizedPath);
+  return resolvePathInsideWorkspace(workspaceDir, normalizedPath);
 }
 
 function resolveStructuredPayloadCandidates(ctx: ReplyContext, payloadPath: string): string[] {
   const normalizedPath = normalizePath(payloadPath);
   const mappedPath = resolveStructuredPayloadCandidate(ctx, payloadPath);
+  if (!mappedPath) {
+    return [];
+  }
   if (mappedPath === normalizedPath) {
     return [normalizedPath];
   }

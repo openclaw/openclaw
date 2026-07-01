@@ -149,7 +149,18 @@ function resolveMissingPathWithinRoots(
   );
 }
 
-function resolveWorkspacePathCandidate(normalizedPath: string, workspaceDir?: string): string {
+function resolvePathInsideWorkspace(
+  workspaceDir: string,
+  pathWithinWorkspace: string,
+): string | null {
+  const mappedPath = path.resolve(workspaceDir, pathWithinWorkspace);
+  return isPathWithinRoot(mappedPath, workspaceDir) ? mappedPath : null;
+}
+
+function resolveWorkspacePathCandidate(
+  normalizedPath: string,
+  workspaceDir?: string,
+): string | null {
   if (!workspaceDir) {
     return normalizedPath;
   }
@@ -157,16 +168,19 @@ function resolveWorkspacePathCandidate(normalizedPath: string, workspaceDir?: st
     return workspaceDir;
   }
   if (normalizedPath.startsWith("/workspace/")) {
-    return path.resolve(workspaceDir, normalizedPath.slice("/workspace/".length));
+    return resolvePathInsideWorkspace(workspaceDir, normalizedPath.slice("/workspace/".length));
   }
   if (path.isAbsolute(normalizedPath)) {
     return normalizedPath;
   }
-  return path.resolve(workspaceDir, normalizedPath);
+  return resolvePathInsideWorkspace(workspaceDir, normalizedPath);
 }
 
 function resolveWorkspacePathCandidates(normalizedPath: string, workspaceDir?: string): string[] {
   const mappedPath = resolveWorkspacePathCandidate(normalizedPath, workspaceDir);
+  if (!mappedPath) {
+    return [];
+  }
   if (mappedPath === normalizedPath) {
     return [normalizedPath];
   }
@@ -258,7 +272,7 @@ function senderKindForLoadedMedia(
   return "file";
 }
 
-function resolveHostReadMediaPath(ctx: MediaTargetContext, mediaPath: string): string {
+function resolveHostReadMediaPath(ctx: MediaTargetContext, mediaPath: string): string | null {
   const normalizedPath = normalizePath(mediaPath);
   if (
     path.isAbsolute(normalizedPath) &&
@@ -278,6 +292,9 @@ async function stageHostReadVoice(
     return null;
   }
   const hostReadMediaPath = resolveHostReadMediaPath(ctx, mediaPath);
+  if (!hostReadMediaPath) {
+    return null;
+  }
   const mediaAccess = resolveHostReadMediaAccess(ctx);
   const loaded = await loadOutboundMediaFromUrl(hostReadMediaPath, {
     maxBytes: getMaxUploadSize(MediaFileType.VOICE),
@@ -305,6 +322,9 @@ async function trySendViaHostRead(
     return null;
   }
   const hostReadMediaPath = resolveHostReadMediaPath(ctx, mediaPath);
+  if (!hostReadMediaPath) {
+    return null;
+  }
   const mediaAccess = resolveHostReadMediaAccess(ctx);
   try {
     const loaded = await loadOutboundMediaFromUrl(hostReadMediaPath, {
