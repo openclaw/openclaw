@@ -129,7 +129,7 @@ jobs:
 
       - name: Run Codex test performance agent
         if: steps.gate.outputs.run_agent == 'true'
-        uses: openai/codex-action@e0fdf01220eb9a88167c4898839d273e3f2609d1
+        uses: openai/codex-action@10cb888d2ed3b99867f7e7ccff174a861a75aeb6
         with:
           openai-api-key: ${{ secrets.OPENCLAW_TEST_PERF_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
           prompt-file: .github/codex/prompts/test-performance-agent.md
