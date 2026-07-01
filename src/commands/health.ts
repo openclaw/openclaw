@@ -13,7 +13,7 @@ import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import { buildChannelAccountSnapshotFromAccount } from "../channels/plugins/status.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
+import type { ChannelAccountSnapshot, ChannelId } from "../channels/plugins/types.public.js";
 import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import { withProgress } from "../cli/progress.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
@@ -39,6 +39,7 @@ import { info } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
+import { getChannelActivity } from "../infra/channel-activity.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -230,6 +231,41 @@ function buildContextEngineHealthSummary(): ContextEngineHealthSummary | undefin
     quarantined.push(summary);
   }
   return quarantined.length > 0 ? { quarantined } : undefined;
+}
+
+function mergeRecordedActivityTimestamp(params: {
+  account: Record<string, unknown>;
+  key: "lastInboundAt" | "lastOutboundAt";
+  recorded: number | null;
+}) {
+  if (typeof params.recorded !== "number" || !Number.isFinite(params.recorded)) {
+    return;
+  }
+  const existing = params.account[params.key];
+  if (existing == null) {
+    params.account[params.key] = params.recorded;
+  }
+}
+
+function projectRecordedChannelActivity(params: {
+  channelId: ChannelId;
+  account: ChannelAccountHealthSummary | ChannelAccountSnapshot;
+}) {
+  const activity = getChannelActivity({
+    channel: params.channelId,
+    accountId: params.account.accountId,
+  });
+  const account = params.account as Record<string, unknown>;
+  mergeRecordedActivityTimestamp({
+    account,
+    key: "lastInboundAt",
+    recorded: activity.inboundAt,
+  });
+  mergeRecordedActivityTimestamp({
+    account,
+    key: "lastOutboundAt",
+    recorded: activity.outboundAt,
+  });
 }
 
 /** Formats context engine quarantine state for text health output. */
@@ -595,6 +631,10 @@ export async function getHealthSnapshot(params?: {
       if (lastProbeAt) {
         snapshot.lastProbeAt = lastProbeAt;
       }
+      projectRecordedChannelActivity({
+        channelId: plugin.id,
+        account: snapshot,
+      });
       const health = evaluateChannelHealth(snapshot, {
         channelId: plugin.id,
         now: Date.now(),
@@ -640,6 +680,10 @@ export async function getHealthSnapshot(params?: {
         record.lastProbeAt = lastProbeAt;
       }
       record.accountId = accountId;
+      projectRecordedChannelActivity({
+        channelId: plugin.id,
+        account: record,
+      });
       accountSummaries[accountId] = record;
     }
 
