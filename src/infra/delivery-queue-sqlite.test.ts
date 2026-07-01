@@ -77,7 +77,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
 
       const entries = loadDeliveryQueueEntries(QUEUE, stateDir);
       expect(entries).toHaveLength(2);
-      expect(entries.map((e) => e.id).sort()).toEqual(["valid-a", "valid-b"]);
+      expect(entries.map((e) => e.id).toSorted()).toEqual(["valid-a", "valid-b"]);
     });
 
     it("returns empty array when all rows are corrupt", () => {
