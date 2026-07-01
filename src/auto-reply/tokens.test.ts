@@ -133,6 +133,14 @@ describe("isSilentReplyText", () => {
     expect(isSilentReplyText("the sentinel is NO_REPLY, fyi")).toBe(false);
   });
 
+  it("returns true for punctuation with surrounding whitespace (#98166)", () => {
+    expect(isSilentReplyText(" .NO_REPLY")).toBe(true);
+    expect(isSilentReplyText(".NO_REPLY ")).toBe(true);
+    expect(isSilentReplyText(" .NO_REPLY ")).toBe(true);
+    expect(isSilentReplyText(" NO_REPLY. ")).toBe(true);
+    expect(isSilentReplyText(" *NO_REPLY* ")).toBe(true);
+  });
+
   it("preserves exact custom-token matches with punctuation-edged tokens", () => {
     // Custom tokens whose first/last character is punctuation must still match
     expect(isSilentReplyText("*SILENT*", "*SILENT*")).toBe(true);
