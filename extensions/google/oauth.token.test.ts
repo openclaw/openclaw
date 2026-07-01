@@ -105,7 +105,9 @@ describe("requestTokenGrant bounded error reads", () => {
           resolveStreamClosed();
         });
         const writeNext = () => {
-          if (closed) return;
+          if (closed) {
+            return;
+          }
           if (written >= STREAM_BODY_BYTES) {
             streamCompleted = true;
             res.end();
@@ -139,7 +141,7 @@ describe("requestTokenGrant bounded error reads", () => {
       );
 
       expect(error).toBeInstanceOf(Error);
-      const message = String((error as Error).message);
+      const message = (error as Error).message;
       expect(message).toContain("Token exchange failed:");
 
       // After bounded read, the stream should be cancelled before completion
@@ -163,7 +165,7 @@ describe("requestTokenGrant bounded error reads", () => {
       );
 
       expect(error).toBeInstanceOf(Error);
-      const message = String((error as Error).message);
+      const message = (error as Error).message;
       expect(message).toBe(
         'Token exchange failed: {"error":"invalid_grant","error_description":"Bad Request"}',
       );
@@ -194,7 +196,9 @@ describe("requestTokenGrant bounded error reads", () => {
           resolveStreamClosed();
         });
         const writeNext = () => {
-          if (closed) return;
+          if (closed) {
+            return;
+          }
           if (written >= STREAM_BODY_BYTES) {
             streamCompleted = true;
             res.end();
@@ -228,7 +232,7 @@ describe("requestTokenGrant bounded error reads", () => {
       }).catch((err: unknown) => err);
 
       expect(error).toBeInstanceOf(Error);
-      const message = String((error as Error).message);
+      const message = (error as Error).message;
       expect(message).toContain("Token exchange failed:");
 
       await expect(streamClosed).resolves.toBeUndefined();
