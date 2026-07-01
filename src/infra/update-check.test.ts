@@ -196,13 +196,16 @@ describe("resolveNpmChannelTag", () => {
 
   it("uses the public registry when no npm command is available", async () => {
     const fetch = vi.fn(async () => {
-      return {
-        ok: true,
-        json: async () => ({
+      return new Response(
+        JSON.stringify({
           version: "2026.6.8",
           engines: { node: ">=22.19.0" },
         }),
-      } as Response;
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      );
     });
     vi.stubGlobal("fetch", fetch);
 
