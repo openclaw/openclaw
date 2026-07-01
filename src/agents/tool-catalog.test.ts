@@ -50,6 +50,7 @@ describe("tool-catalog", () => {
       "update_goal",
       "update_plan",
       "skill_workshop",
+      "soul_update",
       "image",
       "image_generate",
       "music_generate",
@@ -66,9 +67,10 @@ describe("tool-catalog", () => {
       "sessions_send",
       "session_status",
       "message",
+      "soul_update",
       "bundle-mcp",
     ]);
-    expect(requirePolicyAllow("minimal")).toEqual(["session_status"]);
+    expect(requirePolicyAllow("minimal")).toEqual(["session_status", "soul_update"]);
   });
 
   it("full profile uses wildcard to grant all tools (#76507)", () => {

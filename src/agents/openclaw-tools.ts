@@ -64,6 +64,7 @@ import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createSkillWorkshopTool } from "./tools/skill-workshop-tool.js";
+import { createSoulUpdateTool } from "./tools/soul-update-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTranscriptsTool } from "./tools/transcripts-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
@@ -185,6 +186,12 @@ export function createOpenClawTools(
     onYield?: (message: string) => Promise<void> | void;
     /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
     allowGatewaySubagentBinding?: boolean;
+    /**
+     * Expose the soul_update tool. Defaults to false; only set true by the
+     * soul-reflection sub-turn. Without this, autoUpdate=true alone leaks the
+     * tool into main turns where the model would call it redundantly.
+     */
+    enableSoulUpdateTool?: boolean;
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
   const resolvedConfig = options?.config ?? openClawToolsDeps.config;
@@ -437,6 +444,10 @@ export function createOpenClawTools(
         ]),
     ...(messageTool && includeMessageTool ? [messageTool] : []),
     ...collectPresentOpenClawTools([heartbeatTool]),
+    ...(resolvedConfig?.agents?.defaults?.soul?.autoUpdate === true &&
+    options?.enableSoulUpdateTool === true
+      ? [createSoulUpdateTool({ workspaceDir })]
+      : []),
     createTtsTool({
       agentChannel: options?.agentChannel,
       config: resolvedConfig,

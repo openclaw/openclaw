@@ -293,6 +293,11 @@ export type AgentDefaultsConfig = {
      */
     localModelLean?: boolean;
   };
+  /** Soul reflection: opt-in agent-driven SOUL.md evolution via the `soul_update` tool. */
+  soul?: {
+    /** When true, runtime exposes the `soul_update` tool and fires reflection sub-turns. Default false. */
+    autoUpdate?: boolean;
+  };
   /**
    * Agent-visible bootstrap truncation warning mode:
    * - off: do not inject warning text

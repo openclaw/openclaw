@@ -94,6 +94,13 @@ export const AgentDefaultsSchema = z
       })
       .strict()
       .optional(),
+    soul: z
+      .object({
+        /** When true, the runtime fires reflection sub-turns that can append rules to SOUL.md. Default false. */
+        autoUpdate: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     bootstrapPromptTruncationWarning: z
       .union([z.literal("off"), z.literal("once"), z.literal("always")])
       .optional(),

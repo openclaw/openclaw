@@ -138,6 +138,7 @@ import {
   isAgentRunRestartAbortReason,
   resolveAgentRunAbortLifecycleFields,
 } from "./run-termination.js";
+import { formatSoulReflectionNotice, maybeFireSoulReflection } from "./soul-reflection-runner.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { hasNonzeroUsage } from "./usage.js";
@@ -898,6 +899,20 @@ async function agentCommandInternal(
   let sessionReboundDuringRun = false;
   let trackedRestartRecoveryDeliveryContext = false;
   let currentRunDeliveryContext: DeliveryContext | undefined;
+
+  if (!isRawModelRun && opts.skipSoulReflection !== true) {
+    const reflectionOutcome = await maybeFireSoulReflection({
+      cfg,
+      sessionKey,
+      workspaceDir,
+      userMessage: body,
+      channel: opts.channel,
+      skipSoulReflection: opts.skipSoulReflection,
+    });
+    if (reflectionOutcome.status === "fired" && reflectionOutcome.appendedRule) {
+      runtime.log(formatSoulReflectionNotice(reflectionOutcome.appendedRule));
+    }
+  }
 
   try {
     if (opts.deliver === true) {
