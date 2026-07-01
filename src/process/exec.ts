@@ -23,6 +23,7 @@ import {
   resolveTrustedWindowsCmdExe,
   resolveWindowsCommandShim,
 } from "./windows-command.js";
+import { reapZombies } from "./zombie-reaper.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -562,6 +563,9 @@ export async function runCommandWithTimeout(
           }
         }
         terminateProcessTree(child.pid, { graceMs: COMMAND_PROCESS_TREE_KILL_GRACE_MS });
+        // Reap zombie grandchildren after the process-tree kill settles
+        // (the SIGTERM/SIGKILL race can leave unreaped zombies, #97616).
+        setTimeout(() => reapZombies(), COMMAND_PROCESS_TREE_KILL_GRACE_MS + 500);
         return;
       }
       if (process.platform === "win32" && typeof child.pid === "number" && child.pid > 0) {
@@ -580,6 +584,8 @@ export async function runCommandWithTimeout(
         }
       }
       child.kill("SIGKILL");
+      // Give the SIGKILL time to take effect before reaping orphans.
+      setTimeout(() => reapZombies(), 500);
     };
 
     const armNoOutputTimer = () => {
