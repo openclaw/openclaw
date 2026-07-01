@@ -94,6 +94,33 @@ export function createFeishuApiError(
 // 11232: tenant-level "create message service trigger rate limit" (100/min, 5/sec per app/bot).
 // Distinct from FEISHU_BACKOFF_CODES in typing.ts, which covers the reaction API (99991400+).
 const FEISHU_SEND_RATE_LIMIT_CODES = new Set([230020, 11232]);
+const FEISHU_TOKEN_INVALID_CODES = new Set([99991663, 99991664]);
+
+/** Cache-owning modules register their clearers at import time so
+ *  requestFeishuApi can invalidate all caches before retrying after a
+ *  token-invalid error (99991663/99991664). After clearing the cached
+ *  tenant_access_token the SDK fetches a fresh token on the retry. */
+const feishuTokenCacheClearers: Array<() => void> = [];
+
+export function addFeishuTokenCacheClearer(fn: () => void): void {
+  feishuTokenCacheClearers.push(fn);
+}
+
+function clearFeishuTokenCaches(): void {
+  for (const fn of feishuTokenCacheClearers) {
+    fn();
+  }
+}
+
+export function getFeishuTokenInvalidCode(error: unknown): number | undefined {
+  if (!isRecord(error)) {
+    return undefined;
+  }
+  const response = isRecord(error.response) ? error.response : undefined;
+  const data = isRecord(response?.data) ? response.data : undefined;
+  const code = data?.code;
+  return typeof code === "number" && FEISHU_TOKEN_INVALID_CODES.has(code) ? code : undefined;
+}
 const FEISHU_SEND_MAX_RETRIES = 2;
 const FEISHU_SEND_RETRY_BASE_MS = 500;
 
@@ -148,6 +175,7 @@ export async function requestFeishuApi<T>(
 ): Promise<T> {
   const retryDelayMs = options.retryDelayMs ?? FEISHU_SEND_RETRY_BASE_MS;
   let lastFulfilledRateLimit: { response: unknown; code: number } | undefined;
+  let retriedTokenInvalid = false; // single recovery retry per issue #97287
   for (let attempt = 0; attempt <= FEISHU_SEND_MAX_RETRIES; attempt++) {
     if (attempt > 0) {
       // Linear backoff: delay grows with each attempt to give the rate-limit window time to reset.
@@ -161,20 +189,45 @@ export async function requestFeishuApi<T>(
       // instead of throwing. Classify before returning so retry covers both shapes.
       const fulfilledRateLimit = getFeishuSendRateLimitCodeFromResponse(result);
       if (fulfilledRateLimit !== undefined) {
-        // Capture for the synthetic-error path below; on a non-final attempt
-        // continue retrying, on the final attempt fall through so the loop
-        // exits and the wrapped exhaustion error is thrown.
         lastFulfilledRateLimit = { response: result, code: fulfilledRateLimit };
         if (attempt < FEISHU_SEND_MAX_RETRIES) {
           continue;
         }
         break;
       }
+      // Also handle fulfilled token-invalid bodies (SDK sometimes resolves instead
+      // of throwing on 99991663/99991664). Clear caches and retry once.
+      const fulfilledTokenInvalid =
+        isRecord(result) &&
+        FEISHU_TOKEN_INVALID_CODES.has((result as { code?: number }).code as number);
+      if (fulfilledTokenInvalid) {
+        clearFeishuTokenCaches();
+        if (!retriedTokenInvalid) {
+          retriedTokenInvalid = true;
+          attempt--; // don't consume the rate-limit retry budget (#97287)
+          continue;
+        }
+        throw createFeishuApiError(
+          Object.assign(new Error("Feishu API token invalid"), { response: { data: result } }),
+          errorPrefix,
+          options,
+        );
+      }
       return result;
     } catch (error) {
-      const isRetryable =
+      const isRateLimit =
         attempt < FEISHU_SEND_MAX_RETRIES && getFeishuSendRateLimitCode(error) !== undefined;
-      if (!isRetryable) {
+      const isTokenInvalid = getFeishuTokenInvalidCode(error) !== undefined;
+      if (isTokenInvalid) {
+        clearFeishuTokenCaches();
+        if (!retriedTokenInvalid) {
+          retriedTokenInvalid = true;
+          attempt--; // don't consume the rate-limit retry budget (#97287)
+          continue;
+        }
+        throw createFeishuApiError(error, errorPrefix, options);
+      }
+      if (!isRateLimit) {
         throw createFeishuApiError(error, errorPrefix, options);
       }
       // Rate-limit on a non-final attempt — loop continues to next retry.
@@ -190,8 +243,12 @@ export async function requestFeishuApi<T>(
     );
     throw createFeishuApiError(synthetic, errorPrefix, options);
   }
-  // Unreachable: every iteration either returns or throws. Required for TypeScript exhaustiveness.
-  throw createFeishuApiError(new Error("unreachable"), errorPrefix, options);
+  // Exhausted retries — preserve the last error details when available.
+  throw createFeishuApiError(
+    new Error("Feishu API request failed after exhausting retries"),
+    errorPrefix,
+    options,
+  );
 }
 
 type ParsedCommentDocumentRef = {
