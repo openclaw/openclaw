@@ -875,7 +875,7 @@ export class TelegramPollingSession {
     }
     const age = formatDurationPrecise(timedOutHandler.ageMs);
     activeHandler.timedOutAt = Date.now();
-    const message = `Telegram isolated polling spool handler timed out behind update ${handler.updateId} on lane ${handler.laneKey} after ${age}; marking the update failed, aborting active reply work, and restarting isolated ingress so later updates can drain.`;
+    const message = `Telegram isolated polling spool handler timed out behind update ${handler.updateId} on lane ${handler.laneKey} after ${age}; marking the update failed, aborting active reply work, and waiting for the handler to stop before releasing the lane.`;
     activeHandler.timeoutMessage = message;
     try {
       const failed = await failTelegramSpooledUpdateClaim({
@@ -916,13 +916,14 @@ export class TelegramPollingSession {
       !handlerStopped &&
       activeSpooledUpdateHandlersByLane.get(handler.handlerKey) === activeHandler
     ) {
+      // Reply fences can cancel OpenClaw-owned send work, but they cannot kill
+      // arbitrary handler code. Keep the lane guarded until the handler settles
+      // so same-lane updates never run concurrently.
       this.opts.log(
-        `[telegram][diag] timed out spooled update ${handler.updateId} did not stop within ${formatDurationPrecise(this.#spooledUpdateHandlerAbortGraceMs)} after reply abort; releasing lane ${handler.laneKey} and restarting isolated ingress so later updates can drain.`,
+        `[telegram][diag] timed out spooled update ${handler.updateId} did not stop within ${formatDurationPrecise(this.#spooledUpdateHandlerAbortGraceMs)} after reply abort; keeping lane ${handler.laneKey} guarded until the handler stops.`,
       );
-      activeSpooledUpdateHandlersByLane.delete(handler.handlerKey);
-      this.#spooledUpdateHandlerKeys.delete(handler.handlerKey);
       this.#status.notePollingError(message);
-      return { handlerKey: handler.handlerKey, restart: true };
+      return { handlerKey: handler.handlerKey, restart: false };
     }
     if (activeSpooledUpdateHandlersByLane.get(handler.handlerKey) === activeHandler) {
       activeSpooledUpdateHandlersByLane.delete(handler.handlerKey);
