@@ -830,6 +830,7 @@ async function handleSessionSend(params: {
       await reactivateCompletedSubagentSession({
         sessionKey: canonicalKey,
         runId: startedRunId,
+        task: (p as { message: string }).message,
       });
     }
     emitSessionsChanged(params.context, {

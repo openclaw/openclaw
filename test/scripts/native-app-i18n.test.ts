@@ -1,5 +1,14 @@
+import { readFile, stat } from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { collectNativeI18nEntries, NATIVE_I18N_LOCALES } from "../../scripts/native-app-i18n.ts";
+import {
+  collectNativeI18nEntries,
+  NATIVE_I18N_LOCALES,
+  parseNativeI18nCommand,
+  syncNativeLocale,
+  type NativeI18nEntry,
+} from "../../scripts/native-app-i18n.ts";
+import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 describe("native app i18n inventory", () => {
   it("collects stable Android and Apple UI entries", async () => {
@@ -111,5 +120,163 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.path.endsWith("Info.plist"))).toBe(true);
     expect(NATIVE_I18N_LOCALES).toHaveLength(21);
     expect(NATIVE_I18N_LOCALES).toContain("sv");
+  });
+
+  it("creates a first-run locale artifact and leaves a complete artifact unchanged", async () => {
+    const tempDirs: string[] = [];
+    const translationsDir = makeTempDir(tempDirs, "openclaw-native-i18n-");
+    const entries: NativeI18nEntry[] = [
+      {
+        id: "native.android.hello",
+        kind: "ui-call",
+        line: 1,
+        path: "apps/android/example.kt",
+        source: "Hello",
+        surface: "android",
+      },
+      {
+        id: "native.apple.request",
+        kind: "ui-call",
+        line: 2,
+        path: "apps/ios/example.swift",
+        source: "Request ID: \\(requestId)",
+        surface: "apple",
+      },
+      {
+        id: "native.android.count",
+        kind: "ui-call",
+        line: 3,
+        path: "apps/android/example.kt",
+        source: "Showing ${visibleApps.size} of ${apps.size}",
+        surface: "android",
+      },
+      {
+        id: "native.apple.permissions",
+        kind: "ui-call",
+        line: 4,
+        path: "apps/ios/example.swift",
+        source: "\\(granted) of \\(total) permissions granted",
+        surface: "apple",
+      },
+    ];
+
+    try {
+      const first = await syncNativeLocale("sv", entries, {
+        glossary: [],
+        translationsDir,
+        translate: async (pending) =>
+          new Map(
+            pending.map((entry) => {
+              const translated = {
+                "native.android.hello": "Hej",
+                "native.apple.request": "Begärans-ID: \\(requestId)",
+                "native.android.count": "${apps.size} totalt, ${visibleApps.size} visas",
+                "native.apple.permissions": "Av \\(total) behörigheter har \\(granted) beviljats",
+              }[entry.id];
+              return [entry.id, translated ?? entry.source];
+            }),
+          ),
+      });
+      expect(first).toEqual({ changed: true, translated: 4 });
+
+      const artifactPath = path.join(translationsDir, "sv.json");
+      const firstContents = await readFile(artifactPath, "utf8");
+      const firstModifiedAt = (await stat(artifactPath)).mtimeMs;
+      const second = await syncNativeLocale("sv", entries, {
+        glossary: [],
+        translationsDir,
+        translate: async () => {
+          throw new Error("no-op refresh must not call the provider");
+        },
+      });
+
+      expect(second).toEqual({ changed: false, translated: 0 });
+      expect(await readFile(artifactPath, "utf8")).toBe(firstContents);
+      expect((await stat(artifactPath)).mtimeMs).toBe(firstModifiedAt);
+
+      const refreshed = await syncNativeLocale("sv", entries, {
+        glossary: [{ source: "Request", target: "Begäran" }],
+        translationsDir,
+        translate: async (pending) =>
+          new Map(pending.map((entry) => [entry.id, `refreshed:${entry.source}`])),
+      });
+
+      expect(refreshed).toEqual({ changed: true, translated: 4 });
+      const refreshedArtifact = JSON.parse(await readFile(artifactPath, "utf8")) as {
+        entries: Array<{ translated: string }>;
+        glossaryHash: string;
+      };
+      expect(refreshedArtifact.glossaryHash).toMatch(/^[a-f0-9]{64}$/u);
+      expect(
+        refreshedArtifact.entries.every((entry) => entry.translated.startsWith("refreshed:")),
+      ).toBe(true);
+    } finally {
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
+  it("rejects native printf placeholder drift", async () => {
+    const tempDirs: string[] = [];
+    const translationsDir = makeTempDir(tempDirs, "openclaw-native-i18n-");
+    const cases = [
+      {
+        entry: {
+          id: "native.android.certificate",
+          kind: "ui-call",
+          line: 1,
+          path: "apps/android/example.kt",
+          source: "Old fingerprint: %1$s\nNew fingerprint: %2$s",
+          surface: "android",
+        },
+        translated: "Gammalt fingeravtryck: %1$s",
+      },
+      {
+        entry: {
+          id: "native.apple.failure",
+          kind: "ui-call",
+          line: 1,
+          path: "apps/ios/example.swift",
+          source: "Send failed: %@",
+          surface: "apple",
+        },
+        translated: "Sändningen misslyckades",
+      },
+    ] satisfies Array<{ entry: NativeI18nEntry; translated: string }>;
+
+    try {
+      for (const { entry, translated } of cases) {
+        await expect(
+          syncNativeLocale("sv", [entry], {
+            glossary: [],
+            translationsDir,
+            translate: async () => new Map([[entry.id, translated]]),
+          }),
+        ).rejects.toThrow(
+          `native translation changed placeholders or line breaks for sv:${entry.id}`,
+        );
+      }
+    } finally {
+      cleanupTempDirs(tempDirs);
+    }
+  });
+
+  it("validates locale refresh arguments before write paths run", () => {
+    expect(parseNativeI18nCommand(["sync", "--write", "--locale", "sv"])).toEqual({
+      command: "sync",
+      locale: "sv",
+      write: true,
+    });
+    expect(() => parseNativeI18nCommand(["sync", "--write", "--locale"])).toThrow(
+      "requires a locale value",
+    );
+    expect(() => parseNativeI18nCommand(["sync", "--write", "--locale", "--write"])).toThrow(
+      "requires a locale value",
+    );
+    expect(() => parseNativeI18nCommand(["sync", "--write", "--locale", "xx"])).toThrow(
+      "unsupported native locale",
+    );
+    expect(() => parseNativeI18nCommand(["check", "--locale", "sv"])).toThrow(
+      "requires `sync --write",
+    );
   });
 });
