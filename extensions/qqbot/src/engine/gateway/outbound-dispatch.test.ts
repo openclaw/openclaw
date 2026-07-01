@@ -445,12 +445,10 @@ describe("dispatchOutbound", () => {
     }
   });
 
-  it("resolves relative block mediaUrl payloads against the agent workspace", async () => {
+  it("does not auto-route bare relative block mediaUrl payloads", async () => {
     const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-block-mediaurl-workspace-"));
     try {
-      const filePath = path.join(tmpRoot, "relative-report.docx");
-      await fs.writeFile(filePath, Buffer.from("report"));
-      const realFilePath = await fs.realpath(filePath);
+      await fs.writeFile(path.join(tmpRoot, "relative-report.docx"), Buffer.from("report"));
       const runtime = makeRuntime({
         onDeliver: async (deliver) => {
           await deliver({ mediaUrl: "relative-report.docx" }, { kind: "block" });
@@ -468,30 +466,22 @@ describe("dispatchOutbound", () => {
         },
       );
 
-      expect(sendMediaMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          kind: "file",
-          source: { localPath: realFilePath },
-          target: { id: "user-openid", type: "c2c" },
-        }),
-      );
+      expect(sendMediaMock).not.toHaveBeenCalled();
     } finally {
       await fs.rm(tmpRoot, { recursive: true, force: true });
     }
   });
 
-  it("resolves relative markdown image paths against the agent workspace", async () => {
+  it("does not auto-route bare relative markdown image paths", async () => {
     const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-markdown-image-workspace-"));
     try {
-      const filePath = path.join(tmpRoot, "relative-chart.png");
       await fs.writeFile(
-        filePath,
+        path.join(tmpRoot, "relative-chart.png"),
         Buffer.from(
           "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
           "base64",
         ),
       );
-      const realFilePath = await fs.realpath(filePath);
       const runtime = makeRuntime({
         onDeliver: async (deliver) => {
           await deliver({ text: "Here is ![chart](relative-chart.png)" }, { kind: "block" });
@@ -509,13 +499,7 @@ describe("dispatchOutbound", () => {
         },
       );
 
-      expect(sendMediaMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          kind: "image",
-          source: { localPath: realFilePath },
-          target: { id: "user-openid", type: "c2c" },
-        }),
-      );
+      expect(sendMediaMock).not.toHaveBeenCalled();
     } finally {
       await fs.rm(tmpRoot, { recursive: true, force: true });
     }
@@ -587,6 +571,45 @@ describe("dispatchOutbound", () => {
 
       expect(sendMediaMock).not.toHaveBeenCalled();
     } finally {
+      await fs.rm(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("does not expose default sandbox roots through gateway qqmedia replies", async () => {
+    const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qqbot-agent-root-boundary-"));
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    try {
+      const workspaceDir = path.join(tmpRoot, "workspace");
+      const stateSandboxDir = path.join(tmpRoot, "state", "sandboxes", "other-agent");
+      const stateSandboxFile = path.join(stateSandboxDir, "outside-report.docx");
+      await fs.mkdir(workspaceDir, { recursive: true });
+      await fs.mkdir(stateSandboxDir, { recursive: true });
+      await fs.writeFile(stateSandboxFile, Buffer.from("outside"));
+      process.env.OPENCLAW_STATE_DIR = path.join(tmpRoot, "state");
+      const runtime = makeRuntime({
+        onDeliver: async (deliver) => {
+          await deliver({ text: `<qqmedia>${stateSandboxFile}</qqmedia>` }, { kind: "block" });
+        },
+      });
+
+      await dispatchOutbound(
+        makeInbound({
+          route: { sessionKey: "qqbot:c2c:user-openid", accountId: "qq-main", agentId: "agent-1" },
+        }),
+        {
+          runtime,
+          cfg: { agents: { list: [{ id: "agent-1", workspace: workspaceDir }] } },
+          account,
+        },
+      );
+
+      expect(sendMediaMock).not.toHaveBeenCalled();
+    } finally {
+      if (originalStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      }
       await fs.rm(tmpRoot, { recursive: true, force: true });
     }
   });

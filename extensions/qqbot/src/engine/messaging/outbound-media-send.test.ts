@@ -284,6 +284,32 @@ describe("trySendViaHostRead error handling", () => {
     );
   });
 
+  it("does not host-read virtual /workspace paths without a workspaceDir", async () => {
+    mockedLoadOutboundMediaFromUrl.mockResolvedValue({
+      buffer: Buffer.from("report"),
+      kind: "document",
+      fileName: "report.docx",
+      contentType: "application/octet-stream",
+    });
+    mockedSenderSendMedia.mockResolvedValue({ id: "media-1", timestamp: 123 });
+
+    const result = await sendPhoto(
+      {
+        ...makeCtx(),
+        mediaAccess: {
+          localRoots: ["/tmp/openclaw-sandbox"],
+          readFile: async () => Buffer.from("report"),
+        },
+        mediaLocalRoots: [],
+      },
+      "/workspace/report.docx",
+    );
+
+    expect(result).toMatchObject({ channel: "qqbot", error: expect.any(String) });
+    expect(mockedLoadOutboundMediaFromUrl).not.toHaveBeenCalled();
+    expect(mockedSenderSendMedia).not.toHaveBeenCalled();
+  });
+
   it("preserves authorized host /workspace paths before virtual workspace mapping", async () => {
     mockedLoadOutboundMediaFromUrl.mockResolvedValue({
       buffer: Buffer.from("report"),

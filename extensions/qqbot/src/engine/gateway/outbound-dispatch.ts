@@ -13,7 +13,6 @@
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-chunking";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { createQQBotMarkdownChunker } from "../messaging/markdown-table-chunking.js";
@@ -136,17 +135,10 @@ export async function dispatchOutbound(
   const { event, qualifiedTarget } = inbound;
 
   const routeAgentId = inbound.route.agentId;
-  const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg as OpenClawConfig, routeAgentId);
   const workspaceDir = routeAgentId
     ? resolveAgentWorkspaceDir(cfg as OpenClawConfig, routeAgentId)
     : undefined;
-  const gatewayMediaContext =
-    mediaLocalRoots.length > 0 || workspaceDir
-      ? {
-          ...(mediaLocalRoots.length > 0 ? { mediaLocalRoots } : {}),
-          ...(workspaceDir ? { mediaAccess: { workspaceDir } } : {}),
-        }
-      : {};
+  const gatewayMediaContext = workspaceDir ? { mediaAccess: { workspaceDir } } : {};
   const replyTarget = {
     type: event.type,
     senderId: event.senderId,

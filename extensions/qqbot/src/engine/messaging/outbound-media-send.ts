@@ -279,7 +279,9 @@ function resolveHostReadMediaPath(ctx: MediaTargetContext, mediaPath: string): s
       return normalizedPath;
     }
     if (normalizedPath === "/workspace" || normalizedPath.startsWith("/workspace/")) {
-      return resolveWorkspacePathCandidate(normalizedPath, ctx.mediaAccess?.workspaceDir);
+      return ctx.mediaAccess?.workspaceDir
+        ? resolveWorkspacePathCandidate(normalizedPath, ctx.mediaAccess.workspaceDir)
+        : null;
     }
     return null;
   }
