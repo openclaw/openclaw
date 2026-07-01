@@ -60,7 +60,7 @@ import {
 import type { PendingFinalDeliveryPayload, SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveSubagentRunDeadlineMs } from "./subagent-run-timeout.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
-import { isNonDeliverableSessionsReply } from "./tools/sessions-send-tokens.js";
+import { selectDeliverableSessionsReply } from "./tools/sessions-send-tokens.js";
 
 type CaptureSubagentCompletionReply =
   (typeof import("./subagent-announce.js"))["captureSubagentCompletionReply"];
@@ -85,10 +85,13 @@ function resolveFinalDeliveryGiveUpMode(entry: SubagentRunRecord): FinalDelivery
   if (entry.cleanup === "keep") {
     return "suspend";
   }
+  const payload = entry.delivery?.payload;
   const completion = entry.completion;
-  const result = completion?.resultText?.trim() || completion?.fallbackResultText?.trim();
-  const hasDeliverableResult = Boolean(result) && !isNonDeliverableSessionsReply(result);
-  return hasDeliverableResult ? "suspend" : "finalize";
+  const result = selectDeliverableSessionsReply(
+    payload?.frozenResultText ?? completion?.resultText,
+    payload?.fallbackFrozenResultText ?? completion?.fallbackResultText,
+  );
+  return result ? "suspend" : "finalize";
 }
 
 const browserCleanupLoader = createLazyImportLoader<BrowserCleanupModule>(

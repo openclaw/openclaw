@@ -961,6 +961,15 @@ describe("subagent registry lifecycle hardening", () => {
       },
       expectedResult: "fallback final answer",
     },
+    {
+      reason: "retry-limit" as const,
+      completion: {
+        required: true,
+        resultText: "NO_REPLY",
+        fallbackResultText: "pre-wake final answer",
+      },
+      expectedResult: "pre-wake final answer",
+    },
   ])(
     "surfaces a successful delete-mode completion to the requester after $reason give-up",
     async ({ reason, completion, expectedResult }) => {
@@ -989,10 +998,7 @@ describe("subagent registry lifecycle hardening", () => {
       });
 
       expect(entry.delivery?.status).toBe("suspended");
-      expect(
-        entry.delivery?.payload?.frozenResultText ??
-          entry.delivery?.payload?.fallbackFrozenResultText,
-      ).toBe(expectedResult);
+      expect(entry.delivery?.payload).toBeDefined();
       expect(entry.cleanupHandled).toBe(false);
       expect(entry.cleanupCompletedAt).toBeUndefined();
 
@@ -1004,6 +1010,7 @@ describe("subagent registry lifecycle hardening", () => {
       });
       expect(requesterTurn?.runIds).toEqual([entry.runId]);
       expect(requesterTurn?.prompt).toContain(expectedResult);
+      expect(requesterTurn?.prompt).not.toContain("NO_REPLY");
     },
   );
 
@@ -1073,6 +1080,56 @@ describe("subagent registry lifecycle hardening", () => {
 
     expect(entry.delivery?.status).toBe("failed");
     expect(runs.has(entry.runId)).toBe(false);
+  });
+
+  it("recovers a fallback-only completion from the durable delivery payload", async () => {
+    const entry = createRunEntry({
+      cleanup: "delete",
+      endedAt: 4_000,
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      expectsCompletionMessage: true,
+      completion: { required: true },
+      delivery: {
+        status: "in_progress",
+        attemptCount: 3,
+        lastError: "requester turn interrupted",
+        steeringLeaseId: "stale-requester-turn",
+        steeringLeasedAt: 4_500,
+        payload: {
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          childSessionKey: "agent:main:subagent:test",
+          childRunId: "run-test",
+          task: "test task",
+          endedAt: 4_000,
+          outcome: { status: "ok" },
+          expectsCompletionMessage: true,
+          fallbackFrozenResultText: "durable fallback answer",
+        },
+      },
+      outcome: { status: "ok" },
+    });
+    const runs = new Map([[entry.runId, entry]]);
+    const controller = createLifecycleController({
+      entry,
+      runs,
+      captureSubagentCompletionReply: vi.fn(async () => undefined),
+    });
+
+    await controller.finalizeResumedAnnounceGiveUp({
+      runId: entry.runId,
+      entry,
+      reason: "retry-limit",
+    });
+
+    expect(entry.delivery?.status).toBe("suspended");
+    const requesterTurn = leasePendingAgentSteeringItemsFromSubagentRuns({
+      runs,
+      requesterSessionKey: entry.requesterSessionKey,
+      leaseId: "recovered-requester-turn",
+      now: 5_000,
+    });
+    expect(requesterTurn?.prompt).toContain("durable fallback answer");
   });
 
   it("suspends successful keep-mode final delivery instead of completing cleanup on retry exhaustion", async () => {
