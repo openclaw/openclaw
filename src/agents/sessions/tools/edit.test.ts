@@ -104,6 +104,32 @@ describe("edit tool", () => {
     expect(message).not.toContain("Candidate 4");
   });
 
+  it("bounds long single-line mismatch candidate diagnostics", async () => {
+    const targetTail = "target-tail";
+    const candidateTail = "candidate-tail";
+    const filePath = await createTempFile(`alpha ${"a".repeat(1500)} ${candidateTail}\n`);
+    const tool = createEditTool(tmpDir);
+
+    let message = "";
+    try {
+      await tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: `alpha ${"a".repeat(1500)} ${targetTail}`, newText: "replacement" }],
+        },
+        undefined,
+      );
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("Nearest candidate lines:");
+    expect(message).toContain("... (line truncated)");
+    expect(message).not.toContain(candidateTail);
+    expect(message).not.toContain(targetTail);
+  });
+
   it("omits candidate lines for no-op validation mismatches", async () => {
     const filePath = await createTempFile("present no-op\nnear absent tex\n");
     const tool = createEditTool(tmpDir);

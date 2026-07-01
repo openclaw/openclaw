@@ -86,6 +86,7 @@ const EDIT_MISMATCH_HINT_LIMIT = 800;
 const EDIT_MISMATCH_CANDIDATE_LIMIT = 3;
 const EDIT_MISMATCH_PREFILTER_LIMIT = 24;
 const EDIT_MISMATCH_CANDIDATE_DIFF_LIMIT = 600;
+const EDIT_MISMATCH_LINE_TEXT_LIMIT = 240;
 const EDIT_MISMATCH_SCORE_TEXT_LIMIT = 240;
 const EDIT_MISMATCH_SCAN_LINE_LIMIT = 1000;
 
@@ -189,6 +190,16 @@ function splitDiagnosticLines(text: string): string[] {
     lines.pop();
   }
   return lines;
+}
+
+function truncateDiagnosticLine(line: string): string {
+  return line.length <= EDIT_MISMATCH_LINE_TEXT_LIMIT
+    ? line
+    : `${line.slice(0, EDIT_MISMATCH_LINE_TEXT_LIMIT)}... (line truncated)`;
+}
+
+function splitBoundedDiagnosticLines(text: string): string[] {
+  return splitDiagnosticLines(text).map(truncateDiagnosticLine);
 }
 
 function truncateForScore(text: string): string {
@@ -311,15 +322,14 @@ function findNearestEditCandidates(
   content: string,
   oldText: string,
 ): Array<{ startLine: number; text: string; score: number }> {
-  const targetLines = splitDiagnosticLines(oldText);
+  const targetLines = splitBoundedDiagnosticLines(oldText);
   if (targetLines.length === 0 || (targetLines.length === 1 && targetLines[0] === "")) {
     return [];
   }
 
-  const contentLines = splitDiagnosticLines(stripBom(content).text).slice(
-    0,
-    EDIT_MISMATCH_SCAN_LINE_LIMIT,
-  );
+  const contentLines = splitDiagnosticLines(stripBom(content).text)
+    .slice(0, EDIT_MISMATCH_SCAN_LINE_LIMIT)
+    .map(truncateDiagnosticLine);
   if (contentLines.length === 0) {
     return [];
   }
@@ -372,7 +382,7 @@ function formatMismatchCandidates(currentContent: string, edits: Edit[]): string
         formatCandidateBlock({
           index: blocks.length,
           startLine: candidate.startLine,
-          targetText: normalizeToLF(edit.oldText),
+          targetText: splitBoundedDiagnosticLines(edit.oldText).join("\n"),
           candidateText: candidate.text,
         }),
       );
