@@ -427,10 +427,7 @@ describe("NoOpRearmGuard admission + recording", () => {
 
     t += 120_000; // beyond the 60s window
     const later = guard.evaluate(roomEventWake({ sessionKey }));
-    expect(later.admit).toBe(true);
-    if (later.admit) {
-      expect(later.reason).toBe("below-threshold");
-    }
+    expect(later).toMatchObject({ admit: true, reason: "below-threshold" });
     expect(guard.peekStreak({ sessionKey })).toBe(0);
   });
 

@@ -240,10 +240,6 @@ export type NoOpRearmTurnOutcome =
   | { kind: "no_op"; reason: string }
   | { kind: "error_no_gain"; reason: string };
 
-function isNoReplyText(text: string | undefined): boolean {
-  return isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN);
-}
-
 function isContinuationMarkerOnlyText(text: string | undefined): boolean {
   const normalized = normalizeOptionalString(text);
   if (!normalized) {
@@ -275,7 +271,7 @@ export function summarizeEmbeddedRunOutcome(
     if (
       typeof payload.text === "string" &&
       payload.text.trim().length > 0 &&
-      !isNoReplyText(payload.text) &&
+      !isSilentReplyPayloadText(payload.text, SILENT_REPLY_TOKEN) &&
       !isContinuationMarkerOnlyText(payload.text)
     ) {
       return true;
@@ -295,7 +291,7 @@ export function summarizeEmbeddedRunOutcome(
   );
   const visibleText =
     visibleAssistantText !== undefined &&
-    !isNoReplyText(visibleAssistantText) &&
+    !isSilentReplyPayloadText(visibleAssistantText, SILENT_REPLY_TOKEN) &&
     !isContinuationMarkerOnlyText(visibleAssistantText) &&
     meta?.error?.kind !== "hook_block";
   const hasVisibleReply = payloadVisible || deliveredViaMessaging || visibleText;
