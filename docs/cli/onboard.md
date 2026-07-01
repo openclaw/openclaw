@@ -214,7 +214,7 @@ Token-based model auth (non-interactive; used with `--auth-choice token`):
 
 - `--token-provider <id>` — Token provider id. Identifies which provider issues the token.
 - `--token <token>` — Token value for model authentication.
-- `--token-profile-id <id>` — Auth profile id (default: `<provider>:manual`).
+- `--token-profile-id <id>` — Auth profile id. Generic token storage defaults to `<provider>:manual`; provider-owned setup flows may use their own default, such as `anthropic:default`.
 - `--token-expires-in <duration>` — Optional token expiry duration (e.g. `365d`, `12h`).
 
 Cloudflare AI Gateway (non-interactive):
