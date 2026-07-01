@@ -461,6 +461,44 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(openSpy).not.toHaveBeenCalled();
   });
 
+  it("projects context-engine referenceContext into the Codex turn input", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    SessionManager.open(sessionFile).appendMessage(
+      assistantMessage("existing context", Date.now()) as never,
+    );
+    const contextEngine = createContextEngine({
+      assemble: vi.fn(async ({ messages }) => ({
+        messages,
+        estimatedTokens: 42,
+        referenceContext: [
+          {
+            id: "summary-1",
+            kind: "summary",
+            trust: "untrusted",
+            content: "Historical reference summary from lossless-claw.",
+          },
+        ],
+      })),
+    });
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    const inputText = getRequestInputText(harness);
+    expect(inputText).toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).toContain("OpenClaw reference context for this turn:");
+    expect(inputText).toContain("lower-authority historical data");
+    expect(inputText).toContain("Historical reference summary from lossless-claw.");
+    expect(inputText).toContain("Current user request:\nhello");
+
+    await harness.completeTurn();
+    await run;
+  });
+
   it("keeps context-engine history bound to the run session when sandbox key differs", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

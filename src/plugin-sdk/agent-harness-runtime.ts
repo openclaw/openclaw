@@ -338,6 +338,11 @@ export {
   CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
 } from "../context-engine/host-compat.js";
 export {
+  insertContextEngineReferenceContextMessage,
+  renderContextEngineReferenceContext,
+} from "../context-engine/reference-context.js";
+export type { ContextEngineReferenceContextItem } from "../context-engine/types.js";
+export {
   assembleHarnessContextEngine,
   bootstrapHarnessContextEngine,
   buildHarnessContextEngineRuntimeContext,

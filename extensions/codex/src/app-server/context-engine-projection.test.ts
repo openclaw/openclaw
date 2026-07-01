@@ -98,6 +98,34 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.promptText).not.toContain("cat .env");
   });
 
+  it("projects referenceContext as a separate lower-authority context block", () => {
+    const result = projectContextEngineAssemblyForCodex({
+      assembledMessages: [textMessage("assistant", "Earlier assistant answer")],
+      originalHistoryMessages: [],
+      prompt: "current request",
+      referenceContext: [
+        {
+          id: "summary-1",
+          kind: "summary",
+          trust: "untrusted",
+          content: "Historical summary from the context engine.",
+          source: { engine: "lossless-claw" },
+        },
+      ],
+    });
+
+    expect(result.promptText).toContain("OpenClaw assembled context for this turn:");
+    expect(result.promptText).toContain("OpenClaw reference context for this turn:");
+    expect(result.promptText).toContain("lower-authority historical data");
+    expect(result.promptText).toContain("kind: summary");
+    expect(result.promptText).toContain("Historical summary from the context engine.");
+    expect(result.promptText).toContain("Current user request:\ncurrent request");
+    expect(result.promptContextRange).toEqual({
+      start: 0,
+      end: result.promptText.indexOf("\n\nCurrent user request:"),
+    });
+  });
+
   it("preserves redacted tool payload context for thread bootstrap projections", () => {
     const result = projectContextEngineAssemblyForCodex({
       assembledMessages: [

@@ -130,6 +130,7 @@ export type {
   ContextEngineInfo,
   ContextEngineMaintenanceResult,
   ContextEngineOperation,
+  ContextEngineReferenceContextItem,
   ContextEngineRuntimeReasonCode,
   ContextEngineRuntimeContext,
   ContextEngineRuntimeMode,

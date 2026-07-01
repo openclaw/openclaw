@@ -364,6 +364,23 @@ describe("harness context engine lifecycle", () => {
       await expect(runAssembleWithEngineResult(wellFormed)).resolves.toBe(wellFormed);
     });
 
+    it("passes through a well-formed referenceContext array unchanged", async () => {
+      const wellFormed = {
+        messages: [visibleUser],
+        estimatedTokens: 0,
+        referenceContext: [
+          {
+            id: "summary-1",
+            kind: "summary",
+            trust: "untrusted",
+            content: "Earlier turn summary",
+            source: { engine: "lossless-claw" },
+          },
+        ],
+      };
+      await expect(runAssembleWithEngineResult(wellFormed)).resolves.toBe(wellFormed);
+    });
+
     it("rejects an undefined assemble result with the engine id", async () => {
       await expect(runAssembleWithEngineResult(undefined)).rejects.toThrow(
         /context engine "broken-engine"[\s\S]*messages/,
@@ -395,6 +412,16 @@ describe("harness context engine lifecycle", () => {
       await expect(
         runAssembleWithEngineResult({ messages: null, estimatedTokens: 0 }),
       ).rejects.toThrow(/messages of type null/);
+    });
+
+    it("rejects malformed referenceContext items before runners consume them", async () => {
+      await expect(
+        runAssembleWithEngineResult({
+          messages: [visibleUser],
+          estimatedTokens: 0,
+          referenceContext: [{ kind: "summary", content: 123 }],
+        }),
+      ).rejects.toThrow(/referenceContext\[0\]\.content to be a string/);
     });
   });
 
