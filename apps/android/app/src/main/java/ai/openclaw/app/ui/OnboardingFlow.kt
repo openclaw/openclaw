@@ -7,7 +7,6 @@ import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.R
 import ai.openclaw.app.SensitiveFeatureConfig
 import ai.openclaw.app.gateway.GatewayEndpoint
-import ai.openclaw.app.gateway.isLoopbackGatewayHost
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.ui.design.ClawDesignTheme
 import ai.openclaw.app.ui.design.ClawPrimaryButton
@@ -2517,8 +2516,7 @@ internal fun nearbyGatewayManualPort(endpoint: GatewayEndpoint): String = endpoi
 
 internal fun nearbyGatewayManualTls(endpoint: GatewayEndpoint): Boolean =
   endpoint.tlsEnabled ||
-    !endpoint.tlsFingerprintSha256.isNullOrBlank() ||
-    !isLoopbackGatewayHost(endpoint.host)
+    !endpoint.tlsFingerprintSha256.isNullOrBlank()
 
 private fun hasPermission(
   context: Context,
