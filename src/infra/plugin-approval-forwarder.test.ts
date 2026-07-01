@@ -356,6 +356,19 @@ describe("plugin approval forwarding", () => {
       expect(text).toContain("allowed once");
     });
 
+    it("delivers cancelled message to targets", async () => {
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });
+
+      await registerPendingApproval(forwarder, deliver);
+
+      await forwarder.handlePluginApprovalResolved!(makePluginResolved({ decision: null }));
+      expect(deliver).toHaveBeenCalled();
+      const text = firstDeliveredPayload(deliver)?.text ?? "";
+      expect(text).toContain("Plugin approval");
+      expect(text).toContain("cancelled");
+    });
+
     it("reconstructs targets from resolved request snapshot when pending cache is missing", async () => {
       const deliver = vi.fn().mockResolvedValue([]);
       const { forwarder } = createForwarder({ cfg: PLUGIN_TARGETS_CFG, deliver });

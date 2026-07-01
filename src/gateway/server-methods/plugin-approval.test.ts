@@ -226,6 +226,7 @@ function broadcastCall(opts: GatewayRequestHandlerOptions, index = 0) {
 
 const invalidParamMethodCases = [
   { method: "plugin.approval.request" },
+  { method: "plugin.approval.cancel" },
   { method: "plugin.approval.resolve" },
 ] as const;
 
@@ -262,6 +263,7 @@ describe("createPluginApprovalHandlers", () => {
   it("returns handlers for every plugin approval method", () => {
     const handlers = createPluginApprovalHandlers(manager);
     expect(Object.keys(handlers).toSorted()).toEqual([
+      "plugin.approval.cancel",
       "plugin.approval.list",
       "plugin.approval.request",
       "plugin.approval.resolve",
@@ -717,6 +719,72 @@ describe("createPluginApprovalHandlers", () => {
       const error = expectResponseRejected(opts.respond);
       expect(error.code).toBe("INVALID_REQUEST");
       expect(error.message).toBe("unknown or expired approval id");
+    });
+  });
+
+  describe("plugin.approval.cancel", () => {
+    it("cancels a pending approval and broadcasts a nullable resolved event", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const record = registerApproval(manager);
+
+      const opts = createMockOptions("plugin.approval.cancel", { id: record.id });
+      await handlers["plugin.approval.cancel"](opts);
+
+      expect(opts.respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      expect(manager.listPendingRecords()).toEqual([]);
+      const resolvedBroadcast = broadcastCall(opts);
+      expect(resolvedBroadcast.event).toBe("plugin.approval.resolved");
+      expect(resolvedBroadcast.payload.id).toBe(record.id);
+      expect(resolvedBroadcast.payload.decision).toBeNull();
+      expect(resolvedBroadcast.options).toEqual({ dropIfSlow: true });
+    });
+
+    it("unblocks waitDecision with a null decision when cancelled", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const record = registerApproval(manager);
+      const waitOpts = createMockOptions("plugin.approval.waitDecision", { id: record.id });
+      const waitPromise = handlers["plugin.approval.waitDecision"](waitOpts);
+
+      const cancelOpts = createMockOptions("plugin.approval.cancel", { id: record.id });
+      await handlers["plugin.approval.cancel"](cancelOpts);
+      await waitPromise;
+
+      expect(cancelOpts.respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+      const waitResult = expectResponseOk(waitOpts.respond);
+      expect(waitResult.id).toBe(record.id);
+      expect(waitResult.decision).toBeNull();
+    });
+
+    it("does not cancel approvals hidden from the caller", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const hidden = registerOwnedApproval(manager, {
+        title: "Hidden",
+        id: "plugin:hidden-cancel",
+        owner: "other",
+      });
+
+      const opts = createMockOptions(
+        "plugin.approval.cancel",
+        { id: hidden.id },
+        {
+          client: createOwnedClient("owner"),
+        },
+      );
+      await handlers["plugin.approval.cancel"](opts);
+
+      expect(expectResponseRejected(opts.respond).message).toContain("unknown or expired");
+      expect(manager.listPendingRecords().map((record) => record.id)).toEqual([hidden.id]);
+    });
+
+    it("rejects cancel after an approval was already decided", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const record = registerApproval(manager);
+      manager.resolve(record.id, "allow-once");
+
+      const opts = createMockOptions("plugin.approval.cancel", { id: record.id });
+      await handlers["plugin.approval.cancel"](opts);
+
+      expect(expectResponseRejected(opts.respond).message).toBe("approval already resolved");
     });
   });
 });

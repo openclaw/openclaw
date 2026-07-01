@@ -1611,7 +1611,11 @@ describe("before_tool_call requireApproval handling", () => {
 
     expect(result.blocked).toBe(true);
     expect(result).toHaveProperty("reason", "Approval cancelled (run aborted)");
-    expect(mockCallGateway).toHaveBeenCalledTimes(2);
+    expect(mockCallGateway).toHaveBeenCalledTimes(3);
+    const cancelCall = requireGatewayCall(2);
+    expect(cancelCall[0]).toBe("plugin.approval.cancel");
+    expect(cancelCall[1]).toEqual({ timeoutMs: 5_000 });
+    expect(cancelCall[2]).toEqual({ id: "server-id-abort" });
   });
 
   it("classifies non-Error abort reasons as run abort cancellation", async () => {

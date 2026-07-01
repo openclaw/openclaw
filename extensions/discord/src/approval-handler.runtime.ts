@@ -255,13 +255,17 @@ function createExecResolvedContainer(params: {
       ? "Allowed (once)"
       : params.view.decision === "allow-always"
         ? "Allowed (always)"
-        : "Denied";
+        : params.view.decision === "deny"
+          ? "Denied"
+          : "Cancelled";
   const accentColor =
     params.view.decision === "deny"
       ? "#ED4245"
       : params.view.decision === "allow-always"
         ? "#5865F2"
-        : "#57F287";
+        : params.view.decision === "allow-once"
+          ? "#57F287"
+          : "#99AAB5";
 
   return new ExecApprovalContainer({
     cfg: params.cfg,
