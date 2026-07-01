@@ -527,6 +527,57 @@ function createInstalledPluginIndexFixture(
   };
 }
 
+function createInstalledPluginIndexForRecords(
+  plugins: readonly InstalledPluginIndexRecord[],
+): InstalledPluginIndex {
+  return {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "test",
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins,
+    diagnostics: [],
+  };
+}
+
+function createInstalledPluginRecordForStartupContractTest(params: {
+  pluginId: string;
+  origin: InstalledPluginIndexRecord["origin"];
+  contracts?: NonNullable<InstalledPluginIndexRecord["contributions"]>["contracts"];
+}): InstalledPluginIndexRecord {
+  return {
+    pluginId: params.pluginId,
+    manifestPath: `/tmp/plugins/${params.pluginId}/openclaw.plugin.json`,
+    manifestHash: `test-${params.pluginId}`,
+    source: `/tmp/plugins/${params.pluginId}/index.ts`,
+    rootDir: `/tmp/plugins/${params.pluginId}`,
+    origin: params.origin,
+    enabled: true,
+    startup: {
+      sidecar: false,
+      memory: false,
+      deferConfiguredChannelFullLoadUntilAfterListen: false,
+      agentHarnesses: [],
+      configPaths: [],
+    },
+    contributions: {
+      channels: [],
+      channelConfigs: [],
+      providers: [],
+      modelCatalogProviders: [],
+      modelSupportPrefixes: [],
+      modelSupportPatterns: [],
+      autoEnableProviderIds: [],
+      commandAliases: [],
+      contracts: params.contracts ?? {},
+    },
+    compat: [],
+  };
+}
+
 function filterManifestRegistryForInstalledIndex(params: {
   pluginIds?: readonly string[];
   includeDisabled?: boolean;
@@ -1456,6 +1507,70 @@ describe("resolveGatewayStartupPluginIds", () => {
       activationSourceConfig: rawConfig,
       expected: ["browser", "brave"],
     });
+  });
+
+  it("skips unreadable manifest provider contracts while preserving healthy providers", () => {
+    const brokenSearch = {
+      id: "broken-search",
+      rootDir: "/tmp/plugins/broken-search",
+      source: "/tmp/plugins/broken-search/index.ts",
+      manifestPath: "/tmp/plugins/broken-search/openclaw.plugin.json",
+      channels: [],
+      origin: "global" as const,
+      enabledByDefault: undefined,
+      providers: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      get contracts() {
+        throw new Error("fuzzplugin contracts exploded");
+      },
+    } as unknown as PluginManifestRecord;
+    const brave = withManifestLoadPaths({
+      id: "brave",
+      channels: [],
+      origin: "global" as const,
+      enabledByDefault: undefined,
+      providers: [],
+      cliBackends: [],
+      contracts: {
+        webSearchProviders: ["brave"],
+      },
+    });
+    const registry = {
+      plugins: [brokenSearch, brave],
+      diagnostics: [],
+    } satisfies PluginManifestRegistry;
+    const index = createInstalledPluginIndexForRecords([
+      createInstalledPluginRecordForStartupContractTest({
+        pluginId: "broken-search",
+        origin: "global",
+      }),
+      createInstalledPluginRecordForStartupContractTest({
+        pluginId: "brave",
+        origin: "global",
+        contracts: {
+          webSearchProviders: ["brave"],
+        },
+      }),
+    ]);
+
+    expect(
+      resolveGatewayStartupPluginIdsFromRegistry({
+        config: {
+          channels: {},
+          tools: { web: { search: { enabled: true, provider: "brave" } } },
+          plugins: {
+            allow: ["brave"],
+            entries: { brave: { enabled: true } },
+            slots: { memory: "none" },
+          },
+        } as OpenClawConfig,
+        env: createPluginPlanningTestEnv(),
+        index,
+        manifestRegistry: registry,
+      }),
+    ).toStrictEqual(["brave"]);
   });
 
   it("does not let runtime-default plugin entries bypass the authored startup allowlist", () => {
