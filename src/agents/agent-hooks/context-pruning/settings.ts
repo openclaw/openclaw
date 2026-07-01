@@ -27,6 +27,10 @@ type ContextPruningConfig = {
     enabled?: boolean;
     placeholder?: string;
   };
+  thinking?: {
+    enabled?: boolean;
+    keepRecentTurns?: number;
+  };
 };
 
 /** Fully normalized context-pruning settings used at runtime. */
@@ -47,6 +51,10 @@ export type EffectiveContextPruningSettings = {
     enabled: boolean;
     placeholder: string;
   };
+  thinking: {
+    enabled: boolean;
+    keepRecentTurns: number;
+  };
 };
 
 export const DEFAULT_CONTEXT_PRUNING_SETTINGS: EffectiveContextPruningSettings = {
@@ -65,6 +73,10 @@ export const DEFAULT_CONTEXT_PRUNING_SETTINGS: EffectiveContextPruningSettings =
   hardClear: {
     enabled: true,
     placeholder: "[Old tool result content cleared]",
+  },
+  thinking: {
+    enabled: true,
+    keepRecentTurns: 1,
   },
 };
 
@@ -121,6 +133,15 @@ export function computeEffectiveSettings(raw: unknown): EffectiveContextPruningS
     }
     if (typeof cfg.hardClear.placeholder === "string" && cfg.hardClear.placeholder.trim()) {
       s.hardClear.placeholder = cfg.hardClear.placeholder.trim();
+    }
+  }
+
+  if (cfg.thinking) {
+    if (typeof cfg.thinking.enabled === "boolean") {
+      s.thinking.enabled = cfg.thinking.enabled;
+    }
+    if (typeof cfg.thinking.keepRecentTurns === "number" && Number.isFinite(cfg.thinking.keepRecentTurns)) {
+      s.thinking.keepRecentTurns = Math.max(1, Math.floor(cfg.thinking.keepRecentTurns));
     }
   }
 

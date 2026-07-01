@@ -178,6 +178,86 @@ describe("dropThinkingBlocks", () => {
   });
 });
 
+describe("dropThinkingBlocks keepRecentTurns option", () => {
+  it("defaults to keepRecentTurns=1 when options omitted", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "first" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "old" },
+          { type: "text", text: "old text" },
+        ],
+      }),
+      castAgentMessage({ role: "user", content: "second" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "latest" },
+          { type: "text", text: "latest text" },
+        ],
+      }),
+    ];
+
+    const withOption = dropThinkingBlocks(messages, { keepRecentTurns: 1 });
+    const withoutOption = dropThinkingBlocks(messages);
+
+    expect(withOption).toStrictEqual(withoutOption);
+  });
+
+  it("keeps thinking blocks in last 2 assistant turns when keepRecentTurns=2", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "u1" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "t1" }, { type: "text", text: "a1" }],
+      }),
+      castAgentMessage({ role: "user", content: "u2" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "t2" }, { type: "text", text: "a2" }],
+      }),
+      castAgentMessage({ role: "user", content: "u3" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "t3" }, { type: "text", text: "a3" }],
+      }),
+    ];
+
+    const result = dropThinkingBlocks(messages, { keepRecentTurns: 2 });
+
+    const firstAssistant = result[1] as AssistantMessage;
+    const secondAssistant = result[3] as AssistantMessage;
+    const thirdAssistant = result[5] as AssistantMessage;
+
+    // Old turn should be stripped
+    expect(firstAssistant.content).toEqual([{ type: "text", text: "a1" }]);
+
+    // Recent 2 turns should preserve thinking blocks
+    expect(secondAssistant.content).toEqual([{ type: "thinking", thinking: "t2" }, { type: "text", text: "a2" }]);
+    expect(thirdAssistant.content).toEqual([{ type: "thinking", thinking: "t3" }, { type: "text", text: "a3" }]);
+  });
+
+  it("handles empty options object", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "assistant", content: [{ type: "thinking", thinking: "test" }] }),
+    ];
+
+    const result = dropThinkingBlocks(messages, {});
+    expect(result[0].content).toEqual([{ type: "thinking", thinking: "test" }]);
+  });
+
+  it("uses reference equality when no changes needed", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "hello" }),
+      castAgentMessage({ role: "assistant", content: [{ type: "text", text: "world" }] }),
+    ];
+
+    const result = dropThinkingBlocks(messages, { keepRecentTurns: 1 });
+    expect(result).toBe(messages);
+  });
+});
+
 describe("dropReasoningFromHistory", () => {
   it("strips assistant reasoning from prior completed turns", () => {
     const messages: AgentMessage[] = [
