@@ -920,6 +920,9 @@ async function writeManagedMarkdownFile(params: {
 }): Promise<boolean> {
   const root = await fsRoot(params.rootDir);
   const original = await root.readText(params.relativePath).catch(() => `# ${params.title}\n`);
+  // Generated indexes bypass page discovery. Parse existing content here so
+  // managed-block updates cannot rewrite malformed frontmatter.
+  parseWikiMarkdown(original);
   const updated = replaceManagedMarkdownBlock({
     original,
     heading: "## Generated",

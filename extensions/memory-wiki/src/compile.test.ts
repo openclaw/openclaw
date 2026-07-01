@@ -172,6 +172,64 @@ describe("compileMemoryWikiVault", () => {
     ).resolves.not.toContain("syntheses/broken.md");
   });
 
+  it.each([
+    {
+      name: "root index with syntax-error frontmatter",
+      relativePath: "index.md",
+      frontmatterLines: [
+        "pageType: report",
+        "sourceIds:",
+        '  - **MEMORY.md line 235**:"some quoted, value"',
+      ],
+      error: "Unexpected scalar",
+    },
+    {
+      name: "root index with sequence-root frontmatter",
+      relativePath: "index.md",
+      frontmatterLines: ["- pageType: report"],
+      error: "Wiki frontmatter must be a YAML mapping",
+    },
+    {
+      name: "directory index with syntax-error frontmatter",
+      relativePath: "sources/index.md",
+      frontmatterLines: [
+        "pageType: report",
+        "sourceIds:",
+        '  - **MEMORY.md line 235**:"some quoted, value"',
+      ],
+      error: "Unexpected scalar",
+    },
+    {
+      name: "directory index with scalar-root frontmatter",
+      relativePath: "sources/index.md",
+      frontmatterLines: ["report"],
+      error: "Wiki frontmatter must be a YAML mapping",
+    },
+  ])(
+    "rejects $name without changing its bytes",
+    async ({ relativePath, frontmatterLines, error }) => {
+      const { rootDir, config } = await createVault({
+        rootDir: nextCaseRoot(),
+        initialize: true,
+        config: { render: { createDashboards: false } },
+      });
+      const targetPath = path.join(rootDir, relativePath);
+      const original = [
+        "---",
+        ...frontmatterLines,
+        "---",
+        "",
+        "# Existing Index",
+        "",
+        "Keep this body.",
+      ].join("\n");
+      await fs.writeFile(targetPath, original, "utf8");
+
+      await expect(compileMemoryWikiVault(config)).rejects.toThrow(error);
+      await expect(fs.readFile(targetPath, "utf8")).resolves.toBe(original);
+    },
+  );
+
   it("discovers pages in nested subdirectories during compile", async () => {
     const { rootDir, config } = await createVault({
       rootDir: nextCaseRoot(),
