@@ -53,12 +53,12 @@ describe("root package override guardrails", () => {
     expect(pnpmWorkspace.overrides).not.toHaveProperty(packageName);
   });
 
-  it("pins the node-domexception alias exactly in pnpm override metadata", () => {
+  it("pins node-domexception to a resolvable version in pnpm override metadata", () => {
     const manifest = readRootManifest();
     const pnpmWorkspace = readPnpmWorkspaceConfig();
     const pnpmOverride = pnpmWorkspace.overrides?.["node-domexception"];
 
-    expect(pnpmOverride).toBe("npm:@nolyfill/domexception@1.0.28");
+    expect(pnpmOverride).toBe("2.0.2");
     expect(manifest.overrides).toBeUndefined();
   });
 
