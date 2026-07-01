@@ -1,6 +1,7 @@
 // Msteams tests cover graph upload plugin behavior.
+import { createServer, type Server } from "node:http";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import { resolveGraphChatId, uploadToOneDrive, uploadToSharePoint } from "./graph-upload.js";
 
@@ -246,6 +247,218 @@ describe("resolveGraphChatId", () => {
     });
 
     expect(result).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Loopback server helpers
+// ---------------------------------------------------------------------------
+
+async function listenLoopbackServer(server: Server): Promise<number> {
+  return await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        reject(new Error("expected loopback TCP address"));
+        return;
+      }
+      resolve(address.port);
+    });
+  });
+}
+
+async function closeServer(server: Server): Promise<void> {
+  await new Promise<void>((resolve) => {
+    server.close(() => resolve());
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Loopback proof: readProviderJsonResponse replaces bare res.json() calls
+// ---------------------------------------------------------------------------
+
+describe("graph-upload readProviderJsonResponse loopback proof", () => {
+  const tokenProvider = {
+    getAccessToken: vi.fn(async () => "graph-token"),
+  };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("uploadToOneDrive parses normal JSON response from a real loopback HTTP server", async () => {
+    const payload = { id: "item-lp", webUrl: "https://example.com/lp", name: "lp.txt" };
+    let receivedMethod: string | undefined;
+    let receivedAuth: string | undefined;
+    let contentLength: string | null | undefined;
+    const server = createServer((req, res) => {
+      receivedMethod = req.method;
+      receivedAuth = req.headers.authorization;
+      const body = JSON.stringify(payload);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.write(body.slice(0, 10));
+      res.end(body.slice(10));
+    });
+    const port = await listenLoopbackServer(server);
+
+    try {
+      const realFetch = globalThis.fetch.bind(globalThis);
+      vi.stubGlobal(
+        "fetch",
+        withFetchPreconnect(async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = new URL(input instanceof Request ? input.url : String(input));
+          const loopback = new URL(`${url.pathname}${url.search}`, `http://127.0.0.1:${port}`);
+          const response = await realFetch(loopback, init);
+          contentLength = response.headers.get("content-length");
+          return response;
+        }),
+      );
+
+      const result = await uploadToOneDrive({
+        buffer: Buffer.from("hello"),
+        filename: "lp.txt",
+        tokenProvider,
+      });
+
+      expect(result).toEqual(payload);
+      expect(receivedMethod).toBe("PUT");
+      expect(receivedAuth).toBe("Bearer graph-token");
+      expect(contentLength).toBeNull();
+      console.log(
+        `[msteams graph-upload loopback proof] uploadToOneDrive: returned=${JSON.stringify(result)} auth_ok=${receivedAuth === "Bearer graph-token"} content_length=${contentLength ?? "none"}`,
+      );
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("uploadToSharePoint parses normal JSON response from a real loopback HTTP server", async () => {
+    const payload = { id: "sp-lp", webUrl: "https://sp.example.com/lp", name: "sp-lp.txt" };
+    let receivedMethod: string | undefined;
+    let contentLength: string | null | undefined;
+    const server = createServer((req, res) => {
+      receivedMethod = req.method;
+      const body = JSON.stringify(payload);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.write(body.slice(0, 15));
+      res.end(body.slice(15));
+    });
+    const port = await listenLoopbackServer(server);
+
+    try {
+      const realFetch = globalThis.fetch.bind(globalThis);
+      vi.stubGlobal(
+        "fetch",
+        withFetchPreconnect(async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = new URL(input instanceof Request ? input.url : String(input));
+          const loopback = new URL(`${url.pathname}${url.search}`, `http://127.0.0.1:${port}`);
+          const response = await realFetch(loopback, init);
+          contentLength = response.headers.get("content-length");
+          return response;
+        }),
+      );
+
+      const result = await uploadToSharePoint({
+        buffer: Buffer.from("world"),
+        filename: "sp-lp.txt",
+        siteId: "site-123",
+        tokenProvider,
+      });
+
+      expect(result).toEqual(payload);
+      expect(receivedMethod).toBe("PUT");
+      expect(contentLength).toBeNull();
+      console.log(
+        `[msteams graph-upload loopback proof] uploadToSharePoint: returned=${JSON.stringify(result)} content_length=${contentLength ?? "none"}`,
+      );
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("uploadToOneDrive surfaces a labelled error on malformed JSON from a real loopback HTTP server", async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end("{not-valid-json");
+    });
+    const port = await listenLoopbackServer(server);
+
+    try {
+      const realFetch = globalThis.fetch.bind(globalThis);
+      vi.stubGlobal(
+        "fetch",
+        withFetchPreconnect(async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = new URL(input instanceof Request ? input.url : String(input));
+          const loopback = new URL(`${url.pathname}${url.search}`, `http://127.0.0.1:${port}`);
+          return realFetch(loopback, init);
+        }),
+      );
+
+      let error: unknown;
+      try {
+        await uploadToOneDrive({ buffer: Buffer.from("x"), filename: "bad.txt", tokenProvider });
+      } catch (err) {
+        error = err;
+      }
+
+      expect(error).toBeInstanceOf(Error);
+      expect(String(error)).toContain("msteams.graph-upload.uploadOneDriveFile");
+      expect(String(error)).toContain("malformed JSON response");
+      console.log(
+        `[msteams graph-upload loopback proof] malformed JSON labelled: ${String(error)}`,
+      );
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("uploadToOneDrive rejects an oversized success JSON body from a real loopback HTTP server", async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      const chunk = Buffer.alloc(64 * 1024, 0x20);
+      let remaining = 257; // >16 MiB when combined with the JSON prefix.
+      res.write('{"id":"item-big","webUrl":"https://example.com/big","name":"big.txt","padding":"');
+      const writeNext = () => {
+        if (remaining <= 0) {
+          res.end('"}');
+          return;
+        }
+        remaining -= 1;
+        if (res.write(chunk)) {
+          setImmediate(writeNext);
+        } else {
+          res.once("drain", writeNext);
+        }
+      };
+      writeNext();
+    });
+    const port = await listenLoopbackServer(server);
+
+    try {
+      const realFetch = globalThis.fetch.bind(globalThis);
+      vi.stubGlobal(
+        "fetch",
+        withFetchPreconnect(async (input: RequestInfo | URL, init?: RequestInit) => {
+          const url = new URL(input instanceof Request ? input.url : String(input));
+          const loopback = new URL(`${url.pathname}${url.search}`, `http://127.0.0.1:${port}`);
+          return realFetch(loopback, init);
+        }),
+      );
+
+      await expect(
+        uploadToOneDrive({ buffer: Buffer.from("x"), filename: "big.txt", tokenProvider }),
+      ).rejects.toThrow(
+        "msteams.graph-upload.uploadOneDriveFile: JSON response exceeds 16777216 bytes",
+      );
+      console.log(
+        "[msteams graph-upload loopback proof] oversized JSON rejected by bounded reader",
+      );
+    } finally {
+      await closeServer(server);
+    }
   });
 });
 
