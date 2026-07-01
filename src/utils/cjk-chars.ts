@@ -80,3 +80,16 @@ function countCodePoints(text: string, nonLatinCount: number): number {
 export function estimateTokensFromChars(chars: number): number {
   return Math.ceil(Math.max(0, chars) / CHARS_PER_TOKEN_ESTIMATE);
 }
+
+/**
+ * Return the ratio of non-Latin (CJK, etc.) characters to total characters.
+ * Returns 0 for empty text.
+ */
+export function estimateCjkRatio(text: string): number {
+  if (text.length === 0) {
+    return 0;
+  }
+  const nonLatinCount = (text.match(NON_LATIN_RE) ?? []).length;
+  const codePointLength = countCodePoints(text, nonLatinCount);
+  return codePointLength > 0 ? nonLatinCount / codePointLength : 0;
+}
