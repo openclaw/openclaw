@@ -300,7 +300,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/exec-approvals-runtime` | Exec approval policy file helpers without the broad infra-runtime barrel |
     | `plugin-sdk/infra-runtime` | Deprecated compatibility shim; use the focused runtime subpaths above |
     | `plugin-sdk/collection-runtime` | Small bounded cache helpers |
-    | `plugin-sdk/diagnostic-runtime` | Diagnostic flag, event, and trace-context helpers |
+    | `plugin-sdk/diagnostic-runtime` | Diagnostic flag, event, and trace-context helpers. Includes `onDiagnosticEvent` (untrusted events, dropped trusted events) and `onModelDiagnosticEvent` (allowlisted `model.call.{started,completed,error}` / `model.usage` / `model.failover` events for observability/cost plugins). The `trusted` flag is an emit-side guarantee only — the runtime uses it to mark its own emissions, and `emitTrustedDiagnosticEvent` is publicly exported, so do not treat trusted-stream events as integrity-attested telemetry. Use it for span attribution and usage tracking, not for security-sensitive accounting. |
     | `plugin-sdk/error-runtime` | Error graph, formatting, shared error classification helpers, `isApprovalNotFoundError` |
     | `plugin-sdk/fetch-runtime` | Wrapped fetch, proxy, EnvHttpProxyAgent option, and pinned lookup helpers |
     | `plugin-sdk/runtime-fetch` | Dispatcher-aware runtime fetch without proxy/guarded-fetch imports |
