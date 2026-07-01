@@ -1463,6 +1463,21 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: async () => {},
     }),
     createDoctorHealthContribution({
+      id: "doctor:stale-plugin-runtime-symlinks",
+      label: "Stale plugin runtime symlinks",
+      healthChecks: {
+        id: "core/doctor/stale-plugin-runtime-symlinks",
+        description: "Stale plugin-runtime symlinks are represented as findings.",
+        defaultEnabled: false,
+        async detect() {
+          const { collectStalePluginRuntimeSymlinkHealthFindings } =
+            await import("../commands/doctor/shared/plugin-runtime-symlinks.js");
+          return await collectStalePluginRuntimeSymlinkHealthFindings();
+        },
+      },
+      run: async () => {},
+    }),
+    createDoctorHealthContribution({
       id: "doctor:release-configured-plugin-installs",
       label: "Configured plugin repair",
       healthChecks: {
