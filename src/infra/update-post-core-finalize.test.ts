@@ -123,6 +123,38 @@ describe("runPostCoreFinalizeAfterGatewayUpdate", () => {
     expect(env.OPENCLAW_GATEWAY_SERVICE_PID).toBeUndefined();
   });
 
+  it("does not inherit a stale source-config handoff path without a fresh payload", async () => {
+    const spawnFinalize = vi.fn<PostCoreFinalizeSpawner>(async () => ({ code: 0 }));
+    await runPostCoreFinalizeAfterGatewayUpdate({
+      result: gitOkResult(),
+      resolveEntrypoint: resolveEntrypointOk,
+      spawnFinalize,
+      env: {
+        PATH: "/usr/bin",
+        OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH: "/tmp/stale-source-config.json",
+      },
+    });
+
+    const { env } = spawnFinalize.mock.calls[0][0];
+    expect(env.OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH).toBeUndefined();
+  });
+
+  it("does not inherit a stale compatibility host version when the update result has none", async () => {
+    const spawnFinalize = vi.fn<PostCoreFinalizeSpawner>(async () => ({ code: 0 }));
+    await runPostCoreFinalizeAfterGatewayUpdate({
+      result: gitOkResult({ after: undefined }),
+      resolveEntrypoint: resolveEntrypointOk,
+      spawnFinalize,
+      env: {
+        PATH: "/usr/bin",
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.1.1",
+      },
+    });
+
+    const { env } = spawnFinalize.mock.calls[0][0];
+    expect(env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
+  });
+
   it("carries effective git/dev channel via env without --channel for a no-config update", async () => {
     const spawnFinalize = vi.fn<PostCoreFinalizeSpawner>(async () => ({ code: 0 }));
     await runPostCoreFinalizeAfterGatewayUpdate({
