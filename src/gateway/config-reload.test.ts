@@ -1,5 +1,6 @@
 // Gateway config reload tests cover changed-path detection, reload planning,
 // plugin registry refresh, skill snapshot invalidation, and watcher behavior.
+import nodePath from "node:path";
 import chokidar from "chokidar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listChannelPlugins } from "../channels/plugins/index.js";
@@ -592,8 +593,8 @@ describe("resolveGatewayReloadSettings", () => {
   });
 });
 
-type WatcherHandler = () => void;
-type WatcherEvent = "add" | "change" | "unlink" | "error";
+type WatcherHandler = (value?: string | Error) => void;
+type WatcherEvent = "add" | "change" | "unlink" | "error" | "ready";
 
 function createWatcherMock(effectiveUsePolling?: boolean) {
   const handlers = new Map<WatcherEvent, WatcherHandler[]>();
@@ -606,9 +607,9 @@ function createWatcherMock(effectiveUsePolling?: boolean) {
       handlers.set(event, existing);
       return this;
     },
-    emit(event: WatcherEvent) {
+    emit(event: WatcherEvent, value?: string | Error) {
       for (const handler of handlers.get(event) ?? []) {
-        handler();
+        handler(value);
       }
     },
     close: vi.fn(async () => {}),
@@ -673,17 +674,30 @@ function makeZeroDebounceHookWrite(persistedHash: string): ConfigWriteNotificati
 }
 
 function createReloaderHarness(
-  readSnapshot: () => Promise<ConfigFileSnapshot>,
+  readSnapshot: () => Promise<
+    ConfigFileSnapshot | { snapshot: ConfigFileSnapshot; includeFilePaths?: readonly string[] }
+  >,
   options: {
     initialCompareConfig?: OpenClawConfig;
     initialInternalWriteHash?: string | null;
+    initialIncludeFilePaths?: readonly string[];
     promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
     initialPluginInstallRecords?: Record<string, PluginInstallRecord>;
     readPluginInstallRecords?: () => Promise<Record<string, PluginInstallRecord>>;
+    watchers?: ReturnType<typeof createWatcherMock>[];
   } = {},
 ) {
-  const watcher = createWatcherMock();
-  vi.spyOn(chokidar, "watch").mockReturnValue(watcher as unknown as never);
+  const watchers = options.watchers ?? [createWatcherMock()];
+  const watcher = watchers[0] ?? createWatcherMock();
+  let watcherIndex = 0;
+  const watchSpy = vi.spyOn(chokidar, "watch").mockImplementation((_path, watchOptions) => {
+    const next = watchers[watcherIndex++];
+    if (!next) {
+      throw new Error("missing watcher mock");
+    }
+    next.options.usePolling = next.effectiveUsePolling ?? Boolean(watchOptions?.usePolling);
+    return next as unknown as never;
+  });
   const onHotReload = vi.fn(async (_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {});
   const onRestart = vi.fn((_plan: GatewayReloadPlan, _nextConfig: OpenClawConfig) => {});
   let writeListener: ((event: ConfigWriteNotification) => void) | null = null;
@@ -704,6 +718,7 @@ function createReloaderHarness(
     initialConfig: { gateway: { reload: { debounceMs: 0 } } },
     initialCompareConfig: options.initialCompareConfig,
     initialInternalWriteHash: options.initialInternalWriteHash,
+    initialIncludeFilePaths: options.initialIncludeFilePaths,
     readSnapshot,
     promoteSnapshot: options.promoteSnapshot,
     initialPluginInstallRecords: options.initialPluginInstallRecords ?? {},
@@ -716,6 +731,8 @@ function createReloaderHarness(
   });
   return {
     watcher,
+    watchers,
+    watchSpy,
     onHotReload,
     onRestart,
     log,
@@ -1013,7 +1030,9 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
-  it("does not promote external config edits when hot reload rejects them", async () => {
+  it("does not replay a rejected graph and accepts a later content change", async () => {
+    const oldInclude = nodePath.normalize("/tmp/includes/old.json5");
+    const nextInclude = nodePath.normalize("/tmp/includes/next.json5");
     const acceptedSnapshot = makeSnapshot({
       config: {
         gateway: { reload: { debounceMs: 0 } },
@@ -1021,21 +1040,49 @@ describe("startGatewayConfigReloader", () => {
       },
       hash: "external-rejected-1",
     });
+    const revisedSnapshot = makeSnapshot({
+      config: {
+        gateway: { reload: { debounceMs: 0 } },
+        hooks: { enabled: false },
+      },
+      hash: "external-revised-2",
+    });
     const readSnapshot = vi
-      .fn<() => Promise<ConfigFileSnapshot>>()
-      .mockResolvedValueOnce(acceptedSnapshot);
+      .fn()
+      .mockResolvedValueOnce({ snapshot: acceptedSnapshot, includeFilePaths: [nextInclude] })
+      .mockResolvedValueOnce({ snapshot: acceptedSnapshot, includeFilePaths: [nextInclude] })
+      .mockResolvedValueOnce({ snapshot: revisedSnapshot, includeFilePaths: [nextInclude] });
     const promoteSnapshot = vi.fn(async (_snapshot: ConfigFileSnapshot, _reason: string) => true);
+    const watchers = [createWatcherMock(), createWatcherMock(), createWatcherMock()];
     const { watcher, onHotReload, log, reloader } = createReloaderHarness(readSnapshot, {
+      initialIncludeFilePaths: [oldInclude],
       promoteSnapshot,
+      watchers,
     });
     onHotReload.mockRejectedValueOnce(new Error("reload refused"));
 
     watcher.emit("change");
-    await vi.runAllTimersAsync();
+    await vi.runOnlyPendingTimersAsync();
 
     expect(onHotReload).toHaveBeenCalledTimes(1);
     expect(promoteSnapshot).not.toHaveBeenCalled();
     expect(log.error).toHaveBeenCalledWith("config reload failed: Error: reload refused");
+
+    watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(onHotReload).toHaveBeenCalledTimes(1);
+    expect(promoteSnapshot).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      "config reload skipped (previous apply failed; waiting for config change)",
+    );
+
+    watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(onHotReload).toHaveBeenCalledTimes(2);
+    expect(promoteSnapshot).toHaveBeenCalledTimes(1);
+    expect(promoteSnapshot).toHaveBeenCalledWith(revisedSnapshot, "valid-config");
 
     await reloader.stop();
   });
@@ -1114,6 +1161,461 @@ describe("startGatewayConfigReloader", () => {
     expect(readSnapshot).toHaveBeenCalledTimes(3);
     expect(harness.onHotReload).toHaveBeenCalledTimes(1);
     expect(harness.onRestart).toHaveBeenCalledTimes(1);
+
+    await harness.reloader.stop();
+  });
+
+  it("retains a queued include reconciliation when an in-process hot reload throws", async () => {
+    const includePath = nodePath.normalize("/tmp/includes/active.json5");
+    const acceptedSnapshot = makeZeroDebounceHookSnapshot("internal-reconcile-1");
+    const readSnapshot = vi.fn().mockResolvedValueOnce({
+      snapshot: acceptedSnapshot,
+      includeFilePaths: [includePath],
+    });
+    const watchers = [createWatcherMock(), createWatcherMock()];
+    const harness = createReloaderHarness(readSnapshot, {
+      initialIncludeFilePaths: [includePath],
+      watchers,
+    });
+    harness.onHotReload.mockRejectedValueOnce(new Error("reload refused"));
+
+    harness.emitWrite(makeZeroDebounceHookWrite("internal-reconcile-1"));
+    watchers[1]?.emit("ready");
+    await vi.runOnlyPendingTimersAsync();
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.log.error).toHaveBeenCalledWith("config reload failed: Error: reload refused");
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+    expect(harness.log.warn).toHaveBeenCalledWith(
+      "config reload skipped (previous apply failed; waiting for config change)",
+    );
+
+    await harness.reloader.stop();
+  });
+
+  it("watches nested startup includes and does not apply root hash dedupe to include edits", async () => {
+    const includePaths = [
+      nodePath.normalize("/tmp/includes/outer.json5"),
+      nodePath.normalize("/tmp/includes/nested.json5"),
+    ];
+    const readSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce({
+        snapshot: makeZeroDebounceHookSnapshot("internal-include-1"),
+        includeFilePaths: includePaths,
+      })
+      .mockResolvedValueOnce({
+        snapshot: makeSnapshot({
+          sourceConfig: {
+            gateway: { reload: { debounceMs: 0 } },
+            hooks: { enabled: false },
+          },
+          runtimeConfig: {
+            gateway: { reload: { debounceMs: 0 } },
+            hooks: { enabled: false },
+          },
+          config: {
+            gateway: { reload: { debounceMs: 0 } },
+            hooks: { enabled: false },
+          },
+          hash: "internal-include-1",
+        }),
+        includeFilePaths: includePaths,
+      });
+    const watchers = [createWatcherMock(), createWatcherMock(), createWatcherMock()];
+    const harness = createReloaderHarness(readSnapshot, {
+      initialIncludeFilePaths: includePaths,
+      promoteSnapshot: vi.fn(async () => true),
+      watchers,
+    });
+
+    expect(harness.watchSpy.mock.calls.map((call) => call[0])).toEqual([
+      "/tmp/openclaw.json",
+      nodePath.normalize("/tmp/includes/nested.json5"),
+      nodePath.normalize("/tmp/includes/outer.json5"),
+    ]);
+
+    harness.emitWrite(makeZeroDebounceHookWrite("internal-include-1"));
+    await vi.runOnlyPendingTimersAsync();
+    expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+
+    watchers[2]?.emit("change", nodePath.normalize("/tmp/includes/outer.json5"));
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledTimes(2);
+    expect(harness.onHotReload).toHaveBeenCalledTimes(2);
+    await harness.reloader.stop();
+  });
+
+  it("clears a stale root write hash when an include-triggered read sees different root bytes", async () => {
+    const includePath = nodePath.normalize("/tmp/includes/active.json5");
+    const readSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce({
+        snapshot: makeZeroDebounceHookSnapshot("external-root-2"),
+        includeFilePaths: [includePath],
+      })
+      .mockResolvedValueOnce({
+        snapshot: makeSnapshot({
+          sourceConfig: { gateway: { reload: { debounceMs: 0 } }, hooks: { enabled: false } },
+          runtimeConfig: { gateway: { reload: { debounceMs: 0 } }, hooks: { enabled: false } },
+          config: { gateway: { reload: { debounceMs: 0 } }, hooks: { enabled: false } },
+          hash: "internal-root-1",
+        }),
+        includeFilePaths: [includePath],
+      });
+    const watchers = [createWatcherMock(), createWatcherMock()];
+    const harness = createReloaderHarness(readSnapshot, {
+      initialIncludeFilePaths: [includePath],
+      initialInternalWriteHash: "internal-root-1",
+      watchers,
+    });
+
+    watchers[1]?.emit("change", includePath);
+    await vi.runOnlyPendingTimersAsync();
+    expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+
+    watchers[0]?.emit("change", nodePath.normalize("/tmp/openclaw.json"));
+    await vi.runOnlyPendingTimersAsync();
+    expect(readSnapshot).toHaveBeenCalledTimes(2);
+    expect(harness.onHotReload).toHaveBeenCalledTimes(2);
+
+    await harness.reloader.stop();
+  });
+
+  it("retries a failed include watcher handoff while the prior set stays active", async () => {
+    const rootPath = nodePath.normalize("/tmp/openclaw.json");
+    const oldInclude = nodePath.normalize("/tmp/includes/old.json5");
+    const nextInclude = nodePath.normalize("/tmp/includes/next.json5");
+    const nextSnapshot = {
+      snapshot: makeZeroDebounceHookSnapshot("graph-retry-1"),
+      includeFilePaths: [nextInclude],
+    };
+    const readSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce(nextSnapshot)
+      .mockResolvedValueOnce(nextSnapshot);
+    const watchers = [
+      createWatcherMock(),
+      createWatcherMock(),
+      createWatcherMock(),
+      createWatcherMock(),
+    ];
+    const [rootWatcher, oldWatcher, failedCandidate, retryCandidate] = watchers;
+    if (!rootWatcher || !oldWatcher || !failedCandidate || !retryCandidate) {
+      throw new Error("expected watcher mocks");
+    }
+    const harness = createReloaderHarness(readSnapshot, {
+      initialIncludeFilePaths: [oldInclude],
+      watchers,
+    });
+
+    rootWatcher.emit("change", rootPath);
+    await vi.runOnlyPendingTimersAsync();
+    failedCandidate.emit("error", new Error("ENOSPC"));
+    failedCandidate.emit("ready");
+
+    expect(oldWatcher.close).not.toHaveBeenCalled();
+    expect(rootWatcher.close).not.toHaveBeenCalled();
+    expect(harness.watchSpy).toHaveBeenCalledTimes(3);
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(harness.watchSpy).toHaveBeenCalledTimes(4);
+    retryCandidate.emit("ready");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(oldWatcher.close).toHaveBeenCalledTimes(1);
+    expect(rootWatcher.close).not.toHaveBeenCalled();
+    expect(readSnapshot).toHaveBeenCalledTimes(2);
+    expect(harness.log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("retrying replacement (attempt 1/3 in 500ms)"),
+    );
+
+    await harness.reloader.stop();
+  });
+
+  it("uses the include watcher's effective polling mode when retries are exhausted", async () => {
+    const originalVitest = process.env.VITEST;
+    const originalChokidarPolling = process.env.CHOKIDAR_USEPOLLING;
+    delete process.env.VITEST;
+    delete process.env.CHOKIDAR_USEPOLLING;
+    let harness: ReloaderHarness | undefined;
+    try {
+      const oldInclude = nodePath.normalize("/tmp/includes/old.json5");
+      const nextInclude = nodePath.normalize("/tmp/includes/next.json5");
+      const watchers = [
+        createWatcherMock(false),
+        createWatcherMock(false),
+        createWatcherMock(true),
+        createWatcherMock(true),
+        createWatcherMock(true),
+        createWatcherMock(true),
+      ];
+      harness = createReloaderHarness(
+        vi.fn().mockResolvedValueOnce({
+          snapshot: makeZeroDebounceHookSnapshot("effective-polling"),
+          includeFilePaths: [nextInclude],
+        }),
+        { initialIncludeFilePaths: [oldInclude], watchers },
+      );
+
+      watchers[0]?.emit("change", nodePath.normalize("/tmp/openclaw.json"));
+      await vi.runOnlyPendingTimersAsync();
+      for (const [index, delay] of [
+        [2, 500],
+        [3, 2000],
+        [4, 5000],
+      ] as const) {
+        watchers[index]?.emit("error", new Error("polling failed"));
+        await vi.advanceTimersByTimeAsync(delay);
+      }
+      watchers[5]?.emit("error", new Error("polling failed"));
+
+      expect(harness.reloader.hotReloadStatus()).toBe("disabled");
+      expect(harness.log.error).toHaveBeenCalledWith(expect.stringContaining("in polling mode"));
+      expect(harness.log.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining("degrading to polling mode"),
+      );
+    } finally {
+      if (originalVitest === undefined) {
+        delete process.env.VITEST;
+      } else {
+        process.env.VITEST = originalVitest;
+      }
+      if (originalChokidarPolling === undefined) {
+        delete process.env.CHOKIDAR_USEPOLLING;
+      } else {
+        process.env.CHOKIDAR_USEPOLLING = originalChokidarPolling;
+      }
+      await harness?.reloader.stop();
+    }
+  });
+
+  it("reconciles once the initial include watcher set is ready", async () => {
+    const includePath = nodePath.normalize("/tmp/includes/startup.json5");
+    const readSnapshot = vi.fn().mockResolvedValueOnce({
+      snapshot: makeZeroDebounceHookSnapshot("startup-include-ready"),
+      includeFilePaths: [includePath],
+    });
+    const watchers = [createWatcherMock(), createWatcherMock()];
+    const harness = createReloaderHarness(readSnapshot, {
+      initialIncludeFilePaths: [includePath],
+      watchers,
+    });
+
+    watchers[1]?.emit("ready");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    await harness.reloader.stop();
+  });
+
+  it("reconciles a retained initial watcher after a graph change reverts before ready", async () => {
+    const rootPath = nodePath.normalize("/tmp/openclaw.json");
+    const initialInclude = nodePath.normalize("/tmp/includes/initial.json5");
+    const transientInclude = nodePath.normalize("/tmp/includes/transient.json5");
+    const initialSnapshot = {
+      snapshot: makeZeroDebounceHookSnapshot("initial-graph"),
+      includeFilePaths: [initialInclude],
+    };
+    const readSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce({
+        snapshot: makeZeroDebounceHookSnapshot("transient-graph"),
+        includeFilePaths: [transientInclude],
+      })
+      .mockResolvedValueOnce(initialSnapshot)
+      .mockResolvedValueOnce(initialSnapshot);
+    const watchers = [createWatcherMock(), createWatcherMock(), createWatcherMock()];
+    const [rootWatcher, initialWatcher, transientCandidate] = watchers;
+    if (!rootWatcher || !initialWatcher || !transientCandidate) {
+      throw new Error("expected watcher mocks");
+    }
+    const harness = createReloaderHarness(readSnapshot, {
+      initialIncludeFilePaths: [initialInclude],
+      watchers,
+    });
+
+    rootWatcher.emit("change", rootPath);
+    await vi.runOnlyPendingTimersAsync();
+    rootWatcher.emit("change", rootPath);
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(transientCandidate.close).toHaveBeenCalledTimes(1);
+    initialWatcher.emit("ready");
+    await vi.runOnlyPendingTimersAsync();
+    expect(readSnapshot).toHaveBeenCalledTimes(3);
+
+    await harness.reloader.stop();
+  });
+
+  it("invalidates an active include watcher that errors during a newer graph handoff", async () => {
+    const rootPath = nodePath.normalize("/tmp/openclaw.json");
+    const oldInclude = nodePath.normalize("/tmp/includes/old.json5");
+    const nextInclude = nodePath.normalize("/tmp/includes/next.json5");
+    const nextSnapshot = {
+      snapshot: makeZeroDebounceHookSnapshot("graph-active-error"),
+      includeFilePaths: [nextInclude],
+    };
+    const readSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce(nextSnapshot)
+      .mockResolvedValueOnce(nextSnapshot);
+    const watchers = [createWatcherMock(), createWatcherMock(), createWatcherMock()];
+    const [rootWatcher, oldWatcher, candidateWatcher] = watchers;
+    if (!rootWatcher || !oldWatcher || !candidateWatcher) {
+      throw new Error("expected watcher mocks");
+    }
+    const harness = createReloaderHarness(readSnapshot, {
+      initialIncludeFilePaths: [oldInclude],
+      watchers,
+    });
+
+    rootWatcher.emit("change", rootPath);
+    await vi.runOnlyPendingTimersAsync();
+    oldWatcher.emit("error", new Error("active failed"));
+
+    expect(oldWatcher.close).toHaveBeenCalledTimes(1);
+    expect(rootWatcher.close).not.toHaveBeenCalled();
+
+    candidateWatcher.emit("ready");
+    await vi.runOnlyPendingTimersAsync();
+    expect(readSnapshot).toHaveBeenCalledTimes(2);
+
+    await harness.reloader.stop();
+  });
+
+  it("atomically swaps changed include graphs after ready and reconciles without watcher leaks", async () => {
+    const rootPath = nodePath.normalize("/tmp/openclaw.json");
+    const oldInclude = nodePath.normalize("/tmp/includes/old.json5");
+    const nextInclude = nodePath.normalize("/tmp/includes/next.json5");
+    const finalInclude = nodePath.normalize("/tmp/includes/final.json5");
+    const firstConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      hooks: { enabled: true },
+    };
+    const finalConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      hooks: { enabled: false },
+    };
+    const readSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce({
+        snapshot: makeSnapshot({
+          sourceConfig: firstConfig,
+          runtimeConfig: firstConfig,
+          config: firstConfig,
+          hash: "graph-1",
+        }),
+        includeFilePaths: [nextInclude],
+      })
+      .mockResolvedValueOnce({
+        snapshot: makeSnapshot({
+          sourceConfig: firstConfig,
+          runtimeConfig: firstConfig,
+          config: firstConfig,
+          hash: "graph-1",
+        }),
+        includeFilePaths: [nextInclude],
+      })
+      .mockResolvedValueOnce({
+        snapshot: makeSnapshot({
+          sourceConfig: finalConfig,
+          runtimeConfig: finalConfig,
+          config: finalConfig,
+          hash: "graph-2",
+        }),
+        includeFilePaths: [finalInclude],
+      });
+    const watchers = [
+      createWatcherMock(),
+      createWatcherMock(),
+      createWatcherMock(),
+      createWatcherMock(),
+    ];
+    const harness = createReloaderHarness(readSnapshot, {
+      initialIncludeFilePaths: [oldInclude],
+      watchers,
+    });
+    const [rootWatcher, initialIncludeWatcher, replacementWatcher, pendingFinalWatcher] = watchers;
+    if (!rootWatcher || !initialIncludeWatcher || !replacementWatcher || !pendingFinalWatcher) {
+      throw new Error("expected watcher mocks");
+    }
+
+    rootWatcher.emit("change", rootPath);
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.watchSpy.mock.calls[2]?.[0]).toBe(nextInclude);
+    expect(rootWatcher.close).not.toHaveBeenCalled();
+    expect(initialIncludeWatcher.close).not.toHaveBeenCalled();
+    replacementWatcher.emit("change", nextInclude);
+    await vi.runOnlyPendingTimersAsync();
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+
+    replacementWatcher.emit("ready");
+    expect(initialIncludeWatcher.close).toHaveBeenCalledTimes(1);
+    expect(rootWatcher.close).not.toHaveBeenCalled();
+    await vi.runOnlyPendingTimersAsync();
+    expect(readSnapshot).toHaveBeenCalledTimes(2);
+    expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+
+    initialIncludeWatcher.emit("change", oldInclude);
+    await vi.runOnlyPendingTimersAsync();
+    expect(readSnapshot).toHaveBeenCalledTimes(2);
+
+    rootWatcher.emit("change", rootPath);
+    await vi.runOnlyPendingTimersAsync();
+    expect(harness.watchSpy.mock.calls[3]?.[0]).toBe(finalInclude);
+    expect(harness.onHotReload).toHaveBeenCalledTimes(2);
+
+    await harness.reloader.stop();
+    expect(rootWatcher.close).toHaveBeenCalledTimes(1);
+    expect(initialIncludeWatcher.close).toHaveBeenCalledTimes(1);
+    expect(replacementWatcher.close).toHaveBeenCalledTimes(1);
+    expect(pendingFinalWatcher.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the last valid include watch set when a candidate snapshot is invalid", async () => {
+    const rootPath = nodePath.normalize("/tmp/openclaw.json");
+    const acceptedInclude = nodePath.normalize("/tmp/includes/accepted.json5");
+    const rejectedInclude = nodePath.normalize("/tmp/includes/rejected.json5");
+    const nextConfig: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      hooks: { enabled: true },
+    };
+    const readSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce({
+        snapshot: makeSnapshot({
+          valid: false,
+          issues: [{ path: "hooks.enabled", message: "Expected boolean" }],
+          hash: "invalid-graph",
+        }),
+        includeFilePaths: [rejectedInclude],
+      })
+      .mockResolvedValueOnce({
+        snapshot: makeSnapshot({
+          sourceConfig: nextConfig,
+          runtimeConfig: nextConfig,
+          config: nextConfig,
+          hash: "accepted-graph",
+        }),
+        includeFilePaths: [acceptedInclude],
+      });
+    const harness = createReloaderHarness(readSnapshot, {
+      initialIncludeFilePaths: [acceptedInclude],
+      watchers: [createWatcherMock(), createWatcherMock()],
+    });
+
+    harness.watcher.emit("change", rootPath);
+    await vi.runOnlyPendingTimersAsync();
+    expect(harness.watchSpy).toHaveBeenCalledTimes(2);
+
+    harness.watchers[1]?.emit("change", acceptedInclude);
+    await vi.runOnlyPendingTimersAsync();
+    expect(harness.watchSpy).toHaveBeenCalledTimes(2);
+    expect(harness.onHotReload).toHaveBeenCalledTimes(1);
 
     await harness.reloader.stop();
   });
@@ -1543,6 +2045,40 @@ describe("startGatewayConfigReloader", () => {
     expect(readSnapshot).toHaveBeenCalledTimes(1);
     expect(promoteSnapshot).not.toHaveBeenCalled();
     expect(harness.log.warn).not.toHaveBeenCalled();
+
+    await harness.reloader.stop();
+  });
+
+  it("skips in-process promotion when includes change under the same root hash", async () => {
+    const oldInclude = nodePath.normalize("/tmp/includes/old.json5");
+    const nextInclude = nodePath.normalize("/tmp/includes/next.json5");
+    const changedByInclude: OpenClawConfig = {
+      gateway: { reload: { debounceMs: 0 } },
+      hooks: { enabled: false },
+    };
+    const readSnapshot = vi.fn().mockResolvedValueOnce({
+      snapshot: makeSnapshot({
+        sourceConfig: changedByInclude,
+        runtimeConfig: changedByInclude,
+        config: changedByInclude,
+        hash: "internal-1",
+      }),
+      includeFilePaths: [nextInclude],
+    });
+    const promoteSnapshot = vi.fn(async () => true);
+    const harness = createReloaderHarness(readSnapshot, {
+      initialIncludeFilePaths: [oldInclude],
+      promoteSnapshot,
+      watchers: [createWatcherMock(), createWatcherMock()],
+    });
+
+    harness.emitWrite(makeZeroDebounceHookWrite("internal-1"));
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onHotReload).toHaveBeenCalledTimes(1);
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    expect(promoteSnapshot).not.toHaveBeenCalled();
+    expect(harness.watchSpy).toHaveBeenCalledTimes(2);
 
     await harness.reloader.stop();
   });

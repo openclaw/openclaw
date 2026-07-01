@@ -99,6 +99,7 @@ function secretsPrepareTimelineAttributes(
 export type GatewayStartupConfigSnapshotLoadResult = {
   snapshot: ConfigFileSnapshot;
   wroteConfig: boolean;
+  includeFilePaths?: readonly string[];
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
@@ -143,6 +144,7 @@ export async function loadGatewayStartupConfigSnapshot(params: {
     return {
       snapshot: configSnapshot,
       wroteConfig,
+      ...(snapshotRead.includeFilePaths ? { includeFilePaths: snapshotRead.includeFilePaths } : {}),
       ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
     };
   }
@@ -153,6 +155,7 @@ export async function loadGatewayStartupConfigSnapshot(params: {
   return {
     snapshot: withRuntimeConfig(configSnapshot, autoEnable.config),
     wroteConfig,
+    ...(snapshotRead.includeFilePaths ? { includeFilePaths: snapshotRead.includeFilePaths } : {}),
     ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
   };
 }

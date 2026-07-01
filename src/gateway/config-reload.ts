@@ -1,5 +1,6 @@
 // Gateway config hot-reload watcher.
 // Diffs config/plugin install snapshots and dispatches hot reload or restart plans.
+import nodePath from "node:path";
 import chokidar from "chokidar";
 import type { ConfigWriteNotification } from "../config/io.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
@@ -102,6 +103,36 @@ type GatewayConfigReloader = {
 
 type PluginInstallRecords = Record<string, PluginInstallRecord>;
 
+type ConfigReloadSnapshotReadResult =
+  | ConfigFileSnapshot
+  | {
+      snapshot: ConfigFileSnapshot;
+      includeFilePaths?: readonly string[];
+    };
+
+function unpackConfigReloadSnapshot(result: ConfigReloadSnapshotReadResult): {
+  snapshot: ConfigFileSnapshot;
+  includeFilePaths?: readonly string[];
+} {
+  return "snapshot" in result ? result : { snapshot: result };
+}
+
+function normalizeIncludeWatcherPaths(
+  rootPath: string,
+  includeFilePaths: readonly string[] = [],
+): string[] {
+  const normalizedRoot = nodePath.normalize(rootPath);
+  const includes = new Set(
+    includeFilePaths.map((includePath) => nodePath.normalize(includePath)).filter(Boolean),
+  );
+  includes.delete(normalizedRoot);
+  return [...includes].toSorted((left, right) => left.localeCompare(right));
+}
+
+function watcherPathsEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((entry, index) => entry === right[index]);
+}
+
 function asPluginInstallConfig(records: PluginInstallRecords): OpenClawConfig {
   return {
     plugins: {
@@ -114,7 +145,8 @@ export function startGatewayConfigReloader(opts: {
   initialConfig: OpenClawConfig;
   initialCompareConfig?: OpenClawConfig;
   initialInternalWriteHash?: string | null;
-  readSnapshot: () => Promise<ConfigFileSnapshot>;
+  initialIncludeFilePaths?: readonly string[];
+  readSnapshot: () => Promise<ConfigReloadSnapshotReadResult>;
   onHotReload: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => Promise<void>;
   onRestart: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
   promoteSnapshot?: (snapshot: ConfigFileSnapshot, reason: string) => Promise<boolean>;
@@ -135,6 +167,7 @@ export function startGatewayConfigReloader(opts: {
   let pending = false;
   let running = false;
   let stopped = false;
+  let pendingIncludeReload = false;
   let restartQueued = false;
   let missingConfigRetries = 0;
   let pendingInProcessConfig: {
@@ -144,6 +177,7 @@ export function startGatewayConfigReloader(opts: {
     afterWrite?: ConfigWriteNotification["afterWrite"];
   } | null = null;
   let lastAppliedWriteHash = opts.initialInternalWriteHash ?? null;
+  let currentApplyRejected = false;
   let currentPluginInstallRecords =
     opts.initialPluginInstallRecords ?? loadInstalledPluginIndexInstallRecordsSync();
   const readPluginInstallRecords =
@@ -256,7 +290,11 @@ export function startGatewayConfigReloader(opts: {
     currentPluginInstallRecords = nextPluginInstallRecords;
     settings = resolveGatewayReloadSettings(nextConfig);
     if (changedPaths.length === 0) {
-      return;
+      if (currentApplyRejected) {
+        opts.log.warn("config reload skipped (previous apply failed; waiting for config change)");
+        return false;
+      }
+      return true;
     }
 
     // Invalidate cached skills snapshots (persisted in sessions.json) whenever
@@ -273,18 +311,21 @@ export function startGatewayConfigReloader(opts: {
     opts.log.info(`config change detected; evaluating reload (${changedPaths.join(", ")})`);
     if (followUp.mode === "none") {
       opts.log.info(`config reload skipped by writer intent (${followUp.reason})`);
-      return;
+      currentApplyRejected = false;
+      return true;
     }
     const plan = buildGatewayReloadPlan(changedPaths, {
       noopPaths: pluginInstallTimestampNoopPaths,
       forceChangedPaths: pluginInstallWholeRecordPaths,
     });
     if (isNoopReloadPlan(plan) && !followUp.requiresRestart) {
-      return;
+      currentApplyRejected = false;
+      return true;
     }
     if (settings.mode === "off") {
       opts.log.info("config reload disabled (gateway.reload.mode=off)");
-      return;
+      currentApplyRejected = false;
+      return true;
     }
     if (followUp.requiresRestart) {
       queueRestart(
@@ -295,11 +336,13 @@ export function startGatewayConfigReloader(opts: {
         },
         nextConfig,
       );
-      return;
+      currentApplyRejected = false;
+      return true;
     }
     if (settings.mode === "restart") {
       queueRestart(plan, nextConfig);
-      return;
+      currentApplyRejected = false;
+      return true;
     }
     if (plan.restartGateway) {
       if (settings.mode === "hot") {
@@ -308,13 +351,23 @@ export function startGatewayConfigReloader(opts: {
             ", ",
           )})`,
         );
-        return;
+        currentApplyRejected = false;
+        return true;
       }
       queueRestart(plan, nextConfig);
-      return;
+      currentApplyRejected = false;
+      return true;
     }
 
-    await opts.onHotReload(plan, nextConfig);
+    try {
+      await opts.onHotReload(plan, nextConfig);
+      currentApplyRejected = false;
+      return true;
+    } catch (err) {
+      currentApplyRejected = true;
+      opts.log.error(`config reload failed: ${String(err)}`);
+      return false;
+    }
   };
 
   const promoteAcceptedSnapshot = async (snapshot: ConfigFileSnapshot, reason: string) => {
@@ -328,14 +381,25 @@ export function startGatewayConfigReloader(opts: {
     }
   };
 
-  const promoteAcceptedInProcessWrite = async (persistedHash: string) => {
+  const promoteAcceptedInProcessWrite = async (
+    persistedHash: string,
+    acceptedCompareConfig: OpenClawConfig,
+  ) => {
     if (!opts.promoteSnapshot) {
       return;
     }
     try {
-      const snapshot = await opts.readSnapshot();
-      if (snapshot.hash !== persistedHash || !snapshot.valid) {
+      const snapshotRead = unpackConfigReloadSnapshot(await opts.readSnapshot());
+      const snapshot = snapshotRead.snapshot;
+      if (
+        snapshot.hash !== persistedHash ||
+        !snapshot.valid ||
+        diffConfigPaths(acceptedCompareConfig, snapshot.sourceConfig).length > 0
+      ) {
         return;
+      }
+      if (snapshotRead.includeFilePaths) {
+        replaceWatchedPaths(snapshotRead.includeFilePaths);
       }
       await promoteAcceptedSnapshot(snapshot, "in-process-write");
     } catch (err) {
@@ -361,20 +425,31 @@ export function startGatewayConfigReloader(opts: {
         const pendingWrite = pendingInProcessConfig;
         pendingInProcessConfig = null;
         missingConfigRetries = 0;
-        await applySnapshot(
+        const applied = await applySnapshot(
           pendingWrite.config,
           pendingWrite.compareConfig,
           pendingWrite.afterWrite,
         );
-        await promoteAcceptedInProcessWrite(pendingWrite.persistedHash);
-        return;
-      }
-      const snapshot = await opts.readSnapshot();
-      if (lastAppliedWriteHash && typeof snapshot.hash === "string") {
-        if (snapshot.hash === lastAppliedWriteHash) {
+        if (!applied) {
+          if (lastAppliedWriteHash === pendingWrite.persistedHash) {
+            lastAppliedWriteHash = null;
+          }
           return;
         }
-        lastAppliedWriteHash = null;
+        await promoteAcceptedInProcessWrite(pendingWrite.persistedHash, pendingWrite.compareConfig);
+        return;
+      }
+      const bypassRootWriteHashDedupe = pendingIncludeReload;
+      pendingIncludeReload = false;
+      const snapshotRead = unpackConfigReloadSnapshot(await opts.readSnapshot());
+      const snapshot = snapshotRead.snapshot;
+      if (lastAppliedWriteHash && typeof snapshot.hash === "string") {
+        if (!bypassRootWriteHashDedupe && snapshot.hash === lastAppliedWriteHash) {
+          return;
+        }
+        if (snapshot.hash !== lastAppliedWriteHash) {
+          lastAppliedWriteHash = null;
+        }
       }
       if (handleMissingSnapshot(snapshot)) {
         return;
@@ -383,7 +458,13 @@ export function startGatewayConfigReloader(opts: {
         handleInvalidSnapshot(snapshot);
         return;
       }
-      await applySnapshot(snapshot.config, snapshot.sourceConfig);
+      const applied = await applySnapshot(snapshot.config, snapshot.sourceConfig);
+      if (!applied) {
+        return;
+      }
+      if (snapshotRead.includeFilePaths) {
+        replaceWatchedPaths(snapshotRead.includeFilePaths);
+      }
       await promoteAcceptedSnapshot(snapshot, "valid-config");
     } catch (err) {
       opts.log.error(`config reload failed: ${String(err)}`);
@@ -392,11 +473,20 @@ export function startGatewayConfigReloader(opts: {
       if (pending) {
         pending = false;
         schedule();
+      } else if (pendingIncludeReload) {
+        scheduleAfter(0);
       }
     }
   };
 
-  const scheduleFromWatcher = () => {
+  const normalizedRootWatchPath = nodePath.normalize(opts.watchPath);
+  const scheduleFromWatcher = (changedPath?: string) => {
+    if (
+      typeof changedPath === "string" &&
+      nodePath.normalize(changedPath) !== normalizedRootWatchPath
+    ) {
+      pendingIncludeReload = true;
+    }
     schedule();
   };
 
@@ -415,35 +505,254 @@ export function startGatewayConfigReloader(opts: {
       scheduleAfter(0);
     }) ?? (() => {});
 
-  let watcher: ReturnType<typeof chokidar.watch> | null = null;
+  type ConfigWatcher = ReturnType<typeof chokidar.watch>;
+  type IncludeWatcherGroup = {
+    paths: string[];
+    watchers: ConfigWatcher[];
+    ready: Set<ConfigWatcher>;
+    usePolling: boolean;
+  };
+  const emptyIncludeGroup = (paths: string[] = []): IncludeWatcherGroup => ({
+    paths,
+    watchers: [],
+    ready: new Set(),
+    usePolling: false,
+  });
+
+  let watcher: ConfigWatcher | null = null;
   let watcherRecreateRetries = 0;
   let watcherRecreateTimer: ReturnType<typeof setTimeout> | null = null;
-  let hotReloadStatus: GatewayHotReloadStatus = "active";
+  let rootHotReloadDisabled = false;
   let degradedToPolling = false;
   let watcherUsesPolling = false;
+
+  const initialIncludePaths = normalizeIncludeWatcherPaths(
+    opts.watchPath,
+    opts.initialIncludeFilePaths,
+  );
+  let activeIncludeGroup = emptyIncludeGroup(initialIncludePaths);
+  let pendingIncludeGroup: IncludeWatcherGroup | null = null;
+  let desiredIncludePaths = initialIncludePaths;
+  let includeGeneration = 0;
+  let includeReplacementRetries = 0;
+  let includeReplacementTimer: ReturnType<typeof setTimeout> | null = null;
+  let includeHotReloadDisabled = false;
+  let includeDegradedToPolling = false;
+
+  const closeWatcher = (target: ConfigWatcher | null) => {
+    void target?.close().catch(() => {});
+  };
+
+  const closeIncludeGroup = (group: IncludeWatcherGroup | null) => {
+    for (const target of group?.watchers ?? []) {
+      closeWatcher(target);
+    }
+  };
+
+  const createWatcherInstance = (watchPath: string, usePolling: boolean): ConfigWatcher =>
+    chokidar.watch(watchPath, {
+      ignoreInitial: true,
+      awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
+      usePolling,
+    });
+
+  const activateIncludeGroup = (group: IncludeWatcherGroup) => {
+    if (stopped || group !== pendingIncludeGroup) {
+      return;
+    }
+    const previous = activeIncludeGroup;
+    activeIncludeGroup = group;
+    pendingIncludeGroup = null;
+    includeReplacementRetries = 0;
+    includeHotReloadDisabled = false;
+    closeIncludeGroup(previous);
+
+    // Re-read once after the handoff so edits during candidate startup are
+    // reconciled without opening a gap between the old and new exact sets.
+    pendingIncludeReload = true;
+    schedule();
+  };
+
+  const scheduleIncludeReplacementRetry = (
+    generation: number,
+    failedWithPolling: boolean,
+    err: unknown,
+  ) => {
+    if (stopped || generation !== includeGeneration) {
+      return;
+    }
+    if (includeReplacementRetries >= WATCHER_RECREATE_MAX_RETRIES) {
+      if (!failedWithPolling && resolveChokidarUsePolling(true)) {
+        includeDegradedToPolling = true;
+        includeReplacementRetries = 0;
+        opts.log.warn(
+          `config include watcher native retries exhausted; degrading to polling mode: ${String(err)}`,
+        );
+        includeReplacementTimer = setTimeout(() => {
+          includeReplacementTimer = null;
+          stageIncludeReplacement(generation);
+        }, WATCHER_RECREATE_BACKOFF_MS[0] ?? 500);
+        return;
+      }
+      const mode = failedWithPolling ? "polling mode" : "native mode";
+      includeHotReloadDisabled = true;
+      opts.log.error(
+        `config include hot-reload disabled: watcher failed after ${WATCHER_RECREATE_MAX_RETRIES} re-create attempts in ${mode}; keeping prior paths: ${String(err)}`,
+      );
+      return;
+    }
+    const backoff =
+      WATCHER_RECREATE_BACKOFF_MS[includeReplacementRetries] ??
+      WATCHER_RECREATE_BACKOFF_MS[WATCHER_RECREATE_BACKOFF_MS.length - 1] ??
+      0;
+    includeReplacementRetries += 1;
+    opts.log.warn(
+      `config include watcher error; retrying replacement (attempt ${includeReplacementRetries}/${WATCHER_RECREATE_MAX_RETRIES} in ${backoff}ms): ${String(err)}`,
+    );
+    includeReplacementTimer = setTimeout(() => {
+      includeReplacementTimer = null;
+      stageIncludeReplacement(generation);
+    }, backoff);
+  };
+
+  const createIncludeGroup = (paths: string[], generation: number): IncludeWatcherGroup => {
+    const usePolling = resolveChokidarUsePolling(includeDegradedToPolling);
+    const group: IncludeWatcherGroup = {
+      paths,
+      watchers: [],
+      ready: new Set(),
+      usePolling: false,
+    };
+    try {
+      for (const includePath of paths) {
+        const next = createWatcherInstance(includePath, usePolling);
+        group.watchers.push(next);
+        group.usePolling ||= Boolean(next.options.usePolling);
+        const scheduleIfActive = (changedPath: string) => {
+          if (group === activeIncludeGroup) {
+            scheduleFromWatcher(changedPath);
+          }
+        };
+        next.on("add", scheduleIfActive);
+        next.on("change", scheduleIfActive);
+        next.on("unlink", scheduleIfActive);
+        next.on("ready", () => {
+          if (stopped) {
+            return;
+          }
+          group.ready.add(next);
+          if (group.ready.size !== group.watchers.length) {
+            return;
+          }
+          if (group === pendingIncludeGroup) {
+            if (generation !== includeGeneration) {
+              return;
+            }
+            activateIncludeGroup(group);
+          } else if (group === activeIncludeGroup) {
+            pendingIncludeReload = true;
+            schedule();
+          }
+        });
+        next.on("error", (err) => {
+          if (stopped) {
+            return;
+          }
+          if (group === pendingIncludeGroup) {
+            if (generation !== includeGeneration) {
+              return;
+            }
+            pendingIncludeGroup = null;
+            closeIncludeGroup(group);
+            scheduleIncludeReplacementRetry(generation, group.usePolling, err);
+            return;
+          }
+          if (group === activeIncludeGroup) {
+            activeIncludeGroup = emptyIncludeGroup();
+            closeIncludeGroup(group);
+            if (!pendingIncludeGroup && !includeReplacementTimer) {
+              scheduleIncludeReplacementRetry(includeGeneration, group.usePolling, err);
+            }
+          }
+        });
+      }
+      return group;
+    } catch (err) {
+      closeIncludeGroup(group);
+      throw err;
+    }
+  };
+
+  function stageIncludeReplacement(generation: number) {
+    if (
+      stopped ||
+      generation !== includeGeneration ||
+      pendingIncludeGroup ||
+      watcherPathsEqual(desiredIncludePaths, activeIncludeGroup.paths)
+    ) {
+      return;
+    }
+    if (desiredIncludePaths.length === 0) {
+      pendingIncludeGroup = emptyIncludeGroup();
+      activateIncludeGroup(pendingIncludeGroup);
+      return;
+    }
+    try {
+      pendingIncludeGroup = createIncludeGroup([...desiredIncludePaths], generation);
+    } catch (err) {
+      scheduleIncludeReplacementRetry(
+        generation,
+        resolveChokidarUsePolling(includeDegradedToPolling),
+        err,
+      );
+    }
+  }
+
+  const replaceWatchedPaths = (includeFilePaths: readonly string[]) => {
+    const nextPaths = normalizeIncludeWatcherPaths(opts.watchPath, includeFilePaths);
+    if (watcherPathsEqual(nextPaths, desiredIncludePaths)) {
+      return;
+    }
+    includeGeneration += 1;
+    desiredIncludePaths = nextPaths;
+    includeReplacementRetries = 0;
+    if (includeReplacementTimer) {
+      clearTimeout(includeReplacementTimer);
+      includeReplacementTimer = null;
+    }
+    const stagedGroup = pendingIncludeGroup;
+    pendingIncludeGroup = null;
+    closeIncludeGroup(stagedGroup);
+    if (watcherPathsEqual(nextPaths, activeIncludeGroup.paths)) {
+      includeHotReloadDisabled = false;
+      return;
+    }
+    stageIncludeReplacement(includeGeneration);
+  };
 
   const createWatcher = () => {
     if (stopped) {
       return;
     }
-    const usePolling = resolveChokidarUsePolling(degradedToPolling);
-    const next = chokidar.watch(opts.watchPath, {
-      ignoreInitial: true,
-      awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
-      usePolling,
-    });
-    next.on("add", scheduleFromWatcher);
-    next.on("change", scheduleFromWatcher);
-    next.on("unlink", scheduleFromWatcher);
-    next.on("error", (err) => {
-      handleWatcherError(next, err);
-    });
+    const next = createWatcherInstance(
+      opts.watchPath,
+      resolveChokidarUsePolling(degradedToPolling),
+    );
     watcher = next;
-    watcherUsesPolling = next.options.usePolling;
-    hotReloadStatus = "active";
+    watcherUsesPolling = Boolean(next.options.usePolling);
+    rootHotReloadDisabled = false;
+    const scheduleIfActive = (changedPath: string) => {
+      if (next === watcher) {
+        scheduleFromWatcher(changedPath);
+      }
+    };
+    next.on("add", scheduleIfActive);
+    next.on("change", scheduleIfActive);
+    next.on("unlink", scheduleIfActive);
+    next.on("error", (err) => handleWatcherError(next, err));
   };
 
-  const handleWatcherError = (source: typeof watcher, err: unknown) => {
+  const handleWatcherError = (source: ConfigWatcher, err: unknown) => {
     // Ignore stale errors from a watcher we already replaced or stopped.
     if (stopped || source !== watcher) {
       return;
@@ -451,7 +760,7 @@ export function startGatewayConfigReloader(opts: {
     const failedWatcherUsedPolling = watcherUsesPolling;
     watcher = null;
     watcherUsesPolling = false;
-    void source?.close().catch(() => {});
+    closeWatcher(source);
     if (watcherRecreateRetries >= WATCHER_RECREATE_MAX_RETRIES) {
       // All native (inotify/kqueue) retries exhausted — fall back to polling
       // mode so config hot-reload survives on hosts where inotify resources
@@ -469,7 +778,7 @@ export function startGatewayConfigReloader(opts: {
         return;
       }
       const mode = failedWatcherUsedPolling ? "polling mode" : "native mode";
-      hotReloadStatus = "disabled";
+      rootHotReloadDisabled = true;
       opts.log.error(
         `config hot-reload disabled: watcher failed after ${WATCHER_RECREATE_MAX_RETRIES} re-create attempts in ${mode}: ${String(err)}`,
       );
@@ -490,6 +799,18 @@ export function startGatewayConfigReloader(opts: {
   };
 
   createWatcher();
+  if (initialIncludePaths.length > 0) {
+    try {
+      activeIncludeGroup = createIncludeGroup(initialIncludePaths, includeGeneration);
+    } catch (err) {
+      activeIncludeGroup = emptyIncludeGroup();
+      scheduleIncludeReplacementRetry(
+        includeGeneration,
+        resolveChokidarUsePolling(includeDegradedToPolling),
+        err,
+      );
+    }
+  }
 
   return {
     stop: async () => {
@@ -502,11 +823,26 @@ export function startGatewayConfigReloader(opts: {
         clearTimeout(watcherRecreateTimer);
         watcherRecreateTimer = null;
       }
+      if (includeReplacementTimer) {
+        clearTimeout(includeReplacementTimer);
+        includeReplacementTimer = null;
+      }
       unsubscribeFromWrites();
-      const active = watcher;
+      const rootWatcher = watcher;
+      const activeIncludes = activeIncludeGroup;
+      const stagedIncludes = pendingIncludeGroup;
       watcher = null;
-      await active?.close().catch(() => {});
+      activeIncludeGroup = emptyIncludeGroup();
+      pendingIncludeGroup = null;
+      await Promise.all(
+        [
+          ...(rootWatcher ? [rootWatcher] : []),
+          ...activeIncludes.watchers,
+          ...(stagedIncludes?.watchers ?? []),
+        ].map(async (target) => await target.close().catch(() => {})),
+      );
     },
-    hotReloadStatus: () => hotReloadStatus,
+    hotReloadStatus: () =>
+      rootHotReloadDisabled || includeHotReloadDisabled ? "disabled" : "active",
   };
 }
