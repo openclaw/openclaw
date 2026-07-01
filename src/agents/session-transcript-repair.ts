@@ -10,7 +10,6 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "./runtime/index.js";
-import { isThinkingLikeBlock } from "./thinking-block.js";
 import {
   extractToolCallsFromAssistant,
   extractToolResultId,
@@ -40,6 +39,14 @@ const RAW_TOOL_CALL_BLOCK_TYPES = new Set([
   "tool_use",
   "function_call",
 ]);
+
+function isThinkingLikeBlock(block: unknown): boolean {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const type = (block as { type?: unknown }).type;
+  return type === "thinking" || type === "redacted_thinking";
+}
 
 function isRawToolCallBlock(block: unknown): block is RawToolCallBlock {
   if (!block || typeof block !== "object") {
@@ -554,15 +561,14 @@ function assistantHasToolCalls(message: AgentMessage): boolean {
   return extractToolCallsFromAssistant(message).length > 0;
 }
 
-function collectLaterMatchingToolResults(params: {
+function findLaterMatchingToolResult(params: {
   messages: AgentMessage[];
   startIndex: number;
+  toolCallId: string;
+  toolName?: string;
   toolCalls: Array<{ id: string; name?: string }>;
-  toolNamesById: Map<string, string>;
   seenToolResultIds: Set<string>;
-}): Map<string, Extract<AgentMessage, { role: "toolResult" }>> {
-  const resultsById = new Map<string, Extract<AgentMessage, { role: "toolResult" }>>();
-  const toolCallIds = new Set(params.toolCalls.map((toolCall) => toolCall.id));
+}): Extract<AgentMessage, { role: "toolResult" }> | undefined {
   for (let index = params.startIndex; index < params.messages.length; index += 1) {
     const candidate = params.messages[index];
     if (!candidate || typeof candidate !== "object" || candidate.role !== "toolResult") {
@@ -570,15 +576,12 @@ function collectLaterMatchingToolResults(params: {
     }
     const normalizedLegacyResult = normalizeLegacyToolResultId(candidate, params.toolCalls);
     const id = extractToolResultId(normalizedLegacyResult);
-    if (!id || !toolCallIds.has(id) || params.seenToolResultIds.has(id) || resultsById.has(id)) {
+    if (!id || id !== params.toolCallId || params.seenToolResultIds.has(id)) {
       continue;
     }
-    resultsById.set(
-      id,
-      normalizeToolResultName(normalizedLegacyResult, params.toolNamesById.get(id)),
-    );
+    return normalizeToolResultName(normalizedLegacyResult, params.toolName);
   }
-  return resultsById;
+  return undefined;
 }
 
 export function repairToolUseResultPairing(
@@ -599,6 +602,52 @@ export function repairToolUseResultPairing(
   let droppedOrphanCount = 0;
   let moved = false;
   let changed = false;
+
+  // Pre-process: deduplicate tool_use blocks across assistant messages.
+  // Legacy transcript replay/import rows (transcript_entry_id IS NULL)
+  // can produce duplicate tool_call_id groups that inflate context and
+  // trigger spurious duplicate warnings on every assembly cycle.
+  // Track seen tool_call_ids globally; skip assistant messages whose
+  // every tool_call_id was already produced by an earlier turn.
+  const seenToolCallIds = new Set<string>();
+  const deduped: AgentMessage[] = [];
+  for (const msg of messages) {
+    if (msg && typeof msg === "object" && msg.role === "assistant") {
+      const toolCalls = extractToolCallsFromAssistant(msg);
+      if (toolCalls.length > 0 && toolCalls.every((tc) => seenToolCallIds.has(tc.id))) {
+        // Every tool_call_id in this turn has already been produced by an
+        // earlier assistant message (legacy null-transcript duplication).
+        // Preserve non-tool content (text/thinking) while removing duplicate
+        // tool_use blocks to avoid silent content loss.
+        changed = true;
+        const content = Array.isArray(msg.content) ? msg.content : [];
+        const nonToolBlocks = content.filter(
+          (block) =>
+            !(
+              block &&
+              typeof block === "object" &&
+              typeof (block as Record<string, unknown>).id === "string" &&
+              typeof (block as Record<string, unknown>).type === "string" &&
+              ((block as Record<string, unknown>).type === "toolCall" ||
+                (block as Record<string, unknown>).type === "toolUse" ||
+                (block as Record<string, unknown>).type === "functionCall")
+            ),
+        );
+        if (nonToolBlocks.length > 0) {
+          deduped.push({
+            ...(msg as Record<string, unknown>),
+            content: nonToolBlocks,
+          } as AgentMessage);
+        }
+        continue;
+      }
+      for (const tc of toolCalls) {
+        seenToolCallIds.add(tc.id);
+      }
+    }
+    deduped.push(msg);
+  }
+  const msgs = changed ? deduped : messages;
 
   const pushToolResult = (msg: Extract<AgentMessage, { role: "toolResult" }>) => {
     const id = extractToolResultId(msg);
@@ -632,8 +681,8 @@ export function repairToolUseResultPairing(
     out.push(msg);
   };
 
-  for (let i = 0; i < messages.length; i += 1) {
-    const msg = messages[i];
+  for (let i = 0; i < msgs.length; i += 1) {
+    const msg = msgs[i];
     if (!msg || typeof msg !== "object") {
       out.push(msg);
       continue;
@@ -674,8 +723,8 @@ export function repairToolUseResultPairing(
     const remainder: AgentMessage[] = [];
 
     let j = i + 1;
-    for (; j < messages.length; j += 1) {
-      const next = messages[j];
+    for (; j < msgs.length; j += 1) {
+      const next = msgs[j];
       if (!next || typeof next !== "object") {
         remainder.push(next);
         continue;
@@ -773,21 +822,20 @@ export function repairToolUseResultPairing(
       changed = true;
     }
 
-    const laterResultsById = collectLaterMatchingToolResults({
-      messages,
-      startIndex: j,
-      toolCalls,
-      toolNamesById: toolCallNamesById,
-      seenToolResultIds,
-    });
     for (const call of toolCalls) {
       const existing = spanResultsById.get(call.id);
       if (existing) {
         pushToolResult(existing);
       } else {
-        const laterResult = laterResultsById.get(call.id);
+        const laterResult = findLaterMatchingToolResult({
+          messages: msgs,
+          startIndex: j,
+          toolCallId: call.id,
+          toolName: call.name,
+          toolCalls,
+          seenToolResultIds,
+        });
         if (laterResult) {
-          laterResultsById.delete(call.id);
           moved = true;
           changed = true;
           pushToolResult(laterResult);
@@ -816,7 +864,7 @@ export function repairToolUseResultPairing(
 
   const changedOrMoved = changed || moved;
   return {
-    messages: changedOrMoved ? out : messages,
+    messages: changedOrMoved ? out : msgs,
     added,
     droppedDuplicateCount,
     droppedOrphanCount,
