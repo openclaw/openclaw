@@ -628,7 +628,13 @@ function isNonVisibleAssistantTurnEligibleForSilentReply(params: {
   return isReasoningOnlyAssistantTurn(assistant);
 }
 
-function shouldSkipNonVisibleTurnRetry(params: {
+/**
+ * Returns true when the turn ended with a genuine failure or handoff signal that rules out
+ * deliberate silence: abort, timeout, client tool calls, yield, approval prompt, tool error,
+ * or accepted session spawn. Does NOT include hadPotentialSideEffects — a mutating tool that
+ * cleanly emitted NO_REPLY is a deliberate signal, not a failure.
+ */
+function hasGenuineFailureSignal(params: {
   aborted: boolean;
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
@@ -640,8 +646,18 @@ function shouldSkipNonVisibleTurnRetry(params: {
     params.attempt.yieldDetected ||
     params.attempt.didSendDeterministicApprovalPrompt ||
     params.attempt.lastToolError ||
-    hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) ||
-    resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects,
+    hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns),
+  );
+}
+
+function shouldSkipNonVisibleTurnRetry(params: {
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: IncompleteTurnAttempt;
+}): boolean {
+  return (
+    hasGenuineFailureSignal(params) ||
+    resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects
   );
 }
 
@@ -653,19 +669,28 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   timedOut: boolean;
   attempt: IncompleteTurnAttempt;
 }): boolean {
-  if (!params.allowEmptyAssistantReplyAsSilent || shouldSkipNonVisibleTurnRetry(params)) {
+  if (!params.allowEmptyAssistantReplyAsSilent) {
     return false;
   }
   if (hasCommittedMessagingToolDeliveryEvidence(params.attempt)) {
     return false;
   }
   const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  // Explicit NO_REPLY is deliberate silence — honour it even when tools ran with side effects,
+  // provided no genuine failure or handoff signal is present. A real failure (tool error,
+  // abort, yield, client tool call, etc.) never cleanly emits NO_REPLY, so this is safe.
   if (
     params.payloadCount === 0 &&
     assistant?.stopReason !== "error" &&
+    !hasGenuineFailureSignal(params) &&
     hasOnlySilentAssistantReply(params.attempt.assistantTexts)
   ) {
     return true;
+  }
+  // For implicit empties (no token) all replay-safety checks must still apply: an ambiguous
+  // provider failure after a mutating tool call should not be silently swallowed.
+  if (shouldSkipNonVisibleTurnRetry(params)) {
+    return false;
   }
   // Post-tool empty stops are ambiguous provider failures, not intentional silence.
   // Let the retry/incomplete-turn paths decide whether replay is safe.
