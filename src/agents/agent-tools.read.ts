@@ -74,6 +74,10 @@ const OFFSET_BEYOND_EOF_RE = /^Offset \d+ is beyond end of file \(\d+ lines tota
 const READ_CONTINUATION_NOTICE_RE =
   /\n\n\[(?:Showing lines [^\]]*?Use offset=\d+ to continue\.|\d+ more lines in file\. Use offset=\d+ to continue\.)\]\s*$/;
 const DAILY_MEMORY_PATH_RE = /^memory\/\d{4}-\d{2}-\d{2}\.md$/;
+const DAILY_MEMORY_FLUSH_MAX_APPEND_CHARS = 800;
+const DAILY_MEMORY_FLUSH_MAX_APPEND_LINES = 3;
+const DAILY_MEMORY_FLUSH_MAX_LINE_CHARS = 500;
+const MARKDOWN_HEADING_LINE_RE = /^#{1,6}\s+\S/;
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
@@ -562,7 +566,7 @@ type MemoryFlushAppendOnlyWriteOptions = {
 };
 
 async function readOptionalUtf8File(params: {
-  absolutePath: string;
+  root: string;
   relativePath: string;
   sandbox?: MemoryFlushAppendOnlyWriteOptions["sandbox"];
   signal?: AbortSignal;
@@ -584,9 +588,16 @@ async function readOptionalUtf8File(params: {
       });
       return buffer.toString("utf-8");
     }
-    return await fs.readFile(params.absolutePath, "utf-8");
+    const root = await fsRoot(params.root);
+    const existing = await root.read(params.relativePath, {
+      hardlinks: "reject",
+      nonBlockingRead: true,
+      symlinks: "reject",
+    });
+    return existing.buffer.toString("utf-8");
   } catch (error) {
-    if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT" || code === "not-found") {
       return "";
     }
     throw error;
@@ -594,7 +605,6 @@ async function readOptionalUtf8File(params: {
 }
 
 async function appendMemoryFlushContent(params: {
-  absolutePath: string;
   root: string;
   relativePath: string;
   content: string;
@@ -611,7 +621,7 @@ async function appendMemoryFlushContent(params: {
   }
 
   const existing = await readOptionalUtf8File({
-    absolutePath: params.absolutePath,
+    root: params.root,
     relativePath: params.relativePath,
     sandbox: params.sandbox,
     signal: params.signal,
@@ -619,26 +629,153 @@ async function appendMemoryFlushContent(params: {
   const separator =
     existing.length > 0 && !existing.endsWith("\n") && !params.content.startsWith("\n") ? "\n" : "";
   const next = `${existing}${separator}${params.content}`;
-  if (params.sandbox) {
-    const parent = path.posix.dirname(params.relativePath);
-    if (parent && parent !== ".") {
-      await params.sandbox.bridge.mkdirp({
-        filePath: parent,
-        cwd: params.sandbox.root,
-        signal: params.signal,
-      });
-    }
-    await params.sandbox.bridge.writeFile({
-      filePath: params.relativePath,
+  const parent = path.posix.dirname(params.relativePath);
+  if (parent && parent !== ".") {
+    await params.sandbox.bridge.mkdirp({
+      filePath: parent,
       cwd: params.sandbox.root,
-      data: next,
-      mkdir: true,
       signal: params.signal,
     });
-    return;
   }
-  await fs.mkdir(path.dirname(params.absolutePath), { recursive: true });
-  await fs.writeFile(params.absolutePath, next, "utf-8");
+  await params.sandbox.bridge.writeFile({
+    filePath: params.relativePath,
+    cwd: params.sandbox.root,
+    data: next,
+    mkdir: true,
+    signal: params.signal,
+  });
+}
+
+type PreparedMemoryFlushAppend =
+  | {
+      status: "accepted";
+      content: string;
+      appendedLines: number;
+      appendChars: number;
+      skippedDuplicateLines: number;
+    }
+  | {
+      status: "skipped_duplicate";
+      content: "";
+      skippedDuplicateLines: number;
+    };
+
+function memoryFlushAppendRejected(message: string): Error {
+  return new Error(`Memory flush append rejected: ${message}`);
+}
+
+function splitMemoryFlushAppendLines(content: string): string[] {
+  return content
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function normalizeMemoryFlushLineKey(line: string): string {
+  return line.trim().replace(/\s+/g, " ");
+}
+
+function existingMemoryFlushLineKeys(existingContent: string): Set<string> {
+  return new Set(
+    splitMemoryFlushAppendLines(existingContent).map(normalizeMemoryFlushLineKey).filter(Boolean),
+  );
+}
+
+function assertDailyMemoryFlushAppendBounds(lines: readonly string[]): string {
+  if (lines.length === 0) {
+    throw memoryFlushAppendRejected(
+      "content is empty; reply NO_REPLY when there is nothing durable to store.",
+    );
+  }
+  if (lines.length > DAILY_MEMORY_FLUSH_MAX_APPEND_LINES) {
+    throw memoryFlushAppendRejected(
+      `too many new lines (${lines.length}; max ${DAILY_MEMORY_FLUSH_MAX_APPEND_LINES}). Write 1-3 short pointer lines only.`,
+    );
+  }
+  const headingLine = lines.find((line) => MARKDOWN_HEADING_LINE_RE.test(line));
+  if (headingLine) {
+    throw memoryFlushAppendRejected(
+      "markdown headings or daily-memory scaffolds are not allowed; append only new note lines.",
+    );
+  }
+  const longLine = lines.find((line) => line.length > DAILY_MEMORY_FLUSH_MAX_LINE_CHARS);
+  if (longLine) {
+    throw memoryFlushAppendRejected(
+      `line too long (${longLine.length} chars; max ${DAILY_MEMORY_FLUSH_MAX_LINE_CHARS}). Write a short pointer instead of a transcript-style narrative.`,
+    );
+  }
+  const normalizedContent = lines.join("\n");
+  if (normalizedContent.length > DAILY_MEMORY_FLUSH_MAX_APPEND_CHARS) {
+    throw memoryFlushAppendRejected(
+      `content too large (${normalizedContent.length} chars; max ${DAILY_MEMORY_FLUSH_MAX_APPEND_CHARS}). Write 1-3 short pointer lines only.`,
+    );
+  }
+  return normalizedContent;
+}
+
+function prepareDailyMemoryFlushAppend(params: {
+  content: string;
+  existingContent: string;
+}): PreparedMemoryFlushAppend {
+  const lines = splitMemoryFlushAppendLines(params.content);
+  if (lines.length === 0) {
+    throw memoryFlushAppendRejected(
+      "content is empty; reply NO_REPLY when there is nothing durable to store.",
+    );
+  }
+
+  const existingLineKeys = existingMemoryFlushLineKeys(params.existingContent);
+  const newLines = lines.filter((line) => {
+    const key = normalizeMemoryFlushLineKey(line);
+    return key && !existingLineKeys.has(key);
+  });
+  const skippedDuplicateLines = lines.length - newLines.length;
+  if (newLines.length === 0) {
+    return {
+      status: "skipped_duplicate",
+      content: "",
+      skippedDuplicateLines,
+    };
+  }
+
+  const content = assertDailyMemoryFlushAppendBounds(newLines);
+  return {
+    status: "accepted",
+    content,
+    appendedLines: newLines.length,
+    appendChars: content.length,
+    skippedDuplicateLines,
+  };
+}
+
+async function prepareMemoryFlushAppend(params: {
+  root: string;
+  relativePath: string;
+  content: string;
+  sandbox?: MemoryFlushAppendOnlyWriteOptions["sandbox"];
+  signal?: AbortSignal;
+}): Promise<PreparedMemoryFlushAppend> {
+  if (!DAILY_MEMORY_PATH_RE.test(params.relativePath)) {
+    return {
+      status: "accepted",
+      content: params.content,
+      appendedLines: splitMemoryFlushAppendLines(params.content).length,
+      appendChars: params.content.length,
+      skippedDuplicateLines: 0,
+    };
+  }
+
+  const existingContent = await readOptionalUtf8File({
+    root: params.root,
+    relativePath: params.relativePath,
+    sandbox: params.sandbox,
+    signal: params.signal,
+  });
+  return prepareDailyMemoryFlushAppend({
+    content: params.content,
+    existingContent,
+  });
 }
 
 /** Restrict a write tool to appending memory-flush content to one path. */
@@ -676,11 +813,36 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         );
       }
 
-      await appendMemoryFlushContent({
-        absolutePath: allowedAbsolutePath,
+      const preparedAppend = await prepareMemoryFlushAppend({
         root: options.root,
         relativePath: options.relativePath,
         content,
+        sandbox: options.sandbox,
+        signal,
+      });
+      if (preparedAppend.status === "skipped_duplicate") {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `No new memory-flush content appended to ${options.relativePath}; all proposed lines were already present.`,
+            },
+          ],
+          details: {
+            path: options.relativePath,
+            appendOnly: true,
+            memoryFlushAppend: {
+              status: "skipped_duplicate",
+              skippedDuplicateLines: preparedAppend.skippedDuplicateLines,
+            },
+          },
+        };
+      }
+
+      await appendMemoryFlushContent({
+        root: options.root,
+        relativePath: options.relativePath,
+        content: preparedAppend.content,
         sandbox: options.sandbox,
         signal,
       });
@@ -689,6 +851,12 @@ export function wrapToolMemoryFlushAppendOnlyWrite(
         details: {
           path: options.relativePath,
           appendOnly: true,
+          memoryFlushAppend: {
+            status: "accepted",
+            appendedLines: preparedAppend.appendedLines,
+            appendChars: preparedAppend.appendChars,
+            skippedDuplicateLines: preparedAppend.skippedDuplicateLines,
+          },
         },
       };
     },
