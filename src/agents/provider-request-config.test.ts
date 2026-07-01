@@ -416,6 +416,21 @@ describe("provider request config", () => {
         rateLimit: { requestsPerMinute: 60 },
       } as ConfiguredProviderRequest),
     ).toBeUndefined();
+    expect(
+      sanitizeConfiguredModelProviderRequest({
+        rateLimit: {
+          maxQueueSize: 3,
+        },
+      }),
+    ).toBeUndefined();
+    expect(
+      sanitizeConfiguredModelProviderRequest({
+        allowPrivateNetwork: true,
+        rateLimit: {
+          maxQueueSize: 3,
+        },
+      }),
+    ).toEqual({ allowPrivateNetwork: true });
   });
 
   it("merges allowPrivateNetwork with later override winning", () => {

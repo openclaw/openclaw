@@ -132,6 +132,23 @@ describe("provider transport stream contracts", () => {
     expect(prepareTransportAwareSimpleModel(model).api).toBe("openclaw-openai-responses-transport");
   });
 
+  it("ignores maxQueueSize-only rate limits when choosing managed transport", () => {
+    const model = attachModelProviderRequestTransport(
+      buildModel("openai-responses", {
+        id: "gpt-5.4",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+      }),
+      {
+        rateLimit: { maxQueueSize: 2 },
+      },
+    );
+
+    expect(createTransportAwareStreamFnForModel(model)).toBeUndefined();
+    expect(buildTransportAwareSimpleStreamFn(model)).toBeUndefined();
+    expect(prepareTransportAwareSimpleModel(model)).toBe(model);
+  });
+
   it("fails closed when unsupported apis carry transport overrides", () => {
     const model = attachModelProviderRequestTransport(
       buildModel("ollama", {

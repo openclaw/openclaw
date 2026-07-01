@@ -66,6 +66,22 @@ describe("ModelsConfigSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("rejects model-provider request rate limits without active pacing", () => {
+    const result = ModelsConfigSchema.safeParse({
+      providers: {
+        openai: {
+          request: {
+            rateLimit: {
+              maxQueueSize: 2,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it("accepts google-vertex as a model API from MODEL_APIS", () => {
     const result = ModelsConfigSchema.safeParse({
       providers: {

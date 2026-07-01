@@ -374,7 +374,10 @@ export function sanitizeConfiguredModelProviderRequest(
         }
       : undefined;
   const normalizedRateLimit =
-    rateLimit && Object.keys(rateLimit).length > 0 ? rateLimit : undefined;
+    rateLimit &&
+    (rateLimit.requestsPerMinute !== undefined || rateLimit.minIntervalMs !== undefined)
+      ? rateLimit
+      : undefined;
   if (!sanitized && allowPrivateNetwork === undefined && !normalizedRateLimit) {
     return undefined;
   }

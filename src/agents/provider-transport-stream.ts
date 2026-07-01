@@ -101,8 +101,17 @@ function createSupportedTransportStreamFn(
 
 function hasOpenClawTransportRequirement(model: Model): boolean {
   const request = getModelProviderRequestTransport(model);
+  const rateLimit = request?.rateLimit;
+  const hasActiveRateLimit = Boolean(
+    (typeof rateLimit?.requestsPerMinute === "number" &&
+      Number.isFinite(rateLimit.requestsPerMinute) &&
+      rateLimit.requestsPerMinute > 0) ||
+    (typeof rateLimit?.minIntervalMs === "number" &&
+      Number.isFinite(rateLimit.minIntervalMs) &&
+      rateLimit.minIntervalMs > 0),
+  );
   return Boolean(
-    request?.proxy || request?.tls || request?.rateLimit || getModelProviderLocalService(model),
+    request?.proxy || request?.tls || hasActiveRateLimit || getModelProviderLocalService(model),
   );
 }
 
