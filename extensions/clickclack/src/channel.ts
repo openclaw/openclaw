@@ -26,6 +26,7 @@ import {
 import { clickClackConfigSchema } from "./config-schema.js";
 import { startClickClackGatewayAccount } from "./gateway.js";
 import { sendClickClackText } from "./outbound.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import {
   buildClickClackTarget,
   looksLikeClickClackTarget,
@@ -166,6 +167,10 @@ export const clickClackPlugin: ChannelPlugin<ResolvedClickClackAccount> = create
     }),
     gateway: {
       startAccount: startClickClackGatewayAccount,
+    },
+    secrets: {
+      secretTargetRegistryEntries,
+      collectRuntimeConfigAssignments,
     },
     message: clickClackMessageAdapter,
   },

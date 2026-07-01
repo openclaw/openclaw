@@ -16,4 +16,8 @@ export default defineBundledChannelEntry({
     specifier: "./api.js",
     exportName: "setClickClackRuntime",
   },
+  secrets: {
+    specifier: "./secret-contract-api.js",
+    exportName: "channelSecrets",
+  },
 });
