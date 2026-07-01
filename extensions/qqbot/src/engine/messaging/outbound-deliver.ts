@@ -136,6 +136,32 @@ function resolveMediaTargetContext(
   };
 }
 
+function hasUrlScheme(value: string): boolean {
+  return /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(value.trim());
+}
+
+function isBareRelativeMediaPath(value: string): boolean {
+  const trimmed = value.trim();
+  return (
+    Boolean(trimmed) &&
+    !trimmed.startsWith("#") &&
+    !trimmed.startsWith("//") &&
+    !hasUrlScheme(trimmed)
+  );
+}
+
+function extractMarkdownImageUrl(rawDestination: string | undefined): string | undefined {
+  const destination = rawDestination?.trim();
+  if (!destination) {
+    return undefined;
+  }
+  if (destination.startsWith("<")) {
+    const close = destination.indexOf(">");
+    return close > 1 ? destination.slice(1, close).trim() : undefined;
+  }
+  return destination.match(/^(\S+)\s+["'(]/)?.[1] ?? destination;
+}
+
 async function autoMediaBatch(params: {
   qualifiedTarget: string;
   account: GatewayAccount;
@@ -534,7 +560,10 @@ export async function sendPlainReply(
   const collectedImageUrls: string[] = [];
   const localMediaToSend: string[] = [];
 
-  const collectImageUrl = (url: string | undefined | null): boolean => {
+  const collectImageUrl = (
+    url: string | undefined | null,
+    allowBareRelativeMedia = false,
+  ): boolean => {
     if (!url) {
       return false;
     }
@@ -549,7 +578,7 @@ export async function sendPlainReply(
       }
       return true;
     }
-    if (isLocalFilePath(url)) {
+    if (isLocalFilePath(url) || (allowBareRelativeMedia && isBareRelativeMediaPath(url))) {
       if (!localMediaToSend.includes(url)) {
         localMediaToSend.push(url);
         log?.debug?.(`Collected local media for auto-routing: ${url}`);
@@ -561,23 +590,23 @@ export async function sendPlainReply(
 
   if (payload.mediaUrls?.length) {
     for (const url of payload.mediaUrls) {
-      collectImageUrl(url);
+      collectImageUrl(url, true);
     }
   }
   if (payload.mediaUrl) {
-    collectImageUrl(payload.mediaUrl);
+    collectImageUrl(payload.mediaUrl, true);
   }
 
   // Extract markdown images.
   const mdImageRegex = /!\[([^\]]*)\]\(([^)]+)\)/gi;
   const mdMatches = [...replyText.matchAll(mdImageRegex)];
   for (const m of mdMatches) {
-    const url = m[2]?.trim();
+    const url = extractMarkdownImageUrl(m[2]);
     if (url && !collectedImageUrls.includes(url)) {
       if (url.startsWith("http://") || url.startsWith("https://")) {
         collectedImageUrls.push(url);
         log?.debug?.(`Extracted HTTP image from markdown: ${url.slice(0, 80)}...`);
-      } else if (isLocalFilePath(url)) {
+      } else if (isLocalFilePath(url) || isBareRelativeMediaPath(url)) {
         if (!localMediaToSend.includes(url)) {
           localMediaToSend.push(url);
           log?.debug?.(`Collected local media from markdown for auto-routing: ${url}`);
@@ -604,7 +633,7 @@ export async function sendPlainReply(
   let textWithoutImages = filterInternalMarkers(replyText);
 
   for (const m of mdMatches) {
-    const url = m[2]?.trim();
+    const url = extractMarkdownImageUrl(m[2]);
     if (url && !url.startsWith("http://") && !url.startsWith("https://") && !isLocalFilePath(url)) {
       textWithoutImages = textWithoutImages.replace(m[0], "").trim();
     }
