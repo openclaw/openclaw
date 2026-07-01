@@ -236,6 +236,44 @@ describe("noteClaudeCliHealth", () => {
     });
   });
 
+  it("reports Claude CLI apiKeyHelper as headless auth", async () => {
+    await withTempHome(({ homeDir, workspaceDir }) => {
+      const noteFn = vi.fn();
+      noteClaudeCliHealth(
+        {
+          agents: {
+            defaults: {
+              model: { primary: "claude-cli/claude-sonnet-4-6" },
+            },
+          },
+        },
+        {
+          homeDir,
+          workspaceDir,
+          noteFn,
+          store: createStore({
+            [CLAUDE_CLI_PROFILE_ID]: {
+              type: "oauth",
+              provider: "claude-cli",
+              access: "token-a",
+              refresh: "token-r",
+              expires: Date.now() + 60_000,
+            },
+          }),
+          readClaudeCliCredentials: () => ({
+            type: "api_key_helper",
+          }),
+          resolveCommandPath: () => "/opt/homebrew/bin/claude",
+        },
+      );
+
+      const body = noteBody(noteFn);
+      expect(body).toContain("Headless Claude auth: OK (apiKeyHelper).");
+      expect(body).not.toContain("Headless Claude auth: unavailable");
+      expect(body).not.toContain("claude auth login");
+    });
+  });
+
   it("warns when Claude auth is not readable headlessly", async () => {
     await withTempHome(({ homeDir, workspaceDir }) => {
       const noteFn = vi.fn();

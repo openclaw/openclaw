@@ -78,15 +78,15 @@ function encodeOAuthIdentity(credential: {
 }
 
 function encodeClaudeCredential(credential: ClaudeCliCredential): string {
-  // Identity-only hashing for both OAuth and token Claude CLI credentials.
+  // Identity-only hashing for Claude CLI-managed credentials.
   // The Claude CLI keychain rewrite is not atomic: a token rotation can
   // briefly produce a partial read where `refreshToken` is missing, and the
   // parser falls back to a token-shaped credential. With the previous
   // token-inclusive hash, that transient race flipped the auth-epoch and
-  // forced a session reset on every rotation. Routing both branches through
-  // `encodeOAuthIdentity` collapses partial reads and rotations onto the
-  // same provider-keyed identity hash, while a real account switch would
-  // still surface as different identity fields. Fixes #74312.
+  // forced a session reset on every rotation. Routing these branches through
+  // `encodeOAuthIdentity` collapses partial reads, helper auth, and rotations
+  // onto the same provider-keyed identity hash, while a real account switch
+  // would still surface as different identity fields. Fixes #74312.
   return encodeOAuthIdentity({
     type: "oauth",
     provider: credential.provider,

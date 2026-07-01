@@ -4,6 +4,7 @@
  */
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import { readClaudeCliCredentialsForRuntime } from "./cli-auth-seam.js";
+import { CLAUDE_CLI_API_KEY_HELPER_AUTH_MARKER } from "./cli-constants.js";
 
 const CLAUDE_CLI_BACKEND_ID = "claude-cli";
 
@@ -12,19 +13,28 @@ function resolveClaudeCliSyntheticAuth() {
   if (!credential) {
     return undefined;
   }
-  return credential.type === "oauth"
-    ? {
+  switch (credential.type) {
+    case "oauth":
+      return {
         apiKey: credential.access,
         source: "Claude CLI native auth",
         mode: "oauth" as const,
         expiresAt: credential.expires,
-      }
-    : {
+      };
+    case "token":
+      return {
         apiKey: credential.token,
         source: "Claude CLI native auth",
         mode: "token" as const,
         expiresAt: credential.expires,
       };
+    case "api_key_helper":
+      return {
+        apiKey: CLAUDE_CLI_API_KEY_HELPER_AUTH_MARKER,
+        source: "Claude CLI apiKeyHelper",
+        mode: "api-key" as const,
+      };
+  }
 }
 
 const anthropicProviderDiscovery: ProviderPlugin = {

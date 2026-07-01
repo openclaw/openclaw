@@ -258,6 +258,19 @@ describe("resolveCliAuthEpoch", () => {
     expect(tokenEpoch).toBe(oauthEpoch);
   });
 
+  it("includes Claude CLI apiKeyHelper in the local auth epoch", async () => {
+    setCliAuthEpochTestDeps({
+      readClaudeCliCredentialsCached: () => ({
+        type: "api_key_helper",
+        provider: "anthropic",
+      }),
+    });
+
+    const helperEpoch = await resolveCliAuthEpoch({ provider: "claude-cli" });
+
+    expectCliAuthEpoch(helperEpoch);
+  });
+
   it("drops the claude cli epoch when the credential read is absent", async () => {
     setCliAuthEpochTestDeps({
       readClaudeCliCredentialsCached: () => ({

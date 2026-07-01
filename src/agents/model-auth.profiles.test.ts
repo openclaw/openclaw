@@ -211,6 +211,16 @@ vi.mock("../plugins/provider-runtime.js", () => ({
     provider: string;
     context: { providerConfig?: { api?: string; baseUrl?: string; models?: unknown[] } };
   }) => {
+    if (
+      params.provider === "claude-cli" &&
+      cliCredentialMocks.readClaudeCliCredentialsCached()?.type === "api_key_helper"
+    ) {
+      return {
+        apiKey: "openclaw:claude-cli-api-key-helper",
+        source: "Claude CLI apiKeyHelper",
+        mode: "api-key" as const,
+      };
+    }
     if (params.provider !== "demo-local") {
       return undefined;
     }
@@ -692,6 +702,28 @@ describe("getApiKeyForModel", () => {
       | { allowKeychainPrompt?: boolean }
       | undefined;
     expect(options?.allowKeychainPrompt).toBe(false);
+  });
+
+  it("accepts Claude CLI apiKeyHelper auth without a stored credential profile", async () => {
+    cliCredentialMocks.readClaudeCliCredentialsCached.mockReturnValue({
+      type: "api_key_helper",
+      provider: "anthropic",
+    });
+
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-auth-claude-helper-",
+        agentEnv: "main",
+      },
+      async () => {
+        const resolved = await resolveApiKeyForProvider({ provider: "claude-cli" });
+        expect(resolved.apiKey).toBe("openclaw:claude-cli-api-key-helper");
+        expect(resolved.source).toBe("Claude CLI apiKeyHelper");
+        expect(resolved.mode).toBe("api-key");
+        expect(resolved.profileId).toBeUndefined();
+      },
+    );
   });
 
   it("throws when ZAI API key is missing", async () => {

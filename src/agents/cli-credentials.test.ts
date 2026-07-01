@@ -187,6 +187,65 @@ describe("cli credentials", () => {
     expect(execSyncMock).toHaveBeenCalledTimes(1);
   });
 
+  it("recognizes Claude Code apiKeyHelper settings as CLI-managed auth", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-settings-"));
+    const settingsDir = path.join(tempDir, ".claude");
+    fs.mkdirSync(settingsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(settingsDir, "settings.json"),
+      JSON.stringify({ apiKeyHelper: "printf '%s' \"$ANTHROPIC_API_KEY\"" }),
+    );
+
+    const credential = readClaudeCliCredentialsCached({
+      allowKeychainPrompt: false,
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "linux",
+      homeDir: tempDir,
+      execSync: execSyncMock,
+    });
+
+    expect(credential).toEqual({
+      type: "api_key_helper",
+      provider: "anthropic",
+    });
+    expect(execSyncMock).not.toHaveBeenCalled();
+  });
+
+  it("prefers Claude Code apiKeyHelper settings over stored Claude credentials", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-claude-helper-first-"));
+    const settingsDir = path.join(tempDir, ".claude");
+    fs.mkdirSync(settingsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(settingsDir, "settings.json"),
+      JSON.stringify({ apiKeyHelper: "printf '%s' \"$ANTHROPIC_API_KEY\"" }),
+    );
+    fs.writeFileSync(
+      path.join(settingsDir, ".credentials.json"),
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "stale-access",
+          refreshToken: "stale-refresh",
+          expiresAt: Date.parse("2099-01-01T00:00:00Z"),
+        },
+      }),
+    );
+    mockClaudeCliCredentialRead();
+
+    const credential = readClaudeCliCredentialsCached({
+      allowKeychainPrompt: true,
+      ttlMs: CLI_CREDENTIALS_CACHE_TTL_MS,
+      platform: "darwin",
+      homeDir: tempDir,
+      execSync: execSyncMock,
+    });
+
+    expect(credential).toEqual({
+      type: "api_key_helper",
+      provider: "anthropic",
+    });
+    expect(execSyncMock).not.toHaveBeenCalled();
+  });
+
   it("reads Codex credentials from keychain when available", () => {
     const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-"));
     process.env.CODEX_HOME = tempHome;
