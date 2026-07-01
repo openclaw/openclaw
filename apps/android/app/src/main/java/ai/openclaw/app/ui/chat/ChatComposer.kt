@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui.chat
 
+import ai.openclaw.app.chat.ChatCommandEntry
 import ai.openclaw.app.ui.mobileAccent
 import ai.openclaw.app.ui.mobileAccentBorderStrong
 import ai.openclaw.app.ui.mobileAccentSoft
@@ -100,18 +101,24 @@ fun ChatComposer(
   healthOk: Boolean,
   thinkingLevel: String,
   pendingRunCount: Int,
+  commands: List<ChatCommandEntry>,
   attachments: List<PendingImageAttachment>,
   onDraftApplied: () -> Unit,
   onPickImages: () -> Unit,
   onRemoveAttachment: (id: String) -> Unit,
   onSetThinkingLevel: (level: String) -> Unit,
   onRefresh: () -> Unit,
+  onNewChat: () -> Unit,
   onAbort: () -> Unit,
   onSend: (text: String) -> Unit,
 ) {
   var input by rememberSaveable { mutableStateOf("") }
   var lastAppliedDraft by rememberSaveable { mutableStateOf<String?>(null) }
   var showThinkingMenu by remember { mutableStateOf(false) }
+  val slashCommands =
+    remember(input, commands) {
+      matchingSlashCommands(input = input, commands = commands)
+    }
 
   LaunchedEffect(draftText) {
     val next = applyDraftText(draftText = draftText, currentInput = input, lastAppliedDraft = lastAppliedDraft)
@@ -132,6 +139,21 @@ fun ChatComposer(
   Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
     if (attachments.isNotEmpty()) {
       AttachmentsStrip(attachments = attachments, onRemoveAttachment = onRemoveAttachment)
+    }
+
+    if (shouldShowSlashCommandMenu(input)) {
+      SheetSlashCommandPanel(
+        commands = slashCommands,
+        onSelect = { command ->
+          val commandText = slashCommandText(command)
+          if (isNewChatSlashCommand(commandText)) {
+            input = ""
+            onNewChat()
+          } else {
+            input = slashCommandCompletion(command)
+          }
+        },
+      )
     }
 
     OutlinedTextField(
@@ -200,6 +222,8 @@ fun ChatComposer(
         }
       }
 
+      SlashTextActionButton(onClick = { input = "/" })
+
       SecondaryActionButton(
         label = "Attach",
         icon = Icons.Default.AttachFile,
@@ -228,9 +252,13 @@ fun ChatComposer(
 
       Button(
         onClick = {
-          val text = input
+          val text = input.trim()
           input = ""
-          onSend(text)
+          if (attachments.isEmpty() && isNewChatSlashCommand(text)) {
+            onNewChat()
+          } else {
+            onSend(text)
+          }
         },
         enabled = canSend,
         modifier = Modifier.height(44.dp),
@@ -257,6 +285,94 @@ fun ChatComposer(
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
+      }
+    }
+  }
+}
+
+@Composable
+private fun SlashTextActionButton(onClick: () -> Unit) {
+  Button(
+    onClick = onClick,
+    modifier = Modifier.size(44.dp),
+    shape = RoundedCornerShape(14.dp),
+    colors =
+      ButtonDefaults.buttonColors(
+        containerColor = mobileCardSurface,
+        contentColor = mobileTextSecondary,
+      ),
+    border = BorderStroke(1.dp, mobileBorderStrong),
+    contentPadding = PaddingValues(0.dp),
+  ) {
+    Text(
+      text = "/",
+      style = mobileHeadline.copy(fontWeight = FontWeight.Bold, fontSize = 18.sp, lineHeight = 20.sp),
+      color = mobileTextSecondary,
+    )
+  }
+}
+
+@Composable
+private fun SheetSlashCommandPanel(
+  commands: List<ChatCommandEntry>,
+  onSelect: (ChatCommandEntry) -> Unit,
+) {
+  Surface(
+    modifier = Modifier.fillMaxWidth(),
+    color = mobileCardSurface,
+    shape = RoundedCornerShape(14.dp),
+    border = BorderStroke(1.dp, mobileBorderStrong),
+    tonalElevation = 0.dp,
+    shadowElevation = 0.dp,
+  ) {
+    Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+      if (commands.isEmpty()) {
+        Text(
+          text = "No commands found",
+          style = mobileCaption1,
+          color = mobileTextTertiary,
+        )
+      } else {
+        for (command in commands) {
+          Surface(
+            onClick = { onSelect(command) },
+            shape = RoundedCornerShape(10.dp),
+            color = Color.Transparent,
+            contentColor = mobileText,
+          ) {
+            Row(
+              modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 7.dp),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+              Text(
+                text = slashCommandText(command),
+                style = mobileCaption1.copy(fontWeight = FontWeight.Bold),
+                color = mobileText,
+                modifier = Modifier.width(76.dp),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+              Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                Text(
+                  text = command.description.ifBlank { command.category ?: "Command" },
+                  style = mobileCaption1,
+                  color = mobileTextSecondary,
+                  maxLines = 1,
+                  overflow = TextOverflow.Ellipsis,
+                )
+                command.category?.takeIf { it.isNotBlank() }?.let { category ->
+                  Text(
+                    text = category,
+                    style = mobileCaption1.copy(fontSize = 11.sp, lineHeight = 14.sp),
+                    color = mobileTextTertiary,
+                    maxLines = 1,
+                  )
+                }
+              }
+            }
+          }
+        }
       }
     }
   }

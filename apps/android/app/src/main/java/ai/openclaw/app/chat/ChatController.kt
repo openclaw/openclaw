@@ -70,6 +70,9 @@ class ChatController internal constructor(
   private val _sessions = MutableStateFlow<List<ChatSessionEntry>>(emptyList())
   val sessions: StateFlow<List<ChatSessionEntry>> = _sessions.asStateFlow()
 
+  private val _commands = MutableStateFlow(defaultChatCommands())
+  val commands: StateFlow<List<ChatCommandEntry>> = _commands.asStateFlow()
+
   private val pendingRuns = mutableSetOf<String>()
   private val pendingRunTimeoutJobs = ConcurrentHashMap<String, Job>()
 
@@ -137,6 +140,39 @@ class ChatController internal constructor(
 
   fun refreshSessions(limit: Int? = null) {
     scope.launch { fetchSessions(limit = limit) }
+  }
+
+  /** Starts a fresh chat for the active gateway session key. */
+  fun startNewChat() {
+    scope.launch { startNewChatAwait() }
+  }
+
+  /** Starts a fresh chat and returns whether the gateway accepted the reset. */
+  suspend fun startNewChatAwait(): Boolean {
+    val key = normalizeRequestedSessionKey(_sessionKey.value)
+    if (key.isEmpty()) return false
+    _errorText.value = null
+    _historyLoading.value = true
+    return try {
+      val params =
+        buildJsonObject {
+          put("key", JsonPrimitive(key))
+          put("reason", JsonPrimitive("new"))
+        }
+      requestGateway("sessions.reset", params.toString())
+      val generation = beginHistoryLoad(key, clearMessages = true)
+      bootstrap(sessionKey = key, generation = generation, forceHealth = true, refreshSessions = true)
+      true
+    } catch (err: Throwable) {
+      _errorText.value = err.message
+      _historyLoading.value = false
+      false
+    }
+  }
+
+  /** Refreshes the available text slash commands for the current gateway. */
+  fun refreshCommands() {
+    scope.launch { fetchCommands() }
   }
 
   /** Persists the normalized thinking level used for subsequent chat sends. */
@@ -424,6 +460,23 @@ class ChatController internal constructor(
       _sessions.value = parseSessions(res)
     } catch (_: Throwable) {
       // best-effort
+    }
+  }
+
+  private suspend fun fetchCommands() {
+    try {
+      val params =
+        buildJsonObject {
+          put("scope", JsonPrimitive("text"))
+          put("includeArgs", JsonPrimitive(true))
+        }
+      val res = requestGateway("commands.list", params.toString())
+      val parsed = parseChatCommands(json, res)
+      _commands.value = parsed.ifEmpty { defaultChatCommands() }
+    } catch (_: Throwable) {
+      if (_commands.value.isEmpty()) {
+        _commands.value = defaultChatCommands()
+      }
     }
   }
 
@@ -853,6 +906,40 @@ internal fun parseChatMessageContents(obj: JsonObject): List<ChatMessageContent>
     return listOf(ChatMessageContent(type = "text", text = text))
   }
   return emptyList()
+}
+
+internal fun parseChatCommands(
+  json: Json,
+  commandsJson: String,
+): List<ChatCommandEntry> {
+  val root = json.parseToJsonElement(commandsJson).asObjectOrNull() ?: return emptyList()
+  val commands = root["commands"].asArrayOrNull() ?: return emptyList()
+  return commands.mapNotNull { item -> parseChatCommandEntry(item.asObjectOrNull()) }
+}
+
+private fun parseChatCommandEntry(obj: JsonObject?): ChatCommandEntry? {
+  if (obj == null) return null
+  val aliases =
+    obj["textAliases"]
+      .asArrayOrNull()
+      ?.mapNotNull { alias -> alias.asStringOrNull()?.trim()?.takeIf { it.startsWith("/") && it.length > 1 } }
+      ?.distinct()
+      .orEmpty()
+  val name =
+    obj["name"]
+      .asStringOrNull()
+      ?.trim()
+      ?.removePrefix("/")
+      ?.takeIf { it.isNotEmpty() }
+      ?: aliases.firstOrNull()?.removePrefix("/")
+      ?: return null
+  return ChatCommandEntry(
+    name = name,
+    description = obj["description"].asStringOrNull()?.trim().orEmpty(),
+    category = obj["category"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+    textAliases = aliases,
+    acceptsArgs = obj["acceptsArgs"].asBooleanOrNull() ?: false,
+  )
 }
 
 internal data class MainSessionState(
