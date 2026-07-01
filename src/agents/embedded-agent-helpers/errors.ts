@@ -1052,11 +1052,15 @@ function classifyFailoverClassificationFromMessage(
   if (isPeriodicUsageLimitErrorMessage(raw)) {
     return toReasonClassification(isBillingErrorMessage(raw) ? "billing" : "rate_limit");
   }
-  if (isRateLimitErrorMessage(raw)) {
-    return toReasonClassification("rate_limit");
-  }
+  // Overloaded errors take precedence over rate-limit because providers may
+  // return HTTP 429 with an overload message (e.g., z.ai error code 1305:
+  // "The service may be temporarily overloaded"). Classifying these as
+  // rate_limit would show the wrong user-facing copy (#98101).
   if (isOverloadedErrorMessage(raw)) {
     return toReasonClassification("overloaded");
+  }
+  if (isRateLimitErrorMessage(raw)) {
+    return toReasonClassification("rate_limit");
   }
   if (
     isStructuredServerErrorMessage(raw) &&

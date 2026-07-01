@@ -69,7 +69,12 @@ const ZAI_AUTH_ERROR_PATTERNS = [
 
 const ERROR_PATTERNS = {
   rateLimit: [
-    /rate[_ ]limit|too many requests|429/,
+    // Match 429 status codes, but exclude explicit overload messages which
+    // should be classified as "overloaded" instead (#98101). The negative
+    // lookahead prevents matching when "overload" or "capacity" appears nearby.
+    /429(?!.*(?:overload|capacity))/i,
+    /rate[_ ]limit/i,
+    /too many requests/i,
     /too many (?:concurrent )?requests/i,
     /throttling(?:exception)?/i,
     "model_cooldown",

@@ -117,6 +117,38 @@ describe("Chinese provider overload messages", () => {
   });
 });
 
+describe("z.ai HTTP 429 with overload message (#98101)", () => {
+  // z.ai returns HTTP 429 with error code 1305 and message:
+  // "The service may be temporarily overloaded, please try again later"
+  // This should be classified as "overloaded", not "rate_limit".
+  const ZAI_429_OVERLOAD_JSON =
+    '{"error":{"code":"1305","message":"The service may be temporarily overloaded, please try again later"}}';
+
+  it("classifies z.ai 429+overload JSON body as overloaded", () => {
+    expect(isOverloadedErrorMessage(ZAI_429_OVERLOAD_JSON)).toBe(true);
+  });
+
+  it("does not misclassify z.ai 429+overload as rate limit", () => {
+    expect(isRateLimitErrorMessage(ZAI_429_OVERLOAD_JSON)).toBe(false);
+  });
+
+  it("classifies z.ai 429+overload with classifyFailoverReason as overloaded", () => {
+    expect(classifyFailoverReason(ZAI_429_OVERLOAD_JSON)).toBe("overloaded");
+  });
+
+  it("still classifies plain 429 without overload wording as rate limit", () => {
+    const plain429 = "Error 429: Too many requests";
+    expect(isRateLimitErrorMessage(plain429)).toBe(true);
+    expect(isOverloadedErrorMessage(plain429)).toBe(false);
+  });
+
+  it("still classifies rate limit messages correctly", () => {
+    expect(isRateLimitErrorMessage("rate limit exceeded")).toBe(true);
+    expect(isRateLimitErrorMessage("too many requests")).toBe(true);
+    expect(isRateLimitErrorMessage("throttled")).toBe(true);
+  });
+});
+
 describe("Volcengine Coding Plan subscription errors", () => {
   it("classifies InvalidSubscription JSON body as billing", () => {
     const raw =
