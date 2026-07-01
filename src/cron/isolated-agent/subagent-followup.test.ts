@@ -9,6 +9,7 @@ vi.hoisted(() => {
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 import {
   readDescendantSubagentFallbackReply,
+  readDescendantSubagentFallbackReplyWithRuns,
   waitForDescendantSubagentSummary,
 } from "./subagent-followup.js";
 
@@ -209,6 +210,30 @@ describe("readDescendantSubagentFallbackReply", () => {
       runStartedAt,
     });
     expect(result).toBe("first child output\n\nsecond child output");
+  });
+
+  it("returns consumed run ids with fallback reply details", async () => {
+    vi.mocked(listDescendantRunsForRequester).mockReturnValue([
+      createDescendantRun({ runId: "run-1", resultText: "first child output" }),
+      createDescendantRun({
+        runId: "run-2",
+        childSessionKey: "child-2",
+        task: "task-2",
+        endedAt: 3000,
+        resultText: "second child output",
+      }),
+    ]);
+    vi.mocked(readLatestAssistantReply).mockResolvedValue(undefined);
+
+    const result = await readDescendantSubagentFallbackReplyWithRuns({
+      sessionKey: "test-session",
+      runStartedAt,
+    });
+
+    expect(result).toEqual({
+      text: "first child output\n\nsecond child output",
+      consumedRunIds: ["run-1", "run-2"],
+    });
   });
 
   it("skips SILENT_REPLY_TOKEN descendants", async () => {

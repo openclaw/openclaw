@@ -34,7 +34,7 @@ import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatc
 import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 import {
   applySubagentWaitOutcome,
-  buildChildCompletionFindings,
+  buildChildCompletionFindingsWithRuns,
   buildCompactAnnounceStatsLine,
   dedupeLatestChildCompletionRows,
   filterCurrentDirectChildCompletionRows,
@@ -316,6 +316,7 @@ export async function runSubagentAnnounceFlow(params: {
       requesterDepth >= 1 || isCronSessionKey(targetRequesterSessionKey);
 
     let childCompletionFindings: string | undefined;
+    let consumedChildRunIds: string[] = [];
     let subagentRegistryRuntime:
       | Awaited<ReturnType<typeof loadSubagentRegistryRuntime>>
       | undefined;
@@ -347,15 +348,15 @@ export async function runSubagentAnnounceFlow(params: {
           },
         );
         if (Array.isArray(directChildren) && directChildren.length > 0) {
-          childCompletionFindings = buildChildCompletionFindings(
-            dedupeLatestChildCompletionRows(
-              filterCurrentDirectChildCompletionRows(directChildren, {
-                requesterSessionKey: params.childSessionKey,
-                getLatestSubagentRunByChildSessionKey:
-                  subagentRegistryRuntime.getLatestSubagentRunByChildSessionKey,
-              }),
-            ),
-          );
+          const currentDirectChildren = filterCurrentDirectChildCompletionRows(directChildren, {
+            requesterSessionKey: params.childSessionKey,
+            getLatestSubagentRunByChildSessionKey:
+              subagentRegistryRuntime.getLatestSubagentRunByChildSessionKey,
+          });
+          const consumedDirectChildren = dedupeLatestChildCompletionRows(currentDirectChildren);
+          const childCompletion = buildChildCompletionFindingsWithRuns(consumedDirectChildren);
+          consumedChildRunIds = childCompletion?.consumedRunIds ?? [];
+          childCompletionFindings = childCompletion?.text;
         }
       }
     } catch {
@@ -386,6 +387,18 @@ export async function runSubagentAnnounceFlow(params: {
         signal: params.signal,
       });
       if (woke) {
+        try {
+          subagentRegistryRuntime?.markDescendantCompletionConsumedByRequester?.({
+            requesterSessionKey: params.childSessionKey,
+            runStartedAt: params.startedAt ?? 0,
+            runIds: consumedChildRunIds,
+            kind: "subagent_descendant_result",
+            consumerRunId: params.childRunId,
+          });
+        } catch {
+          // Requester-consumed accounting is best-effort; a successful wake must
+          // still preserve delivery success and child-session cleanup override.
+        }
         shouldDeleteChildSession = false;
         return true;
       }
@@ -598,6 +611,15 @@ export async function runSubagentAnnounceFlow(params: {
     });
     params.onDeliveryResult?.(delivery);
     didAnnounce = delivery.delivered;
+    if (didAnnounce && childCompletionFindings?.trim()) {
+      subagentRegistryRuntime?.markDescendantCompletionConsumedByRequester?.({
+        requesterSessionKey: params.childSessionKey,
+        runStartedAt: params.startedAt ?? 0,
+        runIds: consumedChildRunIds,
+        kind: "subagent_descendant_result",
+        consumerRunId: params.childRunId,
+      });
+    }
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
       defaultRuntime.log(
         `[warn] Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,

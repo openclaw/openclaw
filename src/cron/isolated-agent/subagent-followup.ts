@@ -4,6 +4,11 @@ import { listDescendantRunsForRequester } from "../../agents/subagent-registry-r
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
+export type DescendantSubagentFallbackReply = {
+  text: string;
+  consumedRunIds: string[];
+};
+
 function resolveCronSubagentTimings() {
   const fastTestMode = process.env.OPENCLAW_TEST_FAST === "1";
   return {
@@ -14,10 +19,10 @@ function resolveCronSubagentTimings() {
 }
 
 /** Reads completed descendant subagent replies when the orchestrator only emitted interim text. */
-export async function readDescendantSubagentFallbackReply(params: {
+export async function readDescendantSubagentFallbackReplyWithRuns(params: {
   sessionKey: string;
   runStartedAt: number;
-}): Promise<string | undefined> {
+}): Promise<DescendantSubagentFallbackReply | undefined> {
   const descendants = listDescendantRunsForRequester(params.sessionKey)
     .filter(
       (entry) =>
@@ -43,6 +48,7 @@ export async function readDescendantSubagentFallbackReply(params: {
   }
 
   const replies: string[] = [];
+  const consumedRunIds: string[] = [];
   // Limit fallback synthesis to the latest few children so a noisy run does not
   // flood the cron announce with stale descendant output.
   const latestRuns = [...latestByChild.values()]
@@ -69,14 +75,23 @@ export async function readDescendantSubagentFallbackReply(params: {
       continue;
     }
     replies.push(reply);
+    consumedRunIds.push(entry.runId);
   }
   if (replies.length === 0) {
     return undefined;
   }
   if (replies.length === 1) {
-    return replies[0];
+    return { text: replies[0], consumedRunIds };
   }
-  return replies.join("\n\n");
+  return { text: replies.join("\n\n"), consumedRunIds };
+}
+
+/** Reads completed descendant subagent reply text for older callers that do not need run credit. */
+export async function readDescendantSubagentFallbackReply(params: {
+  sessionKey: string;
+  runStartedAt: number;
+}): Promise<string | undefined> {
+  return (await readDescendantSubagentFallbackReplyWithRuns(params))?.text;
 }
 
 /**

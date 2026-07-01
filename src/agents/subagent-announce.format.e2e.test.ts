@@ -26,6 +26,7 @@ import * as embeddedRuns from "./embedded-agent-runner/runs.js";
 import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
 import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
 import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type AgentCallRequest = {
   method?: string;
@@ -171,7 +172,7 @@ const { subagentRegistryMock } = vi.hoisted(() => ({
     countPendingDescendantRuns: vi.fn((_sessionKey: string) => 0),
     countPendingDescendantRunsExcludingRun: vi.fn((_sessionKey: string, _runId: string) => 0),
     getLatestSubagentRunByChildSessionKey: vi.fn(
-      (_childSessionKey: string): MockSubagentRun | undefined => undefined,
+      (_childSessionKey: string): SubagentRunRecord | null => null,
     ),
     listSubagentRunsForRequester: vi.fn(
       (_sessionKey: string, _scope?: { requesterRunId?: string }): MockSubagentRun[] => [],
@@ -179,6 +180,7 @@ const { subagentRegistryMock } = vi.hoisted(() => ({
     replaceSubagentRunAfterSteer: vi.fn(
       (_params: { previousRunId: string; nextRunId: string }) => true,
     ),
+    markDescendantCompletionConsumedByRequester: vi.fn(),
     resolveRequesterForChildSession: vi.fn((_sessionKey: string): RequesterResolution => null),
   },
 }));
@@ -404,6 +406,8 @@ describe("subagent announce formatting", () => {
         req: Parameters<typeof gatewayCall.callGateway>[0],
       ) => (await callGatewaySpy(req)) as T,
       getRuntimeConfig: () => configOverride,
+      loadSubagentRegistryRuntime: async () =>
+        subagentRegistryMock as unknown as typeof import("./subagent-announce.registry.runtime.js"),
     });
     subagentAnnounceOutputTesting.setDepsForTest({
       callGateway: async <T = Record<string, unknown>>(
@@ -466,11 +470,10 @@ describe("subagent announce formatting", () => {
       .mockImplementation((sessionKey: string, _runId: string) =>
         subagentRegistryMock.countPendingDescendantRuns(sessionKey),
       );
-    subagentRegistryMock.getLatestSubagentRunByChildSessionKey
-      .mockClear()
-      .mockReturnValue(undefined);
+    subagentRegistryMock.getLatestSubagentRunByChildSessionKey.mockClear().mockReturnValue(null);
     subagentRegistryMock.listSubagentRunsForRequester.mockClear().mockReturnValue([]);
     subagentRegistryMock.replaceSubagentRunAfterSteer.mockClear().mockReturnValue(true);
+    subagentRegistryMock.markDescendantCompletionConsumedByRequester.mockClear();
     subagentRegistryMock.resolveRequesterForChildSession.mockClear().mockReturnValue(null);
     hasSubagentDeliveryTargetHook = false;
     hookHasHooksMock.mockClear();
@@ -2605,6 +2608,105 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("result from child b");
     expect(msg).not.toContain("stale result from child a");
     expect(msg.match(/1\. child-a/g)?.length ?? 0).toBe(1);
+    expect(subagentRegistryMock.markDescendantCompletionConsumedByRequester).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(subagentRegistryMock.markDescendantCompletionConsumedByRequester).toHaveBeenCalledWith({
+      requesterSessionKey: "agent:main:subagent:parent",
+      runStartedAt: defaultOutcomeAnnounce.startedAt,
+      runIds: ["run-child-current", "run-child-b"],
+      kind: "subagent_descendant_result",
+      consumerRunId: "run-parent-dedupe",
+    });
+    const consumedRunIds =
+      subagentRegistryMock.markDescendantCompletionConsumedByRequester.mock.calls[0]?.[0]?.runIds;
+    expect(consumedRunIds).not.toContain("run-child-stale");
+  });
+
+  it("credits only direct children included in rendered child completion findings", async () => {
+    subagentRegistryMock.countPendingDescendantRuns.mockReturnValue(0);
+    subagentRegistryMock.listSubagentRunsForRequester.mockImplementation(
+      (sessionKey: string, scope?: { requesterRunId?: string }) => {
+        if (sessionKey !== "agent:main:subagent:parent") {
+          return [];
+        }
+        if (scope?.requesterRunId !== "run-parent-visible-and-silent") {
+          return [];
+        }
+        return [
+          {
+            runId: "run-child-visible",
+            childSessionKey: "agent:main:subagent:parent:subagent:visible",
+            requesterSessionKey: "agent:main:subagent:parent",
+            requesterDisplayKey: "parent",
+            task: "visible child task",
+            label: "visible-child",
+            cleanup: "keep",
+            createdAt: 10,
+            endedAt: 20,
+            cleanupCompletedAt: 21,
+            frozenResultText: "visible child output",
+            outcome: { status: "ok" },
+          },
+          {
+            runId: "run-child-announce-skip",
+            childSessionKey: "agent:main:subagent:parent:subagent:announce-skip",
+            requesterSessionKey: "agent:main:subagent:parent",
+            requesterDisplayKey: "parent",
+            task: "announce skip child task",
+            label: "announce-skip-child",
+            cleanup: "keep",
+            createdAt: 11,
+            endedAt: 21,
+            cleanupCompletedAt: 22,
+            frozenResultText: "ANNOUNCE_SKIP",
+            outcome: { status: "ok" },
+          },
+          {
+            runId: "run-child-no-reply",
+            childSessionKey: "agent:main:subagent:parent:subagent:no-reply",
+            requesterSessionKey: "agent:main:subagent:parent",
+            requesterDisplayKey: "parent",
+            task: "no reply child task",
+            label: "no-reply-child",
+            cleanup: "keep",
+            createdAt: 12,
+            endedAt: 22,
+            cleanupCompletedAt: 23,
+            frozenResultText: SILENT_REPLY_TOKEN,
+            outcome: { status: "ok" },
+          },
+        ];
+      },
+    );
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:parent",
+      childRunId: "run-parent-visible-and-silent",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      roundOneReply: "placeholder waiting text that should be ignored",
+    });
+
+    expect(didAnnounce).toBe(true);
+    const call = getAgentCall() as { params?: { message?: string } };
+    const msg = call?.params?.message ?? "";
+    expect(msg).toContain("visible child output");
+    expect(msg).not.toContain("ANNOUNCE_SKIP");
+    expect(msg).not.toContain("announce-skip-child");
+    expect(msg).not.toContain("no-reply-child");
+    expect(subagentRegistryMock.markDescendantCompletionConsumedByRequester).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(subagentRegistryMock.markDescendantCompletionConsumedByRequester).toHaveBeenCalledWith({
+      requesterSessionKey: "agent:main:subagent:parent",
+      runStartedAt: defaultOutcomeAnnounce.startedAt,
+      runIds: ["run-child-visible"],
+      kind: "subagent_descendant_result",
+      consumerRunId: "run-parent-visible-and-silent",
+    });
   });
 
   it("does not announce a direct child that moved to a newer parent", async () => {
@@ -2638,7 +2740,7 @@ describe("subagent announce formatting", () => {
     subagentRegistryMock.getLatestSubagentRunByChildSessionKey.mockImplementation(
       (childSessionKey: string) => {
         if (childSessionKey !== "agent:main:subagent:shared-child") {
-          return undefined;
+          return null;
         }
         return {
           runId: "run-child-new-parent",

@@ -135,6 +135,40 @@ describe("normalizeSubagentRunState", () => {
     expect(entry.cleanupHandled).toBe(false);
   });
 
+  it("preserves requester-consumed delivery credit across normalization", () => {
+    const entry = normalizeSubagentRunState(
+      baseRun({
+        cleanupHandled: true,
+        delivery: {
+          status: "delivered",
+          deliveredAt: 500,
+          requesterConsumedAt: 500,
+          requesterConsumedKind: "cron_descendant_fallback",
+          requesterConsumedBySessionKey: "agent:main:cron:daily:run:abc",
+          requesterConsumedRunStartedAt: 400,
+          requesterConsumedMetadata: {
+            consumerRunId: "cron-run",
+            deliveryTextHash: "abc123",
+          },
+        },
+      }),
+    );
+
+    expect(entry.delivery).toMatchObject({
+      status: "delivered",
+      deliveredAt: 500,
+      requesterConsumedAt: 500,
+      requesterConsumedKind: "cron_descendant_fallback",
+      requesterConsumedBySessionKey: "agent:main:cron:daily:run:abc",
+      requesterConsumedRunStartedAt: 400,
+      requesterConsumedMetadata: {
+        consumerRunId: "cron-run",
+        deliveryTextHash: "abc123",
+      },
+    });
+    expect(entry.cleanupHandled).toBe(false);
+  });
+
   it("keeps discarded terminal delivery dormant across restart", () => {
     const entry = normalizeSubagentRunState(
       baseRun({

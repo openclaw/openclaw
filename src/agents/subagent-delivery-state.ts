@@ -134,6 +134,14 @@ function mergeDeliveryState(
     enqueuedAt: current.enqueuedAt ?? restored.enqueuedAt,
     deliveredAt: current.deliveredAt ?? restored.deliveredAt,
     announcedAt: current.announcedAt ?? restored.announcedAt,
+    requesterConsumedAt: current.requesterConsumedAt ?? restored.requesterConsumedAt,
+    requesterConsumedKind: current.requesterConsumedKind ?? restored.requesterConsumedKind,
+    requesterConsumedBySessionKey:
+      current.requesterConsumedBySessionKey ?? restored.requesterConsumedBySessionKey,
+    requesterConsumedRunStartedAt:
+      current.requesterConsumedRunStartedAt ?? restored.requesterConsumedRunStartedAt,
+    requesterConsumedMetadata:
+      current.requesterConsumedMetadata ?? restored.requesterConsumedMetadata,
     lastAttemptAt: current.lastAttemptAt ?? restored.lastAttemptAt,
     attemptCount: current.attemptCount ?? restored.attemptCount,
     lastError: current.lastError ?? restored.lastError,
