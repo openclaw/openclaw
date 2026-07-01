@@ -7180,7 +7180,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /providers/anthropic
 - Headings:
   - H2: Getting started
-  - H2: Thinking defaults (Claude Fable 5, 4.8, and 4.6)
+  - H2: Thinking defaults (Claude Sonnet 5, Fable 5, 4.8, and 4.6)
   - H2: Prompt caching
   - H2: Advanced configuration
   - H2: Troubleshooting
