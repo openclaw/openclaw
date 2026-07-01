@@ -2669,8 +2669,9 @@ function createOpenAICompletionsClient(
   context: Context,
   apiKey: string,
   optionHeaders?: Record<string, string>,
+  sessionId?: string,
 ) {
-  const clientConfig = buildOpenAICompletionsClientConfig(model, context, optionHeaders);
+  const clientConfig = buildOpenAICompletionsClientConfig(model, context, optionHeaders, sessionId);
   return new OpenAI({
     apiKey,
     baseURL: clientConfig.baseURL,
@@ -2709,12 +2710,18 @@ function buildOpenAICompletionsClientConfig(
   model: Model,
   context: Context,
   optionHeaders?: Record<string, string>,
+  sessionId?: string,
 ): {
   baseURL: string;
   defaultHeaders: Record<string, string>;
   defaultQuery?: Record<string, string>;
 } {
   const headers = buildOpenAIClientHeaders(model, context, optionHeaders);
+  if (sessionId && model.compat?.sendSessionAffinityHeaders) {
+    headers.session_id = sessionId;
+    headers["x-client-request-id"] = sessionId;
+    headers["x-session-affinity"] = sessionId;
+  }
   const defaultQuery: Record<string, string> = {};
   let baseURL = model.baseUrl;
   let isAzureHost = false;
@@ -2777,7 +2784,13 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
       };
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-        const client = createOpenAICompletionsClient(model, context, apiKey, options?.headers);
+        const client = createOpenAICompletionsClient(
+          model,
+          context,
+          apiKey,
+          options?.headers,
+          options?.sessionId,
+        );
         let params = buildOpenAICompletionsParams(
           model as OpenAIModeModel,
           context,
