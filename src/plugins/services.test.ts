@@ -2,7 +2,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { createEmptyPluginRegistry } from "./registry.js";
-import type { OpenClawPluginService, OpenClawPluginServiceContext } from "./types.js";
+import type {
+  OpenClawPluginService,
+  OpenClawPluginServiceContext,
+  ProviderPlugin,
+} from "./types.js";
 
 const mockedLogger = vi.hoisted(() => ({
   info: vi.fn<(msg: string) => void>(),
@@ -12,11 +16,24 @@ const mockedLogger = vi.hoisted(() => ({
   child: vi.fn(() => mockedLogger),
 }));
 
+type PluginModelUsageEvent = Parameters<
+  Parameters<NonNullable<OpenClawPluginServiceContext["modelUsage"]>["onEvent"]>[0]
+>[0];
+
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => mockedLogger,
 }));
 
 import { STATE_DIR } from "../config/paths.js";
+import {
+  emitDiagnosticEvent,
+  emitTrustedDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+} from "../infra/diagnostic-events.js";
+import {
+  emitModelUsageEvent,
+  resetCoreModelUsageEventsForTest,
+} from "../infra/model-usage-events.js";
 import { registerPluginHttpRoute } from "./http-registry.js";
 import {
   pinActivePluginHttpRouteRegistry,
@@ -30,6 +47,7 @@ function createRegistry(
   pluginId = "plugin:test",
   origin: PluginOrigin = "workspace",
   trustedOfficialInstall = false,
+  providers: Array<{ pluginId?: string; provider: ProviderPlugin }> = [],
 ) {
   const registry = createEmptyPluginRegistry();
   registry.services = services.map((service) => ({
@@ -40,11 +58,39 @@ function createRegistry(
     ...(trustedOfficialInstall ? { trustedOfficialInstall } : {}),
     rootDir: "/plugins/test-plugin",
   })) as typeof registry.services;
+  registry.providers = providers.map((entry) => ({
+    pluginId: entry.pluginId ?? pluginId,
+    provider: entry.provider,
+    source: "test",
+    rootDir: "/plugins/test-plugin",
+  }));
   return registry;
+}
+
+function createProvider(id: string, overrides: Partial<ProviderPlugin> = {}): ProviderPlugin {
+  return {
+    id,
+    label: id,
+    auth: [],
+    ...overrides,
+  };
 }
 
 function createServiceConfig() {
   return {} as Parameters<typeof startPluginServices>[0]["config"];
+}
+
+function createModelUsageServiceConfig() {
+  return {
+    diagnostics: {
+      enabled: false,
+    },
+    plugins: {
+      modelUsage: {
+        enabled: true,
+      },
+    },
+  } as Parameters<typeof startPluginServices>[0]["config"];
 }
 
 function expectServiceContext(
@@ -145,6 +191,8 @@ function createTrackingService(
 describe("startPluginServices", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetDiagnosticEventsForTest();
+    resetCoreModelUsageEventsForTest();
     resetPluginRuntimeStateForTest();
   });
 
@@ -344,6 +392,143 @@ describe("startPluginServices", () => {
       "sidecars.plugin-services.plugin~003Atest.service_a",
     ]);
     expect(new Set(measured).size).toBe(measured.length);
+  });
+
+  it("omits model usage events from plugin services until enabled", async () => {
+    const contexts: OpenClawPluginServiceContext[] = [];
+    await startPluginServices({
+      registry: createRegistry([createTrackingService("usage-reader", { contexts })]),
+      config: createServiceConfig(),
+    });
+
+    expect(contexts[0]?.modelUsage).toBeUndefined();
+  });
+
+  it("exposes matching-provider usage when enabled without diagnostics", async () => {
+    const seen: PluginModelUsageEvent[] = [];
+    let unsubscribe: (() => void) | undefined;
+    const config = createModelUsageServiceConfig();
+    const usageService: OpenClawPluginService = {
+      id: "usage-reader",
+      start: (ctx) => {
+        expect(ctx.modelUsage?.onEvent).toBeTypeOf("function");
+        if (!ctx.modelUsage) {
+          throw new Error("expected model usage subscription");
+        }
+        unsubscribe = ctx.modelUsage.onEvent((event) => {
+          seen.push(event);
+        });
+      },
+      stop: () => unsubscribe?.(),
+    };
+    const handle = await startPluginServices({
+      registry: createRegistry([usageService], "usage-plugin", "workspace", false, [
+        { provider: createProvider("anthropic") },
+        { provider: createProvider("OpenAI") },
+        { pluginId: "other-plugin", provider: createProvider("openai") },
+      ]),
+      config,
+    });
+
+    emitDiagnosticEvent({
+      type: "model.usage",
+      sessionKey: "ignored",
+      usage: { total: 1 },
+    });
+    emitTrustedDiagnosticEvent({
+      type: "model.usage",
+      sessionKey: "forged",
+      usage: { total: 1 },
+    });
+    emitModelUsageEvent(
+      { diagnostics: { enabled: false } },
+      {
+        sessionKey: "not-enabled",
+        usage: { total: 1 },
+      },
+    );
+    emitModelUsageEvent(
+      { diagnostics: { enabled: false }, plugins: { modelUsage: {} } },
+      {
+        sessionKey: "still-not-enabled",
+        usage: { total: 1 },
+      },
+    );
+    emitModelUsageEvent(config, {
+      sessionKey: "colliding-provider",
+      provider: "openai",
+      usage: { total: 1 },
+    });
+    emitModelUsageEvent(config, {
+      sessionKey: "agent:main:slack:channel:c1",
+      sessionId: "session-1",
+      channel: "slack",
+      agentId: "main",
+      provider: "anthropic",
+      model: "gpt-5.5",
+      usage: {
+        input: 10,
+        output: 5,
+        cacheRead: 2,
+        cacheWrite: 1,
+        promptTokens: 13,
+        total: 18,
+      },
+      lastCallUsage: {
+        input: 4,
+        output: 5,
+        cacheRead: 2,
+        cacheWrite: 1,
+        total: 12,
+      },
+      context: {
+        limit: 100,
+        used: 13,
+      },
+      costUsd: 0.00042,
+      durationMs: 123,
+    });
+
+    expect(seen).toEqual([
+      {
+        timestampMs: expect.any(Number),
+        sequence: expect.any(Number),
+        sessionKey: "agent:main:slack:channel:c1",
+        sessionId: "session-1",
+        channel: "slack",
+        agentId: "main",
+        provider: "anthropic",
+        model: "gpt-5.5",
+        usage: {
+          input: 10,
+          output: 5,
+          cacheRead: 2,
+          cacheWrite: 1,
+          promptTokens: 13,
+          total: 18,
+        },
+        lastCallUsage: {
+          input: 4,
+          output: 5,
+          cacheRead: 2,
+          cacheWrite: 1,
+          total: 12,
+        },
+        context: {
+          limit: 100,
+          used: 13,
+        },
+        costUsd: 0.00042,
+        durationMs: 123,
+      },
+    ]);
+
+    await handle.stop();
+    emitModelUsageEvent(config, {
+      sessionKey: "after-stop",
+      usage: { total: 1 },
+    });
+    expect(seen).toHaveLength(1);
   });
 
   it("grants internal diagnostics only to trusted diagnostics exporter services", async () => {

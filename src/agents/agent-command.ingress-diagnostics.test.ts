@@ -1,34 +1,28 @@
 /**
- * Tests for ingress model.usage diagnostic emission in agentCommandFromIngress.
+ * Tests for ingress model usage accounting in agentCommandFromIngress.
  *
  * Covers:
- * - ingressDiagnosticChannel channel label resolution
- * - emitIngressModelUsageDiagnostic with diagnostics enabled + valid usage
- * - emitIngressModelUsageDiagnostic with diagnostics disabled
- * - emitIngressModelUsageDiagnostic with null/missing usage
+ * - ingressModelUsageChannel channel label resolution
+ * - recordIngressModelUsage with model usage accounting enabled + valid usage
+ * - recordIngressModelUsage with model usage accounting disabled
+ * - recordIngressModelUsage with null/missing usage
  */
 
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  emitTrustedDiagnosticEvent: vi.fn(),
-  isDiagnosticsEnabled: vi.fn(),
+  emitModelUsageEvent: vi.fn(),
+  shouldEmitModelUsageEvent: vi.fn(),
   getRuntimeConfig: vi.fn(),
   hasNonzeroUsage: vi.fn(),
   resolveModelCostConfig: vi.fn(),
   estimateUsageCost: vi.fn(),
 }));
 
-vi.mock("../infra/diagnostic-events.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/diagnostic-events.js")>(
-    "../infra/diagnostic-events.js",
-  );
-  return {
-    ...actual,
-    emitTrustedDiagnosticEvent: mocks.emitTrustedDiagnosticEvent,
-    isDiagnosticsEnabled: mocks.isDiagnosticsEnabled,
-  };
-});
+vi.mock("../infra/model-usage-events.js", () => ({
+  emitModelUsageEvent: mocks.emitModelUsageEvent,
+  shouldEmitModelUsageEvent: mocks.shouldEmitModelUsageEvent,
+}));
 
 vi.mock("../utils/usage-format.js", () => ({
   resolveModelCostConfig: (...args: Array<unknown>) => mocks.resolveModelCostConfig(...args),
@@ -52,7 +46,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.isDiagnosticsEnabled.mockReturnValue(true);
+  mocks.shouldEmitModelUsageEvent.mockReturnValue(true);
   mocks.hasNonzeroUsage.mockReturnValue(true);
   mocks.getRuntimeConfig.mockReturnValue({});
   mocks.resolveModelCostConfig.mockReturnValue({});
@@ -104,11 +98,11 @@ function makeOpts(overrides?: Record<string, unknown>) {
 }
 
 // ---------------------------------------------------------------------------
-// ingressDiagnosticChannel
+// ingressModelUsageChannel
 // ---------------------------------------------------------------------------
-describe("ingressDiagnosticChannel", () => {
+describe("ingressModelUsageChannel", () => {
   it("returns runContext.messageChannel when set", () => {
-    const channel = testing.ingressDiagnosticChannel({
+    const channel = testing.ingressModelUsageChannel({
       message: "hi",
       allowModelOverride: false,
       runContext: { messageChannel: "discord" },
@@ -119,7 +113,7 @@ describe("ingressDiagnosticChannel", () => {
   });
 
   it("falls back to opts.messageChannel", () => {
-    const channel = testing.ingressDiagnosticChannel({
+    const channel = testing.ingressModelUsageChannel({
       message: "hi",
       allowModelOverride: false,
       messageChannel: "api",
@@ -129,7 +123,7 @@ describe("ingressDiagnosticChannel", () => {
   });
 
   it("falls back to opts.channel", () => {
-    const channel = testing.ingressDiagnosticChannel({
+    const channel = testing.ingressModelUsageChannel({
       message: "hi",
       allowModelOverride: false,
       channel: "webchat",
@@ -138,7 +132,7 @@ describe("ingressDiagnosticChannel", () => {
   });
 
   it('defaults to "http" when no channel info is present', () => {
-    const channel = testing.ingressDiagnosticChannel({
+    const channel = testing.ingressModelUsageChannel({
       message: "hi",
       allowModelOverride: false,
     });
@@ -147,19 +141,19 @@ describe("ingressDiagnosticChannel", () => {
 });
 
 // ---------------------------------------------------------------------------
-// emitIngressModelUsageDiagnostic
+// recordIngressModelUsage
 // ---------------------------------------------------------------------------
-describe("emitIngressModelUsageDiagnostic", () => {
-  it("emits model.usage when diagnostics are enabled and result has usage", () => {
+describe("recordIngressModelUsage", () => {
+  it("emits model.usage when usage accounting is enabled and result has usage", () => {
     const result = makeResult();
     const opts = makeOpts();
 
-    testing.emitIngressModelUsageDiagnostic(result, opts);
+    testing.recordIngressModelUsage(result, opts);
 
-    expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledTimes(1);
-    const event = mocks.emitTrustedDiagnosticEvent.mock.calls[0]?.[0];
+    expect(mocks.emitModelUsageEvent).toHaveBeenCalledTimes(1);
+    const [configArg, event] = mocks.emitModelUsageEvent.mock.calls[0] ?? [];
+    expect(configArg).toEqual({});
     expect(event).toMatchObject({
-      type: "model.usage",
       sessionKey: "agent:main:main",
       sessionId: "sess-abc",
       channel: "api",
@@ -178,14 +172,14 @@ describe("emitIngressModelUsageDiagnostic", () => {
     });
   });
 
-  it("does not emit when diagnostics are disabled", () => {
-    mocks.isDiagnosticsEnabled.mockReturnValue(false);
+  it("does not emit when model usage accounting is disabled", () => {
+    mocks.shouldEmitModelUsageEvent.mockReturnValue(false);
     const result = makeResult();
     const opts = makeOpts();
 
-    testing.emitIngressModelUsageDiagnostic(result, opts);
+    testing.recordIngressModelUsage(result, opts);
 
-    expect(mocks.emitTrustedDiagnosticEvent).not.toHaveBeenCalled();
+    expect(mocks.emitModelUsageEvent).not.toHaveBeenCalled();
   });
 
   it("does not emit when agentMeta is missing", () => {
@@ -197,9 +191,9 @@ describe("emitIngressModelUsageDiagnostic", () => {
 
     const opts = makeOpts();
 
-    testing.emitIngressModelUsageDiagnostic(result, opts);
+    testing.recordIngressModelUsage(result, opts);
 
-    expect(mocks.emitTrustedDiagnosticEvent).not.toHaveBeenCalled();
+    expect(mocks.emitModelUsageEvent).not.toHaveBeenCalled();
   });
 
   it("does not emit when usage is zero", () => {
@@ -207,9 +201,9 @@ describe("emitIngressModelUsageDiagnostic", () => {
     const result = makeResult();
     const opts = makeOpts();
 
-    testing.emitIngressModelUsageDiagnostic(result, opts);
+    testing.recordIngressModelUsage(result, opts);
 
-    expect(mocks.emitTrustedDiagnosticEvent).not.toHaveBeenCalled();
+    expect(mocks.emitModelUsageEvent).not.toHaveBeenCalled();
   });
 
   it("resolves channel from runContext when available", () => {
@@ -219,10 +213,10 @@ describe("emitIngressModelUsageDiagnostic", () => {
       messageChannel: "api",
     });
 
-    testing.emitIngressModelUsageDiagnostic(result, opts);
+    testing.recordIngressModelUsage(result, opts);
 
-    expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledTimes(1);
-    const event = mocks.emitTrustedDiagnosticEvent.mock.calls[0]?.[0];
+    expect(mocks.emitModelUsageEvent).toHaveBeenCalledTimes(1);
+    const event = mocks.emitModelUsageEvent.mock.calls[0]?.[1];
     expect(event.channel).toBe("discord");
   });
 
@@ -230,10 +224,10 @@ describe("emitIngressModelUsageDiagnostic", () => {
     const result = makeResult();
     const opts = { message: "hi", allowModelOverride: false };
 
-    testing.emitIngressModelUsageDiagnostic(result, opts);
+    testing.recordIngressModelUsage(result, opts);
 
-    expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledTimes(1);
-    const event = mocks.emitTrustedDiagnosticEvent.mock.calls[0]?.[0];
+    expect(mocks.emitModelUsageEvent).toHaveBeenCalledTimes(1);
+    const event = mocks.emitModelUsageEvent.mock.calls[0]?.[1];
     expect(event.channel).toBe("http");
   });
 
@@ -241,7 +235,7 @@ describe("emitIngressModelUsageDiagnostic", () => {
     const result = makeResult();
     const opts = makeOpts();
 
-    testing.emitIngressModelUsageDiagnostic(result, opts);
+    testing.recordIngressModelUsage(result, opts);
 
     expect(mocks.resolveModelCostConfig).toHaveBeenCalledWith({
       provider: "openai",
@@ -249,8 +243,8 @@ describe("emitIngressModelUsageDiagnostic", () => {
       config: expect.any(Object) as unknown,
     });
     expect(mocks.estimateUsageCost).toHaveBeenCalled();
-    expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledTimes(1);
-    const event = mocks.emitTrustedDiagnosticEvent.mock.calls[0]?.[0];
+    expect(mocks.emitModelUsageEvent).toHaveBeenCalledTimes(1);
+    const event = mocks.emitModelUsageEvent.mock.calls[0]?.[1];
     expect(event.costUsd).toBe(0.001);
   });
 
@@ -265,10 +259,10 @@ describe("emitIngressModelUsageDiagnostic", () => {
     });
     const opts = makeOpts();
 
-    testing.emitIngressModelUsageDiagnostic(result, opts);
+    testing.recordIngressModelUsage(result, opts);
 
-    expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledTimes(1);
-    const event = mocks.emitTrustedDiagnosticEvent.mock.calls[0]?.[0];
+    expect(mocks.emitModelUsageEvent).toHaveBeenCalledTimes(1);
+    const event = mocks.emitModelUsageEvent.mock.calls[0]?.[1];
     expect(event.usage).toMatchObject({
       input: 100,
       output: 50,
@@ -292,10 +286,10 @@ describe("emitIngressModelUsageDiagnostic", () => {
     });
     const opts = makeOpts();
 
-    testing.emitIngressModelUsageDiagnostic(result, opts);
+    testing.recordIngressModelUsage(result, opts);
 
-    expect(mocks.emitTrustedDiagnosticEvent).toHaveBeenCalledTimes(1);
-    const event = mocks.emitTrustedDiagnosticEvent.mock.calls[0]?.[0];
+    expect(mocks.emitModelUsageEvent).toHaveBeenCalledTimes(1);
+    const event = mocks.emitModelUsageEvent.mock.calls[0]?.[1];
     expect(event.context).toEqual({ limit: 128000 });
   });
 });

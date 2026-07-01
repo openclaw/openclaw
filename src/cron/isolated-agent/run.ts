@@ -24,11 +24,12 @@ import {
   getAgentRunContext,
   releaseAgentRunContext,
 } from "../../infra/agent-events.js";
-import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
+import { emitModelUsageEvent, shouldEmitModelUsageEvent } from "../../infra/model-usage-events.js";
 import {
   resolveSourceDeliveryOutcome,
   type SourceDeliveryOutcome,
@@ -1125,15 +1126,14 @@ async function finalizeCronRun(params: {
       provider: providerUsed,
       usage: telemetryUsage,
     };
-    if (isDiagnosticsEnabled(prepared.cfgWithAgentDefaults)) {
+    if (shouldEmitModelUsageEvent(prepared.cfgWithAgentDefaults)) {
       const usagePromptTokens = input + cacheRead + cacheWrite;
       const contextUsedTokens = deriveContextPromptTokens({
         lastCallUsage,
         promptTokens,
         usage,
       });
-      emitTrustedDiagnosticEvent({
-        type: "model.usage",
+      emitModelUsageEvent(prepared.cfgWithAgentDefaults, {
         ...(finalRunResult.diagnosticTrace
           ? {
               trace: freezeDiagnosticTraceContext(

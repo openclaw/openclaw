@@ -1,10 +1,16 @@
 /** Starts, stops, and inspects plugin service registrations. */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { STATE_DIR } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   emitTrustedDiagnosticEventWithPrivateData,
   onTrustedInternalDiagnosticEvent,
+  type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import {
+  isModelUsagePluginEventsEnabled,
+  onCoreModelUsageEvent,
+} from "../infra/model-usage-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
 import type { PluginServiceRegistration } from "./registry-types.js";
@@ -13,6 +19,10 @@ import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type { OpenClawPluginServiceContext, PluginLogger } from "./types.js";
 
 const log = createSubsystemLogger("plugins");
+type DiagnosticUsageEvent = Extract<DiagnosticEventPayload, { type: "model.usage" }>;
+type PluginModelUsage = NonNullable<OpenClawPluginServiceContext["modelUsage"]>;
+type PluginModelUsageEvent = Parameters<Parameters<PluginModelUsage["onEvent"]>[0]>[0];
+
 function createPluginLogger(): PluginLogger {
   return {
     info: (msg) => log.info(msg),
@@ -22,8 +32,51 @@ function createPluginLogger(): PluginLogger {
   };
 }
 
+function toPluginModelUsageEvent({
+  ts: timestampMs,
+  seq: sequence,
+  type: _type,
+  trace: _trace,
+  usage,
+  lastCallUsage,
+  context,
+  ...event
+}: DiagnosticUsageEvent): PluginModelUsageEvent {
+  return {
+    timestampMs,
+    sequence,
+    ...event,
+    usage: { ...usage },
+    ...(lastCallUsage !== undefined ? { lastCallUsage: { ...lastCallUsage } } : {}),
+    ...(context !== undefined ? { context: { ...context } } : {}),
+  };
+}
+
+function createModelUsageProviderIds(
+  registry: PluginRegistry,
+  pluginId: string,
+): ReadonlySet<string> {
+  const owners = new Map<string, string | null>();
+  for (const entry of registry.providers) {
+    const providerId = normalizeProviderId(entry.provider.id);
+    if (!providerId) {
+      continue;
+    }
+    const owner = owners.get(providerId);
+    owners.set(providerId, owner === undefined || owner === entry.pluginId ? entry.pluginId : null);
+  }
+  const providerIds = new Set<string>();
+  for (const [providerId, owner] of owners) {
+    if (owner === pluginId) {
+      providerIds.add(providerId);
+    }
+  }
+  return providerIds;
+}
+
 function createServiceContext(params: {
   config: OpenClawConfig;
+  registry: PluginRegistry;
   startupTrace?: PluginServiceStartupTrace;
   workspaceDir?: string;
   service: PluginServiceRegistration;
@@ -35,12 +88,29 @@ function createServiceContext(params: {
   const grantsInternalDiagnostics =
     isDiagnosticsExporter &&
     (params.service?.origin === "bundled" || params.service?.trustedOfficialInstall === true);
+  const modelUsageProviderIds = createModelUsageProviderIds(
+    params.registry,
+    params.service.pluginId,
+  );
 
   return {
     config: params.config,
     workspaceDir: params.workspaceDir,
     stateDir: STATE_DIR,
     logger: createPluginLogger(),
+    ...(isModelUsagePluginEventsEnabled(params.config)
+      ? {
+          modelUsage: {
+            onEvent: (listener) =>
+              onCoreModelUsageEvent((event) => {
+                if (!modelUsageProviderIds.has(normalizeProviderId(event.provider ?? ""))) {
+                  return;
+                }
+                listener(toPluginModelUsageEvent(event));
+              }),
+          },
+        }
+      : {}),
     ...(params.startupTrace
       ? {
           startupTrace: createScopedPluginServiceStartupTrace(
@@ -108,6 +178,7 @@ export async function startPluginServices(params: {
     const traceName = createPluginServiceTraceName(entry);
     const serviceContext = createServiceContext({
       config: params.config,
+      registry: params.registry,
       startupTrace: params.startupTrace,
       workspaceDir: params.workspaceDir,
       service: entry,

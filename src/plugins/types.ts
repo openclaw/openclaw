@@ -155,6 +155,8 @@ type ModelProviderRequestTransportOverrides =
 type ChannelId = import("../channels/plugins/types.core.js").ChannelId;
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
 
+type DiagnosticUsageEvent = Extract<DiagnosticEventPayload, { type: "model.usage" }>;
+
 export type { PluginRuntime } from "./runtime/types.js";
 export type { PluginOrigin } from "./plugin-origin.types.js";
 export type {
@@ -2330,6 +2332,22 @@ export type OpenClawGatewayDiscoveryService = {
   ) => void | Promise<void | { stop?: () => void | Promise<void> }>;
 };
 
+type PluginModelUsageEvent = {
+  timestampMs: number;
+  sequence: number;
+  sessionKey?: DiagnosticUsageEvent["sessionKey"];
+  sessionId?: DiagnosticUsageEvent["sessionId"];
+  channel?: DiagnosticUsageEvent["channel"];
+  agentId?: DiagnosticUsageEvent["agentId"];
+  provider?: DiagnosticUsageEvent["provider"];
+  model?: DiagnosticUsageEvent["model"];
+  usage: DiagnosticUsageEvent["usage"];
+  lastCallUsage?: DiagnosticUsageEvent["lastCallUsage"];
+  context?: DiagnosticUsageEvent["context"];
+  costUsd?: DiagnosticUsageEvent["costUsd"];
+  durationMs?: DiagnosticUsageEvent["durationMs"];
+};
+
 /** Context passed to long-lived plugin services. */
 export type OpenClawPluginServiceContext = {
   config: OpenClawConfig;
@@ -2339,6 +2357,9 @@ export type OpenClawPluginServiceContext = {
   startupTrace?: {
     detail?: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
     measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
+  };
+  modelUsage?: {
+    onEvent: (listener: (event: PluginModelUsageEvent) => void) => () => void;
   };
   internalDiagnostics?: {
     emit: (event: DiagnosticEventInput, privateData?: DiagnosticEventPrivateData) => void;

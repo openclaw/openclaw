@@ -1387,6 +1387,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Plugin loader configuration group for specifying filesystem paths where plugins are discovered. Keep load paths explicit and reviewed to avoid accidental untrusted extension loading.",
   "plugins.load.paths":
     "Additional plugin files or directories scanned by the loader beyond built-in defaults. Use dedicated extension directories and avoid broad paths with unrelated executable content.",
+  "plugins.modelUsage":
+    "Plugin service model usage event controls. Enable this only when installed plugin services need token, cost, model, and session accounting events.",
+  "plugins.modelUsage.enabled":
+    "Explicitly enables model usage accounting events for plugin service subscriptions. This is separate from diagnostics.enabled and does not expose raw prompts, responses, tool payloads, or internal diagnostics.",
   "plugins.slots":
     "Selects which plugins own exclusive runtime slots such as memory so only one plugin provides that capability. Use explicit slot ownership to avoid overlapping providers with conflicting behavior.",
   "plugins.slots.memory":

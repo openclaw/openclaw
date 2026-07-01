@@ -26,8 +26,8 @@ import {
   registerAgentRunContext,
   withAgentRunLifecycleGeneration,
 } from "../infra/agent-events.js";
-import { isDiagnosticsEnabled, emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { emitModelUsageEvent, shouldEmitModelUsageEvent } from "../infra/model-usage-events.js";
 import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
@@ -2445,27 +2445,26 @@ export async function agentCommand(
   );
 }
 
-/** Resolve the channel label for model.usage diagnostics from ingress run options. */
-function ingressDiagnosticChannel(opts: AgentCommandIngressOpts): string {
+/** Resolve the channel label for model usage accounting from ingress run options. */
+function ingressModelUsageChannel(opts: AgentCommandIngressOpts): string {
   return opts.runContext?.messageChannel ?? opts.messageChannel ?? opts.channel ?? "http";
 }
 
 /**
- * Emit a model.usage diagnostic event after an ingress agent run completes.
+ * Record model usage after an ingress agent run completes.
  *
- * Unlike channel/cron paths which emit model.usage in runReplyAgent /
- * finalizeCronRun, the ingress path has no such existing emission — without
- * this every diagnostics consumer (Langfuse bridge, @openclaw/diagnostics-otel,
- * diagnostics-prometheus) sees usage/cost only for webchat/cli/cron turns
- * and is blind to HTTP API traffic (POST /v1/responses, POST /v1/chat/completions,
- * and node-event dispatch).
+ * Unlike channel/cron paths which record model usage in runReplyAgent /
+ * finalizeCronRun, the ingress path has no such existing emission. Without
+ * this, diagnostics exporters and plugin model-usage subscribers are blind to
+ * HTTP API traffic (POST /v1/responses, POST /v1/chat/completions, and
+ * node-event dispatch).
  */
-function emitIngressModelUsageDiagnostic(
+function recordIngressModelUsage(
   result: NonNullable<Awaited<ReturnType<typeof agentCommandInternal>>>,
   opts: AgentCommandIngressOpts,
 ): void {
   const cfg = getRuntimeConfig();
-  if (!isDiagnosticsEnabled(cfg)) {
+  if (!shouldEmitModelUsageEvent(cfg)) {
     return;
   }
   const agentMeta = result.meta?.agentMeta;
@@ -2496,11 +2495,10 @@ function emitIngressModelUsageDiagnostic(
     ? estimateUsageCost({ usage, cost: costConfig })
     : undefined;
 
-  emitTrustedDiagnosticEvent({
-    type: "model.usage",
+  emitModelUsageEvent(cfg, {
     sessionKey: opts.sessionKey,
     sessionId: agentMeta.sessionId,
-    channel: ingressDiagnosticChannel(opts),
+    channel: ingressModelUsageChannel(opts),
     agentId: opts.agentId,
     provider: providerUsed,
     model: modelUsed,
@@ -2545,7 +2543,7 @@ export async function agentCommandFromIngress(
     );
 
     if (result) {
-      emitIngressModelUsageDiagnostic(result, opts);
+      recordIngressModelUsage(result, opts);
     }
 
     return result;
@@ -2556,8 +2554,8 @@ export const testing = {
   resolveAgentRuntimeConfig,
   prepareAgentCommandExecution,
   resolveExplicitAgentCommandSessionKey,
-  ingressDiagnosticChannel,
-  emitIngressModelUsageDiagnostic,
+  ingressModelUsageChannel,
+  recordIngressModelUsage,
 };
 
 /** @deprecated Use `testing`. */

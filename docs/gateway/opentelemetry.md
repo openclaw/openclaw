@@ -374,8 +374,10 @@ content classes you opted into.
 
 ## Diagnostic event catalog
 
-The events below back the metrics and spans above. Plugins can also subscribe
-to them directly without OTLP export.
+The events below back the metrics and spans above. Provider plugins can also
+subscribe to their own model usage accounting through
+`OpenClawPluginServiceContext.modelUsage` when `plugins.modelUsage.enabled` is
+true, without OTLP export or raw internal diagnostics access.
 
 **Model usage**
 

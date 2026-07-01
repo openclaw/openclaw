@@ -32,12 +32,12 @@ import type { TypingMode } from "../../config/types.js";
 import { resolveSessionTranscriptCandidates } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
+import { emitModelUsageEvent, shouldEmitModelUsageEvent } from "../../infra/model-usage-events.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
@@ -2183,7 +2183,7 @@ export async function runReplyAgent(params: {
 
     await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
 
-    if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
+    if (shouldEmitModelUsageEvent(cfg) && hasNonzeroUsage(usage)) {
       const input = usage.input ?? 0;
       const output = usage.output ?? 0;
       const cacheRead = usage.cacheRead ?? 0;
@@ -2203,8 +2203,7 @@ export async function runReplyAgent(params: {
       const costUsd = hasBillableUsageBuckets
         ? estimateUsageCost({ usage, cost: costConfig })
         : undefined;
-      emitTrustedDiagnosticEvent({
-        type: "model.usage",
+      emitModelUsageEvent(cfg, {
         ...(runResult.diagnosticTrace
           ? {
               trace: freezeDiagnosticTraceContext(

@@ -66,6 +66,10 @@ export type PluginsConfig = {
   /** Optional plugin denylist (plugin ids). */
   deny?: string[];
   load?: PluginsLoadConfig;
+  modelUsage?: {
+    /** Enable model usage events for plugin service subscriptions. */
+    enabled?: boolean;
+  };
   slots?: PluginSlotsConfig;
   entries?: Record<string, PluginEntryConfig>;
   /** @deprecated Shipped upgrade marker accepted for old restrictive allowlist configs. */

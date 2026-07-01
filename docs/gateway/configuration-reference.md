@@ -245,6 +245,9 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
     load: {
       paths: ["~/Projects/oss/voice-call-plugin"],
     },
+    modelUsage: {
+      enabled: false,
+    },
     entries: {
       "voice-call": {
         enabled: true,
@@ -263,6 +266,10 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 - Discovery accepts native OpenClaw plugins plus compatible Codex bundles and Claude bundles, including manifestless Claude default-layout bundles.
 - **Config changes require a gateway restart.**
 - `allow`: optional allowlist (only listed plugins load). `deny` wins.
+- `plugins.modelUsage.enabled`: explicitly enables model usage accounting events
+  for provider plugin service subscriptions. Events are scoped to provider ids
+  registered by the same plugin. Default: `false`. This is separate from
+  `diagnostics.enabled`; enabling it does not expose raw diagnostics.
 - `plugins.entries.<id>.apiKey`: plugin-level API key convenience field (when supported by the plugin).
 - `plugins.entries.<id>.env`: plugin-scoped env var map.
 - `plugins.entries.<id>.hooks.allowPromptInjection`: when `false`, core blocks `before_prompt_build` and ignores prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride`. Applies to native plugin hooks and supported bundle-provided hook directories.

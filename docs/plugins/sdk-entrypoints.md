@@ -322,6 +322,40 @@ For CLI registrars specifically:
   rendering help
 - use `commands` alone only for eager compatibility paths
 
+## Background service context
+
+Services registered with `api.registerService(...)` receive an
+`OpenClawPluginServiceContext`. Use `ctx.modelUsage?.onEvent(...)` to observe
+trusted model usage accounting for providers registered by the same plugin,
+without subscribing to the full internal diagnostic stream. Operators must
+explicitly enable the feed with `plugins.modelUsage.enabled: true`;
+`diagnostics.enabled` is not required:
+
+```typescript
+let stopUsage: (() => void) | undefined;
+
+api.registerService({
+  id: "usage-ledger",
+  start(ctx) {
+    stopUsage = ctx.modelUsage?.onEvent((event) => {
+      console.log(event.provider, event.model, event.usage.total, event.costUsd);
+    });
+  },
+  stop() {
+    stopUsage?.();
+    stopUsage = undefined;
+  },
+});
+```
+
+Each event includes the event timestamp and sequence, provider, model, channel,
+agent/session ids, token buckets (`input`, `output`, `cacheRead`, `cacheWrite`,
+`promptTokens`, `total`), last-call usage when available, context window facts,
+estimated `costUsd`, and run duration. The surface exposes only model usage
+accounting; raw prompts, responses, tool payloads, and other diagnostics are not
+included. Events are scoped to the service plugin's registered provider ids;
+events for other provider ids are not delivered.
+
 ## Plugin shapes
 
 OpenClaw classifies loaded plugins by their registration behavior:
