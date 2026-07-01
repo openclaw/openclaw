@@ -32,6 +32,7 @@ import { t } from "../../i18n/index.ts";
 import { refreshVisibleToolsEffectiveForCurrentSession } from "../../lib/agents/tools-effective.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
+import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "../../lib/session-display.ts";
@@ -117,7 +118,6 @@ import {
 } from "./session-message-cache.ts";
 import { createChatSessionsLoadOverrides } from "./session-scope.ts";
 import { createSessionWorkspaceProps, type SessionWorkspaceHost } from "./session-workspace.ts";
-import type { ChatAttachment, ChatQueueItem } from "./types.ts";
 import { renderChat, resetChatViewState, type ChatProps } from "./view.ts";
 
 type ChatRouteData = {

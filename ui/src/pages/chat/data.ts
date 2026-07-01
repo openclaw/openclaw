@@ -7,6 +7,12 @@ import {
 } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { SessionsListResult } from "../../api/types.ts";
+import type {
+  ChatAttachment,
+  ChatQueueItem,
+  ChatQueueSkillWorkshopRevision,
+  ChatSessionRefreshTarget,
+} from "../../lib/chat/chat-types.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
@@ -84,12 +90,6 @@ import {
   scopedAgentListParamsForRefreshTarget,
 } from "./session-scope.ts";
 import type { ChatSideResult } from "./side-result.ts";
-import type {
-  ChatAttachment,
-  ChatQueueItem,
-  ChatQueueSkillWorkshopRevision,
-  ChatSessionRefreshTarget,
-} from "./types.ts";
 
 export type ChatHost = ChatInputHistoryState & {
   sessions: SessionCapability;

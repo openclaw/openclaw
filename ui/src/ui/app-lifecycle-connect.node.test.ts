@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChatQueueItem } from "../pages/chat/types.ts";
+import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
 
 const {
   applySettingsFromUrlMock,

@@ -8,6 +8,7 @@ import {
   encodeBlockArtCodeBlockCopyPayload,
 } from "../../components/markdown.ts";
 import { i18n, t } from "../../i18n/index.ts";
+import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   createModelCatalog,
   createSessionsListResult,
@@ -25,7 +26,6 @@ import { renderWelcomeState } from "./chat-welcome.ts";
 import { renderChatModelSelect, renderChatQuotaPill } from "./components/chat-model-controls.ts";
 import { renderMarkdownSidebar } from "./components/chat-sidebar.ts";
 import { buildRawSidebarContent } from "./components/chat-sidebar.ts";
-import type { ChatAttachment, ChatQueueItem } from "./types.ts";
 import { renderChat, resetChatViewState } from "./view.ts";
 
 const refreshVisibleToolsEffectiveForCurrentSessionMock = vi.hoisted(() =>

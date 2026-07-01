@@ -18,6 +18,7 @@ import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
 import { CHAT_HISTORY_RENDER_LIMIT } from "../../lib/chat/chat-types.ts";
 import type { ChatStreamSegment } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import {
   CATEGORY_LABELS,
   SLASH_COMMANDS,
@@ -41,8 +42,8 @@ import { renderChatQueue } from "./chat-queue.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
 import { renderContextNotice } from "./context-notice.ts";
-import { DeletedMessages } from "./deleted-messages.ts";
 import "./components/chat-sidebar.ts";
+import { DeletedMessages } from "./deleted-messages.ts";
 import { exportChatMarkdown } from "./export.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
@@ -71,7 +72,6 @@ import {
   renderFallbackIndicator,
 } from "./status-indicators.ts";
 import { getExpandedToolCards, syncToolCardExpansionState } from "./tool-expansion-state.ts";
-import type { ChatAttachment, ChatQueueItem } from "./types.ts";
 import "../../components/resizable-divider.ts";
 
 function getPinnedMessageSummary(message: unknown): string {

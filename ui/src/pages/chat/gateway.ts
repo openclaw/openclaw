@@ -15,6 +15,7 @@ import type {
   ModelCatalogEntry,
   SessionsListResult,
 } from "../../api/types.ts";
+import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
@@ -63,7 +64,6 @@ import {
   prunePersistedToolStreamMessages,
   visibleCurrentAssistantStreamTail,
 } from "./stream-reconciliation.ts";
-import type { ChatAttachment } from "./types.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 const SILENT_REPLY_PATTERN = /^\s*NO_REPLY\s*$/;

@@ -1,3 +1,8 @@
+import type {
+  ChatAttachment,
+  ChatQueueItem,
+  ChatQueueSkillWorkshopRevision,
+} from "../../lib/chat/chat-types.ts";
 import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
@@ -6,7 +11,6 @@ import {
 // Control UI chat module implements composer persistence behavior.
 import { getSafeSessionStorage } from "../../local-storage.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
-import type { ChatAttachment, ChatQueueItem, ChatQueueSkillWorkshopRevision } from "./types.ts";
 
 const STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v1:";
 const MAX_STORED_SESSIONS = 20;

@@ -1,11 +1,11 @@
 import { appRouter, type ApplicationContext, startAppRouter } from "../app-routes.ts";
 import { createBrowserHistory } from "../app/browser.ts";
 import { observeTopbar } from "../app/topbar.ts";
+import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
 import {
   persistChatComposerState,
   restoreChatComposerState,
 } from "../pages/chat/composer-persistence.ts";
-import type { ChatQueueItem } from "../pages/chat/types.ts";
 import { stopDebugPolling } from "../pages/debug/polling.ts";
 import { stopLogsPolling } from "../pages/logs/polling.ts";
 import { stopNodesPolling } from "../pages/nodes/polling.ts";

@@ -1,5 +1,5 @@
 // Control UI chat module implements attachment payload store behavior.
-import type { ChatAttachment } from "./types.ts";
+import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 
 type AttachmentPayload = {
   dataUrl?: string;

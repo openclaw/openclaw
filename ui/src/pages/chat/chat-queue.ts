@@ -3,7 +3,7 @@ import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
-import type { ChatQueueItem } from "./types.ts";
+import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 
 export type ChatQueueProps = {
   queue: ChatQueueItem[];

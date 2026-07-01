@@ -1,10 +1,10 @@
+import type { ChatSessionRefreshTarget } from "../../lib/chat/chat-types.ts";
 import {
   scopedAgentListParamsForSession,
   type SessionListOptions,
   type SessionScopeHost,
 } from "../../lib/sessions/index.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
-import type { ChatSessionRefreshTarget } from "./types.ts";
 
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 0;
 export const CHAT_SESSIONS_REFRESH_LIMIT = 50;
