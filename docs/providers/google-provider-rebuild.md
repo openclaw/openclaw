@@ -39,9 +39,10 @@ Without that flag, bundled runtime registration stays on the official API-backed
 
 A full rebuild should land as small follow-up PRs:
 
-1. Remove Gemini CLI OAuth from default onboarding prominence or keep it marked as an opt-in harness path behind the same boundary.
-2. Add a first-class Gemini API provider implementation for the current official API surface.
-3. Keep Vertex AI as a separate provider with its own auth and endpoint resolution.
-4. Remove deprecated project discovery from provider auth paths.
-5. Add regression tests proving normal Google setup stays on the official API-backed provider path.
-6. Keep Gemini CLI compatibility as an opt-in harness with direct warnings.
+1. Update the main Google provider setup page so the Gemini CLI section directly documents the opt-in flag.
+2. Remove Gemini CLI OAuth from default onboarding prominence or keep it marked as an opt-in harness path behind the same boundary.
+3. Add a first-class Gemini API provider implementation for the current official API surface.
+4. Keep Vertex AI as a separate provider with its own auth and endpoint resolution.
+5. Remove deprecated project discovery from provider auth paths.
+6. Add regression tests proving normal Google setup stays on the official API-backed provider path.
+7. Keep Gemini CLI compatibility as an opt-in harness with direct warnings.
