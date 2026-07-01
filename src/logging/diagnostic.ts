@@ -500,14 +500,16 @@ function resolveStalledEmbeddedRunAbortMs(stuckSessionWarnMs: number): number {
 
 function isStalledEmbeddedRunRecoveryEligible(params: {
   classification: SessionAttentionClassification | undefined;
-  ageMs: number;
+  activity?: DiagnosticSessionActivitySnapshot;
   stuckSessionAbortMs: number;
 }): boolean {
+  const lastProgressAgeMs = params.activity?.lastProgressAgeMs;
   return (
     params.classification?.eventType === "session.stalled" &&
     params.classification.classification === "stalled_agent_run" &&
     params.classification.activeWorkKind === "embedded_run" &&
-    params.ageMs >= params.stuckSessionAbortMs
+    typeof lastProgressAgeMs === "number" &&
+    lastProgressAgeMs >= params.stuckSessionAbortMs
   );
 }
 
@@ -551,7 +553,6 @@ function isStalledModelCallRecoveryEligible(params: {
 function isActiveAbortRecoveryEligible(params: {
   classification: SessionAttentionClassification | undefined;
   activity?: DiagnosticSessionActivitySnapshot;
-  ageMs: number;
   stuckSessionAbortMs: number;
 }): boolean {
   return (
@@ -1007,20 +1008,21 @@ export function logSessionAttention(
     { sessionId: state.sessionId, sessionKey: state.sessionKey },
     Date.now(),
   );
+  const stuckSessionAbortMs =
+    params.abortThresholdMs ?? resolveStalledEmbeddedRunAbortMs(params.thresholdMs);
   const classification = classifySessionAttention({
     state: state.state as "idle" | "processing" | "waiting" | undefined,
     queueDepth: state.queueDepth,
     activity,
     staleMs: params.thresholdMs,
+    stuckSessionAbortMs,
   });
   const recoveryEligible =
     classification.recoveryEligible ||
     isActiveAbortRecoveryEligible({
       classification,
       activity,
-      ageMs: params.ageMs,
-      stuckSessionAbortMs:
-        params.abortThresholdMs ?? resolveStalledEmbeddedRunAbortMs(params.thresholdMs),
+      stuckSessionAbortMs,
     });
   // The warning backoff throttles repeated log lines/events only. It must never
   // gate recovery: a recovery-eligible session has to return its classification
@@ -1323,7 +1325,6 @@ export function startDiagnosticHeartbeat(
           isActiveAbortRecoveryEligible({
             classification,
             activity,
-            ageMs: attentionAgeMs,
             stuckSessionAbortMs,
           })
         ) {

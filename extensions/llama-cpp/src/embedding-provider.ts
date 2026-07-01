@@ -51,16 +51,21 @@ function readLocalOptions(options: { local?: unknown }): LlamaCppLocalOptions {
   return local ?? {};
 }
 
-function createLlamaCppCacheKeyData(model: string): Record<string, unknown> {
+function createLlamaCppCacheKeyData(
+  model: string,
+  outputDimensionality?: number,
+): Record<string, unknown> {
   return {
     provider: LLAMA_CPP_EMBEDDING_PROVIDER_ID,
     model,
+    ...(typeof outputDimensionality === "number" ? { outputDimensionality } : {}),
   };
 }
 
 function resolveLlamaCppModelIdentity(
   local: LlamaCppLocalOptions,
   modelPath: string,
+  outputDimensionality?: number,
 ): LlamaCppModelIdentity {
   const modelCacheDir =
     normalizeOptionalString(local.modelCacheDir) ??
@@ -80,7 +85,7 @@ function resolveLlamaCppModelIdentity(
   ) {
     return {
       model: modelPath,
-      cacheKeyData: createLlamaCppCacheKeyData(modelPath),
+      cacheKeyData: createLlamaCppCacheKeyData(modelPath, outputDimensionality),
       aliases: [],
     };
   }
@@ -93,10 +98,13 @@ function resolveLlamaCppModelIdentity(
   }
   return {
     model: DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
-    cacheKeyData: createLlamaCppCacheKeyData(DEFAULT_LLAMA_CPP_EMBEDDING_MODEL),
+    cacheKeyData: createLlamaCppCacheKeyData(
+      DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+      outputDimensionality,
+    ),
     aliases: Array.from(aliasModels, (aliasModel) => ({
       model: aliasModel,
-      cacheKeyData: createLlamaCppCacheKeyData(aliasModel),
+      cacheKeyData: createLlamaCppCacheKeyData(aliasModel, outputDimensionality),
     })),
   };
 }
@@ -174,17 +182,6 @@ function adaptMemoryEmbeddingProvider(provider: MemoryEmbeddingProvider): Embedd
   };
 }
 
-export async function createLlamaCppEmbeddingProvider(
-  options: EmbeddingProviderCreateOptions,
-  runtimeOptions: LlamaCppEmbeddingProviderRuntimeOptions = {},
-): Promise<EmbeddingProvider> {
-  const result = await createLlamaCppEmbeddingProviderResult(options, runtimeOptions);
-  if (!result.provider) {
-    throw new Error("llama.cpp local embedding provider was unavailable");
-  }
-  return result.provider;
-}
-
 export async function createLlamaCppMemoryEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
   runtimeOptions: LlamaCppEmbeddingProviderRuntimeOptions = {},
@@ -194,7 +191,11 @@ export async function createLlamaCppMemoryEmbeddingProvider(
   const provider = await createLocalEmbeddingProvider(createOptions, {
     nodeLlamaCppImportUrl: runtimeOptions.nodeLlamaCppImportUrl ?? resolveNodeLlamaCppImportUrl(),
   });
-  const identity = resolveLlamaCppModelIdentity(local, provider.model);
+  const identity = resolveLlamaCppModelIdentity(
+    local,
+    provider.model,
+    createOptions.outputDimensionality,
+  );
   const identifiedProvider =
     identity.model === provider.model ? provider : { ...provider, model: identity.model };
   return {
@@ -262,6 +263,7 @@ export const llamaCppEmbeddingProviderAdapter: EmbeddingProviderAdapter = {
     return resolveLlamaCppModelIdentity(
       local,
       normalizeOptionalString(local.modelPath) ?? DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
+      createOptions.outputDimensionality,
     );
   },
   create: async (options) => await createLlamaCppEmbeddingProviderResult(options),

@@ -11,12 +11,16 @@ sidebarTitle: "MCP"
 `openclaw mcp` has two jobs:
 
 - run OpenClaw as an MCP server with `openclaw mcp serve`
-- manage OpenClaw-owned outbound MCP server definitions with `list`, `show`, `status`, `doctor`, `probe`, `add`, `set`, `configure`, `tools`, `login`, `logout`, `reload`, and `unset`
+- manage OpenClaw-managed outbound MCP server definitions with `list`, `show`, `status`, `doctor`, `probe`, `add`, `set`, `configure`, `tools`, `login`, `logout`, `reload`, and `unset`
 
 In other words:
 
 - `serve` is OpenClaw acting as an MCP server
 - the other subcommands are OpenClaw acting as an MCP client-side registry for MCP servers its runtimes may consume later
+
+<Note>
+  `list`, `show`, `set`, and `unset` only read and write OpenClaw-managed `mcp.servers` entries in OpenClaw config. They do not include mcporter servers from `config/mcporter.json`; use `mcporter list` for that registry.
+</Note>
 
 Use [`openclaw acp`](/cli/acp) when OpenClaw should host a coding harness session itself and route that runtime through ACP.
 
@@ -249,7 +253,7 @@ Current bridge behavior:
 
 - inbound `user` transcript messages are forwarded as `notifications/claude/channel`
 - Claude permission requests received over MCP are tracked in-memory
-- if the linked conversation later sends `yes abcde` or `no abcde`, the bridge converts that to `notifications/claude/channel/permission`
+- if the command owner in the linked conversation later sends `yes abcde` or `no abcde`, the bridge converts that to `notifications/claude/channel/permission`
 - these notifications are live-session only; if the MCP client disconnects, there is no push target
 
 This is intentionally client-specific. Generic MCP clients should rely on the standard polling tools.
@@ -368,7 +372,7 @@ For broader testing context, see [Testing](/help/testing).
 This is the `openclaw mcp list`, `show`, `status`, `doctor`, `probe`, `add`, `set`,
 `configure`, `tools`, `login`, `logout`, `reload`, and `unset` path.
 
-These commands do not expose OpenClaw over MCP. They manage OpenClaw-owned MCP server definitions under `mcp.servers` in OpenClaw config.
+These commands do not expose OpenClaw over MCP. They manage OpenClaw-managed MCP server definitions under `mcp.servers` in OpenClaw config. They do not read mcporter servers from `config/mcporter.json`.
 
 Those saved definitions are for runtimes that OpenClaw launches or configures later, such as embedded OpenClaw and other runtime adapters. OpenClaw stores the definitions centrally so those runtimes do not need to keep their own duplicate MCP server lists.
 

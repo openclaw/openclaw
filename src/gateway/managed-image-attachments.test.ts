@@ -34,12 +34,15 @@ vi.mock("./http-utils.js", () => ({
 
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: loadSessionEntryMock,
+  resolveSessionHistoryTranscriptPathAsync: resolveSessionHistoryTranscriptPathMock,
+}));
+
+vi.mock("./session-transcript-readers.js", () => ({
   readSessionMessagesAsync: readSessionMessagesMock,
   readSessionMessagesWithSourceAsync: async (...args: unknown[]) => ({
     messages: await readSessionMessagesMock(...args),
     transcriptPath: await resolveSessionHistoryTranscriptPathMock(...args),
   }),
-  resolveSessionHistoryTranscriptPathAsync: resolveSessionHistoryTranscriptPathMock,
 }));
 
 const {
@@ -287,9 +290,16 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.headers["content-disposition"]).toContain("inline");
     expect(result.body.toString("utf-8")).toBe("original-image");
     expect(readSessionMessagesMock).toHaveBeenCalledWith(
-      "sess-1",
-      path.join(stateDir, "gateway-sessions.json"),
-      "session.jsonl",
+      {
+        agentId: undefined,
+        sessionEntry: {
+          sessionFile: "session.jsonl",
+          sessionId: "sess-1",
+        },
+        sessionId: "sess-1",
+        sessionKey: "agent:main:main",
+        storePath: path.join(stateDir, "gateway-sessions.json"),
+      },
       expect.objectContaining({ allowResetArchiveFallback: true }),
     );
   });
@@ -849,6 +859,24 @@ describe("createManagedOutgoingImageBlocks", () => {
     expect(requireBlock(blocks).type).toBe("image");
   });
 
+  it("allows managed inbound image paths before validating explicit roots", async () => {
+    const inboundPath = path.join(stateDir, "media", "inbound", "inbound.png");
+    await fs.mkdir(path.dirname(inboundPath), { recursive: true });
+    await fs.writeFile(inboundPath, Buffer.from(TINY_PNG_BASE64, "base64"));
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const blocks = await createManagedOutgoingImageBlocks({
+        sessionKey: "agent:main:main",
+        mediaUrls: [inboundPath],
+        stateDir,
+        localRoots: [path.parse(stateDir).root],
+      });
+
+      expect(blocks).toHaveLength(1);
+      expect(requireBlock(blocks).type).toBe("image");
+    });
+  });
+
   it("rejects relative local image paths that resolve outside allowed roots", async () => {
     const allowedWorkspaceDir = path.join(stateDir, "workspace");
     const outsidePath = path.join(stateDir, "outside.png");
@@ -1056,9 +1084,16 @@ describe("cleanupManagedOutgoingImageRecords", () => {
     expect(result.retainedCount).toBe(1);
     await expect(fs.access(fixture.originalPath)).resolves.toBeUndefined();
     expect(readSessionMessagesMock).toHaveBeenCalledWith(
-      "sess-main",
-      path.join(stateDir, "gateway-sessions.json"),
-      "/tmp/sess-main.jsonl",
+      {
+        agentId: undefined,
+        sessionEntry: {
+          sessionFile: "/tmp/sess-main.jsonl",
+          sessionId: "sess-main",
+        },
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        storePath: path.join(stateDir, "gateway-sessions.json"),
+      },
       expect.objectContaining({ allowResetArchiveFallback: true }),
     );
   });

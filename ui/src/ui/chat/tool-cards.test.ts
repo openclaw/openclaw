@@ -10,32 +10,6 @@ import {
   renderToolCardSidebar,
 } from "./tool-cards.ts";
 
-vi.mock("../icons.ts", () => ({
-  icons: {
-    check: "✓",
-    chevronDown: "",
-    panelRightOpen: "",
-    x: "✕",
-    zap: "",
-  },
-}));
-
-vi.mock("../tool-display.ts", () => ({
-  formatToolDetail: () => undefined,
-  resolveToolDisplay: ({ name, args }: { name: string; args?: unknown }) => ({
-    name,
-    label: name
-      .split(/[._-]/g)
-      .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : part))
-      .join(" "),
-    icon: "zap",
-    detail:
-      args && typeof args === "object" && "detail" in args
-        ? String((args as { detail: unknown }).detail)
-        : undefined,
-  }),
-}));
-
 function requireFirstMockArg(
   mock: ReturnType<typeof vi.fn>,
   label: string,
@@ -121,7 +95,7 @@ describe("tool-cards", () => {
 
     const summaryButton = container.querySelector("button.chat-tool-msg-summary");
     expect(summaryButton?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
-      "Sessions Spawn",
+      "Sub-agent",
     );
     expect(summaryButton?.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
@@ -134,8 +108,8 @@ describe("tool-cards", () => {
         {
           id: "msg:5a:call-5a",
           name: "skill_workshop",
-          args: { detail: "create" },
-          inputText: '{\n  "detail": "create"\n}',
+          args: { action: "create" },
+          inputText: '{\n  "action": "create"\n}',
           outputText: "Proposal created",
         },
         { expanded: false, onToggleExpanded: vi.fn() },
@@ -278,6 +252,7 @@ describe("tool-cards", () => {
     expect(rawToggle!.getAttribute("aria-expanded")).toBe("true");
     expect(rawBody!.hidden).toBe(false);
     expect(rawBody!.querySelector(".chat-tool-card__block-label")?.textContent).toBe("Tool output");
+    expect(rawBody!.querySelector("code.markdown-block-art")).toBeNull();
     expect(JSON.parse(rawBody!.querySelector("code")?.textContent ?? "{}")).toEqual({
       kind: "canvas",
       presentation: {
@@ -291,6 +266,36 @@ describe("tool-cards", () => {
         url: "/__openclaw__/canvas/documents/cv_counter/index.html",
       },
     });
+  });
+
+  it("marks expanded raw block-art output so QR whitespace uses block-art rendering", () => {
+    const container = document.createElement("div");
+    const blockArt = "  ▄▄▄▄▄▄▄  \n  █ ▄▄▄ █  \n  █▄▄▄▄▄█  ";
+    render(
+      renderToolCard(
+        {
+          id: "msg:view:block-art",
+          name: "canvas_render",
+          outputText: blockArt,
+          preview: {
+            kind: "canvas",
+            surface: "assistant_message",
+            render: "url",
+            viewId: "qr_preview",
+            url: "/__openclaw__/canvas/documents/qr_preview/index.html",
+          },
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    const rawToggle = container.querySelector<HTMLButtonElement>(".chat-tool-card__raw-toggle");
+    rawToggle!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    const code = container.querySelector("code.markdown-block-art");
+    expect(code).not.toBeNull();
+    expect(code?.textContent).toBe(blockArt);
   });
 
   it("opens assistant-surface canvas payloads in the sidebar when explicitly requested", () => {
@@ -537,7 +542,6 @@ describe("tool-cards", () => {
     expect(card?.classList.contains("chat-tool-card--error")).toBe(true);
     expect(action?.classList.contains("chat-tool-card__action--error")).toBe(true);
     expect(action?.textContent).toContain("View error");
-    expect(action?.textContent).toContain("✕");
     expect(action?.textContent).not.toContain("✓");
   });
 
@@ -558,7 +562,6 @@ describe("tool-cards", () => {
     const action = container.querySelector(".chat-tool-card__action");
     expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
     expect(action?.textContent).toContain("View error");
-    expect(action?.textContent).toContain("✕");
     expect(action?.textContent).not.toContain("✓");
   });
 
@@ -579,7 +582,6 @@ describe("tool-cards", () => {
     const action = container.querySelector(".chat-tool-card__action");
     expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
     expect(action?.textContent).toContain("View error");
-    expect(action?.textContent).toContain("✕");
     expect(action?.textContent).not.toContain("✓");
   });
 

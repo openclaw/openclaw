@@ -318,10 +318,13 @@ async function buildPluginPolicyElicitationResponse(params: {
       paramsForRun: params.paramsForRun,
       title: approvalPrompt.title,
       description: approvalPrompt.description,
-      allowedDecisions: approvalPrompt.allowedDecisions,
+      allowedDecisions: allowedPluginPolicyApprovalDecisions(mode, approvalPrompt),
       signal: params.signal,
     });
-    return buildElicitationResponse(approvalPrompt, outcome);
+    return buildElicitationResponse(
+      approvalPrompt,
+      oneShotPluginPolicyApprovalOutcome(mode, outcome),
+    );
   }
   logPluginElicitationDecline("unmappable_schema", params.requestParams);
   return declineElicitationResponse();
@@ -329,8 +332,26 @@ async function buildPluginPolicyElicitationResponse(params: {
 
 function resolvePluginDestructiveApprovalMode(
   entry: PluginAppPolicyContextEntry,
-): "allow" | "deny" | "auto" {
+): "allow" | "deny" | "auto" | "always" {
   return entry.destructiveApprovalMode ?? (entry.allowDestructiveActions ? "allow" : "deny");
+}
+
+function allowedPluginPolicyApprovalDecisions(
+  mode: "allow" | "deny" | "auto" | "always",
+  approvalPrompt: BridgeableApprovalElicitation,
+): ExecApprovalDecision[] {
+  const allowedDecisions = approvalPrompt.allowedDecisions ?? ["allow-once", "deny"];
+  if (mode !== "always") {
+    return allowedDecisions;
+  }
+  return allowedDecisions.filter((decision) => decision !== "allow-always");
+}
+
+function oneShotPluginPolicyApprovalOutcome(
+  mode: "allow" | "deny" | "auto" | "always",
+  outcome: AppServerApprovalOutcome,
+): AppServerApprovalOutcome {
+  return mode === "always" && outcome === "approved-session" ? "approved-once" : outcome;
 }
 
 function readPluginApprovalElicitation(

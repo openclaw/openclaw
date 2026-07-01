@@ -384,6 +384,82 @@ describe("Anthropic provider", () => {
     ]);
   });
 
+  it("preserves mixed text and image tool-result order", async () => {
+    let capturedPayload: unknown;
+    const imageData = Buffer.from("image").toString("base64");
+    const stream = streamAnthropic(
+      makeAnthropicModel({ input: ["text", "image"] }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            content: [{ type: "toolCall", id: "call_1", name: "lookup", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "lookup",
+            content: [
+              { type: "text", text: "before image" },
+              { type: "image", data: imageData, mimeType: "image/png" },
+              {
+                type: "resource" as const,
+                resource: { uri: "https://example.com/data.json", text: '{"key":"value"}' },
+              },
+              { type: "text", text: "after image" },
+            ],
+            isError: false,
+            timestamp: 0,
+          },
+        ],
+      } as unknown as Context,
+      {
+        apiKey: "sk-ant-provider",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    await stream.result();
+
+    const payload = capturedPayload as {
+      messages: Array<{ role: string; content: Array<Record<string, unknown>> }>;
+    };
+    const userMessage = payload.messages.find((message) => message.role === "user");
+    const toolResult = userMessage?.content.find((entry) => entry.type === "tool_result") as {
+      content: unknown[];
+    };
+
+    expect(toolResult.content).toEqual([
+      { type: "text", text: "before image" },
+      {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: "image/png",
+          data: imageData,
+        },
+      },
+      { type: "text", text: expect.stringContaining('{"type":"resource"') },
+      { type: "text", text: "after image" },
+    ]);
+  });
+
   it.each([
     ["anthropic", "sk-ant-provider"],
     ["anthropic-vertex", "vertex-token"],
@@ -459,6 +535,63 @@ describe("Anthropic provider", () => {
           explanation: "This request is not allowed.",
         },
       }),
+    ]);
+  });
+
+  it("routes interleaved active content blocks by their event indexes", async () => {
+    const client = {
+      messages: {
+        create: vi.fn(() => ({
+          asResponse: () =>
+            Promise.resolve(
+              createSseResponse([
+                {
+                  type: "message_start",
+                  message: { id: "msg_interleaved", usage: { input_tokens: 1, output_tokens: 0 } },
+                },
+                {
+                  type: "content_block_start",
+                  index: 0,
+                  content_block: { type: "text" },
+                },
+                {
+                  type: "content_block_start",
+                  index: 1,
+                  content_block: { type: "text" },
+                },
+                {
+                  type: "content_block_delta",
+                  index: 1,
+                  delta: { type: "text_delta", text: "second" },
+                },
+                {
+                  type: "content_block_delta",
+                  index: 0,
+                  delta: { type: "text_delta", text: "first" },
+                },
+                { type: "content_block_stop", index: 1 },
+                { type: "content_block_stop", index: 0 },
+                {
+                  type: "message_delta",
+                  delta: { stop_reason: "end_turn" },
+                  usage: { input_tokens: 1, output_tokens: 2 },
+                },
+                { type: "message_stop" },
+              ]),
+            ),
+        })),
+      },
+    };
+
+    const result = await streamAnthropic(
+      makeAnthropicModel(),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      { apiKey: "sk-ant-provider", client: client as never },
+    ).result();
+
+    expect(result.content).toEqual([
+      { type: "text", text: "first" },
+      { type: "text", text: "second" },
     ]);
   });
 

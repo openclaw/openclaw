@@ -55,6 +55,11 @@ type CatalogTool = AnyAgentTool | ToolDefinition;
 type CatalogVisibilityOptions = {
   includeMcp?: boolean;
 };
+type UnknownToolRecoverySurface = "raw-tools" | "code-mode" | "tools";
+type UnknownToolErrorOptions = {
+  exactIdOnly?: boolean;
+  recoverySurface?: UnknownToolRecoverySurface;
+};
 
 type ReusableCatalogSnapshot = {
   entries: ToolSearchCatalogEntry[];
@@ -64,6 +69,8 @@ type ReusableCatalogSnapshot = {
 export type ToolSearchCatalogToolExecutor = (params: {
   tool: CatalogTool;
   toolName: string;
+  source: CatalogSource;
+  sourceName?: string;
   toolCallId: string;
   parentToolCallId?: string;
   input: unknown;
@@ -1537,10 +1544,74 @@ function visibleCatalogEntries(
     : catalog.entries;
 }
 
+function tokenizeLookupValue(input: string): Set<string> {
+  return new Set(normalizeStringEntries(input.toLowerCase().split(/[^a-z0-9]+/u)));
+}
+
+function scoreUnknownToolSuggestion(needle: string, entry: ToolSearchCatalogEntry): number {
+  const normalizedNeedle = needle.toLowerCase();
+  const name = entry.name.toLowerCase();
+  const id = entry.id.toLowerCase();
+  const label = (entry.label ?? "").toLowerCase();
+  const description = entry.description.toLowerCase();
+  const needleTokens = tokenizeLookupValue(needle);
+  const entryTokens = tokenizeLookupValue(
+    `${entry.name} ${entry.id} ${entry.label ?? ""} ${entry.description}`,
+  );
+  let score = 0;
+  if ((name && normalizedNeedle.includes(name)) || id.includes(normalizedNeedle)) {
+    score += 40;
+  }
+  if (name && needleTokens.has(name)) {
+    score += 40;
+  }
+  for (const token of needleTokens) {
+    if (entryTokens.has(token)) {
+      score += 12;
+    }
+  }
+  if (label.includes(normalizedNeedle) || description.includes(normalizedNeedle)) {
+    score += 8;
+  }
+  return score;
+}
+
+function formatUnknownToolIdError(
+  needle: string,
+  entries: readonly ToolSearchCatalogEntry[],
+  options: UnknownToolErrorOptions = {},
+): string {
+  const nameCounts = new Map<string, number>();
+  for (const entry of entries) {
+    nameCounts.set(entry.name, (nameCounts.get(entry.name) ?? 0) + 1);
+  }
+  const suggestions = uniqueStrings(
+    entries
+      .map((entry) => ({
+        value: options.exactIdOnly || (nameCounts.get(entry.name) ?? 0) > 1 ? entry.id : entry.name,
+        score: scoreUnknownToolSuggestion(needle, entry),
+      }))
+      .filter((candidate) => candidate.score > 0)
+      .toSorted((a, b) => b.score - a.score || a.value.localeCompare(b.value))
+      .map((candidate) => candidate.value),
+  ).slice(0, 3);
+  const recoveryText =
+    options.recoverySurface === "code-mode"
+      ? "Use openclaw.tools.search to find a tool, openclaw.tools.describe to inspect it, then openclaw.tools.call with the exact id or name."
+      : options.recoverySurface === "tools"
+        ? "Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name."
+        : "Use tool_search to find a tool, tool_describe to inspect it, then tool_call with the exact id or name.";
+  if (suggestions.length === 0) {
+    return `Unknown tool id: ${needle}. ${recoveryText}`;
+  }
+  return `Unknown tool id: ${needle}. Did you mean: ${suggestions.join(", ")}? ${recoveryText}`;
+}
+
 function findEntry(
   catalog: ToolSearchCatalogSession,
   id: string,
   options?: CatalogVisibilityOptions,
+  errorOptions?: UnknownToolErrorOptions,
 ): ToolSearchCatalogEntry {
   const needle = id.trim();
   const entries = visibleCatalogEntries(catalog, options);
@@ -1554,16 +1625,22 @@ function findEntry(
   }
   const namedEntry = namedEntries[0];
   if (!namedEntry) {
-    throw new ToolInputError(`Unknown tool id: ${needle}`);
+    throw new ToolInputError(formatUnknownToolIdError(needle, entries, errorOptions));
   }
   return namedEntry;
 }
 
-function findEntryByExactId(catalog: ToolSearchCatalogSession, id: string): ToolSearchCatalogEntry {
+function findEntryByExactId(
+  catalog: ToolSearchCatalogSession,
+  id: string,
+  errorOptions: UnknownToolErrorOptions = {},
+): ToolSearchCatalogEntry {
   const needle = id.trim();
   const entry = catalog.entries.find((candidate) => candidate.id === needle);
   if (!entry) {
-    throw new ToolInputError(`Unknown tool id: ${needle}`);
+    throw new ToolInputError(
+      formatUnknownToolIdError(needle, catalog.entries, { ...errorOptions, exactIdOnly: true }),
+    );
   }
   return entry;
 }
@@ -1668,10 +1745,10 @@ export class ToolSearchRuntime {
     );
   };
 
-  describe = async (id: string, options?: CatalogVisibilityOptions) => {
+  describe = async (id: string, options?: CatalogVisibilityOptions & UnknownToolErrorOptions) => {
     const catalog = resolveCatalog(this.ctx);
     catalog.describeCount += 1;
-    return describeEntry(findEntry(catalog, id, options));
+    return describeEntry(findEntry(catalog, id, options, options));
   };
 
   call = async (
@@ -1681,10 +1758,11 @@ export class ToolSearchRuntime {
       parentToolCallId?: string;
       signal?: AbortSignal;
       onUpdate?: AgentToolUpdateCallback;
+      recoverySurface?: UnknownToolRecoverySurface;
     },
   ) => {
     const catalog = resolveCatalog(this.ctx);
-    const entry = findEntry(catalog, id);
+    const entry = findEntry(catalog, id, undefined, options);
     return await this.callEntry(catalog, entry, input, options);
   };
 
@@ -1695,10 +1773,11 @@ export class ToolSearchRuntime {
       parentToolCallId?: string;
       signal?: AbortSignal;
       onUpdate?: AgentToolUpdateCallback;
+      recoverySurface?: UnknownToolRecoverySurface;
     },
   ) => {
     const catalog = resolveCatalog(this.ctx);
-    const entry = findEntryByExactId(catalog, id);
+    const entry = findEntryByExactId(catalog, id, options);
     return await this.callEntry(catalog, entry, input, options);
   };
 
@@ -1728,6 +1807,8 @@ export class ToolSearchRuntime {
     const result = await executeTool({
       tool: entry.tool,
       toolName: entry.name,
+      source: entry.source,
+      sourceName: entry.sourceName,
       toolCallId,
       parentToolCallId: options?.parentToolCallId,
       input: input ?? {},
@@ -1996,14 +2077,17 @@ async function runCodeModeBridgeRequest(
       if (typeof id !== "string") {
         throw new ToolInputError("describe id must be a string.");
       }
-      return await runtime.describe(id);
+      return await runtime.describe(id, { recoverySurface: "code-mode" });
     }
     case "call": {
       const id = values[0];
       if (typeof id !== "string") {
         throw new ToolInputError("call id must be a string.");
       }
-      return await runtime.call(id, values[1] ?? {}, options);
+      return await runtime.call(id, values[1] ?? {}, {
+        ...options,
+        recoverySurface: "code-mode",
+      });
     }
   }
   throw new ToolInputError("Unsupported tool_search_code bridge method.");

@@ -6,7 +6,7 @@ import type { CreateAgentSessionOptions } from "../../sessions/index.js";
 /**
  * Session construction bridge for embedded-attempt runs.
  */
-export type EmbeddedAgentSessionOptions = {
+type EmbeddedAgentSessionOptions = {
   cwd: string;
   agentDir: string;
   authStorage: unknown;

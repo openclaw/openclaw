@@ -183,21 +183,21 @@ generic contracts; Plan Mode can use them, but so can approval workflows,
 workspace policy gates, background monitors, setup wizards, and UI companion
 plugins.
 
-| Method                                                                               | Contract it owns                                                                                                                  |
-| ------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| `api.session.state.registerSessionExtension(...)`                                    | Plugin-owned, JSON-compatible session state projected through Gateway sessions                                                    |
-| `api.session.workflow.enqueueNextTurnInjection(...)`                                 | Durable exactly-once context injected into the next agent turn for one session                                                    |
-| `api.registerTrustedToolPolicy(...)`                                                 | Manifest-gated trusted pre-plugin tool policy that can block or rewrite tool params                                               |
-| `api.registerToolMetadata(...)`                                                      | Tool catalog display metadata without changing the tool implementation                                                            |
-| `api.registerCommand(...)`                                                           | Scoped plugin commands; command results can set `continueAgent: true`; Discord native commands support `descriptionLocalizations` |
-| `api.session.controls.registerControlUiDescriptor(...)`                              | Control UI contribution descriptors for session, tool, run, or settings surfaces                                                  |
-| `api.lifecycle.registerRuntimeLifecycle(...)`                                        | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths                                                 |
-| `api.agent.events.registerAgentEventSubscription(...)`                               | Sanitized event subscriptions for workflow state and monitors                                                                     |
-| `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`  | Per-run plugin scratch state cleared on terminal run lifecycle                                                                    |
-| `api.session.workflow.registerSessionSchedulerJob(...)`                              | Cleanup metadata for plugin-owned scheduler jobs; does not schedule work or create task records                                   |
-| `api.session.workflow.sendSessionAttachment(...)`                                    | Bundled-only host-mediated file attachment delivery to the active direct-outbound session route                                   |
-| `api.session.workflow.scheduleSessionTurn(...)` / `unscheduleSessionTurnsByTag(...)` | Bundled-only Cron-backed scheduled session turns plus tag-based cleanup                                                           |
-| `api.session.controls.registerSessionAction(...)`                                    | Typed session actions clients can dispatch through the Gateway                                                                    |
+| Method                                                                               | Contract it owns                                                                                                                                           |
+| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.session.state.registerSessionExtension(...)`                                    | Plugin-owned, JSON-compatible session state projected through Gateway sessions                                                                             |
+| `api.session.workflow.enqueueNextTurnInjection(...)`                                 | Durable exactly-once context injected into the next agent turn for one session                                                                             |
+| `api.registerTrustedToolPolicy(...)`                                                 | Manifest-gated trusted pre-plugin tool policy that can block or rewrite tool params                                                                        |
+| `api.registerToolMetadata(...)`                                                      | Tool catalog display metadata without changing the tool implementation                                                                                     |
+| `api.registerCommand(...)`                                                           | Scoped plugin commands; command results can set `continueAgent: true` or `suppressReply: true`; Discord native commands support `descriptionLocalizations` |
+| `api.session.controls.registerControlUiDescriptor(...)`                              | Control UI contribution descriptors for session, tool, run, or settings surfaces                                                                           |
+| `api.lifecycle.registerRuntimeLifecycle(...)`                                        | Cleanup callbacks for plugin-owned runtime resources on reset/delete/reload paths                                                                          |
+| `api.agent.events.registerAgentEventSubscription(...)`                               | Sanitized event subscriptions for workflow state and monitors                                                                                              |
+| `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`  | Per-run plugin scratch state cleared on terminal run lifecycle                                                                                             |
+| `api.session.workflow.registerSessionSchedulerJob(...)`                              | Cleanup metadata for plugin-owned scheduler jobs; does not schedule work or create task records                                                            |
+| `api.session.workflow.sendSessionAttachment(...)`                                    | Bundled-only host-mediated file attachment delivery to the active direct-outbound session route                                                            |
+| `api.session.workflow.scheduleSessionTurn(...)` / `unscheduleSessionTurnsByTag(...)` | Bundled-only Cron-backed scheduled session turns plus tag-based cleanup                                                                                    |
+| `api.session.controls.registerSessionAction(...)`                                    | Typed session actions clients can dispatch through the Gateway                                                                                             |
 
 Use the grouped namespaces for new plugin code:
 
@@ -388,13 +388,13 @@ For an end-to-end authoring guide, see
 
 ### Exclusive slots
 
-| Method                                     | What it registers                                                                                                                                         |
-| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). The `assemble()` callback receives `availableTools` and `citationsMode` so the engine can tailor prompt additions. |
-| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                 |
-| `api.registerMemoryPromptSection(builder)` | Memory prompt section builder                                                                                                                             |
-| `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver                                                                                                                                |
-| `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                                                                                                                                    |
+| Method                                     | What it registers                                                                                                                                                                                  |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Lifecycle callbacks receive `runtimeSettings` when the host can provide model/provider/mode diagnostics; older strict engines are retried without that key. |
+| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                                          |
+| `api.registerMemoryPromptSection(builder)` | Memory prompt section builder                                                                                                                                                                      |
+| `api.registerMemoryFlushPlan(resolver)`    | Memory flush plan resolver                                                                                                                                                                         |
+| `api.registerMemoryRuntime(runtime)`       | Memory runtime adapter                                                                                                                                                                             |
 
 ### Deprecated memory embedding adapters
 

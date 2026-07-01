@@ -51,6 +51,20 @@ describe("iMessage sent-message echo cache", () => {
     ).toBe(true);
   });
 
+  it("matches delayed reflected echoes with leading NUL corruption markers", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
+    const cache = createSentMessageCache();
+
+    cache.remember("acct:imessage:+1555", { text: "Delayed echo reply" });
+
+    expect(
+      cache.has("acct:imessage:+1555", {
+        text: "\u0000\u0000Delayed echo reply",
+      }),
+    ).toBe(true);
+  });
+
   it("keeps attributedBody corruption cleanup leading-only", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
@@ -65,6 +79,31 @@ describe("iMessage sent-message echo cache", () => {
     ).toBe(false);
     expect(cache.has("acct:imessage:+1555", { text: "Delayed\techo reply" })).toBe(false);
     expect(cache.has("acct:imessage:+1555", { text: "Delayed\necho reply" })).toBe(false);
+  });
+
+  it("keeps NUL corruption cleanup leading-only", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
+    const cache = createSentMessageCache();
+
+    cache.remember("acct:imessage:+1555", { text: "Delayed echo reply" });
+
+    expect(cache.has("acct:imessage:+1555", { text: "Delayed\u0000echo reply" })).toBe(false);
+  });
+
+  it("matches a delayed reflected echo with leading corruption markers via the persisted cache", () => {
+    // The persisted 12h cache is the only matcher once the 4s in-memory text TTL expires, so it
+    // must strip leading attributedBody corruption markers exactly like the in-memory key (#93511).
+    const scope = "acct:imessage:+1555";
+    const markers = String.fromCharCode(0x0000, 0xfffd, 0xfffe, 0xffff, 0xfeff);
+    rememberPersistedIMessageEcho({ scope, text: "Delayed echo reply" });
+
+    expect(hasPersistedIMessageEcho({ scope, text: "Delayed echo reply" })).toBe(true);
+    expect(hasPersistedIMessageEcho({ scope, text: `${markers}Delayed echo reply` })).toBe(true);
+    // Leading-only: a mid-string marker stays distinct.
+    expect(
+      hasPersistedIMessageEcho({ scope, text: `Delayed${String.fromCharCode(0x0000)}echo reply` }),
+    ).toBe(false);
   });
 
   it("matches by outbound message id and ignores placeholder ids", () => {

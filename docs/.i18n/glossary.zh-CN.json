@@ -624,6 +624,10 @@
     "target": "发布策略"
   },
   {
+    "source": "Release notes",
+    "target": "发布说明"
+  },
+  {
     "source": "for full details",
     "target": "了解详情"
   },
@@ -944,6 +948,14 @@
     "target": "Matrix QA"
   },
   {
+    "source": "Maturity scorecard",
+    "target": "成熟度评分卡"
+  },
+  {
+    "source": "Maturity taxonomy",
+    "target": "成熟度分类法"
+  },
+  {
     "source": "Matrix presentation metadata",
     "target": "Matrix 呈现元数据"
   },
@@ -1176,7 +1188,31 @@
     "target": "Control UI"
   },
   {
+    "source": "Models CLI",
+    "target": "模型 CLI"
+  },
+  {
     "source": "Z.AI (GLM)",
     "target": "Z.AI (GLM)"
+  },
+  {
+    "source": "Cohere",
+    "target": "Cohere"
+  },
+  {
+    "source": "Cohere plugin",
+    "target": "Cohere 插件"
+  },
+  {
+    "source": "cohere",
+    "target": "cohere"
+  },
+  {
+    "source": "Zalo ClawBot",
+    "target": "Zalo ClawBot"
+  },
+  {
+    "source": "Docs map",
+    "target": "文档地图"
   }
 ]

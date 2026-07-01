@@ -18,14 +18,15 @@ import { loadPluginLookUpTable, type PluginLookUpTable } from "../plugins/plugin
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistryParams } from "../plugins/registry-types.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntimeLoaderLogger } from "../plugins/runtime/load-context.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-import type { PluginLogger } from "../plugins/types.js";
+import type { PluginLogger, PluginOrigin } from "../plugins/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
+import { isOperatorScope, type OperatorScope } from "./operator-scopes.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandler,
@@ -289,6 +290,52 @@ function canClientUseModelOverride(client: GatewayRequestOptions["client"]): boo
   return hasAdminScope(client) || client?.internal?.allowModelOverride === true;
 }
 
+function normalizeRuntimeNodeInvokeScopes(
+  scopes: string[] | undefined,
+): OperatorScope[] | undefined {
+  if (!Array.isArray(scopes)) {
+    return undefined;
+  }
+  const normalized: OperatorScope[] = [];
+  for (const scope of scopes) {
+    if (isOperatorScope(scope) && !normalized.includes(scope)) {
+      normalized.push(scope);
+    }
+  }
+  return normalized;
+}
+
+function canTrustedOfficialPluginRequestScopes(params: {
+  pluginId?: string;
+  pluginOrigin?: PluginOrigin;
+  pluginTrustedOfficialInstall?: boolean;
+}): boolean {
+  if (!params.pluginId) {
+    return false;
+  }
+  if (params.pluginOrigin === "bundled" || params.pluginTrustedOfficialInstall === true) {
+    return true;
+  }
+  const registry = getActivePluginRegistry();
+  const record = registry?.plugins.find((entry) => entry.id === params.pluginId);
+  return record?.origin === "bundled" || record?.trustedOfficialInstall === true;
+}
+
+function resolveRuntimeNodeInvokeSyntheticScopes(params: {
+  pluginId?: string;
+  pluginOrigin?: PluginOrigin;
+  pluginTrustedOfficialInstall?: boolean;
+  requestedScopes?: OperatorScope[];
+}): OperatorScope[] | undefined {
+  if (!params.requestedScopes) {
+    return undefined;
+  }
+  if (!canTrustedOfficialPluginRequestScopes(params)) {
+    return undefined;
+  }
+  return params.requestedScopes;
+}
+
 function mergeGatewayClientInternal(
   client: GatewayRequestOptions["client"] | undefined,
   internal: NonNullable<GatewayRequestOptions["client"]>["internal"],
@@ -536,11 +583,20 @@ export async function dispatchGatewayMethodInProcess<T>(
   return await dispatchGatewayMethod<T>(method, params, options);
 }
 
+const PLUGIN_SUBAGENT_SESSION_MESSAGES_MAX_LIMIT = 1_000;
+
 export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
   const getSessionMessages: PluginRuntime["subagent"]["getSessionMessages"] = async (params) => {
+    const limit =
+      params.limit == null || !Number.isFinite(params.limit)
+        ? undefined
+        : Math.min(
+            PLUGIN_SUBAGENT_SESSION_MESSAGES_MAX_LIMIT,
+            Math.max(1, Math.floor(params.limit)),
+          );
     const payload = await dispatchGatewayMethod<{ messages?: unknown[] }>("sessions.get", {
       key: params.sessionKey,
-      ...(params.limit != null && { limit: params.limit }),
+      ...(limit != null && { limit }),
     });
     return { messages: Array.isArray(payload?.messages) ? payload.messages : [] };
   };
@@ -608,13 +664,20 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
           ...(params.timeoutMs != null && { timeoutMs: params.timeoutMs }),
         },
       );
-      const status = payload?.status;
+      let status = payload?.status;
+      if (status === "completed" || status === "succeeded") {
+        status = "ok";
+      } else if (status === "error" && payload?.error?.trim().toLowerCase() === "completed") {
+        status = "ok";
+      }
       if (status !== "ok" && status !== "error" && status !== "timeout") {
-        throw new Error(`Gateway agent.wait returned unexpected status: ${status}`);
+        throw new Error(`Gateway agent.wait returned unexpected status: ${payload?.status}`);
       }
       return {
         status,
-        ...(typeof payload?.error === "string" && payload.error && { error: payload.error }),
+        ...(status !== "ok" &&
+          typeof payload?.error === "string" &&
+          payload.error && { error: payload.error }),
       };
     },
     getSessionMessages,
@@ -669,13 +732,31 @@ export function createGatewayNodesRuntime(): PluginRuntime["nodes"] {
       };
     },
     async invoke(params) {
-      const payload = await dispatchGatewayMethod<unknown>("node.invoke", {
-        nodeId: params.nodeId,
-        command: params.command,
-        ...(params.params !== undefined && { params: params.params }),
-        timeoutMs: params.timeoutMs,
-        idempotencyKey: params.idempotencyKey || randomUUID(),
+      const scope = getPluginRuntimeGatewayRequestScope();
+      const pluginId =
+        typeof scope?.pluginId === "string" && scope.pluginId.trim()
+          ? scope.pluginId.trim()
+          : undefined;
+      const syntheticScopes = resolveRuntimeNodeInvokeSyntheticScopes({
+        pluginId,
+        pluginOrigin: scope?.pluginOrigin,
+        pluginTrustedOfficialInstall: scope?.pluginTrustedOfficialInstall,
+        requestedScopes: normalizeRuntimeNodeInvokeScopes(params.scopes),
       });
+      const payload = await dispatchGatewayMethod<unknown>(
+        "node.invoke",
+        {
+          nodeId: params.nodeId,
+          command: params.command,
+          ...(params.params !== undefined && { params: params.params }),
+          timeoutMs: params.timeoutMs,
+          idempotencyKey: params.idempotencyKey || randomUUID(),
+        },
+        {
+          ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
+          ...(syntheticScopes ? { syntheticScopes } : {}),
+        },
+      );
       return payload;
     },
   };

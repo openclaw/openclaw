@@ -8,7 +8,6 @@ import { estimateToolResultReductionPotential } from "../tool-result-truncation.
 let PREEMPTIVE_OVERFLOW_ERROR_TEXT: typeof import("./preemptive-compaction.js").PREEMPTIVE_OVERFLOW_ERROR_TEXT;
 let estimateLlmBoundaryTokenPressure: typeof import("./preemptive-compaction.js").estimateLlmBoundaryTokenPressure;
 let buildPrePromptContextBudgetStatus: typeof import("./preemptive-compaction.js").buildPrePromptContextBudgetStatus;
-let estimatePrePromptTokens: typeof import("./preemptive-compaction.js").estimatePrePromptTokens;
 let estimateRenderedLlmBoundaryTokenPressure: typeof import("./preemptive-compaction.js").estimateRenderedLlmBoundaryTokenPressure;
 let formatPrePromptPrecheckLog: typeof import("./preemptive-compaction.js").formatPrePromptPrecheckLog;
 let shouldPreemptivelyCompactBeforePrompt: typeof import("./preemptive-compaction.js").shouldPreemptivelyCompactBeforePrompt;
@@ -21,7 +20,6 @@ beforeAll(async () => {
     PREEMPTIVE_OVERFLOW_ERROR_TEXT,
     estimateLlmBoundaryTokenPressure,
     buildPrePromptContextBudgetStatus,
-    estimatePrePromptTokens,
     estimateRenderedLlmBoundaryTokenPressure,
     formatPrePromptPrecheckLog,
     shouldPreemptivelyCompactBeforePrompt,
@@ -91,12 +89,12 @@ describe("preemptive-compaction", () => {
   });
 
   it("raises the estimate as prompt-side content grows", () => {
-    const smaller = estimatePrePromptTokens({
+    const smaller = estimateLlmBoundaryTokenPressure({
       messages: [makeAssistantHistory(verboseHistory)],
       systemPrompt: "sys",
       prompt: "hello",
     });
-    const larger = estimatePrePromptTokens({
+    const larger = estimateLlmBoundaryTokenPressure({
       messages: [makeAssistantHistory(verboseHistory)],
       systemPrompt: verboseSystem,
       prompt: verbosePrompt,
@@ -293,7 +291,7 @@ describe("preemptive-compaction", () => {
         })),
       }),
     ];
-    const estimatedPromptTokens = estimatePrePromptTokens({
+    const estimatedPromptTokens = estimateLlmBoundaryTokenPressure({
       messages,
       systemPrompt: "sys",
       prompt: "continue",
@@ -372,7 +370,7 @@ describe("preemptive-compaction", () => {
     ];
     const reserveTokens = 2_000;
     const contextTokenBudget = 26_000;
-    const estimatedPromptTokens = estimatePrePromptTokens({
+    const estimatedPromptTokens = estimateLlmBoundaryTokenPressure({
       messages,
       systemPrompt: "sys",
       prompt: "hello",
@@ -430,7 +428,7 @@ describe("preemptive-compaction", () => {
       makeToolResultMessage(medium),
     ];
     const reserveTokens = 2_000;
-    const estimatedPromptTokens = estimatePrePromptTokens({
+    const estimatedPromptTokens = estimateLlmBoundaryTokenPressure({
       messages,
       systemPrompt: "sys",
       prompt: "hello",

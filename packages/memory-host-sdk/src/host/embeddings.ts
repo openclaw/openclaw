@@ -31,6 +31,15 @@ export type LocalEmbeddingProviderRuntimeOptions = {
   nodeLlamaCppImportUrl?: string;
 };
 
+function copyEmbeddingVector(vector: ArrayLike<number>, maxLength?: number): number[] {
+  const length = Math.min(maxLength ?? vector.length, vector.length);
+  const values: number[] = [];
+  for (let index = 0; index < length; index += 1) {
+    values.push(vector[index]);
+  }
+  return values;
+}
+
 async function disposeResources(
   resources: Array<DisposableResource | null | undefined>,
 ): Promise<void> {
@@ -141,6 +150,11 @@ export async function createLocalEmbeddingProviderInProcess(
     return initPromise;
   };
 
+  const outputDimensionality =
+    typeof options.outputDimensionality === "number" ? options.outputDimensionality : undefined;
+  const normalize = (vector: ArrayLike<number>): number[] =>
+    sanitizeAndNormalizeEmbedding(copyEmbeddingVector(vector, outputDimensionality));
+
   return {
     id: "local",
     model: modelPath,
@@ -151,7 +165,7 @@ export async function createLocalEmbeddingProviderInProcess(
       throwIfClosed();
       optionsValue?.signal?.throwIfAborted();
       const embedding = await ctx.getEmbeddingFor(text);
-      return sanitizeAndNormalizeEmbedding(Array.from(embedding.vector));
+      return normalize(embedding.vector);
     },
     embedBatch: async (texts, optionsLocal) => {
       throwIfClosed();
@@ -164,7 +178,7 @@ export async function createLocalEmbeddingProviderInProcess(
         throwIfClosed();
         optionsLocal?.signal?.throwIfAborted();
         const embedding = await ctx.getEmbeddingFor(text);
-        embeddings.push(sanitizeAndNormalizeEmbedding(Array.from(embedding.vector)));
+        embeddings.push(normalize(embedding.vector));
       }
       return embeddings;
     },

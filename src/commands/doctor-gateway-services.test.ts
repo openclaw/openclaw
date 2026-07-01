@@ -110,6 +110,9 @@ vi.mock("./doctor-gateway-auth-token.js", () => ({
 }));
 
 import {
+  detectExtraGatewayServiceIssues,
+  extraGatewayServiceToHealthFinding,
+  extraGatewayServiceToRepairEffects,
   maybeRepairGatewayServiceConfig,
   maybeScanExtraGatewayServices,
 } from "./doctor-gateway-services.js";
@@ -576,13 +579,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
       installEntrypoint:
         "/Users/test/Library/pnpm/global/5/node_modules/.pnpm/openclaw@2026.3.12/node_modules/openclaw/dist/index.js",
       realpath: async (value: string) => {
-        if (value.includes("/global/5/node_modules/openclaw/")) {
-          return value.replace(
+        const normalized = value.replaceAll("\\", "/").replace(/^[A-Z]:/i, "");
+        if (normalized.includes("/global/5/node_modules/openclaw/")) {
+          return normalized.replace(
             "/global/5/node_modules/openclaw/",
             "/global/5/node_modules/.pnpm/openclaw@2026.3.12/node_modules/openclaw/",
           );
         }
-        return value;
+        return normalized;
       },
     });
 
@@ -1187,6 +1191,83 @@ describe("maybeScanExtraGatewayServices", () => {
       "system",
     );
     expectNoteContaining("custom-gateway.service", "Other gateway-like services detected");
+  });
+
+  it("threads deep scans through structured extra gateway service detection", async () => {
+    mocks.findExtraGatewayServices.mockResolvedValue([]);
+
+    await detectExtraGatewayServiceIssues({ deep: true });
+
+    expect(mocks.findExtraGatewayServices).toHaveBeenCalledWith(process.env, { deep: true });
+  });
+
+  it("maps intentional extra gateway services to informational structured findings", () => {
+    expect(
+      extraGatewayServiceToHealthFinding({
+        platform: "linux",
+        label: "custom-gateway.service",
+        detail: "unit: /etc/systemd/system/custom-gateway.service",
+        scope: "system",
+        legacy: false,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/gateway-services/extra",
+        severity: "info",
+        source: "linux",
+        target: "custom-gateway.service",
+      }),
+    );
+  });
+
+  it("keeps legacy gateway services warning-level", () => {
+    expect(
+      extraGatewayServiceToHealthFinding({
+        platform: "linux",
+        label: "openclaw-gateway.service",
+        detail: "legacy unit",
+        scope: "user",
+        legacy: true,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/gateway-services/extra",
+        severity: "warning",
+        source: "linux",
+        target: "openclaw-gateway.service",
+      }),
+    );
+  });
+
+  it("maps legacy gateway services to dry-run cleanup effects", () => {
+    expect(
+      extraGatewayServiceToRepairEffects({
+        platform: "linux",
+        label: "clawdbot-gateway.service",
+        detail: "unit: /home/test/.config/systemd/user/clawdbot-gateway.service",
+        scope: "user",
+        legacy: true,
+      }),
+    ).toEqual([
+      {
+        kind: "service",
+        action: "would-remove-legacy-gateway-service",
+        target: "clawdbot-gateway.service",
+        dryRunSafe: false,
+      },
+    ]);
+  });
+
+  it("does not report cleanup effects for intentional extra gateway services", () => {
+    expect(
+      extraGatewayServiceToRepairEffects({
+        platform: "linux",
+        label: "custom-gateway.service",
+        detail: "unit: /etc/systemd/system/custom-gateway.service",
+        scope: "system",
+        legacy: false,
+      }),
+    ).toEqual([]);
   });
 
   it("removes legacy Linux user systemd services", async () => {

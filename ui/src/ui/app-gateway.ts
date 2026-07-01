@@ -151,7 +151,11 @@ type GatewayHost = {
   execApprovalBusy: boolean;
   execApprovalError: string | null;
   updateAvailable: UpdateAvailable | null;
+  currentSessionId?: string | null;
+  reconnectResumeSessionId?: string | null;
   reconcileWebPushState?: () => Promise<void> | void;
+  realtimeTalkOptionsOpen?: boolean;
+  fetchRealtimeTalkCatalog?: () => Promise<void>;
   sessionsChangedReloadTimer?: number | ReturnType<typeof globalThis.setTimeout> | null;
   controlUiBootstrapReady?: Promise<void> | null;
 };
@@ -810,6 +814,9 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       host.lastErrorCode = null;
       host.chatError = null;
       host.hello = hello;
+      if (host.realtimeTalkOptionsOpen) {
+        void host.fetchRealtimeTalkCatalog?.();
+      }
       applySnapshot(host, hello);
       prepareHelloScopedComposerRestore(host);
       restoreChatComposerState(host as unknown as Parameters<typeof restoreChatComposerState>[0], {
@@ -906,6 +913,11 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         return;
       }
       host.connected = false;
+      const currentSessionId =
+        typeof host.currentSessionId === "string" ? host.currentSessionId.trim() : "";
+      if (currentSessionId) {
+        host.reconnectResumeSessionId = currentSessionId;
+      }
       markQueuedChatSendsWaitingForReconnect(
         host as unknown as Parameters<typeof markQueuedChatSendsWaitingForReconnect>[0],
       );

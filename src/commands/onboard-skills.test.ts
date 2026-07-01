@@ -1,5 +1,5 @@
 // Onboard skills tests cover skill setup prompts, package manager config, and skip behavior.
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -41,8 +41,10 @@ function createBundledSkill(params: {
   name: string;
   description: string;
   bins: string[];
+  env?: string[];
   os?: string[];
   installLabel: string;
+  installKind?: string;
 }): {
   name: string;
   description: string;
@@ -78,10 +80,39 @@ function createBundledSkill(params: {
     disabled: false,
     blockedByAllowlist: false,
     eligible: false,
-    requirements: { bins: params.bins, anyBins: [], env: [], config: [], os: params.os ?? [] },
-    missing: { bins: params.bins, anyBins: [], env: [], config: [], os: params.os ?? [] },
+    requirements: {
+      bins: params.bins,
+      anyBins: [],
+      env: params.env ?? [],
+      config: [],
+      os: params.os ?? [],
+    },
+    missing: {
+      bins: params.bins,
+      anyBins: [],
+      env: params.env ?? [],
+      config: [],
+      os: params.os ?? [],
+    },
     configChecks: [],
-    install: [{ id: "brew", kind: "brew", label: params.installLabel, bins: params.bins }],
+    install: [
+      {
+        id: params.installKind ?? "brew",
+        kind: params.installKind ?? "brew",
+        label: params.installLabel,
+        bins: params.bins,
+      },
+    ],
+  };
+}
+
+function createWorkspaceSkill(
+  params: Parameters<typeof createBundledSkill>[0],
+): ReturnType<typeof createBundledSkill> {
+  return {
+    ...createBundledSkill(params),
+    source: "openclaw-workspace",
+    bundled: false,
   };
 }
 
@@ -143,16 +174,30 @@ const runtime: RuntimeEnv = {
   }) as RuntimeEnv["exit"],
 };
 
+const supportsHomebrewPrompt = process.platform === "darwin" || process.platform === "linux";
+
+async function withPlatform<T>(platform: NodeJS.Platform, fn: () => Promise<T>): Promise<T> {
+  const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", {
+    configurable: true,
+    value: platform,
+  });
+  try {
+    return await fn();
+  } finally {
+    Object.defineProperty(process, "platform", originalPlatformDescriptor);
+  }
+}
+
 describe("setupSkills", () => {
-  afterEach(() => {
+  beforeEach(() => {
+    vi.clearAllMocks();
     mocks.isContainerEnvironment.mockReset();
     mocks.resolveBrewExecutable.mockReset();
   });
 
   it("hides brew-only installs in Linux containers when brew is missing", async () => {
-    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
-    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
-    try {
+    await withPlatform("linux", async () => {
       mockMissingBrewStatus([
         createBundledSkill({
           name: "video-frames",
@@ -173,15 +218,11 @@ describe("setupSkills", () => {
       expect(
         notes.find((n) => n.message.includes("No missing skill dependencies to install")),
       ).toBeUndefined();
-    } finally {
-      Object.defineProperty(process, "platform", originalPlatformDescriptor);
-    }
+    });
   });
 
   it("keeps brew-only installs visible when Linuxbrew is resolved off PATH", async () => {
-    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
-    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
-    try {
+    await withPlatform("linux", async () => {
       mockMissingBrewStatus([
         createBundledSkill({
           name: "video-frames",
@@ -196,19 +237,76 @@ describe("setupSkills", () => {
       const { prompter, notes } = createPrompter({ multiselect: ["video-frames"] });
       await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
 
-      expect(prompter.multiselect).toHaveBeenCalled();
+      expect(prompter.multiselect).not.toHaveBeenCalled();
       expect(mocks.installSkill).toHaveBeenCalledWith(
         expect.objectContaining({ skillName: "video-frames", installId: "brew" }),
       );
       expect(notes.find((n) => n.title === "Container skill installs")).toBeUndefined();
       expect(notes.find((n) => n.title === "Homebrew recommended")).toBeUndefined();
-    } finally {
-      Object.defineProperty(process, "platform", originalPlatformDescriptor);
-    }
+    });
   });
 
-  it("does not recommend Homebrew when user skips installing brew-backed deps", async () => {
-    if (process.platform === "win32") {
+  it("auto-installs bundled skill dependencies without running workspace skill recipes", async () => {
+    mockMissingBrewStatus([
+      createWorkspaceSkill({
+        name: "repo-helper",
+        description: "Workspace helper",
+        bins: ["repo-helper"],
+        installLabel: "Install repo-helper",
+      }),
+      createBundledSkill({
+        name: "video-frames",
+        description: "ffmpeg",
+        bins: ["ffmpeg"],
+        installLabel: "Install ffmpeg (brew)",
+      }),
+    ]);
+
+    const { prompter, notes } = createPrompter({});
+    await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+    expect(prompter.multiselect).not.toHaveBeenCalled();
+    expect(mocks.installSkill).toHaveBeenCalledTimes(1);
+    expect(mocks.installSkill).toHaveBeenCalledWith(
+      expect.objectContaining({ skillName: "video-frames", installId: "brew" }),
+    );
+    const installNote = notes.find((n) => n.message.includes("video-frames"));
+    expect(installNote?.message).toContain("video-frames");
+    expect(installNote?.message).not.toContain("repo-helper");
+  });
+
+  it("uses the requested node manager for node-backed auto installs", async () => {
+    mockMissingBrewStatus([
+      createBundledSkill({
+        name: "node-helper",
+        description: "Node helper",
+        bins: ["node-helper"],
+        installLabel: "Install node-helper",
+        installKind: "node",
+      }),
+    ]);
+
+    const { prompter } = createPrompter({});
+    const next = await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter, {
+      nodeManager: "pnpm",
+    });
+
+    expect(next.skills?.install?.nodeManager).toBe("pnpm");
+    expect(mocks.installSkill).toHaveBeenCalledWith(
+      expect.objectContaining({
+        skillName: "node-helper",
+        installId: "node",
+        config: expect.objectContaining({
+          skills: expect.objectContaining({
+            install: expect.objectContaining({ nodeManager: "pnpm" }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("recommends Homebrew when brew-backed deps are auto-installed and brew is missing", async () => {
+    if (!supportsHomebrewPrompt) {
       return;
     }
 
@@ -243,11 +341,12 @@ describe("setupSkills", () => {
     });
 
     const brewNote = notes.find((n) => n.title === "Homebrew recommended");
-    expect(brewNote).toBeUndefined();
+    expect(brewNote).toBeDefined();
+    expect(prompter.multiselect).not.toHaveBeenCalled();
   });
 
-  it("recommends Homebrew when user selects a brew-backed install and brew is missing", async () => {
-    if (process.platform === "win32") {
+  it("recommends Homebrew when brew-backed installs run and brew is missing", async () => {
+    if (!supportsHomebrewPrompt) {
       return;
     }
 
@@ -278,5 +377,46 @@ describe("setupSkills", () => {
     expect(emptyStateNote?.message).toContain("No missing skill dependencies to install");
     expect(emptyStateNote?.message).toContain("openclaw skills list --verbose");
     expect(emptyStateNote?.message).toContain("openclaw skills check");
+  });
+
+  it("does not recommend Homebrew on FreeBSD", async () => {
+    await withPlatform("freebsd", async () => {
+      mockMissingBrewStatus([
+        createBundledSkill({
+          name: "video-frames",
+          description: "ffmpeg",
+          bins: ["ffmpeg"],
+          installLabel: "Install ffmpeg (brew)",
+        }),
+      ]);
+
+      const { prompter, notes } = createPrompter({ multiselect: ["video-frames"] });
+      await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+      const brewNote = notes.find((n) => n.title === "Homebrew recommended");
+      expect(brewNote).toBeUndefined();
+      expect(prompter.multiselect).not.toHaveBeenCalled();
+      expect(mocks.detectBinary).not.toHaveBeenCalledWith("brew");
+    });
+  });
+
+  it("does not ask for API keys when skills are missing env vars", async () => {
+    mockMissingBrewStatus([
+      createBundledSkill({
+        name: "goplaces",
+        description: "Places lookup",
+        bins: [],
+        env: ["GOOGLE_PLACES_API_KEY"],
+        installLabel: "",
+      }),
+    ]);
+
+    const { prompter } = createPrompter({});
+    const next = await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+    expect(next).toEqual({});
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(prompter.text).not.toHaveBeenCalled();
+    expect(prompter.multiselect).not.toHaveBeenCalled();
   });
 });

@@ -57,8 +57,10 @@ type SessionManagerMocks = {
   resetLeaf: UnknownMock;
   buildSessionContext: Mock<() => { messages: AgentMessage[] }>;
   appendCustomEntry: UnknownMock;
+  rewriteFile: UnknownMock;
   flushPendingToolResults: UnknownMock;
   clearPendingToolResults: UnknownMock;
+  removeTrailingEntries: UnknownMock;
 };
 type AttemptSpawnWorkspaceHoisted = {
   spawnSubagentDirectMock: UnknownMock;
@@ -98,7 +100,7 @@ type AttemptSpawnWorkspaceHoisted = {
   sessionManager: SessionManagerMocks;
 };
 
-export function createSubscriptionMock(): SubscriptionMock {
+function createSubscriptionMock(): SubscriptionMock {
   // Minimal subscription surface for runEmbeddedAttempt tests; individual tests
   // override only the lifecycle method they need.
   return {
@@ -206,8 +208,10 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     resetLeaf: vi.fn(),
     buildSessionContext: vi.fn<() => { messages: AgentMessage[] }>(() => ({ messages: [] })),
     appendCustomEntry: vi.fn(),
+    rewriteFile: vi.fn(),
     flushPendingToolResults: vi.fn(),
     clearPendingToolResults: vi.fn(),
+    removeTrailingEntries: vi.fn(() => 0),
   };
   return {
     spawnSubagentDirectMock,
@@ -390,6 +394,14 @@ vi.mock("../../bootstrap-files.js", async () => {
   };
 });
 
+vi.mock("../../workspace.js", async () => {
+  const actual = await vi.importActual<typeof import("../../workspace.js")>("../../workspace.js");
+  return {
+    ...actual,
+    isWorkspaceBootstrapPending: hoisted.isWorkspaceBootstrapPendingMock,
+  };
+});
+
 vi.mock("../../../skills/runtime/env-overrides.js", () => ({
   applySkillEnvOverrides: () => () => {},
   applySkillEnvOverridesFromSnapshot: () => () => {},
@@ -465,7 +477,7 @@ vi.mock("../tool-schema-runtime.js", () => ({
 }));
 
 vi.mock("../../session-file-repair.js", () => ({
-  repairSessionFileIfNeeded: async () => {},
+  repairSessionFileIfNeeded: async () => ({ repaired: false, droppedLines: 0 }),
 }));
 
 vi.mock("../session-manager-cache.js", () => ({
@@ -822,6 +834,13 @@ vi.mock("../utils.js", () => ({
 }));
 
 vi.mock("./compaction-retry-aggregate-timeout.js", () => ({
+  hasActiveCompactionRetryWork: ({
+    isCompactionInFlight,
+    isSessionStreaming,
+  }: {
+    isCompactionInFlight: boolean;
+    isSessionStreaming: boolean;
+  }) => isCompactionInFlight || isSessionStreaming,
   waitForCompactionRetryWithAggregateTimeout: async () => ({
     timedOut: false,
     aborted: false,
@@ -830,13 +849,6 @@ vi.mock("./compaction-retry-aggregate-timeout.js", () => ({
 
 vi.mock("./compaction-timeout.js", () => ({
   resolveRunTimeoutDuringCompaction: () => "abort",
-  resolveRunTimeoutWithCompactionGraceMs: ({
-    runTimeoutMs,
-    compactionTimeoutMs,
-  }: {
-    runTimeoutMs: number;
-    compactionTimeoutMs: number;
-  }) => runTimeoutMs + compactionTimeoutMs,
   selectCompactionTimeoutSnapshot: ({
     currentSnapshot,
     currentSessionId,
@@ -856,7 +868,7 @@ vi.mock("./history-image-prune.js", () => ({
   pruneProcessedHistoryImages: () => null,
 }));
 
-export type MutableSession = {
+type MutableSession = {
   sessionId: string;
   messages: unknown[];
   isCompacting: boolean;
@@ -1023,6 +1035,7 @@ export function resetEmbeddedAttemptHarness(
     .mockReset()
     .mockReturnValue({ messages: params.sessionMessages ?? [] });
   hoisted.sessionManager.appendCustomEntry.mockReset();
+  hoisted.sessionManager.rewriteFile.mockReset();
   if (params.subscribeImpl) {
     hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation(params.subscribeImpl);
   }
@@ -1141,7 +1154,7 @@ export function expectCalledWithSessionKey(mock: ReturnType<typeof vi.fn>, sessi
   expect(mock).toHaveBeenCalledWith(expect.objectContaining({ sessionKey }));
 }
 
-export const testModel = {
+const testModel = {
   api: "openai-completions",
   provider: "openai",
   compat: {},

@@ -7,13 +7,15 @@ import { withEnvAsync } from "../test-utils/env.js";
 const agentCommandFromIngressMock = vi.fn();
 const runBtwSideQuestionMock = vi.fn();
 const updateSessionStoreMock = vi.fn();
-const applySessionsPatchToStoreMock = vi.fn();
+const applySessionPatchProjectionMock = vi.fn();
+const projectSessionsPatchEntryMock = vi.fn();
 const createSessionGoalMock = vi.fn();
 const clearSessionGoalMock = vi.fn();
 const getSessionGoalMock = vi.fn();
 const updateSessionGoalStatusMock = vi.fn();
 const ensureRuntimePluginsLoadedMock = vi.fn();
 const ensureContextWindowCacheLoadedMock = vi.fn(async () => undefined);
+const runSessionStartupMigrationMock = vi.fn<() => Promise<void>>(async () => undefined);
 const listSessionsFromStoreAsyncMock = vi.fn(
   async (_options?: unknown): Promise<{ sessions: unknown[] }> => ({ sessions: [] }),
 );
@@ -101,6 +103,10 @@ vi.mock("../config/sessions.js", () => ({
   updateSessionStore: (...args: unknown[]) => updateSessionStoreMock(...args),
 }));
 
+vi.mock("../config/sessions/session-accessor.js", () => ({
+  applySessionPatchProjection: (...args: unknown[]) => applySessionPatchProjectionMock(...args),
+}));
+
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentDir: (_cfg: unknown, agentId: string) => `/tmp/openclaw-agent-${agentId}/agent`,
   resolveAgentWorkspaceDir: (_cfg: unknown, agentId: string) => `/tmp/openclaw-agent-${agentId}`,
@@ -143,6 +149,11 @@ vi.mock("../config/config.js", () => ({
   loadConfig: () => getRuntimeConfigMock(),
 }));
 
+vi.mock("../config/sessions/startup-migration.js", () => ({
+  runSessionStartupMigration: (...args: Parameters<typeof runSessionStartupMigrationMock>) =>
+    runSessionStartupMigrationMock(...args),
+}));
+
 vi.mock("../gateway/cli-session-history.js", () => ({
   augmentChatHistoryWithCliSessionImports: ({ localMessages }: { localMessages?: unknown[] }) =>
     localMessages ?? [],
@@ -175,9 +186,10 @@ vi.mock("../gateway/session-utils.js", () => ({
     loadCombinedSessionStoreForGatewayMock(...args),
   loadSessionEntry: (sessionKey: string, opts?: { agentId?: string }) =>
     loadSessionEntryMock(sessionKey, opts),
-  migrateAndPruneGatewaySessionStoreKey: ({ key }: { key: string }) => ({ primaryKey: key }),
-  readSessionMessagesAsync: (...args: Parameters<typeof readSessionMessagesAsyncMock>) =>
-    readSessionMessagesAsyncMock(...args),
+  migrateAndPruneGatewaySessionStoreKey: ({ key }: { key: string }) => ({
+    primaryKey: key,
+    target: { storeKeys: [key] },
+  }),
   resolveGatewaySessionStoreTarget: ({ key }: { key: string }) => ({
     canonicalKey: key,
     storePath: "/tmp/openclaw-sessions.json",
@@ -193,12 +205,14 @@ vi.mock("../gateway/session-reset-service.js", () => ({
   performGatewaySessionReset: () => ({ ok: true, key: "agent:main:main", entry: {} }),
 }));
 
-vi.mock("../gateway/session-utils.fs.js", () => ({
+vi.mock("../gateway/session-transcript-readers.js", () => ({
   capArrayByJsonBytes: (items: unknown[]) => ({ items }),
+  readSessionMessagesAsync: (...args: Parameters<typeof readSessionMessagesAsyncMock>) =>
+    readSessionMessagesAsyncMock(...args),
 }));
 
 vi.mock("../gateway/sessions-patch.js", () => ({
-  applySessionsPatchToStore: (...args: unknown[]) => applySessionsPatchToStoreMock(...args),
+  projectSessionsPatchEntry: (...args: unknown[]) => projectSessionsPatchEntryMock(...args),
 }));
 
 vi.mock("../gateway/server-methods/agent-timestamp.js", () => ({
@@ -260,6 +274,8 @@ describe("EmbeddedTuiBackend", () => {
     ensureRuntimePluginsLoadedMock.mockReset();
     ensureContextWindowCacheLoadedMock.mockReset();
     ensureContextWindowCacheLoadedMock.mockResolvedValue(undefined);
+    runSessionStartupMigrationMock.mockReset();
+    runSessionStartupMigrationMock.mockResolvedValue(undefined);
     listSessionsFromStoreAsyncMock.mockReset();
     listSessionsFromStoreAsyncMock.mockResolvedValue({ sessions: [] });
     loadCombinedSessionStoreForGatewayMock.mockReset();
@@ -267,8 +283,22 @@ describe("EmbeddedTuiBackend", () => {
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
     });
-    applySessionsPatchToStoreMock.mockReset();
-    applySessionsPatchToStoreMock.mockResolvedValue({ ok: true, entry: {} });
+    applySessionPatchProjectionMock.mockReset();
+    applySessionPatchProjectionMock.mockImplementation(
+      async (params: {
+        project: (context: {
+          entries: unknown[];
+          existingEntry?: unknown;
+          primaryKey: string;
+        }) => Promise<unknown>;
+        resolveTarget: (snapshot: { entries: unknown[] }) => { primaryKey: string };
+      }) => {
+        const target = params.resolveTarget({ entries: [] });
+        return await params.project({ ...target, entries: [] });
+      },
+    );
+    projectSessionsPatchEntryMock.mockReset();
+    projectSessionsPatchEntryMock.mockResolvedValue({ ok: true, entry: {} });
     getRuntimeConfigMock.mockReset();
     getRuntimeConfigMock.mockReturnValue({});
     loadGatewayModelCatalogMock.mockReset();
@@ -494,7 +524,7 @@ describe("EmbeddedTuiBackend", () => {
         provider: "tui-pty-mock",
       },
     ]);
-    applySessionsPatchToStoreMock.mockImplementation(
+    projectSessionsPatchEntryMock.mockImplementation(
       async ({
         loadGatewayModelCatalog,
       }: {
@@ -533,6 +563,34 @@ describe("EmbeddedTuiBackend", () => {
       store: {},
       opts: { agentId: "work", includeGlobal: true, search: "global" },
     });
+  });
+
+  it("gates session reads on the startup migration so legacy keys are never observed early", async () => {
+    let resolveMigration: () => void = () => {};
+    const migrationDone = new Promise<void>((resolve) => {
+      resolveMigration = resolve;
+    });
+    runSessionStartupMigrationMock.mockReturnValueOnce(migrationDone);
+
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    const backend = new EmbeddedTuiBackend();
+    backend.start();
+
+    const listed = backend.listSessions({ agentId: "work" });
+    await flushMicrotasks();
+    expect(listSessionsFromStoreAsyncMock).not.toHaveBeenCalled();
+
+    resolveMigration();
+    await listed;
+    expect(runSessionStartupMigrationMock).toHaveBeenCalledWith({
+      cfg: {},
+      env: process.env,
+      log: {
+        info: expect.any(Function),
+        warn: expect.any(Function),
+      },
+    });
+    expect(listSessionsFromStoreAsyncMock).toHaveBeenCalledTimes(1);
   });
 
   it("creates a local session entry before starting a goal", async () => {
@@ -650,9 +708,13 @@ describe("EmbeddedTuiBackend", () => {
     await backend.loadHistory({ sessionKey: "agent:main:main" });
 
     expect(readSessionMessagesAsyncMock).toHaveBeenCalledWith(
-      "sess-main",
-      "/tmp/openclaw-sessions.json",
-      undefined,
+      {
+        agentId: "main",
+        sessionEntry: { sessionId: "sess-main" },
+        sessionId: "sess-main",
+        sessionKey: "agent:main:main",
+        storePath: "/tmp/openclaw-sessions.json",
+      },
       {
         mode: "recent",
         maxMessages: 200,
@@ -1342,7 +1404,7 @@ describe("EmbeddedTuiBackend", () => {
       fastMode: true,
     });
 
-    expect(applySessionsPatchToStoreMock).toHaveBeenCalledWith(
+    expect(projectSessionsPatchEntryMock).toHaveBeenCalledWith(
       expect.objectContaining({
         storeKey: "global",
         agentId: "work",
@@ -1476,7 +1538,6 @@ describe("EmbeddedTuiBackend", () => {
       .mockResolvedValueOnce({ payloads: [{ text: "second done" }], meta: {} });
 
     const backend = new EmbeddedTuiBackend();
-    let callsAfterSendDuringError = 0;
     let sentDuringError: Promise<{ runId: string }> | undefined;
     backend.onEvent = (evt) => {
       const payload = evt.payload as { runId?: string; state?: string };
@@ -1490,7 +1551,6 @@ describe("EmbeddedTuiBackend", () => {
           message: "second",
           runId: "run-local-second",
         });
-        callsAfterSendDuringError = agentCommandFromIngressMock.mock.calls.length;
       }
     };
 
@@ -1504,9 +1564,9 @@ describe("EmbeddedTuiBackend", () => {
     await vi.waitFor(() => {
       expect(sentDuringError).toBeDefined();
     });
-    expect(callsAfterSendDuringError).toBe(2);
     await sentDuringError;
     await flushMicrotasks();
+    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(2);
   });
 
   it("keeps final short replies like No after suppressing lead-fragment deltas", async () => {

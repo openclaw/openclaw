@@ -67,7 +67,7 @@ function createManifestPlugin(id: string): PluginManifestRecord {
 
 function createManifestPluginWithModelCatalog(
   id: string,
-  discovery: "static" | "runtime" = "static",
+  discovery: "static" | "refreshable" | "runtime" = "static",
 ): PluginManifestRecord {
   return {
     ...createManifestPluginWithoutDiscovery({ id }),
@@ -84,6 +84,7 @@ function createManifestPluginWithModelCatalog(
               input: ["text"],
               contextWindow: 128000,
               maxTokens: 4096,
+              thinkingLevelMap: { off: null, minimal: "low", max: "max" },
               cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0 },
             },
           ],
@@ -261,6 +262,38 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
       [],
     );
     expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
+  });
+
+  it("does not synthesize manifest entry providers for refreshable catalogs", () => {
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["token-plan"]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [createManifestPluginWithModelCatalog("token-plan", "refreshable")],
+        diagnostics: [],
+      },
+    });
+
+    expect(resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true })).toStrictEqual(
+      [],
+    );
+    expect(mocks.resolvePluginProviders).not.toHaveBeenCalled();
+  });
+
+  it("loads the full plugin for refreshable manifest catalog rows", () => {
+    const refreshableProvider = createProvider({ id: "token-plan", mode: "catalog" });
+    mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["token-plan"]);
+    mocks.resolvePluginProviders.mockReturnValue([refreshableProvider]);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      manifestRegistry: {
+        plugins: [createManifestPluginWithModelCatalog("token-plan", "refreshable")],
+        diagnostics: [],
+      },
+    });
+
+    expect(resolvePluginDiscoveryProvidersRuntime({})).toStrictEqual([refreshableProvider]);
+    expect(requireResolvePluginProvidersParams().onlyPluginIds).toEqual(["token-plan"]);
   });
 
   it("loads the full plugin when one manifest catalog provider is runtime-owned", () => {
@@ -668,6 +701,7 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
               id: "catalog-model",
               name: "Catalog Model",
               reasoning: true,
+              thinkingLevelMap: { off: null, minimal: "low", max: "max" },
             }),
           ],
         },

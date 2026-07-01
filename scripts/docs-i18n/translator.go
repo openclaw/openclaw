@@ -315,11 +315,16 @@ func previewCommandOutput(stdout, stderr string) string {
 		return "no output"
 	}
 	combined = strings.Join(strings.Fields(combined), " ")
-	const limit = 500
+	const (
+		limit      = 1200
+		headLength = 300
+		tailLength = 800
+	)
 	if len(combined) <= limit {
 		return combined
 	}
-	return combined[:limit] + "..."
+	// Codex prints API failures after its header and prompt, so the tail carries the actionable error.
+	return combined[:headLength] + " ... [truncated] ... " + combined[len(combined)-tailLength:]
 }
 
 func sleepWithContext(ctx context.Context, delay time.Duration) error {

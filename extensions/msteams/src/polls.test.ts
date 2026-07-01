@@ -8,13 +8,13 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { beforeEach, describe, expect, it } from "vitest";
-import { createMSTeamsPollStoreMemory } from "./polls-store-memory.js";
 import {
   buildMSTeamsPollCard,
   createMSTeamsPollStoreState,
   extractMSTeamsPollVote,
   normalizeMSTeamsPollSelections,
   type MSTeamsPoll,
+  type MSTeamsPollStore,
 } from "./polls.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
@@ -112,7 +112,32 @@ const createStateStore = async () => {
   return createMSTeamsPollStoreState({ stateDir });
 };
 
-const createMemoryStore = () => createMSTeamsPollStoreMemory();
+function createMemoryPollStore(initial: MSTeamsPoll[] = []): MSTeamsPollStore {
+  const polls = new Map<string, MSTeamsPoll>();
+  for (const poll of initial) {
+    polls.set(poll.id, { ...poll });
+  }
+
+  return {
+    createPoll: async (poll) => {
+      polls.set(poll.id, { ...poll });
+    },
+    getPoll: async (pollId) => polls.get(pollId) ?? null,
+    recordVote: async ({ pollId, voterId, selections }) => {
+      const poll = polls.get(pollId);
+      if (!poll) {
+        return null;
+      }
+      const normalized = normalizeMSTeamsPollSelections(poll, selections);
+      poll.votes[voterId] = normalized;
+      poll.updatedAt = new Date().toISOString();
+      polls.set(poll.id, poll);
+      return poll;
+    },
+  };
+}
+
+const createMemoryStore = () => createMemoryPollStore();
 
 describe.each([
   { name: "memory", createStore: createMemoryStore },
@@ -339,7 +364,7 @@ describe("state poll store", () => {
 
 describe("memory poll store", () => {
   it("reads seeded polls back, updates timestamps, and returns null for missing polls", async () => {
-    const store = createMSTeamsPollStoreMemory([
+    const store = createMemoryPollStore([
       {
         id: "poll-1",
         question: "Pick one",

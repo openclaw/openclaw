@@ -105,7 +105,7 @@ export function resolveSourceReplyDeliveryMode(params: {
 }
 
 /** Full source-reply suppression decision consumed by run and hook code. */
-export type SourceReplyVisibilityPolicy = {
+type SourceReplyVisibilityPolicy = {
   sourceReplyDeliveryMode: SourceReplyDeliveryMode;
   sendPolicyDenied: boolean;
   suppressAutomaticSourceDelivery: boolean;

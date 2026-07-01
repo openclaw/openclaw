@@ -6,13 +6,13 @@ import {
   type AcceptedSessionSpawn,
 } from "../../accepted-session-spawn.js";
 
-export type AttemptTrajectoryTerminalStatus = "success" | "error" | "interrupted";
+type AttemptTrajectoryTerminalStatus = "success" | "error" | "interrupted";
 
 /** Terminal error marker for runs that produced no user-visible delivery or durable progress. */
 export const NON_DELIVERABLE_TERMINAL_TURN_REASON = "non_deliverable_terminal_turn";
 
 /** Normalized terminal status recorded for an embedded run attempt trajectory. */
-export type AttemptTrajectoryTerminal = {
+type AttemptTrajectoryTerminal = {
   status: AttemptTrajectoryTerminalStatus;
   terminalError?: typeof NON_DELIVERABLE_TERMINAL_TURN_REASON;
 };

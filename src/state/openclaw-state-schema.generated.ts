@@ -475,6 +475,20 @@ CREATE TABLE IF NOT EXISTS installed_plugin_index (
 CREATE INDEX IF NOT EXISTS idx_installed_plugin_index_generated
   ON installed_plugin_index(generated_at_ms DESC, index_key);
 
+CREATE TABLE IF NOT EXISTS official_external_plugin_catalog_snapshots (
+  feed_url TEXT NOT NULL PRIMARY KEY,
+  body TEXT NOT NULL,
+  status INTEGER NOT NULL,
+  etag TEXT,
+  last_modified TEXT,
+  checksum TEXT NOT NULL,
+  saved_at TEXT NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_official_external_plugin_catalog_snapshots_updated
+  ON official_external_plugin_catalog_snapshots(updated_at_ms DESC, feed_url);
+
 CREATE TABLE IF NOT EXISTS gateway_restart_sentinel (
   sentinel_key TEXT NOT NULL PRIMARY KEY,
   version INTEGER NOT NULL,
@@ -884,6 +898,7 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
   payload_external_content_source_json TEXT,
   payload_light_context INTEGER,
   payload_tools_allow_json TEXT,
+  payload_tools_allow_is_default INTEGER,
   delivery_mode TEXT,
   delivery_channel TEXT,
   delivery_to TEXT,
@@ -1003,6 +1018,7 @@ CREATE TABLE IF NOT EXISTS task_runs (
   parent_flow_id TEXT,
   parent_task_id TEXT,
   agent_id TEXT,
+  requester_agent_id TEXT,
   run_id TEXT,
   label TEXT,
   task TEXT NOT NULL,

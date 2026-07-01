@@ -3,7 +3,6 @@ import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onbo
 import { describe, expect, it } from "vitest";
 import {
   applyKimiCodeConfig,
-  applyKimiCodeProviderConfig,
   KIMI_CODING_MODEL_REF,
   KIMI_MODEL_REF,
 } from "./onboard.js";
@@ -15,7 +14,7 @@ describe("kimi coding onboard", () => {
   });
 
   it("adds the Kimi coding provider defaults", () => {
-    const cfg = applyKimiCodeProviderConfig({});
+    const cfg = applyKimiCodeConfig({});
     const provider = cfg.models?.providers?.kimi;
 
     expect(provider).toEqual({

@@ -1,5 +1,19 @@
 # OpenClaw iOS Changelog
 
+## 2026.6.10 - 2026-06-21
+
+Maintenance update for the current OpenClaw beta release.
+
+- Improved notification cleanup, Watch app compatibility, and native file input handling.
+
+## 2026.6.9 - 2026-06-20
+
+Maintenance update for the current OpenClaw release.
+
+- Added Apple Watch controls for common agent actions.
+- Improved Gateway setup, notification settings, and share-extension identity handling.
+- Updated the Watch app integration for current Xcode compatibility.
+
 ## 2026.6.2 - 2026-06-02
 
 OpenClaw is now available on iPhone.
@@ -58,11 +72,11 @@ Maintenance update for the current OpenClaw release.
 
 ## 2026.5.12 - 2026-05-12
 
-Maintenance update for the current OpenClaw beta release.
+Maintenance update for the current OpenClaw release.
 
 ## 2026.5.10 - 2026-05-10
 
-Maintenance update for the current OpenClaw beta release.
+Maintenance update for the current OpenClaw release.
 
 - Gateway connections now recover after a trusted Gateway certificate changes by refreshing the stored certificate pin during reconnect.
 
@@ -128,7 +142,7 @@ Maintenance update for the current OpenClaw release.
 
 ## 2026.4.19 - 2026-04-19
 
-Maintenance update for the current OpenClaw beta release.
+Maintenance update for the current OpenClaw release.
 
 ## 2026.4.18 - 2026-04-18
 
@@ -136,11 +150,11 @@ Maintenance update for the current OpenClaw release.
 
 ## 2026.4.15 - 2026-04-15
 
-Maintenance update for the current OpenClaw beta release.
+Maintenance update for the current OpenClaw release.
 
 ## 2026.4.14 - 2026-04-14
 
-Maintenance update for the current OpenClaw beta release.
+Maintenance update for the current OpenClaw release.
 
 ## 2026.4.12 - 2026-04-12
 

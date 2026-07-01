@@ -172,18 +172,18 @@ describe("scripts/committer", () => {
     expect(committedPaths(repo)).toEqual(["note.txt"]);
   });
 
-  it("passes FAST_COMMIT through to git hooks when using --fast", () => {
+  it("bypasses git hooks when using --fast", () => {
     const repo = createRepo();
     installHook(
       repo,
       ".githooks/pre-commit",
-      '#!/usr/bin/env bash\nset -euo pipefail\n[ "${FAST_COMMIT:-}" = "1" ] || exit 91\n',
+      "#!/usr/bin/env bash\nset -euo pipefail\nexit 91\n",
     );
     writeRepoFile(repo, "note.txt", "hello\n");
 
-    const output = commitWithHelperArgs(repo, "--fast", "test: fast hook env", "note.txt");
+    const output = commitWithHelperArgs(repo, "--fast", "test: fast no verify", "note.txt");
 
-    expect(output).toContain('Committed "test: fast hook env" with 1 files');
+    expect(output).toContain('Committed "test: fast no verify" with 1 files');
     expect(committedPaths(repo)).toEqual(["note.txt"]);
   });
 

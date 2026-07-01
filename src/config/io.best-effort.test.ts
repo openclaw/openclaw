@@ -1,6 +1,13 @@
 // Covers best-effort config IO reads and warning behavior.
 import fs from "node:fs/promises";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   readBestEffortConfig,
   readBestEffortConfigSnapshot,
@@ -9,10 +16,28 @@ import {
 } from "./config.js";
 import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 
+type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
+
+function readConfigHealthRow(env: NodeJS.ProcessEnv, configPath: string) {
+  const { db } = openOpenClawStateDatabase({ env });
+  const healthDb = getNodeSqliteKysely<ConfigHealthDatabase>(db);
+  return executeSqliteQueryTakeFirstSync(
+    db,
+    healthDb
+      .selectFrom("config_health_entries")
+      .select(["config_path", "last_known_good_json"])
+      .where("config_path", "=", configPath),
+  );
+}
+
 describe("readBestEffortConfig", () => {
+  afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
+  });
+
   it("can read snapshots without updating config observation state", async () => {
     await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
+      const configPath = await writeOpenClawConfig(home, {
         gateway: { mode: "local" },
       });
 
@@ -23,7 +48,135 @@ describe("readBestEffortConfig", () => {
 
       await readConfigFileSnapshot();
 
-      await expect(fs.stat(healthPath)).resolves.toMatchObject({ isFile: expect.any(Function) });
+      await expect(fs.stat(healthPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(readConfigHealthRow({ ...process.env, HOME: home }, configPath)).toMatchObject({
+        config_path: configPath,
+        last_known_good_json: expect.any(String),
+      });
+    });
+  });
+
+  it("can read snapshots without applying config env vars to the process", async () => {
+    await withTempHome(async (home) => {
+      const key = "OPENCLAW_ISOLATED_CONFIG_READ_TEST";
+      await withEnvAsync({ [key]: undefined }, async () => {
+        await writeOpenClawConfig(home, {
+          env: { vars: { [key]: "from-config" } },
+          gateway: { mode: "local" },
+        });
+
+        await readConfigFileSnapshot({ isolateEnv: true, observe: false });
+
+        expect(process.env[key]).toBeUndefined();
+      });
+    });
+  });
+
+  it("resolves config env above exact lower-precedence values in isolated snapshots", async () => {
+    await withTempHome(async (home) => {
+      const key = "OPENCLAW_GATEWAY_TOKEN";
+      await withEnvAsync({ [key]: "shell-token" }, async () => {
+        await writeOpenClawConfig(home, {
+          env: { vars: { [key]: "config-token" } },
+          gateway: { auth: { mode: "token", token: `\${${key}}` }, mode: "local" },
+        });
+
+        const snapshot = await readConfigFileSnapshot({
+          isolateEnv: true,
+          lowerPrecedenceEnv: { [key]: "shell-token" },
+          observe: false,
+        });
+
+        expect(snapshot.config.gateway?.auth?.token).toBe("config-token");
+        expect(process.env[key]).toBe("shell-token");
+      });
+    });
+  });
+
+  it("resolves config env above normalized lower-precedence aliases in isolated snapshots", async () => {
+    await withTempHome(async (home) => {
+      await withEnvAsync({ ZAI_API_KEY: "shell-token", Z_AI_API_KEY: undefined }, async () => {
+        await writeOpenClawConfig(home, {
+          env: { vars: { Z_AI_API_KEY: "config-token" } },
+          gateway: { auth: { mode: "token", token: "${ZAI_API_KEY}" }, mode: "local" },
+        });
+
+        const snapshot = await readConfigFileSnapshot({
+          isolateEnv: true,
+          lowerPrecedenceEnv: { ZAI_API_KEY: "shell-token" },
+          observe: false,
+        });
+
+        expect(snapshot.config.gateway?.auth?.token).toBe("config-token");
+        expect(process.env.ZAI_API_KEY).toBe("shell-token");
+        expect(process.env.Z_AI_API_KEY).toBeUndefined();
+      });
+    });
+  });
+
+  it("resolves config aliases from a higher-precedence canonical value in isolated snapshots", async () => {
+    await withTempHome(async (home) => {
+      await withEnvAsync({ ZAI_API_KEY: "invocation-token", Z_AI_API_KEY: undefined }, async () => {
+        await writeOpenClawConfig(home, {
+          env: { vars: { Z_AI_API_KEY: "config-token" } },
+          gateway: { auth: { mode: "token", token: "${Z_AI_API_KEY}" }, mode: "local" },
+        });
+
+        const snapshot = await readConfigFileSnapshot({
+          isolateEnv: true,
+          observe: false,
+        });
+
+        expect(snapshot.config.gateway?.auth?.token).toBe("invocation-token");
+        expect(process.env.ZAI_API_KEY).toBe("invocation-token");
+        expect(process.env.Z_AI_API_KEY).toBeUndefined();
+      });
+    });
+  });
+
+  it("can read best-effort config without applying env vars or recording observation", async () => {
+    await withTempHome(async (home) => {
+      const key = "OPENCLAW_ISOLATED_BEST_EFFORT_CONFIG_TEST";
+      await withEnvAsync({ [key]: undefined }, async () => {
+        await writeOpenClawConfig(home, {
+          env: { vars: { [key]: "from-config" } },
+          gateway: { mode: "local" },
+        });
+
+        const config = await readBestEffortConfig({ isolateEnv: true, observe: false });
+
+        expect(config.gateway?.mode).toBe("local");
+        expect(process.env[key]).toBeUndefined();
+        await expect(fs.stat(`${home}/.openclaw/logs/config-health.json`)).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      });
+    });
+  });
+
+  it("preserves Windows case-insensitive env lookup in isolated reads", async () => {
+    await withTempHome(async (home) => {
+      const mixedCaseKey = "OpenClaw_Config_Path";
+      const customConfigPath = `${home}/custom-openclaw.json`;
+      await withEnvAsync({ OPENCLAW_CONFIG_PATH: undefined }, async () => {
+        await withEnvAsync({ [mixedCaseKey]: customConfigPath }, async () => {
+          const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+          try {
+            await fs.writeFile(
+              customConfigPath,
+              `${JSON.stringify({ gateway: { mode: "local" } }, null, 2)}\n`,
+              "utf-8",
+            );
+
+            const snapshot = await readConfigFileSnapshot({ isolateEnv: true, observe: false });
+
+            expect(snapshot.exists).toBe(true);
+            expect(snapshot.path).toBe(customConfigPath);
+          } finally {
+            platformSpy.mockRestore();
+          }
+        });
+      });
     });
   });
 

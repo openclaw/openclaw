@@ -4,10 +4,10 @@
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { hasAcceptedSessionSpawn } from "./accepted-session-spawn.js";
+import { sanitizeForConsole } from "./console-sanitize.js";
 import {
   buildApiErrorObservationFields,
   buildTextObservationFields,
-  sanitizeForConsole,
   shouldSuppressRawErrorConsoleSuffix,
 } from "./embedded-agent-error-observation.js";
 import {
@@ -184,38 +184,9 @@ export function handleAgentEnd(
         : {}),
       ...(typeof terminalAborted === "boolean" ? { aborted: terminalAborted } : {}),
     };
-    if (isError) {
-      emitAgentEvent({
-        runId: ctx.params.runId,
-        ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
-        ...(ctx.params.sessionId ? { sessionId: ctx.params.sessionId } : {}),
-        ...(ctx.params.agentId ? { agentId: ctx.params.agentId } : {}),
-        ...(ctx.params.lifecycleGeneration
-          ? { lifecycleGeneration: ctx.params.lifecycleGeneration }
-          : {}),
-        stream: "lifecycle",
-        data: {
-          phase: "error",
-          error: lifecycleErrorText ?? GENERIC_ASSISTANT_ERROR_TEXT,
-          ...terminalMeta,
-          ...(livenessState ? { livenessState } : {}),
-          ...(replayInvalid ? { replayInvalid } : {}),
-          endedAt: Date.now(),
-        },
-      });
-      void ctx.params.onAgentEvent?.({
-        stream: "lifecycle",
-        data: {
-          phase: "error",
-          error: lifecycleErrorText ?? GENERIC_ASSISTANT_ERROR_TEXT,
-          ...terminalMeta,
-          ...(livenessState ? { livenessState } : {}),
-          ...(replayInvalid ? { replayInvalid } : {}),
-        },
-      });
-      return;
-    }
-    const successPhase = ctx.params.terminalLifecyclePhase ?? "end";
+    const phase =
+      ctx.params.terminalLifecyclePhase === "finishing" ? "finishing" : isError ? "error" : "end";
+    const errorData = isError ? { error: lifecycleErrorText ?? GENERIC_ASSISTANT_ERROR_TEXT } : {};
     emitAgentEvent({
       runId: ctx.params.runId,
       ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
@@ -226,7 +197,8 @@ export function handleAgentEnd(
         : {}),
       stream: "lifecycle",
       data: {
-        phase: successPhase,
+        phase,
+        ...errorData,
         ...terminalMeta,
         ...(livenessState ? { livenessState } : {}),
         ...(replayInvalid ? { replayInvalid } : {}),
@@ -236,7 +208,8 @@ export function handleAgentEnd(
     void ctx.params.onAgentEvent?.({
       stream: "lifecycle",
       data: {
-        phase: successPhase,
+        phase,
+        ...errorData,
         ...terminalMeta,
         ...(livenessState ? { livenessState } : {}),
         ...(replayInvalid ? { replayInvalid } : {}),

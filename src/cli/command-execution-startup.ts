@@ -1,4 +1,5 @@
 // CLI startup context, banner/log presentation, and bootstrap orchestration.
+import type { ConfigFileSnapshot } from "../config/types.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
@@ -65,6 +66,7 @@ export async function ensureCliExecutionBootstrap(params: {
   commandPath: string[];
   startupPolicy: CliStartupPolicy;
   allowInvalid?: boolean;
+  beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
   loadPlugins?: boolean;
   skipConfigGuard?: boolean;
 }) {
@@ -73,6 +75,9 @@ export async function ensureCliExecutionBootstrap(params: {
     commandPath: params.commandPath,
     suppressDoctorStdout: params.startupPolicy.suppressDoctorStdout,
     allowInvalid: params.allowInvalid,
+    ...(params.beforeStateMigrations
+      ? { beforeStateMigrations: params.beforeStateMigrations }
+      : {}),
     loadPlugins: params.loadPlugins ?? params.startupPolicy.loadPlugins,
     pluginRegistry: params.startupPolicy.pluginRegistry,
     skipConfigGuard: params.skipConfigGuard ?? params.startupPolicy.skipConfigGuard,

@@ -19,9 +19,9 @@ export const MIGRATION_SKILL_SELECTION_TOGGLE_ALL_OFF = MIGRATION_SELECTION_TOGG
 
 type InteractiveMigrationSelection = { action: "select"; selectedItemIds: Set<string> };
 /** Interactive skill selection result consumed by the apply flow. */
-export type InteractiveMigrationSkillSelection = InteractiveMigrationSelection;
+type InteractiveMigrationSkillSelection = InteractiveMigrationSelection;
 /** Interactive plugin selection result consumed by the apply flow. */
-export type InteractiveMigrationPluginSelection = InteractiveMigrationSelection;
+type InteractiveMigrationPluginSelection = InteractiveMigrationSelection;
 
 function normalizeSelectionRef(value: string): string {
   return value.trim().toLowerCase();

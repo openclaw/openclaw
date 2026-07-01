@@ -5,6 +5,7 @@
  * snapshots, DOM text, and selector lookup on top of the CDP socket helpers.
  */
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import {
   appendCdpPath,
@@ -63,20 +64,6 @@ export function normalizeCdpWsUrl(wsUrl: string, cdpUrl: string): string {
     }
   }
   return ws.toString();
-}
-
-/** Capture a PNG screenshot through CDP. */
-export async function captureScreenshotPng(opts: {
-  wsUrl: string;
-  fullPage?: boolean;
-  timeoutMs?: number;
-}): Promise<Buffer> {
-  return await captureScreenshot({
-    wsUrl: opts.wsUrl,
-    fullPage: opts.fullPage,
-    format: "png",
-    timeoutMs: opts.timeoutMs,
-  });
 }
 
 /** Capture a PNG or JPEG screenshot through CDP, optionally full-page. */
@@ -311,56 +298,6 @@ async function prepareCdpPageSession(send: CdpSendFn, sessionId?: string): Promi
     send("Accessibility.enable", undefined, sessionId).catch(() => {}),
   ]);
   await send("Runtime.runIfWaitingForDebugger", undefined, sessionId).catch(() => {});
-}
-
-/** Runtime.evaluate remote-object subset used by CDP helpers. */
-export type CdpRemoteObject = {
-  type: string;
-  subtype?: string;
-  value?: unknown;
-  description?: string;
-  unserializableValue?: string;
-  preview?: unknown;
-};
-
-/** Exception details surfaced from CDP Runtime.evaluate. */
-export type CdpExceptionDetails = {
-  text?: string;
-  lineNumber?: number;
-  columnNumber?: number;
-  exception?: CdpRemoteObject;
-  stackTrace?: unknown;
-};
-
-/** Evaluate JavaScript in a CDP target and return by value when possible. */
-export async function evaluateJavaScript(opts: {
-  wsUrl: string;
-  expression: string;
-  awaitPromise?: boolean;
-  returnByValue?: boolean;
-}): Promise<{
-  result: CdpRemoteObject;
-  exceptionDetails?: CdpExceptionDetails;
-}> {
-  return await withCdpSocket(opts.wsUrl, async (send) => {
-    await send("Runtime.enable").catch(() => {});
-    const evaluated = (await send("Runtime.evaluate", {
-      expression: opts.expression,
-      awaitPromise: Boolean(opts.awaitPromise),
-      returnByValue: opts.returnByValue ?? true,
-      userGesture: true,
-      includeCommandLineAPI: true,
-    })) as {
-      result?: CdpRemoteObject;
-      exceptionDetails?: CdpExceptionDetails;
-    };
-
-    const result = evaluated?.result;
-    if (!result) {
-      throw new Error("CDP Runtime.evaluate returned no result");
-    }
-    return { result, exceptionDetails: evaluated.exceptionDetails };
-  });
 }
 
 /** Normalized accessibility tree node returned by ARIA snapshots. */
@@ -684,7 +621,7 @@ async function findCursorInteractiveElements(
           }
           el.setAttribute("${attr}", String(out.length));
           out.push({
-            text: String(el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 100),
+            text: String(el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 101),
             tagName,
             hasCursorPointer,
             hasOnClick,
@@ -701,7 +638,10 @@ async function findCursorInteractiveElements(
     sessionId,
   ).catch(() => null)) as { result?: { value?: unknown } } | null;
   const entries = Array.isArray(evaluated?.result?.value)
-    ? (evaluated.result.value as CursorInteractiveInfo[])
+    ? (evaluated.result.value as CursorInteractiveInfo[]).map((entry) => {
+        entry.text = truncateUtf16Safe(entry.text, 100);
+        return entry;
+      })
     : [];
   if (!entries.length) {
     return new Map();
@@ -843,6 +783,7 @@ async function buildCdpRoleSnapshot(params: {
 
   const counts = new Map<string, number>();
   const refsByKey = new Map<string, string[]>();
+  const nodesByRef = new Map<string, RoleTreeNode>();
   const refs: Record<string, CdpRoleRef> = {};
   for (const node of tree) {
     const role = node.role.toLowerCase();
@@ -861,7 +802,13 @@ async function buildCdpRoleSnapshot(params: {
     params.nextRef.value += 1;
     node.ref = ref;
     node.nth = nth;
-    refsByKey.set(key, [...(refsByKey.get(key) ?? []), ref]);
+    const refsForKey = refsByKey.get(key);
+    if (refsForKey) {
+      refsForKey.push(ref);
+    } else {
+      refsByKey.set(key, [ref]);
+    }
+    nodesByRef.set(ref, node);
     refs[ref] = {
       role,
       ...(node.name ? { name: node.name } : {}),
@@ -877,7 +824,7 @@ async function buildCdpRoleSnapshot(params: {
     const ref = refList[0];
     if (ref) {
       delete refs[ref]?.nth;
-      const node = tree.find((entry) => entry.ref === ref);
+      const node = nodesByRef.get(ref);
       if (node) {
         delete node.nth;
       }
@@ -979,200 +926,3 @@ export async function snapshotRoleViaCdp(opts: {
     { commandTimeoutMs: opts.timeoutMs ?? 5000 },
   );
 }
-
-/** Capture a raw DOM snapshot through CDP. */
-export async function snapshotDom(opts: {
-  wsUrl: string;
-  limit?: number;
-  maxTextChars?: number;
-}): Promise<{
-  nodes: DomSnapshotNode[];
-}> {
-  const limit = resolveIntegerOption(opts.limit, 800, { min: 1, max: 5000 });
-  const maxTextChars = resolveIntegerOption(opts.maxTextChars, 220, { min: 0, max: 5000 });
-
-  const expression = `(() => {
-    const maxNodes = ${JSON.stringify(limit)};
-    const maxText = ${JSON.stringify(maxTextChars)};
-    const lower = (value) => String(value || "").toLocaleLowerCase();
-    const nodes = [];
-    const root = document.documentElement;
-    if (!root) return { nodes };
-    const stack = [{ el: root, depth: 0, parentRef: null }];
-    while (stack.length && nodes.length < maxNodes) {
-      const cur = stack.pop();
-      const el = cur.el;
-      if (!el || el.nodeType !== 1) continue;
-      const ref = "n" + String(nodes.length + 1);
-      const tag = lower(el.tagName);
-      const id = el.id ? String(el.id) : undefined;
-      const className = el.className ? String(el.className).slice(0, 300) : undefined;
-      const role = el.getAttribute && el.getAttribute("role") ? String(el.getAttribute("role")) : undefined;
-      const name = el.getAttribute && el.getAttribute("aria-label") ? String(el.getAttribute("aria-label")) : undefined;
-      let text = "";
-      try { text = String(el.innerText || "").trim(); } catch {}
-      if (maxText && text.length > maxText) text = text.slice(0, maxText) + "…";
-      const href = (el.href !== undefined && el.href !== null) ? String(el.href) : undefined;
-      const type = (el.type !== undefined && el.type !== null) ? String(el.type) : undefined;
-      const value = (el.value !== undefined && el.value !== null) ? String(el.value).slice(0, 500) : undefined;
-      nodes.push({
-        ref,
-        parentRef: cur.parentRef,
-        depth: cur.depth,
-        tag,
-        ...(id ? { id } : {}),
-        ...(className ? { className } : {}),
-        ...(role ? { role } : {}),
-        ...(name ? { name } : {}),
-        ...(text ? { text } : {}),
-        ...(href ? { href } : {}),
-        ...(type ? { type } : {}),
-        ...(value ? { value } : {}),
-      });
-      const children = el.children ? Array.from(el.children) : [];
-      for (let i = children.length - 1; i >= 0; i--) {
-        stack.push({ el: children[i], depth: cur.depth + 1, parentRef: ref });
-      }
-    }
-    return { nodes };
-  })()`;
-
-  const evaluated = await evaluateJavaScript({
-    wsUrl: opts.wsUrl,
-    expression,
-    awaitPromise: true,
-    returnByValue: true,
-  });
-  const value = evaluated.result?.value;
-  if (!value || typeof value !== "object") {
-    return { nodes: [] };
-  }
-  const nodes = (value as { nodes?: unknown }).nodes;
-  return { nodes: Array.isArray(nodes) ? (nodes as DomSnapshotNode[]) : [] };
-}
-
-/** Simplified DOM node returned by DOM snapshot helpers. */
-export type DomSnapshotNode = {
-  ref: string;
-  parentRef: string | null;
-  depth: number;
-  tag: string;
-  id?: string;
-  className?: string;
-  role?: string;
-  name?: string;
-  text?: string;
-  href?: string;
-  type?: string;
-  value?: string;
-};
-
-/** Extract visible DOM text from a CDP target. */
-export async function getDomText(opts: {
-  wsUrl: string;
-  format: "html" | "text";
-  maxChars?: number;
-  selector?: string;
-}): Promise<{ text: string }> {
-  const maxChars = resolveIntegerOption(opts.maxChars, 200_000, { min: 0, max: 5_000_000 });
-  const selectorExpr = opts.selector ? JSON.stringify(opts.selector) : "null";
-  const expression = `(() => {
-    const fmt = ${JSON.stringify(opts.format)};
-    const max = ${JSON.stringify(maxChars)};
-    const sel = ${selectorExpr};
-    const pick = sel ? document.querySelector(sel) : null;
-    let out = "";
-    if (fmt === "text") {
-      const el = pick || document.body || document.documentElement;
-      try { out = String(el && el.innerText ? el.innerText : ""); } catch { out = ""; }
-    } else {
-      const el = pick || document.documentElement;
-      try { out = String(el && el.outerHTML ? el.outerHTML : ""); } catch { out = ""; }
-    }
-    if (max && out.length > max) out = out.slice(0, max) + "\\n<!-- …truncated… -->";
-    return out;
-  })()`;
-
-  const evaluated = await evaluateJavaScript({
-    wsUrl: opts.wsUrl,
-    expression,
-    awaitPromise: true,
-    returnByValue: true,
-  });
-  const textValue = (evaluated.result?.value ?? "") as unknown;
-  const text =
-    typeof textValue === "string"
-      ? textValue
-      : typeof textValue === "number" || typeof textValue === "boolean"
-        ? String(textValue)
-        : "";
-  return { text };
-}
-
-/** Query a selector in a CDP target and return matching node metadata. */
-export async function querySelector(opts: {
-  wsUrl: string;
-  selector: string;
-  limit?: number;
-  maxTextChars?: number;
-  maxHtmlChars?: number;
-}): Promise<{
-  matches: QueryMatch[];
-}> {
-  const limit = resolveIntegerOption(opts.limit, 20, { min: 1, max: 200 });
-  const maxText = resolveIntegerOption(opts.maxTextChars, 500, { min: 0, max: 5000 });
-  const maxHtml = resolveIntegerOption(opts.maxHtmlChars, 1500, { min: 0, max: 20_000 });
-
-  const expression = `(() => {
-    const sel = ${JSON.stringify(opts.selector)};
-    const lim = ${JSON.stringify(limit)};
-    const maxText = ${JSON.stringify(maxText)};
-    const maxHtml = ${JSON.stringify(maxHtml)};
-    const lower = (value) => String(value || "").toLocaleLowerCase();
-    const els = Array.from(document.querySelectorAll(sel)).slice(0, lim);
-    return els.map((el, i) => {
-      const tag = lower(el.tagName);
-      const id = el.id ? String(el.id) : undefined;
-      const className = el.className ? String(el.className).slice(0, 300) : undefined;
-      let text = "";
-      try { text = String(el.innerText || "").trim(); } catch {}
-      if (maxText && text.length > maxText) text = text.slice(0, maxText) + "…";
-      const value = (el.value !== undefined && el.value !== null) ? String(el.value).slice(0, 500) : undefined;
-      const href = (el.href !== undefined && el.href !== null) ? String(el.href) : undefined;
-      let outerHTML = "";
-      try { outerHTML = String(el.outerHTML || ""); } catch {}
-      if (maxHtml && outerHTML.length > maxHtml) outerHTML = outerHTML.slice(0, maxHtml) + "…";
-      return {
-        index: i + 1,
-        tag,
-        ...(id ? { id } : {}),
-        ...(className ? { className } : {}),
-        ...(text ? { text } : {}),
-        ...(value ? { value } : {}),
-        ...(href ? { href } : {}),
-        ...(outerHTML ? { outerHTML } : {}),
-      };
-    });
-  })()`;
-
-  const evaluated = await evaluateJavaScript({
-    wsUrl: opts.wsUrl,
-    expression,
-    awaitPromise: true,
-    returnByValue: true,
-  });
-  const matches = evaluated.result?.value;
-  return { matches: Array.isArray(matches) ? (matches as QueryMatch[]) : [] };
-}
-
-/** Selector match metadata returned by querySelector. */
-export type QueryMatch = {
-  index: number;
-  tag: string;
-  id?: string;
-  className?: string;
-  text?: string;
-  value?: string;
-  href?: string;
-  outerHTML?: string;
-};

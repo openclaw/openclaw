@@ -6,7 +6,13 @@
  */
 
 import type { Server } from "node:http";
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
+import { toErrorObject } from "../../../infra/errors.js";
 import {
+  generateOAuthState,
+  generatePKCE,
+  oauthErrorHtml,
+  oauthSuccessHtml,
   parseOAuthAuthorizationInput,
   resolveOAuthTokenExpiresAt,
 } from "../../../plugin-sdk/provider-oauth-runtime.js";
@@ -16,8 +22,6 @@ import {
   throwIfOAuthLoginAborted,
   withOAuthLoginAbort,
 } from "./abort.js";
-import { oauthErrorHtml, oauthSuccessHtml } from "./oauth-page.js";
-import { generateOAuthState, generatePKCE } from "./pkce.js";
 import type {
   OAuthCredentials,
   OAuthLoginCallbacks,
@@ -49,6 +53,10 @@ const CALLBACK_PATH = "/callback";
 const REDIRECT_URI = `http://localhost:${CALLBACK_PORT}${CALLBACK_PATH}`;
 const SCOPES =
   "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
+
+/** Max response body bytes for Anthropic OAuth token endpoint (16 MiB). */
+const OAUTH_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+
 async function getNodeApis(): Promise<NodeApis> {
   if (nodeApis) {
     return nodeApis;
@@ -230,7 +238,10 @@ async function postJson(
     signal: buildOAuthRequestSignal({ signal: options.signal, timeoutMs }),
   });
 
-  const responseBody = await response.text();
+  const buffer = await readResponseWithLimit(response, OAUTH_RESPONSE_MAX_BYTES, {
+    onOverflow: ({ size }) => new Error(`Anthropic OAuth response too large: ${size} bytes`),
+  });
+  const responseBody = new TextDecoder().decode(buffer);
 
   if (!response.ok) {
     throw new Error(
@@ -357,7 +368,7 @@ export async function loginAnthropic(options: {
       if (!code) {
         await withOAuthLoginAbort(manualPromise, options.signal, server.cancelWait);
         if (manualError) {
-          throw toLintErrorObject(manualError, "Non-Error thrown");
+          throw toErrorObject(manualError, "Non-Error thrown");
         }
         if (manualInput) {
           const parsed = parseOAuthAuthorizationInput(manualInput);
@@ -460,17 +471,3 @@ export const anthropicOAuthProvider: OAuthProviderInterface = {
     return credentials.access;
   },
 };
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

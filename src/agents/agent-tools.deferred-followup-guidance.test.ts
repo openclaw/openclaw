@@ -3,8 +3,10 @@
  * Protects the model-facing text selected after tool filtering.
  */
 import { describe, expect, it } from "vitest";
+import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tools.js";
 import { applyDeferredFollowupToolDescriptions } from "./agent-tools.deferred-followup.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { getChannelAgentToolMeta, setChannelAgentToolMeta } from "./channel-tool-metadata.js";
 
 function findToolDescription(toolName: string, includeCron: boolean) {
   const tools = applyDeferredFollowupToolDescriptions([
@@ -44,5 +46,22 @@ describe("createOpenClawCodingTools deferred follow-up guidance", () => {
     expect(process.description).toBe(
       "Manage running exec sessions for commands already started: list, poll, log, write, send-keys, submit, paste, kill. Use poll/log when you need status, logs, quiet-success confirmation, or completion confirmation when automatic completion wake is unavailable. Use poll/log also for input-wait hints. Use write/send-keys/submit/paste/kill for input or intervention.",
     );
+  });
+
+  it("preserves ownership metadata when replacing process descriptions", () => {
+    const processTool = {
+      name: "process",
+      description: "plugin process",
+    } as AnyAgentTool;
+    setPluginToolMeta(processTool, { pluginId: "example", optional: false });
+    setChannelAgentToolMeta(processTool as never, { channelId: "example-channel" });
+
+    const [updated] = applyDeferredFollowupToolDescriptions([processTool]);
+
+    expect(updated).not.toBe(processTool);
+    expect(getPluginToolMeta(updated)).toEqual({ pluginId: "example", optional: false });
+    expect(getChannelAgentToolMeta(updated as never)).toEqual({
+      channelId: "example-channel",
+    });
   });
 });

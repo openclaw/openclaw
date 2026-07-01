@@ -471,6 +471,7 @@ describe("active-memory plugin", () => {
     };
     expect(command.name).toBe("active-memory");
     expect(command.acceptsArgs).toBe(true);
+    expect(command.exposeSenderIsOwner).toBe(true);
 
     const offResult = await command.handler({
       channel: "webchat",
@@ -568,6 +569,7 @@ describe("active-memory plugin", () => {
     const offResult = await command.handler({
       channel: "webchat",
       isAuthorizedSender: true,
+      senderIsOwner: true,
       args: "off --global",
       commandBody: "/active-memory off --global",
       config: {},
@@ -617,6 +619,7 @@ describe("active-memory plugin", () => {
     const onResult = await command.handler({
       channel: "webchat",
       isAuthorizedSender: true,
+      senderIsOwner: true,
       args: "on --global",
       commandBody: "/active-memory on --global",
       config: {},
@@ -650,6 +653,30 @@ describe("active-memory plugin", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
   });
 
+  it("blocks external non-owner callers from changing global active-memory config", async () => {
+    const command = registeredCommands["active-memory"];
+
+    for (const args of ["off --global", "on --global"]) {
+      const result = await command.handler({
+        channel: "telegram",
+        isAuthorizedSender: true,
+        senderIsOwner: false,
+        args,
+        commandBody: `/active-memory ${args}`,
+        config: {},
+        requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
+        detachConversationBinding: async () => ({ removed: false }),
+        getCurrentConversationBinding: async () => null,
+      });
+
+      expect(result.text).toContain(
+        "global enable/disable changes require owner or operator.admin",
+      );
+    }
+
+    expect(api.runtime.config.mutateConfigFile).not.toHaveBeenCalled();
+  });
+
   it("blocks gateway callers without admin scope from changing global active-memory config", async () => {
     const command = registeredCommands["active-memory"];
 
@@ -674,7 +701,9 @@ describe("active-memory plugin", () => {
         getCurrentConversationBinding: async () => null,
       });
 
-      expect(result.text).toContain("global enable/disable changes require operator.admin");
+      expect(result.text).toContain(
+        "global enable/disable changes require owner or operator.admin",
+      );
     }
 
     expect(api.runtime.config.mutateConfigFile).not.toHaveBeenCalled();
@@ -842,6 +871,79 @@ describe("active-memory plugin", () => {
 
     expect(result).toBeUndefined();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("does not run for dreaming-narrative cron session keys", async () => {
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:dreaming-narrative-light-abc123",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("does not run when a session id resolves to a dreaming-narrative cron session key", async () => {
+    hoisted.sessionStore["agent:main:dreaming-narrative-light-abc123"] = {
+      sessionId: "dreaming-session",
+      updatedAt: 1,
+    };
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionId: "dreaming-session",
+        messageProvider: "webchat",
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
+  it("allows non-canonical session keys that merely contain the dreaming-narrative substring", async () => {
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:webchat:dreaming-narrative-room",
+        messageProvider: "webchat",
+      },
+    );
+
+    // Real session keys that happen to contain "dreaming-narrative" in a
+    // non-canonical way (not {light|rem|deep} phase suffix) must remain eligible.
+    // The session key "agent:main:webchat:dreaming-narrative-room" is a real chat
+    // whose topic happens to contain the string — not a dreaming cron key.
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    expect(result).not.toBeUndefined();
+  });
+
+  it("allows real webchat session keys whose peer id starts with a phased dreaming-narrative prefix", async () => {
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:webchat:dreaming-narrative-light-room",
+        messageProvider: "webchat",
+      },
+    );
+
+    // A real webchat session key whose peer id begins with a phased dreaming-narrative
+    // phrase must not be excluded. Only the canonical bare or agent-prefixed key
+    // shape (dreaming-narrative-<phase>-<hash> directly after agentId or bare) should
+    // be rejected — not the same phrase appearing deeper in the key as a peer id.
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    expect(result).not.toBeUndefined();
   });
 
   it("defaults to direct-style sessions only", async () => {
@@ -2781,16 +2883,16 @@ describe("active-memory plugin", () => {
     );
 
     const prependContext = requirePrependContext(result);
-    expect(prependContext).toContain("alpha beta gamma delta epsilon zeta");
+    expect(prependContext).toContain("alpha beta gamma delta epsilon zeta eta…");
     expect(prependContext).toContain("<active_memory_plugin>");
     expect(prependContext).not.toContain("theta");
     expect(prependContext).not.toContain("ignore this user text");
     const lines = getActiveMemoryLines(sessionKey);
     expectLinesToContain(lines, "🧩 Active Memory: status=timeout_partial");
-    expectLinesToContain(lines, "summary=35 chars");
+    expectLinesToContain(lines, "summary=40 chars");
     expectLinesToContain(
       lines,
-      "🔎 Active Memory Debug: timeout_partial: 35 chars recovered (not persisted)",
+      "🔎 Active Memory Debug: timeout_partial: 40 chars recovered (not persisted)",
     );
     expect(lines.join("\n")).not.toContain("alpha beta gamma delta");
   });
@@ -4316,7 +4418,7 @@ describe("active-memory plugin", () => {
       sessionId: "s-empty-search-completed-output",
       updatedAt: 0,
     };
-    runEmbeddedAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+    runEmbeddedAgent.mockImplementation(async (params: { sessionFile: string }) => {
       await writeTranscriptJsonl(params.sessionFile, [
         {
           message: {
@@ -5256,9 +5358,26 @@ describe("active-memory plugin", () => {
 
     const prependContext = requirePrependContext(result);
     expect(prependContext).toContain("alpha beta gamma");
-    expect(prependContext).toContain("alpha beta gamma delta epsilon");
+    expect(prependContext).toContain("alpha beta gamma delta epsilon…");
     expect(prependContext).not.toContain("zetalo");
     expect(prependContext).not.toContain("zetalongword");
+  });
+
+  it("asks recall subagents to mark mutable operational facts stale unless source status is current", async () => {
+    await hooks.before_prompt_build(
+      { prompt: "is autonomous pickup running?", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:main",
+        messageProvider: "webchat",
+      },
+    );
+
+    const prompt = lastEmbeddedPrompt();
+    expect(prompt).toContain("Mutable operational facts");
+    expect(prompt).toContain("source timestamp");
+    expect(prompt).toContain("verify live");
   });
 
   it("uses the configured maxSummaryChars value in the subagent prompt", async () => {

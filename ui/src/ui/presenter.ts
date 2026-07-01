@@ -10,14 +10,6 @@ import {
 } from "./format.ts";
 import type { CronJob, GatewaySessionRow, PresenceEntry } from "./types.ts";
 
-export function formatPresenceSummary(entry: PresenceEntry): string {
-  const host = entry.host ?? "unknown";
-  const ip = entry.ip ? `(${entry.ip})` : "";
-  const mode = entry.mode ?? "";
-  const version = entry.version ?? "";
-  return `${host} ${ip} ${mode} ${version}`.trim();
-}
-
 export function formatPresenceAge(entry: PresenceEntry): string {
   const ts = entry.ts ?? null;
   return ts ? formatRelativeTimestamp(ts) : t("common.na");
@@ -70,6 +62,11 @@ export function formatCronSchedule(job: CronJob) {
   }
   if (s.kind === "every") {
     return `Every ${formatDurationHuman(s.everyMs)}`;
+  }
+  if (s.kind === "on-exit") {
+    // on-exit jobs carry a watched command (+ optional cwd), not a cron expr;
+    // without this branch they fall through and render "Cron undefined".
+    return `On exit: ${s.command}${s.cwd ? ` (cwd: ${s.cwd})` : ""}`;
   }
   return `Cron ${s.expr}${s.tz ? ` (${s.tz})` : ""}`;
 }

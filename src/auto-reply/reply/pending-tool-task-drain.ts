@@ -2,7 +2,7 @@
 const DEFAULT_PENDING_TOOL_DRAIN_IDLE_TIMEOUT_MS = 30_000;
 
 /** Result from waiting for pending tool tasks before final delivery. */
-export type PendingToolTaskDrainResult =
+type PendingToolTaskDrainResult =
   | { kind: "settled" }
   | { kind: "timeout"; remaining: number };
 

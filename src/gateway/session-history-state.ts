@@ -10,12 +10,13 @@ import {
   attachOpenClawTranscriptMeta,
   readRecentSessionMessagesWithStatsAsync,
   readSessionMessagesWithSourceAsync,
-} from "./session-utils.js";
+} from "./session-transcript-readers.js";
 
 // Session history state owns the SSE-friendly projection of transcript JSONL:
 // raw messages are projected for display, paginated by transcript seq, then
 // incrementally updated until cursor/window semantics require a full refresh.
 type SessionHistoryTranscriptMeta = {
+  idempotencyKey?: string;
   seq?: number;
 };
 
@@ -42,9 +43,11 @@ type InlineSessionHistoryAppend = {
 };
 
 type SessionHistoryTranscriptTarget = {
+  agentId?: string;
+  sessionEntry?: { sessionFile?: string; sessionId?: string };
   sessionId: string;
+  sessionKey: string;
   storePath?: string;
-  sessionFile?: string;
 };
 
 type SessionHistoryRawSnapshot = {
@@ -53,6 +56,14 @@ type SessionHistoryRawSnapshot = {
   totalRawMessages?: number;
   transcriptPath?: string;
 };
+
+function readMessageIdempotencyKey(message: unknown): string | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const value = (message as Record<string, unknown>).idempotencyKey;
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
 
 /** Computes an oversized raw transcript tail window for projected chat history. */
 export function resolveSessionHistoryTailReadOptions(limit: number): {
@@ -256,8 +267,10 @@ export class SessionHistorySseState {
     } else {
       this.rawTranscriptSeq += 1;
     }
+    const idempotencyKey = readMessageIdempotencyKey(update.message);
     const nextMessage = attachOpenClawTranscriptMeta(update.message, {
       ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
+      ...(idempotencyKey ? { idempotencyKey } : {}),
       seq: this.rawTranscriptSeq,
     });
     // Projection can split, drop, or rewrite raw transcript messages. When one
@@ -361,9 +374,13 @@ export class SessionHistorySseState {
   private async readRawSnapshotAsync(): Promise<SessionHistoryRawSnapshot> {
     if (this.cursor === undefined && typeof this.limit === "number") {
       const snapshot = await readRecentSessionMessagesWithStatsAsync(
-        this.target.sessionId,
-        this.target.storePath,
-        this.target.sessionFile,
+        {
+          agentId: this.target.agentId,
+          sessionEntry: this.target.sessionEntry,
+          sessionId: this.target.sessionId,
+          sessionKey: this.target.sessionKey,
+          storePath: this.target.storePath,
+        },
         {
           ...resolveSessionHistoryTailReadOptions(this.limit),
           allowResetArchiveFallback: true,
@@ -377,9 +394,13 @@ export class SessionHistorySseState {
       };
     }
     const snapshot = await readSessionMessagesWithSourceAsync(
-      this.target.sessionId,
-      this.target.storePath,
-      this.target.sessionFile,
+      {
+        agentId: this.target.agentId,
+        sessionEntry: this.target.sessionEntry,
+        sessionId: this.target.sessionId,
+        sessionKey: this.target.sessionKey,
+        storePath: this.target.storePath,
+      },
       {
         mode: "full",
         reason: "session history cursor pagination",

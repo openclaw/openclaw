@@ -5,8 +5,99 @@ import Testing
 
 @Suite(.serialized)
 struct DeviceIdentityStoreTests {
-    @Test("loads TypeScript PEM identity schema without rewriting or regenerating")
-    func loadsTypeScriptPEMIdentitySchema() throws {
+    @Test
+    func `state directory override wins over shared app group storage`() {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let overrideURL = tempDir.appendingPathComponent("override", isDirectory: true)
+        let legacyURL = tempDir.appendingPathComponent("legacy", isDirectory: true)
+        let sharedURL = tempDir.appendingPathComponent("shared", isDirectory: true)
+
+        let selected = DeviceIdentityPaths.stateDirURL(
+            overrideURL: overrideURL,
+            legacyStateDirURL: legacyURL,
+            appGroupStateDirURL: sharedURL,
+            temporaryDirectory: tempDir)
+
+        #expect(selected == overrideURL)
+        #expect(!FileManager.default.fileExists(atPath: sharedURL.path))
+    }
+
+    @Test
+    func `shared app group storage wins over legacy app support storage`() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let legacyURL = tempDir.appendingPathComponent("legacy", isDirectory: true)
+        let sharedURL = tempDir.appendingPathComponent("shared", isDirectory: true)
+        let legacyIdentityURL = legacyURL.appendingPathComponent("identity", isDirectory: true)
+        let legacyDeviceURL = legacyIdentityURL.appendingPathComponent("device.json", isDirectory: false)
+        let sharedIdentityURL = sharedURL.appendingPathComponent("identity", isDirectory: true)
+        let sharedDeviceURL = sharedIdentityURL.appendingPathComponent("device.json", isDirectory: false)
+        try FileManager.default.createDirectory(at: legacyIdentityURL, withIntermediateDirectories: true)
+        try "legacy-device\n".write(to: legacyDeviceURL, atomically: true, encoding: .utf8)
+
+        let selected = DeviceIdentityPaths.stateDirURL(
+            overrideURL: nil,
+            legacyStateDirURL: legacyURL,
+            appGroupStateDirURL: sharedURL,
+            temporaryDirectory: tempDir)
+
+        #expect(selected == sharedURL)
+        #expect(!FileManager.default.fileExists(atPath: sharedDeviceURL.path))
+    }
+
+    @Test
+    func `share extension profile uses separate identity and auth files`() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
+        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
+        defer {
+            if let previousStateDir {
+                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
+            } else {
+                unsetenv("OPENCLAW_STATE_DIR")
+            }
+            try? FileManager.default.removeItem(at: tempDir)
+        }
+
+        let primaryIdentity = DeviceIdentityStore.loadOrCreate()
+        let shareIdentity = DeviceIdentityStore.loadOrCreate(profile: .shareExtension)
+        _ = DeviceAuthStore.storeToken(
+            deviceId: primaryIdentity.deviceId,
+            role: "node",
+            token: "primary-token")
+        _ = DeviceAuthStore.storeToken(
+            deviceId: shareIdentity.deviceId,
+            role: "node",
+            token: "share-token",
+            profile: .shareExtension)
+
+        let identityDir = tempDir.appendingPathComponent("identity", isDirectory: true)
+        #expect(primaryIdentity.deviceId != shareIdentity.deviceId)
+        #expect(FileManager.default.fileExists(atPath: identityDir.appendingPathComponent("device.json").path))
+        #expect(FileManager.default.fileExists(atPath: identityDir.appendingPathComponent("share-device.json").path))
+        #expect(FileManager.default.fileExists(atPath: identityDir.appendingPathComponent("device-auth.json").path))
+        #expect(FileManager.default
+            .fileExists(atPath: identityDir.appendingPathComponent("share-device-auth.json").path))
+        #expect(DeviceAuthStore.loadToken(deviceId: primaryIdentity.deviceId, role: "node")?.token == "primary-token")
+        #expect(
+            DeviceAuthStore
+                .loadToken(deviceId: shareIdentity.deviceId, role: "node", profile: .shareExtension)?.token ==
+                "share-token")
+
+        DeviceAuthStore.clearAll(profile: .shareExtension)
+
+        #expect(DeviceAuthStore.loadToken(deviceId: primaryIdentity.deviceId, role: "node")?.token == "primary-token")
+        #expect(DeviceAuthStore
+            .loadToken(deviceId: shareIdentity.deviceId, role: "node", profile: .shareExtension) == nil)
+    }
+
+    @Test
+    func `loads TypeScript PEM identity schema without rewriting or regenerating`() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let identityURL = tempDir
@@ -40,8 +131,8 @@ struct DeviceIdentityStoreTests {
         #expect(try String(contentsOf: identityURL, encoding: .utf8) == before)
     }
 
-    @Test("does not overwrite a recognized invalid TypeScript identity schema")
-    func preservesInvalidTypeScriptPEMIdentitySchema() throws {
+    @Test
+    func `does not overwrite a recognized invalid TypeScript identity schema`() throws {
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         let identityURL = tempDir
@@ -52,14 +143,14 @@ struct DeviceIdentityStoreTests {
             at: identityURL.deletingLastPathComponent(),
             withIntermediateDirectories: true)
         let stored = """
-            {
-              "version": 1,
-              "deviceId": "stale-device-id",
-              "publicKeyPem": "not-a-valid-public-key",
-              "privateKeyPem": "not-a-valid-private-key",
-              "createdAtMs": 1700000000000
-            }
-            """
+        {
+          "version": 1,
+          "deviceId": "stale-device-id",
+          "publicKeyPem": "not-a-valid-public-key",
+          "privateKeyPem": "not-a-valid-private-key",
+          "createdAtMs": 1700000000000
+        }
+        """
         try stored.write(to: identityURL, atomically: true, encoding: .utf8)
         let before = try String(contentsOf: identityURL, encoding: .utf8)
 

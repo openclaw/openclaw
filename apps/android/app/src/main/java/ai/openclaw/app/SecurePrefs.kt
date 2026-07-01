@@ -393,12 +393,6 @@ class SecurePrefs(
     return stored?.takeIf { it.isNotEmpty() }
   }
 
-  /** Saves the paired gateway token under the current Android instance id. */
-  fun saveGatewayToken(token: String) {
-    val key = "gateway.token.${_instanceId.value}"
-    securePrefs.edit { putString(key, token.trim()) }
-  }
-
   /** Loads the bootstrap token used during gateway setup and device-token handoff. */
   fun loadGatewayBootstrapToken(): String? {
     val key = "gateway.bootstrapToken.${_instanceId.value}"

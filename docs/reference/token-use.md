@@ -54,7 +54,7 @@ for bounded runtime excerpts and injected runtime-owned blocks. They are
 separate from bootstrap limits, startup-context limits, and skills prompt
 limits.
 
-`toolResultMaxChars` is an advanced ceiling. When it is unset, OpenClaw chooses
+`toolResultMaxChars` is an advanced ceiling (up to `1000000` characters). When it is unset, OpenClaw chooses
 the live tool-result cap from the effective model context window: `16000` chars
 below 100K tokens, `32000` chars at 100K+ tokens, and `64000` chars at 200K+
 tokens, still bounded by the runtime context-share guard.
@@ -76,8 +76,12 @@ Use these in chat:
   configured for the active model.
 - `/usage off|tokens|full` → appends a **per-response usage footer** to every reply.
   - Persists per session (stored as `responseUsage`).
-  - `/usage full` shows estimated cost only when OpenClaw has usage metadata and
-    local pricing for the active model. Otherwise it shows tokens only.
+  - `/usage reset` (aliases: `inherit`, `clear`, `default`) — clears the session
+    override so the session re-inherits the configured default.
+  - `/usage tokens` shows turn token/cache details.
+  - `/usage full` shows compact model/context/cost details; estimated cost appears
+    only when OpenClaw has usage metadata and local pricing for the active model.
+    Custom `messages.usageTemplate` layouts can include token/cache fields.
 - `/usage cost` → shows a local cost summary from OpenClaw session logs.
 
 Other surfaces:
@@ -92,9 +96,11 @@ Usage surfaces normalize common provider-native field aliases before display.
 For OpenAI-family Responses traffic, that includes both `input_tokens` /
 `output_tokens` and `prompt_tokens` / `completion_tokens`, so transport-specific
 field names do not change `/status`, `/usage`, or session summaries.
-Gemini CLI JSON usage is normalized too: reply text comes from `response`, and
-`stats.cached` maps to `cacheRead` with `stats.input_tokens - stats.cached`
-used when the CLI omits an explicit `stats.input` field.
+Gemini CLI usage is normalized too: the default `stream-json` parser reads
+assistant `message` events, and `stats.cached` maps to `cacheRead` with
+`stats.input_tokens - stats.cached` used when the CLI omits an explicit
+`stats.input` field. Legacy JSON overrides still read reply text from
+`response`.
 For native OpenAI-family Responses traffic, WebSocket/SSE usage aliases are
 normalized the same way, and totals fall back to normalized input + output when
 `total_tokens` is missing or `0`.
@@ -127,10 +133,11 @@ models.providers.<provider>.models[].cost
 ```
 
 These are **USD per 1M tokens** for `input`, `output`, `cacheRead`, and
-`cacheWrite`. If pricing is missing, OpenClaw shows tokens only. Cost display is
-not limited to API-key auth: non-API-key providers such as `aws-sdk` can show
-estimated cost when their configured model entry includes local pricing and the
-provider returns usage metadata.
+`cacheWrite`. If pricing is missing, `/usage full` omits cost; use `/usage tokens`
+or a custom `messages.usageTemplate` when you need token/cache details in every
+reply. Cost display is not limited to API-key auth: non-API-key providers such
+as `aws-sdk` can show estimated cost when their configured model entry includes
+local pricing and the provider returns usage metadata.
 
 After sidecars and channels reach the Gateway ready path, OpenClaw starts an
 optional background pricing bootstrap for configured model refs that do not

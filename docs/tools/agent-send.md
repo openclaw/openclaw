@@ -22,6 +22,15 @@ programmatic delivery.
 
   </Step>
 
+  <Step title="Send a multiline prompt from a file">
+    ```bash
+    openclaw agent --agent ops --message-file ./task.md
+    ```
+
+    This reads a valid UTF-8 file as the agent message body.
+
+  </Step>
+
   <Step title="Target a specific agent or session">
     ```bash
     # Target a specific agent
@@ -56,7 +65,8 @@ programmatic delivery.
 
 | Flag                          | Description                                                 |
 | ----------------------------- | ----------------------------------------------------------- |
-| `--message \<text\>`          | Message to send (required)                                  |
+| `--message \<text\>`          | Inline message to send                                      |
+| `--message-file \<path\>`     | Read the message from a valid UTF-8 file                    |
 | `--to \<dest\>`               | Derive session key from a target (phone, chat id)           |
 | `--session-key \<key\>`       | Use an explicit session key                                 |
 | `--agent \<id\>`              | Target a configured agent (uses its `main` session)         |
@@ -76,6 +86,8 @@ programmatic delivery.
 
 - By default, the CLI goes **through the Gateway**. Add `--local` to force the
   embedded runtime on the current machine.
+- Pass exactly one of `--message` or `--message-file`. File messages preserve
+  multiline content after removing an optional UTF-8 BOM.
 - If the Gateway is unreachable, the CLI **falls back** to the local embedded run.
 - Session selection: `--to` derives the session key (group/channel targets
   preserve isolation; direct chats collapse to `main`).
@@ -101,6 +113,9 @@ openclaw agent --to +15555550123 --message "Trace logs" --verbose on --json
 
 # Turn with thinking level
 openclaw agent --session-id 1234 --message "Summarize inbox" --thinking medium
+
+# Multiline prompt from a file
+openclaw agent --agent ops --message-file ./task.md
 
 # Exact session key
 openclaw agent --session-key agent:ops:incident-42 --message "Summarize status"

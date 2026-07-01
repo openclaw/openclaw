@@ -5,6 +5,7 @@
  * navigation policy checks, media storage, and screenshot normalization.
  */
 import path from "node:path";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getImageMetadata } from "../../media/media-services.js";
 import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
 import { captureScreenshot, snapshotAria, snapshotRoleViaCdp } from "../cdp.js";
@@ -78,7 +79,7 @@ async function collectChromeMcpSnapshotUrls(params: {
         const text = (anchor.innerText || anchor.textContent || anchor.getAttribute("aria-label") || "")
           .replace(/\\s+/g, " ")
           .trim()
-          .slice(0, 120) || href;
+          .slice(0, 121) || href;
         seen.add(href);
         out.push({ text, url: href });
         if (out.length >= 100) break;
@@ -87,13 +88,18 @@ async function collectChromeMcpSnapshotUrls(params: {
     }`,
   }).catch(() => []);
   return Array.isArray(result)
-    ? result.filter(
-        (entry): entry is { text: string; url: string } =>
-          entry &&
-          typeof entry === "object" &&
-          typeof (entry as { text?: unknown }).text === "string" &&
-          typeof (entry as { url?: unknown }).url === "string",
-      )
+    ? result
+        .filter(
+          (entry): entry is { text: string; url: string } =>
+            entry &&
+            typeof entry === "object" &&
+            typeof (entry as { text?: unknown }).text === "string" &&
+            typeof (entry as { url?: unknown }).url === "string",
+        )
+        .map((entry) => {
+          entry.text = truncateUtf16Safe(entry.text, 120) || entry.url;
+          return entry;
+        })
     : [];
 }
 
@@ -594,7 +600,9 @@ export function registerBrowserAgentSnapshotRoutes(
       });
 
       try {
-        const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
+        const tab = await profileCtx.ensureTabAvailable(targetId || undefined, {
+          allowPlaywrightFallback: hasPlaywright,
+        });
         const usesChromeMcp = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp;
         const ssrfPolicyOpts = browserNavigationPolicyForProfile(ctx, profileCtx);
         if ((plan.labels || plan.mode === "efficient") && plan.format === "aria") {

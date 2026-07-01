@@ -7,7 +7,6 @@ extension RootTabs {
         980
     }
 
-    static let sidebarSplitMinimumWidth: CGFloat = 292
     static let sidebarSplitIdealWidth: CGFloat = 316
     static let sidebarSplitMaximumWidth: CGFloat = 340
     static let sidebarDrawerMaximumWidth: CGFloat = 340
@@ -67,26 +66,6 @@ extension RootTabs {
             switch self {
             case .gateway: "Connection"
             default: self.title
-            }
-        }
-
-        var subtitle: String {
-            switch self {
-            case .chat: "Agent chat and recent work."
-            case .talk: "Realtime voice and fallback controls."
-            case .overview: "Status, entry points, health."
-            case .activity: "Gateway, session, and device activity."
-            case .agents: "Agent roster and readiness."
-            case .workboard: "Agent work queue and session handoff."
-            case .skillWorkshop: "Review and apply proposed skills."
-            case .instances: "Latest presence from OpenClaw nodes."
-            case .sessions: "Active sessions and defaults."
-            case .dreaming: "Memory signals and background synthesis."
-            case .usage: "API usage and costs."
-            case .cron: "Wakeups and recurring runs."
-            case .docs: "Reference docs and setup guides."
-            case .settings: "Connection, permissions, channels, and app options."
-            case .gateway: "Pairing, diagnostics, permissions, and device controls."
             }
         }
 

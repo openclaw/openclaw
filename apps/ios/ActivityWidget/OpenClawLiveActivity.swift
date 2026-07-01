@@ -74,23 +74,30 @@ struct OpenClawLiveActivity: Widget {
     private func statusIcon(state: OpenClawActivityAttributes.ContentState) -> some View {
         if state.isConnecting {
             Image(systemName: "arrow.triangle.2.circlepath")
-                .foregroundStyle(.cyan)
+                .foregroundStyle(OpenClawActivityStyle.info)
         } else if state.isDisconnected {
             Image(systemName: "wifi.slash")
-                .foregroundStyle(.red)
+                .foregroundStyle(OpenClawActivityStyle.danger)
         } else if state.isIdle {
             Image(systemName: "checkmark")
-                .foregroundStyle(.green)
+                .foregroundStyle(OpenClawActivityStyle.ok)
         } else {
             Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
+                .foregroundStyle(OpenClawActivityStyle.warn)
         }
     }
 
     private func dotColor(state: OpenClawActivityAttributes.ContentState) -> Color {
-        if state.isDisconnected { return .red }
-        if state.isConnecting { return .cyan }
-        if state.isIdle { return .green }
-        return .orange
+        if state.isDisconnected { return OpenClawActivityStyle.danger }
+        if state.isConnecting { return OpenClawActivityStyle.info }
+        if state.isIdle { return OpenClawActivityStyle.ok }
+        return OpenClawActivityStyle.warn
     }
+}
+
+private enum OpenClawActivityStyle {
+    static let info = Color(red: 0, green: 122 / 255.0, blue: 1)
+    static let danger = Color(red: 185 / 255.0, green: 28 / 255.0, blue: 28 / 255.0)
+    static let ok = Color(red: 34 / 255.0, green: 197 / 255.0, blue: 94 / 255.0)
+    static let warn = Color(red: 245 / 255.0, green: 158 / 255.0, blue: 11 / 255.0)
 }

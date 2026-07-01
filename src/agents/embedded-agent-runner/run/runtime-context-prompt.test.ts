@@ -3,9 +3,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildCurrentInboundPrompt,
-  buildCurrentInboundPromptContextPrefix,
   buildRuntimeContextCustomMessage,
-  buildRuntimeContextSystemContext,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
 
@@ -283,31 +281,6 @@ describe("runtime context prompt submission", () => {
     });
   });
 
-  it("uses current-turn context as prompt-local text", () => {
-    expect(
-      buildCurrentInboundPromptContextPrefix({
-        text: "Conversation info (untrusted metadata):\n```json\n{}\n```",
-      }),
-    ).toBe("Conversation info (untrusted metadata):\n```json\n{}\n```");
-  });
-
-  it("can use compact current-turn context for resumable backends", () => {
-    expect(
-      buildCurrentInboundPromptContextPrefix(
-        {
-          text: "Room context:\nAlice: lunch?\n\nCurrent event:\nBob: yes",
-          resumableText: "Current event:\nBob: yes",
-        },
-        { preferResumableText: true },
-      ),
-    ).toBe("Current event:\nBob: yes");
-  });
-
-  it("omits empty current-turn context", () => {
-    expect(buildCurrentInboundPromptContextPrefix(undefined)).toBe("");
-    expect(buildCurrentInboundPromptContextPrefix({ text: "   " })).toBe("");
-  });
-
   it("joins current-turn context and prompt with the requested separator", () => {
     expect(
       buildCurrentInboundPrompt({
@@ -333,6 +306,13 @@ describe("runtime context prompt submission", () => {
         preferResumableText: true,
       }),
     ).toBe("Current event:\nBob: yes\n\n[OpenClaw room event]");
+
+    expect(
+      buildCurrentInboundPrompt({
+        context: { text: "   " },
+        prompt: "visible ask",
+      }),
+    ).toBe("visible ask");
   });
 
   it("builds runtime context as prompt-local custom context before the current user prompt", () => {
@@ -352,20 +332,14 @@ describe("runtime context prompt submission", () => {
     });
   });
 
-  it("labels next-turn runtime context only when used as prompt-local system context", () => {
-    const systemContext = buildRuntimeContextSystemContext("secret runtime context");
+  it("labels runtime-only events as system context", () => {
+    const parts = resolveRuntimeContextPromptParts({
+      effectivePrompt: "internal event",
+      transcriptPrompt: "",
+    });
 
-    expect(systemContext).toContain(
-      "OpenClaw runtime context for the immediately preceding user message.",
-    );
-    expect(systemContext).toContain("not user-authored");
-    expect(systemContext).toContain("secret runtime context");
-  });
-
-  it("labels runtime-only events as system context", async () => {
-    const { buildRuntimeEventSystemContext } = await import("./runtime-context-prompt.js");
-
-    expect(buildRuntimeEventSystemContext("internal event")).toContain("OpenClaw runtime event.");
-    expect(buildRuntimeEventSystemContext("internal event")).toContain("not user-authored");
+    expect(parts.runtimeSystemContext).toContain("OpenClaw runtime event.");
+    expect(parts.runtimeSystemContext).toContain("not user-authored");
+    expect(parts.runtimeSystemContext).toContain("internal event");
   });
 });

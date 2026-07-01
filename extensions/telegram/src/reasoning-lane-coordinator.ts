@@ -12,12 +12,15 @@ const REASONING_TAG_PREFIXES = [
   "<thinking",
   "<thought",
   "<antthinking",
+  "<mm:think",
   "</think",
   "</thinking",
   "</thought",
   "</antthinking",
+  "</mm:think",
 ];
-const THINKING_TAG_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
+const THINKING_TAG_RE =
+  /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/gi;
 
 function extractThinkingFromTaggedStreamOutsideCode(text: string): string {
   if (!text) {
@@ -70,6 +73,10 @@ export function splitTelegramReasoningText(
     return {};
   }
 
+  if (isReasoning !== true) {
+    return { answerText: text };
+  }
+
   const trimmed = text.trim();
   if (isPartialReasoningTagPrefix(trimmed)) {
     return {};
@@ -87,17 +94,7 @@ export function splitTelegramReasoningText(
   const taggedReasoning = extractThinkingFromTaggedStreamOutsideCode(text);
   const strippedAnswer = stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
 
-  if (isReasoning === true) {
-    return { reasoningText: formatReasoningMessage(taggedReasoning || strippedAnswer || text) };
-  }
-
-  if (!taggedReasoning && strippedAnswer === text) {
-    return { answerText: text };
-  }
-
-  const reasoningText = taggedReasoning ? formatReasoningMessage(taggedReasoning) : undefined;
-  const answerText = strippedAnswer || undefined;
-  return { reasoningText, answerText };
+  return { reasoningText: formatReasoningMessage(taggedReasoning || strippedAnswer || text) };
 }
 
 type BufferedFinalAnswer = {

@@ -18,11 +18,11 @@ let resolveAutoLiveToolResultMaxChars: typeof import("./tool-result-truncation.j
 let getToolResultTextLength: typeof import("./tool-result-truncation.js").getToolResultTextLength;
 let truncateOversizedToolResultsInMessages: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInMessages;
 let truncateOversizedToolResultsInSession: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInSession;
-let isOversizedToolResult: typeof import("./tool-result-truncation.js").isOversizedToolResult;
 let sessionLikelyHasOversizedToolResults: typeof import("./tool-result-truncation.js").sessionLikelyHasOversizedToolResults;
 let estimateToolResultReductionPotential: typeof import("./tool-result-truncation.js").estimateToolResultReductionPotential;
 let DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.js").DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 let resolveLiveToolResultMaxChars: typeof import("./tool-result-truncation.js").resolveLiveToolResultMaxChars;
+let createToolResultPromptProjectionState: typeof import("./tool-result-truncation.js").createToolResultPromptProjectionState;
 let tmpDir: string | undefined;
 
 async function loadFreshToolResultTruncationModuleForTest() {
@@ -37,11 +37,11 @@ async function loadFreshToolResultTruncationModuleForTest() {
     getToolResultTextLength,
     truncateOversizedToolResultsInMessages,
     truncateOversizedToolResultsInSession,
-    isOversizedToolResult,
     sessionLikelyHasOversizedToolResults,
     estimateToolResultReductionPotential,
     DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
     resolveLiveToolResultMaxChars,
+    createToolResultPromptProjectionState,
   } = await import("./tool-result-truncation.js"));
 }
 
@@ -169,6 +169,26 @@ describe("getToolResultTextLength", () => {
     expect(getToolResultTextLength(msg)).toBe(8);
   });
 
+  it("counts Codex protocol toolResult content blocks", () => {
+    const msg = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "exec",
+      isError: false,
+      content: [
+        {
+          type: "toolResult",
+          toolUseId: "call_1",
+          text: "codex output",
+          content: "codex output",
+        },
+      ],
+      timestamp: nextTimestamp(),
+    } as unknown as ToolResultMessage;
+
+    expect(getToolResultTextLength(msg)).toBe("codex output".length);
+  });
+
   it("returns zero for non-toolResult messages", () => {
     expect(getToolResultTextLength(makeAssistantMessage("hello"))).toBe(0);
   });
@@ -194,6 +214,39 @@ describe("truncateToolResultMessage", () => {
       throw new Error("expected toolResult");
     }
     expect(getFirstToolResultText(result)).toContain("[persist-truncated]");
+  });
+
+  it("truncates Codex protocol toolResult content blocks and mirrored content", () => {
+    const oversized = "x".repeat(50_000);
+    const msg = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "exec",
+      content: [
+        {
+          type: "toolResult",
+          toolUseId: "call_1",
+          text: oversized,
+          content: oversized,
+        },
+      ],
+      isError: false,
+      timestamp: nextTimestamp(),
+    } as unknown as ToolResultMessage;
+
+    const result = truncateToolResultMessage(msg, 10_000, {
+      suffix: "\n\n[persist-truncated]",
+      minKeepChars: 2_000,
+    });
+    expect(result.role).toBe("toolResult");
+    if (result.role !== "toolResult") {
+      throw new Error("expected toolResult");
+    }
+    const firstBlock = result.content[0] as unknown as { text?: unknown; content?: unknown };
+    expect(typeof firstBlock.text).toBe("string");
+    expect(firstBlock.text).toContain("[persist-truncated]");
+    expect(String(firstBlock.text).length).toBeLessThan(oversized.length);
+    expect(firstBlock.content).toBe(firstBlock.text);
   });
 });
 
@@ -244,28 +297,6 @@ describe("calculateMaxToolResultChars", () => {
       agentId: "writer",
     });
     expect(result).toBe(24_000);
-  });
-});
-
-describe("isOversizedToolResult", () => {
-  it("returns false for small tool results", () => {
-    const msg = makeToolResult("small content");
-    expect(isOversizedToolResult(msg, 200_000)).toBe(false);
-  });
-
-  it("returns true for oversized tool results", () => {
-    const msg = makeToolResult("x".repeat(500_000));
-    expect(isOversizedToolResult(msg, 128_000)).toBe(true);
-  });
-
-  it("honors an explicit higher maxChars override", () => {
-    const msg = makeToolResult("x".repeat(20_000));
-    expect(isOversizedToolResult(msg, 128_000, 24_000)).toBe(false);
-  });
-
-  it("returns false for non-toolResult messages", () => {
-    const msg = makeUserMessage("x".repeat(500_000));
-    expect(isOversizedToolResult(msg, 128_000)).toBe(false);
   });
 });
 
@@ -460,6 +491,152 @@ describe("truncateOversizedToolResultsInMessages", () => {
     expect(messages.reduce((sum, message) => sum + getToolResultTextLength(message), 0)).toBe(
       medium.length * 3,
     );
+  });
+
+  it("keeps prompt projections byte-stable as history grows", () => {
+    const prefix = [
+      makeToolResult("p".repeat(15_000), "prefix_1"),
+      makeToolResult("q".repeat(15_000), "prefix_2"),
+    ];
+    const suffix = [
+      makeToolResult("x".repeat(15_000), "current_1"),
+      makeToolResult("y".repeat(15_000), "current_2"),
+    ];
+    const messages = [...prefix, ...suffix];
+    const projectionState = createToolResultPromptProjectionState();
+
+    const first = truncateOversizedToolResultsInMessages(
+      messages,
+      128_000,
+      12_000,
+      12_000,
+      projectionState,
+    );
+    const second = truncateOversizedToolResultsInMessages(
+      [...messages, makeToolResult("z".repeat(15_000), "current_3")],
+      128_000,
+      12_000,
+      12_000,
+      projectionState,
+    );
+
+    expect(first.truncatedCount).toBe(4);
+    expect(second.truncatedCount).toBe(1);
+    expect(second.messages.slice(0, messages.length)).toEqual(first.messages);
+    expect(second.messages.every((message) => getToolResultTextLength(message) <= 12_000)).toBe(
+      true,
+    );
+    expect(messages).toEqual([...prefix, ...suffix]);
+
+    const stableState = createToolResultPromptProjectionState();
+    const stableHistory = [
+      makeToolResult("a".repeat(4_000), "stable_1"),
+      makeToolResult("b".repeat(4_000), "stable_2"),
+    ];
+    const stableFirst = truncateOversizedToolResultsInMessages(
+      stableHistory,
+      128_000,
+      12_000,
+      12_000,
+      stableState,
+    );
+    const stableSecond = truncateOversizedToolResultsInMessages(
+      [...stableHistory, makeToolResult("c".repeat(15_000), "stable_3")],
+      128_000,
+      12_000,
+      12_000,
+      stableState,
+    );
+    expect(stableFirst.truncatedCount).toBe(0);
+    expect(stableSecond.messages.slice(0, stableHistory.length)).toEqual(stableFirst.messages);
+    const stableThird = truncateOversizedToolResultsInMessages(
+      [
+        ...stableHistory,
+        makeToolResult("c".repeat(15_000), "stable_3"),
+        makeToolResult("d".repeat(15_000), "stable_4"),
+      ],
+      128_000,
+      12_000,
+      12_000,
+      stableState,
+    );
+    expect(stableThird.messages).toHaveLength(4);
+    const stableFourth = truncateOversizedToolResultsInMessages(
+      [
+        ...stableHistory,
+        makeToolResult("c".repeat(15_000), "stable_3"),
+        makeToolResult("d".repeat(15_000), "stable_4"),
+        makeToolResult("e".repeat(15_000), "stable_5"),
+      ],
+      128_000,
+      12_000,
+      12_000,
+      stableState,
+    );
+    const lastText = stableFourth.messages.at(-1);
+    expect(lastText && getToolResultTextLength(lastText)).toBeLessThanOrEqual(12_000);
+  });
+
+  it("does not restore filtered image blocks when reusing a projection", () => {
+    const projectionState = createToolResultPromptProjectionState();
+    const source = makeToolResult("x".repeat(15_000), "image_call");
+    source.content = [
+      { type: "image", data: "filtered-after-conversion" },
+      { type: "text", text: "x".repeat(15_000) },
+    ] as never;
+    truncateOversizedToolResultsInMessages([source], 128_000, 12_000, 12_000, projectionState);
+
+    const providerMessage: ToolResultMessage = {
+      ...source,
+      content: [
+        { type: "text" as const, text: "Image reading is disabled." },
+        { type: "text" as const, text: "x".repeat(15_000) },
+      ],
+    };
+    const result = truncateOversizedToolResultsInMessages(
+      [providerMessage],
+      128_000,
+      12_000,
+      12_000,
+      projectionState,
+    ).messages[0] as ToolResultMessage | undefined;
+
+    expect(result?.content?.[0]).toEqual({
+      type: "text",
+      text: "Image reading is disabled.",
+    });
+    expect(
+      result?.content?.[1] && "text" in result.content[1] ? result.content[1].text.length : 0,
+    ).toBeLessThan(15_000);
+  });
+
+  it("does not reuse ambiguous projections across filtered history", () => {
+    const projectionState = createToolResultPromptProjectionState();
+    const duplicate = (text: string) => ({
+      role: "toolResult" as const,
+      toolCallId: "duplicate-call",
+      toolName: "duplicate",
+      isError: false,
+      timestamp: 1,
+      content: [{ type: "text" as const, text }],
+    });
+    const first = truncateOversizedToolResultsInMessages(
+      [duplicate("a".repeat(100)), duplicate("b".repeat(100))],
+      128_000,
+      100,
+      100,
+      projectionState,
+    );
+    const filtered = truncateOversizedToolResultsInMessages(
+      [duplicate("b".repeat(100))],
+      128_000,
+      100,
+      100,
+      projectionState,
+    );
+
+    expect(first.messages[0]).not.toEqual(first.messages[1]);
+    expect(filtered.messages[0]).toEqual(duplicate("b".repeat(100)));
   });
 });
 

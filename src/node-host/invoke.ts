@@ -7,7 +7,6 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { GatewayClient } from "../gateway/client.js";
 import {
   analyzeArgvCommand,
-  analyzeShellCommand,
   ensureExecApprovals,
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
@@ -19,6 +18,7 @@ import {
   type ExecApprovalsResolved,
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
+import { planShellAuthorization } from "../infra/exec-authorization-plan.js";
 import {
   requestExecHostViaSocket,
   type ExecHostRequest,
@@ -135,7 +135,7 @@ function buildSystemRunPrepareCoverageEnv(params: {
   };
 }
 
-function buildSystemRunAllowAlwaysCoverage(params: {
+async function buildSystemRunAllowAlwaysCoverage(params: {
   argv: string[];
   rawCommand?: string | null;
   cwd: string | null | undefined;
@@ -148,22 +148,30 @@ function buildSystemRunAllowAlwaysCoverage(params: {
     if (!shellWrapper.command) {
       return { complete: false, patterns: [] };
     }
-    const analysis = analyzeShellCommand({
+    const authorizationPlan = await planShellAuthorization({
       command: shellWrapper.command,
       cwd,
       env: params.env,
       platform: process.platform,
     });
-    if (!analysis.ok) {
+    if (!authorizationPlan.ok) {
       return { complete: false, patterns: [] };
     }
-    return resolveAllowAlwaysPatternCoverage({
-      segments: analysis.segments,
+    const candidates = authorizationPlan.groups.flatMap((group) => group.candidates);
+    const reusableSegments = candidates
+      .filter((candidate) => candidate.allowAlways)
+      .map((candidate) => candidate.sourceSegment);
+    const coverage = resolveAllowAlwaysPatternCoverage({
+      segments: reusableSegments,
       cwd,
       env: params.env,
       platform: process.platform,
       strictInlineEval: params.strictInlineEval,
     });
+    return {
+      ...coverage,
+      complete: coverage.complete && reusableSegments.length === candidates.length,
+    };
   }
   const analysis = analyzeArgvCommand({ argv: params.argv, cwd, env: params.env });
   if (!analysis.ok) {
@@ -367,7 +375,14 @@ function resolveExecutable(bin: string, env?: Record<string, string>) {
   }
   const extensions =
     process.platform === "win32"
-      ? (process.env.PATHEXT ?? process.env.PathExt ?? ".EXE;.CMD;.BAT;.COM")
+      ? (
+          env?.PATHEXT ??
+          env?.PathExt ??
+          env?.Pathext ??
+          process.env.PATHEXT ??
+          process.env.PathExt ??
+          ".EXE;.CMD;.BAT;.COM"
+        )
           .split(";")
           .map((ext) => normalizeLowercaseStringOrEmpty(ext))
       : [""];
@@ -595,7 +610,7 @@ export async function handleInvoke(
           security: execPolicy.security,
           ask: execPolicy.ask,
         },
-        allowAlwaysCoverage: buildSystemRunAllowAlwaysCoverage({
+        allowAlwaysCoverage: await buildSystemRunAllowAlwaysCoverage({
           argv: prepared.plan.argv,
           rawCommand: typeof params.rawCommand === "string" ? params.rawCommand : null,
           cwd: prepared.plan.cwd,

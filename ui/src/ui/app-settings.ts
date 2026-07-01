@@ -57,10 +57,14 @@ import {
   loadSkillWorkshopProposals,
   type SkillWorkshopState,
 } from "./controllers/skill-workshop.ts";
-import { loadSkills, type SkillsState } from "./controllers/skills.ts";
+import { loadSkills, reconcileSkillsAgentId, type SkillsState } from "./controllers/skills.ts";
 import { loadUsage, type UsageState } from "./controllers/usage.ts";
-import { loadWorkboard } from "./controllers/workboard.ts";
-import { resolveCronJobLastRunStatus } from "./cron-status.ts";
+import {
+  loadWorkboard,
+  stopWorkboardLifecycleRefresh,
+  stopWorkboardPolling,
+} from "./controllers/workboard.ts";
+import { isCronJobActiveFailure } from "./cron-status.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
 import { isMonitoredAuthProvider } from "./model-auth-helpers.ts";
 import {
@@ -450,6 +454,7 @@ export async function refreshActiveTab(host: SettingsHost, opts?: { chatStartup?
             client: app.client,
             force: true,
             requestUpdate: host.requestUpdate,
+            refreshDiagnostics: hasOperatorWriteAccess(app.hello?.auth ?? null),
           }),
         ]);
         break;
@@ -469,6 +474,8 @@ export async function refreshActiveTab(host: SettingsHost, opts?: { chatStartup?
         await loadCron(host);
         break;
       case "skills":
+        await loadAgents(app);
+        reconcileSkillsAgentId(app, app.agentsList);
         await loadSkills(app);
         break;
       case "skillWorkshop":
@@ -709,6 +716,12 @@ function applyTabSelection(
   (next === "debug" ? startDebugPolling : stopDebugPolling)(
     host as unknown as Parameters<typeof startDebugPolling>[0],
   );
+  if (next !== "workboard") {
+    stopWorkboardPolling(host as unknown as Parameters<typeof stopWorkboardPolling>[0]);
+    stopWorkboardLifecycleRefresh(
+      host as unknown as Parameters<typeof stopWorkboardLifecycleRefresh>[0],
+    );
+  }
 
   if (options.refreshPolicy === "always" || host.connected) {
     void refreshActiveTab(host);
@@ -928,7 +941,7 @@ function buildAttentionItems(host: SettingsAppHost) {
   }
 
   const cronJobs = host.cronJobs ?? [];
-  const failedCron = cronJobs.filter((j) => resolveCronJobLastRunStatus(j) === "error");
+  const failedCron = cronJobs.filter(isCronJobActiveFailure);
   if (failedCron.length > 0) {
     items.push({
       severity: "error",

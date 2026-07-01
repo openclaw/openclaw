@@ -42,7 +42,10 @@ type SessionsListDetails = {
       to?: string;
     };
     elevatedLevel?: string;
-    fastMode?: boolean;
+    effectiveFastMode?: boolean | "auto";
+    effectiveFastModeSource?: "session" | "agent" | "config" | "default";
+    fastMode?: boolean | "auto";
+    fastAutoOnSeconds?: number;
     reasoningLevel?: string;
     responseUsage?: string;
     thinkingLevel?: string;
@@ -117,6 +120,7 @@ describe("sessions-list-tool", () => {
       accountId: "acct-1",
       threadId: "thread-1",
     });
+    expect(Object.hasOwn(details.sessions?.[0] ?? {}, "effectiveFastMode")).toBe(false);
     expect(details.sessions?.[1]?.deliveryContext).toEqual({
       channel: "telegram",
       to: "telegram:topic",
@@ -173,7 +177,10 @@ describe("sessions-list-tool", () => {
               kind: "direct",
               sessionId: "sess-main",
               thinkingLevel: "high",
-              fastMode: true,
+              fastMode: "auto",
+              effectiveFastMode: "auto",
+              effectiveFastModeSource: "config",
+              fastAutoOnSeconds: 30,
               verboseLevel: "on",
               reasoningLevel: "deep",
               elevatedLevel: "on",
@@ -191,7 +198,10 @@ describe("sessions-list-tool", () => {
 
     const session = details.sessions?.[0];
     expect(session?.thinkingLevel).toBe("high");
-    expect(session?.fastMode).toBe(true);
+    expect(session?.fastMode).toBe("auto");
+    expect(session?.effectiveFastMode).toBe("auto");
+    expect(session?.effectiveFastModeSource).toBe("config");
+    expect(session?.fastAutoOnSeconds).toBe(30);
     expect(session?.verboseLevel).toBe("on");
     expect(session?.reasoningLevel).toBe("deep");
     expect(session?.elevatedLevel).toBe("on");

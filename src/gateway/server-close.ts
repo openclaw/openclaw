@@ -10,7 +10,7 @@ import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { closePluginStateSqliteStore } from "../plugin-state/plugin-state-store.js";
+import { closePluginStateDatabase } from "../plugin-state/plugin-state-store.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import {
   abortTrackedChatRunById,
@@ -22,7 +22,11 @@ import {
   measureGatewayRestartTrace,
   recordGatewayRestartTrace,
 } from "./restart-trace.js";
-import type { ChatRunEntry, ChatRunState } from "./server-chat-state.js";
+import {
+  createChatAbortMarker,
+  type ChatRunEntry,
+  type ChatRunState,
+} from "./server-chat-state.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
 
 const shutdownLog = createSubsystemLogger("gateway/shutdown");
@@ -406,7 +410,7 @@ function abortActiveRunsForRestart(params: RestartRunAbortParams): number {
       entry.abortStopReason = "restart";
       entry.controller.abort(createAgentRunRestartAbortError());
       params.chatAbortControllers.delete(runId);
-      params.chatRunState.abortedRuns.set(runId, Date.now());
+      params.chatRunState.abortedRuns.set(runId, createChatAbortMarker());
       params.chatRunState.clearRun(runId);
       const removed = params.removeChatRun(runId, runId, entry.sessionKey);
       params.agentRunSeq.delete(runId);
@@ -822,7 +826,7 @@ export function createGatewayCloseHandler(
           }),
         ]);
       });
-      await shutdownStep("plugin-state-store", () => closePluginStateSqliteStore(), warnings);
+      await shutdownStep("plugin-state-store", () => closePluginStateDatabase(), warnings);
       await measureCloseStep("config-reloader", () =>
         shutdownStep("config-reloader", () => params.configReloader.stop(), warnings),
       );

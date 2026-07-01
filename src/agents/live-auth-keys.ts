@@ -168,14 +168,14 @@ export function collectProviderApiKeys(
   return Array.from(seen);
 }
 
-/** Collect Anthropic API keys for live cache/model tests. */
-export function collectAnthropicApiKeys(): string[] {
-  return collectProviderApiKeys("anthropic");
-}
-
-/** Collect Gemini API keys for live cache/model tests. */
-export function collectGeminiApiKeys(): string[] {
-  return collectProviderApiKeys("google");
+/** Collect Anthropic API keys for live cache/model tests when OAuth is unavailable. */
+export function collectAnthropicApiKeys(options: CollectProviderApiKeysOptions = {}): string[] {
+  const env = options.env ?? process.env;
+  if (normalizeOptionalString(env.ANTHROPIC_OAUTH_TOKEN)) {
+    // OAuth is a separate auth mode; API-key rotation would overwrite it.
+    return [];
+  }
+  return collectProviderApiKeys("anthropic", { ...options, env });
 }
 
 /** Return whether a provider error message indicates API-key rate limiting. */
@@ -200,11 +200,6 @@ export function isApiKeyRateLimitError(message: string): boolean {
     return true;
   }
   return false;
-}
-
-/** Return whether an Anthropic error message indicates rate limiting. */
-export function isAnthropicRateLimitError(message: string): boolean {
-  return isApiKeyRateLimitError(message);
 }
 
 /** Return whether an Anthropic error message indicates billing exhaustion. */

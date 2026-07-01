@@ -9,7 +9,14 @@ import {
   MIN_PROMPT_BUDGET_TOKENS,
 } from "../../agent-compaction-constants.js";
 import { SAFETY_MARGIN } from "../../compaction.js";
-import type { AgentMessage } from "../../runtime/index.js";
+import type { AgentMessage, BashExecutionMessage } from "../../runtime/index.js";
+import {
+  BRANCH_SUMMARY_PREFIX,
+  BRANCH_SUMMARY_SUFFIX,
+  bashExecutionToText,
+  COMPACTION_SUMMARY_PREFIX,
+  COMPACTION_SUMMARY_SUFFIX,
+} from "../../runtime/index.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
@@ -23,8 +30,6 @@ const MESSAGE_BOUNDARY_OVERHEAD_TOKENS = 12;
 const CONTENT_BLOCK_OVERHEAD_TOKENS = 6;
 const IMAGE_BLOCK_TOKENS = 2_000;
 const TRUNCATION_ROUTE_BUFFER_TOKENS = 512;
-
-export type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
 /** Pre-prompt routing decision plus the budget facts used to explain it in logs and session state. */
 export type PreemptiveCompactionDecision = {
@@ -160,6 +165,30 @@ function estimateMessageTokenPressure(message: AgentMessage): number {
     return tokens;
   }
 
+  if (record.role === "bashExecution") {
+    if (record.excludeFromContext === true) {
+      return 0;
+    }
+    tokens += estimateStringTokenPressure(
+      bashExecutionToText(record as unknown as BashExecutionMessage),
+    );
+    return tokens;
+  }
+
+  if (record.role === "branchSummary") {
+    const summary = typeof record.summary === "string" ? record.summary : "";
+    tokens += estimateStringTokenPressure(BRANCH_SUMMARY_PREFIX + summary + BRANCH_SUMMARY_SUFFIX);
+    return tokens;
+  }
+
+  if (record.role === "compactionSummary") {
+    const summary = typeof record.summary === "string" ? record.summary : "";
+    tokens += estimateStringTokenPressure(
+      COMPACTION_SUMMARY_PREFIX + summary + COMPACTION_SUMMARY_SUFFIX,
+    );
+    return tokens;
+  }
+
   if (record.role === "assistant") {
     const content = record.content;
     if (Array.isArray(content)) {
@@ -226,19 +255,6 @@ export function estimateRenderedLlmBoundaryTokenPressure(params: {
   return Math.max(0, Math.ceil((systemTokens + promptTokens) * SAFETY_MARGIN));
 }
 
-/**
- * Backward-compatible alias for callers that still name this a pre-prompt estimate.
- *
- * @deprecated Use estimateLlmBoundaryTokenPressure.
- */
-export function estimatePrePromptTokens(params: {
-  messages: AgentMessage[];
-  systemPrompt?: string;
-  prompt: string;
-}): number {
-  return estimateLlmBoundaryTokenPressure(params);
-}
-
 function normalizeLlmBoundaryTokenPressure(
   pressure: LlmBoundaryTokenPressure | undefined,
 ): LlmBoundaryTokenPressure | undefined {
@@ -276,14 +292,14 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   );
   let estimatedPromptTokens =
     llmBoundaryTokenPressure?.estimatedPromptTokens ??
-    estimatePrePromptTokens({
+    estimateLlmBoundaryTokenPressure({
       messages: params.messages,
       systemPrompt: params.systemPrompt,
       prompt: params.prompt,
     });
   let pressureSource = llmBoundaryTokenPressure?.source ?? "transcript_estimate";
   if (params.unwindowedMessages && params.unwindowedMessages !== params.messages) {
-    const unwindowedEstimatedPromptTokens = estimatePrePromptTokens({
+    const unwindowedEstimatedPromptTokens = estimateLlmBoundaryTokenPressure({
       messages: params.unwindowedMessages,
       systemPrompt: params.systemPrompt,
       prompt: params.prompt,
