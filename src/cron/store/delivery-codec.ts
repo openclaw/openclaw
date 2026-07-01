@@ -1,6 +1,6 @@
 /** SQLite column codec for cron delivery configuration. */
 import type { CronDelivery } from "../types.js";
-import { booleanToInteger, integerToBoolean } from "./scalar-codec.js";
+import { booleanToInteger, integerToBoolean, parseJsonObject } from "./scalar-codec.js";
 import type { CronJobInsert, CronJobRow } from "./schema.js";
 
 /** Maps cron delivery config into normalized SQLite columns. */
@@ -60,6 +60,12 @@ function readFailureDestinationField(value: string | null): string | undefined {
 
 function cronDeliveryModeFromValue(value: unknown): CronDelivery["mode"] | undefined {
   return value === "none" || value === "announce" || value === "webhook" ? value : undefined;
+}
+
+function threadIdFromRow(row: CronJobRow, columnValue: string): string | number {
+  const config = parseJsonObject<{ delivery?: { threadId?: unknown } }>(row.job_json, {});
+  const typed = config.delivery?.threadId;
+  return typeof typed === "string" || typeof typed === "number" ? typed : columnValue;
 }
 
 /** Reconstructs delivery config from split SQLite columns, preserving legacy partial rows. */
@@ -122,7 +128,7 @@ export function deliveryFromRow(row: CronJobRow): CronDelivery | undefined {
     mode: rowMode ?? "announce",
     ...(row.delivery_channel ? { channel: row.delivery_channel as CronDelivery["channel"] } : {}),
     ...(row.delivery_to ? { to: row.delivery_to } : {}),
-    ...(row.delivery_thread_id ? { threadId: row.delivery_thread_id } : {}),
+    ...(row.delivery_thread_id ? { threadId: threadIdFromRow(row, row.delivery_thread_id) } : {}),
     ...(row.delivery_account_id ? { accountId: row.delivery_account_id } : {}),
     ...(row.delivery_best_effort != null
       ? { bestEffort: integerToBoolean(row.delivery_best_effort) }
