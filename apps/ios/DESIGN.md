@@ -29,7 +29,7 @@ Feature-local layout enums may define row heights and grid dimensions, but shoul
 
 - `OpenClawProBackground`: grouped page background
 - `ProCard`: quiet content grouping; never Liquid Glass
-- `ProIconBadge`, `ProValuePill`, `ProCapsule`: compact semantic indicators
+- `ProIconBadge`, `ProValuePill`: compact semantic indicators
 - `OpenClawNoticeBanner`: shared connection and runtime notices
 - `OpenClawAdaptiveHeaderRow`: responsive destination heading
 - `OpenClawGlassControlGroup`: performance and morphing boundary for nearby glass controls

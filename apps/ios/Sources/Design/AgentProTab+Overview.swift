@@ -524,14 +524,6 @@ extension AgentProTab {
             self.appModel.isOperatorGatewayConnected
     }
 
-    private var iconButtonFill: Color {
-        self.colorScheme == .dark ? Color.white.opacity(0.065) : Color.white.opacity(0.78)
-    }
-
-    private var iconButtonStroke: Color {
-        self.colorScheme == .dark ? Color.white.opacity(0.14) : Color.black.opacity(0.07)
-    }
-
     var emptyAgentsTitle: String {
         if !self.gatewayConnected { return "Agents unavailable" }
         if !self.agentSearchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "No matches" }

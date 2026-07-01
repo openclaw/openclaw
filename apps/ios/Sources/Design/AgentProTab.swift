@@ -3,7 +3,6 @@ import SwiftUI
 
 struct AgentProTab: View {
     @Environment(NodeAppModel.self) var appModel
-    @Environment(\.colorScheme) var colorScheme
     @Environment(\.scenePhase) var scenePhase
     let directRoute: AgentRoute?
     let headerLeadingAction: OpenClawSidebarHeaderAction?

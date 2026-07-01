@@ -525,38 +525,6 @@ struct ProProgressBar: View {
     }
 }
 
-struct ProCapsule: View {
-    @Environment(\.colorScheme) private var colorScheme
-    let title: String
-    let color: Color
-    var icon: String?
-
-    var body: some View {
-        HStack(spacing: 6) {
-            if let icon {
-                Image(systemName: icon)
-                    .font(.caption.weight(.semibold))
-            }
-            Text(self.title)
-                .font(.caption.weight(.semibold))
-                .lineLimit(1)
-                .minimumScaleFactor(0.78)
-        }
-        .fixedSize(horizontal: true, vertical: false)
-        .foregroundStyle(self.color)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background {
-            Capsule()
-                .fill(self.color.opacity(self.colorScheme == .dark ? 0.16 : 0.10))
-                .overlay {
-                    Capsule()
-                        .strokeBorder(self.color.opacity(self.colorScheme == .dark ? 0.30 : 0.18), lineWidth: 1)
-                }
-        }
-    }
-}
-
 struct OpenClawGatewayCompactPill: View {
     @Environment(NodeAppModel.self) private var appModel
 
