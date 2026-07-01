@@ -124,6 +124,28 @@ describe("isHeartbeatOkResponse", () => {
     expect(isHeartbeatOkResponse(toolCallOnlyMessage)).toBe(false);
   });
 
+  it("recognizes heartbeat OK acknowledgements paired with reasoning blocks", () => {
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content: [
+          { type: "reasoning", reasoning: "Checking system status..." },
+          { type: "text", text: "HEARTBEAT_OK" },
+        ],
+      }),
+    ).toBe(true);
+
+    expect(
+      isHeartbeatOkResponse({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "Let me verify." },
+          { type: "text", text: "HEARTBEAT_OK" },
+        ],
+      }),
+    ).toBe(true);
+  });
+
   it("respects ackMaxChars overrides", () => {
     expect(
       isHeartbeatOkResponse(
