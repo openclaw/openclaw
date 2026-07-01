@@ -1,5 +1,6 @@
 // Slack helper module supports monitor helpers behavior.
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { vi } from "vitest";
 import type { Mock } from "vitest";
 import { clearSlackInboundDeliveryStateForTest } from "./monitor/inbound-delivery-state.js";
@@ -12,6 +13,7 @@ type SlackProviderMonitor = (params: {
   abortSignal: AbortSignal;
   config?: Record<string, unknown>;
   channelRuntime?: ChannelRuntimeSurface;
+  runtime?: RuntimeEnv;
 }) => Promise<unknown>;
 
 type SlackTestState = {
@@ -86,7 +88,7 @@ function ensureSlackTestRuntime(): {
   }
   if (!globalState["__slackClient"]) {
     globalState["__slackClient"] = {
-      auth: { test: vi.fn().mockResolvedValue({ user_id: "bot-user" }) },
+      auth: { test: vi.fn().mockResolvedValue({ user_id: "bot-user", bot_id: "bot-id" }) },
       conversations: {
         info: vi.fn().mockResolvedValue({
           channel: { name: "dm", is_im: true },
@@ -138,7 +140,12 @@ async function waitForSlackEvent(name: string) {
 
 export function startSlackMonitor(
   monitorSlackProvider: SlackProviderMonitor,
-  opts?: { botToken?: string; appToken?: string; channelRuntime?: ChannelRuntimeSurface },
+  opts?: {
+    botToken?: string;
+    appToken?: string;
+    channelRuntime?: ChannelRuntimeSurface;
+    runtime?: RuntimeEnv;
+  },
 ) {
   const controller = new AbortController();
   const run = monitorSlackProvider({
@@ -147,6 +154,7 @@ export function startSlackMonitor(
     abortSignal: controller.signal,
     config: slackTestState.config,
     channelRuntime: opts?.channelRuntime,
+    runtime: opts?.runtime,
   });
   return { controller, run };
 }
@@ -225,7 +233,7 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
       entries.map((input) => ({ input, resolved: false })),
     );
   const client = getSlackClient();
-  client.auth.test.mockReset().mockResolvedValue({ user_id: "bot-user" });
+  client.auth.test.mockReset().mockResolvedValue({ user_id: "bot-user", bot_id: "bot-id" });
   client.conversations.info.mockReset().mockResolvedValue({
     channel: { name: "dm", is_im: true },
   });

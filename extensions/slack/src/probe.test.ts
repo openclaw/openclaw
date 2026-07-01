@@ -41,6 +41,7 @@ describe("probeSlack", () => {
     authTestMock.mockResolvedValue({
       ok: true,
       user_id: "U123",
+      bot_id: "B123",
       user: "openclaw-bot",
       team_id: "T123",
       team: "OpenClaw",
@@ -58,6 +59,22 @@ describe("probeSlack", () => {
     const [promise, timeoutMs] = requireFirstTimeoutCall();
     expect(promise).toBeInstanceOf(Promise);
     expect(timeoutMs).toBe(2500);
+  });
+
+  it("warns when auth.test looks like a user token in the bot token slot", async () => {
+    vi.spyOn(Date, "now").mockReturnValueOnce(100).mockReturnValueOnce(145);
+    authTestMock.mockResolvedValue({
+      ok: true,
+      user_id: "UUSER",
+      user: "human-installer",
+      team_id: "T123",
+      team: "OpenClaw",
+    });
+
+    await expect(probeSlack("xoxp-user-token", 2500)).resolves.toMatchObject({
+      ok: true,
+      warning: expect.stringContaining("without bot_id"),
+    });
   });
 
   it("keeps optional auth metadata fields undefined when Slack omits them", async () => {
