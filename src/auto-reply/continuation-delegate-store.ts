@@ -29,6 +29,7 @@ export {
   consumePendingDelegates,
   enqueuePendingDelegate,
   markPendingDelegateFailed,
+  markPendingDelegateSpawnAccepted,
   pendingDelegateCount,
   resetDelegateStoreForTests,
   stagedPostCompactionDelegateCount,

@@ -8,6 +8,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   consumePendingDelegates,
   markPendingDelegateFailed,
+  markPendingDelegateSpawnAccepted,
   stagePostCompactionDelegate,
 } from "../auto-reply/continuation-delegate-store.js";
 import type { ContinuationTrigger } from "../auto-reply/get-reply-options.types.js";
@@ -64,6 +65,7 @@ import {
   resolveContinuationRuntimeConfig,
   waitForEmbeddedAgentRunEnd,
 } from "./subagent-announce.runtime.js";
+import { deriveContinuationDelegateChildSessionKeyFromParent } from "./subagent-continuation-ids.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
@@ -1401,6 +1403,9 @@ export async function runSubagentAnnounceFlow(params: {
                     ? { continuationFanoutMode: toolDelegate.fanoutMode }
                     : {}),
                   drainsContinuationDelegateQueue: true,
+                  ...(toolDelegate.flowId
+                    ? { continuationDelegateFlowId: toolDelegate.flowId }
+                    : {}),
                   ...(toolDelegate.model ? { model: toolDelegate.model } : {}),
                 },
                 {
@@ -1412,6 +1417,22 @@ export async function runSubagentAnnounceFlow(params: {
                 },
               );
               if (spawnResult.status === "accepted") {
+                // Commit the consumed TaskFlow row like the shared dispatcher
+                // (delegate-dispatch.ts). consumePendingDelegates already moved
+                // it to `running`; without finishing it here the row stays
+                // `running` and restart recovery re-spawns it as duplicate
+                // continuation work (C2).
+                const acceptedChildSessionKey =
+                  spawnResult.childSessionKey ??
+                  (toolDelegate.flowId
+                    ? deriveContinuationDelegateChildSessionKeyFromParent(
+                        targetRequesterSessionKey,
+                        toolDelegate.flowId,
+                      )
+                    : undefined);
+                if (acceptedChildSessionKey) {
+                  markPendingDelegateSpawnAccepted(toolDelegate, acceptedChildSessionKey);
+                }
                 defaultRuntime.log(
                   `[subagent-chain-hop] Tool delegate (${nextToolHop}/${toolMaxChainLength}) from ${params.childSessionKey}: ${toolDelegate.task.slice(0, 80)}`,
                 );
