@@ -70,6 +70,8 @@
 
   /* Focus */
   --focus: rgba(255, 92, 92, 0.2);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring);
+  /* blended ring for browsers with color-mix support; older browsers keep the solid fallback above */
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 80%, transparent);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
 
@@ -188,6 +190,7 @@
   --info: #2563eb;
 
   --focus: rgba(220, 38, 38, 0.15);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 70%, transparent);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 12px var(--accent-glow);
 
@@ -236,6 +239,7 @@
 
   /* Focus — crimson ring */
   --focus: rgba(229, 36, 59, 0.2);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 70%, transparent);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
 
@@ -372,6 +376,7 @@
 
   /* Focus — match chocolate accent, slightly higher ring opacity for dark bg visibility */
   --focus: rgba(180, 120, 64, 0.2);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 80%, transparent);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
 
