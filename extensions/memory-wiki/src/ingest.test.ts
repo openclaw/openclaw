@@ -118,4 +118,49 @@ hello from source
     const afterPage = await fs.readFile(pagePath, "utf8");
     expect(afterPage).toContain("user note that should survive");
   });
+
+  it("preserves notes on persistent read failure (safer than retry+fallthrough, regression for #98345)", async () => {
+    // Unlike a retry-once-with-empty-fallback approach that still wipes notes
+    // after the second failure, our fix throws on EVERY read failure.  The
+    // write never happens, so the notes block survives regardless of how many
+    // times the read fails.
+    const rootDir = await createTempDir("memory-wiki-ingest-proof2-");
+    const inputPath = path.join(rootDir, "persistent.txt");
+    await fs.writeFile(inputPath, "v1\n", "utf8");
+    const { config } = await createVault({
+      rootDir: path.join(rootDir, "vault"),
+    });
+
+    await ingestMemoryWikiSource({ config, inputPath, nowMs: 0 });
+    const pagePath = path.join(config.vault.path, "sources", "persistent.md");
+
+    const pageContent = await fs.readFile(pagePath, "utf8");
+    const withNotes = pageContent.replace(
+      "<!-- openclaw:human:end -->",
+      "precious user note\n<!-- openclaw:human:end -->",
+    );
+    await fs.writeFile(pagePath, withNotes, "utf8");
+    await fs.writeFile(inputPath, "v2\n", "utf8");
+
+    // Persistent EIO — every read fails (simulates disk error)
+    const originalReadFile = fs.readFile;
+    (fs as { readFile: typeof fs.readFile }).readFile = (() =>
+      Promise.reject(Object.assign(new Error("EIO"), { code: "EIO" }))) as typeof fs.readFile;
+
+    try {
+      let threw = false;
+      try {
+        await ingestMemoryWikiSource({ config, inputPath, nowMs: 1 });
+      } catch {
+        threw = true;
+      }
+      expect(threw).toBe(true);
+    } finally {
+      (fs as { readFile: typeof fs.readFile }).readFile = originalReadFile;
+    }
+
+    // Notes MUST survive — the write never happened
+    const afterPage = await fs.readFile(pagePath, "utf8");
+    expect(afterPage).toContain("precious user note");
+  });
 });
