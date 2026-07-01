@@ -55,6 +55,7 @@ export const AUTH_RATE_LIMIT_SCOPE_NODE_REAPPROVAL = "node-reapproval";
 // device signature can queue the bootstrap-pairing flow behind their
 // requests, blocking legitimate node onboarding during the attack.
 export const AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN = "bootstrap-token";
+export const AUTH_RATE_LIMIT_SCOPE_PAIRING_SETUP_SHORT_CODE = "pairing-setup-short-code";
 export const AUTH_RATE_LIMIT_SCOPE_HOOK_AUTH = "hook-auth";
 const BROWSER_ORIGIN_RATE_LIMIT_KEY_PREFIX = "browser-origin:";
 const IDENTITY_RATE_LIMIT_KEY_PREFIX = "identity:";

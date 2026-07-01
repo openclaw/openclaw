@@ -756,7 +756,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H3: Where the state lives
   - H2: 2) Node device pairing (iOS/Android/macOS/headless nodes)
   - H3: Pair via Telegram (recommended for iOS)
-  - H3: Approve a node device
+  - H3: Approve a node device or upgrade
   - H3: Optional trusted-CIDR node auto-approve
   - H3: Node pairing state storage
   - H3: Notes
@@ -3557,6 +3557,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H2: Transport
   - H2: Handshake (connect)
+  - H3: Setup Short-Code Redeem
   - H3: Node example
   - H2: Framing
   - H2: Roles + scopes

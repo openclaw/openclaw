@@ -1,6 +1,13 @@
 // Server HTTP probe tests cover readiness, health, disabled compat routes, and
 // auth handling through the in-memory HTTP harness.
 import { describe, expect, it, vi } from "vitest";
+import { issuePairingSetupShortCode } from "../pairing/setup-short-code.js";
+import {
+  clearPluginStateStoreForTests,
+  resetPluginStateStoreForTests,
+} from "../plugin-state/plugin-state-store.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createAuthRateLimiter } from "./auth-rate-limit.js";
 import {
   AUTH_TOKEN,
   AUTH_NONE,
@@ -40,6 +47,117 @@ describe("gateway OpenAI-compatible disabled HTTP routes", () => {
         }
       },
     });
+  });
+});
+
+describe("gateway pairing setup short-code redeem endpoint", () => {
+  it("redeems a valid setup short code once without gateway auth", async () => {
+    await withOpenClawTestState({ label: "gateway-setup-short-code-redeem" }, async () => {
+      clearPluginStateStoreForTests();
+      const issued = await issuePairingSetupShortCode(
+        {
+          gateway: {
+            bind: "custom",
+            customBindHost: "127.0.0.1",
+            port: 19001,
+            auth: { mode: "token", token: "tok_123" },
+          },
+        },
+        { codeGenerator: () => "ABCD2345" },
+      );
+      expect(issued.ok).toBe(true);
+
+      await withGatewayServer({
+        prefix: "pairing-setup-short-code-redeem",
+        resolvedAuth: AUTH_TOKEN,
+        run: async (server) => {
+          const first = await sendGatewayRequest(server, {
+            path: "/api/v1/pairing/setup-code/redeem",
+            method: "POST",
+            body: JSON.stringify({ code: "abcd-2345" }),
+            remoteAddress: "10.0.0.8",
+            host: "gateway.test",
+          });
+
+          expect(first.res.statusCode).toBe(200);
+          expect(JSON.parse(first.getBody())).toEqual({
+            ok: true,
+            payload: {
+              url: "ws://127.0.0.1:19001",
+              bootstrapToken: expect.any(String),
+            },
+            expiresAtMs: expect.any(Number),
+          });
+
+          const replay = await sendGatewayRequest(server, {
+            path: "/api/v1/pairing/setup-code/redeem",
+            method: "POST",
+            body: JSON.stringify({ code: "ABCD2345" }),
+            remoteAddress: "10.0.0.8",
+            host: "gateway.test",
+          });
+
+          expect(replay.res.statusCode).toBe(404);
+          expect(JSON.parse(replay.getBody())).toMatchObject({
+            ok: false,
+            error: { type: "invalid_or_expired_setup_code" },
+          });
+        },
+      });
+    });
+    resetPluginStateStoreForTests();
+  });
+
+  it("rejects non-POST requests before reading a code", async () => {
+    await withGatewayServer({
+      prefix: "pairing-setup-short-code-method",
+      resolvedAuth: AUTH_NONE,
+      run: async (server) => {
+        const response = await sendGatewayRequest(server, {
+          path: "/api/v1/pairing/setup-code/redeem",
+          method: "GET",
+        });
+
+        expect(response.res.statusCode).toBe(405);
+        expect(response.getBody()).toBe("Method Not Allowed");
+      },
+    });
+  });
+
+  it("rate-limits invalid setup short-code redemption attempts", async () => {
+    const rateLimiter = createAuthRateLimiter({
+      maxAttempts: 1,
+      exemptLoopback: false,
+      pruneIntervalMs: 0,
+    });
+    try {
+      await withGatewayServer({
+        prefix: "pairing-setup-short-code-rate-limit",
+        resolvedAuth: AUTH_NONE,
+        overrides: { rateLimiter },
+        run: async (server) => {
+          const first = await sendGatewayRequest(server, {
+            path: "/api/v1/pairing/setup-code/redeem",
+            method: "POST",
+            body: JSON.stringify({ code: "BAD-CODE" }),
+            remoteAddress: "10.0.0.9",
+            host: "gateway.test",
+          });
+          expect(first.res.statusCode).toBe(400);
+
+          const second = await sendGatewayRequest(server, {
+            path: "/api/v1/pairing/setup-code/redeem",
+            method: "POST",
+            body: JSON.stringify({ code: "BAD-CODE" }),
+            remoteAddress: "10.0.0.9",
+            host: "gateway.test",
+          });
+          expect(second.res.statusCode).toBe(429);
+        },
+      });
+    } finally {
+      rateLimiter.dispose();
+    }
   });
 });
 

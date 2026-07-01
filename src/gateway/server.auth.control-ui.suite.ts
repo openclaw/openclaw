@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { replaceConfigFile as replaceOpenClawConfigFile } from "../config/config.js";
 import {
   BACKEND_GATEWAY_CLIENT,
   connectReq,
@@ -110,6 +111,9 @@ export function registerControlUiAndPairingSuite(): void {
       mode: "node";
       deviceFamily: string;
     };
+    caps?: string[];
+    commands?: string[];
+    permissions?: Record<string, boolean>;
   }) => {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
     const { server, port, prevToken } = await startControlUiServer("secret");
@@ -122,6 +126,9 @@ export function registerControlUiAndPairingSuite(): void {
         bootstrapToken: issued.token,
         role: "node",
         scopes: [],
+        caps: params.caps,
+        commands: params.commands,
+        permissions: params.permissions,
         client: params.client,
         deviceIdentityPath: identityPath,
       });
@@ -144,6 +151,112 @@ export function registerControlUiAndPairingSuite(): void {
     const admin = await rpcReq(ws, "set-heartbeats", { enabled: false });
     expect(admin.ok).toBe(true);
   };
+
+  const IOS_SETUP_NODE_CAPS = [
+    "calendar",
+    "camera",
+    "canvas",
+    "contacts",
+    "device",
+    "motion",
+    "photos",
+    "reminders",
+    "screen",
+    "talk",
+  ];
+  const IOS_SETUP_NODE_COMMANDS = [
+    "calendar.add",
+    "calendar.events",
+    "camera.clip",
+    "camera.list",
+    "camera.snap",
+    "canvas.a2ui.push",
+    "canvas.a2ui.pushJSONL",
+    "canvas.a2ui.reset",
+    "canvas.eval",
+    "canvas.hide",
+    "canvas.navigate",
+    "canvas.present",
+    "canvas.snapshot",
+    "chat.push",
+    "contacts.add",
+    "contacts.search",
+    "device.status",
+    "device.info",
+    "motion.activity",
+    "motion.pedometer",
+    "photos.latest",
+    "reminders.add",
+    "reminders.list",
+    "screen.record",
+    "system.notify",
+    "talk.ptt.once",
+    "talk.ptt.start",
+    "talk.ptt.stop",
+    "talk.ptt.cancel",
+  ];
+  const ANDROID_SETUP_NODE_CAPS = [
+    "calendar",
+    "callLog",
+    "camera",
+    "canvas",
+    "contacts",
+    "device",
+    "location",
+    "motion",
+    "notifications",
+    "photos",
+    "sms",
+    "system",
+    "talk",
+    "voiceWake",
+  ];
+  const ANDROID_SETUP_NODE_COMMANDS = [
+    "calendar.add",
+    "calendar.events",
+    "callLog.search",
+    "camera.clip",
+    "camera.list",
+    "camera.snap",
+    "canvas.a2ui.push",
+    "canvas.a2ui.pushJSONL",
+    "canvas.a2ui.reset",
+    "canvas.eval",
+    "canvas.hide",
+    "canvas.navigate",
+    "canvas.present",
+    "canvas.snapshot",
+    "contacts.add",
+    "contacts.search",
+    "device.apps",
+    "device.health",
+    "device.info",
+    "device.permissions",
+    "device.status",
+    "location.get",
+    "motion.activity",
+    "motion.pedometer",
+    "notifications.actions",
+    "notifications.list",
+    "photos.latest",
+    "sms.search",
+    "sms.send",
+    "system.notify",
+    "talk.ptt.cancel",
+    "talk.ptt.once",
+    "talk.ptt.start",
+    "talk.ptt.stop",
+  ];
+  const DANGEROUS_SETUP_NODE_COMMANDS = new Set([
+    "calendar.add",
+    "camera.clip",
+    "camera.snap",
+    "contacts.add",
+    "reminders.add",
+    "screen.record",
+    "sms.search",
+    "sms.send",
+  ]);
 
   const connectControlUiWithoutDeviceAndExpectOk = async (params: {
     ws: WebSocket;
@@ -1140,6 +1253,7 @@ export function registerControlUiAndPairingSuite(): void {
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
     const { getPairedDevice, listDevicePairing, verifyDeviceToken } =
       await import("../infra/device-pairing.js");
+    const { listNodePairing } = await import("../infra/node-pairing.js");
     const { server, port, prevToken } = await startControlUiServer("secret");
 
     const { identityPath, identity } = await createOperatorIdentityFixture(
@@ -1161,6 +1275,9 @@ export function registerControlUiAndPairingSuite(): void {
         bootstrapToken: issued.token,
         role: "node",
         scopes: [],
+        caps: IOS_SETUP_NODE_CAPS,
+        commands: IOS_SETUP_NODE_COMMANDS,
+        permissions: { photos: true },
         client,
         deviceIdentityPath: identityPath,
       });
@@ -1208,6 +1325,10 @@ export function registerControlUiAndPairingSuite(): void {
         (entry) => entry.deviceId === identity.deviceId,
       );
       expect(pendingForDevice).toEqual([]);
+      const pendingNodeAfterInitial = (await listNodePairing()).pending.filter(
+        (entry) => entry.nodeId === identity.deviceId,
+      );
+      expect(pendingNodeAfterInitial).toEqual([]);
       wsBootstrap.close();
 
       const afterBootstrap = await listDevicePairing();
@@ -1231,6 +1352,16 @@ export function registerControlUiAndPairingSuite(): void {
         "operator.talk.secrets",
         "operator.write",
       ]);
+      const pairedNode = (await listNodePairing()).paired.find(
+        (entry) => entry.nodeId === identity.deviceId,
+      );
+      expect(pairedNode?.caps).toEqual(IOS_SETUP_NODE_CAPS);
+      expect(pairedNode?.commands).toEqual(
+        IOS_SETUP_NODE_COMMANDS.filter(
+          (command) => !DANGEROUS_SETUP_NODE_COMMANDS.has(command),
+        ),
+      );
+      expect(pairedNode?.permissions).toEqual({ photos: true });
 
       const wsReplay = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
       const replay = await connectReq(wsReplay, {
@@ -1316,6 +1447,9 @@ export function registerControlUiAndPairingSuite(): void {
     {
       name: "Android",
       identityPrefix: "openclaw-bootstrap-android-node-",
+      caps: ANDROID_SETUP_NODE_CAPS,
+      commands: ANDROID_SETUP_NODE_COMMANDS,
+      permissions: undefined,
       client: {
         id: "openclaw-android",
         version: "2026.6.2",
@@ -1327,6 +1461,9 @@ export function registerControlUiAndPairingSuite(): void {
     {
       name: "iPadOS",
       identityPrefix: "openclaw-bootstrap-ipados-node-",
+      caps: IOS_SETUP_NODE_CAPS,
+      commands: IOS_SETUP_NODE_COMMANDS,
+      permissions: { photos: true },
       client: {
         id: "openclaw-ios",
         version: "2026.6.2",
@@ -1337,11 +1474,15 @@ export function registerControlUiAndPairingSuite(): void {
     },
   ])(
     "qr setup code auto-approves $name clients when mobile metadata matches",
-    async ({ client, identityPrefix }) => {
+    async ({ caps, client, commands, identityPrefix, permissions }) => {
       const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
+      const { listNodePairing } = await import("../infra/node-pairing.js");
       const { identity, initial } = await connectSetupCodeBootstrapNode({
         identityPrefix,
         client,
+        caps,
+        commands,
+        permissions,
       });
       expect(initial.ok).toBe(true);
       const approvedPayload = initial.payload as
@@ -1384,8 +1525,139 @@ export function registerControlUiAndPairingSuite(): void {
         "operator.talk.secrets",
         "operator.write",
       ]);
+      const nodePairing = await listNodePairing();
+      expect(nodePairing.pending.filter((entry) => entry.nodeId === identity.deviceId)).toEqual([]);
+      const pairedNode = nodePairing.paired.find((entry) => entry.nodeId === identity.deviceId);
+      expect(pairedNode?.caps).toEqual(caps);
+      expect(pairedNode?.commands).toEqual(
+        commands.filter((command) => !DANGEROUS_SETUP_NODE_COMMANDS.has(command)),
+      );
+      expect(pairedNode?.permissions).toEqual(permissions);
     },
   );
+
+  test("qr setup code leaves Android-only iOS node surfaces pending", async () => {
+    const { listNodePairing } = await import("../infra/node-pairing.js");
+    const { identity, initial } = await connectSetupCodeBootstrapNode({
+      identityPrefix: "openclaw-bootstrap-ios-android-surface-",
+      client: {
+        id: "openclaw-ios",
+        version: "2026.6.2",
+        platform: "iOS 26.3.1",
+        mode: "node",
+        deviceFamily: "iPhone",
+      },
+      caps: [...IOS_SETUP_NODE_CAPS, "callLog"],
+      commands: [...IOS_SETUP_NODE_COMMANDS, "callLog.search"],
+      permissions: { photos: true },
+    });
+
+    expect(initial.ok).toBe(true);
+    const nodePairing = await listNodePairing();
+    const pending = nodePairing.pending.filter((entry) => entry.nodeId === identity.deviceId);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.caps).toContain("callLog");
+    expect(nodePairing.paired.find((entry) => entry.nodeId === identity.deviceId)).toBeUndefined();
+  });
+
+  test("qr setup code honors denied mobile node commands during auto-approval", async () => {
+    const { listNodePairing } = await import("../infra/node-pairing.js");
+    const deniedCommand = "camera.snap";
+    await replaceOpenClawConfigFile({
+      nextConfig: {
+        gateway: {
+          nodes: {
+            denyCommands: [deniedCommand],
+          },
+        },
+      },
+    });
+    try {
+      const { identity, initial } = await connectSetupCodeBootstrapNode({
+        identityPrefix: "openclaw-bootstrap-ios-denied-command-",
+        client: {
+          id: "openclaw-ios",
+          version: "2026.6.2",
+          platform: "iOS 26.3.1",
+          mode: "node",
+          deviceFamily: "iPhone",
+        },
+        caps: IOS_SETUP_NODE_CAPS,
+        commands: IOS_SETUP_NODE_COMMANDS,
+        permissions: { photos: true },
+      });
+
+      expect(initial.ok).toBe(true);
+      const nodePairing = await listNodePairing();
+      const pairedNode = nodePairing.paired.find((entry) => entry.nodeId === identity.deviceId);
+      expect(pairedNode?.commands).not.toContain(deniedCommand);
+      expect(nodePairing.pending.filter((entry) => entry.nodeId === identity.deviceId)).toEqual([]);
+    } finally {
+      await replaceOpenClawConfigFile({ nextConfig: {} });
+    }
+  });
+
+  test("qr setup code auto-approves explicitly allowed dangerous mobile node commands", async () => {
+    const { listNodePairing } = await import("../infra/node-pairing.js");
+    const allowedCommand = "camera.snap";
+    await replaceOpenClawConfigFile({
+      nextConfig: {
+        gateway: {
+          nodes: {
+            allowCommands: [allowedCommand],
+          },
+        },
+      },
+    });
+    try {
+      const { identity, initial } = await connectSetupCodeBootstrapNode({
+        identityPrefix: "openclaw-bootstrap-ios-allowed-dangerous-command-",
+        client: {
+          id: "openclaw-ios",
+          version: "2026.6.2",
+          platform: "iOS 26.3.1",
+          mode: "node",
+          deviceFamily: "iPhone",
+        },
+        caps: IOS_SETUP_NODE_CAPS,
+        commands: IOS_SETUP_NODE_COMMANDS,
+        permissions: { photos: true },
+      });
+
+      expect(initial.ok).toBe(true);
+      const nodePairing = await listNodePairing();
+      const pairedNode = nodePairing.paired.find((entry) => entry.nodeId === identity.deviceId);
+      expect(pairedNode?.commands).toContain(allowedCommand);
+      expect(nodePairing.pending.filter((entry) => entry.nodeId === identity.deviceId)).toEqual([]);
+    } finally {
+      await replaceOpenClawConfigFile({ nextConfig: {} });
+    }
+  });
+
+  test("qr setup code requires owner approval for setup-code bootstrap node surfaces outside mobile baseline", async () => {
+    const { listNodePairing } = await import("../infra/node-pairing.js");
+    const extraCap = "plugin.demo";
+    const { identity, initial } = await connectSetupCodeBootstrapNode({
+      identityPrefix: "openclaw-bootstrap-extra-node-command-",
+      client: {
+        id: "openclaw-ios",
+        version: "2026.6.2",
+        platform: "iOS 26.3.1",
+        mode: "node",
+        deviceFamily: "iPhone",
+      },
+      caps: [...IOS_SETUP_NODE_CAPS, extraCap],
+      commands: IOS_SETUP_NODE_COMMANDS,
+      permissions: { photos: true },
+    });
+
+    expect(initial.ok).toBe(true);
+    const nodePairing = await listNodePairing();
+    const pending = nodePairing.pending.filter((entry) => entry.nodeId === identity.deviceId);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.caps).toContain(extraCap);
+    expect(nodePairing.paired.find((entry) => entry.nodeId === identity.deviceId)).toBeUndefined();
+  });
 
   test.each([
     {

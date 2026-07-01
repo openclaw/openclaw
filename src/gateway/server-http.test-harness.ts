@@ -37,6 +37,7 @@ export function createRequest(params: {
   remoteAddress?: string;
   host?: string;
   headers?: Record<string, string>;
+  body?: string;
 }): IncomingMessage {
   return createGatewayRequest({
     path: params.path,
@@ -45,6 +46,7 @@ export function createRequest(params: {
     remoteAddress: params.remoteAddress,
     host: params.host,
     headers: params.headers,
+    body: params.body,
   });
 }
 
@@ -184,6 +186,7 @@ export async function sendRequest(
     method?: string;
     remoteAddress?: string;
     host?: string;
+    body?: string;
   },
 ): Promise<ReturnType<typeof createResponse>> {
   const response = createResponse();

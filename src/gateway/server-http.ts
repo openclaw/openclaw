@@ -87,6 +87,9 @@ let pluginNodeCapabilityAuthModulePromise:
   | Promise<typeof import("./server/plugin-node-capability-auth.js")>
   | undefined;
 let httpAuthUtilsModulePromise: Promise<typeof import("./http-auth-utils.js")> | undefined;
+let pairingSetupShortCodeHttpModulePromise:
+  | Promise<typeof import("./pairing-setup-short-code-http.js")>
+  | undefined;
 let pluginRouteRuntimeScopesModulePromise:
   | Promise<typeof import("./server/plugin-route-runtime-scopes.js")>
   | undefined;
@@ -149,6 +152,11 @@ function getPluginNodeCapabilityAuthModule() {
 function getHttpAuthUtilsModule() {
   httpAuthUtilsModulePromise ??= import("./http-auth-utils.js");
   return httpAuthUtilsModulePromise;
+}
+
+function getPairingSetupShortCodeHttpModule() {
+  pairingSetupShortCodeHttpModulePromise ??= import("./pairing-setup-short-code-http.js");
+  return pairingSetupShortCodeHttpModulePromise;
 }
 
 function getPluginRouteRuntimeScopesModule() {
@@ -231,6 +239,10 @@ function isSessionKillPath(pathname: string): boolean {
 
 function isSessionHistoryPath(pathname: string): boolean {
   return /^\/sessions\/[^/]+\/history$/.test(pathname);
+}
+
+function isPairingSetupShortCodeRedeemPath(pathname: string): boolean {
+  return pathname === "/api/v1/pairing/setup-code/redeem";
 }
 
 function shouldEnforceDefaultPluginGatewayAuth(pathContext: PluginRoutePathContext): boolean {
@@ -659,6 +671,19 @@ export function createGatewayHttpServer(opts: {
             (await getSessionHistoryHttpModule()).handleSessionHistoryHttpRequest(req, res, {
               auth: resolvedAuthValue,
               getResolvedAuth,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
+            }),
+        });
+      }
+      if (isPairingSetupShortCodeRedeemPath(scopedRequestPath)) {
+        requestStages.push({
+          name: "pairing-setup-short-code-redeem",
+          run: async () =>
+            (
+              await getPairingSetupShortCodeHttpModule()
+            ).handlePairingSetupShortCodeRedeemHttpRequest(req, res, {
               trustedProxies,
               allowRealIpFallback,
               rateLimiter,

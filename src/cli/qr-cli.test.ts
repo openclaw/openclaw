@@ -12,6 +12,13 @@ const mocks = vi.hoisted(() => ({
     diagnostics: [] as string[],
   })),
   renderTerminal: vi.fn(async () => "ASCII-QR"),
+  registerShortCode: vi.fn(() => ({
+    ok: true as const,
+    code: "ABCD2345",
+    expiresAtMs: 456,
+    authLabel: "token" as const,
+    urlSource: "test",
+  })),
 }));
 const { defaultRuntime: runtime, resetRuntimeCapture } = createCliRuntimeCapture();
 const runtimeLog = runtime.log;
@@ -32,6 +39,10 @@ vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: mocks.runCommandWi
 vi.mock("../media/qr-terminal.ts", () => ({
   renderQrTerminal: mocks.renderTerminal,
 }));
+vi.mock("../pairing/setup-short-code.js", () => ({
+  formatPairingSetupShortCode: (code: string) => `${code.slice(0, 4)}-${code.slice(4)}`,
+  registerPairingSetupShortCode: mocks.registerShortCode,
+}));
 vi.mock("./command-secret-gateway.js", () => ({
   resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
 }));
@@ -45,6 +56,7 @@ const loadConfig = mocks.loadConfig;
 const runCommandWithTimeout = mocks.runCommandWithTimeout;
 const resolveCommandSecretRefsViaGateway = mocks.resolveCommandSecretRefsViaGateway;
 const renderTerminal = mocks.renderTerminal;
+const registerShortCode = mocks.registerShortCode;
 
 const { registerQrCli } = await import("./qr-cli.js");
 
@@ -140,6 +152,8 @@ describe("registerQrCli", () => {
     const raw = calls[calls.length - 1]?.[0];
     return JSON.parse(typeof raw === "string" ? raw : "{}") as {
       setupCode?: string;
+      shortCode?: string;
+      shortCodeExpiresAtMs?: number;
       gatewayUrl?: string;
       auth?: string;
       urlSource?: string;
@@ -197,6 +211,7 @@ describe("registerQrCli", () => {
     });
     expect(runtime.log).toHaveBeenCalledWith(expected);
     expect(renderTerminal).not.toHaveBeenCalled();
+    expect(registerShortCode).not.toHaveBeenCalled();
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
 
@@ -215,8 +230,66 @@ describe("registerQrCli", () => {
     const output = runtimeLog.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
     expect(output).toContain("Pairing QR");
     expect(output).toContain("ASCII-QR");
+    expect(output).toContain("Short code:");
+    expect(output).toContain("ABCD-2345");
     expect(output).toContain("Gateway:");
+    expect(output).toContain("Fresh mobile setup auto-approves");
+    expect(output).toContain("openclaw nodes pending");
     expect(output).toContain("openclaw devices approve <requestId>");
+    expect(output).toContain("openclaw nodes approve <requestId>");
+    expect(registerShortCode).toHaveBeenCalledWith({
+      payload: {
+        url: "ws://127.0.0.1:18789",
+        bootstrapToken: "bootstrap-123",
+      },
+      authLabel: "token",
+      urlSource: "gateway.bind=custom",
+    });
+  });
+
+  it("still prints the setup QR when short-code registration is unavailable", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        bind: "custom",
+        customBindHost: "127.0.0.1",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+    registerShortCode.mockImplementationOnce(() => {
+      throw new Error("state unavailable");
+    });
+
+    await runQr([]);
+
+    expect(renderTerminal).toHaveBeenCalledTimes(1);
+    const output = runtimeLog.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
+    expect(output).toContain("Pairing QR");
+    expect(output).toContain("ASCII-QR");
+    expect(output).toContain("Short code:");
+    expect(output).toContain("unavailable");
+    expect(output).toContain("Setup code:");
+    expect(output).toContain("Gateway:");
+  });
+
+  it("omits unavailable short-code fields from json output", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        bind: "custom",
+        customBindHost: "127.0.0.1",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+    registerShortCode.mockImplementationOnce(() => {
+      throw new Error("state unavailable");
+    });
+
+    await runQr(["--json"]);
+
+    const payload = parseLastLoggedQrJson();
+    expect(payload.setupCode).toBeTruthy();
+    expect(payload.gatewayUrl).toBe("ws://127.0.0.1:18789");
+    expect(payload.shortCode).toBeUndefined();
+    expect(payload.shortCodeExpiresAtMs).toBeUndefined();
   });
 
   it("fails fast for insecure remote mobile pairing setup urls", async () => {
@@ -482,8 +555,11 @@ describe("registerQrCli", () => {
 
     const payload = parseLastLoggedQrJson();
     expect(payload.gatewayUrl).toBe("wss://remote.example.com:444");
+    expect(payload.shortCode).toBeUndefined();
+    expect(payload.shortCodeExpiresAtMs).toBeUndefined();
     expect(payload.auth).toBe("token");
     expect(payload.urlSource).toBe("gateway.remote.url");
+    expect(registerShortCode).not.toHaveBeenCalled();
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
@@ -545,7 +621,10 @@ describe("registerQrCli", () => {
 
     const payload = parseLastLoggedQrJson();
     expect(payload.gatewayUrl).toBe("wss://ts-host.tailnet.ts.net");
+    expect(payload.shortCode).toBe("ABCD2345");
+    expect(payload.shortCodeExpiresAtMs).toBe(456);
     expect(payload.auth).toBe("token");
     expect(payload.urlSource).toBe("gateway.tailscale.mode=serve");
+    expect(registerShortCode).toHaveBeenCalled();
   });
 });

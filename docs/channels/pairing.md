@@ -113,8 +113,12 @@ If you use the `device-pair` plugin, you can do first-time device pairing entire
 1. In Telegram, message your bot: `/pair`
 2. The bot replies with two messages: an instruction message and a separate **setup code** message (easy to copy/paste in Telegram).
 3. On your phone, open the OpenClaw iOS app → Settings → Gateway.
-4. Scan the QR code or paste the setup code and connect.
-5. Back in Telegram: `/pair pending` (review request IDs, role, and scopes), then approve.
+4. Scan the QR code or paste the setup code and connect. For the built-in
+   setup-code mobile baseline, the Gateway silently approves the fresh mobile
+   device and its node pairing during the bootstrap handshake.
+5. Back in Telegram: `/pair pending` only if the app reports a pending repair or
+   upgrade. Review request IDs, role, scopes, and capability changes before
+   approving.
 
 The setup code is a base64-encoded JSON payload that contains:
 
@@ -127,13 +131,17 @@ That bootstrap token carries the built-in pairing bootstrap profile:
   `node` plus a bounded `operator` handoff
 - the handed-off `node` token stays `scopes: []`
 - the handed-off `operator` token is limited to `operator.approvals`,
-  `operator.read`, and `operator.write`
+  `operator.read`, `operator.talk.secrets`, and `operator.write`
 - `operator.admin` and `operator.pairing` are not granted by QR/setup-code
   bootstrap; they require a separate approved operator pairing or token flow
 - later token rotation/revocation remains bounded by both the device's approved
   role contract and the caller session's operator scopes
 
-Treat the setup code like a password while it is valid.
+Treat the setup code like a password while it is valid. `openclaw qr` also
+prints an 8-character setup short code. The short code is a 5-minute, single-use
+pointer to the same setup-code payload on that Gateway. A QR/setup code carries
+the Gateway URL directly; a bare short code still requires the app to know which
+Gateway host to redeem against.
 
 For Tailscale, public, or other remote mobile pairing, use Tailscale Serve/Funnel
 or another `wss://` Gateway URL. Plaintext `ws://` setup codes are accepted only
@@ -141,12 +149,14 @@ for loopback, private LAN addresses, `.local` Bonjour hosts, and the Android
 emulator host. Tailnet CGNAT addresses, `.ts.net` names, and public hosts still
 fail closed before QR/setup-code issuance.
 
-### Approve a node device
+### Approve a node device or upgrade
 
 ```bash
 openclaw devices list
 openclaw devices approve <requestId>
 openclaw devices reject <requestId>
+openclaw nodes pending
+openclaw nodes approve <requestId>
 ```
 
 When an explicit approval is denied because the approving paired-device session

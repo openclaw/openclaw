@@ -177,6 +177,40 @@ a separate approved operator pairing or token flow. Clients should persist
 when the connect used bootstrap auth on trusted transport such as `wss://` or
 loopback/local pairing.
 
+For current native onboarding, that same baseline setup-code bootstrap can also
+silently approve the fresh mobile device and its first node pairing. This is
+limited to the built-in setup profile and mobile client metadata. Later role,
+scope, device metadata, or node capability changes still create pending pairing
+requests for explicit review.
+
+### Setup Short-Code Redeem
+
+`POST /api/v1/pairing/setup-code/redeem` redeems the 8-character setup short
+code printed by `openclaw qr` into the canonical setup-code payload:
+
+```json
+{ "code": "ABCD2345" }
+```
+
+Success:
+
+```json
+{
+  "ok": true,
+  "payload": {
+    "url": "wss://gateway.example.com",
+    "bootstrapToken": "…"
+  },
+  "expiresAtMs": 1737264300000
+}
+```
+
+The endpoint is intentionally pre-auth so a fresh mobile app can redeem a code.
+The short code is single-use, expires after 5 minutes, is rate-limited per
+client IP, and points only to the same setup-code payload that the QR/setup-code
+path would have carried. It does not expose the long-lived shared Gateway token
+or password by default.
+
 ### Node example
 
 ```json

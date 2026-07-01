@@ -42,6 +42,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { getRuntimeConfig } from "../../../config/io.js";
 import { resolveStateDir } from "../../../config/paths.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   getBoundDeviceBootstrapProfile,
   getDeviceBootstrapTokenProfile,
@@ -77,6 +78,7 @@ import {
 } from "../../../infra/diagnostic-trace-context.js";
 import {
   beginNodePairingConnect,
+  approveNodePairing,
   finalizeNodePairingCleanupClaim,
   releaseNodePairingCleanupClaim,
   requestNodePairing,
@@ -123,6 +125,7 @@ import {
   resolveNodePairingClientIpSource,
   shouldAutoApproveNodePairingFromTrustedCidrs,
 } from "../../node-pairing-auto-approve.js";
+import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../../node-command-policy.js";
 import type { NodeReapprovalCoordinator } from "../../node-reapproval-coordinator.js";
 import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { checkBrowserOrigin } from "../../origin-check.js";
@@ -349,6 +352,211 @@ function isSetupCodeMobileBootstrapClient(client: {
     return /^(?:ios|ipados)(?:\s|$)/.test(platform) && /^(?:iphone|ipad|ios)$/.test(deviceFamily);
   }
   return false;
+}
+
+type SetupCodeMobileNodeApprovalProfile = {
+  caps: ReadonlySet<string>;
+  commands: ReadonlySet<string>;
+  permissionKeys: ReadonlySet<string>;
+};
+
+const SETUP_CODE_IOS_NODE_CAPS = new Set([
+  "calendar",
+  "camera",
+  "canvas",
+  "contacts",
+  "device",
+  "location",
+  "motion",
+  "photos",
+  "reminders",
+  "screen",
+  "talk",
+  "voiceWake",
+  "watch",
+]);
+
+const SETUP_CODE_IOS_NODE_COMMANDS = new Set([
+  "calendar.events",
+  "calendar.add",
+  "camera.list",
+  "camera.clip",
+  "camera.snap",
+  "chat.push",
+  "canvas.a2ui.push",
+  "canvas.a2ui.pushJSONL",
+  "canvas.a2ui.reset",
+  "canvas.eval",
+  "canvas.hide",
+  "canvas.navigate",
+  "canvas.present",
+  "canvas.snapshot",
+  "contacts.search",
+  "contacts.add",
+  "device.info",
+  "device.status",
+  "location.get",
+  "motion.activity",
+  "motion.pedometer",
+  "photos.latest",
+  "reminders.list",
+  "reminders.add",
+  "screen.record",
+  "system.notify",
+  "talk.ptt.cancel",
+  "talk.ptt.once",
+  "talk.ptt.start",
+  "talk.ptt.stop",
+  "watch.notify",
+  "watch.status",
+]);
+
+const SETUP_CODE_ANDROID_NODE_CAPS = new Set([
+  "calendar",
+  "callLog",
+  "camera",
+  "canvas",
+  "contacts",
+  "device",
+  "location",
+  "motion",
+  "notifications",
+  "photos",
+  "sms",
+  "system",
+  "talk",
+  "voiceWake",
+]);
+
+const SETUP_CODE_ANDROID_NODE_COMMANDS = new Set([
+  "calendar.events",
+  "calendar.add",
+  "callLog.search",
+  "camera.list",
+  "camera.clip",
+  "camera.snap",
+  "canvas.a2ui.push",
+  "canvas.a2ui.pushJSONL",
+  "canvas.a2ui.reset",
+  "canvas.eval",
+  "canvas.hide",
+  "canvas.navigate",
+  "canvas.present",
+  "canvas.snapshot",
+  "contacts.search",
+  "contacts.add",
+  "device.apps",
+  "device.health",
+  "device.info",
+  "device.permissions",
+  "device.status",
+  "location.get",
+  "motion.activity",
+  "motion.pedometer",
+  "notifications.actions",
+  "notifications.list",
+  "photos.latest",
+  "sms.search",
+  "sms.send",
+  "system.notify",
+  "talk.ptt.cancel",
+  "talk.ptt.once",
+  "talk.ptt.start",
+  "talk.ptt.stop",
+]);
+
+const SETUP_CODE_IOS_NODE_PERMISSION_KEYS = new Set([
+  "calendar",
+  "camera",
+  "contacts",
+  "location",
+  "microphone",
+  "motion",
+  "photos",
+  "reminders",
+  "screenRecording",
+  "speechRecognition",
+  "watchAppInstalled",
+  "watchPaired",
+  "watchReachable",
+  "watchSupported",
+]);
+
+const SETUP_CODE_ANDROID_NODE_PERMISSION_KEYS = new Set<string>();
+
+const SETUP_CODE_IOS_NODE_APPROVAL_PROFILE = {
+  caps: SETUP_CODE_IOS_NODE_CAPS,
+  commands: SETUP_CODE_IOS_NODE_COMMANDS,
+  permissionKeys: SETUP_CODE_IOS_NODE_PERMISSION_KEYS,
+} satisfies SetupCodeMobileNodeApprovalProfile;
+
+const SETUP_CODE_ANDROID_NODE_APPROVAL_PROFILE = {
+  caps: SETUP_CODE_ANDROID_NODE_CAPS,
+  commands: SETUP_CODE_ANDROID_NODE_COMMANDS,
+  permissionKeys: SETUP_CODE_ANDROID_NODE_PERMISSION_KEYS,
+} satisfies SetupCodeMobileNodeApprovalProfile;
+
+function isSubsetOfAllowed(values: readonly string[], allowed: ReadonlySet<string>): boolean {
+  return values.every((value) => allowed.has(value));
+}
+
+function resolveSetupCodeMobileNodeApprovalProfile(client: {
+  id?: string;
+}): SetupCodeMobileNodeApprovalProfile | undefined {
+  if (client.id === GATEWAY_CLIENT_IDS.IOS_APP) {
+    return SETUP_CODE_IOS_NODE_APPROVAL_PROFILE;
+  }
+  if (client.id === GATEWAY_CLIENT_IDS.ANDROID_APP) {
+    return SETUP_CODE_ANDROID_NODE_APPROVAL_PROFILE;
+  }
+  return undefined;
+}
+
+function isSetupCodeMobileNodeApprovalSurface(
+  profile: SetupCodeMobileNodeApprovalProfile,
+  params: {
+  caps: readonly string[];
+  commands: readonly string[];
+  permissions?: Record<string, boolean>;
+  },
+): boolean {
+  // QR/setup-code bootstrap may approve only built-in mobile app surfaces.
+  // Operator-configured extra node commands still require normal owner approval.
+  if (!isSubsetOfAllowed(params.caps, profile.caps)) {
+    return false;
+  }
+  if (!isSubsetOfAllowed(params.commands, profile.commands)) {
+    return false;
+  }
+  return Object.keys(params.permissions ?? {}).every((key) =>
+    profile.permissionKeys.has(key)
+  );
+}
+
+function withSetupCodeMobileNodeCommandAllowlist(
+  cfg: OpenClawConfig,
+  profile: SetupCodeMobileNodeApprovalProfile,
+): OpenClawConfig {
+  const configuredAllowCommands = cfg.gateway?.nodes?.allowCommands ?? [];
+  const configuredAllowSet = new Set(configuredAllowCommands.map((command) => command.trim()));
+  const dangerousCommands = new Set(DEFAULT_DANGEROUS_NODE_COMMANDS);
+  const setupCodeAllowCommands = [...profile.commands].filter(
+    (command) => !dangerousCommands.has(command) || configuredAllowSet.has(command),
+  );
+  const allowCommands = normalizeSortedUniqueTrimmedStringList([
+    ...configuredAllowCommands,
+    ...setupCodeAllowCommands,
+  ]);
+  return {
+    ...cfg,
+    gateway: {
+      ...cfg.gateway,
+      nodes: {
+        ...cfg.gateway?.nodes,
+        allowCommands,
+      },
+    },
+  };
 }
 
 function resolveTrustedProxyControlUiScopes(params: {
@@ -1269,6 +1477,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             ? await getDeviceBootstrapTokenProfile({ token: bootstrapTokenCandidate })
             : null;
         let handoffBootstrapProfile: DeviceBootstrapProfile | null = null;
+        let setupCodeMobileDeviceBootstrapApproved = false;
         const trustedProxyAuthOk = isTrustedProxyControlUiOperatorAuth({
           isControlUi,
           role,
@@ -1460,6 +1669,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
               if (approved?.status === "approved") {
                 if (allowSetupCodeMobileBootstrapPairing && boundBootstrapProfile) {
                   handoffBootstrapProfile = boundBootstrapProfile;
+                  setupCodeMobileDeviceBootstrapApproved = true;
                 }
                 logGateway.info(
                   `device pairing auto-approved device=${approved.device.deviceId} role=${approved.device.role ?? "unknown"}`,
@@ -1770,10 +1980,18 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           const nodePairingSnapshot = await beginNodePairingConnect(nodeId);
           const pairedNode = nodePairingSnapshot.pairedNode;
           pendingNodePairingCleanup = nodePairingSnapshot.cleanupClaim;
+          const setupCodeMobileApprovalProfile = setupCodeMobileDeviceBootstrapApproved
+            ? resolveSetupCodeMobileNodeApprovalProfile(connectParams.client)
+            : undefined;
           let reconciliation: Awaited<ReturnType<typeof reconcileNodePairingOnConnect>>;
           try {
             reconciliation = await reconcileNodePairingOnConnect({
-              cfg: getRuntimeConfig(),
+              cfg: setupCodeMobileApprovalProfile
+                ? withSetupCodeMobileNodeCommandAllowlist(
+                    getRuntimeConfig(),
+                    setupCodeMobileApprovalProfile,
+                  )
+                : getRuntimeConfig(),
               connectParams,
               pairedNode,
               reportedClientIp,
@@ -1788,6 +2006,48 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                 });
               },
             });
+            if (
+              setupCodeMobileDeviceBootstrapApproved &&
+              setupCodeMobileApprovalProfile &&
+              pairedNode === null &&
+              reconciliation.pendingPairing &&
+              isSetupCodeMobileNodeApprovalSurface(setupCodeMobileApprovalProfile, {
+                caps: reconciliation.declaredCaps,
+                commands: reconciliation.declaredCommands,
+                permissions: reconciliation.declaredPermissions,
+              })
+            ) {
+              const bootstrapNodeApproval = await approveNodePairing(
+                reconciliation.pendingPairing.request.requestId,
+                {
+                  callerScopes: ["operator.pairing", "operator.write"],
+                },
+              );
+              if (bootstrapNodeApproval && "node" in bootstrapNodeApproval) {
+                const { pendingPairing: _pendingPairing, ...approvedReconciliation } =
+                  reconciliation;
+                reconciliation = {
+                  ...approvedReconciliation,
+                  effectiveCaps: reconciliation.declaredCaps,
+                  effectiveCommands: reconciliation.declaredCommands,
+                  effectivePermissions: reconciliation.declaredPermissions,
+                  shouldClearPendingPairings: true,
+                };
+                buildRequestContext().broadcast(
+                  "node.pair.resolved",
+                  {
+                    requestId: bootstrapNodeApproval.requestId,
+                    nodeId: bootstrapNodeApproval.node.nodeId,
+                    decision: "approved",
+                    ts: Date.now(),
+                  },
+                  { dropIfSlow: true },
+                );
+                logGateway.info(
+                  `node pairing auto-approved via setup-code bootstrap node=${bootstrapNodeApproval.node.nodeId}`,
+                );
+              }
+            }
           } catch (error) {
             await releasePendingNodePairingCleanup();
             if (error instanceof NodePairingRateLimitError) {

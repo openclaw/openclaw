@@ -9,6 +9,11 @@ import { trimToUndefined } from "../gateway/credentials.js";
 import { resolveRequiredConfiguredSecretRefInputString } from "../gateway/resolve-configured-secret-input-string.js";
 import { renderQrTerminal } from "../media/qr-terminal.ts";
 import { resolvePairingSetupFromConfig, encodePairingSetupCode } from "../pairing/setup-code.js";
+import {
+  formatPairingSetupShortCode,
+  registerPairingSetupShortCode,
+  type PairingSetupShortCodeIssueResult,
+} from "../pairing/setup-short-code.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
@@ -28,6 +33,31 @@ type QrCliOptions = {
 function renderQrAscii(data: string): Promise<string> {
   return renderQrTerminal(data);
 }
+
+function tryRegisterPairingSetupShortCode(
+  params: Parameters<typeof registerPairingSetupShortCode>[0],
+): PairingSetupShortCodeIssueResult {
+  try {
+    return registerPairingSetupShortCode(params);
+  } catch {
+    return { ok: false, error: "short code unavailable" };
+  }
+}
+
+function shouldRegisterPairingSetupShortCode(params: {
+  explicitUrl?: string;
+  urlSource: string;
+}): boolean {
+  if (params.explicitUrl) {
+    return false;
+  }
+  return (
+    params.urlSource.startsWith("gateway.bind=") ||
+    params.urlSource.startsWith("gateway.tailscale.mode=") ||
+    params.urlSource === "plugins.entries.device-pair.config.publicUrl"
+  );
+}
+
 function readDevicePairPublicUrlFromConfig(cfg: OpenClawConfig): string | undefined {
   const value = cfg.plugins?.entries?.["device-pair"]?.config?.["publicUrl"];
   if (typeof value !== "string") {
@@ -216,9 +246,22 @@ export function registerQrCli(program: Command) {
           return;
         }
 
+        const shortCode = shouldRegisterPairingSetupShortCode({
+          explicitUrl,
+          urlSource: resolved.urlSource,
+        })
+          ? tryRegisterPairingSetupShortCode({
+              payload: resolved.payload,
+              authLabel: resolved.authLabel,
+              urlSource: resolved.urlSource,
+            })
+          : ({ ok: false, error: "short code unavailable" } satisfies PairingSetupShortCodeIssueResult);
+
         if (opts.json) {
           defaultRuntime.writeJson({
             setupCode,
+            shortCode: shortCode.ok ? shortCode.code : undefined,
+            shortCodeExpiresAtMs: shortCode.ok ? shortCode.expiresAtMs : undefined,
             gatewayUrl: resolved.payload.url,
             auth: resolved.authLabel,
             urlSource: resolved.urlSource,
@@ -238,14 +281,18 @@ export function registerQrCli(program: Command) {
         }
 
         lines.push(
+          `${theme.muted("Short code:")} ${shortCode.ok ? formatPairingSetupShortCode(shortCode.code) : "unavailable"}`,
           `${theme.muted("Setup code:")} ${setupCode}`,
           `${theme.muted("Gateway:")} ${resolved.payload.url}`,
           `${theme.muted("Auth:")} ${resolved.authLabel}`,
           `${theme.muted("Source:")} ${resolved.urlSource}`,
           "",
-          "Approve after scan with:",
+          "Fresh mobile setup auto-approves the baseline device and node.",
+          "If an upgraded surface remains pending:",
           `  ${theme.command("openclaw devices list")}`,
+          `  ${theme.command("openclaw nodes pending")}`,
           `  ${theme.command("openclaw devices approve <requestId>")}`,
+          `  ${theme.command("openclaw nodes approve <requestId>")}`,
         );
 
         defaultRuntime.log(lines.join("\n"));

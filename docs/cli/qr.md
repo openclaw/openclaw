@@ -29,14 +29,18 @@ openclaw qr --url wss://gateway.example/ws
 - `--password <password>`: override which gateway password the bootstrap flow authenticates against
 - `--setup-code-only`: print only setup code
 - `--no-ascii`: skip ASCII QR rendering
-- `--json`: emit JSON (`setupCode`, `gatewayUrl`, `auth`, `urlSource`)
+- `--json`: emit JSON (`setupCode`, optional `shortCode`/`shortCodeExpiresAtMs`, `gatewayUrl`, `auth`, `urlSource`)
 
 ## Notes
 
 - `--token` and `--password` are mutually exclusive.
 - The setup code itself now carries an opaque short-lived `bootstrapToken`, not the shared gateway token/password.
+- Normal QR/setup-code mobile onboarding is one step: scan the QR or paste the setup code, then the app connects with bootstrap auth and the Gateway silently approves the fresh baseline mobile device plus its node pairing.
+- `openclaw qr` also prints an 8-character setup short code. The short code is a 5-minute, single-use pointer to the same setup-code payload on that Gateway. A bare short code still needs the app to know which Gateway host to redeem against; the QR/setup code carries the Gateway URL directly.
 - Built-in setup-code bootstrap returns a primary `node` token with `scopes: []` plus a bounded `operator` handoff token for trusted mobile onboarding.
 - The handed-off operator token is limited to `operator.approvals`, `operator.read`, `operator.talk.secrets`, and `operator.write`; `operator.admin` and `operator.pairing` require a separate approved operator pairing or token flow.
+- Auto-approval is limited to the fresh setup-code mobile baseline. Later role, scope, metadata, or node capability upgrades still create pending requests that require explicit approval.
+- Dangerous node commands such as camera capture, screen recording, contact/calendar writes, and SMS are still excluded unless explicitly enabled with `gateway.nodes.allowCommands`; `gateway.nodes.denyCommands` still removes matching mobile node commands from the auto-approved baseline.
 - Mobile pairing fails closed for Tailscale/public `ws://` gateway URLs. Private LAN addresses and `.local` Bonjour hosts remain supported over `ws://`, but Tailscale/public mobile routes should use Tailscale Serve/Funnel or a `wss://` gateway URL.
 - With `--remote`, OpenClaw requires either `gateway.remote.url` or
   `gateway.tailscale.mode=serve|funnel`.
@@ -46,9 +50,10 @@ openclaw qr --url wss://gateway.example/ws
   - `gateway.auth.password` resolves when password auth can win (explicit `gateway.auth.mode="password"` or inferred mode with no winning token from auth/env).
 - If both `gateway.auth.token` and `gateway.auth.password` are configured (including SecretRefs) and `gateway.auth.mode` is unset, setup-code resolution fails until mode is set explicitly.
 - Gateway version skew note: this command path requires a gateway that supports `secrets.resolve`; older gateways return an unknown-method error.
-- After scanning, approve device pairing with:
+- If onboarding reports a pending repair or upgrade instead of connecting, review it with:
   - `openclaw devices list`
-  - `openclaw devices approve <requestId>`
+  - `openclaw nodes pending`
+  - `openclaw devices approve <requestId>` or `openclaw nodes approve <requestId>`
 
 ## Related
 

@@ -1,5 +1,6 @@
 // Gateway hook test fixtures.
 // Builds resolved hook config and IncomingMessage-like requests for tests.
+import { EventEmitter } from "node:events";
 import type { IncomingMessage } from "node:http";
 import type { HooksConfigResolved } from "./hooks.js";
 
@@ -31,6 +32,7 @@ export function createGatewayRequest(params: {
   remoteAddress?: string;
   host?: string;
   headers?: Record<string, string>;
+  body?: string;
 }): IncomingMessage {
   const headers: Record<string, string> = {
     host: params.host ?? "localhost:18789",
@@ -39,10 +41,44 @@ export function createGatewayRequest(params: {
   if (params.authorization) {
     headers.authorization = params.authorization;
   }
-  return {
+  if (params.body !== undefined) {
+    headers["content-length"] ??= String(Buffer.byteLength(params.body, "utf8"));
+    headers["content-type"] ??= "application/json";
+  }
+  const body = params.body;
+  let bodyScheduled = false;
+  const emitter = new EventEmitter();
+  const request = Object.assign(emitter, {
     method: params.method ?? "GET",
     url: params.path,
     headers,
     socket: { remoteAddress: params.remoteAddress ?? "127.0.0.1" },
-  } as IncomingMessage;
+    destroyed: false,
+  }) as IncomingMessage & { destroyed: boolean };
+  request.destroy = () => {
+    request.destroyed = true;
+    emitter.emit("close");
+    return request;
+  };
+  if (body !== undefined) {
+    const scheduleBody = () => {
+      if (bodyScheduled) {
+        return;
+      }
+      bodyScheduled = true;
+      setImmediate(() => {
+        if (request.destroyed) {
+          return;
+        }
+        request.emit("data", Buffer.from(body, "utf8"));
+        request.emit("end");
+      });
+    };
+    request.on("newListener", (eventName) => {
+      if (eventName === "data" || eventName === "end") {
+        scheduleBody();
+      }
+    });
+  }
+  return request;
 }
