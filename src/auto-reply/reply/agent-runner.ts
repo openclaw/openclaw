@@ -2239,7 +2239,7 @@ export async function runReplyAgent(params: {
     const responseUsageSessionRaw =
       activeSessionEntry?.responseUsage ??
       (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
-    const responseUsageLine = resolveResponseUsageLine({
+    const responseUsageLine = await resolveResponseUsageLine({
       config: cfg,
       sessionRaw: responseUsageSessionRaw,
       channel: replyToChannel,
@@ -2248,6 +2248,9 @@ export async function runReplyAgent(params: {
       model: modelUsed,
       preserveUserFacingSessionState,
       replyUsageState,
+      authMode: runResult.meta?.requestShaping?.authMode,
+      agentDir: followupRun.run.agentDir,
+      workspaceDir: followupRun.run.workspaceDir,
     });
 
     if (verboseEnabled) {

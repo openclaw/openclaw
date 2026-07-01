@@ -80,6 +80,11 @@ Use these in chat:
     override so the session re-inherits the configured default.
   - `/usage full` shows estimated cost only when OpenClaw has usage metadata and
     local pricing for the active model. Otherwise it shows tokens only.
+  - `/usage tokens` and `/usage full` also append active-provider quota windows
+    when the provider exposes them, for example `Premium 86% left · Chat 100% left`.
+    If usage-window credentials are missing or the provider usage endpoint is
+    unavailable, the reply footer keeps the token/cost line and omits the quota
+    text.
 - `/usage cost` → shows a local cost summary from OpenClaw session logs.
 
 Other surfaces:
