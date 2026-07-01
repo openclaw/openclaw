@@ -7,7 +7,11 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import { Type } from "typebox";
 import { runTavilyExtract } from "./tavily-client.js";
-import { resolveTavilyToolConfig, type TavilyToolConfigContext } from "./tavily-tool-config.js";
+import {
+  resolveTavilyToolConfig,
+  tavilyToolRequiresCredentialBroker,
+  type TavilyToolConfigContext,
+} from "./tavily-tool-config.js";
 import { optionalStringEnum } from "./tavily-tool-schema.js";
 
 const TavilyExtractToolSchema = Type.Object(
@@ -48,7 +52,11 @@ export function createTavilyExtractTool(api: OpenClawPluginApi, ctx?: TavilyTool
     description:
       "Extract clean content from one or more URLs using Tavily. Handles JS-rendered pages. Supports query-focused chunking.",
     parameters: TavilyExtractToolSchema,
-    execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
+    execute: async (
+      _toolCallId: string,
+      rawParams: Record<string, unknown>,
+      signal?: AbortSignal,
+    ) => {
       const urls = Array.isArray(rawParams.urls)
         ? (rawParams.urls as string[]).filter(Boolean)
         : [];
@@ -74,6 +82,9 @@ export function createTavilyExtractTool(api: OpenClawPluginApi, ctx?: TavilyTool
           extractDepth,
           chunksPerSource,
           includeImages,
+          ...(ctx?.credentialBroker ? { credentialBroker: ctx.credentialBroker } : {}),
+          ...(tavilyToolRequiresCredentialBroker(ctx) ? { requiresCredentialBroker: true } : {}),
+          ...(signal ? { signal } : {}),
         }),
       );
     },

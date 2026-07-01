@@ -56,6 +56,34 @@ SecretRef migration as complete only when all of these are true:
 This is why the audit/configure/apply workflow is a security migration gate, not
 just a convenience helper.
 
+### Brokered plugin tool operations
+
+Plugin manifests can declare narrow credentialed JSON operations for agent
+tools. When the configured credential is a structured SecretRef, OpenClaw keeps
+the resolved runtime value inside a conversation-scoped request broker and
+removes that credential path from the owning tool factory's config snapshots.
+The tool-discovery plugin API receives only the opaque SecretRef before
+registration, and the tool receives a short-lived opaque request handle, not
+the SecretRef or plaintext value.
+
+The broker reads the resolved runtime snapshot paired with the prepared run, so
+startup/reload fail-fast, atomic swap, and last-known-good behavior remain
+unchanged. It does not invoke env, file, or exec secret providers on the request
+path.
+
+Brokered operations require prepared agent, conversation, channel, and sender
+identity plus an explicit existing tool-policy grant. Missing scope denies the
+request. Existing sender, group, agent, sandbox, and inherited deny policies
+still win. Requests use guarded HTTPS/SSRF handling, no redirects, fixed
+manifest-declared methods and paths, and declared body, response, and timeout
+limits. Handles are single-use, expire after 30 seconds, and are invalid after a
+Gateway restart.
+
+This is a data-flow boundary against accidental secret propagation into tool
+arguments, events, logs, errors, transcripts, and audit records. It is not
+process isolation from installed plugin code or a modified OpenClaw runtime.
+See [Plugin manifest: credentialBroker](/plugins/manifest#credentialbroker-reference).
+
 <Warning>
 SecretRefs do not make arbitrary readable files safe. Backups, copied configs,
 old generated model catalogs, and unsupported credential classes must be treated

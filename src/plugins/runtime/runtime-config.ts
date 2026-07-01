@@ -4,6 +4,7 @@ import {
   mutateConfigFile as mutateConfigFileInternal,
   replaceConfigFile as replaceConfigFileInternal,
 } from "../../config/mutate.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logWarn } from "../../logger.js";
 import { getPluginRuntimeGatewayRequestScope } from "./gateway-request-scope.js";
 import type { PluginRuntime } from "./types.js";
@@ -49,9 +50,10 @@ export function resetRuntimeConfigDeprecationWarningStateForTest(): void {
   warnedDeprecatedConfigApis.clear();
 }
 
-export function createRuntimeConfig(): PluginRuntime["config"] {
+export function createRuntimeConfig(configSnapshot?: OpenClawConfig): PluginRuntime["config"] {
+  const current = configSnapshot ? () => configSnapshot : getRuntimeConfig;
   return {
-    current: getRuntimeConfig,
+    current,
     mutateConfigFile: async (params) =>
       await mutateConfigFileInternal({
         ...params,
@@ -64,7 +66,7 @@ export function createRuntimeConfig(): PluginRuntime["config"] {
       }),
     loadConfig: () => {
       warnDeprecatedConfigApiOnce("loadConfig", "config.current()");
-      return getRuntimeConfig();
+      return current();
     },
     writeConfigFile: async (cfg, options) => {
       warnDeprecatedConfigApiOnce(

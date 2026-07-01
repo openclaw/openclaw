@@ -4,6 +4,7 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { OpenClawCredentialBroker } from "./credential-broker-types.js";
 
 export type OpenClawPluginActiveModelContext = {
   provider?: string;
@@ -46,6 +47,8 @@ export type OpenClawPluginToolContext = {
   deliveryContext?: DeliveryContext;
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */
   requesterSenderId?: string;
+  /** Brokered operations whose declared secret inputs are removed from plugin-visible config. */
+  credentialBroker?: OpenClawCredentialBroker;
   sandboxed?: boolean;
   /**
    * True for explicit one-shot local CLI runs that must release plugin-owned

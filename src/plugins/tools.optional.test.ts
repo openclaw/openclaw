@@ -1,8 +1,11 @@
 // Verifies optional plugin tool registration and absence handling.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "../agents/tool-policy.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
+import type { OpenClawCredentialBroker } from "./credential-broker-types.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 
 type MockRegistryToolEntry = {
@@ -1349,6 +1352,172 @@ describe("resolvePluginTools optional tools", () => {
     const tools = resolveOptionalDemoTools();
 
     expect(tools).toHaveLength(0);
+  });
+
+  it("injects a manifest-declared credential broker into its owning tool factory", () => {
+    const sourceConfig = {
+      ...createContext().config,
+      tools: { allow: ["brokered_action"] },
+      plugins: {
+        ...createContext().config.plugins,
+        allow: [...createContext().config.plugins.allow, "broker-demo"],
+        entries: {
+          "broker-demo": {
+            config: {
+              service: {
+                token: { source: "env", provider: "default", id: "BROKER_DEMO_TOKEN" },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const runtimeConfig = structuredClone(sourceConfig);
+    const runtimeEntry = runtimeConfig.plugins?.entries?.["broker-demo"]?.config as {
+      service?: { token?: unknown };
+    };
+    if (runtimeEntry.service) {
+      runtimeEntry.service.token = "resolved-secret-must-not-cross";
+    }
+    let credentialBroker: OpenClawCredentialBroker | undefined;
+    let factoryContext: {
+      config?: OpenClawConfig;
+      runtimeConfig?: OpenClawConfig;
+      getRuntimeConfig?: () => OpenClawConfig | undefined;
+    } = {};
+    const factory = vi.fn((rawContext: unknown) => {
+      factoryContext = rawContext as typeof factoryContext;
+      credentialBroker = (rawContext as { credentialBroker?: OpenClawCredentialBroker })
+        .credentialBroker;
+      return makeTool("brokered_action");
+    });
+    const registry = createToolRegistry([
+      {
+        pluginId: "broker-demo",
+        optional: false,
+        source: "/tmp/broker-demo.js",
+        names: ["brokered_action"],
+        factory,
+      },
+    ]);
+    installToolManifestSnapshot({
+      config: sourceConfig as never,
+      compatibleConfigs: [runtimeConfig as never],
+      plugin: {
+        id: "broker-demo",
+        origin: "bundled",
+        enabledByDefault: true,
+        channels: [],
+        providers: [],
+        contracts: { tools: ["brokered_action"] },
+        credentialBroker: {
+          operations: [
+            {
+              id: "action",
+              tool: "brokered_action",
+              secretInputPath: "service.token",
+              defaultBaseUrl: "https://api.example.test",
+              path: "/action",
+              method: "POST",
+              credentialHeader: "Authorization",
+              maxRequestBodyBytes: 1024,
+              maxResponseBodyBytes: 1024,
+              timeoutMs: 1000,
+            },
+          ],
+        },
+      },
+    });
+    const profile = resolveConversationCapabilityProfile({
+      config: sourceConfig,
+      sessionKey: "agent:main:discord:direct:alice",
+      agentId: "main",
+      messageProvider: "discord",
+      messageChannel: "discord",
+      chatType: "direct",
+      senderId: "alice",
+      workspaceDir: "/tmp",
+    });
+    loadOpenClawPluginsMock.mockReturnValue(registry);
+
+    const tools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        config: runtimeConfig,
+        runtimeConfig,
+        getRuntimeConfig: () => runtimeConfig,
+      } as never,
+      runtimeRegistry: registry as never,
+      toolAllowlist: ["brokered_action"],
+      credentialBrokerContext: {
+        profile,
+        sourceConfig,
+        runtimeConfig,
+      },
+    });
+
+    expectResolvedToolNames(tools, ["brokered_action"]);
+    expect(factory).toHaveBeenCalledOnce();
+    expect(credentialBroker?.isConfigured("action")).toBe(true);
+    expect(JSON.stringify(factoryContext.config)).not.toContain("BROKER_DEMO_TOKEN");
+    expect(JSON.stringify(factoryContext.runtimeConfig)).not.toContain(
+      "resolved-secret-must-not-cross",
+    );
+    expect(JSON.stringify(factoryContext.getRuntimeConfig?.())).not.toContain(
+      "resolved-secret-must-not-cross",
+    );
+    const loaderParams = mockCallParams(loadOpenClawPluginsMock) as {
+      cache?: boolean;
+      config?: OpenClawConfig;
+      activationSourceConfig?: OpenClawConfig;
+      runtimeOptions?: { configSnapshot?: OpenClawConfig };
+    };
+    expect(loaderParams.cache).toBe(false);
+    expect(JSON.stringify(loaderParams.config)).not.toContain("resolved-secret-must-not-cross");
+    expect(JSON.stringify(loaderParams.activationSourceConfig)).not.toContain(
+      "resolved-secret-must-not-cross",
+    );
+    expect(JSON.stringify(loaderParams.runtimeOptions?.configSnapshot)).not.toContain(
+      "resolved-secret-must-not-cross",
+    );
+    expect(JSON.stringify(loaderParams.runtimeOptions?.configSnapshot)).toContain(
+      "BROKER_DEMO_TOKEN",
+    );
+
+    factory.mockClear();
+    credentialBroker = undefined;
+    resetPluginToolFactoryCache();
+    resolvePluginTools({
+      context: {
+        ...createContext(),
+        config: runtimeConfig,
+        runtimeConfig,
+      } as never,
+      toolAllowlist: ["brokered_action"],
+      credentialBrokerSourceConfig: sourceConfig,
+    });
+
+    expect(factory).toHaveBeenCalledOnce();
+    const unavailableBroker = credentialBroker as OpenClawCredentialBroker | undefined;
+    expect(unavailableBroker?.isConfigured("action")).toBe(true);
+    expect(() => unavailableBroker?.createRequest({ operationId: "action", body: {} })).toThrow(
+      "Credential broker requires a prepared conversation capability profile.",
+    );
+    expect(JSON.stringify(factoryContext.config)).not.toContain("resolved-secret-must-not-cross");
+
+    resetPluginToolFactoryCache();
+    const unscopedTools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        config: runtimeConfig,
+        runtimeConfig,
+      } as never,
+      toolAllowlist: ["brokered_action"],
+      credentialBrokerSourceConfig: sourceConfig,
+      omitCredentialBrokerToolsWithoutContext: true,
+    });
+
+    expect(unscopedTools).toEqual([]);
   });
 
   it("does not invoke named optional tool factories without a matching allowlist", () => {
