@@ -33,9 +33,13 @@ type EmbeddedAgentArgs = {
   workspaceDir?: string;
   sessionFile?: string;
   toolsAllow?: string[];
+  blockReplyBreak?: string;
 };
 
-function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
+function createAgentRuntime(
+  payloads: Array<Record<string, unknown>>,
+  options?: { blockReplyPayloads?: Array<Record<string, unknown>> },
+) {
   const sessionStore: Record<string, TestSessionEntry> = {};
   const saveSessionStore = vi.fn(async () => {});
   const updateSessionStore = vi.fn(
@@ -71,10 +75,19 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
       sessionStore[params.sessionKey] = { ...params.entry };
     },
   );
-  const runEmbeddedAgent = vi.fn(async (_args: EmbeddedAgentArgs) => ({
-    payloads,
-    meta: { durationMs: 12, aborted: false },
-  }));
+  const runEmbeddedAgent = vi.fn(
+    async (
+      args: EmbeddedAgentArgs & { onBlockReply?: (payload: Record<string, unknown>) => void },
+    ) => {
+      for (const payload of options?.blockReplyPayloads ?? []) {
+        args.onBlockReply?.(payload);
+      }
+      return {
+        payloads,
+        meta: { durationMs: 12, aborted: false },
+      };
+    },
+  );
   const resolveAgentDir = vi.fn((_cfg: CoreConfig, agentId: string) => {
     return `/tmp/openclaw/agents/${agentId}`;
   });
@@ -193,6 +206,21 @@ describe("generateVoiceResponse", () => {
     expect(args.extraSystemPrompt).toContain('{"spoken":"..."}');
     expect(args.provider).toBe("together");
     expect(args.model).toBe("Qwen/Qwen2.5-7B-Instruct-Turbo");
+    expect(args.blockReplyBreak).toBe("text_end");
+    expect(typeof runEmbeddedAgent.mock.calls[0][0]?.onBlockReply).toBe("function");
+  });
+
+  it("prefers fresh block reply spoken output over stale completed payloads", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime([{ text: '{"spoken":""}' }], {
+      blockReplyPayloads: [{ text: '{"spoken":"Fresh callback response."}' }],
+    });
+
+    const { result } = await runGenerateVoiceResponse([], { runtime });
+
+    expect(result.text).toBe("Fresh callback response.");
+    const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
+    expect(args.blockReplyBreak).toBe("text_end");
+    expect(typeof runEmbeddedAgent.mock.calls[0][0]?.onBlockReply).toBe("function");
   });
 
   it("extracts spoken text from fenced JSON", async () => {
@@ -490,6 +518,257 @@ describe("generateVoiceResponse", () => {
     expect(args.sandboxSessionKey).toBe("agent:voice:voice:15550001111");
     expect(args.workspaceDir).toBe("/tmp/openclaw/workspace/voice");
     expect(args.sessionFile).toBeUndefined();
+  });
+
+  it("delivers early TTS via onEarlyText before the embedded run settles", async () => {
+    // Simulate a run where the block reply fires immediately but the
+    // embedded run only settles after a post-turn compaction delay.
+    let resolveRun: (value: {
+      payloads: Array<Record<string, unknown>>;
+      meta: { durationMs: number; aborted: boolean };
+    }) => void = () => {};
+    const runSettled = new Promise<{
+      payloads: Array<Record<string, unknown>>;
+      meta: { durationMs: number; aborted: boolean };
+    }>((resolve) => {
+      resolveRun = resolve;
+    });
+
+    const onEarlyTextCalls: string[] = [];
+
+    const delayedRunEmbeddedAgent = vi.fn(
+      async (
+        args: EmbeddedAgentArgs & {
+          onBlockReply?: (payload: Record<string, unknown>) => void;
+        },
+      ) => {
+        // Fire block reply synchronously — this is the early delivery window.
+        args.onBlockReply?.({ text: '{"spoken":"Early bird text."}' });
+        // The real embedded runner would now wait for compaction.
+        // We defer settlement to prove the caller does not wait for it.
+        const settled = await runSettled;
+        return settled;
+      },
+    );
+
+    const { runtime: baseRuntime } = createAgentRuntime([]);
+    const runtime = {
+      ...baseRuntime,
+      runEmbeddedAgent: delayedRunEmbeddedAgent,
+    } as CoreAgentDeps;
+
+    const voiceConfig = VoiceCallConfigSchema.parse({ responseTimeoutMs: 5000 });
+    const coreConfig = {} as CoreConfig;
+
+    const responsePromise = generateVoiceResponse({
+      voiceConfig,
+      coreConfig,
+      agentRuntime: runtime,
+      callId: "call-123",
+      from: "+15550001111",
+      transcript: [],
+      userMessage: "hello there",
+      onEarlyText: async (text) => {
+        onEarlyTextCalls.push(text);
+        return true;
+      },
+    });
+
+    // Prove onEarlyText fired before the run settled: the run is still
+    // pending (runSettled hasn't resolved), but onEarlyText should have
+    // been called synchronously during the onBlockReply callback.
+    // Flush the microtask queue so the async onEarlyText body runs.
+    await new Promise<void>((r) => {
+      setTimeout(r, 0);
+    });
+
+    expect(onEarlyTextCalls).toStrictEqual(["Early bird text."]);
+
+    // The response promise should still be pending.
+    resolveRun({
+      payloads: [{ text: '{"spoken":"stale"}' }],
+      meta: { durationMs: 50, aborted: false },
+    });
+    const result = await responsePromise;
+
+    expect(result.earlyTextSpoken).toBe(true);
+    // Still returns the full extracted text for logging, but marks it as early-spoken.
+    expect(result.text).toBe("Early bird text.");
+  });
+
+  it("returns earlyTextSpoken false when no block reply arrived before run settled", async () => {
+    const { runtime } = createAgentRuntime([{ text: '{"spoken":"Fallback text."}' }]);
+    const onEarlyText = vi.fn();
+
+    const directResult = await generateVoiceResponse({
+      voiceConfig: VoiceCallConfigSchema.parse({ responseTimeoutMs: 5000 }),
+      coreConfig: {} as CoreConfig,
+      agentRuntime: runtime,
+      callId: "call-456",
+      from: "+15550002222",
+      transcript: [],
+      userMessage: "test",
+      onEarlyText,
+    });
+
+    expect(directResult.earlyTextSpoken).toBeUndefined();
+    expect(onEarlyText).not.toHaveBeenCalled();
+    expect(directResult.text).toBe("Fallback text.");
+  });
+
+  it("leaves earlyTextSpoken false when onEarlyText reports delivery failure", async () => {
+    const blockPayloads: Array<Record<string, unknown>> = [
+      { text: '{"spoken":"TTS attempt that fails."}' },
+    ];
+    const basePayloads: Array<Record<string, unknown>> = [
+      { text: '{"spoken":"Final text for fallback."}' },
+    ];
+
+    const runEmbeddedAgent = vi.fn(
+      async (
+        args: EmbeddedAgentArgs & {
+          onBlockReply?: (payload: Record<string, unknown>) => void;
+        },
+      ) => {
+        args.onBlockReply?.(blockPayloads[0]);
+        return {
+          payloads: basePayloads,
+          meta: { durationMs: 12, aborted: false },
+        };
+      },
+    );
+
+    const { runtime: baseRuntime } = createAgentRuntime(basePayloads);
+    const runtime = {
+      ...baseRuntime,
+      runEmbeddedAgent,
+    } as CoreAgentDeps;
+
+    const onEarlyText = vi.fn(async (_text: string) => false);
+
+    const result = await generateVoiceResponse({
+      voiceConfig: VoiceCallConfigSchema.parse({ responseTimeoutMs: 5000 }),
+      coreConfig: {} as CoreConfig,
+      agentRuntime: runtime,
+      callId: "call-fail",
+      from: "+15550003333",
+      transcript: [],
+      userMessage: "test delivery failure",
+      onEarlyText,
+    });
+
+    expect(onEarlyText).toHaveBeenCalledWith("TTS attempt that fails.");
+    // earlyTextSpoken must stay false so the fallback speak path still fires.
+    expect(result.earlyTextSpoken).toBeUndefined();
+    expect(result.text).toBe("TTS attempt that fails.");
+  });
+
+  it("leaves earlyTextSpoken false when onEarlyText throws", async () => {
+    const blockPayloads: Array<Record<string, unknown>> = [
+      { text: '{"spoken":"TTS attempt that throws."}' },
+    ];
+    const basePayloads: Array<Record<string, unknown>> = [{ text: '{"spoken":"Backup text."}' }];
+
+    const runEmbeddedAgent = vi.fn(
+      async (
+        args: EmbeddedAgentArgs & {
+          onBlockReply?: (payload: Record<string, unknown>) => void;
+        },
+      ) => {
+        args.onBlockReply?.(blockPayloads[0]);
+        return {
+          payloads: basePayloads,
+          meta: { durationMs: 12, aborted: false },
+        };
+      },
+    );
+
+    const { runtime: baseRuntime } = createAgentRuntime(basePayloads);
+    const runtime = {
+      ...baseRuntime,
+      runEmbeddedAgent,
+    } as CoreAgentDeps;
+
+    const onEarlyText = vi.fn(async (_text: string) => {
+      throw new Error("TTS transport error");
+    });
+
+    const result = await generateVoiceResponse({
+      voiceConfig: VoiceCallConfigSchema.parse({ responseTimeoutMs: 5000 }),
+      coreConfig: {} as CoreConfig,
+      agentRuntime: runtime,
+      callId: "call-throw",
+      from: "+15550004444",
+      transcript: [],
+      userMessage: "test delivery throw",
+      onEarlyText,
+    });
+
+    expect(onEarlyText).toHaveBeenCalledWith("TTS attempt that throws.");
+    // earlyTextSpoken must stay false so the fallback speak path still fires.
+    expect(result.earlyTextSpoken).toBeUndefined();
+    expect(result.text).toBe("TTS attempt that throws.");
+  });
+
+  it("awaits pending TTS so a late-resolving onEarlyText still suppresses fallback speak", async () => {
+    // The critical race: the embedded run settles before the async TTS
+    // delivery resolves.  Without awaiting the pending promise, the
+    // earlyTextSpoken flag reads false and the webhook fires a duplicate
+    // fallback speak.
+    const blockPayloads: Array<Record<string, unknown>> = [
+      { text: '{"spoken":"TTS that takes a beat."}' },
+    ];
+
+    let resolveTts: (delivered: boolean) => void = () => {};
+    const ttsDelivered = new Promise<boolean>((resolve) => {
+      resolveTts = resolve;
+    });
+
+    const runEmbeddedAgent = vi.fn(
+      async (
+        args: EmbeddedAgentArgs & {
+          onBlockReply?: (payload: Record<string, unknown>) => void;
+        },
+      ) => {
+        // Fire block reply immediately.
+        args.onBlockReply?.(blockPayloads[0]);
+        // Run returns before TTS promise settles — the real scenario.
+        return {
+          payloads: [{ text: '{"spoken":"stale"}' }],
+          meta: { durationMs: 12, aborted: false },
+        };
+      },
+    );
+
+    const { runtime: baseRuntime } = createAgentRuntime([]);
+    const runtime = {
+      ...baseRuntime,
+      runEmbeddedAgent,
+    } as CoreAgentDeps;
+
+    const onEarlyText = vi.fn(async (_text: string) => ttsDelivered);
+
+    const responsePromise = generateVoiceResponse({
+      voiceConfig: VoiceCallConfigSchema.parse({ responseTimeoutMs: 5000 }),
+      coreConfig: {} as CoreConfig,
+      agentRuntime: runtime,
+      callId: "call-race",
+      from: "+15550005555",
+      transcript: [],
+      userMessage: "test race condition",
+      onEarlyText,
+    });
+
+    // TTS hasn't resolved yet; the response should still be pending.
+    resolveTts(true);
+
+    const result = await responsePromise;
+
+    expect(onEarlyText).toHaveBeenCalledWith("TTS that takes a beat.");
+    // Because we awaited the pending TTS, earlyTextSpoken must be true
+    // and the webhook fallback speak guard must be suppressed.
+    expect(result.earlyTextSpoken).toBe(true);
+    expect(result.text).toBe("TTS that takes a beat.");
   });
 
   it("passes the routed voice agent explicit tool allowlist to the embedded run", async () => {

@@ -1044,6 +1044,13 @@ export class VoiceCallWebhookServer {
         from: call.from,
         transcript: call.transcript,
         userMessage,
+        // Start TTS as soon as the first block reply delivers text,
+        // without waiting for post-turn compaction (#79521).
+        onEarlyText: async (text) => {
+          console.log(`[voice-call] Early AI response: "${text}"`);
+          const speakResult = await this.manager.speak(callId, text);
+          return speakResult.success;
+        },
       });
 
       if (result.error) {
@@ -1051,7 +1058,9 @@ export class VoiceCallWebhookServer {
         return;
       }
 
-      if (result.text) {
+      // Fallback: speak the final text only when no early block reply
+      // arrived during the run.
+      if (result.text && !result.earlyTextSpoken) {
         console.log(`[voice-call] AI response: "${result.text}"`);
         await this.manager.speak(callId, result.text);
       }

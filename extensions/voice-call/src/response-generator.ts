@@ -31,11 +31,24 @@ export type VoiceResponseParams = {
   transcript: Array<{ speaker: "user" | "bot"; text: string }>;
   /** Latest user message */
   userMessage: string;
+  /**
+   * Called as soon as spoken text is extracted from the first block reply,
+   * before the embedded run waits for post-turn compaction.
+   * Lets the voice-call transport start TTS without waiting for the full
+   * run to settle (#79521).
+   *
+   * Must return true when TTS delivery succeeded, false otherwise.
+   * The final post-run fallback speak is skipped only when early delivery
+   * is confirmed successful.
+   */
+  onEarlyText?: (text: string) => Promise<boolean>;
 };
 
 export type VoiceResponseResult = {
   text: string | null;
   error?: string;
+  /** True when onEarlyText was already invoked during the run. */
+  earlyTextSpoken?: boolean;
 };
 
 type VoiceResponsePayload = {
@@ -222,6 +235,7 @@ export async function generateVoiceResponse(
     userMessage,
     coreConfig,
     agentRuntime,
+    onEarlyText,
   } = params;
 
   if (!coreConfig) {
@@ -318,6 +332,16 @@ export async function generateVoiceResponse(
   const runId = `voice:${callId}:${Date.now()}`;
 
   try {
+    // Collect payloads via onBlockReply callback so TTS can receive text
+    // before post-turn compaction completes (#79521).
+    const blockReplyPayloads: VoiceResponsePayload[] = [];
+    let earlyTextSpoken = false;
+    // Track the pending early-TTS promise so the caller's fallback-speak
+    // decision (below) always sees the settled outcome.  Without this await
+    // the run can finish while TTS is still in-flight, earlyTextSpoken reads
+    // false, and the fallback path fires a duplicate speak.
+    let pendingEarlyText: Promise<void> | undefined;
+
     const result = await agentRuntime.runEmbeddedAgent({
       sessionId,
       sessionKey: resolvedSessionKey,
@@ -343,15 +367,56 @@ export async function generateVoiceResponse(
       extraSystemPrompt,
       agentDir,
       toolsAllow,
+      blockReplyBreak: "text_end",
+      onBlockReply: (payload) => {
+        blockReplyPayloads.push(payload);
+        // Start TTS as soon as the first block reply delivers usable spoken
+        // text, without waiting for the embedded run to finish compaction.
+        if (!earlyTextSpoken && onEarlyText) {
+          const earlyText = extractSpokenTextFromPayloads([payload]);
+          if (earlyText) {
+            pendingEarlyText = onEarlyText(earlyText)
+              .then((delivered) => {
+                // Only suppress the final post-run fallback speak when
+                // early TTS delivery is confirmed successful.  If the
+                // provider reports failure or the callback throws, the
+                // caller still gets the full text via the fallback path
+                // after the run settles.
+                if (delivered) {
+                  earlyTextSpoken = true;
+                }
+              })
+              .catch((err: unknown) => {
+                console.error("[voice-call] Early TTS delivery failed:", err);
+              });
+          }
+        }
+      },
     });
 
-    const text = extractSpokenTextFromPayloads((result.payloads ?? []) as VoiceResponsePayload[]);
+    // Ensure the early-TTS outcome is known before deciding whether to
+    // flag the text as already spoken.  When onEarlyText resolves after
+    // the run (e.g. real network I/O to the TTS provider), the flag would
+    // otherwise be false and the caller would fire a duplicate fallback.
+    if (pendingEarlyText) {
+      try {
+        await pendingEarlyText;
+      } catch {
+        // Handled in the per-callback catch above.
+      }
+    }
+
+    const text = extractSpokenTextFromPayloads(
+      blockReplyPayloads.length > 0
+        ? blockReplyPayloads
+        : ((result.payloads ?? []) as VoiceResponsePayload[]),
+    );
 
     if (!text && result.meta?.aborted) {
       return { text: null, error: "Response generation was aborted" };
     }
 
-    return { text };
+    return { text, earlyTextSpoken: earlyTextSpoken || undefined };
   } catch (err) {
     console.error(`[voice-call] Response generation failed:`, err);
     return { text: null, error: String(err) };
