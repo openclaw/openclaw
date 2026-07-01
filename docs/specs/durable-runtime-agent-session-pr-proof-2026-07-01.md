@@ -41,6 +41,24 @@ Observed results:
 - agent tools shard: 2 files, 67 tests passed;
 - agent/session/task policy shard: 1 file, 27 tests passed;
 - durable fan-in/subagent/agent-turn shard: 3 files, 14 tests passed.
+- exact durable matrix from the previous durable-core PR:
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/durable/sqlite-store.test.ts src/durable/recovery.test.ts src/durable/coordination-projection.test.ts src/durable/fan-in.test.ts src/durable/executor.test.ts src/durable/subagent.test.ts`
+  - 6 files, 36 tests passed.
+- exact Gateway durable matrix:
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server-methods/durable.test.ts`
+  - 2 files, 4 tests passed.
+  - Covers enabled projection and disabled read paths that do not create durable
+    SQLite state.
+- exact shared-state permissions/query-plan matrix:
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/state/openclaw-state-db.test.ts src/state/openclaw-state-db.permissions.test.ts src/state/sqlite-query-plan.test.ts`
+  - 3 files, 26 tests passed, 1 skipped.
+- subagent lifecycle compatibility:
+  - `node scripts/run-vitest.mjs run --config test/vitest/vitest.agents.config.ts src/agents/openclaw-tools.subagents.sessions-spawn.lifecycle.test.ts`
+  - 1 file, 8 tests passed.
+- redaction/bounded metadata regression:
+  - covered by `src/durable/subagent.test.ts`.
+  - verifies `taskHash` is stored and raw `task` is not stored on child run or
+    parent link metadata.
 
 ## Typecheck and Schema Proof
 
@@ -56,8 +74,12 @@ Additional validation run on the stacked PR3 branch:
   - passed.
 - `npm run tsgo:core:test`
   - passed.
+- `OPENCLAW_LOCAL_CHECK=0 node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.core.test.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/core-test.tsbuildinfo`
+  - passed.
 - `npm run tsgo:prod`
   - passed after `pnpm tsgo:core && pnpm tsgo:extensions`.
+- `./node_modules/.bin/oxfmt --check --threads=1 <changed durable/state/gateway files>`
+  - passed on 62 changed PR3 durable/state/gateway/session/task/protocol files.
 - `node --import tsx /private/tmp/openclaw-durable-runtime-proof.mts`
   - passed against an isolated temporary SQLite database.
   - created 3 runtime runs, 2 timeline events, and 1 fan-in step.
