@@ -346,6 +346,19 @@ export async function commitPluginInstallRecordsWithConfig(params: {
   });
 }
 
+/** Persist plugin install records without rewriting the user-authored config file. */
+export async function commitPluginInstallRecordsOnly(params: {
+  previousInstallRecords?: Record<string, PluginInstallRecord>;
+  nextInstallRecords: Record<string, PluginInstallRecord>;
+}): Promise<void> {
+  await commitPluginInstallRecordsWithWriter({
+    previousInstallRecords: params.previousInstallRecords,
+    nextInstallRecords: params.nextInstallRecords,
+    nextConfig: {},
+    commit: async () => undefined,
+  });
+}
+
 /** Commit config while migrating any pending install records into the install index. */
 export async function commitConfigWriteWithPendingPluginInstalls(params: {
   nextConfig: OpenClawConfig;

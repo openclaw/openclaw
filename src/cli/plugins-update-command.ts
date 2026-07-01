@@ -1,4 +1,5 @@
 // `openclaw plugins update` command implementation for tracked npm plugins and hook packs.
+import { isDeepStrictEqual } from "node:util";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
@@ -31,7 +32,10 @@ import {
   resolveInstallConfigMutationPreflights,
   selectInstallMutationWriteOptions,
 } from "./plugins-install-persist.js";
-import { commitPluginInstallRecordsWithConfig } from "./plugins-install-record-commit.js";
+import {
+  commitPluginInstallRecordsOnly,
+  commitPluginInstallRecordsWithConfig,
+} from "./plugins-install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./plugins-registry-refresh.js";
 import { logPluginUpdateOutcomes } from "./plugins-update-outcomes.js";
 import {
@@ -345,16 +349,23 @@ export async function runPluginUpdateCommand(params: {
       }),
     });
     if (shouldPersistPluginInstallIndex) {
-      await commitPluginInstallRecordsWithConfig({
-        previousInstallRecords: persistedPluginInstallRecords,
-        nextInstallRecords: nextPluginInstallRecords,
-        nextConfig,
-        baseHash: sourceSnapshot?.snapshot.hash,
-        writeOptions: {
-          ...sourceSnapshot?.writeOptions,
-          afterWrite: { mode: "restart", reason: "plugin source changed" },
-        },
-      });
+      if (isDeepStrictEqual(nextConfig, sourceSnapshot?.snapshot.sourceConfig ?? sourceCfg)) {
+        await commitPluginInstallRecordsOnly({
+          previousInstallRecords: persistedPluginInstallRecords,
+          nextInstallRecords: nextPluginInstallRecords,
+        });
+      } else {
+        await commitPluginInstallRecordsWithConfig({
+          previousInstallRecords: persistedPluginInstallRecords,
+          nextInstallRecords: nextPluginInstallRecords,
+          nextConfig,
+          baseHash: sourceSnapshot?.snapshot.hash,
+          writeOptions: {
+            ...sourceSnapshot?.writeOptions,
+            afterWrite: { mode: "restart", reason: "plugin source changed" },
+          },
+        });
+      }
     } else {
       await replaceConfigFile({
         nextConfig,

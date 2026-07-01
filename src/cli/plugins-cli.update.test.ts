@@ -488,7 +488,7 @@ describe("plugins cli update", () => {
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
       nextConfig.plugins?.installs,
     );
-    expect(writeConfigFile).toHaveBeenCalledWith(cfg);
+    expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("allows scoped non-npm updates beside include-owned plugin config", async () => {
@@ -527,7 +527,74 @@ describe("plugins cli update", () => {
     expect(runtimeErrors).toEqual([]);
     expect(updateNpmInstalledPlugins).toHaveBeenCalledOnce();
     expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(pluginRecords);
-    expect(writeConfigFile).toHaveBeenCalledWith(cfg);
+    expect(writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("does not rewrite source config for persisted install record-only updates", async () => {
+    const cfg = {
+      gateway: {
+        mode: "local",
+        port: 18889,
+      },
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+        },
+      },
+      channels: {
+        discord: {
+          enabled: true,
+        },
+      },
+      plugins: {
+        entries: {
+          brave: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    const previousRecords = {
+      brave: {
+        source: "npm",
+        spec: "@openclaw/brave-plugin@2026.6.11-beta.2",
+        installPath: "/tmp/brave-beta",
+        resolvedName: "@openclaw/brave-plugin",
+        resolvedVersion: "2026.6.11-beta.2",
+      },
+    } as const;
+    const nextRecords = {
+      brave: {
+        ...previousRecords.brave,
+        spec: "@openclaw/brave-plugin@2026.6.11",
+        installPath: "/tmp/brave-stable",
+        resolvedVersion: "2026.6.11",
+      },
+    } as const;
+    primeUpdateConfigSnapshot({ config: cfg });
+    setInstalledPluginIndexInstallRecords(previousRecords);
+    updateNpmInstalledPlugins.mockResolvedValue({
+      config: {
+        ...cfg,
+        plugins: {
+          ...cfg.plugins,
+          installs: nextRecords,
+        },
+      } as OpenClawConfig,
+      changed: true,
+      outcomes: [{ pluginId: "brave", status: "updated", message: "Updated brave." }],
+    });
+
+    await runPluginsCommand(["plugins", "update", "brave"]);
+
+    expect(runtimeErrors).toEqual([]);
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(nextRecords);
+    expect(writeConfigFile).not.toHaveBeenCalled();
+    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(refreshPluginRegistry).toHaveBeenCalledWith({
+      config: cfg,
+      installRecords: nextRecords,
+      reason: "source-changed",
+    });
+    expectRestartNoticeLogged();
   });
 
   it("blocks legacy plugin id migration before updater side effects", async () => {
