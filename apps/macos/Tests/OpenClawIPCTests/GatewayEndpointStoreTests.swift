@@ -26,6 +26,37 @@ struct GatewayEndpointStoreTests {
         return defaults
     }
 
+    private func makeGeneratedEnvFileLaunchAgentSnapshot() throws -> LaunchAgentPlistSnapshot {
+        let dir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-endpoint-env-\(UUID().uuidString)", isDirectory: true)
+        try FileManager().createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager().removeItem(at: dir) }
+        let wrapperURL = dir.appendingPathComponent("ai.openclaw.gateway-env-wrapper.sh")
+        let envURL = dir.appendingPathComponent("ai.openclaw.gateway.env")
+        let plistURL = dir.appendingPathComponent("ai.openclaw.gateway.plist")
+        try """
+        export OPENCLAW_GATEWAY_PASSWORD='file-pass'
+        export OPENCLAW_GATEWAY_TOKEN='file-token'
+
+        """.write(to: envURL, atomically: true, encoding: .utf8)
+        let plist: [String: Any] = [
+            "ProgramArguments": [
+                wrapperURL.path,
+                envURL.path,
+                "openclaw",
+                "gateway",
+                "--port",
+                "18789",
+            ],
+            "EnvironmentVariables": [
+                "OPENCLAW_GATEWAY_TOKEN": "inline-token",
+            ],
+        ]
+        let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        try data.write(to: plistURL, options: [.atomic])
+        return try #require(LaunchAgentPlist.snapshot(url: plistURL))
+    }
+
     @Test func `resolve gateway token prefers env and falls back to launchd`() {
         let snapshot = self.makeLaunchAgentSnapshot(
             env: ["OPENCLAW_GATEWAY_TOKEN": "launchd-token"],
@@ -229,6 +260,19 @@ struct GatewayEndpointStoreTests {
         #expect(config.url.absoluteString == "wss://100.64.1.8:\(GatewayEnvironment.gatewayPort())")
         #expect(config.token == "launchd-token")
         #expect(config.password == "launchd-pass")
+    }
+
+    @Test func `local config uses launchd generated env file auth`() throws {
+        let snapshot = try self.makeGeneratedEnvFileLaunchAgentSnapshot()
+
+        let config = GatewayEndpointStore._testLocalConfig(
+            root: [:],
+            env: [:],
+            launchdSnapshot: snapshot,
+            tailscaleIP: nil)
+
+        #expect(config.token == "file-token")
+        #expect(config.password == "file-pass")
     }
 
     @Test func `dashboard URL uses local base path in local mode`() throws {

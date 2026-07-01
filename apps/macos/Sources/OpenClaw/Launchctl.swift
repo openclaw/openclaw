@@ -52,7 +52,9 @@ enum LaunchAgentPlist {
         }
         guard let root = rootAny as? [String: Any] else { return nil }
         let programArguments = root["ProgramArguments"] as? [String] ?? []
-        let env = root["EnvironmentVariables"] as? [String: String] ?? [:]
+        let inlineEnv = root["EnvironmentVariables"] as? [String: String] ?? [:]
+        let fileEnv = Self.readGeneratedEnvironmentFile(programArguments)
+        let env = inlineEnv.merging(fileEnv) { _, fileValue in fileValue }
         let stdoutPath = (root["StandardOutPath"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
         let stderrPath = (root["StandardErrorPath"] as? String)?
@@ -83,5 +85,62 @@ enum LaunchAgentPlist {
         guard valueIdx < args.endIndex else { return nil }
         let token = args[valueIdx].trimmingCharacters(in: .whitespacesAndNewlines)
         return token.isEmpty ? nil : token
+    }
+
+    private static func readGeneratedEnvironmentFile(_ programArguments: [String]) -> [String: String] {
+        guard Self.isGeneratedEnvironmentWrapperArgs(programArguments) else { return [:] }
+        let envFilePath = programArguments[1].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !envFilePath.isEmpty else { return [:] }
+        guard let content = try? String(contentsOf: URL(fileURLWithPath: envFilePath), encoding: .utf8) else {
+            return [:]
+        }
+        var environment: [String: String] = [:]
+        for rawLine in content.components(separatedBy: .newlines) {
+            guard let (key, value) = Self.parseGeneratedEnvironmentLine(rawLine) else { continue }
+            environment[key] = value
+        }
+        return environment
+    }
+
+    private static func isGeneratedEnvironmentWrapperArgs(_ programArguments: [String]) -> Bool {
+        guard programArguments.count >= 2 else { return false }
+        let wrapperPath = programArguments[0].trimmingCharacters(in: .whitespacesAndNewlines)
+        let envFilePath = programArguments[1].trimmingCharacters(in: .whitespacesAndNewlines)
+        return wrapperPath.hasSuffix("-env-wrapper.sh") && !envFilePath.isEmpty
+    }
+
+    private static func parseGeneratedEnvironmentLine(_ rawLine: String) -> (String, String)? {
+        let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !line.isEmpty, !line.hasPrefix("#"), line.hasPrefix("export ") else { return nil }
+        let assignment = line.dropFirst("export ".count)
+        guard let separator = assignment.firstIndex(of: "=") else { return nil }
+        let key = String(assignment[..<separator])
+        guard Self.isValidEnvironmentKey(key) else { return nil }
+        let rawValue = String(assignment[assignment.index(after: separator)...])
+        return (key, Self.parseGeneratedEnvironmentValue(rawValue))
+    }
+
+    private static func parseGeneratedEnvironmentValue(_ rawValue: String) -> String {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("'"), trimmed.hasSuffix("'"), trimmed.count >= 2 else {
+            return trimmed
+        }
+        let inner = String(trimmed.dropFirst().dropLast())
+        return inner.replacingOccurrences(of: "'\\''", with: "'")
+    }
+
+    private static func isValidEnvironmentKey(_ key: String) -> Bool {
+        guard let first = key.unicodeScalars.first, Self.isEnvironmentKeyFirstScalar(first) else {
+            return false
+        }
+        return key.unicodeScalars.dropFirst().allSatisfy { Self.isEnvironmentKeyScalar($0) }
+    }
+
+    private static func isEnvironmentKeyFirstScalar(_ scalar: UnicodeScalar) -> Bool {
+        scalar == "_" || (scalar.value >= 65 && scalar.value <= 90) || (scalar.value >= 97 && scalar.value <= 122)
+    }
+
+    private static func isEnvironmentKeyScalar(_ scalar: UnicodeScalar) -> Bool {
+        Self.isEnvironmentKeyFirstScalar(scalar) || (scalar.value >= 48 && scalar.value <= 57)
     }
 }
