@@ -56,6 +56,7 @@ export type ResolvedMemorySearchConfig = {
   inputType?: string;
   queryInputType?: string;
   documentInputType?: string;
+  queryInstructionTemplate?: boolean;
   outputDimensionality?: number;
   local: {
     modelPath?: string;
@@ -256,6 +257,8 @@ function mergeConfig(
     overrides?.queryInputType?.trim() || defaults?.queryInputType?.trim() || undefined;
   const documentInputType =
     overrides?.documentInputType?.trim() || defaults?.documentInputType?.trim() || undefined;
+  const queryInstructionTemplate =
+    overrides?.queryInstructionTemplate ?? defaults?.queryInstructionTemplate ?? false;
   const outputDimensionality = overrides?.outputDimensionality ?? defaults?.outputDimensionality;
   const local = {
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
@@ -358,6 +361,7 @@ function mergeConfig(
     inputType,
     queryInputType,
     documentInputType,
+    queryInstructionTemplate,
     outputDimensionality,
     local,
     store,

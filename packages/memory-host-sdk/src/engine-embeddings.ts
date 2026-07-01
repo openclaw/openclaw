@@ -58,6 +58,7 @@ export {
 export { sanitizeAndNormalizeEmbedding } from "./host/embedding-vectors.js";
 export { debugEmbeddingsLog } from "./host/embeddings-debug.js";
 export { normalizeEmbeddingModelWithPrefixes } from "./host/embeddings-model-normalize.js";
+export { applyQueryInstructionTemplate } from "./host/query-instruction-templates.js";
 export {
   resolveRemoteEmbeddingBearerClient,
   type RemoteEmbeddingProviderId,

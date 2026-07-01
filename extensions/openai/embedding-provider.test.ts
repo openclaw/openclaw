@@ -17,6 +17,34 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", () => ({
+  applyQueryInstructionTemplate: (model: string, queryText: string): string => {
+    const normalizedModel = model.trim().toLowerCase().split("/").filter(Boolean).at(-1) ?? "";
+    if (
+      normalizedModel === "qwen3-embedding" ||
+      normalizedModel.startsWith("qwen3-embedding-") ||
+      normalizedModel.startsWith("qwen3-embedding:") ||
+      normalizedModel.includes("-qwen3-embedding")
+    ) {
+      return `Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:${queryText}`;
+    }
+    if (
+      normalizedModel === "nomic-embed-text" ||
+      normalizedModel.startsWith("nomic-embed-text-") ||
+      normalizedModel.startsWith("nomic-embed-text:") ||
+      normalizedModel.includes("-nomic-embed-text")
+    ) {
+      return `search_query: ${queryText}`;
+    }
+    if (
+      normalizedModel === "mxbai-embed-large" ||
+      normalizedModel.startsWith("mxbai-embed-large-") ||
+      normalizedModel.startsWith("mxbai-embed-large:") ||
+      normalizedModel.includes("-mxbai-embed-large")
+    ) {
+      return `Represent this sentence for searching relevant passages: ${queryText}`;
+    }
+    return queryText;
+  },
   fetchRemoteEmbeddingVectors: mocks.fetchRemoteEmbeddingVectors,
   resolveRemoteEmbeddingClient: mocks.resolveRemoteEmbeddingClient,
 }));
@@ -216,13 +244,31 @@ describe("OpenAI embedding provider", () => {
   });
 
   describe("query instruction template", () => {
+    it("leaves instruction-aware query models raw unless opted in", async () => {
+      const { provider } = await createOpenAiEmbeddingProvider(
+        createOptions({ model: "qwen3-embedding-4b" }),
+      );
+
+      await provider.embedQuery("memory search query?");
+
+      expect(mocks.fetchRemoteEmbeddingVectors).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.objectContaining({
+            input: ["memory search query?"],
+          }),
+        }),
+      );
+    });
+
     it.each([
       "qwen3-embedding-4b",
       "qwen3-embedding:0.6b",
       "Qwen/Qwen3-Embedding-4B",
       "openai/Qwen/Qwen3-Embedding-4B",
     ])("applies Qwen3-Embedding prefix to query string for %s", async (model) => {
-      const { provider } = await createOpenAiEmbeddingProvider(createOptions({ model }));
+      const { provider } = await createOpenAiEmbeddingProvider(
+        createOptions({ model, queryInstructionTemplate: true }),
+      );
 
       await provider.embedQuery("memory search query?");
 
@@ -242,7 +288,9 @@ describe("OpenAI embedding provider", () => {
       "nomic-ai/nomic-embed-text-v1.5",
       "text-embedding-nomic-embed-text-v1.5",
     ])("applies nomic-embed-text prefix to query string for %s", async (model) => {
-      const { provider } = await createOpenAiEmbeddingProvider(createOptions({ model }));
+      const { provider } = await createOpenAiEmbeddingProvider(
+        createOptions({ model, queryInstructionTemplate: true }),
+      );
 
       await provider.embedQuery("Zabbix monitoring rules");
 
@@ -260,7 +308,9 @@ describe("OpenAI embedding provider", () => {
       "mxbai-embed-large:latest",
       "mixedbread-ai/mxbai-embed-large-v1",
     ])("applies mxbai-embed-large prefix to query string for %s", async (model) => {
-      const { provider } = await createOpenAiEmbeddingProvider(createOptions({ model }));
+      const { provider } = await createOpenAiEmbeddingProvider(
+        createOptions({ model, queryInstructionTemplate: true }),
+      );
 
       await provider.embedQuery("HVAC automation");
 
@@ -280,7 +330,7 @@ describe("OpenAI embedding provider", () => {
       });
 
       const { provider } = await createOpenAiEmbeddingProvider(
-        createOptions({ model: "qwen3-embedding-4b" }),
+        createOptions({ model: "qwen3-embedding-4b", queryInstructionTemplate: true }),
       );
 
       await provider.embedBatch(["doc one", "doc two"]);
@@ -296,7 +346,7 @@ describe("OpenAI embedding provider", () => {
 
     it("sends raw query for unknown model (no matching prefix)", async () => {
       const { provider } = await createOpenAiEmbeddingProvider(
-        createOptions({ model: "text-embedding-3-small" }),
+        createOptions({ model: "text-embedding-3-small", queryInstructionTemplate: true }),
       );
 
       await provider.embedQuery("hello world");

@@ -1,5 +1,6 @@
 // Openai provider module implements model/runtime integration.
 import {
+  applyQueryInstructionTemplate,
   fetchRemoteEmbeddingVectors,
   resolveRemoteEmbeddingClient,
   type MemoryEmbeddingProvider,
@@ -17,6 +18,7 @@ export type OpenAiEmbeddingClient = {
   inputType?: string;
   queryInputType?: string;
   documentInputType?: string;
+  queryInstructionTemplate?: boolean;
   outputDimensionality?: number;
 };
 
@@ -27,26 +29,6 @@ const OPENAI_MAX_INPUT_TOKENS: Record<string, number> = {
   "text-embedding-3-large": 8192,
   "text-embedding-ada-002": 8191,
 };
-
-/**
- * Query instruction templates for models that require instruction-aware embeddings.
- * Mirrors the behavior already implemented in the Ollama adapter.
- */
-const QUERY_INSTRUCTION_TEMPLATES = [
-  {
-    prefix: "qwen3-embedding",
-    template:
-      "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:{query}",
-  },
-  {
-    prefix: "nomic-embed-text",
-    template: "search_query: {query}",
-  },
-  {
-    prefix: "mxbai-embed-large",
-    template: "Represent this sentence for searching relevant passages: {query}",
-  },
-] as const;
 
 function normalizeOpenAiModel(model: string): string {
   const trimmed = model.trim();
@@ -63,33 +45,6 @@ function isNativeOpenAiBaseUrl(baseUrl: string): boolean {
   } catch {
     return false;
   }
-}
-
-/**
- * Apply query instruction template for models that require it (e.g. Qwen3-Embedding).
- * Returns the original query if no matching template is found.
- */
-function normalizeTemplateMatchModel(model: string): string {
-  const normalizedModel = model.trim().toLowerCase();
-  const segments = normalizedModel.split("/").filter(Boolean);
-  return segments.at(-1) ?? normalizedModel;
-}
-
-function matchesTemplateModelAlias(model: string, prefix: string): boolean {
-  return (
-    model === prefix ||
-    model.startsWith(`${prefix}-`) ||
-    model.startsWith(`${prefix}:`) ||
-    model.includes(`-${prefix}`)
-  );
-}
-
-function applyQueryInstructionTemplate(model: string, queryText: string): string {
-  const normalizedModel = normalizeTemplateMatchModel(model);
-  const match = QUERY_INSTRUCTION_TEMPLATES.find(({ prefix }) =>
-    matchesTemplateModelAlias(normalizedModel, prefix),
-  );
-  return match ? match.template.replace("{query}", () => queryText) : queryText;
 }
 
 export async function createOpenAiEmbeddingProvider(
@@ -139,9 +94,10 @@ export async function createOpenAiEmbeddingProvider(
         ? { maxInputTokens: OPENAI_MAX_INPUT_TOKENS[normalizeOpenAiModel(client.model)] }
         : {}),
       embedQuery: async (text, optionsValue) => {
-        // Apply query instruction template for models that need it (Qwen3-Embedding, etc.)
-        const prefixed = applyQueryInstructionTemplate(client.model, text);
-        const [vec] = await embed([prefixed], "query", optionsValue?.signal);
+        const query = client.queryInstructionTemplate
+          ? applyQueryInstructionTemplate(client.model, text)
+          : text;
+        const [vec] = await embed([query], "query", optionsValue?.signal);
         return vec ?? [];
       },
       embedBatch: async (texts, optionsLocal) =>
@@ -172,6 +128,7 @@ async function resolveOpenAiEmbeddingClient(
     inputType: options.inputType,
     queryInputType: options.queryInputType,
     documentInputType: options.documentInputType,
+    queryInstructionTemplate: options.queryInstructionTemplate === true,
     outputDimensionality: options.outputDimensionality,
   };
 }

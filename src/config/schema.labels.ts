@@ -460,6 +460,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "memory.search.inputType": "Memory Search Input Type",
   "memory.search.queryInputType": "Memory Search Query Input Type",
   "memory.search.documentInputType": "Memory Search Document Input Type",
+  "memory.search.queryInstructionTemplate": "Memory Search Query Instruction Template",
   "memory.search.outputDimensionality": "Memory Search Output Dimensionality",
   "memory.search.fallback": "Memory Search Fallback",
   "memory.search.local.modelPath": "Local Embedding Model Path",
