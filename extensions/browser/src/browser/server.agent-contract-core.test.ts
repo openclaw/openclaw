@@ -273,6 +273,47 @@ describe("browser control server", () => {
   );
 
   it(
+    "returns action download metadata from /act responses",
+    async () => {
+      const base = await startServerAndBase();
+      pwMocks.executeActViaPlaywright.mockResolvedValueOnce({
+        downloads: {
+          count: 1,
+          recent: [
+            {
+              suggestedFilename: "report.pdf",
+              savedPath: "/tmp/openclaw/downloads/report.pdf",
+            },
+          ],
+        },
+      });
+
+      const response = await postJson<{
+        ok: boolean;
+        downloads?: {
+          count: number;
+          recent: Array<{ suggestedFilename?: string; savedPath?: string }>;
+        };
+      }>(`${base}/act`, {
+        kind: "click",
+        ref: "5",
+      });
+
+      expect(response.ok).toBe(true);
+      expect(response.downloads).toEqual({
+        count: 1,
+        recent: [
+          {
+            suggestedFilename: "report.pdf",
+            savedPath: "/tmp/openclaw/downloads/report.pdf",
+          },
+        ],
+      });
+    },
+    slowTimeoutMs,
+  );
+
+  it(
     "returns ACT_SELECTOR_UNSUPPORTED for selector on unsupported action kinds",
     async () => {
       const base = await startServerAndBase();

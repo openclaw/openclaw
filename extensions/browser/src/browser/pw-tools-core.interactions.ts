@@ -25,7 +25,9 @@ import {
 import { resolveStrictExistingUploadPaths } from "./paths.js";
 import {
   assertPageNavigationCompletedSafely,
+  beginActionDownloadCaptureOnPage,
   createObservedDialogAbortSignalForPage,
+  type BrowserActionDownload,
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
@@ -57,6 +59,7 @@ type TargetOpts = {
 };
 
 const INTERACTION_NAVIGATION_GRACE_MS = 250;
+const ACT_DOWNLOAD_GRACE_MS = 500;
 
 type NavigationObservablePage = Pick<Page, "url"> & {
   mainFrame?: () => Frame;
@@ -1691,6 +1694,18 @@ async function executeSingleAction(
   return undefined;
 }
 
+function actionDownloadGraceMs(action: BrowserActRequest): number {
+  switch (action.kind) {
+    case "batch":
+    case "click":
+    case "clickCoords":
+    case "evaluate":
+      return ACT_DOWNLOAD_GRACE_MS;
+    default:
+      return 0;
+  }
+}
+
 /** Executes one high-level browser act request with bounded recursive actions. */
 export async function executeActViaPlaywright(opts: {
   cdpUrl: string;
@@ -1704,12 +1719,15 @@ export async function executeActViaPlaywright(opts: {
   results?: Array<{ ok: boolean; error?: string }>;
   blockedByDialog?: boolean;
   browserState?: unknown;
+  downloads?: { count: number; recent: BrowserActionDownload[] };
 }> {
   const page = await getPageForTargetId({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
     ssrfPolicy: opts.ssrfPolicy,
   });
+  const downloadCapture = beginActionDownloadCaptureOnPage(page);
+  const downloadGraceMs = actionDownloadGraceMs(opts.action);
   const dialogAbort = createObservedDialogAbortSignalForPage({
     page,
     parentSignal: opts.signal,
@@ -1725,7 +1743,11 @@ export async function executeActViaPlaywright(opts: {
         evaluateEnabled: opts.evaluateEnabled,
         signal: dialogAbort.signal,
       });
-      return { results: batch.results };
+      const newDownloads = await downloadCapture.drain({ graceMs: downloadGraceMs });
+      return {
+        results: batch.results,
+        ...(newDownloads ? { downloads: newDownloads } : {}),
+      };
     }
     const result = await executeSingleAction(
       opts.action,
@@ -1736,16 +1758,18 @@ export async function executeActViaPlaywright(opts: {
       0,
       dialogAbort.signal,
     );
+    const newDownloads = await downloadCapture.drain({ graceMs: downloadGraceMs });
     if (opts.action.kind === "evaluate") {
-      return { result };
+      return { result, ...(newDownloads ? { downloads: newDownloads } : {}) };
     }
-    return {};
+    return newDownloads ? { downloads: newDownloads } : {};
   } catch (err) {
     if (isBrowserObservedDialogBlockedError(err)) {
       return { blockedByDialog: true, browserState: err.browserState };
     }
     throw err;
   } finally {
+    downloadCapture.dispose();
     dialogAbort.cleanup();
   }
 }
