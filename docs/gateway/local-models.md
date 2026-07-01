@@ -211,7 +211,10 @@ Behavior note for local/proxied `/v1` backends:
   OpenAI endpoints
 - native OpenAI-only request shaping does not apply here: no
   `service_tier`, no Responses `store`, no OpenAI reasoning-compat payload
-  shaping, and no prompt-cache hints
+  shaping, and no prompt-cache hints by default. LiteLLM Anthropic model refs
+  are the exception: explicit `cacheRetention: "short"` or
+  `cacheRetention: "long"` sends Anthropic `cache_control` markers through the
+  proxy.
 - hidden OpenClaw attribution headers (`originator`, `version`, `User-Agent`)
   are not injected on these custom proxy URLs
 

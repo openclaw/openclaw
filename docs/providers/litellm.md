@@ -205,8 +205,12 @@ will be sent to the configured proxy host.
     - OpenClaw connects through LiteLLM's proxy-style OpenAI-compatible `/v1`
       endpoint
     - Native OpenAI-only request shaping does not apply through LiteLLM:
-      no `service_tier`, no Responses `store`, no prompt-cache hints, and no
-      OpenAI reasoning-compat payload shaping
+      no `service_tier`, no Responses `store`, and no OpenAI reasoning-compat
+      payload shaping
+    - LiteLLM Anthropic model refs such as `litellm/claude-opus-4-6` or
+      `litellm/anthropic/claude-opus-4-6` do receive Anthropic `cache_control`
+      prompt-cache markers when `cacheRetention` is explicitly set to `short`
+      or `long`
     - Hidden OpenClaw attribution headers (`originator`, `version`, `User-Agent`)
       are not injected on custom LiteLLM base URLs
   </Accordion>

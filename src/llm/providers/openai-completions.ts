@@ -52,6 +52,10 @@ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copi
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { mapOpenAIStopReason } from "./openai-stop-reason.js";
 import { buildBaseOptions } from "./simple-options.js";
+import {
+  isAnthropicModelRef,
+  isLiteLLMAnthropicModelRef,
+} from "./stream-wrappers/anthropic-family-cache-semantics.js";
 import { transformMessages } from "./transform-messages.js";
 
 /**
@@ -628,7 +632,10 @@ function buildParams(
   compat: ResolvedOpenAICompletionsCompat = getCompat(model),
   cacheRetention: CacheRetention = resolveCacheRetention(options?.cacheRetention),
 ) {
-  const cacheControl = getCompatCacheControl(compat, cacheRetention);
+  const cacheControl =
+    model.provider === "litellm" && options?.cacheRetention === undefined
+      ? undefined
+      : getCompatCacheControl(compat, cacheRetention);
   const messages = convertMessages(model, context, compat, {
     preserveSystemPromptCacheBoundary: cacheControl !== undefined,
   });
@@ -1309,8 +1316,10 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
   const isGrok = provider === "xai" || baseUrl.includes("api.x.ai");
   const isDeepSeek = provider === "deepseek" || baseUrl.includes("deepseek.com");
   const isXiaomi = provider === "xiaomi" || baseUrl.includes("xiaomimimo.com");
-  const cacheControlFormat =
-    provider === "openrouter" && model.id.startsWith("anthropic/") ? "anthropic" : undefined;
+  const usesAnthropicCacheControl =
+    (provider === "openrouter" && isAnthropicModelRef(model.id)) ||
+    (provider === "litellm" && isLiteLLMAnthropicModelRef(model.id));
+  const cacheControlFormat = usesAnthropicCacheControl ? "anthropic" : undefined;
 
   return {
     supportsStore: !isNonStandard,

@@ -144,6 +144,15 @@ as the cache-hit signal.
 If you repoint the model at an arbitrary OpenAI-compatible proxy URL, OpenClaw
 stops injecting those OpenRouter-specific Anthropic cache markers.
 
+### LiteLLM Anthropic routes
+
+For `litellm/claude-*`, `litellm/anthropic/*`, and
+`litellm/anthropic.claude*` model refs, explicit `cacheRetention: "short"` or
+`cacheRetention: "long"` makes OpenClaw inject Anthropic `cache_control` markers
+into the OpenAI-compatible chat payload so LiteLLM can pass them through to
+Anthropic. Non-Anthropic LiteLLM models do not receive those Anthropic markers,
+and `cacheRetention: "none"` suppresses them.
+
 ### Other providers
 
 If the provider does not support this cache mode, `cacheRetention` has no effect.
