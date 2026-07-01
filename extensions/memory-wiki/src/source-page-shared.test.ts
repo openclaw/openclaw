@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import * as securityRuntime from "openclaw/plugin-sdk/security-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderMarkdownFence, renderWikiMarkdown } from "./markdown.js";
 import { writeImportedSourcePage } from "./source-page-shared.js";
@@ -179,5 +180,79 @@ describe("writeImportedSourcePage", () => {
     expect(after).toContain("second imported body without marker comments");
     expect(notesBlock).toContain(userNote);
     expect(notesBlock).not.toContain("OLD IMPORTED SOURCE MARKER PAYLOAD");
+  });
+
+  it("preserves notes through a transient vault readText failure (retry-once)", async () => {
+    // Simulate vault.readText failing once (EIO) then succeeding on retry.
+    // The mock wraps the real fsRoot so every other vault method is untouched.
+    const actualRoot = securityRuntime.root;
+    const spy = vi
+      .spyOn(securityRuntime, "root")
+      .mockImplementation(async (...args: Parameters<typeof actualRoot>) => {
+        const vault = await actualRoot(...args);
+        let calls = 0;
+        const origReadText = vault.readText.bind(vault);
+        const wrappedReadText = async (p: string) => {
+          calls += 1;
+          if (calls === 1) {
+            throw new securityRuntime.FsSafeError("EIO: transient read error", "path-mismatch");
+          }
+          return await origReadText(p);
+        };
+        vault.readText = wrappedReadText;
+        return vault;
+      });
+
+    try {
+      const sourcePath = path.join(suiteRoot, "retry-imported.txt");
+      const pagePath = "sources/retry-imported.md";
+      const state: Parameters<typeof writeImportedSourcePage>[0]["state"] = {
+        entries: {},
+        version: 1,
+      };
+
+      await fs.writeFile(sourcePath, "first imported body", "utf8");
+      await writeImportedSourcePage({
+        vaultRoot: suiteRoot,
+        syncKey: "bridge:retry-imported",
+        sourcePath,
+        sourceUpdatedAtMs: Date.UTC(2026, 4, 1),
+        sourceSize: 19,
+        renderFingerprint: "fp-r1",
+        pagePath,
+        group: "bridge",
+        state,
+        buildRendered: buildSourcePage,
+      });
+
+      const absPage = path.join(suiteRoot, pagePath);
+      const userNote = "SURVIVES_TRANSIENT_VAULT_READ_ERROR";
+      const edited = (await fs.readFile(absPage, "utf8")).replace(
+        "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
+        `<!-- openclaw:human:start -->\n${userNote}\n<!-- openclaw:human:end -->`,
+      );
+      await fs.writeFile(absPage, edited, "utf8");
+
+      await fs.writeFile(sourcePath, "second imported body", "utf8");
+      const result = await writeImportedSourcePage({
+        vaultRoot: suiteRoot,
+        syncKey: "bridge:retry-imported",
+        sourcePath,
+        sourceUpdatedAtMs: Date.UTC(2026, 4, 2),
+        sourceSize: 19,
+        renderFingerprint: "fp-r2",
+        pagePath,
+        group: "bridge",
+        state,
+        buildRendered: buildSourcePage,
+      });
+
+      const after = await fs.readFile(absPage, "utf8");
+      expect(result.changed).toBe(true);
+      expect(after).toContain("second imported body");
+      expect(after).toContain(userNote);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

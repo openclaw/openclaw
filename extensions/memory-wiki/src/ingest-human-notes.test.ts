@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import * as securityRuntime from "openclaw/plugin-sdk/security-runtime";
+import { describe, expect, it, vi } from "vitest";
 import { ingestMemoryWikiSource } from "./ingest.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
@@ -191,5 +192,64 @@ describe("ingestMemoryWikiSource human notes", () => {
     expect(after).toContain("second body");
     expect(after).toContain("NOTE TOP");
     expect(after).toContain("NOTE BOTTOM under a pasted heading");
+  });
+
+  it("preserves notes through a transient existing-page read failure (retry-once)", async () => {
+    // Exercising the retry branch in ingest.ts: we mock pathExists to
+    // return true (page exists), then temporarily rename the page away so
+    // the first fs.readFile fails (ENOENT).  A timer restores it before
+    // the 100ms retry fires, so the retry succeeds and notes survive.
+    const rootDir = await createTempDir("memory-wiki-retry-");
+    const inputPath = path.join(rootDir, "retry-test.txt");
+    const vaultDir = path.join(rootDir, "vault");
+    const { config } = await createVault({ rootDir: vaultDir });
+
+    await fs.writeFile(inputPath, "v1 content\n", "utf8");
+    await ingestMemoryWikiSource({
+      config,
+      inputPath,
+      nowMs: Date.UTC(2026, 3, 5, 12, 0, 0),
+    });
+
+    const pagePath = path.join(config.vault.path, "sources", "retry-test.md");
+    const userNote = "SURVIVES_TRANSIENT_READ_ERROR";
+    const edited = (await fs.readFile(pagePath, "utf8")).replace(
+      "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
+      `<!-- openclaw:human:start -->\n${userNote}\n<!-- openclaw:human:end -->`,
+    );
+    await fs.writeFile(pagePath, edited, "utf8");
+
+    // Force pathExists → true so we enter the readFile + retry branch.
+    const pathExistsSpy = vi.spyOn(securityRuntime, "pathExists").mockResolvedValue(true);
+
+    // Temporarily rename the page so the first readFile fails.
+    const tmpPath = pagePath + ".moved";
+    await fs.rename(pagePath, tmpPath);
+    const restoreTimer = setTimeout(() => {
+      fs.rename(tmpPath, pagePath).catch(() => {});
+    }, 10);
+
+    try {
+      await fs.writeFile(inputPath, "v2 content updated\n", "utf8");
+      await ingestMemoryWikiSource({
+        config,
+        inputPath,
+        nowMs: Date.UTC(2026, 3, 6, 12, 0, 0),
+      });
+    } finally {
+      clearTimeout(restoreTimer);
+      pathExistsSpy.mockRestore();
+      // Best-effort restore if our timer didn't fire
+      try {
+        await fs.stat(tmpPath);
+        await fs.rename(tmpPath, pagePath);
+      } catch {
+        // already restored or timer did fire
+      }
+    }
+
+    const after = await fs.readFile(pagePath, "utf8");
+    expect(after).toContain("v2 content updated");
+    expect(after).toContain(userNote);
   });
 });

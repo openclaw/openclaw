@@ -87,7 +87,20 @@ export async function ingestMemoryWikiSource(params: {
     ].join("\n"),
   });
 
-  const existing = created ? "" : await fs.readFile(pagePath, "utf8").catch(() => "");
+  const existing = created
+    ? ""
+    : await fs.readFile(pagePath, "utf8").catch(async (err: unknown) => {
+        // Retry once for transient read failures (EIO, concurrent rewrite
+        // race that vault-page-write.ts also retries).  Fail closed after
+        // retry exhaustion so an unreadable existing page is never treated
+        // as absent, protecting user notes from silent loss (#98345).
+        await new Promise((r) => {
+          setTimeout(r, 100);
+        });
+        return await fs.readFile(pagePath, "utf8").catch(() => {
+          throw err;
+        });
+      });
   await fs.writeFile(
     pagePath,
     existing ? preserveHumanNotesBlock(markdown, existing) : markdown,
