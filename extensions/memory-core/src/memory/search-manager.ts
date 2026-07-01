@@ -7,7 +7,9 @@ import {
   resolveAgentContextLimits,
   resolveAgentWorkspaceDir,
   resolveGlobalSingleton,
+  resolveMemorySearchConfig,
   resolveMemorySearchSyncConfig,
+  truncateUtf16Safe,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
@@ -15,9 +17,15 @@ import {
   resolveQmdBinaryUnavailableReason,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
+  chunkMarkdown,
+  listMemoryFiles,
+  readMemoryFile,
   resolveMemoryBackendConfig,
   type MemoryEmbeddingProbeResult,
+  type MemoryProviderStatus,
+  type MemoryReadResult,
   type MemorySearchManager,
+  type MemorySearchResult,
   type MemorySearchRuntimeDebug,
   type MemorySource,
   type MemorySyncParams,
@@ -452,7 +460,220 @@ async function getBuiltinMemorySearchManager(params: {
     return { manager };
   } catch (err) {
     const message = formatErrorMessage(err);
+    if (isNodeSqliteUnavailableError(message)) {
+      const manager = createKeywordFallbackMemoryManager({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        reason: message,
+      });
+      if (manager) {
+        return { manager };
+      }
+    }
     return { manager: null, error: message };
+  }
+}
+
+function isNodeSqliteUnavailableError(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("missing node:sqlite") ||
+    normalized.includes("no such built-in module: node:sqlite") ||
+    normalized.includes("sqlite support is unavailable in this node runtime")
+  );
+}
+
+function createKeywordFallbackMemoryManager(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  reason: string;
+}): MemorySearchManager | null {
+  const settings = resolveMemorySearchConfig(params.cfg, params.agentId);
+  if (!settings || !settings.sources.includes("memory")) {
+    return null;
+  }
+  return new KeywordFallbackMemoryManager({
+    workspaceDir: resolveAgentWorkspaceDir(params.cfg, params.agentId),
+    extraPaths: settings.extraPaths,
+    chunking: settings.chunking,
+    maxResults: settings.query.maxResults,
+    minScore: settings.query.minScore,
+    reason: params.reason,
+  });
+}
+
+type KeywordFallbackCandidate = MemorySearchResult & { matchCount: number };
+
+const KEYWORD_FALLBACK_TOKEN_RE = /[\p{L}\p{N}_]+/gu;
+const KEYWORD_FALLBACK_SNIPPET_MAX_CHARS = 700;
+
+function tokenizeKeywordFallbackQuery(query: string): string[] {
+  return Array.from(
+    new Set(
+      (query.match(KEYWORD_FALLBACK_TOKEN_RE) ?? [])
+        .map((token) => token.toLowerCase())
+        .filter(Boolean),
+    ),
+  );
+}
+
+function countKeywordFallbackMatches(text: string, tokens: string[]): number {
+  const normalized = text.toLowerCase();
+  return tokens.filter((token) => normalized.includes(token)).length;
+}
+
+class KeywordFallbackMemoryManager implements MemorySearchManager {
+  constructor(
+    private readonly params: {
+      workspaceDir: string;
+      extraPaths: string[];
+      chunking: { tokens: number; overlap: number };
+      maxResults: number;
+      minScore: number;
+      reason: string;
+    },
+  ) {}
+
+  async search(
+    query: string,
+    opts?: {
+      maxResults?: number;
+      minScore?: number;
+      sessionKey?: string;
+      qmdSearchModeOverride?: "query" | "search" | "vsearch";
+      onDebug?: (debug: MemorySearchRuntimeDebug) => void;
+      sources?: MemorySource[];
+      signal?: AbortSignal;
+    },
+  ): Promise<MemorySearchResult[]> {
+    opts?.onDebug?.({
+      backend: "builtin",
+      effectiveMode: "keyword-fallback",
+      fallback: "node-sqlite-unavailable",
+    });
+    if (opts?.sources && !opts.sources.includes("memory")) {
+      return [];
+    }
+    const tokens = tokenizeKeywordFallbackQuery(query);
+    if (tokens.length === 0) {
+      return [];
+    }
+    const maxResults = Math.max(1, opts?.maxResults ?? this.params.maxResults ?? 10);
+    const minScore = opts?.minScore ?? this.params.minScore ?? 0;
+    const files = (await listMemoryFiles(this.params.workspaceDir, this.params.extraPaths)).filter(
+      (filePath) => filePath.endsWith(".md"),
+    );
+    const candidates: KeywordFallbackCandidate[] = [];
+    for (const filePath of files) {
+      if (opts?.signal?.aborted) {
+        throw opts.signal.reason instanceof Error ? opts.signal.reason : new Error("aborted");
+      }
+      let readResult: MemoryReadResult;
+      try {
+        readResult = await readMemoryFile({
+          workspaceDir: this.params.workspaceDir,
+          extraPaths: this.params.extraPaths,
+          relPath: filePath,
+          lines: Number.MAX_SAFE_INTEGER,
+          maxChars: Number.MAX_SAFE_INTEGER,
+        });
+      } catch {
+        continue;
+      }
+      const relPath = readResult.path;
+      const pathMatches = countKeywordFallbackMatches(relPath, tokens);
+      for (const chunk of chunkMarkdown(readResult.text, this.params.chunking)) {
+        const textMatches = countKeywordFallbackMatches(chunk.text, tokens);
+        const matchCount = textMatches + pathMatches;
+        if (matchCount === 0) {
+          continue;
+        }
+        const score = Math.min(1, matchCount / tokens.length + Math.min(textMatches, 1) * 0.1);
+        if (score < minScore) {
+          continue;
+        }
+        candidates.push({
+          path: relPath,
+          startLine: chunk.startLine,
+          endLine: chunk.endLine,
+          score,
+          textScore: score,
+          snippet: truncateUtf16Safe(chunk.text, KEYWORD_FALLBACK_SNIPPET_MAX_CHARS),
+          source: "memory",
+          matchCount,
+        });
+      }
+    }
+    return candidates
+      .toSorted((left, right) => {
+        if (left.score !== right.score) {
+          return right.score - left.score;
+        }
+        if (left.matchCount !== right.matchCount) {
+          return right.matchCount - left.matchCount;
+        }
+        const pathOrder = left.path.localeCompare(right.path);
+        if (pathOrder !== 0) {
+          return pathOrder;
+        }
+        return left.startLine - right.startLine;
+      })
+      .slice(0, maxResults)
+      .map(
+        (candidate): MemorySearchResult => ({
+          path: candidate.path,
+          startLine: candidate.startLine,
+          endLine: candidate.endLine,
+          score: candidate.score,
+          textScore: candidate.textScore,
+          snippet: candidate.snippet,
+          source: candidate.source,
+        }),
+      );
+  }
+
+  async readFile(params: {
+    relPath: string;
+    from?: number;
+    lines?: number;
+  }): Promise<MemoryReadResult> {
+    return await readMemoryFile({
+      workspaceDir: this.params.workspaceDir,
+      extraPaths: this.params.extraPaths,
+      relPath: params.relPath,
+      from: params.from,
+      lines: params.lines,
+    });
+  }
+
+  status(): MemoryProviderStatus {
+    return {
+      backend: "builtin",
+      provider: "keyword-fallback",
+      requestedProvider: "keyword-fallback",
+      workspaceDir: this.params.workspaceDir,
+      sources: ["memory"],
+      fallback: {
+        from: "builtin-sqlite",
+        reason: this.params.reason,
+      },
+      custom: {
+        fallback: {
+          mode: "keyword",
+          reason: this.params.reason,
+        },
+      },
+    };
+  }
+
+  async sync(): Promise<void> {}
+
+  async probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult> {
+    return { ok: false, error: this.params.reason };
+  }
+
+  async probeVectorAvailability(): Promise<boolean> {
+    return false;
   }
 }
 
