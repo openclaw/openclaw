@@ -5,7 +5,7 @@ import type { CliDeps } from "../cli/deps.types.js";
 import type { CronJob } from "../cron/types.js";
 
 const mocks = vi.hoisted(() => ({
-  fetchWithSsrFGuard: vi.fn(async () => ({ release: vi.fn() })),
+  fetchWithSsrFGuard: vi.fn(async (_request: unknown) => ({ release: vi.fn() })),
   sendFailureNotificationAnnounce: vi.fn(),
 }));
 
@@ -31,9 +31,16 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 }
 
 function webhookRequestBody() {
-  const request = requireRecord(mocks.fetchWithSsrFGuard.mock.calls[0]?.[0], "webhook request");
+  const call = (mocks.fetchWithSsrFGuard.mock.calls as unknown[][])[0];
+  if (!call) {
+    throw new Error("expected webhook request call");
+  }
+  const request = requireRecord(call[0], "webhook request");
   const init = requireRecord(request.init, "webhook request init");
-  return JSON.parse(String(init.body));
+  if (typeof init.body !== "string") {
+    throw new Error("expected webhook request body");
+  }
+  return JSON.parse(init.body);
 }
 
 describe("dispatchGatewayCronFinishedNotifications", () => {

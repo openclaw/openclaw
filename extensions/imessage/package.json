@@ -4,6 +4,9 @@
   "private": true,
   "description": "OpenClaw iMessage channel plugin using imsg on a signed-in Mac",
   "type": "module",
+  "dependencies": {
+    "typebox": "1.1.39"
+  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
   },

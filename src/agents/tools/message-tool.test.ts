@@ -341,6 +341,7 @@ function createChannelPlugin(params: {
   capabilities?: readonly ChannelMessageCapability[];
   toolSchema?: MessageToolSchema | ((params: MessageToolDiscoveryContext) => MessageToolSchema);
   describeMessageTool?: DescribeMessageTool;
+  messageActionTargetAliases?: NonNullable<ChannelPlugin["actions"]>["messageActionTargetAliases"];
   message?: ChannelMessageAdapterShape;
   messaging?: ChannelPlugin["messaging"];
 }): ChannelPlugin {
@@ -373,6 +374,7 @@ function createChannelPlugin(params: {
             ...(schema ? { schema } : {}),
           };
         }),
+      messageActionTargetAliases: params.messageActionTargetAliases,
     },
   };
 }
@@ -471,6 +473,144 @@ describe("message tool gateway timeout", () => {
     });
 
     expect(call?.gateway?.timeoutMs).toBe(5000);
+  });
+});
+
+describe("poll vote echo guard", () => {
+  const currentChat = "iMessage;-;+15550001111";
+
+  function createPollVoteTool() {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "imessage",
+          source: "test",
+          plugin: createChannelPlugin({
+            id: "imessage",
+            label: "iMessage",
+            docsPath: "/channels/imessage",
+            blurb: "iMessage test plugin",
+            actions: ["poll-vote"],
+            messageActionTargetAliases: {
+              "poll-vote": {
+                aliases: ["chatGuid"],
+                deliveryTargetAliases: ["chatGuid"],
+              },
+            },
+          }),
+        },
+      ]),
+    );
+    mocks.runMessageAction.mockImplementation(async ({ action }: { action: string }) =>
+      action === "poll-vote"
+        ? ({
+            kind: "action",
+            channel: "imessage",
+            action: "poll-vote",
+            handledBy: "plugin",
+            payload: {},
+            toolResult: {
+              content: [{ type: "text", text: "vote cast" }],
+              details: { pollVotedOption: "Blue" },
+            },
+            dryRun: false,
+          } as MessageActionRunResult)
+        : ({
+            kind: "send",
+            channel: "imessage",
+            action: "send",
+            to: currentChat,
+            handledBy: "plugin",
+            payload: {},
+            dryRun: false,
+          } as MessageActionRunResult),
+    );
+    return createMessageTool({
+      currentChannelProvider: "imessage",
+      currentChannelId: currentChat,
+      agentAccountId: "primary",
+      sourceReplyDeliveryMode: "message_tool_only",
+      runMessageAction: mocks.runMessageAction as never,
+    });
+  }
+
+  async function castBlueVote(
+    tool: ReturnType<CreateMessageTool>,
+    overrides: Record<string, unknown> = {},
+  ) {
+    await tool.execute("vote", {
+      action: "poll-vote",
+      channel: "imessage",
+      pollId: "poll-guid",
+      pollOptionIndex: 2,
+      ...overrides,
+    });
+  }
+
+  it("suppresses the first same-route restatement", async () => {
+    const tool = createPollVoteTool();
+    await castBlueVote(tool);
+
+    const result = await tool.execute("send", {
+      action: "send",
+      channel: "imessage",
+      message: "🦞 Blue.",
+    });
+
+    expect(result.details).toMatchObject({ status: "suppressed", reason: "poll_vote_echo" });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cross accounts, delivery targets, or conflicting target fields", async () => {
+    const accountTool = createPollVoteTool();
+    await castBlueVote(accountTool);
+    await accountTool.execute("send", {
+      action: "send",
+      channel: "imessage",
+      accountId: "secondary",
+      message: "Blue",
+    });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(2);
+
+    const targetTool = createPollVoteTool();
+    await castBlueVote(targetTool, { chatGuid: "iMessage;-;+15559998888" });
+    await targetTool.execute("send", {
+      action: "send",
+      channel: "imessage",
+      message: "Blue",
+    });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(4);
+
+    const conflictingTool = createPollVoteTool();
+    await castBlueVote(conflictingTool, {
+      target: currentChat,
+      chatGuid: "iMessage;-;+15559998888",
+    });
+    await conflictingTool.execute("send", {
+      action: "send",
+      channel: "imessage",
+      target: currentChat,
+      message: "Blue",
+    });
+
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(6);
+  });
+
+  it("consumes the guard on the first same-route visible send", async () => {
+    const tool = createPollVoteTool();
+    await castBlueVote(tool);
+    await tool.execute("send-1", {
+      action: "send",
+      channel: "imessage",
+      message: "Blue, because it matches our theme",
+    });
+    await tool.execute("send-2", {
+      action: "send",
+      channel: "imessage",
+      message: "Blue",
+    });
+
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(3);
   });
 });
 

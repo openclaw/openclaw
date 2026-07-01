@@ -58,6 +58,7 @@ import {
 import type { OutboundSendDeps } from "./deliver.js";
 import { shouldUseInternalSourceReplySink } from "./internal-source-reply.js";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
+import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 import {
   collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
@@ -69,6 +70,7 @@ import {
   resolveAttachmentMediaPolicy,
   resolveExtraActionMediaSourceParamKeys,
 } from "./message-action-params.js";
+import { actionRequiresTarget } from "./message-action-spec.js";
 import {
   prepareOutboundMirrorRoute,
   resolveAndApplyOutboundReplyToId,
@@ -525,14 +527,32 @@ function collectMessageAttachmentMediaHints(value: unknown): string[] {
   return mediaUrls;
 }
 
-function hasExplicitTargetParam(params: Record<string, unknown>): boolean {
+function hasExplicitSingularTargetParam(params: Record<string, unknown>): boolean {
   for (const key of ["target", "to", "channelId"]) {
     if (normalizeOptionalString(params[key])) {
       return true;
     }
   }
+  return false;
+}
+
+function hasExplicitTargetParam(params: Record<string, unknown>): boolean {
   return (
-    Array.isArray(params.targets) && params.targets.some((value) => normalizeOptionalString(value))
+    hasExplicitSingularTargetParam(params) ||
+    (Array.isArray(params.targets) &&
+      params.targets.some((value) => normalizeOptionalString(value)))
+  );
+}
+
+function hasPotentialActionTargetInput(
+  input: RunMessageActionParams,
+  params: Record<string, unknown>,
+): boolean {
+  return Boolean(
+    hasExplicitSingularTargetParam(params) ||
+    normalizeOptionalString(input.toolContext?.currentChannelId) ||
+    normalizeOptionalString(input.toolContext?.currentMessagingTarget) ||
+    hasPotentialPluginActionParam(params),
   );
 }
 
@@ -1418,13 +1438,19 @@ export async function runMessageAction(
     return handleInternalSourceReplySendAction({ ...input, agentId: resolvedAgentId }, params);
   }
   applyImplicitSourceReplySendPolicy(input, params);
+  // Missing targets must fail before channel discovery, which can bootstrap or
+  // probe configured plugins. Non-standard params may still be owner aliases.
+  if (actionRequiresTarget(action) && !hasPotentialActionTargetInput(input, params)) {
+    throw new Error(`Action ${action} requires a target.`);
+  }
+  const channel = await resolveChannel(cfg, params, input.toolContext);
+  params.channel = channel;
   params = normalizeMessageActionInput({
     action,
     args: params,
     toolContext: input.toolContext,
+    targetAliasSpec: getChannelPlugin(channel)?.actions?.messageActionTargetAliases?.[action],
   });
-
-  const channel = await resolveChannel(cfg, params, input.toolContext);
   let accountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
   if (!accountId && resolvedAgentId) {
     accountId = resolveTargetBoundAccountId({
