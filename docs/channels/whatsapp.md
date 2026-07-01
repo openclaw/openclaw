@@ -93,7 +93,31 @@ openclaw gateway
 
   </Step>
 
+  <Step title="Send your first message">
+
+    Verify routing. Onboarding will not auto-send anything.
+
+    Inbound depends on your `dmPolicy`:
+
+    - `pairing` (default): message the linked assistant number from any phone. First contact triggers a pairing code that you approve in the next step.
+    - `allowlist`: message from a sender included in `allowFrom`. Senders outside the list are dropped.
+    - `open`: any sender can message and is routed.
+    - `disabled`: inbound DMs are ignored. Use the outbound CLI path below to verify.
+
+    Outbound (any policy): replace the target with a destination number or group JID.
+
+```bash
+openclaw message send --channel whatsapp \
+  --target +15551234567 --message "hi"
+```
+
+    See [Message](/cli/message) for `--account`, `--media`, presentation payloads, and other options.
+
+  </Step>
+
   <Step title="Approve first pairing request (if using pairing mode)">
+
+    In `pairing` mode, the first inbound message above creates a pending request. Approve it:
 
 ```bash
 openclaw pairing list whatsapp
