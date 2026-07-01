@@ -23,6 +23,19 @@ vi.mock("../cron/delivery.js", async (importOriginal) => {
 
 import { dispatchGatewayCronFinishedNotifications } from "./server-cron-notifications.js";
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function webhookRequestBody() {
+  const request = requireRecord(mocks.fetchWithSsrFGuard.mock.calls[0]?.[0], "webhook request");
+  const init = requireRecord(request.init, "webhook request init");
+  return JSON.parse(String(init.body));
+}
+
 describe("dispatchGatewayCronFinishedNotifications", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -182,10 +195,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     });
 
     await vi.waitFor(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
-    const [request] = mocks.fetchWithSsrFGuard.mock.calls[0] as unknown as [
-      { init?: { body?: string } },
-    ];
-    const body = JSON.parse(String(request.init?.body));
+    const body = webhookRequestBody();
     expect(body.summary).toContain("[redacted-url]");
     expect(body.summary).toContain("[redacted-code]");
     expect(body.summary).toContain("token=***");
@@ -267,10 +277,7 @@ describe("dispatchGatewayCronFinishedNotifications", () => {
     });
 
     await vi.waitFor(() => expect(mocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1));
-    const [request] = mocks.fetchWithSsrFGuard.mock.calls[0] as unknown as [
-      { init?: { body?: string } },
-    ];
-    const body = JSON.parse(String(request.init?.body));
+    const body = webhookRequestBody();
     expect(body).toMatchObject({
       action: "finished",
       jobId: job.id,
