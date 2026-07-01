@@ -31,14 +31,16 @@ async function resolveDashboardTarget() {
   });
   const token = resolvedToken.token ?? "";
 
-  // LAN URLs fail secure-context checks in browsers.
-  // Coerce only lan->loopback and preserve other bind modes.
+  const tlsEnabled = cfg.gateway?.tls?.enabled === true;
+  // LAN and plain-HTTP tailnet URLs fail secure-context checks in browsers.
+  // Prefer the local loopback listener when it can provide the same Gateway.
+  const dashboardBind = bind === "lan" || (bind === "tailnet" && !tlsEnabled) ? "loopback" : bind;
   const links = resolveControlUiLinks({
     port,
-    bind: bind === "lan" ? "loopback" : bind,
+    bind: dashboardBind,
     customBindHost,
     basePath,
-    tlsEnabled: cfg.gateway?.tls?.enabled === true,
+    tlsEnabled,
   });
   // Avoid embedding externally managed SecretRef tokens in terminal/clipboard/browser args.
   const includeTokenInUrl = token.length > 0 && !resolvedToken.secretRefConfigured;

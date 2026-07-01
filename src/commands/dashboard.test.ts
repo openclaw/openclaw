@@ -41,8 +41,15 @@ function mockSnapshot(params?: {
   token?: string;
   bind?: GatewayBindMode;
   customBindHost?: string;
+  tlsEnabled?: boolean;
 }) {
   const token = params?.token ?? "abc123";
+  const gateway = {
+    auth: { token },
+    bind: params?.bind,
+    customBindHost: params?.customBindHost,
+    ...(params?.tlsEnabled === undefined ? {} : { tls: { enabled: params.tlsEnabled } }),
+  };
   mocks.readConfigFileSnapshot.mockResolvedValue({
     path: "/tmp/openclaw.json",
     exists: true,
@@ -50,11 +57,7 @@ function mockSnapshot(params?: {
     parsed: {},
     valid: true,
     config: {
-      gateway: {
-        auth: { token },
-        bind: params?.bind,
-        customBindHost: params?.customBindHost,
-      },
+      gateway,
     },
     issues: [],
     legacyIssues: [],
@@ -115,8 +118,22 @@ describe("dashboardCommand bind selection", () => {
     });
   });
 
-  it("preserves tailnet bind mode", async () => {
+  it("maps plain-http tailnet bind to loopback for dashboard URLs", async () => {
     mockSnapshot({ bind: "tailnet" });
+
+    await dashboardCommand(runtime, { noOpen: true });
+
+    expect(mocks.resolveControlUiLinks).toHaveBeenCalledWith({
+      port: 18789,
+      bind: "loopback",
+      customBindHost: undefined,
+      basePath: undefined,
+      tlsEnabled: false,
+    });
+  });
+
+  it("preserves tailnet bind mode when TLS provides a secure context", async () => {
+    mockSnapshot({ bind: "tailnet", tlsEnabled: true });
 
     await dashboardCommand(runtime, { noOpen: true });
 
@@ -125,7 +142,7 @@ describe("dashboardCommand bind selection", () => {
       bind: "tailnet",
       customBindHost: undefined,
       basePath: undefined,
-      tlsEnabled: false,
+      tlsEnabled: true,
     });
   });
 });
