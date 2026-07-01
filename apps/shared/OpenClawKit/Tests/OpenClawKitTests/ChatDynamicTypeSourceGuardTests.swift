@@ -14,6 +14,14 @@ struct ChatDynamicTypeSourceGuardTests {
         #expect(sources.composer.contains("@ScaledMetric(relativeTo: .body)"))
     }
 
+    @Test func `chat composer keeps iOS return key for multiline input`() throws {
+        let sources = try Self.scopedChatTextSources()
+
+        #expect(!sources.composer.contains(".submitLabel(.send)"))
+        #expect(!sources.composer.contains(".onSubmit"))
+        #expect(sources.composer.contains(".submitLabel(.return)"))
+    }
+
     private static func scopedChatTextSources() throws -> (
         messageViews: String,
         chatView: String,

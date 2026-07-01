@@ -517,10 +517,7 @@ struct OpenClawChatComposer: View {
                 axis: .vertical)
                 .font(.body)
                 .lineLimit(1...4)
-                .submitLabel(.send)
-                .onSubmit {
-                    self.sendDraftIfEnabled()
-                }
+                .submitLabel(.return)
                 .frame(
                     minHeight: self.textMinHeight,
                     idealHeight: self.textMinHeight,
