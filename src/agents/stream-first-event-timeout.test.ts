@@ -63,6 +63,30 @@ describe("withFirstStreamEventTimeout", () => {
     }
   });
 
+  it("calls iterator return when the consumer closes after the first event", async () => {
+    const onReturn = vi.fn();
+    const source: AsyncIterable<unknown> = {
+      [Symbol.asyncIterator]() {
+        return {
+          async next() {
+            return { done: false, value: "first" };
+          },
+          async return() {
+            onReturn();
+            return { done: true, value: undefined };
+          },
+        };
+      },
+    };
+    const stream = withFirstStreamEventTimeout(source, { timeoutMs: 5 });
+    const iterator = stream[Symbol.asyncIterator]();
+
+    await expect(iterator.next()).resolves.toEqual({ done: false, value: "first" });
+    await iterator.return?.();
+
+    expect(onReturn).toHaveBeenCalledTimes(1);
+  });
+
   it("aborts the underlying request on first-event timeout", async () => {
     vi.useFakeTimers();
     try {

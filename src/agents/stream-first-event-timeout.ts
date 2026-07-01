@@ -75,6 +75,7 @@ export function withFirstStreamEventTimeout<T>(
     async *[Symbol.asyncIterator]() {
       const iterator = stream[Symbol.asyncIterator]();
       let timer: ReturnType<typeof setTimeout> | undefined;
+      let completed = false;
       const clear = () => {
         if (timer) {
           clearTimeout(timer);
@@ -92,21 +93,25 @@ export function withFirstStreamEventTimeout<T>(
           iterator.next().then(resolve, reject);
         }).finally(clear);
         if (first.done) {
+          completed = true;
           return;
         }
         yield first.value;
         for (;;) {
           const next = await iterator.next();
           if (next.done) {
+            completed = true;
             return;
           }
           yield next.value;
         }
       } catch (error) {
-        void iterator.return?.().catch(() => undefined);
         throw error;
       } finally {
         clear();
+        if (!completed) {
+          void iterator.return?.().catch(() => undefined);
+        }
       }
     },
   };
