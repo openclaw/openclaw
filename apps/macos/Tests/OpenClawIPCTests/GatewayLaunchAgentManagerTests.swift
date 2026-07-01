@@ -3,6 +3,30 @@ import Testing
 @testable import OpenClaw
 
 struct GatewayLaunchAgentManagerTests {
+    @Test func `remote mode still allows disabling gateway launch agent`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_CONFIG_PATH": configPath],
+            defaults: [connectionModeKey: AppState.ConnectionMode.remote.rawValue])
+        {
+            defer {
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+            }
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+
+            let error = await GatewayLaunchAgentManager.set(
+                enabled: false,
+                bundlePath: "/Applications/OpenClaw.app",
+                port: 18789)
+
+            #expect(error == nil)
+            #expect(
+                GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot() == [["uninstall"]])
+        }
+    }
+
     @Test func `attach only runtime override does not uninstall gateway launch agent`() throws {
         let dir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-attach-only-\(UUID().uuidString)", isDirectory: true)

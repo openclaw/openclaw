@@ -6,6 +6,36 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct GatewayProcessManagerTests {
+    @Test func `stop disables launch agent even when remote mode is active`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_CONFIG_PATH": configPath],
+            defaults: [connectionModeKey: AppState.ConnectionMode.remote.rawValue])
+        {
+            defer {
+                GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(false)
+                GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+                GatewayProcessManager.shared.setTestingDesiredActive(false)
+            }
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true)
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+
+            GatewayProcessManager.shared.stop()
+
+            for _ in 0..<20 {
+                let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                if calls.contains(["uninstall"]) {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 25_000_000)
+            }
+
+            #expect(
+                GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+                    .contains(["uninstall"]))
+        }
+    }
+
     @Test func `clears last failure when health succeeds`() async throws {
         let session = GatewayTestWebSocketSession(
             taskFactory: {

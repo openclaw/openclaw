@@ -61,16 +61,16 @@ enum GatewayLaunchAgentManager {
 
     static func set(enabled: Bool, bundlePath: String, port: Int) async -> String? {
         _ = bundlePath
-        guard !CommandResolver.connectionModeIsRemote() else {
-            self.logger.info("launchd change skipped (remote mode)")
-            return nil
-        }
         if enabled, self.isLaunchAgentWriteDisabled() {
             self.logger.info("launchd enable skipped (disable marker set)")
             return nil
         }
 
         if enabled {
+            guard !CommandResolver.connectionModeIsRemote() else {
+                self.logger.info("launchd enable skipped (remote mode)")
+                return nil
+            }
             self.logger.info("launchd enable requested via CLI port=\(port)")
             return await self.runDaemonCommand([
                 "install",
