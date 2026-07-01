@@ -25,10 +25,14 @@ function renderJsonBlock(label: string, value: unknown): string {
 
 function renderMcpServerLiveLine(params: {
   serverName: string;
+  disabled: boolean;
   catalog: McpToolCatalog;
   stale: boolean;
 }): string {
-  const { serverName, catalog, stale } = params;
+  const { serverName, disabled, catalog, stale } = params;
+  if (disabled) {
+    return `- ${serverName}: 🚫 disabled (enabled: false, excluded from runtime)`;
+  }
   if (stale) {
     return `- ${serverName}: ♻️ config changed since last connect (stale)`;
   }
@@ -51,9 +55,8 @@ function renderMcpServerLiveLine(params: {
  * session runtime exists yet, preserving prior /mcp show output.
  */
 function renderMcpLiveStateSection(params: {
-  serverNames: string[];
+  servers: Record<string, unknown>;
   sessionKey: string;
-  workspaceDir: string;
   cfg: OpenClawConfig;
 }): string | undefined {
   const runtime = peekSessionMcpRuntime({ sessionKey: params.sessionKey });
@@ -64,14 +67,22 @@ function renderMcpLiveStateSection(params: {
   if (!catalog) {
     return "🩺 Live state (session): not yet discovered — connects on next agent MCP tool use.";
   }
+  // Compare against the same workspace-derived fingerprint the runtime was
+  // built from (runtime.workspaceDir), not the command's raw workspaceDir:
+  // sandboxed sessions resolve MCP config from a different effective
+  // workspace, so comparing against the command's own workspaceDir would
+  // misreport every server as stale. Mirrors tools-effective.ts.
   const configSummary = resolveSessionMcpConfigSummary({
-    workspaceDir: params.workspaceDir,
+    workspaceDir: runtime.workspaceDir,
     cfg: params.cfg,
   });
   const stale = runtime.configFingerprint !== configSummary.fingerprint;
-  const lines = params.serverNames.map((serverName) =>
-    renderMcpServerLiveLine({ serverName, catalog, stale }),
-  );
+  const lines = Object.entries(params.servers).map(([serverName, server]) => {
+    const disabled = Boolean(
+      server && typeof server === "object" && (server as { enabled?: unknown }).enabled === false,
+    );
+    return renderMcpServerLiveLine({ serverName, disabled, catalog, stale });
+  });
   return ["🩺 Live state (session):", ...lines].join("\n");
 }
 
@@ -123,9 +134,8 @@ export const handleMcpCommand: CommandHandler = async (params, allowTextCommands
         };
       }
       const liveState = renderMcpLiveStateSection({
-        serverNames: [mcpCommand.name],
+        servers: { [mcpCommand.name]: server },
         sessionKey: params.sessionKey,
-        workspaceDir: params.workspaceDir,
         cfg: params.cfg,
       });
       const text = renderJsonBlock(`🔌 MCP server "${mcpCommand.name}" (${loaded.path})`, server);
@@ -141,9 +151,8 @@ export const handleMcpCommand: CommandHandler = async (params, allowTextCommands
       };
     }
     const liveState = renderMcpLiveStateSection({
-      serverNames: Object.keys(loaded.mcpServers),
+      servers: loaded.mcpServers,
       sessionKey: params.sessionKey,
-      workspaceDir: params.workspaceDir,
       cfg: params.cfg,
     });
     const text = renderJsonBlock(`🔌 MCP servers (${loaded.path})`, loaded.mcpServers);

@@ -14,7 +14,7 @@ const mcpRuntimeMocks = vi.hoisted(() => ({
     (params: {
       sessionId?: string | null;
       sessionKey?: string | null;
-    }) => Pick<SessionMcpRuntime, "configFingerprint" | "peekCatalog"> | undefined
+    }) => Pick<SessionMcpRuntime, "configFingerprint" | "peekCatalog" | "workspaceDir"> | undefined
   >(() => undefined),
   resolveSessionMcpConfigSummary: vi.fn(() => ({
     fingerprint: "mcp:0",
@@ -101,6 +101,7 @@ describe("handleCommands /mcp", () => {
       });
       mcpRuntimeMocks.peekSessionMcpRuntime.mockReturnValue({
         configFingerprint: "mcp:1",
+        workspaceDir,
         peekCatalog: () => catalog,
       });
       mcpRuntimeMocks.resolveSessionMcpConfigSummary.mockReturnValue({
@@ -135,6 +136,7 @@ describe("handleCommands /mcp", () => {
       });
       mcpRuntimeMocks.peekSessionMcpRuntime.mockReturnValue({
         configFingerprint: "mcp:1",
+        workspaceDir,
         peekCatalog: () => catalog,
       });
       mcpRuntimeMocks.resolveSessionMcpConfigSummary.mockReturnValue({
@@ -151,6 +153,36 @@ describe("handleCommands /mcp", () => {
     });
   });
 
+  it("shows a disabled live-state line instead of not-yet-discovered for enabled:false servers", async () => {
+    await withTempHome("openclaw-command-mcp-home-", async () => {
+      const workspaceDir = await workspaceHarness.createWorkspace();
+      mcpServers.set("context7", { command: "uvx", args: ["context7-mcp"], enabled: false });
+      // The bundle-MCP runtime excludes enabled:false servers entirely, so the
+      // warm catalog it built never mentions "context7" — not in servers, not
+      // in diagnostics. That absence must read as "disabled", not "pending".
+      const catalog = makeCatalog({ servers: {} });
+      mcpRuntimeMocks.peekSessionMcpRuntime.mockReturnValue({
+        configFingerprint: "mcp:1",
+        workspaceDir,
+        peekCatalog: () => catalog,
+      });
+      mcpRuntimeMocks.resolveSessionMcpConfigSummary.mockReturnValue({
+        fingerprint: "mcp:1",
+        serverNames: [],
+      });
+
+      const showParams = buildCommandTestParams("/mcp show", buildCfg(), undefined, {
+        workspaceDir,
+      });
+      showParams.command.senderIsOwner = true;
+      const result = expectMcpResult(await handleMcpCommand(showParams, true));
+      expect(result.reply?.text).toContain(
+        "context7: 🚫 disabled (enabled: false, excluded from runtime)",
+      );
+      expect(result.reply?.text).not.toContain("not yet discovered");
+    });
+  });
+
   it("marks live state stale when the session catalog predates the current config", async () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
       const workspaceDir = await workspaceHarness.createWorkspace();
@@ -160,6 +192,7 @@ describe("handleCommands /mcp", () => {
       });
       mcpRuntimeMocks.peekSessionMcpRuntime.mockReturnValue({
         configFingerprint: "mcp:old",
+        workspaceDir,
         peekCatalog: () => catalog,
       });
       mcpRuntimeMocks.resolveSessionMcpConfigSummary.mockReturnValue({
@@ -184,6 +217,7 @@ describe("handleCommands /mcp", () => {
       mcpServers.set("context7", { command: "uvx", args: ["context7-mcp"] });
       mcpRuntimeMocks.peekSessionMcpRuntime.mockReturnValue({
         configFingerprint: "mcp:1",
+        workspaceDir,
         peekCatalog: () => null,
       });
 
