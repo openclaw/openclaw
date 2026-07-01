@@ -15,6 +15,7 @@ import type { GoogleChatCardV2, GoogleChatReaction } from "./types.js";
 
 const CHAT_API_BASE = "https://chat.googleapis.com/v1";
 const CHAT_UPLOAD_BASE = "https://chat.googleapis.com/upload/v1";
+const GOOGLE_CHAT_MEDIA_RESPONSE_MAX_BYTES = 16 * 1024 * 1024; // 16 MiB shared provider cap
 
 async function readGoogleChatJsonResponse<T>(response: Response, label: string): Promise<T> {
   return readProviderJsonResponse<T>(response, label);
@@ -113,18 +114,13 @@ async function fetchBuffer(
     init,
     auditContext: "googlechat.api.buffer",
     handleResponse: async (res) => {
-      const maxBytes = options?.maxBytes;
+      const maxBytes = options?.maxBytes ?? GOOGLE_CHAT_MEDIA_RESPONSE_MAX_BYTES;
       const lengthHeader = res.headers.get("content-length");
-      if (maxBytes && lengthHeader) {
+      if (lengthHeader) {
         const length = parseMediaContentLength(lengthHeader);
         if (length !== null && length > maxBytes) {
           throw new Error(`Google Chat media exceeds max bytes (${maxBytes})`);
         }
-      }
-      if (!maxBytes) {
-        const buffer = Buffer.from(await res.arrayBuffer());
-        const contentType = res.headers.get("content-type") ?? undefined;
-        return { buffer, contentType };
       }
       const buffer = await readResponseWithLimit(res, maxBytes, {
         onOverflow: () => new Error(`Google Chat media exceeds max bytes (${maxBytes})`),
