@@ -611,6 +611,54 @@ describe("startTelegramWebhook", () => {
     expectMockMessageContains(runtimeError, "telegram setWebhook failed: unauthorized");
   });
 
+  it("retries transient getMe startup init failures before starting the account", async () => {
+    const runtimeLog = vi.fn();
+    initSpy.mockRejectedValueOnce(new TypeError("fetch failed")).mockResolvedValueOnce(undefined);
+
+    await withStartedWebhook(
+      {
+        secret: TELEGRAM_SECRET,
+        path: TELEGRAM_WEBHOOK_PATH,
+        runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
+        webhookRegistrationRetryPolicy: {
+          initialMs: 0,
+          maxMs: 0,
+          factor: 1,
+          jitter: 0,
+        },
+      },
+      async ({ port }) => {
+        const health = await fetch(`http://127.0.0.1:${port}/healthz`);
+        expect(health.status).toBe(200);
+      },
+    );
+
+    expect(initSpy).toHaveBeenCalledTimes(2);
+    expect(runtimeLog).toHaveBeenCalledWith("telegram getMe retry 1 scheduled in 0ms");
+    expect(setWebhookSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails startup on non-recoverable getMe errors", async () => {
+    const runtimeError = vi.fn();
+    const error = Object.assign(new Error("unauthorized"), { error_code: 401 });
+    initSpy.mockRejectedValueOnce(error);
+
+    await expect(
+      startTelegramWebhook({
+        token: TELEGRAM_TOKEN,
+        port: 0,
+        secret: TELEGRAM_SECRET,
+        path: TELEGRAM_WEBHOOK_PATH,
+        spoolDir: requireWebhookSpoolDir(),
+        runtime: { log: vi.fn(), error: runtimeError, exit: vi.fn() },
+      }),
+    ).rejects.toThrow("unauthorized");
+
+    expect(setWebhookSpy).not.toHaveBeenCalled();
+    expect(stopSpy).not.toHaveBeenCalled();
+    expectMockMessageContains(runtimeError, "telegram getMe failed: unauthorized");
+  });
+
   it("registers webhook with certificate when webhookCertPath is provided", async () => {
     setWebhookSpy.mockClear();
     await withStartedWebhook(

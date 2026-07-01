@@ -139,7 +139,7 @@ function resolveWebhookPublicUrl(params: {
   return `http://${fallbackHost}:${params.port}${params.path}`;
 }
 
-async function initializeTelegramWebhookBot(params: {
+async function initializeTelegramWebhookBotOnce(params: {
   bot: ReturnType<typeof createTelegramBot>;
   runtime: RuntimeEnv;
   abortSignal?: AbortSignal;
@@ -150,6 +150,38 @@ async function initializeTelegramWebhookBot(params: {
     runtime: params.runtime,
     fn: () => params.bot.init(initSignal),
   });
+}
+
+async function initializeTelegramWebhookBot(params: {
+  abortSignal?: AbortSignal;
+  bot: ReturnType<typeof createTelegramBot>;
+  retryPolicy: BackoffPolicy;
+  runtime: RuntimeEnv;
+}) {
+  let attempt = 0;
+  while (true) {
+    try {
+      await initializeTelegramWebhookBotOnce({
+        bot: params.bot,
+        runtime: params.runtime,
+        abortSignal: params.abortSignal,
+      });
+      return;
+    } catch (err) {
+      if (
+        !isRetryableTelegramApiError(err, { context: "webhook" }) ||
+        params.abortSignal?.aborted
+      ) {
+        throw err;
+      }
+      attempt += 1;
+      const delayMs = computeBackoff(params.retryPolicy, attempt);
+      params.runtime.log?.(
+        `telegram getMe retry ${attempt} scheduled in ${formatDurationPrecise(delayMs)}`,
+      );
+      await sleepWithAbort(delayMs, params.abortSignal);
+    }
+  }
 }
 
 function resolveSingleHeaderValue(header: string | string[] | undefined): string | undefined {
@@ -644,6 +676,7 @@ export async function startTelegramWebhook(opts: {
     bot,
     runtime,
     abortSignal: opts.abortSignal,
+    retryPolicy: webhookRegistrationRetryPolicy,
   });
   const telegramWebhookRateLimiter = createFixedWindowRateLimiter({
     windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
