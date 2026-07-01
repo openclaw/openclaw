@@ -891,6 +891,41 @@ describe("session accessor seam", () => {
     });
   });
 
+  it("preserves SQLite transcript rows for lifecycle removals without archive intent", async () => {
+    const scope = {
+      sessionId: "session-1",
+      sessionKey: "agent:main:preserve",
+      storePath,
+    };
+    await upsertSessionEntry(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 10,
+    });
+    await replaceSqliteTranscriptEvents(scope, [
+      {
+        id: "event-1",
+        message: { role: "user", content: "keep me" },
+        type: "message",
+      },
+    ]);
+
+    const result = await applySessionEntryLifecycleMutation({
+      storePath,
+      removals: [{ expectedSessionId: scope.sessionId, sessionKey: scope.sessionKey }],
+    });
+
+    expect(result.removedEntries).toBe(1);
+    expect(result.archivedTranscriptDirectories).toEqual([]);
+    expect(loadSessionEntry(scope)).toBeUndefined();
+    await expect(loadTranscriptEvents(scope)).resolves.toEqual([
+      {
+        id: "event-1",
+        message: { role: "user", content: "keep me" },
+        type: "message",
+      },
+    ]);
+  });
+
   it("captures SQLite archived transcript cleanup failures when requested", async () => {
     const cleanupError = new Error("cleanup failed");
     cleanupArchivedSessionTranscriptsMock.mockRejectedValueOnce(cleanupError);

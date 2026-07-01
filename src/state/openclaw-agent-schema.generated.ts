@@ -128,9 +128,6 @@ CREATE TABLE IF NOT EXISTS transcript_events (
   FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 );
 
-CREATE INDEX IF NOT EXISTS idx_agent_transcript_events_session
-  ON transcript_events(session_id, seq);
-
 CREATE TABLE IF NOT EXISTS transcript_event_identities (
   session_id TEXT NOT NULL,
   event_id TEXT NOT NULL,

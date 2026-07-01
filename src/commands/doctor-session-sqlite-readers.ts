@@ -27,6 +27,19 @@ export type ReadOnlySqliteTranscriptEventCountResult =
   | { events: number; exists: boolean; ok: true }
   | { error: unknown; exists: true; ok: false };
 
+export type ReadOnlySqliteDbStatsResult =
+  | {
+      ok: true;
+      stats: {
+        dbSizeBytes: number;
+        integrityCheck?: string;
+        largestSessions: Array<{ events: number; rowBytes: number; sessionId: string }>;
+        totalTranscriptRowBytes: number;
+        walSizeBytes: number;
+      };
+    }
+  | { error: unknown; ok: false };
+
 export type TranscriptEventCountResult =
   | { status: "ok"; events: number }
   | { status: "missing" }
@@ -46,7 +59,9 @@ export function countTranscriptEventsForPath(
   let events = 0;
   try {
     for (const line of iterateJsonlLinesSync(transcriptPath)) {
-      JSON.parse(line.text);
+      if (!parseJsonlLine(line)) {
+        continue;
+      }
       events += 1;
     }
     return { status: "ok", events };
@@ -60,7 +75,10 @@ export function createTranscriptEventReader(
 ): (append: (event: TranscriptEvent) => void) => void {
   return (append) => {
     for (const line of iterateJsonlLinesSync(transcriptPath)) {
-      append(JSON.parse(line.text) as TranscriptEvent);
+      const parsed = parseJsonlLine(line);
+      if (parsed) {
+        append(parsed as TranscriptEvent);
+      }
     }
   };
 }
@@ -156,6 +174,92 @@ export function readOnlySqliteTranscriptEventCount(
   }
 }
 
+export function readOnlySqliteDbStats(target: SessionStoreTarget): ReadOnlySqliteDbStatsResult {
+  const sqlitePath = resolveTargetSqlitePath(target);
+  const sizeFor = (filePath: string): number => {
+    try {
+      return fs.statSync(filePath).size;
+    } catch {
+      return 0;
+    }
+  };
+  if (!fs.existsSync(sqlitePath)) {
+    return {
+      ok: true,
+      stats: {
+        dbSizeBytes: 0,
+        largestSessions: [],
+        totalTranscriptRowBytes: 0,
+        walSizeBytes: sizeFor(`${sqlitePath}-wal`),
+      },
+    };
+  }
+  const sqlite = requireNodeSqlite();
+  let database: InstanceType<typeof sqlite.DatabaseSync> | undefined;
+  try {
+    database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
+    const hasTranscriptEvents = database
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get("transcript_events");
+    const integrityRow = database.prepare("PRAGMA quick_check").get() as
+      | { quick_check?: unknown }
+      | undefined;
+    if (!hasTranscriptEvents) {
+      return {
+        ok: true,
+        stats: {
+          dbSizeBytes: sizeFor(sqlitePath),
+          integrityCheck:
+            typeof integrityRow?.quick_check === "string" ? integrityRow.quick_check : undefined,
+          largestSessions: [],
+          totalTranscriptRowBytes: 0,
+          walSizeBytes: sizeFor(`${sqlitePath}-wal`),
+        },
+      };
+    }
+    const totalRow = database
+      .prepare("SELECT COALESCE(SUM(LENGTH(event_json)), 0) AS row_bytes FROM transcript_events")
+      .get() as { row_bytes?: unknown } | undefined;
+    const largestRows = database
+      .prepare(
+        `
+          SELECT session_id, COUNT(*) AS events, COALESCE(SUM(LENGTH(event_json)), 0) AS row_bytes
+          FROM transcript_events
+          GROUP BY session_id
+          ORDER BY row_bytes DESC, events DESC, session_id ASC
+          LIMIT 5
+        `,
+      )
+      .all() as Array<{ events?: unknown; row_bytes?: unknown; session_id?: unknown }>;
+    return {
+      ok: true,
+      stats: {
+        dbSizeBytes: sizeFor(sqlitePath),
+        integrityCheck:
+          typeof integrityRow?.quick_check === "string" ? integrityRow.quick_check : undefined,
+        largestSessions: largestRows.flatMap((row) => {
+          if (typeof row.session_id !== "string") {
+            return [];
+          }
+          return [
+            {
+              events: sqliteNumber(row.events),
+              rowBytes: sqliteNumber(row.row_bytes),
+              sessionId: row.session_id,
+            },
+          ];
+        }),
+        totalTranscriptRowBytes: sqliteNumber(totalRow?.row_bytes),
+        walSizeBytes: sizeFor(`${sqlitePath}-wal`),
+      },
+    };
+  } catch (error) {
+    return { error, ok: false };
+  } finally {
+    database?.close();
+  }
+}
+
 export function resolveTargetSqlitePath(target: SessionStoreTarget): string {
   const sqliteTarget = resolveSqliteTargetFromSessionStorePath(target.storePath, {
     agentId: target.agentId,
@@ -175,7 +279,9 @@ function parseSqliteSessionEntry(entryJson: string): SessionEntry | undefined {
   }
 }
 
-function* iterateJsonlLinesSync(filePath: string): Generator<{ lineNumber: number; text: string }> {
+function* iterateJsonlLinesSync(
+  filePath: string,
+): Generator<{ final: boolean; lineNumber: number; text: string }> {
   const fd = fs.openSync(filePath, "r");
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const buffer = Buffer.allocUnsafe(JSONL_READ_CHUNK_BYTES);
@@ -194,18 +300,39 @@ function* iterateJsonlLinesSync(filePath: string): Generator<{ lineNumber: numbe
         lineNumber += 1;
         const text = part.trim();
         if (text) {
-          yield { lineNumber, text };
+          yield { final: false, lineNumber, text };
         }
       }
     }
     carry += decoder.decode();
     const text = carry.trim();
     if (text) {
-      yield { lineNumber: lineNumber + 1, text };
+      yield { final: true, lineNumber: lineNumber + 1, text };
     }
   } catch (err) {
     throw new Error(`${filePath}:${lineNumber + 1}: ${String(err)}`, { cause: err });
   } finally {
     fs.closeSync(fd);
+  }
+}
+
+function sqliteNumber(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "bigint") {
+    return Number(value);
+  }
+  return 0;
+}
+
+function parseJsonlLine(line: { final: boolean; lineNumber: number; text: string }): unknown {
+  try {
+    return JSON.parse(line.text);
+  } catch (error) {
+    if (line.final) {
+      return undefined;
+    }
+    throw error;
   }
 }

@@ -34,7 +34,7 @@ export { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
  * per pathname, protected with private file modes, and registered in the shared
  * OpenClaw state database for discovery and maintenance.
  */
-const OPENCLAW_AGENT_SCHEMA_VERSION = 2;
+const OPENCLAW_AGENT_SCHEMA_VERSION = 3;
 const OPENCLAW_AGENT_DB_DIR_MODE = 0o700;
 const OPENCLAW_AGENT_DB_FILE_MODE = 0o600;
 
@@ -112,6 +112,9 @@ function migrateOpenClawAgentSchema(db: DatabaseSync): void {
   const userVersion = readSqliteUserVersion(db);
   if (userVersion >= OPENCLAW_AGENT_SCHEMA_VERSION) {
     return;
+  }
+  if (userVersion < 3) {
+    db.exec("DROP INDEX IF EXISTS idx_agent_transcript_events_session;");
   }
   const columns = readSqliteSessionColumns(db);
   if (userVersion > 1 || !columns) {

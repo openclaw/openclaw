@@ -32,6 +32,7 @@ type SessionMigrationDeps = Parameters<typeof runSessionStartupMigration>[0]["de
 };
 
 const STARTUP_WARNING_ISSUE_CODES = new Set([
+  "transcript_archive_failed",
   "transcript_missing",
   "unreferenced_jsonl_archive_failed",
 ]);

@@ -154,6 +154,7 @@ describe("runDoctorSessionSqlite", () => {
     });
 
     expect(firstImport.totals).toMatchObject({
+      archivedLegacyStoreFiles: 1,
       archivedTranscriptFiles: 2,
       archivedUnreferencedJsonlFiles: 1,
       importedEntries: 1,
@@ -163,21 +164,23 @@ describe("runDoctorSessionSqlite", () => {
       unreferencedJsonlFiles: 0,
     });
     expect(secondImport.totals).toMatchObject({
+      archivedLegacyStoreFiles: 0,
       archivedTranscriptFiles: 0,
       archivedUnreferencedJsonlFiles: 0,
       importedEntries: 0,
       importedTranscriptEvents: 0,
       issues: 0,
-      sqliteEntries: 1,
+      sqliteEntries: 0,
       unreferencedJsonlFiles: 0,
-      validatedEntries: 1,
-      validatedTranscriptEvents: 2,
+      validatedEntries: 0,
+      validatedTranscriptEvents: 0,
     });
     expect(validation.totals).toMatchObject({
       issues: 0,
-      validatedEntries: 1,
-      validatedTranscriptEvents: 2,
+      validatedEntries: 0,
+      validatedTranscriptEvents: 0,
     });
+    expect(fs.existsSync(store.storePath)).toBe(false);
     expect(fs.existsSync(store.transcriptPath)).toBe(false);
     expect(fs.existsSync(store.trajectoryPath)).toBe(false);
     expect(fs.existsSync(store.unreferencedJsonlPath)).toBe(false);
@@ -255,7 +258,7 @@ describe("runDoctorSessionSqlite", () => {
     });
     expect(validation.totals).toMatchObject({
       issues: 0,
-      validatedEntries: 1,
+      validatedEntries: 0,
       validatedTranscriptEvents: 0,
     });
     expect(
@@ -306,12 +309,13 @@ describe("runDoctorSessionSqlite", () => {
       storePath: store.storePath,
       validationBeforeArchive: "passed",
     });
-    expect(target.plannedMoves).toHaveLength(3);
-    expect(target.completedMoves).toHaveLength(3);
+    expect(target.plannedMoves).toHaveLength(4);
+    expect(target.completedMoves).toHaveLength(4);
     expect(target.plannedMoves.map((move) => path.basename(move.sourcePath)).toSorted()).toEqual([
       "orphan.jsonl",
       "session-1.jsonl",
       "session-1.trajectory.jsonl",
+      "sessions.json",
     ]);
   });
 
@@ -456,7 +460,8 @@ describe("runDoctorSessionSqlite", () => {
     manifest.targets[0].issues = [
       {
         code: "startup_failure",
-        message: "token=supersecret startup migration failed after archive",
+        message: `token=supersecret startup migration failed for agent:main:main at ${store.storePath} and ${process.env.HOME ?? "/Users/example"}/private/openclaw.json`,
+        sessionKey: "agent:main:main",
       },
     ];
     fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
@@ -480,6 +485,10 @@ describe("runDoctorSessionSqlite", () => {
     expect(recover.supportIssue?.body).toContain("startup_failure");
     expect(recover.supportIssue?.body).not.toContain("agent:main:main");
     expect(recover.supportIssue?.body).not.toContain("supersecret");
+    expect(recover.supportIssue?.body).not.toContain(store.storePath);
+    if (process.env.HOME) {
+      expect(recover.supportIssue?.body).not.toContain(process.env.HOME);
+    }
     expect(recover.supportIssue?.url).toContain("github.com/openclaw/openclaw/issues/new");
   });
 
@@ -698,6 +707,7 @@ describe("runDoctorSessionSqlite", () => {
 
       expect(report.targets.map((target) => target.agentId)).toEqual(["main", "work"]);
       expect(report.totals).toMatchObject({
+        archivedLegacyStoreFiles: 1,
         archivedTranscriptFiles: 2,
         archivedUnreferencedJsonlFiles: 1,
         importedEntries: 2,
@@ -705,6 +715,10 @@ describe("runDoctorSessionSqlite", () => {
         issues: 0,
         sqliteEntries: 2,
       });
+      const manifest = readMigrationManifest(report.migrationRun?.manifestPath);
+      for (const target of manifest.targets) {
+        expect(target.completedMoves.some((move) => move.kind === "legacy-store")).toBe(true);
+      }
       expect(
         loadExactSqliteSessionEntry({
           agentId: "main",
@@ -784,8 +798,11 @@ describe("runDoctorSessionSqlite", () => {
       store: store.storePath,
     });
 
-    expect(report.totals.issues).toBe(1);
-    expect(report.targets[0]?.issues[0]?.code).toBe("sqlite_active_transcript_scan_failed");
+    expect(report.totals.issues).toBe(2);
+    expect(report.targets[0]?.issues.map((issue) => issue.code)).toEqual([
+      "sqlite_corrupt",
+      "sqlite_active_transcript_scan_failed",
+    ]);
   });
 
   it("does not truncate existing SQLite transcript rows when re-importing a duplicate fragment", async () => {
@@ -818,8 +835,8 @@ describe("runDoctorSessionSqlite", () => {
     });
 
     expect(report.totals).toMatchObject({
-      archivedTranscriptFiles: 2,
-      importedEntries: 1,
+      archivedTranscriptFiles: 0,
+      importedEntries: 0,
       importedTranscriptEvents: 0,
       issues: 0,
     });
@@ -854,6 +871,37 @@ describe("runDoctorSessionSqlite", () => {
         storePath: store.storePath,
       }),
     ).toHaveLength(2);
+  });
+
+  it("imports valid transcript rows when only the final JSONL line is crash-truncated", async () => {
+    const store = createLegacyStore();
+    fs.writeFileSync(
+      store.transcriptPath,
+      '{"type":"session","sessionId":"session-1"}\n{"type":"message"',
+      { mode: 0o600 },
+    );
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+
+    expect(report.totals).toMatchObject({
+      importedEntries: 1,
+      importedTranscriptEvents: 1,
+      issues: 0,
+      sqliteEntries: 1,
+    });
+    expect(
+      loadSqliteTranscriptEventsSync({
+        agentId: "main",
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        storePath: store.storePath,
+      }),
+    ).toHaveLength(1);
+    expect(fs.existsSync(store.transcriptPath)).toBe(false);
   });
 
   it("reports malformed transcripts without importing partial rows", async () => {

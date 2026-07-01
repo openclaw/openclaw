@@ -20,6 +20,20 @@ export type DoctorSessionSqliteRestoreReport = {
   skippedFiles: string[];
 };
 
+export type DoctorSessionSqliteLargestSession = {
+  events: number;
+  rowBytes: number;
+  sessionId: string;
+};
+
+export type DoctorSessionSqliteDbStats = {
+  dbSizeBytes: number;
+  integrityCheck?: string;
+  largestSessions: DoctorSessionSqliteLargestSession[];
+  totalTranscriptRowBytes: number;
+  walSizeBytes: number;
+};
+
 export type SessionSqliteMigrationFailureIssue = {
   body: string;
   bodyPath?: string;
@@ -52,8 +66,10 @@ export type DoctorSessionSqliteOptions = {
 
 export type DoctorSessionSqliteTargetReport = {
   agentId: string;
+  archivedLegacyStoreFiles?: string[];
   archivedTranscriptFiles: string[];
   archivedUnreferencedJsonlFiles: string[];
+  dbStats?: DoctorSessionSqliteDbStats;
   importedEntries: number;
   importedTranscriptEvents: number;
   issues: DoctorSessionSqliteIssue[];
@@ -79,6 +95,7 @@ export type DoctorSessionSqliteReport = {
   supportIssue?: SessionSqliteMigrationFailureIssue;
   targets: DoctorSessionSqliteTargetReport[];
   totals: {
+    archivedLegacyStoreFiles?: number;
     archivedTranscriptFiles: number;
     archivedUnreferencedJsonlFiles: number;
     importedEntries: number;

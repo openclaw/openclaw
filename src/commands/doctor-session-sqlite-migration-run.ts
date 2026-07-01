@@ -12,7 +12,11 @@ import type {
   SessionSqliteMigrationFailureIssue,
 } from "./doctor-session-sqlite-types.js";
 
-export type SessionSqliteMigrationMoveKind = "transcript" | "trajectory" | "unreferenced-jsonl";
+export type SessionSqliteMigrationMoveKind =
+  | "legacy-store"
+  | "transcript"
+  | "trajectory"
+  | "unreferenced-jsonl";
 
 export type SessionSqliteMigrationMove = {
   archivePath: string;
@@ -61,6 +65,7 @@ export type ActiveSessionSqliteMigrationRun = {
 };
 
 const SESSION_SQLITE_MIGRATION_RUNS_DIR = "session-sqlite-migration-runs";
+const COMPLETED_MIGRATION_RUN_RETENTION = 50;
 
 export function createSessionSqliteMigrationRun(
   env: NodeJS.ProcessEnv,
@@ -83,6 +88,7 @@ export function createSessionSqliteMigrationRun(
   };
   const activeRun = { manifest, manifestPath };
   writeSessionSqliteMigrationManifest(activeRun);
+  pruneCompletedSessionSqliteMigrationRuns(env);
   return activeRun;
 }
 
@@ -242,8 +248,8 @@ export function writeSessionSqliteMigrationFailureReports(
         completedMoves: target.completedMoves.length,
         issues: target.issues.map((issue) => ({
           code: issue.code,
-          message: sanitizeFailureReportText(issue.message),
-          ...(issue.sessionKey ? { sessionKey: issue.sessionKey } : {}),
+          message: sanitizeFailureIssueMessage(issue, target),
+          ...(issue.sessionKey ? { sessionKey: redactSessionKey(issue.sessionKey) } : {}),
         })),
         plannedMoves: target.plannedMoves.length,
         sqlitePath: sanitizeFailureReportText(shortenFailureReportPath(target.sqlitePath)),
@@ -284,7 +290,7 @@ export function createSessionSqliteMigrationFailureIssue(
       completedMoves: target.completedMoves.length,
       issues: target.issues.map((issue) => ({
         code: issue.code,
-        message: sanitizeFailureReportText(issue.message),
+        message: sanitizeFailureIssueMessage(issue, target),
       })),
       plannedMoves: target.plannedMoves.length,
       sqlitePath: sanitizeFailureReportText(shortenFailureReportPath(target.sqlitePath)),
@@ -464,6 +470,7 @@ export function readSessionSqliteMigrationManifest(
 
 function isFailedSessionSqliteMigrationManifest(manifest: SessionSqliteMigrationManifest): boolean {
   return (
+    manifest.completedAt === undefined ||
     manifest.failedAt !== undefined ||
     manifest.failureReports !== undefined ||
     manifest.targets.some((target) => target.issues.length > 0)
@@ -477,11 +484,37 @@ function manifestSortTime(manifest: SessionSqliteMigrationManifest): number {
 }
 
 function createPrefilledGithubIssueUrl(title: string, body: string): string {
+  const urlBody =
+    body.length > 6_000
+      ? `${body.slice(0, 6_000)}\n\n...(truncated for URL; see local failure report for the full sanitized body)`
+      : body;
   const params = new URLSearchParams({
-    body,
+    body: urlBody,
     title,
   });
   return `https://github.com/openclaw/openclaw/issues/new?${params.toString()}`;
+}
+
+function pruneCompletedSessionSqliteMigrationRuns(env: NodeJS.ProcessEnv): void {
+  const completed = listSessionSqliteMigrationManifestPaths(env)
+    .map((manifestPath) => ({
+      manifest: readSessionSqliteMigrationManifest(manifestPath),
+      manifestPath,
+    }))
+    .filter(
+      (item): item is { manifest: SessionSqliteMigrationManifest; manifestPath: string } =>
+        item.manifest !== undefined &&
+        item.manifest.completedAt !== undefined &&
+        !isFailedSessionSqliteMigrationManifest(item.manifest),
+    )
+    .toSorted((left, right) => manifestSortTime(right.manifest) - manifestSortTime(left.manifest));
+  for (const item of completed.slice(COMPLETED_MIGRATION_RUN_RETENTION)) {
+    try {
+      fs.rmSync(item.manifestPath, { force: true });
+    } catch {
+      // Retention is best-effort and must not block startup import.
+    }
+  }
 }
 
 function renderFailureMarkdown(payload: {
@@ -550,4 +583,40 @@ function shortenFailureReportPath(filePath: string): string {
     return `~${path.sep}${path.relative(home, filePath)}`;
   }
   return filePath;
+}
+
+function sanitizeFailureIssueMessage(
+  issue: DoctorSessionSqliteIssue,
+  target: SessionSqliteMigrationTargetManifest,
+): string {
+  let message = issue.message;
+  for (const filePath of [
+    target.storePath,
+    target.sqlitePath,
+    ...target.plannedMoves.flatMap((move) => [move.sourcePath, move.archivePath]),
+    ...target.completedMoves.flatMap((move) => [move.sourcePath, move.archivePath]),
+  ]) {
+    message = message.split(filePath).join(shortenFailureReportPath(filePath));
+  }
+  if (issue.sessionKey) {
+    message = message.split(issue.sessionKey).join(redactSessionKey(issue.sessionKey));
+  }
+  message = redactAbsoluteHomePaths(message);
+  return sanitizeFailureReportText(message);
+}
+
+function redactSessionKey(sessionKey: string): string {
+  const normalized = sessionKey.trim();
+  if (!normalized) {
+    return "[redacted-session-key]";
+  }
+  return `[redacted-session-key:${randomUUID().slice(0, 8)}]`;
+}
+
+function redactAbsoluteHomePaths(value: string): string {
+  const home = process.env.HOME;
+  if (!home) {
+    return value;
+  }
+  return value.split(home).join("~");
 }

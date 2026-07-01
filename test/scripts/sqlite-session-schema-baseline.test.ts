@@ -18,9 +18,7 @@ describe("SQLite sessions/transcripts schema baseline", () => {
     expect(rendered.sql).toContain("CREATE TABLE IF NOT EXISTS sessions");
     expect(rendered.sql).toContain("CREATE TABLE IF NOT EXISTS transcript_events");
     expect(rendered.sql).toContain("CREATE TABLE IF NOT EXISTS transcript_event_identities");
-    expect(rendered.sql).toContain(
-      "CREATE INDEX IF NOT EXISTS idx_agent_transcript_events_session",
-    );
+    expect(rendered.sql).not.toContain("idx_agent_transcript_events_session");
     expect(rendered.sql).not.toContain("CREATE TABLE IF NOT EXISTS cache_entries");
     expect(rendered.sql).not.toContain("CREATE TABLE IF NOT EXISTS auth_profile_store");
     expect(rendered.sql).not.toContain("CREATE TABLE IF NOT EXISTS memory_index_sources");

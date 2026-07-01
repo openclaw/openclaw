@@ -7,7 +7,6 @@ import { resolveSessionFilePath } from "../config/sessions/paths.js";
 import {
   importSqliteSessionRows,
   loadExactSqliteSessionEntry,
-  loadSqliteTranscriptEventsSync,
 } from "../config/sessions/session-accessor.sqlite.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
@@ -35,6 +34,7 @@ import {
 import {
   countTranscriptEventsForPath,
   createTranscriptEventReader,
+  readOnlySqliteDbStats,
   readOnlySqliteExactSessionEntry,
   readOnlySqliteSessionEntries,
   readOnlySqliteTranscriptEventCount,
@@ -70,6 +70,12 @@ type LegacySessionRecord = {
   transcriptPath?: string;
 };
 
+const WARNING_ISSUE_CODES = new Set([
+  "transcript_missing",
+  "transcript_archive_failed",
+  "unreferenced_jsonl_archive_failed",
+]);
+
 /** Runs the targeted doctor SQLite session migration/inspection submode. */
 export async function runDoctorSessionSqlite(
   options: DoctorSessionSqliteOptions,
@@ -101,7 +107,7 @@ export async function runDoctorSessionSqlite(
     });
   }
   const activeRun =
-    options.mode === "import"
+    options.mode === "import" && targets.length > 0
       ? createSessionSqliteMigrationRun(env, targets.map(createMigrationTargetInput))
       : undefined;
   const reports: DoctorSessionSqliteTargetReport[] = [];
@@ -117,6 +123,7 @@ export async function runDoctorSessionSqlite(
     );
   }
   if (activeRun) {
+    archiveImportedLegacySessionStores(targets, reports, activeRun);
     const hasIssues = reports.some((report) => report.issues.length > 0);
     activeRun.manifest.completedAt = new Date().toISOString();
     if (hasIssues) {
@@ -148,11 +155,10 @@ function resolveDoctorSessionSqliteTargets(params: {
   store?: string;
 }): SessionStoreTarget[] {
   if (params.store) {
-    return resolveSessionStoreTargets(
-      params.cfg,
-      { store: params.store },
-      { env: params.env },
-    ).filter((target) => fs.existsSync(target.storePath));
+    return filterLegacySessionStoreTargets(
+      resolveSessionStoreTargets(params.cfg, { store: params.store }, { env: params.env }),
+      params.mode,
+    );
   }
   if (params.agent) {
     return filterLegacySessionStoreTargets(
@@ -202,6 +208,7 @@ async function inspectOrMigrateTarget(params: {
   );
   const report: DoctorSessionSqliteTargetReport = {
     agentId: params.target.agentId,
+    archivedLegacyStoreFiles: [],
     archivedTranscriptFiles: [],
     archivedUnreferencedJsonlFiles: [],
     importedEntries: 0,
@@ -220,6 +227,7 @@ async function inspectOrMigrateTarget(params: {
   };
   if (params.mode === "inspect") {
     report.sqliteEntries = readSqliteEntryCount(params.target);
+    appendSqliteDbStats(params.target, report);
     appendActiveSqliteTranscriptFileIssues(params.target, report);
     return report;
   }
@@ -234,7 +242,7 @@ async function inspectOrMigrateTarget(params: {
     }
     validateLegacySessionRecord(params.target, record, report);
   }
-  if (params.mode === "import" && report.issues.length === 0) {
+  if (params.mode === "import" && blockingIssueCount(report) === 0) {
     const validationPassed = validateImportedTargetBeforeArchive(params.target, records, report);
     updateMigrationManifestTarget(
       params.activeRun,
@@ -375,6 +383,10 @@ function countLegacyTranscript(
   report.validatedTranscriptEvents += result.events;
 }
 
+function blockingIssueCount(report: DoctorSessionSqliteTargetReport): number {
+  return report.issues.filter((issue) => !WARNING_ISSUE_CODES.has(issue.code)).length;
+}
+
 async function importLegacySessionRecord(
   target: SessionStoreTarget,
   record: LegacySessionRecord,
@@ -485,16 +497,19 @@ function validateImportedRecordBeforeArchive(
     });
     return;
   }
-  const sqliteEvents = loadSqliteTranscriptEventsSync({
-    agentId: target.agentId,
-    sessionId: record.entry.sessionId,
-    sessionKey: normalizedKey,
-    storePath: target.storePath,
-  });
-  if (sqliteEvents.length < result.events) {
+  const sqliteEvents = readOnlySqliteTranscriptEventCount(target, record.entry.sessionId);
+  if (!sqliteEvents.ok) {
+    report.issues.push({
+      code: "sqlite_read_failed",
+      message: `SQLite transcript count read failed: ${String(sqliteEvents.error)}`,
+      sessionKey: record.sessionKey,
+    });
+    return;
+  }
+  if (sqliteEvents.events < result.events) {
     report.issues.push({
       code: "sqlite_transcript_count_mismatch",
-      message: `SQLite transcript has ${sqliteEvents.length} events; source has ${result.events}.`,
+      message: `SQLite transcript has ${sqliteEvents.events} events; source has ${result.events}.`,
       sessionKey: record.sessionKey,
     });
   }
@@ -568,6 +583,83 @@ function archiveUnreferencedJsonlFiles(
       });
     }
   }
+}
+
+function archiveImportedLegacySessionStores(
+  targets: readonly SessionStoreTarget[],
+  reports: readonly DoctorSessionSqliteTargetReport[],
+  activeRun: ActiveSessionSqliteMigrationRun,
+): void {
+  const byStore = new Map<
+    string,
+    { report: DoctorSessionSqliteTargetReport; target: SessionStoreTarget }[]
+  >();
+  for (const target of targets) {
+    const report = reports.find(
+      (candidate) =>
+        candidate.agentId === target.agentId &&
+        path.resolve(candidate.storePath) === path.resolve(target.storePath),
+    );
+    if (!report) {
+      continue;
+    }
+    const key = path.resolve(target.storePath);
+    byStore.set(key, [...(byStore.get(key) ?? []), { report, target }]);
+  }
+  for (const entries of byStore.values()) {
+    if (entries.some((entry) => blockingIssueCount(entry.report) > 0)) {
+      continue;
+    }
+    const archivePath = archiveLegacySessionStore(entries[0].target, entries[0].report, activeRun);
+    if (!archivePath) {
+      continue;
+    }
+    for (const entry of entries.slice(1)) {
+      recordLegacyStoreMoveForTarget(entry.target, archivePath, activeRun);
+    }
+  }
+}
+
+function archiveLegacySessionStore(
+  target: SessionStoreTarget,
+  report: DoctorSessionSqliteTargetReport,
+  activeRun: ActiveSessionSqliteMigrationRun | undefined,
+): string | undefined {
+  if (!fs.existsSync(target.storePath)) {
+    return;
+  }
+  try {
+    const archivePath = moveSessionJsonlToArchive({
+      activeRun,
+      archiveKey: "legacy-store",
+      baseNameRaw: path.basename(target.storePath),
+      kind: "legacy-store",
+      sourcePathRaw: target.storePath,
+      target,
+    });
+    (report.archivedLegacyStoreFiles ??= []).push(archivePath);
+    return archivePath;
+  } catch (err) {
+    report.issues.push({
+      code: "legacy_store_archive_failed",
+      message: `${target.storePath}: ${String(err)}`,
+    });
+    return undefined;
+  }
+}
+
+function recordLegacyStoreMoveForTarget(
+  target: SessionStoreTarget,
+  archivePath: string,
+  activeRun: ActiveSessionSqliteMigrationRun,
+): void {
+  const move = {
+    archivePath,
+    kind: "legacy-store" as const,
+    sourcePath: path.resolve(target.storePath),
+  };
+  recordPlannedMigrationMove(activeRun, createMigrationTargetInput(target), move);
+  recordCompletedMigrationMove(activeRun, createMigrationTargetInput(target), move);
 }
 
 function validateLegacySessionRecord(
@@ -659,12 +751,8 @@ function countAlreadyMigratedTranscriptEventsForImport(
   if (sqliteEntry?.entry.sessionId !== record.entry.sessionId) {
     return undefined;
   }
-  return loadSqliteTranscriptEventsSync({
-    agentId: target.agentId,
-    sessionId: record.entry.sessionId,
-    sessionKey: normalizedKey,
-    storePath: target.storePath,
-  }).length;
+  const eventCount = readOnlySqliteTranscriptEventCount(target, record.entry.sessionId);
+  return eventCount.ok ? eventCount.events : undefined;
 }
 
 function countAlreadyMigratedTranscriptEventsForValidate(
@@ -729,6 +817,27 @@ function appendActiveSqliteTranscriptFileIssues(
       code: "active_sqlite_transcript_jsonl",
       message: `SQLite-backed session still has an active JSONL transcript file: ${transcriptPath}`,
       sessionKey: summary.sessionKey,
+    });
+  }
+}
+
+function appendSqliteDbStats(
+  target: SessionStoreTarget,
+  report: DoctorSessionSqliteTargetReport,
+): void {
+  const result = readOnlySqliteDbStats(target);
+  if (!result.ok) {
+    report.issues.push({
+      code: "sqlite_corrupt",
+      message: `SQLite database could not be inspected: ${String(result.error)}`,
+    });
+    return;
+  }
+  report.dbStats = result.stats;
+  if (result.stats.integrityCheck && result.stats.integrityCheck !== "ok") {
+    report.issues.push({
+      code: "sqlite_integrity_check_failed",
+      message: `SQLite quick_check reported: ${result.stats.integrityCheck}`,
     });
   }
 }
@@ -909,6 +1018,10 @@ function summarizeDoctorSessionSqliteReport(
     mode,
     targets,
     totals: {
+      archivedLegacyStoreFiles: targets.reduce(
+        (total, target) => total + (target.archivedLegacyStoreFiles?.length ?? 0),
+        0,
+      ),
       archivedTranscriptFiles: targets.reduce(
         (total, target) => total + target.archivedTranscriptFiles.length,
         0,

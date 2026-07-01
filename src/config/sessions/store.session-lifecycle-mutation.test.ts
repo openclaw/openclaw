@@ -203,6 +203,46 @@ describe("session store lifecycle mutations", () => {
     );
   });
 
+  it("deletes a SQLite entry without archiving transcripts when archiveTranscript is false", async () => {
+    const now = Date.now();
+    await replaceSessionEntry(
+      { sessionKey: "agent:main:delete-entry-only", storePath },
+      {
+        sessionId: "entry-only-session",
+        updatedAt: now,
+      },
+    );
+    await replaceSqliteTranscriptEvents(
+      { sessionKey: "agent:main:delete-entry-only", sessionId: "entry-only-session", storePath },
+      [createTranscriptEvent("entry-only-session", "preserve transcript rows")],
+    );
+    const transcriptUpdates = recordTranscriptUpdateFiles();
+
+    const result = await deleteSessionEntryLifecycle({
+      archiveTranscript: false,
+      storePath,
+      target: {
+        canonicalKey: "agent:main:delete-entry-only",
+        storeKeys: ["agent:main:delete-entry-only"],
+      },
+    });
+    transcriptUpdates.unsubscribe();
+
+    expect(result.deleted).toBe(true);
+    expect(result.archivedTranscripts).toEqual([]);
+    expect(transcriptUpdates.files).toEqual([]);
+    expect(
+      loadSessionEntry({ sessionKey: "agent:main:delete-entry-only", storePath }),
+    ).toBeUndefined();
+    await expect(
+      loadTranscriptEvents({
+        sessionKey: "agent:main:delete-entry-only",
+        sessionId: "entry-only-session",
+        storePath,
+      }),
+    ).resolves.toEqual([createTranscriptEvent("entry-only-session", "preserve transcript rows")]);
+  });
+
   it("preserves shared SQLite transcript rows until the final session reference is deleted", async () => {
     const now = Date.now();
     await replaceSessionEntry(

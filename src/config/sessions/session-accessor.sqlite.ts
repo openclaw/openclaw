@@ -14,6 +14,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { getChildLogger } from "../../logging/logger.js";
 import { redactSecrets } from "../../logging/redact.js";
 import {
   DEFAULT_AGENT_ID,
@@ -106,6 +107,7 @@ import {
 
 type SessionArchiveRuntime = typeof import("../../gateway/session-archive.runtime.js");
 let sessionArchiveRuntimePromise: Promise<SessionArchiveRuntime> | undefined;
+const SQLITE_SESSION_SLOW_WRITE_MS = 1_000;
 
 function loadSessionArchiveRuntime() {
   sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
@@ -910,6 +912,8 @@ export async function purgeSqliteDeletedAgentSessionEntries(
   const resolved = resolveSqliteStoreScope(params.storePath, { agentId: params.storeAgentId });
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
     const removedSessionKeys: string[] = [];
+    const removedEntriesToArchive: SessionEntry[] = [];
+    const archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
     let afterCount = 0;
     runOpenClawAgentWriteTransaction((database) => {
       const store = readSqliteSessionEntryStore(database);
@@ -922,6 +926,7 @@ export async function purgeSqliteDeletedAgentSessionEntries(
         if (ownerAgentId !== params.agentId) {
           continue;
         }
+        removedEntriesToArchive.push(store[sessionKey]);
         deleteSqliteSessionEntryRows(database, sessionKey);
         delete store[sessionKey];
         removedSessionKeys.push(sessionKey);
@@ -930,12 +935,29 @@ export async function purgeSqliteDeletedAgentSessionEntries(
         activeSessionKey: "",
         archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
       });
+      const referencedSessionIds = readReferencedSqliteSessionIds(database);
+      for (const entry of removedEntriesToArchive) {
+        for (const sessionId of collectSqliteSessionStateIdsForEntry(entry)) {
+          const archived = deleteSqliteSessionStateIfUnreferenced({
+            archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
+            database,
+            referencedSessionIds,
+            sessionId,
+          });
+          if (archived) {
+            archivedTranscripts.push(archived);
+          }
+        }
+      }
       afterCount = Object.keys(readSqliteSessionEntryStore(database)).length;
     }, toDatabaseOptions(resolved));
+    emitArchivedSqliteTranscriptUpdates(archivedTranscripts);
     return {
       removedEntries: removedSessionKeys.length,
       removedSessionKeys,
-      archivedTranscriptDirectories: [],
+      archivedTranscriptDirectories: uniqueStrings(
+        archivedTranscripts.map((transcript) => path.dirname(transcript.archivedPath)),
+      ).toSorted(),
       unreferencedArtifacts: null,
       maintenanceReport: null,
       afterCount,
@@ -1649,12 +1671,33 @@ async function runExclusiveSqliteSessionWrite<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
   const databaseOptions = toDatabaseOptions(scope);
-  return await runQueuedStoreWrite({
-    queues: SQLITE_SESSION_WRITER_QUEUES,
-    storePath: resolveOpenClawAgentSqlitePath(databaseOptions),
-    label: "runExclusiveSqliteSessionWrite",
-    fn,
-  });
+  const storePath = resolveOpenClawAgentSqlitePath(databaseOptions);
+  const startedAt = Date.now();
+  try {
+    const result = await runQueuedStoreWrite({
+      queues: SQLITE_SESSION_WRITER_QUEUES,
+      storePath,
+      label: "runExclusiveSqliteSessionWrite",
+      fn,
+    });
+    const elapsedMs = Date.now() - startedAt;
+    if (elapsedMs >= SQLITE_SESSION_SLOW_WRITE_MS) {
+      getChildLogger({ subsystem: "session-sqlite" }).warn("slow SQLite session write", {
+        agentId: scope.agentId,
+        elapsedMs,
+        storePath,
+      });
+    }
+    return result;
+  } catch (error) {
+    getChildLogger({ subsystem: "session-sqlite" }).warn("SQLite session write failed", {
+      agentId: scope.agentId,
+      elapsedMs: Date.now() - startedAt,
+      error,
+      storePath,
+    });
+    throw error;
+  }
 }
 
 function resolveSqliteScope(
@@ -1830,6 +1873,21 @@ function normalizeSqliteText(value: unknown): string | null {
 
 function normalizeSqliteChatType(value: unknown): "direct" | "group" | "channel" | null {
   if (value === "direct" || value === "group" || value === "channel") {
+    return value;
+  }
+  return null;
+}
+
+function normalizeSqliteStatus(
+  value: unknown,
+): "running" | "done" | "failed" | "killed" | "timeout" | null {
+  if (
+    value === "running" ||
+    value === "done" ||
+    value === "failed" ||
+    value === "killed" ||
+    value === "timeout"
+  ) {
     return value;
   }
   return null;
@@ -2419,7 +2477,9 @@ function writeSqliteTranscriptArchive(params: {
         flag: "wx",
         mode: 0o600,
       });
+      fsyncRegularFile(tempPath);
       fs.renameSync(tempPath, archivePath);
+      fsyncDirectory(params.archiveDirectory);
       return archivePath;
     } catch (err) {
       fs.rmSync(tempPath, { force: true });
@@ -2430,6 +2490,29 @@ function writeSqliteTranscriptArchive(params: {
     }
   }
   throw new Error(`Could not create SQLite transcript archive for ${params.sessionId}`);
+}
+
+function fsyncRegularFile(filePath: string): void {
+  const fd = fs.openSync(filePath, "r");
+  try {
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function fsyncDirectory(dirPath: string): void {
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(dirPath, "r");
+    fs.fsyncSync(fd);
+  } catch {
+    // Directory fsync is not available on every supported platform/filesystem.
+  } finally {
+    if (fd !== undefined) {
+      fs.closeSync(fd);
+    }
+  }
 }
 
 function archiveSqliteTranscriptRows(params: {
@@ -2782,7 +2865,7 @@ function bindSqliteSessionRoot(params: {
     updated_at: updatedAt,
     started_at: finiteSqliteNumber(params.entry.startedAt),
     ended_at: finiteSqliteNumber(params.entry.endedAt),
-    status: normalizeSqliteText(params.entry.status),
+    status: normalizeSqliteStatus(params.entry.status),
     chat_type: normalizeSqliteChatType(params.entry.chatType),
     channel: resolveSqliteSessionChannel(params.entry),
     account_id: resolveSqliteSessionAccountId(params.entry),
