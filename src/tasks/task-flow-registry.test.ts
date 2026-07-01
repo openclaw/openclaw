@@ -535,5 +535,25 @@ describe("task-flow-registry", () => {
         expect(fetched?.chainId ?? null).toBeNull();
       });
     });
+
+    it("survives a SQLite reload (restart) — not just the in-memory map", async () => {
+      await withFlowRegistryTempDir(async () => {
+        const created = createManagedTaskFlow({
+          ownerKey: "agent:main:main",
+          controllerId: "tests/chain-id-reload",
+          goal: "chainId survives a gateway restart",
+          chainId: "chain-reload-abc",
+        });
+        const { flowId } = created;
+
+        // Simulate a gateway restart: drop the in-memory registry WITHOUT
+        // re-persisting, so the next access reloads purely from SQLite. The
+        // chain_id must round-trip through the flow_runs bind/read path.
+        resetTaskFlowRegistryForTests({ persist: false });
+
+        const reloaded = getTaskFlowById(flowId);
+        expect(reloaded?.chainId).toBe("chain-reload-abc");
+      });
+    });
   });
 });

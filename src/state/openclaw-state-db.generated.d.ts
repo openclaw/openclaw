@@ -473,6 +473,7 @@ export interface FlowRuns {
   blocked_summary: string | null;
   blocked_task_id: string | null;
   cancel_requested_at: number | null;
+  chain_id: string | null;
   controller_id: string | null;
   created_at: number;
   current_step: string | null;
