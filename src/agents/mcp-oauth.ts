@@ -19,11 +19,12 @@ import type {
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
+import { logWarn } from "../logger.js";
 import { sanitizeServerName } from "./agent-bundle-mcp-names.js";
 
 type McpOAuthStore = {
   clientInformation?: OAuthClientInformationMixed;
-  tokens?: OAuthTokens;
+  tokens?: OAuthTokens & { expires_at?: number };
   codeVerifier?: string;
   discoveryState?: OAuthDiscoveryState;
   lastAuthorizationUrl?: string;
@@ -155,7 +156,13 @@ export function createMcpOAuthClientProvider(params: {
     },
     async saveTokens(tokens) {
       const store = await readStore(filePath);
-      await writeStore(filePath, { ...store, tokens });
+      // Persist an absolute expiry so a long-lived session schedules proactive
+      // refresh from the remaining lifetime; expires_in alone is only the
+      // original lifetime and is wrong after a gateway restart.
+      const expiresIn = typeof tokens.expires_in === "number" ? tokens.expires_in : undefined;
+      const stored =
+        expiresIn === undefined ? tokens : { ...tokens, expires_at: Date.now() + expiresIn * 1000 };
+      await writeStore(filePath, { ...store, tokens: stored });
     },
     async redirectToAuthorization(authorizationUrl) {
       assertAuthorizationRedirectAllowed();
@@ -199,6 +206,86 @@ export function createMcpOAuthClientProvider(params: {
     async discoveryState() {
       return (await readStore(filePath)).discoveryState;
     },
+  };
+}
+
+// Refresh this far ahead of expiry so a persistent connection never presents an
+// expired access token. The reactive 401->refresh path is unreliable on a
+// long-lived gateway connection (openclaw/openclaw#98377); the SDK transport
+// reads tokens() from disk every request, so keeping the stored token fresh is
+// sufficient.
+const OAUTH_PROACTIVE_REFRESH_SKEW_MS = 5 * 60_000;
+const OAUTH_PROACTIVE_REFRESH_MIN_DELAY_MS = 30_000;
+const OAUTH_PROACTIVE_REFRESH_FALLBACK_MS = 50 * 60_000;
+
+/**
+ * Keep a long-lived MCP OAuth access token fresh on disk by refreshing shortly
+ * before it expires (via the SDK auth() refresh_token path). Returns a stop
+ * function; the session owner MUST call it on dispose so the timer never
+ * dangles. Stops quietly if there is no refresh token or a refresh needs
+ * interactive re-login.
+ */
+export function startMcpOAuthProactiveRefresh(params: {
+  serverName: string;
+  serverUrl: string;
+  authProvider: OAuthClientProvider;
+}): () => void {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let stopped = false;
+
+  const nextDelayMs = async (): Promise<number | null> => {
+    const tokens = await params.authProvider.tokens();
+    if (!tokens?.refresh_token) {
+      return null; // nothing to refresh with; leave (re)auth to the login flow
+    }
+    const expiresAt = (tokens as { expires_at?: number }).expires_at;
+    const remainingMs =
+      typeof expiresAt === "number" ? expiresAt - Date.now() : OAUTH_PROACTIVE_REFRESH_FALLBACK_MS;
+    return Math.max(
+      OAUTH_PROACTIVE_REFRESH_MIN_DELAY_MS,
+      remainingMs - OAUTH_PROACTIVE_REFRESH_SKEW_MS,
+    );
+  };
+
+  const arm = async () => {
+    if (stopped) {
+      return;
+    }
+    const delay = await nextDelayMs();
+    if (delay === null || stopped) {
+      return;
+    }
+    timer = setTimeout(() => void refreshAndRearm(), delay);
+    timer.unref?.();
+  };
+
+  const refreshAndRearm = async () => {
+    if (stopped) {
+      return;
+    }
+    try {
+      const result = await auth(params.authProvider, { serverUrl: params.serverUrl });
+      if (result !== "AUTHORIZED") {
+        logWarn(
+          `mcp-oauth: proactive refresh for "${params.serverName}" needs interactive login (openclaw mcp login ${params.serverName}).`,
+        );
+        return;
+      }
+    } catch (error) {
+      logWarn(`mcp-oauth: proactive refresh failed for "${params.serverName}": ${String(error)}`);
+      return;
+    }
+    await arm();
+  };
+
+  void arm();
+
+  return () => {
+    stopped = true;
+    if (timer) {
+      clearTimeout(timer);
+      timer = undefined;
+    }
   };
 }
 
