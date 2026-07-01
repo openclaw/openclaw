@@ -1,7 +1,8 @@
 // @vitest-environment node
 
 import { describe, expect, it, vi } from "vitest";
-import { buildToolCardSidebarContent, extractToolCards } from "./tool-cards.ts";
+import { extractToolCards } from "../../lib/chat/tool-cards.ts";
+import { buildToolCardSidebarContent } from "./tool-cards.ts";
 
 vi.mock("../../components/icons.ts", () => ({
   icons: {},

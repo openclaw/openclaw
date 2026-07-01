@@ -33,13 +33,15 @@ import {
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolCardError,
+} from "../../lib/chat/tool-cards.ts";
+import { renderChatAvatar } from "./chat-avatar.ts";
+import {
   renderExpandedToolCardContent,
   renderRawOutputToggle,
   renderToolCard,
   renderToolPreview,
   resolveCollapsedToolDetail,
-} from "../../pages/chat/tool-cards.ts";
-import { renderChatAvatar } from "./chat-avatar.ts";
+} from "./tool-cards.ts";
 
 function renderChatIcon(name: string) {
   return icons[name as IconName] ?? icons.zap;

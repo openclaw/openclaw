@@ -12,6 +12,7 @@ import {
 } from "../../lib/chat/message-normalizer.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/role-normalizer.ts";
 import { messageMatchesSearchQuery } from "../../lib/chat/search-match.ts";
+import { extractToolCardsCached, extractToolPreview } from "../../lib/chat/tool-cards.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
@@ -23,7 +24,6 @@ import {
   trimAccumulatedStreamPrefix,
   type ChatStreamSegment,
 } from "./stream-text.ts";
-import { extractToolCardsCached, extractToolPreview } from "./tool-cards.ts";
 import type { ChatQueueItem } from "./types.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 

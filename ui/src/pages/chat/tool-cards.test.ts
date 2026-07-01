@@ -38,9 +38,8 @@ import {
   formatCollapsedToolPreviewText,
   formatCollapsedToolSummaryText,
   isToolErrorOutput,
-  renderToolCard,
-  renderToolCardSidebar,
-} from "./tool-cards.ts";
+} from "../../lib/chat/tool-cards.ts";
+import { renderToolCard, renderToolCardSidebar } from "./tool-cards.ts";
 
 function requireFirstMockArg(
   mock: ReturnType<typeof vi.fn>,
