@@ -64,9 +64,14 @@ import {
   resolveDiscordChannelInfo,
   resolveDiscordMessageChannelId,
   resolveDiscordMessageText,
+  resolveForwardedMediaList,
   resolveMediaList,
 } from "./message-utils.js";
 import { resolveDiscordSenderIdentity, resolveDiscordWebhookId } from "./sender-identity.js";
+import {
+  DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
+  DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
+} from "./timeouts.js";
 
 export type {
   DiscordMessagePreflightContext,
@@ -769,6 +774,32 @@ export async function preflightDiscordMessage(
         }
       : undefined;
 
+  // Discord CDN attachment URLs expire; download now (receipt time) instead
+  // of after the run queue, which may delay processing past the URL TTL.
+  const mediaResolveOptions = {
+    fetchImpl: params.discordRestFetch,
+    ssrfPolicy: params.cfg.browser?.ssrfPolicy,
+    readIdleTimeoutMs: DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
+    totalTimeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
+    abortSignal: params.abortSignal,
+  };
+  const preflightMediaList = await resolveMediaList(
+    message,
+    params.mediaMaxBytes,
+    mediaResolveOptions,
+  );
+  if (isPreflightAborted(params.abortSignal)) {
+    return null;
+  }
+  const preflightForwardedMediaList = await resolveForwardedMediaList(
+    message,
+    params.mediaMaxBytes,
+    mediaResolveOptions,
+  );
+  if (isPreflightAborted(params.abortSignal)) {
+    return null;
+  }
+
   logDebug(
     `[discord-preflight] success: route=${effectiveRoute.agentId} sessionKey=${effectiveRoute.sessionKey}`,
   );
@@ -791,6 +822,8 @@ export async function preflightDiscordMessage(
     baseText,
     messageText,
     ...(preflightTranscript !== undefined ? { preflightAudioTranscript: preflightTranscript } : {}),
+    preflightMediaList,
+    preflightForwardedMediaList,
     wasMentioned,
     route: effectiveRoute,
     threadBinding,
