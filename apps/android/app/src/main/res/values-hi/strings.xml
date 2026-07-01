@@ -31,4 +31,7 @@
     <string name="connect_manual_url">मैन्युअल URL का उपयोग करके कनेक्ट करें</string>
     <string name="permissions">अनुमतियाँ</string>
     <string name="done">हो गया</string>
+    <string name="gateway_trust_first_seen">इस गेटवे पर भरोसा करने से पहले प्रमाणपत्र फ़िंगरप्रिंट सत्यापित करें।\n\n%1$s</string>
+    <string name="gateway_trust_changed">गेटवे प्रमाणपत्र बदल गया है। केवल तभी जारी रखें जब आपको इस बदलाव की अपेक्षा थी।\n\nपुराना SHA-256:\n%1$s\n\nनया SHA-256:\n%2$s</string>
+    <string name="gateway_recovery">गेटवे पुनर्प्राप्ति</string>
 </resources>

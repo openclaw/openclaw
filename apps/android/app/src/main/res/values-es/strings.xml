@@ -31,4 +31,7 @@
     <string name="connect_manual_url">Conectar usando una URL manual</string>
     <string name="permissions">Permisos</string>
     <string name="done">Listo</string>
+    <string name="gateway_trust_first_seen">Verifica la huella digital del certificado antes de confiar en este gateway.\n\n%1$s</string>
+    <string name="gateway_trust_changed">El certificado del gateway cambió. Continúa solo si esperabas este cambio.\n\nSHA-256 anterior:\n%1$s\n\nSHA-256 nuevo:\n%2$s</string>
+    <string name="gateway_recovery">Recuperación del gateway</string>
 </resources>

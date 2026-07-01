@@ -31,4 +31,7 @@
     <string name="connect_manual_url">Hubungkan menggunakan URL manual</string>
     <string name="permissions">Izin</string>
     <string name="done">Selesai</string>
+    <string name="gateway_trust_first_seen">Verifikasi sidik jari sertifikat sebelum memercayai gateway ini.\n\n%1$s</string>
+    <string name="gateway_trust_changed">Sertifikat gateway berubah. Lanjutkan hanya jika Anda mengharapkan perubahan ini.\n\nSHA-256 lama:\n%1$s\n\nSHA-256 baru:\n%2$s</string>
+    <string name="gateway_recovery">Pemulihan gateway</string>
 </resources>
