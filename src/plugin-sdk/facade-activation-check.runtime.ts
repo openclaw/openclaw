@@ -25,7 +25,11 @@ import {
   type PluginManifestRecord,
 } from "../plugins/manifest-registry.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
-import { resolveRegistryPluginModuleLocationFromRecords } from "./facade-resolution-shared.js";
+import {
+  readFacadeRegistryRecord,
+  type FacadeRegistryRecordLike,
+  resolveRegistryPluginModuleLocationFromRecords,
+} from "./facade-resolution-shared.js";
 
 const ALWAYS_ALLOWED_RUNTIME_DIR_NAMES = new Set([
   "image-generation-core",
@@ -224,22 +228,78 @@ function resolveBundledPluginManifestRecord(params: {
   }
 
   const registry = getFacadeManifestRegistry(params.env ? { env: params.env } : {});
+  const records = registry.flatMap((record) => {
+    const safeRecord = readFacadePluginManifestRecord(record);
+    return safeRecord ? [safeRecord] : [];
+  });
   const resolved =
     (params.location
-      ? registry.find((plugin) => {
-          const normalizedRootDir = path.resolve(plugin.rootDir);
-          const normalizedModulePath = path.resolve(params.location!.modulePath);
-          return (
-            normalizedModulePath === normalizedRootDir ||
-            normalizedModulePath.startsWith(`${normalizedRootDir}${path.sep}`)
-          );
-        })
+      ? records.find((plugin) =>
+          isFacadeManifestRecordLocationMatch({
+            modulePath: params.location!.modulePath,
+            record: plugin,
+          }),
+        )
       : null) ??
-    registry.find((plugin) => plugin.id === params.dirName) ??
-    registry.find((plugin) => path.basename(plugin.rootDir) === params.dirName) ??
-    registry.find((plugin) => plugin.channels.includes(params.dirName)) ??
+    records.find((plugin) => plugin.id === params.dirName) ??
+    records.find((plugin) => path.basename(plugin.rootDir) === params.dirName) ??
+    records.find((plugin) => plugin.channels.includes(params.dirName)) ??
     null;
   return resolved;
+}
+
+function readFacadePluginManifestRecord(record: unknown): FacadePluginManifestLike | null {
+  const base = readFacadeRegistryRecord(record);
+  if (!base) {
+    return null;
+  }
+
+  try {
+    const candidate = record as {
+      enabledByDefault?: unknown;
+      enabledByDefaultOnPlatforms?: unknown;
+      origin?: unknown;
+    };
+    if (!isPluginOrigin(candidate.origin)) {
+      return null;
+    }
+    return {
+      ...base,
+      origin: candidate.origin,
+      ...(typeof candidate.enabledByDefault === "boolean"
+        ? { enabledByDefault: candidate.enabledByDefault }
+        : {}),
+      ...(Array.isArray(candidate.enabledByDefaultOnPlatforms)
+        ? {
+            enabledByDefaultOnPlatforms: candidate.enabledByDefaultOnPlatforms.filter(
+              (platform): platform is string => typeof platform === "string",
+            ),
+          }
+        : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function isPluginOrigin(value: unknown): value is FacadePluginManifestLike["origin"] {
+  return value === "bundled" || value === "global" || value === "workspace" || value === "config";
+}
+
+function isFacadeManifestRecordLocationMatch(params: {
+  modulePath: string;
+  record: FacadeRegistryRecordLike;
+}): boolean {
+  try {
+    const normalizedRootDir = path.resolve(params.record.rootDir);
+    const normalizedModulePath = path.resolve(params.modulePath);
+    return (
+      normalizedModulePath === normalizedRootDir ||
+      normalizedModulePath.startsWith(`${normalizedRootDir}${path.sep}`)
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** Resolves the stable plugin id used for telemetry and error reporting. */
