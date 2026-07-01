@@ -335,6 +335,33 @@ describe("routine service", () => {
     });
   });
 
+  it("accepts keyless announce delivery for explicit session targets", async () => {
+    await withOpenClawTestState({ prefix: "routine-session-target-announce-" }, async () => {
+      const cron = createFakeCronService();
+      const created = await createRoutine(
+        createRoutineInput({
+          id: "session-target-announce",
+          owner: undefined,
+          target: {
+            sessionTarget: "session:agent:ops:main",
+            wakeMode: "now",
+            delivery: { mode: "announce" },
+          },
+        }),
+        { cron },
+      );
+
+      expect(cron.add.mock.calls[0]?.[0].delivery).toEqual({
+        mode: "announce",
+        channel: "last",
+      });
+      expect(created.routine.target.delivery).toEqual({
+        mode: "announce",
+        channel: "last",
+      });
+    });
+  });
+
   it("infers the owner agent from agent-scoped session keys", async () => {
     await withOpenClawTestState({ prefix: "routine-session-agent-" }, async () => {
       const cron = createFakeCronService();
@@ -413,9 +440,14 @@ describe("routine service", () => {
       expect(cron.add.mock.calls[0]?.[0]).toMatchObject({
         agentId: "ops",
         sessionTarget: "session:agent:ops:main",
+        delivery: { mode: "announce", channel: "last" },
       });
       expect(created.routine.owner).toEqual({ agentId: "ops" });
       expect(created.routine.target.sessionTarget).toBe("session:agent:ops:main");
+      expect(created.routine.target.delivery).toEqual({
+        mode: "announce",
+        channel: "last",
+      });
     });
   });
 
@@ -604,12 +636,17 @@ describe("routine service", () => {
       const input = createRoutineInput();
       const created = await createRoutine(input, { cron, cronStorePath: "/tmp/cron.sqlite" });
       const cronJobId = created.routine.trigger.cronJobId;
+      const backingCronJob = cron.jobs.get(cronJobId);
+      if (!backingCronJob) {
+        throw new Error("expected backing cron job");
+      }
       openOpenClawStateDatabase().db.exec("DELETE FROM routine_records");
 
       const replay = await createRoutine(input, { cron, cronStorePath: "/tmp/cron.sqlite" });
 
       expect(replay.created).toBe(false);
       expect(replay.idempotent).toBe(true);
+      expect(replay.routine.createdAtMs).toBe(backingCronJob.createdAtMs);
       expect(replay.routine.trigger.cronJobId).toBe(cronJobId);
       expect(cron.add).toHaveBeenCalledTimes(1);
       expect(
@@ -1296,7 +1333,7 @@ describe("routine service", () => {
           expect(cron.update).not.toHaveBeenCalled();
           expect(readStoredRoutineJson(created.routine.id)).not.toHaveProperty("enableStage");
           expect(readStoredRoutineJson(created.routine.id)).not.toHaveProperty("disableStage");
-        }
+        },
       );
     },
   );

@@ -391,6 +391,13 @@ function agentIdFromRoutineSessionTarget(value: CronSessionTarget): string | und
   return parsed ? sanitizeAgentId(parsed.agentId) : undefined;
 }
 
+function sessionKeyFromRoutineSessionTarget(value: CronSessionTarget): string | undefined {
+  if (!value.startsWith("session:")) {
+    return undefined;
+  }
+  return normalizeOptionalString(value.slice("session:".length));
+}
+
 function normalizeRoutineOwner(
   input: RoutineCreateInput,
   sessionTarget: CronSessionTarget,
@@ -432,8 +439,16 @@ function assertRoutinePayloadNonBlank(payload: CronPayload): void {
   }
 }
 
-function routineDeliveryHasStableTarget(owner: RoutineOwner, delivery: CronDelivery): boolean {
-  return Boolean(owner.sessionKey || normalizeOptionalString(delivery.to));
+function routineDeliveryHasStableTarget(
+  owner: RoutineOwner,
+  sessionTarget: CronSessionTarget,
+  delivery: CronDelivery,
+): boolean {
+  return Boolean(
+    owner.sessionKey ||
+    sessionKeyFromRoutineSessionTarget(sessionTarget) ||
+    normalizeOptionalString(delivery.to),
+  );
 }
 
 function normalizeRoutineDelivery(
@@ -442,18 +457,26 @@ function normalizeRoutineDelivery(
   delivery: CronDelivery | undefined,
 ): CronDelivery | undefined {
   const isMainTarget = sessionTarget === "main";
+  const hasSessionDeliveryTarget = Boolean(
+    owner.sessionKey || sessionKeyFromRoutineSessionTarget(sessionTarget),
+  );
   if (!delivery) {
-    return owner.sessionKey && !isMainTarget
+    return hasSessionDeliveryTarget && !isMainTarget
       ? { mode: "announce", channel: "last" }
       : { mode: "none" };
   }
   const mode = delivery.mode ?? "announce";
-  if (mode === "announce" && !routineDeliveryHasStableTarget(owner, delivery)) {
+  if (mode === "announce" && !routineDeliveryHasStableTarget(owner, sessionTarget, delivery)) {
     throw routineInvalidRequest(
       "routine announce delivery requires owner.sessionKey or delivery.to",
     );
   }
-  if (mode === "announce" && owner.sessionKey && delivery.channel === undefined && !isMainTarget) {
+  if (
+    mode === "announce" &&
+    hasSessionDeliveryTarget &&
+    delivery.channel === undefined &&
+    !isMainTarget
+  ) {
     return { ...delivery, mode: "announce", channel: "last" };
   }
   return delivery;
@@ -1009,9 +1032,7 @@ function stageRoutineRecordForToggle(
     ...toPublicRoutineRecord(record),
     enabled,
     updatedAtMs: Date.now(),
-    ...(enabled
-      ? { enableStage: "enabling" as const }
-      : { disableStage: "disabling" as const }),
+    ...(enabled ? { enableStage: "enabling" as const } : { disableStage: "disabling" as const }),
   };
 }
 
@@ -1203,7 +1224,7 @@ export async function createRoutine(
       if (existingBackingCronJob) {
         assertRoutineBackingCronJobMatches(draft, normalized, existingBackingCronJob);
         const adoptedRecord = createRoutineRecordForCronJob({
-          base: draft,
+          base: { ...draft, createdAtMs: existingBackingCronJob.createdAtMs },
           normalized,
           cronJob: existingBackingCronJob,
           enabled: existingBackingCronJob.enabled,
