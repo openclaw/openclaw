@@ -1,5 +1,5 @@
 // Google Meet plugin module implements meet behavior.
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard, type LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { exportGoogleDriveDocumentText, extractGoogleDriveDocumentId } from "./drive.js";
@@ -14,6 +14,14 @@ const GOOGLE_MEET_MEDIA_SCOPE =
 const GOOGLE_MEET_SPACE_SCOPE = "https://www.googleapis.com/auth/meetings.space.readonly";
 const GOOGLE_MEET_SPACE_CREATED_SCOPE = "https://www.googleapis.com/auth/meetings.space.created";
 const GOOGLE_MEET_SPACE_SETTINGS_SCOPE = "https://www.googleapis.com/auth/meetings.space.settings";
+
+type GoogleMeetApiFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+
+type GoogleMeetApiFetchDeps = {
+  /** Override `fetch` for tests that exercise the real SSRF guard. */
+  fetchImpl?: GoogleMeetApiFetch;
+  lookupFn?: LookupFn;
+};
 
 export type GoogleMeetAccessType = "OPEN" | "TRUSTED" | "RESTRICTED";
 export type GoogleMeetEntryPointAccess = "ALL" | "CREATOR_APP_ONLY";
@@ -270,7 +278,7 @@ async function fetchGoogleMeetJson<T>(params: {
   query?: Record<string, string | number | boolean | undefined>;
   auditContext: string;
   errorPrefix: string;
-}): Promise<T> {
+} & GoogleMeetApiFetchDeps): Promise<T> {
   const { response, release } = await fetchWithSsrFGuard({
     url: appendQuery(`${GOOGLE_MEET_API_BASE_URL}/${params.path}`, params.query),
     init: {
@@ -281,6 +289,8 @@ async function fetchGoogleMeetJson<T>(params: {
     },
     policy: { allowedHostnames: [GOOGLE_MEET_API_HOST] },
     auditContext: params.auditContext,
+    fetchImpl: params.fetchImpl,
+    lookupFn: params.lookupFn,
   });
   try {
     if (!response.ok) {
@@ -304,7 +314,7 @@ async function listGoogleMeetCollection<T extends { name?: string }>(params: {
   maxItems?: number;
   auditContext: string;
   errorPrefix: string;
-}): Promise<T[]> {
+} & GoogleMeetApiFetchDeps): Promise<T[]> {
   const items: T[] = [];
   let pageToken: string | undefined;
   do {
@@ -314,6 +324,8 @@ async function listGoogleMeetCollection<T extends { name?: string }>(params: {
       query: { ...params.query, pageToken },
       auditContext: params.auditContext,
       errorPrefix: params.errorPrefix,
+      fetchImpl: params.fetchImpl,
+      lookupFn: params.lookupFn,
     });
     const pageItems = assertResourceArray<T>(
       payload[params.collectionKey],
@@ -334,7 +346,7 @@ async function listGoogleMeetCollection<T extends { name?: string }>(params: {
 export async function fetchGoogleMeetSpace(params: {
   accessToken: string;
   meeting: string;
-}): Promise<GoogleMeetSpace> {
+} & GoogleMeetApiFetchDeps): Promise<GoogleMeetSpace> {
   const name = normalizeGoogleMeetSpaceName(params.meeting);
   const { response, release } = await fetchWithSsrFGuard({
     url: `${GOOGLE_MEET_API_BASE_URL}/${encodeSpaceNameForPath(name)}`,
@@ -346,6 +358,8 @@ export async function fetchGoogleMeetSpace(params: {
     },
     policy: { allowedHostnames: [GOOGLE_MEET_API_HOST] },
     auditContext: "google-meet.spaces.get",
+    fetchImpl: params.fetchImpl,
+    lookupFn: params.lookupFn,
   });
   try {
     if (!response.ok) {
@@ -368,7 +382,7 @@ export async function fetchGoogleMeetSpace(params: {
 export async function createGoogleMeetSpace(params: {
   accessToken: string;
   config?: GoogleMeetSpaceConfig;
-}): Promise<GoogleMeetCreateSpaceResult> {
+} & GoogleMeetApiFetchDeps): Promise<GoogleMeetCreateSpaceResult> {
   const body =
     params.config && Object.keys(params.config).length > 0
       ? JSON.stringify({ config: params.config })
@@ -386,6 +400,8 @@ export async function createGoogleMeetSpace(params: {
     },
     policy: { allowedHostnames: [GOOGLE_MEET_API_HOST] },
     auditContext: "google-meet.spaces.create",
+    fetchImpl: params.fetchImpl,
+    lookupFn: params.lookupFn,
   });
   try {
     if (!response.ok) {
@@ -415,10 +431,12 @@ export async function createGoogleMeetSpace(params: {
 export async function endGoogleMeetActiveConference(params: {
   accessToken: string;
   meeting: string;
-}): Promise<GoogleMeetEndActiveConferenceResult> {
+} & GoogleMeetApiFetchDeps): Promise<GoogleMeetEndActiveConferenceResult> {
   const resolved = await fetchGoogleMeetSpace({
     accessToken: params.accessToken,
     meeting: params.meeting,
+    fetchImpl: params.fetchImpl,
+    lookupFn: params.lookupFn,
   });
   const space = resolved.name;
   const { response, release } = await fetchWithSsrFGuard({
@@ -434,6 +452,8 @@ export async function endGoogleMeetActiveConference(params: {
     },
     policy: { allowedHostnames: [GOOGLE_MEET_API_HOST] },
     auditContext: "google-meet.spaces.endActiveConference",
+    fetchImpl: params.fetchImpl,
+    lookupFn: params.lookupFn,
   });
   try {
     if (!response.ok) {
@@ -452,13 +472,15 @@ export async function endGoogleMeetActiveConference(params: {
 async function fetchGoogleMeetConferenceRecord(params: {
   accessToken: string;
   conferenceRecord: string;
-}): Promise<GoogleMeetConferenceRecord> {
+} & GoogleMeetApiFetchDeps): Promise<GoogleMeetConferenceRecord> {
   const name = normalizeConferenceRecordName(params.conferenceRecord);
   const payload = await fetchGoogleMeetJson<GoogleMeetConferenceRecord>({
     accessToken: params.accessToken,
     path: encodeResourceNameForPath(name),
     auditContext: "google-meet.conferenceRecords.get",
     errorPrefix: "Google Meet conferenceRecords.get",
+    fetchImpl: params.fetchImpl,
+    lookupFn: params.lookupFn,
   });
   if (!payload.name?.trim()) {
     throw new Error("Google Meet conferenceRecords.get response was missing name");
@@ -471,7 +493,7 @@ async function listGoogleMeetConferenceRecords(params: {
   meeting?: string;
   pageSize?: number;
   maxItems?: number;
-}): Promise<GoogleMeetConferenceRecord[]> {
+} & GoogleMeetApiFetchDeps): Promise<GoogleMeetConferenceRecord[]> {
   const filter = params.meeting
     ? `space.name = "${normalizeGoogleMeetSpaceName(params.meeting)}"`
     : undefined;
@@ -486,22 +508,28 @@ async function listGoogleMeetConferenceRecords(params: {
     maxItems: params.maxItems,
     auditContext: "google-meet.conferenceRecords.list",
     errorPrefix: "Google Meet conferenceRecords.list",
+    fetchImpl: params.fetchImpl,
+    lookupFn: params.lookupFn,
   });
 }
 
 export async function fetchLatestGoogleMeetConferenceRecord(params: {
   accessToken: string;
   meeting: string;
-}): Promise<GoogleMeetLatestConferenceRecordResult> {
+} & GoogleMeetApiFetchDeps): Promise<GoogleMeetLatestConferenceRecordResult> {
   const space = await fetchGoogleMeetSpace({
     accessToken: params.accessToken,
     meeting: params.meeting,
+    fetchImpl: params.fetchImpl,
+    lookupFn: params.lookupFn,
   });
   const [conferenceRecord] = await listGoogleMeetConferenceRecords({
     accessToken: params.accessToken,
     meeting: space.name,
     pageSize: 1,
     maxItems: 1,
+    fetchImpl: params.fetchImpl,
+    lookupFn: params.lookupFn,
   });
   return {
     input: params.meeting,
@@ -514,7 +542,7 @@ async function listGoogleMeetParticipants(params: {
   accessToken: string;
   conferenceRecord: string;
   pageSize?: number;
-}): Promise<GoogleMeetParticipant[]> {
+} & GoogleMeetApiFetchDeps): Promise<GoogleMeetParticipant[]> {
   const parent = normalizeConferenceRecordName(params.conferenceRecord);
   return listGoogleMeetCollection<GoogleMeetParticipant>({
     accessToken: params.accessToken,
@@ -523,6 +551,8 @@ async function listGoogleMeetParticipants(params: {
     query: { pageSize: params.pageSize },
     auditContext: "google-meet.conferenceRecords.participants.list",
     errorPrefix: "Google Meet conferenceRecords.participants.list",
+    fetchImpl: params.fetchImpl,
+    lookupFn: params.lookupFn,
   });
 }
 
@@ -530,7 +560,7 @@ async function listGoogleMeetParticipantSessions(params: {
   accessToken: string;
   participant: string;
   pageSize?: number;
-}): Promise<GoogleMeetParticipantSession[]> {
+} & GoogleMeetApiFetchDeps): Promise<GoogleMeetParticipantSession[]> {
   return listGoogleMeetCollection<GoogleMeetParticipantSession>({
     accessToken: params.accessToken,
     path: `${encodeResourceNameForPath(params.participant)}/participantSessions`,
@@ -538,6 +568,8 @@ async function listGoogleMeetParticipantSessions(params: {
     query: { pageSize: params.pageSize },
     auditContext: "google-meet.conferenceRecords.participants.participantSessions.list",
     errorPrefix: "Google Meet conferenceRecords.participants.participantSessions.list",
+    fetchImpl: params.fetchImpl,
+    lookupFn: params.lookupFn,
   });
 }
 
@@ -545,7 +577,7 @@ async function listGoogleMeetRecordings(params: {
   accessToken: string;
   conferenceRecord: string;
   pageSize?: number;
-}): Promise<GoogleMeetRecording[]> {
+} & GoogleMeetApiFetchDeps): Promise<GoogleMeetRecording[]> {
   const parent = normalizeConferenceRecordName(params.conferenceRecord);
   return listGoogleMeetCollection<GoogleMeetRecording>({
     accessToken: params.accessToken,
@@ -554,6 +586,8 @@ async function listGoogleMeetRecordings(params: {
     query: { pageSize: params.pageSize },
     auditContext: "google-meet.conferenceRecords.recordings.list",
     errorPrefix: "Google Meet conferenceRecords.recordings.list",
+    fetchImpl: params.fetchImpl,
+    lookupFn: params.lookupFn,
   });
 }
 
@@ -561,7 +595,7 @@ async function listGoogleMeetTranscripts(params: {
   accessToken: string;
   conferenceRecord: string;
   pageSize?: number;
-}): Promise<GoogleMeetTranscript[]> {
+} & GoogleMeetApiFetchDeps): Promise<GoogleMeetTranscript[]> {
   const parent = normalizeConferenceRecordName(params.conferenceRecord);
   return listGoogleMeetCollection<GoogleMeetTranscript>({
     accessToken: params.accessToken,
@@ -570,6 +604,8 @@ async function listGoogleMeetTranscripts(params: {
     query: { pageSize: params.pageSize },
     auditContext: "google-meet.conferenceRecords.transcripts.list",
     errorPrefix: "Google Meet conferenceRecords.transcripts.list",
+    fetchImpl: params.fetchImpl,
+    lookupFn: params.lookupFn,
   });
 }
 
@@ -577,7 +613,7 @@ async function listGoogleMeetTranscriptEntries(params: {
   accessToken: string;
   transcript: string;
   pageSize?: number;
-}): Promise<GoogleMeetTranscriptEntry[]> {
+} & GoogleMeetApiFetchDeps): Promise<GoogleMeetTranscriptEntry[]> {
   return listGoogleMeetCollection<GoogleMeetTranscriptEntry>({
     accessToken: params.accessToken,
     path: `${encodeResourceNameForPath(params.transcript)}/entries`,
@@ -585,6 +621,8 @@ async function listGoogleMeetTranscriptEntries(params: {
     query: { pageSize: params.pageSize },
     auditContext: "google-meet.conferenceRecords.transcripts.entries.list",
     errorPrefix: "Google Meet conferenceRecords.transcripts.entries.list",
+    fetchImpl: params.fetchImpl,
+    lookupFn: params.lookupFn,
   });
 }
 
@@ -592,7 +630,7 @@ async function listGoogleMeetSmartNotes(params: {
   accessToken: string;
   conferenceRecord: string;
   pageSize?: number;
-}): Promise<GoogleMeetSmartNote[]> {
+} & GoogleMeetApiFetchDeps): Promise<GoogleMeetSmartNote[]> {
   const parent = normalizeConferenceRecordName(params.conferenceRecord);
   return listGoogleMeetCollection<GoogleMeetSmartNote>({
     accessToken: params.accessToken,
@@ -601,6 +639,8 @@ async function listGoogleMeetSmartNotes(params: {
     query: { pageSize: params.pageSize },
     auditContext: "google-meet.conferenceRecords.smartNotes.list",
     errorPrefix: "Google Meet conferenceRecords.smartNotes.list",
+    fetchImpl: params.fetchImpl,
+    lookupFn: params.lookupFn,
   });
 }
 
@@ -811,7 +851,7 @@ async function resolveConferenceRecordQuery(params: {
   conferenceRecord?: string;
   pageSize?: number;
   allConferenceRecords?: boolean;
-}): Promise<{
+} & GoogleMeetApiFetchDeps): Promise<{
   input?: string;
   space?: GoogleMeetSpace;
   conferenceRecords: GoogleMeetConferenceRecord[];
@@ -820,6 +860,8 @@ async function resolveConferenceRecordQuery(params: {
     const conferenceRecord = await fetchGoogleMeetConferenceRecord({
       accessToken: params.accessToken,
       conferenceRecord: params.conferenceRecord,
+      fetchImpl: params.fetchImpl,
+      lookupFn: params.lookupFn,
     });
     return {
       input: params.conferenceRecord.trim(),
@@ -832,12 +874,16 @@ async function resolveConferenceRecordQuery(params: {
   const space = await fetchGoogleMeetSpace({
     accessToken: params.accessToken,
     meeting: params.meeting,
+    fetchImpl: params.fetchImpl,
+    lookupFn: params.lookupFn,
   });
   const conferenceRecords = await listGoogleMeetConferenceRecords({
     accessToken: params.accessToken,
     meeting: space.name,
     pageSize: params.allConferenceRecords ? params.pageSize : 1,
     maxItems: params.allConferenceRecords ? undefined : 1,
+    fetchImpl: params.fetchImpl,
+    lookupFn: params.lookupFn,
   });
   return {
     input: params.meeting,
@@ -854,7 +900,7 @@ export async function fetchGoogleMeetArtifacts(params: {
   includeTranscriptEntries?: boolean;
   allConferenceRecords?: boolean;
   includeDocumentBodies?: boolean;
-}): Promise<GoogleMeetArtifactsResult> {
+} & GoogleMeetApiFetchDeps): Promise<GoogleMeetArtifactsResult> {
   const resolved = await resolveConferenceRecordQuery(params);
   const artifacts = await Promise.all(
     resolved.conferenceRecords.map(async (conferenceRecord) => {
@@ -863,21 +909,29 @@ export async function fetchGoogleMeetArtifacts(params: {
           accessToken: params.accessToken,
           conferenceRecord: conferenceRecord.name,
           pageSize: params.pageSize,
+          fetchImpl: params.fetchImpl,
+          lookupFn: params.lookupFn,
         }),
         listGoogleMeetRecordings({
           accessToken: params.accessToken,
           conferenceRecord: conferenceRecord.name,
           pageSize: params.pageSize,
+          fetchImpl: params.fetchImpl,
+          lookupFn: params.lookupFn,
         }),
         listGoogleMeetTranscripts({
           accessToken: params.accessToken,
           conferenceRecord: conferenceRecord.name,
           pageSize: params.pageSize,
+          fetchImpl: params.fetchImpl,
+          lookupFn: params.lookupFn,
         }),
         listGoogleMeetSmartNotes({
           accessToken: params.accessToken,
           conferenceRecord: conferenceRecord.name,
           pageSize: params.pageSize,
+          fetchImpl: params.fetchImpl,
+          lookupFn: params.lookupFn,
         })
           .then<GoogleMeetSmartNotesListResult>((smartNotes) => ({ smartNotes }))
           .catch((error: unknown) => ({
@@ -897,6 +951,8 @@ export async function fetchGoogleMeetArtifacts(params: {
                       accessToken: params.accessToken,
                       transcript: transcript.name,
                       pageSize: params.pageSize,
+                      fetchImpl: params.fetchImpl,
+                      lookupFn: params.lookupFn,
                     }),
                   };
                 } catch (error) {
@@ -960,7 +1016,7 @@ export async function fetchGoogleMeetAttendance(params: {
   mergeDuplicateParticipants?: boolean;
   lateAfterMinutes?: number;
   earlyBeforeMinutes?: number;
-}): Promise<GoogleMeetAttendanceResult> {
+} & GoogleMeetApiFetchDeps): Promise<GoogleMeetAttendanceResult> {
   const resolved = await resolveConferenceRecordQuery(params);
   const nestedRows = await Promise.all(
     resolved.conferenceRecords.map(async (conferenceRecord) => {
@@ -968,6 +1024,8 @@ export async function fetchGoogleMeetAttendance(params: {
         accessToken: params.accessToken,
         conferenceRecord: conferenceRecord.name,
         pageSize: params.pageSize,
+        fetchImpl: params.fetchImpl,
+        lookupFn: params.lookupFn,
       });
       const rows = await Promise.all(
         participants.map(async (participant) => ({
@@ -981,6 +1039,8 @@ export async function fetchGoogleMeetAttendance(params: {
             accessToken: params.accessToken,
             participant: participant.name,
             pageSize: params.pageSize,
+            fetchImpl: params.fetchImpl,
+            lookupFn: params.lookupFn,
           }),
         })),
       );
