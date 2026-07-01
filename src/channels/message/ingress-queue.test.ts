@@ -708,7 +708,7 @@ describe("channel ingress queue", () => {
       });
     });
 
-    it("claimNext skips a corrupt pending row and claims the next valid one", async () => {
+    it("claimNext skips a corrupt first pending row without lane derivation", async () => {
       await withTempState(async (stateDir) => {
         const queue = createChannelIngressQueue<{ text: string }>({
           channelId: "test",
@@ -732,11 +732,7 @@ describe("channel ingress queue", () => {
         }
         await queue.enqueue("good-1", { text: "hello" }, { receivedAt: earlyTime + 10 });
 
-        // claimNext with scanLimit > 1 to scan past the corrupt row.
-        const claimed = await queue.claimNext({
-          scanLimit: 5,
-          deriveLaneKey: () => undefined,
-        });
+        const claimed = await queue.claimNext();
         expect(claimed).not.toBeNull();
         expect(claimed!.id).toBe("good-1");
       });
