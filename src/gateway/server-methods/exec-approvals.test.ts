@@ -243,7 +243,7 @@ describe("exec approvals gateway methods", () => {
       undefined,
       expect.objectContaining({
         code: "INVALID_REQUEST",
-        message: expect.stringContaining("does not support system.execApprovals.get"),
+        message: expect.stringContaining("does not allow system.execApprovals.get"),
         details: expect.objectContaining({ reason: "command not allowlisted" }),
       }),
     );
@@ -286,7 +286,7 @@ describe("exec approvals gateway methods", () => {
       undefined,
       expect.objectContaining({
         code: "INVALID_REQUEST",
-        message: expect.stringContaining("does not support system.execApprovals.set"),
+        message: expect.stringContaining("does not allow system.execApprovals.set"),
         details: expect.objectContaining({ reason: "command not allowlisted" }),
       }),
     );
