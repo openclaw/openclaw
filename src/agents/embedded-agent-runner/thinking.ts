@@ -603,6 +603,34 @@ function isSuccessfulRecoveryRetryResult(message: AssistantMessage | undefined):
   return message.stopReason !== "error" && message.stopReason !== "aborted";
 }
 
+function wrapRetryStreamWithRecoveryNotification(
+  retryStream: ReturnType<StreamFn>,
+  notify: () => Promise<void>,
+): ReturnType<StreamFn> {
+  if (retryStream instanceof Promise) {
+    return retryStream.then((resolved) =>
+      wrapRetryStreamWithRecoveryNotification(resolved as ReturnType<StreamFn>, notify),
+    ) as ReturnType<StreamFn>;
+  }
+  const streamWithResult = retryStream as unknown as {
+    result?: () => Promise<AssistantMessage>;
+  };
+  if (typeof streamWithResult.result !== "function") {
+    return retryStream;
+  }
+  const result = streamWithResult.result.bind(streamWithResult);
+  let notified = false;
+  streamWithResult.result = async () => {
+    const message = await result();
+    if (!notified && isSuccessfulRecoveryRetryResult(message)) {
+      notified = true;
+      await notify();
+    }
+    return message;
+  };
+  return retryStream;
+}
+
 async function retryStreamWithoutThinking(
   outer: ReturnType<typeof createAssistantMessageEventStream>,
   retry: () => ReturnType<StreamFn>,
@@ -670,6 +698,26 @@ async function pumpStreamWithRecovery(
   }
 }
 
+function createRecoveryStream(
+  stream: Awaited<ReturnType<StreamFn>>,
+  sessionMeta: RecoverySessionMeta,
+  retry: () => ReturnType<StreamFn>,
+  notify: () => Promise<void>,
+): Awaited<ReturnType<StreamFn>> {
+  const outer = createAssistantMessageEventStream();
+  const finalResultPromise = pumpStreamWithRecovery(
+    outer,
+    stream,
+    sessionMeta,
+    retry,
+    notify,
+  ).finally(() => {
+    outer.end();
+  });
+  outer.result = () => finalResultPromise;
+  return outer;
+}
+
 export function wrapAnthropicStreamWithRecovery(
   innerStreamFn: StreamFn,
   sessionMeta: RecoverySessionMeta,
@@ -699,52 +747,20 @@ export function wrapAnthropicStreamWithRecovery(
 
     const stream = innerStreamFn(model, context, options);
     if (stream instanceof Promise) {
-      // When streamFn is async (e.g. wrapEmbeddedAgentStreamFn with authStorage),
-      // the return value is a Promise<AssistantMessageEventStreamLike>.
-      // The Promise branch must pump the resolved stream through
-      // pumpStreamWithRecovery so that mid-stream {type:"error"} events
-      // (e.g. Anthropic thinking-signature replay rejections) trigger
-      // recovery. The old code only caught Promise rejections and missed
-      // error events that arrive after the Promise resolves.
-      const outer = createAssistantMessageEventStream();
-      const finalResultPromise = stream
-        .then(
-          (resolved) =>
-            pumpStreamWithRecovery(
-              outer,
-              resolved as ReturnType<StreamFn>,
-              requestMeta,
-              retry,
-              notify,
-            ),
-          (error: unknown) => {
-            if (!shouldRecoverAnthropicThinkingError(error, requestMeta)) {
-              throw error;
-            }
-            requestMeta.recoveredAnthropicThinking = true;
-            log.warn(
-              `[session-recovery] Anthropic thinking request rejected; retrying once without thinking blocks: sessionId=${requestMeta.id}`,
-            );
-            return retryStreamWithoutThinking(outer, retry, notify);
-          },
-        )
-        .finally(() => {
-          outer.end();
-        });
-      outer.result = () => finalResultPromise;
-      return outer as unknown as ReturnType<StreamFn>;
+      return stream.then(
+        (resolved) => createRecoveryStream(resolved, requestMeta, retry, notify),
+        (error: unknown) => {
+          if (!shouldRecoverAnthropicThinkingError(error, requestMeta)) {
+            throw error;
+          }
+          requestMeta.recoveredAnthropicThinking = true;
+          log.warn(
+            `[session-recovery] Anthropic thinking request rejected; retrying once without thinking blocks: sessionId=${requestMeta.id}`,
+          );
+          return wrapRetryStreamWithRecoveryNotification(retry(), notify);
+        },
+      ) as ReturnType<StreamFn>;
     }
-    const outer = createAssistantMessageEventStream();
-    const finalResultPromise = pumpStreamWithRecovery(
-      outer,
-      stream,
-      requestMeta,
-      retry,
-      notify,
-    ).finally(() => {
-      outer.end();
-    });
-    outer.result = () => finalResultPromise;
-    return outer as unknown as ReturnType<StreamFn>;
+    return createRecoveryStream(stream, requestMeta, retry, notify);
   };
 }

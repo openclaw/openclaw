@@ -493,22 +493,20 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       { id: "test-session" },
     );
 
-    const response = wrapped(
-      {} as never,
-      {
-        messages: castAgentMessages([
-          {
-            role: "assistant",
-            content: [{ type: "thinking", thinking: "secret", thinkingSignature: "sig" }],
-          },
-        ]),
-      } as never,
-      {} as never,
-    ) as { result: () => Promise<unknown> } & AsyncIterable<unknown>;
-    for await (const _ of response) {
-      void _;
-    }
-    await expect(response.result()).rejects.toBe(anthropicThinkingError);
+    await expect(
+      wrapped(
+        {} as never,
+        {
+          messages: castAgentMessages([
+            {
+              role: "assistant",
+              content: [{ type: "thinking", thinking: "secret", thinkingSignature: "sig" }],
+            },
+          ]),
+        } as never,
+        {} as never,
+      ),
+    ).rejects.toBe(anthropicThinkingError);
     expect(callCount).toBe(2);
     const retryMessage = contexts[1]?.messages?.[0];
     if (!retryMessage || retryMessage.role !== "assistant") {
@@ -529,25 +527,23 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       { id: "test-session" },
     );
 
-    const response = wrapped(
-      {} as never,
-      {
-        messages: castAgentMessages([
-          {
-            role: "assistant",
-            content: [
-              { type: "thinking", thinking: "secret", thinkingSignature: "sig" },
-              { type: "text", text: "visible answer" },
-            ],
-          },
-        ]),
-      } as never,
-      {} as never,
-    ) as { result: () => Promise<unknown> } & AsyncIterable<unknown>;
-    for await (const _ of response) {
-      void _;
-    }
-    await expect(response.result()).rejects.toBe(anthropicThinkingError);
+    await expect(
+      wrapped(
+        {} as never,
+        {
+          messages: castAgentMessages([
+            {
+              role: "assistant",
+              content: [
+                { type: "thinking", thinking: "secret", thinkingSignature: "sig" },
+                { type: "text", text: "visible answer" },
+              ],
+            },
+          ]),
+        } as never,
+        {} as never,
+      ),
+    ).rejects.toBe(anthropicThinkingError);
 
     const retryMessage = contexts[1]?.messages?.[0];
     if (!retryMessage || retryMessage.role !== "assistant") {
@@ -626,22 +622,20 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       { id: "test-session", onRecoveredAnthropicThinking: recovered },
     );
 
-    const response = wrapped(
-      {} as never,
-      {
-        messages: castAgentMessages([
-          {
-            role: "assistant",
-            content: [{ type: "thinking", thinking: "secret", thinkingSignature: "sig" }],
-          },
-        ]),
-      } as never,
-      {} as never,
-    ) as { result: () => Promise<unknown> } & AsyncIterable<unknown>;
-    for await (const _ of response) {
-      void _;
-    }
-    await expect(response.result()).rejects.toBe(retryError);
+    await expect(
+      wrapped(
+        {} as never,
+        {
+          messages: castAgentMessages([
+            {
+              role: "assistant",
+              content: [{ type: "thinking", thinking: "secret", thinkingSignature: "sig" }],
+            },
+          ]),
+        } as never,
+        {} as never,
+      ),
+    ).rejects.toBe(retryError);
     expect(recovered).not.toHaveBeenCalled();
   });
 
@@ -704,22 +698,20 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       { id: "test-session" },
     );
 
-    const response = wrapped(
-      {} as never,
-      {
-        messages: castAgentMessages([
-          {
-            role: "assistant",
-            content: [{ type: "thinking", thinking: "secret", thinkingSignature: "" }],
-          },
-        ]),
-      } as never,
-      {} as never,
-    ) as { result: () => Promise<unknown> } & AsyncIterable<unknown>;
-    for await (const _ of response) {
-      void _;
-    }
-    await expect(response.result()).rejects.toBe(bedrockThinkingError);
+    await expect(
+      wrapped(
+        {} as never,
+        {
+          messages: castAgentMessages([
+            {
+              role: "assistant",
+              content: [{ type: "thinking", thinking: "secret", thinkingSignature: "" }],
+            },
+          ]),
+        } as never,
+        {} as never,
+      ),
+    ).rejects.toBe(bedrockThinkingError);
     expect(callCount).toBe(2);
   });
 
@@ -779,13 +771,9 @@ describe("wrapAnthropicStreamWithRecovery", () => {
         { id: "test-session" },
       );
 
-      const response = wrapped({} as never, { messages: [] } as never, {} as never) as {
-        result: () => Promise<unknown>;
-      } & AsyncIterable<unknown>;
-      for await (const _ of response) {
-        void _;
-      }
-      await expect(response.result()).rejects.toBe(providerError);
+      await expect(wrapped({} as never, { messages: [] } as never, {} as never)).rejects.toBe(
+        providerError,
+      );
       expect(callCount).toBe(2);
     },
   );
@@ -956,13 +944,9 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       { id: "test-session" },
     );
 
-    const response = wrapped({} as never, { messages: [] } as never, {} as never) as {
-      result: () => Promise<unknown>;
-    } & AsyncIterable<unknown>;
-    for await (const _ of response) {
-      void _;
-    }
-    await expect(response.result()).rejects.toBe(rateLimitError);
+    await expect(wrapped({} as never, { messages: [] } as never, {} as never)).rejects.toBe(
+      rateLimitError,
+    );
     expect(callCount).toBe(1);
   });
 
@@ -984,21 +968,12 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       ]),
     };
 
-    const response1 = wrapped({} as never, context as never, {} as never) as {
-      result: () => Promise<unknown>;
-    } & AsyncIterable<unknown>;
-    for await (const _ of response1) {
-      void _;
-    }
-    await expect(response1.result()).rejects.toBe(anthropicThinkingError);
-
-    const response2 = wrapped({} as never, context as never, {} as never) as {
-      result: () => Promise<unknown>;
-    } & AsyncIterable<unknown>;
-    for await (const _ of response2) {
-      void _;
-    }
-    await expect(response2.result()).rejects.toBe(anthropicThinkingError);
+    await expect(wrapped({} as never, context as never, {} as never)).rejects.toBe(
+      anthropicThinkingError,
+    );
+    await expect(wrapped({} as never, context as never, {} as never)).rejects.toBe(
+      anthropicThinkingError,
+    );
 
     expect(callCount).toBe(4);
   });
@@ -1047,38 +1022,55 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     expect(events).toHaveLength(2);
   });
 
-  it("recovers mid-stream error when streamFn returns a Promise-resolved stream", async () => {
+  it("recovers an error event from a Promise-resolved stream without changing Promise timing", async () => {
     const recovered = vi.fn();
     let callCount = 0;
+    let resolveFirstStream!: (stream: ReturnType<typeof createAssistantMessageEventStream>) => void;
+    const firstStreamPromise = new Promise<ReturnType<typeof createAssistantMessageEventStream>>(
+      (resolve) => {
+        resolveFirstStream = resolve;
+      },
+    );
     const finalMessage = createTestAssistantMessage({
       content: [{ type: "text", text: "recovered answer" }],
       stopReason: "stop",
     });
     const wrapped = wrapAnthropicStreamWithRecovery(
       (() => {
-        callCount += 1;
+        const attempt = ++callCount;
+        if (attempt === 1) {
+          return firstStreamPromise;
+        }
         const stream = createAssistantMessageEventStream();
         queueMicrotask(() => {
-          if (callCount === 1) {
-            stream.push({ type: "error", reason: "error", error: createTestStreamErrorMessage(terminalThinkingSignatureError) });
-            stream.end();
-          } else {
-            // Retry: success
-            stream.push({ type: "done", reason: "stop", message: finalMessage });
-            stream.end();
-          }
+          stream.push({ type: "done", reason: "stop", message: finalMessage });
+          stream.end();
         });
-        // Wrap the sync stream in a Promise to exercise the Promise branch
-        return Promise.resolve(stream);
+        return stream;
       }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
       { id: "test-session", onRecoveredAnthropicThinking: recovered },
     );
 
-    const response = (await wrapped(
-      {} as never,
-      { messages: [] } as never,
-      {} as never,
-    )) as { result: () => Promise<unknown> } & AsyncIterable<unknown>;
+    const responsePromise = wrapped({} as never, { messages: [] } as never, {} as never);
+    expect(responsePromise).toBeInstanceOf(Promise);
+    let resolved = false;
+    void Promise.resolve(responsePromise).then(() => {
+      resolved = true;
+    });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    const firstStream = createAssistantMessageEventStream();
+    resolveFirstStream(firstStream);
+    const response = await responsePromise;
+    queueMicrotask(() => {
+      firstStream.push({
+        type: "error",
+        reason: "error",
+        error: createTestStreamErrorMessage(terminalThinkingSignatureError),
+      });
+      firstStream.end();
+    });
     for await (const event of response) {
       void event;
     }
