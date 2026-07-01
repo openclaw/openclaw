@@ -74,6 +74,20 @@ describe("telegram custom commands schema", () => {
     });
   });
 
+  it("does not inject account-level bot-to-bot defaults when omitted", () => {
+    const res = TelegramConfigSchema.safeParse({
+      botToBot: { enabled: true, killSwitch: true, allowBotIds: [42] },
+      accounts: { ops: { historyLimit: 3 } },
+    });
+
+    expect(res.success).toBe(true);
+    if (!res.success) {
+      return;
+    }
+
+    expect(res.data.botToBot).toEqual({ enabled: true, killSwitch: true, allowBotIds: ["42"] });
+    expect(res.data.accounts?.ops?.botToBot).toBeUndefined();
+  });
   it("rejects malformed Telegram bot-to-bot config", () => {
     expectTelegramConfigIssue(
       {
