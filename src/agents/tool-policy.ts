@@ -31,6 +31,14 @@ export type PluginToolGroups = {
   byPlugin: Map<string, string[]>;
 };
 
+type PluginToolGroupMeta = {
+  pluginId?: string;
+  mcp?: {
+    serverName?: string;
+    safeServerName?: string;
+  };
+};
+
 /** Analysis of an allowlist after matching core and plugin tool ids. */
 type AllowlistResolution = {
   policy: ToolPolicyLike | undefined;
@@ -130,10 +138,19 @@ export function collectExplicitDenylist(policies: Array<ToolPolicyLike | undefin
 /** Builds plugin tool groups from tool metadata. */
 export function buildPluginToolGroups<T extends { name: string }>(params: {
   tools: T[];
-  toolMeta: (tool: T) => { pluginId: string } | undefined;
+  toolMeta: (tool: T) => PluginToolGroupMeta | undefined;
 }): PluginToolGroups {
   const all: string[] = [];
   const byPlugin = new Map<string, string[]>();
+  const addGroupEntry = (groupId: string | undefined, toolName: string) => {
+    const normalizedGroupId = normalizeOptionalLowercaseString(groupId);
+    if (!normalizedGroupId) {
+      return;
+    }
+    const list = byPlugin.get(normalizedGroupId) ?? [];
+    list.push(toolName);
+    byPlugin.set(normalizedGroupId, list);
+  };
   for (const tool of params.tools) {
     const meta = params.toolMeta(tool);
     if (!meta) {
@@ -141,13 +158,9 @@ export function buildPluginToolGroups<T extends { name: string }>(params: {
     }
     const name = normalizeToolName(tool.name);
     all.push(name);
-    const pluginId = normalizeOptionalLowercaseString(meta.pluginId);
-    if (!pluginId) {
-      continue;
-    }
-    const list = byPlugin.get(pluginId) ?? [];
-    list.push(name);
-    byPlugin.set(pluginId, list);
+    addGroupEntry(meta.pluginId, name);
+    addGroupEntry(meta.mcp?.serverName, name);
+    addGroupEntry(meta.mcp?.safeServerName, name);
   }
   return { all, byPlugin };
 }

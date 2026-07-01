@@ -1,7 +1,7 @@
 /**
  * Plans which core, bundle MCP, and bundle LSP tools an attempt should build.
  */
-import { TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
+import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
 import type { OpenClawCodingToolConstructionPlan } from "../../agent-tools.js";
 import { isToolAllowedByPolicyName } from "../../tool-policy-match.js";
 import {
@@ -79,6 +79,22 @@ function isBundleMcpAllowlistName(normalized: string): boolean {
 
 function isPluginGroupAllowlistName(normalized: string): boolean {
   return normalized === "group:plugins";
+}
+
+function buildMcpServerAllowlistNames(serverNames?: readonly string[]): Set<string> {
+  const names = new Set<string>();
+  const usedSafeNames = new Set<string>();
+  for (const serverName of serverNames ?? []) {
+    const rawName = normalizeToolName(serverName);
+    if (rawName) {
+      names.add(rawName);
+    }
+    const safeName = normalizeToolName(sanitizeServerName(serverName, usedSafeNames));
+    if (safeName) {
+      names.add(safeName);
+    }
+  }
+  return names;
 }
 
 function hasWildcardToolAllowlist(toolsAllow: string[]): boolean {
@@ -261,9 +277,15 @@ export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   toolsEnabled: boolean;
   disableTools?: boolean;
   toolsAllow?: string[];
+  mcpServerNames?: readonly string[];
 }): boolean {
+  const mcpServerAllowlistNames = buildMcpServerAllowlistNames(params.mcpServerNames);
   return shouldCreateBundleRuntimeForAttempt(params, (normalized) => {
-    return isBundleMcpAllowlistName(normalized) || isPluginGroupAllowlistName(normalized);
+    return (
+      isBundleMcpAllowlistName(normalized) ||
+      isPluginGroupAllowlistName(normalized) ||
+      mcpServerAllowlistNames.has(normalized)
+    );
   });
 }
 

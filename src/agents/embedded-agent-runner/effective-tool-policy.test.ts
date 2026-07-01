@@ -246,4 +246,50 @@ describe("applyFinalEffectiveToolPolicy", () => {
 
     expect(filtered).toStrictEqual([]);
   });
+
+  it("allows a scoped MCP server while denying unsafe execution-shaped tools", () => {
+    const driveTool = makeTool("composio-dawson__GOOGLEDRIVE_SEARCH");
+    const sheetsTool = makeTool("composio-dawson__GOOGLESHEETS_UPDATE");
+    const remoteBashTool = makeTool("composio-dawson__remote_bash");
+    const workbenchTool = makeTool("composio-dawson__workbench_run");
+    const unrelatedTool = makeTool("pipedream__GOOGLESHEETS_UPDATE");
+    for (const tool of [driveTool, sheetsTool, remoteBashTool, workbenchTool]) {
+      setPluginToolMeta(tool, {
+        pluginId: "bundle-mcp",
+        optional: false,
+        mcp: {
+          serverName: "composio-dawson",
+          safeServerName: "composio-dawson",
+          toolName: tool.name.split("__")[1] ?? tool.name,
+          operation: "tool",
+        },
+      });
+    }
+    setPluginToolMeta(unrelatedTool, {
+      pluginId: "bundle-mcp",
+      optional: false,
+      mcp: {
+        serverName: "pipedream",
+        safeServerName: "pipedream",
+        toolName: "GOOGLESHEETS_UPDATE",
+        operation: "tool",
+      },
+    });
+
+    const filtered = applyFinalEffectiveToolPolicy({
+      bundledTools: [driveTool, sheetsTool, remoteBashTool, workbenchTool, unrelatedTool],
+      config: {
+        tools: {
+          allow: ["composio-dawson"],
+          deny: ["*bash*", "*shell*", "*workbench*"],
+        },
+      },
+      warn: () => {},
+    });
+
+    expect(filtered.map((tool) => tool.name)).toEqual([
+      "composio-dawson__GOOGLEDRIVE_SEARCH",
+      "composio-dawson__GOOGLESHEETS_UPDATE",
+    ]);
+  });
 });
