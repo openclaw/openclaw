@@ -56,12 +56,8 @@ function duplicateSignature(message: unknown): { key: string; timestamp: number 
   // happen to send the same message within the window are both kept (#98310).
   // Real messages store sender metadata as __openclaw.senderIsOwner; use it
   // as a partial discriminator until full senderId propagation lands.
-  const record = message as Record<string, unknown>;
-  /* eslint-disable no-underscore-dangle — field name from gateway message schema */
-  const openclaw = isRecord(record.__openclaw)
-    ? (record.__openclaw as Record<string, unknown>)
-    : {};
-  /* eslint-enable no-underscore-dangle */
+  // eslint-disable-next-line no-underscore-dangle
+  const openclaw = isRecord(message.__openclaw) ? message.__openclaw : {};
   const senderIsOwner =
     typeof openclaw.senderIsOwner === "boolean" ? String(openclaw.senderIsOwner) : "";
   return {
