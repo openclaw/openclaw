@@ -1382,9 +1382,9 @@ export const ja_JP: TranslationMap = {
       retryQueuedMessage: "キュー内のメッセージを再試行",
     },
     pairingQrExpired: {
-      title: "Pairing QR expired",
-      reason: "Run /pair qr again to generate a fresh setup code.",
-      badge: "Expired",
+      title: "ペアリングQRの有効期限が切れました",
+      reason: "新しいセットアップコードを生成するには、もう一度 /pair qr を実行してください。",
+      badge: "期限切れ",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",
