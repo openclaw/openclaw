@@ -1,5 +1,8 @@
 // OpenAI Responses shared tests cover tool conversion and response item mapping.
-import type { Tool as OpenAIResponsesTool } from "openai/resources/responses/responses.js";
+import type {
+  ResponseStreamEvent,
+  Tool as OpenAIResponsesTool,
+} from "openai/resources/responses/responses.js";
 import { describe, expect, it, vi } from "vitest";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-boundary.js";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model, Tool } from "../types.js";
@@ -25,12 +28,14 @@ async function* streamResponsesEvents(
   }
 }
 
-function createNeverYieldingResponsesStream(): AsyncIterable<OpenAIResponsesStreamEvent> {
+function createNeverYieldingResponsesStream<
+  T extends OpenAIResponsesStreamEvent = OpenAIResponsesStreamEvent,
+>(): AsyncIterable<T> {
   return {
     [Symbol.asyncIterator]() {
       return {
         async next() {
-          return new Promise<IteratorResult<OpenAIResponsesStreamEvent>>(() => {});
+          return new Promise<IteratorResult<T>>(() => {});
         },
       };
     },
@@ -779,7 +784,7 @@ describe("processResponsesStream", () => {
               requestSignal = requestOptions.signal;
               return {
                 withResponse: async () => ({
-                  data: createNeverYieldingResponsesStream(),
+                  data: createNeverYieldingResponsesStream<ResponseStreamEvent>(),
                   response: new Response(null, { status: 200 }),
                 }),
               };

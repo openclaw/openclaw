@@ -1,3 +1,5 @@
+import { clampTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+
 type StreamStage = "responses" | "completions";
 
 export type FirstStreamEventTimeoutContext = {
@@ -64,9 +66,11 @@ export function withFirstStreamEventTimeout<T>(
   stream: AsyncIterable<T>,
   context: FirstStreamEventTimeoutContext,
 ): AsyncIterable<T> {
-  if (context.timeoutMs <= 0 || !Number.isFinite(context.timeoutMs)) {
+  const timeoutMs = clampTimerTimeoutMs(context.timeoutMs);
+  if (timeoutMs === undefined || context.timeoutMs <= 0) {
     return stream;
   }
+  const timeoutContext = { ...context, timeoutMs };
   return {
     async *[Symbol.asyncIterator]() {
       const iterator = stream[Symbol.asyncIterator]();
@@ -80,10 +84,10 @@ export function withFirstStreamEventTimeout<T>(
       try {
         const first = await new Promise<IteratorResult<T>>((resolve, reject) => {
           timer = setTimeout(() => {
-            const timeoutError = createFirstStreamEventTimeoutError(context);
-            context.abort?.(timeoutError);
+            const timeoutError = createFirstStreamEventTimeoutError(timeoutContext);
+            timeoutContext.abort?.(timeoutError);
             reject(timeoutError);
-          }, context.timeoutMs);
+          }, timeoutMs);
           timer.unref?.();
           iterator.next().then(resolve, reject);
         }).finally(clear);

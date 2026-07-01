@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import {
   createFirstStreamEventAbortController,
@@ -78,6 +79,24 @@ describe("withFirstStreamEventTimeout", () => {
 
       expect(error).toBeInstanceOf(Error);
       expect(abort).toHaveBeenCalledWith(error);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("clamps oversized first-event timeouts before scheduling", async () => {
+    vi.useFakeTimers();
+    try {
+      const stream = withFirstStreamEventTimeout(createNeverYieldingStream(), {
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+      const iterator = stream[Symbol.asyncIterator]();
+      const next = expect(iterator.next()).rejects.toThrow(
+        new RegExp(`within ${MAX_TIMER_TIMEOUT_MS}ms`),
+      );
+
+      await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
+      await next;
     } finally {
       vi.useRealTimers();
     }
