@@ -218,29 +218,31 @@ function affectedRows(result: { numAffectedRows?: bigint }): number {
   return Number(result.numAffectedRows ?? 0n);
 }
 
-function parseJson(value: string): unknown | null {
+type ParseJsonResult = { ok: true; value: unknown } | { ok: false };
+
+function parseJson(value: string): ParseJsonResult {
   try {
-    return JSON.parse(value);
+    return { ok: true, value: JSON.parse(value) };
   } catch {
-    return null;
+    return { ok: false };
   }
 }
 
 function baseRecord<TPayload, TMetadata>(
   row: ChannelIngressRow,
 ): ChannelIngressQueueRecord<TPayload, TMetadata> | null {
-  const payload = parseJson(row.payload_json);
-  if (payload === null) {
+  const payloadResult = parseJson(row.payload_json);
+  if (!payloadResult.ok) {
     return null;
   }
-  const parsedMeta = row.metadata_json === null ? null : parseJson(row.metadata_json);
+  const metaResult = row.metadata_json === null ? null : parseJson(row.metadata_json);
   return {
     id: row.event_id,
     channelId: row.channel_id,
     accountId: row.account_id,
     queueName: row.queue_name,
-    payload: payload as TPayload,
-    ...(parsedMeta === null ? {} : { metadata: parsedMeta as TMetadata }),
+    payload: payloadResult.value as TPayload,
+    ...(metaResult === null || !metaResult.ok ? {} : { metadata: metaResult.value as TMetadata }),
     receivedAt: row.received_at,
     updatedAt: row.updated_at,
     ...(row.lane_key === null ? {} : { laneKey: row.lane_key }),
@@ -270,7 +272,7 @@ function claimedRecord<TPayload, TMetadata>(
 function completedRecord<TCompletedMetadata>(
   row: ChannelIngressRow,
 ): ChannelIngressQueueCompletedRecord<TCompletedMetadata> {
-  const parsedMeta =
+  const metaResult =
     row.completed_metadata_json === null ? null : parseJson(row.completed_metadata_json);
   return {
     id: row.event_id,
@@ -278,7 +280,9 @@ function completedRecord<TCompletedMetadata>(
     accountId: row.account_id,
     queueName: row.queue_name,
     completedAt: row.completed_at ?? row.updated_at,
-    ...(parsedMeta === null ? {} : { metadata: parsedMeta as TCompletedMetadata }),
+    ...(metaResult === null || !metaResult.ok
+      ? {}
+      : { metadata: metaResult.value as TCompletedMetadata }),
   };
 }
 
@@ -557,25 +561,28 @@ export function createChannelIngressQueue<
             : orderedSelect.limit(normalizeScanLimit(claimOptions.scanLimit));
         const rows = executeSqliteQuerySync(tx.db, orderedSelect).rows;
         const selected = rows.find((row) => {
+          const rec = baseRecord<TPayload, TMetadata>(row);
+          if (rec === null) {
+            return false;
+          }
           const laneKey =
             row.lane_key ??
-            (claimOptions?.deriveLaneKey
-              ? (() => {
-                  const rec = baseRecord<TPayload, TMetadata>(row);
-                  return rec ? claimOptions.deriveLaneKey(rec) : undefined;
-                })()
-              : undefined);
+            (claimOptions?.deriveLaneKey ? claimOptions.deriveLaneKey(rec) : undefined);
           return !laneKey || !effectiveBlocked.has(laneKey);
         });
         if (!selected) {
+          return null;
+        }
+        // Validate the payload can be decoded before mutating row state.
+        const selectedBase = baseRecord<TPayload, TMetadata>(selected);
+        if (selectedBase === null) {
           return null;
         }
         const derivedLaneKey =
           selected.lane_key ??
           (claimOptions?.deriveLaneKey
             ? (() => {
-                const rec = baseRecord<TPayload, TMetadata>(selected);
-                return rec ? claimOptions.deriveLaneKey(rec) : undefined;
+                return claimOptions.deriveLaneKey(selectedBase);
               })()
             : undefined);
         const token = randomUUID();
@@ -619,6 +626,15 @@ export function createChannelIngressQueue<
     return runOpenClawStateWriteTransaction(
       (tx) => {
         const kysely = getChannelIngressKysely(tx.db);
+        // Validate the payload can be decoded before mutating row state.
+        const pendingRow = selectRow(tx.db, queueName, eventId);
+        if (
+          !pendingRow ||
+          pendingRow.status !== "pending" ||
+          baseRecord<TPayload, TMetadata>(pendingRow) === null
+        ) {
+          return null;
+        }
         const token = randomUUID();
         const claimedAt = now();
         const ownerId = normalizePart(claimOptions?.ownerId, `${process.pid}`);

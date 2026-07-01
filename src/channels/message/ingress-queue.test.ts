@@ -707,5 +707,79 @@ describe("channel ingress queue", () => {
         }
       });
     });
+
+    it("claimNext skips a corrupt pending row and claims the next valid one", async () => {
+      await withTempState(async (stateDir) => {
+        const queue = createChannelIngressQueue<{ text: string }>({
+          channelId: "test",
+          accountId: "account",
+          stateDir,
+        });
+
+        // Insert the bad row first so it sorts before the good row.
+        const earlyTime = 10;
+        insertCorruptRow(stateDir, '["test","account"]', "bad-claim", {
+          payload_json: "{corrupt",
+        });
+        // Override the bad row's received_at to be earlier.
+        {
+          const { db } = openOpenClawStateDatabase({
+            env: createStateDirEnv(stateDir),
+          });
+          db.prepare(
+            `UPDATE channel_ingress_events SET received_at = ? WHERE queue_name = ? AND event_id = ?`,
+          ).run(earlyTime, '["test","account"]', "bad-claim");
+        }
+        await queue.enqueue("good-1", { text: "hello" }, { receivedAt: earlyTime + 10 });
+
+        // claimNext with scanLimit > 1 to scan past the corrupt row.
+        const claimed = await queue.claimNext({
+          scanLimit: 5,
+          deriveLaneKey: () => undefined,
+        });
+        expect(claimed).not.toBeNull();
+        expect(claimed!.id).toBe("good-1");
+      });
+    });
+
+    it("claim returns null for a corrupt pending row", async () => {
+      await withTempState(async (stateDir) => {
+        const queue = createChannelIngressQueue<{ text: string }>({
+          channelId: "test",
+          accountId: "account",
+          stateDir,
+        });
+
+        await queue.enqueue("good-1", { text: "hello" });
+        insertCorruptRow(stateDir, '["test","account"]', "bad-direct", {
+          payload_json: "{corrupt",
+        });
+
+        // The corrupt row should not be claimable.
+        const badClaim = await queue.claim("bad-direct");
+        expect(badClaim).toBeNull();
+
+        // The good row should still be claimable.
+        const goodClaim = await queue.claim("good-1");
+        expect(goodClaim).not.toBeNull();
+        expect(goodClaim!.payload.text).toBe("hello");
+      });
+    });
+
+    it("handles valid JSON null payload correctly", async () => {
+      await withTempState(async (stateDir) => {
+        const queue = createChannelIngressQueue<null>({
+          channelId: "test",
+          accountId: "account",
+          stateDir,
+        });
+
+        // Valid JSON null should parse as null, not be treated as corrupt.
+        await queue.enqueue("null-ok", null);
+        const pending = await queue.listPending();
+        expect(pending).toHaveLength(1);
+        expect(pending[0]!.payload).toBeNull();
+      });
+    });
   });
 });
