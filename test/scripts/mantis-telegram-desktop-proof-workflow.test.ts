@@ -194,7 +194,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(workflowText).toContain("github.event.label.name == 'mantis: telegram-visible-proof'");
     expect(workflowText).toContain('eventName === "pull_request_target"');
     expect(workflowText).toContain("context.payload.pull_request?.number");
-    expect(workflowText).toContain("Accepted Mantis label trigger");
+    expect(workflowText).toContain("getCollaboratorPermissionLevel");
+    expect(workflowText).toContain('new Set(["admin", "maintain", "write"])');
+    expect(workflowText).not.toContain("Accepted Mantis label trigger");
     expect(workflowText).toContain("allow-bot-users: clawsweeper[bot]");
   });
 
