@@ -4,28 +4,16 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginToolMeta } from "../../plugins/tools.js";
 import {
-  resolveEffectiveToolPolicy,
-  resolveGroupToolPolicy,
-  resolveInheritedToolPolicyForSession,
-  resolveTrustedGroupId,
-  resolveSubagentToolPolicyForSession,
-} from "../agent-tools.policy.js";
-import { resolveSenderToolPolicy } from "../sender-tool-policy.js";
-import {
-  isSubagentEnvelopeSession,
-  resolveSubagentCapabilityStore,
-} from "../subagent-capabilities.js";
+  resolveConversationCapabilityProfile,
+  type ResolvedConversationCapabilityProfile,
+} from "../conversation-capability-profile.js";
 import { buildDeclaredToolAllowlistContext } from "../tool-policy-declared-context.js";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
   type ToolPolicyPipelineStep,
 } from "../tool-policy-pipeline.js";
-import {
-  collectExplicitDenylist,
-  mergeAlsoAllowPolicy,
-  resolveToolProfilePolicy,
-} from "../tool-policy.js";
+import { collectExplicitDenylist, mergeAlsoAllowPolicy } from "../tool-policy.js";
 import type { AnyAgentTool } from "../tools/common.js";
 
 /**
@@ -61,6 +49,8 @@ type FinalEffectiveToolPolicyParams = {
   senderName?: string | null;
   senderUsername?: string | null;
   senderE164?: string | null;
+  senderIsOwner?: boolean;
+  conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
   warn: (message: string) => void;
   toolPolicyAuditLogLevel?: "info" | "debug";
 };
@@ -71,7 +61,28 @@ export function applyFinalEffectiveToolPolicy(
   if (params.bundledTools.length === 0) {
     return params.bundledTools;
   }
-  const trustedGroup = resolveTrustedGroupId(params);
+  const capabilityProfile =
+    params.conversationCapabilityProfile ??
+    resolveConversationCapabilityProfile({
+      config: params.config,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      agentAccountId: params.agentAccountId,
+      messageProvider: params.messageProvider,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      senderIsOwner: params.senderIsOwner,
+      modelProvider: params.modelProvider,
+      modelId: params.modelId,
+      sandboxToolPolicy: params.sandboxToolPolicy,
+    });
+  const { trustedGroup } = capabilityProfile.policy;
   // Resolve here for warnings and to strip caller-only group metadata before
   // this pass; resolveGroupToolPolicy re-checks internally for all callers.
   if (trustedGroup.dropped) {
@@ -87,65 +98,19 @@ export function applyFinalEffectiveToolPolicy(
     agentProviderPolicy,
     profile,
     providerProfile,
+    profilePolicy,
+    providerProfilePolicy,
     profileAlsoAllow,
     providerProfileAlsoAllow,
-  } = resolveEffectiveToolPolicy({
-    config: params.config,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    modelProvider: params.modelProvider,
-    modelId: params.modelId,
-  });
-
-  const groupPolicy = resolveGroupToolPolicy({
-    config: params.config,
-    sessionKey: params.sessionKey,
-    spawnedBy: params.spawnedBy,
-    messageProvider: params.messageProvider,
-    groupId: trustedGroup.groupId,
-    groupChannel: trustedGroup.dropped ? null : params.groupChannel,
-    groupSpace: trustedGroup.dropped ? null : params.groupSpace,
-    accountId: params.agentAccountId,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  });
-  const senderPolicy = resolveSenderToolPolicy({
-    config: params.config,
-    agentId,
-    messageProvider: params.messageProvider,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  });
-  const profilePolicy = resolveToolProfilePolicy(profile);
-  const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
+    groupPolicy,
+    senderPolicy,
+    subagentPolicy,
+    inheritedToolPolicy,
+  } = capabilityProfile.policy;
   const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, profileAlsoAllow);
   const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
     providerProfilePolicy,
     providerProfileAlsoAllow,
-  );
-  const subagentStore = resolveSubagentCapabilityStore(params.sessionKey, {
-    cfg: params.config,
-  });
-  const subagentPolicy =
-    params.sessionKey &&
-    isSubagentEnvelopeSession(params.sessionKey, {
-      cfg: params.config,
-      store: subagentStore,
-    })
-      ? resolveSubagentToolPolicyForSession(params.config, params.sessionKey, {
-          store: subagentStore,
-        })
-      : undefined;
-  const inheritedToolPolicy = resolveInheritedToolPolicyForSession(
-    params.config,
-    params.sessionKey,
-    {
-      store: subagentStore,
-    },
   );
   // Suppress unavailable-core-tool warnings on every step of this pass.
   // `applyToolPolicyPipeline` infers `coreToolNames` from the `tools` array

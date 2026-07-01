@@ -37,8 +37,9 @@ extension AgentProTab {
             }
             .safeAreaPadding(.bottom, OpenClawProMetric.bottomScrollInset)
         }
-        .navigationTitle("Agents")
-        .navigationBarTitleDisplayMode(.inline)
+        // The roster owns its large adaptive header; a second navigation title
+        // wastes vertical space and makes the phone tab look double-stacked.
+        .toolbar(.hidden, for: .navigationBar)
     }
 
     var skillsDestination: some View {

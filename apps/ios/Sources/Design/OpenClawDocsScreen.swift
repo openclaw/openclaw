@@ -55,7 +55,8 @@ struct OpenClawDocsScreen: View {
             Button(action: gatewayAction) {
                 OpenClawGatewayCompactPill()
             }
-            .buttonStyle(.plain)
+            .buttonBorderShape(.capsule)
+            .openClawGlassButton()
             .accessibilityHint("Opens Settings / Gateway")
         } else {
             OpenClawGatewayCompactPill()

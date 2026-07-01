@@ -82,6 +82,7 @@ import {
   resolveGatewayOptions,
   type GatewayCallOptions,
 } from "./gateway.js";
+import { isPollVoteEchoText } from "./poll-vote-echo.js";
 
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
 const MESSAGE_TOOL_THREAD_READ_HINT =
@@ -171,14 +172,6 @@ type VisibleTextSuppressionReason =
   | "poll_vote_echo";
 
 const POLL_VOTE_ECHO_TTL_MS = 30_000;
-
-function normalizePollEchoText(text: string): string {
-  return text
-    .replace(/^[\p{Extended_Pictographic}️‍]+\s+/u, "")
-    .replace(/[.!?\s]+$/u, "")
-    .trim()
-    .toLowerCase();
-}
 
 function resolvePollVoteEchoRoute(params: {
   action: ChannelMessageActionName;
@@ -1399,12 +1392,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             readStringParam(params, "text") ??
             readStringParam(params, "message") ??
             readStringParam(params, "content");
-          const normalizedOption = normalizePollEchoText(vote.option);
-          if (
-            outboundText &&
-            normalizedOption &&
-            normalizePollEchoText(outboundText) === normalizedOption
-          ) {
+          if (outboundText && isPollVoteEchoText(vote.option, outboundText)) {
             return jsonResult({
               status: "suppressed",
               reason: "poll_vote_echo" satisfies VisibleTextSuppressionReason,

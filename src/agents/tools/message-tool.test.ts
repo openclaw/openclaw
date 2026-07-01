@@ -493,7 +493,7 @@ describe("message tool gateway timeout", () => {
 describe("poll vote echo guard", () => {
   const currentChat = "iMessage;-;+15550001111";
 
-  function createPollVoteTool() {
+  function createPollVoteTool(votedOption = "Blue") {
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -525,7 +525,7 @@ describe("poll vote echo guard", () => {
             payload: {},
             toolResult: {
               content: [{ type: "text", text: "vote cast" }],
-              details: { pollVotedOption: "Blue" },
+              details: { pollVotedOption: votedOption },
             },
             dryRun: false,
           } as MessageActionRunResult)
@@ -573,6 +573,37 @@ describe("poll vote echo guard", () => {
 
     expect(result.details).toMatchObject({ status: "suppressed", reason: "poll_vote_echo" });
     expect(mocks.runMessageAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("suppresses an emoji-suffixed option echoed with a leading emoji", async () => {
+    // Live regression: iMessage poll options carry a trailing emoji
+    // ("Lobster 🦞 ") while the agent echoes a leading one ("🦞 Lobster.").
+    // A leading-only emoji strip left "lobster 🦞" != "lobster" and leaked.
+    const tool = createPollVoteTool("Lobster 🦞 ");
+    await castBlueVote(tool);
+
+    const result = await tool.execute("send", {
+      action: "send",
+      channel: "imessage",
+      message: "🦞 Lobster.",
+    });
+
+    expect(result.details).toMatchObject({ status: "suppressed", reason: "poll_vote_echo" });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not suppress a different keycap option with the same words", async () => {
+    const tool = createPollVoteTool("Option 1️⃣");
+    await castBlueVote(tool);
+
+    const result = await tool.execute("send", {
+      action: "send",
+      channel: "imessage",
+      message: "2️⃣ Option.",
+    });
+
+    expect(result.details).not.toMatchObject({ status: "suppressed" });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(2);
   });
 
   it("does not cross accounts, delivery targets, or conflicting target fields", async () => {
