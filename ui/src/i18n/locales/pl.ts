@@ -1382,9 +1382,9 @@ export const pl: TranslationMap = {
       retryQueuedMessage: "Ponów wiadomość w kolejce",
     },
     pairingQrExpired: {
-      title: "Pairing QR expired",
-      reason: "Run /pair qr again to generate a fresh setup code.",
-      badge: "Expired",
+      title: "Kod QR parowania wygasł",
+      reason: "Uruchom ponownie /pair qr, aby wygenerować nowy kod konfiguracyjny.",
+      badge: "Wygasł",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",
