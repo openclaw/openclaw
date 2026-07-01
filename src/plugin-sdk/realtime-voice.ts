@@ -103,6 +103,7 @@ export {
 export {
   buildRealtimeVoiceAgentConsultChatMessage,
   buildRealtimeVoiceAgentConsultPolicyInstructions,
+  buildRealtimeVoiceAgentConsultProgressResponse,
   buildRealtimeVoiceAgentConsultPrompt,
   buildRealtimeVoiceAgentConsultWorkingResponse,
   collectRealtimeVoiceAgentConsultVisibleText,
@@ -115,8 +116,10 @@ export {
   resolveRealtimeVoiceAgentConsultTools,
   resolveRealtimeVoiceAgentConsultToolsAllow,
   type RealtimeVoiceAgentConsultArgs,
+  type RealtimeVoiceAgentConsultProgressResponseOptions,
   type RealtimeVoiceAgentConsultToolPolicy,
   type RealtimeVoiceAgentConsultTranscriptEntry,
+  type RealtimeVoiceAgentConsultWorkingResponseOptions,
 } from "../talk/agent-consult-tool.js";
 export {
   consultRealtimeVoiceAgent,

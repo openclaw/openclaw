@@ -256,6 +256,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       ],
       supportsBrowserSession: true,
       supportsBargeIn: true,
+      emitsSpeechStartedEvent: true,
       supportsToolCalls: true,
     });
   });
@@ -1654,7 +1655,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(parseSent(socket).slice(-1)).toEqual([{ type: "response.create" }]);
   });
 
-  it("does not request a realtime response for continuing tool results", async () => {
+  it("requests an interim realtime response for continuing tool results", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const bridge = provider.createBridge({
       providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
@@ -1674,7 +1675,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
 
     bridge.submitToolResult("call_1", { status: "working" }, { willContinue: true });
 
-    expect(parseSent(socket).slice(-1)).toEqual([
+    expect(parseSent(socket).slice(-2)).toEqual([
       {
         type: "conversation.item.create",
         item: {
@@ -1683,12 +1684,12 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
           output: JSON.stringify({ status: "working" }),
         },
       },
+      { type: "response.create" },
     ]);
-    expect(hasSentEventType(socket, "response.create")).toBe(false);
 
     bridge.submitToolResult("call_1", { text: "done" });
 
-    expect(parseSent(socket).slice(-2)).toEqual([
+    expect(parseSent(socket).slice(-1)).toEqual([
       {
         type: "conversation.item.create",
         item: {
@@ -1697,15 +1698,62 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
           output: JSON.stringify({ text: "done" }),
         },
       },
-      { type: "response.create" },
     ]);
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
+    );
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(2);
+  });
+
+  it("serializes repeated continuing tool responses before the final result", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    bridge.submitToolResult("call_1", { status: "working" }, { willContinue: true });
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
+    );
+    bridge.submitToolResult("call_1", { status: "progress", update: 1 }, { willContinue: true });
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
+
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(2);
+
     socket.emit(
       "message",
       Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_2" } })),
     );
+    bridge.submitToolResult("call_1", { status: "progress", update: 2 }, { willContinue: true });
     socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(3);
 
-    expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_3" } })),
+    );
+    bridge.submitToolResult("call_1", { text: "done" });
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(3);
+
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(4);
   });
 
   it("does not request a realtime response for suppressed tool results", async () => {
@@ -1741,7 +1789,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     expect(hasSentEventType(socket, "response.create")).toBe(false);
   });
 
-  it("does not flush deferred response.create while a tool result is still continuing", async () => {
+  it("retries an interim response after active-response errors while a tool result continues", async () => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const onError = vi.fn();
     const bridge = provider.createBridge({
@@ -1776,11 +1824,16 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
 
     expect(onError).not.toHaveBeenCalled();
-    expect(parseSent(socket).filter((event) => event.type === "response.create")).toEqual([]);
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(2);
+
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_2" } })),
+    );
 
     bridge.submitToolResult("call_1", { text: "done" });
 
-    expect(parseSent(socket).slice(-2)).toEqual([
+    expect(parseSent(socket).slice(-1)).toEqual([
       {
         type: "conversation.item.create",
         item: {
@@ -1789,8 +1842,9 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
           output: JSON.stringify({ text: "done" }),
         },
       },
-      { type: "response.create" },
     ]);
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+    expect(parseSent(socket).slice(-1)).toEqual([{ type: "response.create" }]);
   });
 
   it("drains deferred response.create after response.cancelled", async () => {

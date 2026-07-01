@@ -597,6 +597,7 @@ describe("normalizeVoiceCallConfig", () => {
     });
     expect(normalized.realtime.consultThinkingLevel).toBeUndefined();
     expect(normalized.realtime.consultFastMode).toBeUndefined();
+    expect(normalized.realtime.workingResponseMessage).toBeUndefined();
     expect(normalized.realtime.agentContext).toEqual({
       enabled: false,
       maxChars: 6000,
@@ -675,11 +676,13 @@ describe("resolveVoiceCallConfig realtime settings", () => {
       realtime: {
         consultThinkingLevel: "low",
         consultFastMode: true,
+        workingResponseMessage: "Alles klar, ich pruefe das kurz.",
       },
     });
 
     expect(resolved.realtime.consultThinkingLevel).toBe("low");
     expect(resolved.realtime.consultFastMode).toBe(true);
+    expect(resolved.realtime.workingResponseMessage).toBe("Alles klar, ich pruefe das kurz.");
   });
 
   it("rejects invalid realtime consult thinking levels", () => {
