@@ -1253,4 +1253,19 @@ describe("tool turn outcome annotation (#89683)", () => {
     ]);
     expect(tools.map((group) => group.turnSucceeded)).toEqual([true, false]);
   });
+
+  it("does not let a later agent-initiated turn reply collapse an earlier failed turn (#97849)", () => {
+    const tools = toolGroups([
+      failedTool(1),
+      {
+        role: "assistant",
+        content: [],
+        senderLabel: "cron-turn-1",
+        timestamp: 2,
+      },
+      failedTool(3),
+      assistantReply("Recovered on the next cron run.", 4),
+    ]);
+    expect(tools.map((group) => group.turnSucceeded)).toEqual([false, true]);
+  });
 });

@@ -370,6 +370,10 @@ function annotateToolTurnOutcome(
     } else if (role === "assistant") {
       if (assistantGroupHasReplyText(item)) {
         sawAssistantReply = true;
+      } else {
+        // Agent-initiated turns have no user boundary; an empty assistant group
+        // marks the end of a failed turn so a later turn's reply cannot leak backward.
+        sawAssistantReply = false;
       }
     } else if (role === "tool") {
       item.turnSucceeded = sawAssistantReply;
