@@ -5,6 +5,7 @@ import { formatRelativeTimestamp, parseSessionKeyParts } from "../format.ts";
 import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
+import { shortenSessionKeyForCell } from "../session-display.ts";
 import { formatGoalDetail, formatGoalSummary } from "../session-goal.ts";
 import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
@@ -825,9 +826,6 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   });
   const displayName = normalizeOptionalString(row.displayName) ?? null;
   const trimmedLabel = normalizeOptionalString(row.label) ?? "";
-  const showDisplayName = Boolean(
-    displayName && displayName !== row.key && displayName !== trimmedLabel,
-  );
   const keyParts = parseSessionKeyParts(row.key);
   const agentIdentity = keyParts
     ? getAgentIdentity(props.agentIdentityById, keyParts.agentId)
@@ -838,7 +836,14 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
     identityName && keyParts
       ? `${identityEmoji ? `${identityEmoji} ` : ""}${identityName} (${keyParts.channel})`
       : null;
-  const keyCellTitle = friendlyKeyLabel ?? row.key;
+  // Hover: show raw key only for fallback rows (no identity), identity rows keep visible label
+  const hoverTitle = friendlyKeyLabel ?? row.key;
+  // Cell: use friendlyKeyLabel or shortened fallback (not resolveSessionDisplayName to avoid promoting displayName)
+  const keyCellTitle = friendlyKeyLabel ?? shortenSessionKeyForCell(row.key);
+  // Restore original showDisplayName logic - displayName is always secondary, never main cell
+  const showDisplayName = Boolean(
+    displayName && displayName !== row.key && displayName !== trimmedLabel,
+  );
   const canLink = row.kind !== "global";
   const captured = props.workboardSessionKeys?.has(row.key) === true;
   const captureBusy = props.workboardBusySessionKey === row.key;
@@ -901,7 +906,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       <td class="data-table-key-col">
         <div
           class=${friendlyKeyLabel ? "session-key-cell" : "mono session-key-cell"}
-          title=${keyCellTitle}
+          title=${hoverTitle}
         >
           ${canLink
             ? html`<a
@@ -923,9 +928,9 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                     props.onNavigateToChat(row.key);
                   }
                 }}
-                >${friendlyKeyLabel ?? row.key}</a
+                >${keyCellTitle}</a
               >`
-            : (friendlyKeyLabel ?? row.key)}
+            : keyCellTitle}
           ${showDisplayName
             ? html`<span class="muted session-key-display-name">${displayName}</span>`
             : nothing}
@@ -1081,7 +1086,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                     <div class="session-details-panel__eyebrow">
                       ${t("sessionsView.sessionDetails")}
                     </div>
-                    <div class="session-details-panel__title">${friendlyKeyLabel ?? row.key}</div>
+                    <div class="session-details-panel__title">${keyCellTitle}</div>
                     ${showDisplayName
                       ? html`
                           <div class="muted session-details-panel__subtitle">${displayName}</div>

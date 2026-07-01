@@ -29,6 +29,26 @@ function capitalize(s: string): string {
 }
 
 /**
+ * Shorten long direct-chat identifiers for compact cell display.
+ * Only affects the Sessions table key cell — parseSessionKey stays canonical.
+ * Short IDs (<=20 chars) are returned unchanged.
+ */
+export function shortenSessionKeyForCell(key: string): string {
+  const directMatch = key.match(/^agent:[^:]+:([^:]+):direct:(.+)$/);
+  if (!directMatch) {
+    // Non-direct keys: defer to parseSessionKey for typed prefix + fallback.
+    const { prefix, fallbackName } = parseSessionKey(key);
+    return prefix ? `${prefix} ${fallbackName}`.trim() : fallbackName;
+  }
+  const channel = directMatch[1];
+  const identifier = directMatch[2];
+  const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
+  const shortId =
+    identifier.length <= 20 ? identifier : `${identifier.slice(0, 6)}...${identifier.slice(-4)}`;
+  return `${channelLabel} · ${shortId}`;
+}
+
+/**
  * Parse a session key to extract type information and a human-readable
  * fallback display name. Exported for testing.
  */
