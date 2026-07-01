@@ -1,5 +1,6 @@
 // Commander registration for gateway status, health, diagnostics, discovery, and run commands.
 import type { Command } from "commander";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { HealthSummary } from "../../commands/health.js";
@@ -16,10 +17,16 @@ import type {
 import type { WriteDiagnosticSupportExportResult } from "../../logging/diagnostic-support-export.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { parseNodeList } from "../../shared/node-list-parse.js";
+import type { NodeListNode } from "../../shared/node-list-types.js";
+import { formatCliCommand } from "../command-format.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
 import { parseGatewayPortOption } from "../gateway-port-option.js";
 import { formatHelpExamples } from "../help-format.js";
+import { formatConnectionFlagReminder } from "../nodes-cli/cli-utils.js";
+import { callNodeDiagnosticsGatewayCli } from "../nodes-cli/rpc.js";
+import { quoteCliArg } from "../quote-cli-arg.js";
 import type { GatewayRpcOpts } from "./call.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
 import { addGatewayRunCommand } from "./run-command.js";
@@ -48,6 +55,7 @@ const supportExportModuleLoader = createLazyImportLoader(
 const daemonStatusGatherModuleLoader = createLazyImportLoader(
   () => import("../daemon-cli/status.gather.js"),
 );
+const DEFAULT_GATEWAY_RPC_TIMEOUT_MS = 10_000;
 
 function loadConfigModule() {
   return configModuleLoader.load();
@@ -241,6 +249,36 @@ function formatBytes(value: number | undefined): string {
   }
   const digits = unitIndex === 0 || amount >= 100 ? 0 : 1;
   return `${amount.toFixed(digits)} ${units[unitIndex]}`;
+}
+
+function normalizeNonEmptyString(raw: unknown): string | null {
+  return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null;
+}
+
+function isPendingNodeApproval(node: NodeListNode): boolean {
+  return (
+    (node.approvalState === "pending-approval" || node.approvalState === "pending-reapproval") &&
+    normalizeNonEmptyString(node.pendingRequestId) !== null
+  );
+}
+
+function formatNodeApprovalCommand(requestId: string, opts: GatewayRpcOpts): string {
+  const args = ["openclaw", "nodes", "approve", requestId];
+  const timeout = normalizeNonEmptyString(opts.timeout);
+  if (timeout && timeout !== String(DEFAULT_GATEWAY_RPC_TIMEOUT_MS)) {
+    args.push("--timeout", timeout);
+  }
+  return formatCliCommand(args.map(quoteCliArg).join(" "));
+}
+
+function renderPendingNodeApprovalDiagnostic(node: NodeListNode, opts: GatewayRpcOpts): string {
+  const requestId = normalizeNonEmptyString(node.pendingRequestId);
+  const label = sanitizeForLog(normalizeNonEmptyString(node.displayName) ?? node.nodeId);
+  const action = node.approvalState === "pending-reapproval" ? "reapproval" : "approval";
+  const command = requestId ? formatNodeApprovalCommand(requestId, opts) : null;
+  return command
+    ? `Node ${action} pending for ${label} (${sanitizeForLog(requestId)}). Run ${sanitizeForLog(command)}`
+    : `Node ${action} pending for ${label}.`;
 }
 
 function formatStabilityEvent(record: DiagnosticStabilityEventRecord): string {
@@ -764,6 +802,58 @@ export function registerGatewayCli(program: Command) {
         });
       }, "Gateway diagnostics export failed");
     });
+  gatewayCallOpts(
+    diagnostics
+      .command("node-approvals")
+      .description("Show pending node approval request IDs and approve commands")
+      .action(async (opts, command) => {
+        await runGatewayCommand(
+          async () => {
+            const rpcOpts = resolveGatewayRpcOptions(opts, command);
+            const pending = parseNodeList(
+              await callNodeDiagnosticsGatewayCli(
+                "node.list",
+                rpcOpts,
+                {},
+                {
+                  requirePairingScope: true,
+                },
+              ),
+            ).filter(isPendingNodeApproval);
+            const connectionReminder = formatConnectionFlagReminder(rpcOpts);
+            if (rpcOpts.json) {
+              defaultRuntime.writeJson({
+                pending: pending.map((node) => {
+                  const requestId = normalizeNonEmptyString(node.pendingRequestId) ?? "";
+                  return {
+                    nodeId: node.nodeId,
+                    displayName: node.displayName,
+                    approvalState: node.approvalState,
+                    requestId,
+                    approveCommand: formatNodeApprovalCommand(requestId, rpcOpts),
+                    ...(connectionReminder ? { connectionReminder } : {}),
+                  };
+                }),
+              });
+              return;
+            }
+            if (pending.length === 0) {
+              defaultRuntime.log(theme.muted("No pending node approvals."));
+              return;
+            }
+            defaultRuntime.log(theme.heading("Pending Node Approvals"));
+            for (const node of pending) {
+              defaultRuntime.log(theme.warn(renderPendingNodeApprovalDiagnostic(node, rpcOpts)));
+            }
+            if (connectionReminder) {
+              defaultRuntime.log(theme.warn(connectionReminder));
+            }
+          },
+          "Gateway node approval diagnostics failed",
+          { json: Boolean(opts.json) },
+        );
+      }),
+  );
 
   gateway
     .command("probe")

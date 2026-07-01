@@ -79,6 +79,7 @@ export const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =
   cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
     .option("--token <token>", "Gateway token (if required)")
+    .option("--password <password>", "Gateway password (password auth)")
     .option("--timeout <ms>", "Timeout in ms", String(defaults?.timeoutMs ?? 10_000))
     .option("--json", "Output JSON", false);
 
@@ -104,7 +105,11 @@ export const callNodeDiagnosticsGatewayCli = async (
   method: "node.list" | "node.describe",
   opts: NodesRpcOpts,
   params?: unknown,
+  callOpts?: { requirePairingScope?: boolean },
 ) => {
+  const fallbackScopes: OperatorScope[] | undefined = callOpts?.requirePairingScope
+    ? ["operator.read", "operator.pairing"]
+    : undefined;
   try {
     return await callGatewayCli(method, opts, params, {
       useStoredDeviceAuth: true,
@@ -125,7 +130,7 @@ export const callNodeDiagnosticsGatewayCli = async (
       throw error;
     }
   }
-  return await callGatewayCli(method, opts, params);
+  return await callGatewayCli(method, opts, params, { scopes: fallbackScopes });
 };
 
 /** Call pairing approval methods with explicit operator scopes. */

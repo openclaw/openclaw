@@ -39,6 +39,7 @@ export async function callGatewayCliRuntime(
       await callGateway({
         url: opts.url,
         token: opts.token,
+        password: opts.password,
         method,
         params,
         scopes: callOpts?.scopes,
@@ -77,6 +78,7 @@ export async function callNodePairApprovalGatewayCliRuntime(
       await callGateway({
         url: opts.url,
         token: opts.token,
+        password: opts.password,
         method,
         params,
         timeoutMs: resolveNodesTransportTimeoutMs(opts, callOpts.transportTimeoutMs),

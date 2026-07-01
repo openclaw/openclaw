@@ -25,6 +25,7 @@ export function formatConnectionFlagReminder(opts: NodesRpcOpts): string | null 
   const flags = [
     normalizeOptionalString(opts.url) ? "--url" : null,
     normalizeOptionalString(opts.token) ? "--token" : null,
+    normalizeOptionalString(opts.password) ? "--password" : null,
   ].filter((flag) => flag !== null);
   return flags.length > 0
     ? `Reuse the same connection option${flags.length === 1 ? "" : "s"} when rerunning: ${flags.join(", ")}.`

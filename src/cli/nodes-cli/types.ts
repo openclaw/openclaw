@@ -3,6 +3,7 @@
 export type NodesRpcOpts = {
   url?: string;
   token?: string;
+  password?: string;
   timeout?: string;
   json?: boolean;
   node?: string;

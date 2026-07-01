@@ -12,7 +12,7 @@ type DiscoveredBeacon = Awaited<
   ReturnType<typeof import("../infra/bonjour-discovery.js").discoverGatewayBeacons>
 >[number];
 
-const callGateway = vi.fn<(opts: unknown) => Promise<{ ok: true }>>(async () => ({ ok: true }));
+const callGateway = vi.fn<(opts: unknown) => Promise<unknown>>(async () => ({ ok: true }));
 const formatGatewayClientRequestErrorJson = vi.fn();
 const formatGatewayTransportErrorJson = vi.fn();
 const startGatewayServer = vi.fn<
@@ -33,6 +33,9 @@ const discoverGatewayBeacons = vi.fn<(opts: unknown) => Promise<DiscoveredBeacon
   async () => [],
 );
 const gatewayStatusCommand = vi.fn<(opts: unknown) => Promise<void>>(async () => {});
+const callNodeDiagnosticsGatewayCli = vi.fn<
+  (method: string, opts: unknown, params?: unknown, callOpts?: unknown) => Promise<unknown>
+>(async () => ({ nodes: [] }));
 const inspectPortUsage = vi.fn(async (_port: number) => ({ status: "free" as const }));
 const formatPortDiagnostics = vi.fn((_diagnostics: unknown) => [] as string[]);
 
@@ -116,6 +119,15 @@ vi.mock("../commands/gateway-status.js", () => ({
   gatewayStatusCommand: (opts: unknown) => gatewayStatusCommand(opts),
 }));
 
+vi.mock("./nodes-cli/rpc.js", () => ({
+  callNodeDiagnosticsGatewayCli: (
+    method: string,
+    opts: unknown,
+    params?: unknown,
+    callOpts?: unknown,
+  ) => callNodeDiagnosticsGatewayCli(method, opts, params, callOpts),
+}));
+
 vi.mock("../infra/ports.js", () => ({
   inspectPortUsage: (port: number) => inspectPortUsage(port),
   formatPortDiagnostics: (diagnostics: unknown) => formatPortDiagnostics(diagnostics),
@@ -157,6 +169,8 @@ describe("gateway-cli coverage", () => {
     defaultRuntime.writeJson.mockClear();
     defaultRuntime.exit.mockClear();
     startGatewayServer.mockClear();
+    callNodeDiagnosticsGatewayCli.mockClear();
+    callNodeDiagnosticsGatewayCli.mockResolvedValue({ nodes: [] });
     inspectPortUsage.mockClear();
     formatPortDiagnostics.mockClear();
     formatGatewayClientRequestErrorJson.mockReset();
@@ -453,6 +467,113 @@ describe("gateway-cli coverage", () => {
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("prints pending node approval ids and exact approve commands", async () => {
+    callGateway.mockClear();
+    callNodeDiagnosticsGatewayCli.mockResolvedValueOnce({
+      nodes: [
+        {
+          nodeId: "android-node",
+          displayName: "Colin's S25",
+          approvalState: "pending-reapproval",
+          pendingRequestId: "node-req-1",
+        },
+        {
+          nodeId: "approved-node",
+          displayName: "Already Approved",
+          approvalState: "approved",
+        },
+      ],
+    });
+
+    await runGatewayCommand([
+      "gateway",
+      "diagnostics",
+      "node-approvals",
+      "--url",
+      "ws://gateway-user:url-secret@gateway.example:18789/openclaw?cluster=qa",
+      "--token",
+      "secret-token",
+      "--password",
+      "node-approval-password",
+    ]);
+
+    expect(callNodeDiagnosticsGatewayCli).toHaveBeenCalledTimes(1);
+    expect(callNodeDiagnosticsGatewayCli).toHaveBeenCalledWith(
+      "node.list",
+      expect.objectContaining({ json: false, password: "node-approval-password" }),
+      {},
+      { requirePairingScope: true },
+    );
+    expect(callGateway).not.toHaveBeenCalled();
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain("Pending Node Approvals");
+    expect(output).toContain("Node reapproval pending for Colin's S25 (node-req-1)");
+    expect(output).toContain("openclaw nodes approve node-req-1");
+    expect(output).toContain(
+      "Reuse the same connection options when rerunning: --url, --token, --password.",
+    );
+    expect(output).not.toContain("approved-node");
+    expect(output).not.toContain("gateway-user");
+    expect(output).not.toContain("url-secret");
+    expect(output).not.toContain("gateway.example");
+    expect(output).not.toContain("secret-token");
+    expect(output).not.toContain("node-approval-password");
+  });
+
+  it("writes pending node approval diagnostics as JSON", async () => {
+    callGateway.mockClear();
+    callNodeDiagnosticsGatewayCli.mockResolvedValueOnce({
+      nodes: [
+        {
+          nodeId: "android-node",
+          displayName: "Colin's S25",
+          approvalState: "pending-approval",
+          pendingRequestId: "node req 1",
+        },
+      ],
+    });
+
+    await runGatewayCommand([
+      "gateway",
+      "diagnostics",
+      "node-approvals",
+      "--url",
+      "ws://gateway.example.test/openclaw",
+      "--timeout",
+      "3000",
+      "--json",
+    ]);
+
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({
+      pending: [
+        {
+          nodeId: "android-node",
+          displayName: "Colin's S25",
+          approvalState: "pending-approval",
+          requestId: "node req 1",
+          approveCommand: "openclaw nodes approve 'node req 1' --timeout 3000",
+          connectionReminder: "Reuse the same connection option when rerunning: --url.",
+        },
+      ],
+    });
+  });
+
+  it("prints an empty pending node approval diagnostic", async () => {
+    callGateway.mockClear();
+    callNodeDiagnosticsGatewayCli.mockResolvedValueOnce({
+      nodes: [
+        {
+          nodeId: "android-node",
+          approvalState: "pending-reapproval",
+        },
+      ],
+    });
+
+    await runGatewayCommand(["gateway", "diagnostics", "node-approvals"]);
+
+    expect(runtimeLogs.join("\n")).toContain("No pending node approvals.");
   });
 
   it.each([
