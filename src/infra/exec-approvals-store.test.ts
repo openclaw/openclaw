@@ -339,6 +339,30 @@ describe("exec approvals store helpers", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "accepts a symlinked state directory whose target is a real directory",
+    () => {
+      // Deployments commonly mount the state dir via a top-level symlink
+      // (e.g. `/opt/openclaw` -> `/mnt/efs/openclaw` for EFS-backed hosts).
+      // When HOME and STATE_DIR coincide at the symlink, the
+      // `assertNoExecApprovalsSymlinkParents` walk sees zero segments
+      // (target == root) and does not check the terminal symlink.
+      // `ensureDir` must therefore resolve the symlink (statSync) instead of
+      // rejecting any terminal symlink outright.
+      const tmpRoot = makeTempDir();
+      tempDirs.push(tmpRoot);
+      const realRoot = path.join(tmpRoot, "real");
+      fs.mkdirSync(realRoot, { recursive: true });
+      const linkedRoot = path.join(tmpRoot, "linked");
+      fs.symlinkSync(realRoot, linkedRoot);
+      setTestEnvValue("OPENCLAW_HOME", linkedRoot);
+      setTestEnvValue("OPENCLAW_STATE_DIR", linkedRoot);
+
+      expect(() => ensureExecApprovals()).not.toThrow();
+      expect(fs.existsSync(path.join(realRoot, "exec-approvals.json"))).toBe(true);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "rejects symlinked approvals files before resolving the default no-prompt policy",
     () => {
       const dir = createHomeDir();
