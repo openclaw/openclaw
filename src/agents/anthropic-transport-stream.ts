@@ -22,6 +22,7 @@ import type {
   AssistantMessageDiagnostic,
   Context,
   Model,
+  ModelThinkingLevel,
   SimpleStreamOptions,
   ThinkingLevel,
 } from "../llm/types.js";
@@ -37,6 +38,7 @@ import {
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
   usesClaudeFable5MessagesContract,
+  usesClaudeSonnet5MessagesContract,
 } from "../shared/anthropic-model-contract.js";
 import { applyAnthropicRefusal } from "../shared/anthropic-refusal.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
@@ -102,8 +104,11 @@ type AnthropicTransportModel = Model<"anthropic-messages"> & {
   provider: string;
 };
 
+type AnthropicReasoningLevel = ModelThinkingLevel | "adaptive";
 type AnthropicTransportOptions = AnthropicOptions &
-  Pick<SimpleStreamOptions, "reasoning" | "thinkingBudgets" | "stop">;
+  Omit<Pick<SimpleStreamOptions, "reasoning" | "thinkingBudgets" | "stop">, "reasoning"> & {
+    reasoning?: AnthropicReasoningLevel;
+  };
 type AnthropicAdaptiveEffort = NonNullable<AnthropicOptions["effort"]> | "xhigh";
 type AnthropicMessagesClient = {
   messages: {
@@ -166,9 +171,11 @@ const EMPTY_ANTHROPIC_MESSAGES_FALLBACK_TEXT = ".";
 function normalizeAnthropicToolChoice(
   model: AnthropicTransportModel,
   toolChoice: NonNullable<AnthropicTransportOptions["toolChoice"]>,
+  thinkingEnabled: boolean | undefined,
 ): AnthropicProjectedToolChoice {
   if (
     requiresClaudeAdaptiveThinking(model) &&
+    !(usesClaudeSonnet5MessagesContract(model) && thinkingEnabled !== true) &&
     (toolChoice === "any" || (typeof toolChoice === "object" && toolChoice.type === "tool"))
   ) {
     return { type: "auto" as const };
@@ -185,9 +192,12 @@ function supportsAdaptiveThinking(model: AnthropicTransportModel): boolean {
 }
 
 function mapThinkingLevelToEffort(
-  level: ThinkingLevel | "off",
+  level: AnthropicReasoningLevel,
   model: AnthropicTransportModel,
-): AnthropicAdaptiveEffort {
+): AnthropicAdaptiveEffort | undefined {
+  if (level === "adaptive") {
+    return undefined;
+  }
   const thinkingLevelMap = resolveClaudeNativeThinkingLevelMap(model);
   const clampModel = {
     ...model,
@@ -217,6 +227,19 @@ function mapThinkingLevelToEffort(
 
 function clampReasoningLevel(level: ThinkingLevel): "minimal" | "low" | "medium" | "high" {
   return level === "xhigh" || level === "max" ? "high" : level;
+}
+
+function applyClaudeSonnet5RequestMigration(
+  params: Record<string, unknown>,
+  model: AnthropicTransportModel,
+): void {
+  if (!usesClaudeSonnet5MessagesContract(model)) {
+    return;
+  }
+  delete params.temperature;
+  delete params.top_p;
+  delete params.top_k;
+  delete params.service_tier;
 }
 
 function resolvePositiveAnthropicMaxTokens(value: unknown): number | undefined {
@@ -1030,7 +1053,11 @@ function buildAnthropicParams(
     params.metadata = { user_id: options.metadata.user_id };
   }
   if (options?.toolChoice) {
-    const normalizedToolChoice = normalizeAnthropicToolChoice(model, options.toolChoice);
+    const normalizedToolChoice = normalizeAnthropicToolChoice(
+      model,
+      options.toolChoice,
+      options.thinkingEnabled,
+    );
     const projectedToolChoice = toolProjection
       ? reconcileAnthropicToolChoice(normalizedToolChoice, toolProjection)
       : normalizedToolChoice;
@@ -1039,6 +1066,7 @@ function buildAnthropicParams(
     }
   }
   applyAnthropicPayloadPolicyToParams(params, payloadPolicy);
+  applyClaudeSonnet5RequestMigration(params, model);
   return { params, toolProjection };
 }
 
@@ -1077,22 +1105,29 @@ function resolveAnthropicTransportOptions(
   };
   if (!options?.reasoning) {
     resolved.thinkingEnabled = requiresClaudeAdaptiveThinking(model);
-    if (resolved.thinkingEnabled) {
+    if (resolved.thinkingEnabled && !usesClaudeSonnet5MessagesContract(model)) {
       resolved.effort = "high";
     }
     return resolved;
   }
-  if (supportsAdaptiveThinking(model)) {
-    resolved.thinkingEnabled = true;
-    resolved.effort = mapThinkingLevelToEffort(options.reasoning, model) as NonNullable<
-      AnthropicOptions["effort"]
-    >;
+  if (
+    options.reasoning === "off" &&
+    (!requiresClaudeAdaptiveThinking(model) || usesClaudeSonnet5MessagesContract(model))
+  ) {
+    resolved.thinkingEnabled = false;
     return resolved;
   }
+  if (supportsAdaptiveThinking(model)) {
+    resolved.thinkingEnabled = true;
+    resolved.effort = mapThinkingLevelToEffort(options.reasoning, model);
+    return resolved;
+  }
+  const tokenReasoningLevel: ThinkingLevel =
+    options.reasoning === "adaptive" || options.reasoning === "off" ? "high" : options.reasoning;
   const adjusted = adjustMaxTokensForThinking({
     baseMaxTokens,
     modelMaxTokens: reasoningModelMaxTokens,
-    reasoningLevel: options.reasoning,
+    reasoningLevel: tokenReasoningLevel,
     customBudgets: options.thinkingBudgets,
   });
   resolved.maxTokens = adjusted.maxTokens;
@@ -1145,6 +1180,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         if (nextParams !== undefined) {
           params = nextParams as Record<string, unknown>;
         }
+        applyClaudeSonnet5RequestMigration(params, model);
         const anthropicStream = client.messages.stream(
           { ...params, stream: true },
           transportOptions.signal ? { signal: transportOptions.signal } : undefined,

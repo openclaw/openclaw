@@ -30,6 +30,7 @@ import {
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
   usesClaudeFable5MessagesContract,
+  usesClaudeSonnet5MessagesContract,
 } from "../../shared/anthropic-model-contract.js";
 import { applyAnthropicRefusal } from "../../shared/anthropic-refusal.js";
 import { createDeferredEventBuffer } from "../../shared/deferred-event-buffer.js";
@@ -203,6 +204,7 @@ function convertContentBlocks(content: readonly unknown[]):
 export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export type AnthropicThinkingDisplay = "summarized" | "omitted";
+type AnthropicReasoningLevel = SimpleStreamOptions["reasoning"] | "adaptive" | "off";
 
 const FINE_GRAINED_TOOL_STREAMING_BETA = "fine-grained-tool-streaming-2025-05-14";
 const INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14";
@@ -547,6 +549,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
       if (nextParams !== undefined) {
         params = nextParams as MessageCreateParamsStreaming;
       }
+      applyClaudeSonnet5RequestMigration(params, model);
       const requestOptions = {
         ...(options?.signal ? { signal: options.signal } : {}),
         ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
@@ -796,9 +799,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 function normalizeAnthropicToolChoice(
   model: Model<"anthropic-messages">,
   toolChoice: NonNullable<AnthropicOptions["toolChoice"]>,
+  thinkingEnabled: boolean | undefined,
 ): AnthropicProjectedToolChoice {
   if (
     requiresClaudeAdaptiveThinking(model) &&
+    !(usesClaudeSonnet5MessagesContract(model) && thinkingEnabled !== true) &&
     (toolChoice === "any" || (typeof toolChoice === "object" && toolChoice.type === "tool"))
   ) {
     return { type: "auto" as const };
@@ -817,14 +822,31 @@ function supportsNativeXhighEffort(model: Model<"anthropic-messages">): boolean 
   return supportsClaudeNativeXhighEffort(model);
 }
 
+function applyClaudeSonnet5RequestMigration(
+  params: MessageCreateParamsStreaming,
+  model: Model<"anthropic-messages">,
+): void {
+  if (!usesClaudeSonnet5MessagesContract(model)) {
+    return;
+  }
+  const mutableParams = params as unknown as Record<string, unknown>;
+  delete params.temperature;
+  delete mutableParams.top_p;
+  delete mutableParams.top_k;
+  delete mutableParams.service_tier;
+}
+
 /**
  * Map ThinkingLevel to Anthropic effort levels for adaptive thinking.
  * Model metadata owns the provider-specific extended effort mapping.
  */
 function mapThinkingLevelToEffort(
   model: Model<"anthropic-messages">,
-  level: SimpleStreamOptions["reasoning"],
-): AnthropicEffort {
+  level: AnthropicReasoningLevel,
+): AnthropicEffort | undefined {
+  if (level === "adaptive") {
+    return undefined;
+  }
   const requestedLevel = level as ModelThinkingLevel | undefined;
   const hasCanonicalAlias = typeof model.params?.canonicalModelId === "string";
   const thinkingLevelMap = resolveClaudeNativeThinkingLevelMap(model);
@@ -870,19 +892,31 @@ export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleS
   }
 
   const base = buildBaseOptions(model, options, apiKey);
-  if (!options?.reasoning) {
+  const requestedReasoning = options?.reasoning as AnthropicReasoningLevel | undefined;
+  if (!requestedReasoning) {
     const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
     return streamAnthropic(model, context, {
       ...base,
       thinkingEnabled: mandatoryAdaptiveThinking,
-      ...(mandatoryAdaptiveThinking ? { effort: "high" as const } : {}),
+      ...(mandatoryAdaptiveThinking && !usesClaudeSonnet5MessagesContract(model)
+        ? { effort: "high" as const }
+        : {}),
+    } satisfies AnthropicOptions);
+  }
+  if (
+    requestedReasoning === "off" &&
+    (!requiresClaudeAdaptiveThinking(model) || usesClaudeSonnet5MessagesContract(model))
+  ) {
+    return streamAnthropic(model, context, {
+      ...base,
+      thinkingEnabled: false,
     } satisfies AnthropicOptions);
   }
 
   // For Opus 4.6 and Sonnet 4.6: use adaptive thinking with effort level
   // For older models: use budget-based thinking
   if (supportsAdaptiveThinking(model)) {
-    const effort = mapThinkingLevelToEffort(model, options.reasoning);
+    const effort = mapThinkingLevelToEffort(model, requestedReasoning);
     return streamAnthropic(model, context, {
       ...base,
       thinkingEnabled: true,
@@ -892,11 +926,13 @@ export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleS
 
   // Undefined means the caller did not request an output cap; let the helper use the model cap.
   // Do not coerce to 0 here, or the thinking budget would become the entire max_tokens value.
+  const tokenReasoningLevel: SimpleStreamOptions["reasoning"] =
+    requestedReasoning === "off" || requestedReasoning === "adaptive" ? "high" : requestedReasoning;
   const adjusted = adjustMaxTokensForThinking(
     base.maxTokens,
     model.maxTokens,
-    options.reasoning,
-    options.thinkingBudgets,
+    tokenReasoningLevel,
+    options?.thinkingBudgets,
   );
 
   return streamAnthropic(model, context, {
@@ -1151,7 +1187,11 @@ function buildParams(
   }
 
   if (options?.toolChoice) {
-    const normalizedToolChoice = normalizeAnthropicToolChoice(model, options.toolChoice);
+    const normalizedToolChoice = normalizeAnthropicToolChoice(
+      model,
+      options.toolChoice,
+      options?.thinkingEnabled,
+    );
     const projectedToolChoice = toolProjection
       ? reconcileAnthropicToolChoice(normalizedToolChoice, toolProjection)
       : normalizedToolChoice;
@@ -1160,6 +1200,7 @@ function buildParams(
     }
   }
 
+  applyClaudeSonnet5RequestMigration(params, model);
   return { params, toolProjection };
 }
 
