@@ -237,6 +237,43 @@ describe("handleCommands /mcp", () => {
     });
   });
 
+  it("computes staleness against the runtime's own workspaceDir, not the command's raw workspaceDir", async () => {
+    await withTempHome("openclaw-command-mcp-home-", async () => {
+      const commandWorkspaceDir = await workspaceHarness.createWorkspace();
+      const runtimeWorkspaceDir = await workspaceHarness.createWorkspace();
+      mcpServers.set("context7", { command: "uvx", args: ["context7-mcp"] });
+      const catalog = makeCatalog({
+        servers: { context7: { serverName: "context7", launchSummary: "uvx", toolCount: 3 } },
+      });
+      // Simulates a sandboxed session: the runtime was built from a different
+      // effective workspace than the raw command workspaceDir threaded
+      // through get-reply.ts. Regression guard for the sandbox-fingerprint
+      // fix — staleness must compare against runtime.workspaceDir.
+      mcpRuntimeMocks.peekSessionMcpRuntime.mockReturnValue({
+        configFingerprint: "mcp:1",
+        workspaceDir: runtimeWorkspaceDir,
+        peekCatalog: () => catalog,
+      });
+      mcpRuntimeMocks.resolveSessionMcpConfigSummary.mockReturnValue({
+        fingerprint: "mcp:1",
+        serverNames: ["context7"],
+      });
+
+      const showParams = buildCommandTestParams("/mcp show", buildCfg(), undefined, {
+        workspaceDir: commandWorkspaceDir,
+      });
+      showParams.command.senderIsOwner = true;
+      const result = expectMcpResult(await handleMcpCommand(showParams, true));
+      expect(mcpRuntimeMocks.resolveSessionMcpConfigSummary).toHaveBeenCalledWith(
+        expect.objectContaining({ workspaceDir: runtimeWorkspaceDir }),
+      );
+      expect(mcpRuntimeMocks.resolveSessionMcpConfigSummary).not.toHaveBeenCalledWith(
+        expect.objectContaining({ workspaceDir: commandWorkspaceDir }),
+      );
+      expect(result.reply?.text).toContain("context7: ✅ connected (3 tools)");
+    });
+  });
+
   it("shows a not-yet-discovered note when the session runtime has no catalog yet", async () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
       const workspaceDir = await workspaceHarness.createWorkspace();
