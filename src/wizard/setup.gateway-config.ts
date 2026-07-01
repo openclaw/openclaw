@@ -1,5 +1,6 @@
 // Setup gateway config helpers build gateway config from onboarding answers.
 import { validateIPv4AddressInput } from "@openclaw/net-policy/ipv4";
+import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion";
 import { formatPortRangeHint } from "../cli/error-format.js";
 import {
   normalizeGatewayTokenInput,
@@ -62,11 +63,15 @@ function normalizeWizardTextInput(value: unknown): string {
 }
 
 function validateGatewayPortInput(value: unknown): string | undefined {
-  const port = Number(normalizeWizardTextInput(value));
-  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+  if (parseGatewayPortInput(value) === undefined) {
     return formatPortRangeHint();
   }
   return undefined;
+}
+
+function parseGatewayPortInput(value: unknown): number | undefined {
+  const port = parseStrictInteger(normalizeWizardTextInput(value));
+  return port !== undefined && port >= 1 && port <= 65_535 ? port : undefined;
 }
 
 export async function configureGatewayForSetup(
@@ -78,16 +83,16 @@ export async function configureGatewayForSetup(
   const port =
     flow === "quickstart"
       ? quickstartGateway.port
-      : Number.parseInt(
-          normalizeWizardTextInput(
-            await prompter.text({
-              message: t("wizard.gateway.port"),
-              initialValue: String(localPort),
-              validate: validateGatewayPortInput,
-            }),
-          ),
-          10,
+      : parseGatewayPortInput(
+          await prompter.text({
+            message: t("wizard.gateway.port"),
+            initialValue: String(localPort),
+            validate: validateGatewayPortInput,
+          }),
         );
+  if (port === undefined) {
+    throw new Error(formatPortRangeHint());
+  }
 
   let bind: GatewayWizardSettings["bind"] =
     flow === "quickstart"
