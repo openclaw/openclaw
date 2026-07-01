@@ -8,7 +8,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveAgentConfig, resolveSessionAgentIds } from "./agent-scope.js";
+import { resolveAgentConfig, resolveAgentDir, resolveSessionAgentIds } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import type { BootstrapContextRunKind } from "./bootstrap-mode.js";
@@ -331,11 +331,87 @@ export async function resolveBootstrapFilesForRun(params: {
     workspaceSetupCompleted,
     params.workspaceDir,
   );
+
+  // Check for bootstrap files in agentDir and warn if they won't be loaded
+  if (params.config && params.agentId && params.warn) {
+    const agentDir = resolveAgentDir(params.config, params.agentId);
+    if (agentDir) {
+      await checkAgentDirBootstrapFiles({
+        agentDir,
+        workspaceDir: params.workspaceDir,
+        warn: params.warn,
+      });
+    }
+  }
+
   return sanitizeBootstrapFiles(
     filterHeartbeatBootstrapFile(filteredUpdated, excludeHeartbeatBootstrapFile),
     params.workspaceDir,
     params.warn,
   );
+}
+
+/** Checks for bootstrap-named files in agentDir and warns if they exist but won't be loaded. */
+async function checkAgentDirBootstrapFiles(params: {
+  agentDir: string;
+  workspaceDir: string;
+  warn?: (message: string) => void;
+}): Promise<void> {
+  if (!params.warn) {
+    return;
+  }
+
+  const {
+    DEFAULT_AGENTS_FILENAME,
+    DEFAULT_SOUL_FILENAME,
+    DEFAULT_TOOLS_FILENAME,
+    DEFAULT_IDENTITY_FILENAME,
+    DEFAULT_USER_FILENAME,
+    DEFAULT_MEMORY_FILENAME,
+  } = await import("./workspace.js");
+
+  const bootstrapFilenames = [
+    DEFAULT_AGENTS_FILENAME,
+    DEFAULT_SOUL_FILENAME,
+    DEFAULT_TOOLS_FILENAME,
+    DEFAULT_IDENTITY_FILENAME,
+    DEFAULT_USER_FILENAME,
+    DEFAULT_HEARTBEAT_FILENAME,
+    DEFAULT_BOOTSTRAP_FILENAME,
+    DEFAULT_MEMORY_FILENAME,
+  ];
+
+  const agentDirResolved = resolveUserPath(params.agentDir);
+  const workspaceDirResolved = resolveUserPath(params.workspaceDir);
+
+  for (const filename of bootstrapFilenames) {
+    const agentDirPath = path.join(agentDirResolved, filename);
+    const workspacePath = path.join(workspaceDirResolved, filename);
+
+    try {
+      await fs.access(agentDirPath);
+      const existsInAgentDir = true;
+
+      let existsInWorkspace = false;
+      try {
+        await fs.access(workspacePath);
+        existsInWorkspace = true;
+      } catch {
+        existsInWorkspace = false;
+      }
+
+      if (existsInAgentDir && !existsInWorkspace) {
+        const warning = [
+          `⚠ Warning: ${filename} found in agentDir (${agentDirResolved}) but will not be loaded.`,
+          `  Bootstrap files are only read from workspace (${workspaceDirResolved}).`,
+          `  Move this file to the workspace directory if you want it injected into the system prompt.`,
+        ].join("\n");
+        params.warn(warning);
+      }
+    } catch {
+      // File doesn't exist in agentDir, no warning needed
+    }
+  }
 }
 
 /** Resolves both raw bootstrap metadata and bounded context files for a run. */
