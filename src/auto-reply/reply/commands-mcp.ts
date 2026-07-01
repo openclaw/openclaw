@@ -26,12 +26,18 @@ function renderJsonBlock(label: string, value: unknown): string {
 function renderMcpServerLiveLine(params: {
   serverName: string;
   disabled: boolean;
-  catalog: McpToolCatalog;
+  catalog: McpToolCatalog | null;
   stale: boolean;
 }): string {
   const { serverName, disabled, catalog, stale } = params;
+  // Disabled state always wins: enabled:false servers never attempt a
+  // connection, so they must not be labeled "warming up"/"stale" even when
+  // the session catalog itself isn't built yet (catalog === null).
   if (disabled) {
     return `- ${serverName}: 🚫 disabled (enabled: false, excluded from runtime)`;
+  }
+  if (!catalog) {
+    return `- ${serverName}: ⏳ not yet discovered — connects on next agent MCP tool use.`;
   }
   if (stale) {
     return `- ${serverName}: ♻️ config changed since last connect (stale)`;
@@ -64,19 +70,16 @@ function renderMcpLiveStateSection(params: {
     return undefined;
   }
   const catalog = runtime.peekCatalog();
-  if (!catalog) {
-    return "🩺 Live state (session): not yet discovered — connects on next agent MCP tool use.";
-  }
   // Compare against the same workspace-derived fingerprint the runtime was
   // built from (runtime.workspaceDir), not the command's raw workspaceDir:
   // sandboxed sessions resolve MCP config from a different effective
   // workspace, so comparing against the command's own workspaceDir would
   // misreport every server as stale. Mirrors tools-effective.ts.
-  const configSummary = resolveSessionMcpConfigSummary({
-    workspaceDir: runtime.workspaceDir,
-    cfg: params.cfg,
-  });
-  const stale = runtime.configFingerprint !== configSummary.fingerprint;
+  const stale = catalog
+    ? runtime.configFingerprint !==
+      resolveSessionMcpConfigSummary({ workspaceDir: runtime.workspaceDir, cfg: params.cfg })
+        .fingerprint
+    : false;
   const lines = Object.entries(params.servers).map(([serverName, server]) => {
     const disabled = Boolean(
       server && typeof server === "object" && (server as { enabled?: unknown }).enabled === false,

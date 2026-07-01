@@ -226,9 +226,35 @@ describe("handleCommands /mcp", () => {
       });
       showParams.command.senderIsOwner = true;
       const result = expectMcpResult(await handleMcpCommand(showParams, true));
+      expect(result.reply?.text).toContain("🩺 Live state (session):");
       expect(result.reply?.text).toContain(
-        "🩺 Live state (session): not yet discovered — connects on next agent MCP tool use.",
+        "context7: ⏳ not yet discovered — connects on next agent MCP tool use.",
       );
+    });
+  });
+
+  it("shows disabled (not not-yet-discovered) for enabled:false servers even before the session catalog is built", async () => {
+    await withTempHome("openclaw-command-mcp-home-", async () => {
+      const workspaceDir = await workspaceHarness.createWorkspace();
+      mcpServers.set("context7", { command: "uvx", args: ["context7-mcp"], enabled: false });
+      // Session runtime exists but hasn't built a catalog yet (cold path) —
+      // the disabled check must still win over the generic "connects on next
+      // agent MCP tool use" fallback, since a disabled server never connects.
+      mcpRuntimeMocks.peekSessionMcpRuntime.mockReturnValue({
+        configFingerprint: "mcp:1",
+        workspaceDir,
+        peekCatalog: () => null,
+      });
+
+      const showParams = buildCommandTestParams("/mcp show", buildCfg(), undefined, {
+        workspaceDir,
+      });
+      showParams.command.senderIsOwner = true;
+      const result = expectMcpResult(await handleMcpCommand(showParams, true));
+      expect(result.reply?.text).toContain(
+        "context7: 🚫 disabled (enabled: false, excluded from runtime)",
+      );
+      expect(result.reply?.text).not.toContain("not yet discovered");
     });
   });
 
