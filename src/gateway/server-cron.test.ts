@@ -623,7 +623,8 @@ describe("buildGatewayCronService", () => {
       const event = runCronChangedMock.mock.calls
         .map((call) => requireRecord(call[0], "cron_changed event"))
         .find((hookEvent) => hookEvent.action === "finished");
-      const summary = String(event?.summary ?? "");
+      const summary =
+        typeof event?.summary === "string" ? event.summary : String(event?.summary ?? "");
       expect(summary).toContain("[redacted-url]");
       expect(summary).toContain("[redacted-code]");
       expect(summary).toContain("token=***");
@@ -673,7 +674,10 @@ describe("buildGatewayCronService", () => {
         callArg(sendCronAnnouncePayloadStrictMock, 0, 0, "cron announce payload"),
         "cron announce payload",
       );
-      const message = String(announcePayload.message ?? "");
+      const message =
+        typeof announcePayload.message === "string"
+          ? announcePayload.message
+          : String(announcePayload.message ?? "");
       expect(message).toContain("token=***");
       expect(message).not.toContain("opaque-secret-value");
     } finally {
