@@ -368,7 +368,24 @@ describe("sent-message-cache", () => {
     expect(wasSentByBot(123, 1)).toBe(true);
   });
 
-  it("persists sent-message rows with their remaining logical ttl", () => {
+  it("persists only the newly recorded sent-message row", () => {
+    const persistedMessageIds: string[] = [];
+    setTelegramSentMessageStoreForTest({
+      ...sentMessageStore,
+      register(key, value, options) {
+        sentMessageStore.register(key, value, options);
+        persistedMessageIds.push(value.messageId);
+      },
+    });
+
+    recordSentMessage(123, 1);
+    recordSentMessage(123, 2);
+    recordSentMessage(456, 10);
+
+    expect(persistedMessageIds).toEqual(["1", "2", "10"]);
+  });
+
+  it("persists sent-message rows with a per-entry ttl", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-26T12:00:00.000Z"));
     const ttlByMessageId = new Map<string, number>();
@@ -384,7 +401,7 @@ describe("sent-message-cache", () => {
     vi.advanceTimersByTime(60 * 60 * 1000);
     recordSentMessage(123, 2);
 
-    expect(ttlByMessageId.get("1")).toBe(23 * 60 * 60 * 1000);
+    expect(ttlByMessageId.get("1")).toBe(24 * 60 * 60 * 1000);
     expect(ttlByMessageId.get("2")).toBe(24 * 60 * 60 * 1000);
   });
 
