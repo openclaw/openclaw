@@ -35,6 +35,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   approveNodePairing,
+  getPairedNode,
   listNodePairing,
   rejectNodePairing,
   removePairedNode,
@@ -956,7 +957,18 @@ export const nodeHandlers: GatewayRequestHandlers = {
     // Intentionally fail closed for RPC callers without an explicit scoped session.
     const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
     await respondUnavailableOnThrow(respond, async () => {
+      // Check if request is still pending to obtain nodeId for idempotent handling
+      const pairing = await listNodePairing();
+      const pendingEntry = pairing.pending.find(p => p.requestId === requestId);
+      const nodeIdFromPending = pendingEntry?.nodeId;
       const approved = await approveNodePairing(requestId, { callerScopes });
+      // If approve returned null but we have nodeId and node is already paired, treat as idempotent success
+      if (!approved && nodeIdFromPending) {
+        const alreadyPaired = await getPairedNode(nodeIdFromPending);
+        if (alreadyPaired) {
+          approved = { requestId, node: alreadyPaired };
+        }
+      }
       if (!approved) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
         return;
