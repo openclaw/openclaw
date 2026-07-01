@@ -2828,10 +2828,29 @@ export class WorkboardStore {
     }
   }
 
-  async move(id: string, status: unknown, position: unknown): Promise<WorkboardCard> {
-    return await this.update(id, {
-      status,
-      position,
+  async move(
+    id: string,
+    status: unknown,
+    position: unknown,
+    scope?: WorkboardMutationScope,
+  ): Promise<WorkboardCard> {
+    return await this.enqueueMutation(async () => {
+      const existing = await this.get(id);
+      if (!existing) {
+        throw new Error(`card "${id}" not found.`);
+      }
+      assertCanMutateClaimedCard(existing, scope);
+      return await this.updateCard(
+        id,
+        {
+          status,
+          position,
+        },
+        {
+          allowMetadataDependencyLinks: false,
+          enforceStatusHolds: true,
+        },
+      );
     });
   }
 

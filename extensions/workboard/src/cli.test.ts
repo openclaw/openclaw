@@ -186,4 +186,121 @@ describe("registerWorkboardCli", () => {
       program.parseAsync(["workboard", "show", prefix], { from: "user" }),
     ).rejects.toThrow("Ambiguous card id prefix");
   });
+
+  it("moves a card to a different status", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Move me", status: "todo" });
+    const program = createProgram(store);
+
+    const output = await captureStdout(async () => {
+      await program.parseAsync(["workboard", "move", card.id, "--status", "running"], {
+        from: "user",
+      });
+    });
+    expect(output).toContain("Move me");
+    expect(output).toContain("running");
+
+    const updated = await store.get(card.id);
+    expect(updated?.status).toBe("running");
+  });
+
+  it("rejects invalid status in move command", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Bad move", status: "todo" });
+    const program = createProgram(store);
+
+    await expect(
+      program.parseAsync(["workboard", "move", card.id, "--status", "nonexistent"], {
+        from: "user",
+      }),
+    ).rejects.toThrow(/must be one of/);
+  });
+
+  it("requires --status flag for move command", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Missing status", status: "todo" });
+    const program = createProgram(store);
+
+    await expect(
+      program.parseAsync(["workboard", "move", card.id], { from: "user" }),
+    ).rejects.toThrow("--status is required");
+  });
+
+  it("outputs JSON for move command with --json", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "JSON move", status: "todo" });
+    const program = createProgram(store);
+
+    const output = await captureStdout(async () => {
+      await program.parseAsync(["workboard", "move", card.id, "--status", "review", "--json"], {
+        from: "user",
+      });
+    });
+    const parsed = JSON.parse(output);
+    expect(parsed.card.status).toBe("review");
+    expect(parsed.card.title).toBe("JSON move");
+  });
+
+  it("enforces claim scope in store.move() when moving claimed cards", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Claimed", status: "todo" });
+    // Claim the card
+    await store.claim(card.id, { ownerId: "agent-a", token: "tok-a" });
+    // Unrelated agent tries to move - should fail
+    await expect(
+      store.move(card.id, "running", undefined, { ownerId: "agent-b", token: "tok-b" }),
+    ).rejects.toThrow(/card is claimed by agent-a/);
+    // Same agent can move - should succeed
+    const moved = await store.move(card.id, "running", undefined, {
+      ownerId: "agent-a",
+      token: "tok-a",
+    });
+    expect(moved.status).toBe("running");
+  });
+
+  it("rejects CLI move of claimed card without matching token", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Claimed CLI", status: "todo" });
+    await store.claim(card.id, { ownerId: "agent-a", token: "tok-a" });
+    const program = createProgram(store);
+    // CLI without token should fail - scope { ownerId: "cli" } doesn't match claim
+    await expect(
+      program.parseAsync(["workboard", "move", card.id, "--status", "running"], {
+        from: "user",
+      }),
+    ).rejects.toThrow(/card is claimed by agent-a/);
+    // CLI with correct token should succeed
+    await expect(
+      program.parseAsync(["workboard", "move", card.id, "--status", "done", "--token", "tok-a"], {
+        from: "user",
+      }),
+    ).resolves.toBeUndefined();
+    expect(await store.get(card.id)).toMatchObject({ status: "done" });
+  });
+
+  it("uses canonical WORKBOARD_STATUSES in move command validation", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({ title: "Status check", status: "todo" });
+    const program = createProgram(store);
+
+    // All valid statuses should work (skip scheduled which requires scheduledAt)
+    const validStatuses = [
+      "triage",
+      "backlog",
+      "todo",
+      "ready",
+      "running",
+      "review",
+      "blocked",
+      "done",
+    ];
+    for (const status of validStatuses) {
+      const output = await captureStdout(async () => {
+        await program.parseAsync(["workboard", "move", card.id, "--status", status], {
+          from: "user",
+        });
+      });
+      expect(output).toContain(card.title);
+    }
+  });
 });

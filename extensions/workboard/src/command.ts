@@ -4,6 +4,7 @@ import { resolveWorkboardCardByIdOrPrefix } from "./card-lookup.js";
 import { dispatchAndStartWorkboardCards, type WorkboardSubagentRuntime } from "./dispatcher.js";
 import type { WorkboardStore } from "./store.js";
 import type { WorkboardCard } from "./types.js";
+import { WORKBOARD_STATUSES } from "./types.js";
 
 const ADMIN_SCOPE = "operator.admin";
 const WRITE_SCOPE = "operator.write";
@@ -89,6 +90,7 @@ export async function handleWorkboardCommand(params: {
         "/workboard list",
         "/workboard show <card-id>",
         "/workboard create <title>",
+        "/workboard move <card-id> --status <status> [--token <claim-token>]",
         "/workboard dispatch",
       ].join("\n"),
     };
@@ -137,6 +139,43 @@ export async function handleWorkboardCommand(params: {
         ),
       ].join("\n"),
     };
+  }
+  if (action === "move") {
+    const accessError = requireWriteAccess(params);
+    if (accessError) {
+      return accessError;
+    }
+    const id = rest[0];
+    const statusIndex = rest.indexOf("--status");
+    const status = statusIndex >= 0 ? rest[statusIndex + 1] : undefined;
+    const tokenIndex = rest.indexOf("--token");
+    const token = tokenIndex >= 0 ? rest[tokenIndex + 1] : undefined;
+    if (!id) {
+      return {
+        text: "Usage: /workboard move <card-id> --status <status> [--token <claim-token>]",
+        isError: true,
+      };
+    }
+    if (!status) {
+      return {
+        text: "Usage: /workboard move <card-id> --status <status> [--token <claim-token>]",
+        isError: true,
+      };
+    }
+    const cards = await params.store.list();
+    const { card, error } = resolveWorkboardCardByIdOrPrefix(cards, id);
+    if (!card) {
+      return { text: error, isError: true };
+    }
+    if (!(WORKBOARD_STATUSES as readonly string[]).includes(status)) {
+      return {
+        text: `status must be one of: ${WORKBOARD_STATUSES.join(", ")}.`,
+        isError: true,
+      };
+    }
+    const scope = token ? { ownerId: "slash", token } : { ownerId: "slash" };
+    const updated = await params.store.move(card.id, status, undefined, scope);
+    return { text: formatCardLine(updated) };
   }
   return { text: `Unknown Workboard action: ${action}`, isError: true };
 }

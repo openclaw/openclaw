@@ -64,6 +64,7 @@ export default definePluginEntry({
         "workboard_worker_log",
         "workboard_protocol_violation",
         "workboard_unblock",
+        "workboard_move",
       ],
       optional: true,
     });

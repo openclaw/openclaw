@@ -112,4 +112,89 @@ describe("handleWorkboardCommand", () => {
       }),
     );
   });
+
+  it("moves cards between statuses with permission checks", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const api = createApi();
+    const card = await store.create({ title: "Ready worker", status: "ready" });
+
+    // Move requires write access
+    await expect(
+      handleWorkboardCommand({ api, store, args: `move ${card.id} --status running` }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        isError: true,
+        text: expect.stringContaining("operator.write"),
+      }),
+    );
+    expect(await store.get(card.id)).toMatchObject({ status: "ready" });
+
+    // Move succeeds with write access
+    await expect(
+      handleWorkboardCommand({
+        api,
+        store,
+        args: `move ${card.id} --status running`,
+        gatewayClientScopes: ["operator.write"],
+      }),
+    ).resolves.toMatchObject({
+      text: expect.stringContaining("running"),
+    });
+    expect(await store.get(card.id)).toMatchObject({ status: "running" });
+  });
+
+  it("rejects invalid status for move", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const api = createApi();
+    const card = await store.create({ title: "Test card", status: "todo" });
+
+    await expect(
+      handleWorkboardCommand({
+        api,
+        store,
+        args: `move ${card.id} --status invalid`,
+        gatewayClientScopes: ["operator.write"],
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        isError: true,
+        text: expect.stringContaining("status must be one of"),
+      }),
+    );
+    expect(await store.get(card.id)).toMatchObject({ status: "todo" });
+  });
+
+  it("rejects slash move of claimed card without matching token", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const api = createApi();
+    const card = await store.create({ title: "Claimed slash", status: "todo" });
+    await store.claim(card.id, { ownerId: "agent-a", token: "tok-a" });
+    // Slash without token should fail - scope { ownerId: "slash" } doesn't match claim
+    await expect(
+      handleWorkboardCommand({
+        api,
+        store,
+        args: `move ${card.id} --status running`,
+        gatewayClientScopes: ["operator.write"],
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        isError: true,
+        text: expect.stringContaining("card is claimed by agent-a"),
+      }),
+    );
+    expect(await store.get(card.id)).toMatchObject({ status: "todo" });
+    // Slash with correct token should succeed
+    await expect(
+      handleWorkboardCommand({
+        api,
+        store,
+        args: `move ${card.id} --status done --token tok-a`,
+        gatewayClientScopes: ["operator.write"],
+      }),
+    ).resolves.toMatchObject({
+      text: expect.stringContaining("done"),
+    });
+    expect(await store.get(card.id)).toMatchObject({ status: "done" });
+  });
 });

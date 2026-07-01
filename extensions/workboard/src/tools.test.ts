@@ -462,4 +462,40 @@ describe("workboard tools", () => {
     );
     expect(Buffer.from(attachment.contentBase64 as string, "base64").toString("utf8")).toBe("done");
   });
+
+  it("moves a card to a different status with workboard_move", async () => {
+    const keyed = createMemoryStore();
+    const api = {
+      runtime: {
+        state: {
+          openKeyedStore: vi.fn(() => keyed),
+        },
+      },
+    } as unknown as OpenClawPluginApi;
+    const store = new WorkboardStore(keyed);
+    const tools = new Map(
+      createWorkboardTools({
+        api,
+        store,
+        context: { agentId: "main" } as never,
+      }).map((tool) => [tool.name, tool]),
+    );
+
+    const card = await store.create({ title: "To move", status: "todo" });
+    expect(card.status).toBe("todo");
+
+    const moved = readPayload(
+      await tools.get("workboard_move")?.execute("call-1", { id: card.id, status: "running" }),
+    );
+    expect(moved.card).toMatchObject({ status: "running" });
+
+    const movedAgain = readPayload(
+      await tools.get("workboard_move")?.execute("call-2", { id: card.id, status: "done" }),
+    );
+    expect(movedAgain.card).toMatchObject({ status: "done" });
+
+    await expect(
+      tools.get("workboard_move")?.execute("call-3", { id: card.id, status: "invalid-status" }),
+    ).rejects.toThrow(/must be one of/);
+  });
 });
