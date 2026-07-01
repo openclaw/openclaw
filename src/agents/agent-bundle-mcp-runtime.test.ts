@@ -2208,6 +2208,7 @@ process.stdin.on("end", () => {
       const slowServerPath = path.join(tempDir, "slow-server.mjs");
       const slowLogPath = path.join(tempDir, "slow.log");
       const firstConnectMarkerPath = path.join(tempDir, "first-connect.marker");
+      const sessionId = `session-timeout-retire-test-${path.basename(tempDir)}`;
 
       await writeExecutable(
         triggerServerPath,
@@ -2368,8 +2369,8 @@ process.on("SIGINT", shutdown);`,
       );
 
       const runtime = await getOrCreateSessionMcpRuntime({
-        sessionId: "session-timeout-retire-test",
-        sessionKey: "agent:test:session-timeout-retire-test",
+        sessionId,
+        sessionKey: `agent:test:${sessionId}`,
         workspaceDir: "/workspace",
         cfg: {
           mcp: {
