@@ -368,6 +368,37 @@ describe("exec approval reply helpers", () => {
     expect(payload.interactive).toBeUndefined();
   });
 
+  it("shows non-persistable message when allow-always is excluded by command type", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-redir",
+      approvalSlug: "slug-redir",
+      allowedDecisions: ["allow-once", "deny"],
+      nonPersistableCommand: true,
+      command: "echo ok > file.txt",
+      host: "gateway",
+    });
+
+    expect(payload.text).toContain(
+      "Allow Always is unavailable because this command cannot be saved as a reusable pattern",
+    );
+    expect(payload.text).not.toContain("policy requires approval every time");
+  });
+
+  it("shows policy message when allow-always is excluded by ask=always policy", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-policy",
+      approvalSlug: "slug-policy",
+      ask: "always",
+      command: "echo ok",
+      host: "gateway",
+    });
+
+    expect(payload.text).toContain(
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+    );
+    expect(payload.text).not.toContain("cannot be saved as a reusable pattern");
+  });
+
   it("stores agent and session metadata for downstream suppression checks", () => {
     const payload = buildExecApprovalPendingReplyPayload({
       approvalId: "req-meta",
