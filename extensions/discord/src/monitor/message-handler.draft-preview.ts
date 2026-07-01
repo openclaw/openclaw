@@ -79,12 +79,15 @@ export function createDiscordDraftPreviewController(params: {
   let progressDraftStartedBeforeFinal = false;
   const previewToolProgressEnabled =
     Boolean(draftStream) && resolveChannelStreamingPreviewToolProgress(params.discordConfig);
-  const suppressDefaultToolProgressMessages =
+  const canSuppressDefaultToolProgressMessages =
     Boolean(draftStream) &&
     resolveChannelStreamingSuppressDefaultToolProgressMessages(params.discordConfig, {
       draftStreamActive: true,
       previewToolProgressEnabled,
     });
+  const suppressDefaultToolProgressImmediately =
+    canSuppressDefaultToolProgressMessages &&
+    (discordStreamMode !== "progress" || !previewToolProgressEnabled);
   const progressSeed = `${params.accountId}:${params.deliverChannelId}`;
   const progressDraft = createChannelProgressDraftCompositor({
     entry: params.discordConfig,
@@ -136,12 +139,24 @@ export function createDiscordDraftPreviewController(params: {
     draftStream,
     previewToolProgressEnabled,
     commentaryProgressEnabled: progressDraft.commentaryProgressEnabled,
-    suppressDefaultToolProgressMessages,
+    get suppressDefaultToolProgressMessages() {
+      return (
+        suppressDefaultToolProgressImmediately ||
+        hasStreamedMessage ||
+        progressDraft.suppressDefaultToolProgressMessages
+      );
+    },
     get isProgressMode() {
       return discordStreamMode === "progress";
     },
     get hasProgressDraftStarted() {
       return progressDraft.hasStarted || progressDraftStartedBeforeFinal;
+    },
+    get shouldSuppressBlockReplies() {
+      return hasStreamedMessage;
+    },
+    get shouldDeferProgressBlockReplies() {
+      return canSuppressDefaultToolProgressMessages && discordStreamMode === "progress";
     },
     get finalizedViaPreviewMessage() {
       return finalizedViaPreviewMessage;
