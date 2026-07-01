@@ -7,6 +7,7 @@ import {
   buildBundleMcpToolsFromCatalog,
   createBundleMcpToolRuntime,
   materializeBundleMcpToolsForRun,
+  projectBundleMcpToolsFromCatalog,
 } from "./agent-bundle-mcp-materialize.js";
 import type { McpCatalogTool } from "./agent-bundle-mcp-types.js";
 import type { McpToolCatalogDiagnostic } from "./agent-bundle-mcp-types.js";
@@ -249,6 +250,115 @@ describe("createBundleMcpToolRuntime", () => {
     expect(runtime.diagnostics).toEqual(diagnostics);
   });
 
+  it("falls back when MCP catalog optional description fields are unreadable", async () => {
+    const hostileTool = {
+      serverName: "bundleProbe",
+      safeServerName: "bundleProbe",
+      toolName: "bundle_probe",
+      inputSchema: { type: "object", properties: {} },
+      fallbackDescription: "Fallback bundle probe",
+    };
+    Object.defineProperty(hostileTool, "description", {
+      get() {
+        throw new Error("description exploded");
+      },
+    });
+
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({ tools: [hostileTool as never] }),
+    });
+
+    expect(
+      runtime.tools.map((tool) => ({ name: tool.name, description: tool.description })),
+    ).toEqual([
+      {
+        name: "bundleProbe__bundle_probe",
+        description: "Fallback bundle probe",
+      },
+    ]);
+    expect(runtime.diagnostics).toBeUndefined();
+  });
+
+  it("skips MCP catalog tools with unreadable required fields while preserving siblings", async () => {
+    const brokenTool = {
+      serverName: "bundleProbe",
+      safeServerName: "bundleProbe",
+      description: "bad",
+      inputSchema: { type: "object", properties: {} },
+      fallbackDescription: "bad",
+    };
+    Object.defineProperty(brokenTool, "toolName", {
+      get() {
+        throw new Error("toolName exploded");
+      },
+    });
+
+    const projection = projectBundleMcpToolsFromCatalog({
+      catalog: {
+        version: 1,
+        generatedAt: 0,
+        servers: {
+          bundleProbe: {
+            serverName: "bundleProbe",
+            safeServerName: "bundleProbe",
+            launchSummary: "bundleProbe",
+            toolCount: 2,
+          },
+        },
+        tools: [
+          brokenTool as never,
+          {
+            serverName: "bundleProbe",
+            safeServerName: "bundleProbe",
+            toolName: "healthy_probe",
+            description: "Healthy probe",
+            inputSchema: { type: "object", properties: {} },
+            fallbackDescription: "Healthy probe",
+          },
+        ],
+      },
+    });
+
+    expect(projection.tools.map((tool) => tool.name)).toEqual(["bundleProbe__healthy_probe"]);
+    expect(projection.diagnostics).toEqual([
+      {
+        serverName: "bundleProbe",
+        safeServerName: "bundleProbe",
+        launchSummary: "bundleProbe",
+        message: "tools[0] has unreadable or missing required field(s): toolName",
+      },
+    ]);
+  });
+
+  it("returns materialization diagnostics for unreadable MCP catalog input schemas", async () => {
+    const brokenTool = {
+      serverName: "bundleProbe",
+      safeServerName: "bundleProbe",
+      toolName: "broken_probe",
+      description: "Broken probe",
+      fallbackDescription: "Broken probe",
+    };
+    Object.defineProperty(brokenTool, "inputSchema", {
+      get() {
+        throw new Error("inputSchema exploded");
+      },
+    });
+
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({ tools: [brokenTool as never] }),
+    });
+
+    expect(runtime.tools).toEqual([]);
+    expect(runtime.diagnostics).toEqual([
+      {
+        serverName: "bundleProbe",
+        safeServerName: "bundleProbe",
+        launchSummary: "bundleProbe",
+        message: "tools[0] has unreadable or missing required field(s): inputSchema",
+      },
+    ]);
+  });
+
   it("exposes MCP resource and prompt utility tools when advertised", async () => {
     const base = makeToolRuntime({ tools: [], serverName: "knowledge" });
     const runtime = await materializeBundleMcpToolsForRun({
@@ -335,6 +445,51 @@ describe("createBundleMcpToolRuntime", () => {
     });
 
     expect(runtime.tools.map((tool) => tool.name)).toEqual(["knowledge__resources_list"]);
+  });
+
+  it("skips unreadable server utility metadata without dropping healthy servers", async () => {
+    const brokenServer = {
+      serverName: "broken",
+      safeServerName: "broken",
+      launchSummary: "broken",
+      toolCount: 0,
+    };
+    Object.defineProperty(brokenServer, "resources", {
+      get() {
+        throw new Error("resources exploded");
+      },
+    });
+
+    const projection = projectBundleMcpToolsFromCatalog({
+      catalog: {
+        version: 1,
+        generatedAt: 0,
+        servers: {
+          broken: brokenServer as never,
+          healthy: {
+            serverName: "healthy",
+            safeServerName: "healthy",
+            launchSummary: "healthy",
+            toolCount: 0,
+            resources: { listChanged: false },
+          },
+        },
+        tools: [],
+      },
+    });
+
+    expect(projection.tools.map((tool) => tool.name)).toEqual([
+      "healthy__resources_list",
+      "healthy__resources_read",
+    ]);
+    expect(projection.diagnostics).toEqual([
+      {
+        serverName: "broken",
+        safeServerName: "broken",
+        launchSummary: "broken",
+        message: 'server "broken" resources metadata is unreadable',
+      },
+    ]);
   });
 
   it("projects resource and prompt utility tools for inventory-only catalogs", async () => {
