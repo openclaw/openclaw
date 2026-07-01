@@ -3,7 +3,14 @@ import { agentCommandFromIngress } from "openclaw/plugin-sdk/agent-runtime";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveRealtimeBootstrapContextInstructions } from "openclaw/plugin-sdk/realtime-bootstrap-context";
 import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  evaluateSessionFreshness,
+  getSessionEntry,
+  resolveChannelResetConfig,
+  resolveSessionResetPolicy,
+  resolveSessionResetType,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatMention } from "../mentions.js";
 import { normalizeDiscordSlug } from "../monitor/allow-list.js";
@@ -135,11 +142,35 @@ export async function runDiscordVoiceAgentTurn(params: {
   const voiceModel = normalizeOptionalString(params.discordConfig.voice?.model);
   const sessionKey = params.entry.route.sessionKey;
   const agentId = params.entry.route.agentId;
-  const storedSessionId = getSessionEntry({
+  const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+  const sessionEntry = getSessionEntry({
     agentId,
     sessionKey,
-    storePath: resolveStorePath(params.cfg.session?.store, { agentId }),
-  })?.sessionId;
+    storePath,
+  });
+  // Only reuse the stored sessionId when the session entry is still fresh under
+  // the configured reset policy.  Stale entries (idle/daily-expired) must not be
+  // forced back into use — they should rotate so the agent starts a new session.
+  const resetType = resolveSessionResetType({ sessionKey });
+  const channelReset = resolveChannelResetConfig({
+    sessionCfg: params.cfg.session,
+    channel: sessionEntry?.lastChannel ?? sessionEntry?.channel ?? sessionEntry?.origin?.provider,
+  });
+  const resetPolicy = resolveSessionResetPolicy({
+    sessionCfg: params.cfg.session,
+    resetType,
+    resetOverride: channelReset,
+  });
+  const fresh =
+    sessionEntry &&
+    evaluateSessionFreshness({
+      updatedAt: sessionEntry.updatedAt,
+      sessionStartedAt: sessionEntry.sessionStartedAt,
+      lastInteractionAt: sessionEntry.lastInteractionAt,
+      now: Date.now(),
+      policy: resetPolicy,
+    }).fresh;
+  const storedSessionId = fresh ? sessionEntry.sessionId : undefined;
   const result = await agentCommandFromIngress(
     {
       message: params.message,

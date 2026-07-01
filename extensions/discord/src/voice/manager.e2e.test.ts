@@ -5776,6 +5776,148 @@ describe("DiscordVoiceManager", () => {
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
   });
 
+  it("passes stored sessionId to agentCommandFromIngress when session entry is fresh", async () => {
+    const sessionStoreRuntime = await import("openclaw/plugin-sdk/session-store-runtime");
+    const mockedGetSessionEntry = vi.mocked(sessionStoreRuntime.getSessionEntry);
+    const now = Date.now();
+    const freshEntry = {
+      sessionId: "fresh-session-id",
+      updatedAt: now,
+      sessionStartedAt: now - 30_000,
+      lastInteractionAt: now - 10_000,
+    };
+    mockedGetSessionEntry.mockReturnValue(freshEntry as ReturnType<typeof mockedGetSessionEntry>);
+
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "fresh answer" }] });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const turn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    turn?.sendInputAudio(Buffer.alloc(8));
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    await emitFinalRealtimeUserTranscript(bridgeParams, "fresh question");
+    expect(lastAgentCommandArgs().sessionId).toBe("fresh-session-id");
+    expectUserMessageIncludes("fresh answer");
+
+    mockedGetSessionEntry.mockReturnValue(undefined);
+  });
+
+  it("does not pass stored sessionId to agentCommandFromIngress when session entry is stale", async () => {
+    const sessionStoreRuntime = await import("openclaw/plugin-sdk/session-store-runtime");
+    const mockedGetSessionEntry = vi.mocked(sessionStoreRuntime.getSessionEntry);
+    const now = Date.now();
+    // A stale entry: sessionStartedAt is before the daily reset boundary.
+    // Set sessionStartedAt to two days ago so the daily reset at hour 4
+    // will definitely mark this entry as stale regardless of current time.
+    const twoDaysAgo = now - 2 * 24 * 60 * 60 * 1000;
+    const staleEntry = {
+      sessionId: "stale-session-id",
+      updatedAt: twoDaysAgo,
+      sessionStartedAt: twoDaysAgo,
+      lastInteractionAt: twoDaysAgo,
+    };
+    mockedGetSessionEntry.mockReturnValue(staleEntry as ReturnType<typeof mockedGetSessionEntry>);
+
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "new session answer" }] });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const turn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    turn?.sendInputAudio(Buffer.alloc(8));
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    await emitFinalRealtimeUserTranscript(bridgeParams, "stale question");
+    expect(lastAgentCommandArgs().sessionId).toBeUndefined();
+    expectUserMessageIncludes("new session answer");
+
+    mockedGetSessionEntry.mockReturnValue(undefined);
+  });
+
+  it("does not pass sessionId to agentCommandFromIngress when no stored session entry exists", async () => {
+    const sessionStoreRuntime = await import("openclaw/plugin-sdk/session-store-runtime");
+    const mockedGetSessionEntry = vi.mocked(sessionStoreRuntime.getSessionEntry);
+    mockedGetSessionEntry.mockReturnValue(undefined);
+
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "no entry answer" }] });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const turn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    turn?.sendInputAudio(Buffer.alloc(8));
+    const bridgeParams = lastRealtimeBridgeParams() as
+      | {
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    await emitFinalRealtimeUserTranscript(bridgeParams, "no entry question");
+    expect(lastAgentCommandArgs().sessionId).toBeUndefined();
+    expectUserMessageIncludes("no entry answer");
+  });
+
   it("DiscordVoiceReadyListener: starts autoJoin fire-and-forget on ready", async () => {
     const manager = createManager();
     const autoJoinSpy = vi
