@@ -95,8 +95,7 @@ describe("resolveModelSelection", () => {
       providers: ["openai", "anthropic"],
       byProvider: new Map([["openai", new Set(["gpt-4.1"])]]),
     });
-    expect(result.kind).toBe("ambiguous");
-    expect(result.matchingProviders).toEqual(["openai", "anthropic"]);
+    expect(result).toMatchObject({ kind: "ambiguous", matchingProviders: ["openai", "anthropic"] });
   });
 
   it("returns ambiguous result when modelIndex is out of range", () => {
