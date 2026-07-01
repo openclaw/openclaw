@@ -1484,9 +1484,9 @@ private fun SettingsShellScreen(
       }
       item {
         SettingsGroup(
-          rows = listOf(SettingsRow("Sign Out", "Disconnect", Icons.AutoMirrored.Filled.ExitToApp)),
+          rows = listOf(SettingsRow("Sign Out", "Return to setup", Icons.AutoMirrored.Filled.ExitToApp)),
           onOpen = { },
-          onAction = { viewModel.disconnect() },
+          onAction = { viewModel.pairNewGateway() },
         )
       }
 
@@ -1738,6 +1738,7 @@ private fun SettingsGroup(
       rows.forEachIndexed { index, row ->
         SettingsListRow(
           row = row,
+          showDisclosure = row.route != null || onAction != null,
           onClick = {
             val rowRoute = row.route
             if (rowRoute == null) {
@@ -1758,6 +1759,7 @@ private fun SettingsGroup(
 @Composable
 private fun SettingsListRow(
   row: SettingsRow,
+  showDisclosure: Boolean,
   onClick: () -> Unit,
 ) {
   Row(
@@ -1778,10 +1780,10 @@ private fun SettingsListRow(
       row.status?.let { active ->
         Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (active) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
       }
-      if (row.route != null) {
+      if (showDisclosure) {
         Icon(
           imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-          contentDescription = "Open ${row.title}",
+          contentDescription = if (row.route != null) "Open ${row.title}" else row.title,
           modifier = Modifier.size(17.dp),
           tint = ClawTheme.colors.text,
         )

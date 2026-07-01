@@ -427,7 +427,7 @@ class ConnectionManagerTest {
   }
 
   @Test
-  fun buildOperatorConnectOptions_requestsQrBootstrapHandoffScopes() {
+  fun buildOperatorConnectOptions_requestsLegacySafeOperatorScopes() {
     val options = newManager().buildOperatorConnectOptions()
 
     assertEquals(

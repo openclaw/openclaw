@@ -507,7 +507,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
        - `/pair approve` when there is only one pending request
        - `/pair approve latest` for most recent
 
-    The setup code carries a short-lived bootstrap token. Built-in setup-code bootstrap is node-only: the first connect creates a pending node request, and after approval the Gateway returns a durable node token with `scopes: []`. It does not return a handed-off operator token; operator access requires a separate approved operator pairing or token flow.
+    The setup code carries a short-lived bootstrap token. Built-in setup-code bootstrap returns a durable node token with `scopes: []` plus a bounded operator handoff token for trusted mobile onboarding. That operator token can read setup-time native configuration, but it does not grant pairing mutation scopes or `operator.admin`.
 
     If a device retries with changed auth details (for example role/scopes/public key), the previous pending request is superseded and the new request uses a different `requestId`. Re-run `/pair pending` before approving.
 

@@ -538,7 +538,10 @@ class GatewaySessionInvokeTest {
         assertEquals("bootstrap-node-token", nodeEntry?.token)
         assertEquals(emptyList<String>(), nodeEntry?.scopes)
         assertEquals("bootstrap-operator-token", operatorEntry?.token)
-        assertEquals(listOf("operator.approvals", "operator.read", "operator.write"), operatorEntry?.scopes)
+        assertEquals(
+          listOf("operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"),
+          operatorEntry?.scopes,
+        )
       } finally {
         shutdownHarness(harness, server)
       }
