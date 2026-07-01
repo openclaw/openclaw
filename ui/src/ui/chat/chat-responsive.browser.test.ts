@@ -622,6 +622,8 @@ describeBrowserLayout("chat responsive browser layout", () => {
           };
           return {
             input: rectFor(".agent-chat__input"),
+            thread: rectFor(".chat-thread"),
+            textarea: rectFor(".agent-chat__composer-combobox > textarea"),
             left: rectFor(".agent-chat__toolbar-left"),
             model: rectFor(".chat-composer-model-control"),
             settings: rectFor(".chat-settings-chip"),
@@ -631,6 +633,8 @@ describeBrowserLayout("chat responsive browser layout", () => {
         });
 
         const input = expectControlRect(controls.input, "composer");
+        const thread = expectControlRect(controls.thread, "chat thread");
+        const textarea = expectControlRect(controls.textarea, "composer textarea");
         const left = expectControlRect(controls.left, "composer left controls");
         const model = expectControlRect(controls.model, "composer model control");
         const settings = expectControlRect(controls.settings, "composer settings control");
@@ -647,6 +651,12 @@ describeBrowserLayout("chat responsive browser layout", () => {
         expect(settings.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
         expect(settings.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
         expect(settingsLabel.display).toBe("none");
+
+        if (width > height && height <= 500) {
+          expect(input.height).toBeLessThanOrEqual(height * 0.38);
+          expect(thread.height).toBeGreaterThanOrEqual(height * 0.4);
+          expect(textarea.height).toBeLessThanOrEqual(56);
+        }
       } finally {
         await closeBrowserPage(page);
       }

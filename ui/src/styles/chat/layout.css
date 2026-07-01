@@ -1561,6 +1561,24 @@
   }
 }
 
+@media (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .chat-thread {
+    min-height: 40vh;
+  }
+
+  .agent-chat__input {
+    max-height: min(36vh, 164px);
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  .agent-chat__composer-combobox > textarea {
+    max-height: 56px;
+    overflow-y: auto;
+  }
+}
+
 .chat-queue__item--steered {
   border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
 }
