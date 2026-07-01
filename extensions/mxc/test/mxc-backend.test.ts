@@ -59,6 +59,8 @@ const baseParams = {
   workdir: "/workspace",
 };
 
+const describeOnWindows = describe.runIf(process.platform === "win32");
+
 const testDirs: string[] = [];
 
 function sandboxPolicyOptions(policy: unknown) {
@@ -202,7 +204,7 @@ async function withProcessEnv(
   }
 }
 
-describe("createMxcSandboxBackendHandle", () => {
+describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests)", () => {
   beforeEach(() => {
     execFileMock.mockReset();
     stdinEndMock.mockReset();
@@ -1234,7 +1236,7 @@ describe("createMxcSandboxBackendHandle", () => {
   });
 });
 
-describe("mxcSandboxBackendManager", () => {
+describeOnWindows("mxcSandboxBackendManager (Windows-only MXC backend tests)", () => {
   test("describeRuntime returns running=true", async () => {
     const info = await mxcSandboxBackendManager.describeRuntime({
       entry: {} as never,
