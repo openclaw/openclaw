@@ -329,7 +329,10 @@ export function parseArgs(argvInput: string[]): Options {
     const arg = argv[index];
     const readValue = (options: { allowOptionLike?: boolean; repeatable?: boolean } = {}) => {
       const value = argv[index + 1];
-      if (value === undefined || (!options.allowOptionLike && value.startsWith("--"))) {
+      if (
+        value === undefined ||
+        (!options.allowOptionLike && (value.startsWith("--") || /^-[A-Za-z]$/u.test(value)))
+      ) {
         usage();
       }
       if (!options.repeatable) {
