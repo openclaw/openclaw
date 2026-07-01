@@ -256,23 +256,50 @@ class MemoryDB {
       ? { storageOptions: this.storageOptions }
       : {};
     this.db = await lancedb.connect(this.dbPath, connectionOptions);
-    const tables = await this.db.tableNames();
 
-    if (tables.includes(TABLE_NAME)) {
-      this.table = await this.db.openTable(TABLE_NAME);
-    } else {
-      this.table = await this.db.createTable(TABLE_NAME, [
-        {
-          id: "__schema__",
-          text: "",
-          vector: Array.from({ length: this.vectorDim }).fill(0),
-          importance: 0,
-          category: "other",
-          createdAt: 0,
-        },
-      ]);
-      await this.table.delete('id = "__schema__"');
+    // Retry transient table metadata errors seen with Docker bind mounts.
+    const maxRetries = 3;
+    const retryDelayMs = 100;
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const tables = await this.db.tableNames();
+
+        if (tables.includes(TABLE_NAME)) {
+          const table = await this.db.openTable(TABLE_NAME);
+          await table.delete('id = "__schema__"');
+          this.table = table;
+        } else {
+          const table = await this.db.createTable(TABLE_NAME, [
+            {
+              id: "__schema__",
+              text: "",
+              vector: Array.from({ length: this.vectorDim }).fill(0),
+              importance: 0,
+              category: "other",
+              createdAt: 0,
+            },
+          ]);
+          await table.delete('id = "__schema__"');
+          this.table = table;
+        }
+        return;
+      } catch (error) {
+        lastError = error;
+        if (attempt < maxRetries - 1) {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, retryDelayMs * (attempt + 1));
+          });
+        }
+      }
     }
+
+    // All retries exhausted: surface a Docker bind-mount hint for the common sync-delay case.
+    const error = lastError instanceof Error ? lastError : new Error(String(lastError));
+    error.message +=
+      "\n\nIf the LanceDB data directory is backed by a Docker bind mount, try using a named Docker volume instead.";
+    throw error;
   }
 
   async store(entry: Omit<MemoryEntry, "id" | "createdAt">): Promise<MemoryEntry> {
