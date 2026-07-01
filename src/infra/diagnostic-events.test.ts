@@ -822,6 +822,7 @@ describe("diagnostic-events", () => {
         approvalId: "approval-123",
         reason: "session_rebound",
         phase: "gateway_preflight",
+        ts: expect.any(Number),
       }),
     );
   });

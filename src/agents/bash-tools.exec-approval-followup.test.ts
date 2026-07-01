@@ -232,6 +232,10 @@ describe("exec approval followup", () => {
     const sessionStore = writeTempSessionStore({
       "agent:main:main": { sessionId: "session-after-reset" },
     });
+    const diagnostics: DiagnosticEventPayload[] = [];
+    onDiagnosticEvent((event) => {
+      diagnostics.push(event);
+    });
 
     const result = await sendExecApprovalFollowup({
       approvalId: "req-finished-rebound",
@@ -245,6 +249,15 @@ describe("exec approval followup", () => {
     });
 
     expect(result).toBe(false);
+    await waitForDiagnosticEventsDrained();
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        type: "exec.approval.followup_suppressed",
+        approvalId: "req-finished-rebound",
+        reason: "session_rebound",
+        phase: "direct_delivery",
+      }),
+    );
     expect(sendMessage).not.toHaveBeenCalled();
     expect(callGatewayTool).not.toHaveBeenCalled();
   });
