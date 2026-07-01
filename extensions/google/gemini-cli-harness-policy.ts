@@ -4,9 +4,9 @@ export const GOOGLE_GEMINI_CLI_HARNESS_ENV = "OPENCLAW_ENABLE_GOOGLE_GEMINI_CLI_
 
 const ENABLED_VALUES = new Set(["1", "true", "yes", "on"]);
 
-export function shouldEnableGoogleGeminiCliHarness(
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
+type HarnessEnv = Record<string, string | undefined>;
+
+export function shouldEnableGoogleGeminiCliHarness(env: HarnessEnv = process.env): boolean {
   const value = env[GOOGLE_GEMINI_CLI_HARNESS_ENV];
   return typeof value === "string" && ENABLED_VALUES.has(value.trim().toLowerCase());
 }
