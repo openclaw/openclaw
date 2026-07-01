@@ -55,7 +55,6 @@ import {
   resolveTelegramEffectiveDmPolicy,
   type NormalizedAllowFrom,
 } from "./bot-access.js";
-import { resolveTelegramBotToBotPolicy } from "./bot-to-bot-policy.js";
 import {
   resolveAgentDir,
   resolveDefaultAgentId,
@@ -84,6 +83,7 @@ import {
   type TelegramMessageProcessingResult,
   type TelegramSpooledReplayDeferredParticipant,
 } from "./bot-processing-outcome.js";
+import { resolveTelegramBotToBotPolicy } from "./bot-to-bot-policy.js";
 import {
   MEDIA_GROUP_TIMEOUT_MS,
   resolveTelegramUpdateId,
@@ -3115,6 +3115,7 @@ export const registerTelegramHandlers = ({
     sendOversizeWarning: boolean;
     oversizeLogMessage: string;
     errorMessage: string;
+    applyBotToBotPolicy?: boolean;
   };
 
   const normalizeChannelPostMessage = (post: Message): Message => {
@@ -3297,36 +3298,39 @@ export const registerTelegramHandlers = ({
       if (shouldSkipUpdate(event.ctxForDedupe)) {
         return;
       }
-      let effectiveBotToBotConfig = telegramCfg.botToBot;
-      try {
-        const runtimeBotToBotConfig = resolveTelegramAccount({
-          cfg: telegramDeps.getRuntimeConfig(),
-          accountId,
-        }).config.botToBot;
-        effectiveBotToBotConfig = runtimeBotToBotConfig ?? effectiveBotToBotConfig;
-      } catch {
-        // Keep the startup snapshot when live config is temporarily unavailable.
-      }
-      const botToBotDecision = resolveTelegramBotToBotPolicy({
-        message: event.msg,
-        from: event.msg.from,
-        me: event.ctx.me,
-        config: effectiveBotToBotConfig,
-        metadata: {
-          accountId,
-          updateId: resolveTelegramUpdateId(event.ctxForDedupe),
-        },
-      });
-      if (botToBotDecision.decision !== "allow" || !botToBotDecision.allow) {
-        logVerbose(
-          `Blocked telegram bot-to-bot sender ${event.senderId || "unknown"} (${botToBotDecision.reason}${
-            botToBotDecision.dedupeKey ? `, dedupe=${botToBotDecision.dedupeKey}` : ""
-          })`,
-        );
-        return;
+      if (event.applyBotToBotPolicy !== false) {
+        let effectiveBotToBotConfig = telegramCfg.botToBot;
+        try {
+          const runtimeBotToBotConfig = resolveTelegramAccount({
+            cfg: telegramDeps.getRuntimeConfig(),
+            accountId,
+          }).config.botToBot;
+          effectiveBotToBotConfig = runtimeBotToBotConfig ?? effectiveBotToBotConfig;
+        } catch {
+          // Keep the startup snapshot when live config is temporarily unavailable.
+        }
+        const botToBotDecision = resolveTelegramBotToBotPolicy({
+          message: event.msg,
+          from: event.msg.from,
+          me: event.ctx.me,
+          config: effectiveBotToBotConfig,
+          metadata: {
+            accountId,
+            updateId: resolveTelegramUpdateId(event.ctxForDedupe),
+          },
+        });
+        if (botToBotDecision.decision !== "allow" || !botToBotDecision.allow) {
+          logVerbose(
+            `Blocked telegram bot-to-bot sender ${event.senderId || "unknown"} (${botToBotDecision.reason}${
+              botToBotDecision.dedupeKey ? `, dedupe=${botToBotDecision.dedupeKey}` : ""
+            })`,
+          );
+          return;
+        }
       }
       const gate = await authorizeInboundMessage({
-        msg: event.msg,chatId: event.chatId,
+        msg: event.msg,
+        chatId: event.chatId,
         isGroup: event.isGroup,
         isForum: event.isForum,
         messageThreadId: event.messageThreadId,
@@ -3490,6 +3494,7 @@ export const registerTelegramHandlers = ({
       sendOversizeWarning: false,
       oversizeLogMessage: "channel post media exceeds size limit",
       errorMessage: "channel_post handler failed",
+      applyBotToBotPolicy: false,
     });
   });
 

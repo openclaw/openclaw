@@ -73,7 +73,6 @@ function setOpenChannelPostConfig() {
     channels: {
       telegram: {
         groupPolicy: "open",
-        botToBot: { enabled: true, allowUsernames: ["wake_channel"] },
         groups: {
           "-100777111222": {
             enabled: true,

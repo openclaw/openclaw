@@ -41,21 +41,21 @@ describe("telegram custom commands schema", () => {
       expect(res.data.botToBot).toEqual({
         enabled: false,
         killSwitch: false,
-        allowUsernames: [],
+        allowBotIds: [],
       });
     }
   });
 
-  it("normalizes Telegram bot-to-bot allow usernames", () => {
+  it("accepts and normalizes Telegram bot-to-bot numeric allow bot IDs", () => {
     const res = TelegramConfigSchema.safeParse({
       botToBot: {
         enabled: true,
-        allowUsernames: [" @HelperBot ", "OPS_BOT"],
+        allowBotIds: [" 001234 ", 5678],
       },
       accounts: {
         ops: {
           botToBot: {
-            allowUsernames: ["@NestedBot"],
+            allowBotIds: ["42"],
           },
         },
       },
@@ -66,11 +66,11 @@ describe("telegram custom commands schema", () => {
       return;
     }
 
-    expect(res.data.botToBot?.allowUsernames).toEqual(["helperbot", "ops_bot"]);
+    expect(res.data.botToBot?.allowBotIds).toEqual(["1234", "5678"]);
     expect(res.data.accounts?.ops?.botToBot).toEqual({
       enabled: false,
       killSwitch: false,
-      allowUsernames: ["nestedbot"],
+      allowBotIds: ["42"],
     });
   });
 
@@ -78,28 +78,53 @@ describe("telegram custom commands schema", () => {
     expectTelegramConfigIssue(
       {
         botToBot: {
-          allowUsernames: ["bad-name"],
+          allowBotIds: ["bad-name"],
         },
       },
-      "botToBot.allowUsernames.0",
+      "botToBot.allowBotIds.0",
     );
     expectTelegramConfigIssue(
       {
         botToBot: {
-          maxDepth: -1,
+          allowBotIds: [0],
         },
       },
-      "botToBot.maxDepth",
+      "botToBot.allowBotIds.0",
+    );
+  });
+
+  it("rejects removed Telegram bot-to-bot config fields", () => {
+    expectTelegramConfigIssue(
+      {
+        botToBot: {
+          allowUsernames: ["helperbot"],
+        },
+      },
+      "botToBot",
     );
     expectTelegramConfigIssue(
       {
         botToBot: {
-          rateLimit: {
-            windowMs: 0,
-          },
+          maxDepth: 1,
         },
       },
-      "botToBot.rateLimit.windowMs",
+      "botToBot",
+    );
+    expectTelegramConfigIssue(
+      {
+        botToBot: {
+          maxHops: 1,
+        },
+      },
+      "botToBot",
+    );
+    expectTelegramConfigIssue(
+      {
+        botToBot: {
+          rateLimit: { windowMs: 1000, maxMessages: 1 },
+        },
+      },
+      "botToBot",
     );
   });
 

@@ -154,35 +154,21 @@ const TelegramCustomCommandConfig = {
   pattern: TelegramCommandNamePattern,
   patternDescription: "use a-z, 0-9, underscore; max 32 chars",
 } as const;
-const normalizeTelegramBotUsername = (value: string): string =>
-  value.trim().replace(/^@+/u, "").toLowerCase();
-const TelegramBotToBotUsernameSchema = z
-  .string()
-  .overwrite(normalizeTelegramBotUsername)
-  .pipe(
-    z
-      .string()
-      .min(1)
-      .regex(/^[a-z0-9_]{1,32}$/u),
-  );
-const TelegramBotToBotRateLimitSchema = z
-  .object({
-    windowMs: z.number().int().positive().optional(),
-    maxMessages: z.number().int().positive().optional(),
-  })
-  .strict();
+const normalizeTelegramBotToBotId = (value: string | number): string =>
+  String(value).trim().replace(/^0+/u, "") || "0";
+const TelegramBotToBotIdSchema = z
+  .union([z.number().int().positive(), z.string().trim().regex(/^\d+$/u)])
+  .overwrite(normalizeTelegramBotToBotId)
+  .pipe(z.string().regex(/^[1-9]\d*$/u));
 const TelegramBotToBotSchema = z
   .object({
     enabled: z.boolean().optional().default(false),
     killSwitch: z.boolean().optional().default(false),
-    allowUsernames: z.array(TelegramBotToBotUsernameSchema).optional().default([]),
-    maxDepth: z.number().int().nonnegative().optional(),
-    maxHops: z.number().int().nonnegative().optional(),
-    rateLimit: TelegramBotToBotRateLimitSchema.optional(),
+    allowBotIds: z.array(TelegramBotToBotIdSchema).optional().default([]),
   })
   .strict()
   .optional()
-  .default({ enabled: false, killSwitch: false, allowUsernames: [] });
+  .default({ enabled: false, killSwitch: false, allowBotIds: [] });
 export const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),

@@ -1,13 +1,7 @@
 export type TelegramBotToBotPolicyConfig = {
   enabled?: boolean;
   killSwitch?: boolean;
-  allowUsernames?: string[];
-  maxDepth?: number;
-  maxHops?: number;
-  rateLimit?: {
-    windowMs?: number;
-    maxMessages?: number;
-  };
+  allowBotIds?: Array<string | number>;
 };
 
 export type TelegramBotToBotPolicyUser = {
@@ -26,8 +20,6 @@ export type TelegramBotToBotPolicyMessage = {
 export type TelegramBotToBotPolicyMetadata = {
   accountId?: string;
   updateId?: string | number;
-  depth?: number;
-  hops?: number;
 };
 
 export type TelegramBotToBotPolicyReason =
@@ -36,21 +28,17 @@ export type TelegramBotToBotPolicyReason =
   | "kill_switch"
   | "disabled_bot_sender"
   | "allowlisted_bot_sender"
-  | "unknown_bot_sender"
-  | "max_depth_exceeded"
-  | "max_hops_exceeded";
+  | "unknown_bot_sender";
 
 export type TelegramBotToBotPolicyDecision = {
   decision: "allow" | "drop";
   allow: boolean;
   reason: TelegramBotToBotPolicyReason;
+  senderId?: string;
   senderUsername?: string;
-  normalizedAllowUsernames: string[];
+  normalizedAllowBotIds: string[];
   dedupeKey?: string;
   senderScopeKey?: string;
-  rateLimitKey?: string;
-  maxDepth?: number;
-  maxHops?: number;
 };
 
 export function normalizeTelegramBotToBotUsername(value: unknown): string | undefined {
@@ -59,6 +47,21 @@ export function normalizeTelegramBotToBotUsername(value: unknown): string | unde
   }
   const normalized = value.trim().replace(/^@+/u, "").toLowerCase();
   return normalized ? normalized : undefined;
+}
+
+export function normalizeTelegramBotToBotId(value: unknown): string | undefined {
+  if (typeof value === "number") {
+    return Number.isSafeInteger(value) && value > 0 ? String(value) : undefined;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!/^\d+$/u.test(trimmed)) {
+    return undefined;
+  }
+  const normalized = trimmed.replace(/^0+/u, "") || "0";
+  return normalized === "0" ? undefined : normalized;
 }
 
 export function resolveTelegramBotToBotPolicy(params: {
@@ -70,12 +73,11 @@ export function resolveTelegramBotToBotPolicy(params: {
 }): TelegramBotToBotPolicyDecision {
   const { message, from, me, metadata } = params;
   const config = params.config ?? {};
-  const senderId = from?.id == null ? undefined : String(from.id);
-  const meId = me?.id == null ? undefined : String(me.id);
+  const senderId = normalizeTelegramBotToBotId(from?.id);
+  const meId = normalizeTelegramBotToBotId(me?.id);
   const senderUsername = normalizeTelegramBotToBotUsername(from?.username);
-  const meUsername = normalizeTelegramBotToBotUsername(me?.username);
-  const normalizedAllowUsernames = (config.allowUsernames ?? [])
-    .map((entry) => normalizeTelegramBotToBotUsername(entry))
+  const normalizedAllowBotIds = (config.allowBotIds ?? [])
+    .map((entry) => normalizeTelegramBotToBotId(entry))
     .filter((entry): entry is string => Boolean(entry));
   const chatId = message?.chat?.id == null ? undefined : String(message.chat.id);
   const messageId = message?.message_id == null ? undefined : String(message.message_id);
@@ -88,27 +90,16 @@ export function resolveTelegramBotToBotPolicy(params: {
         ? ["telegram", accountId, "message", chatId, messageId].join(":")
         : undefined;
   const senderScopeKey =
-    chatId && (senderUsername || senderId)
-      ? ["telegram-bot-to-bot", accountId, chatId, senderUsername ?? senderId].join(":")
-      : undefined;
-  const rateLimitKey =
-    chatId && (senderUsername || senderId)
-      ? ["telegram-bot-to-bot", accountId, chatId, senderUsername ?? senderId].join(":")
-      : undefined;
+    chatId && senderId ? ["telegram-bot-to-bot", accountId, chatId, senderId].join(":") : undefined;
   const base = {
+    senderId,
     senderUsername,
-    normalizedAllowUsernames,
+    normalizedAllowBotIds,
     dedupeKey,
     senderScopeKey,
-    rateLimitKey,
-    maxDepth: config.maxDepth,
-    maxHops: config.maxHops,
   };
 
-  if (
-    (senderId && meId && senderId === meId) ||
-    (senderUsername && meUsername && senderUsername === meUsername)
-  ) {
+  if (senderId && meId && senderId === meId) {
     return { ...base, decision: "drop", allow: false, reason: "self_loop" };
   }
 
@@ -120,19 +111,11 @@ export function resolveTelegramBotToBotPolicy(params: {
     return { ...base, decision: "drop", allow: false, reason: "kill_switch" };
   }
 
-  if (config.maxDepth != null && metadata?.depth != null && metadata.depth > config.maxDepth) {
-    return { ...base, decision: "drop", allow: false, reason: "max_depth_exceeded" };
-  }
-
-  if (config.maxHops != null && metadata?.hops != null && metadata.hops > config.maxHops) {
-    return { ...base, decision: "drop", allow: false, reason: "max_hops_exceeded" };
-  }
-
   if (!config.enabled) {
     return { ...base, decision: "drop", allow: false, reason: "disabled_bot_sender" };
   }
 
-  if (senderUsername && normalizedAllowUsernames.includes(senderUsername)) {
+  if (senderId && normalizedAllowBotIds.includes(senderId)) {
     return { ...base, decision: "allow", allow: true, reason: "allowlisted_bot_sender" };
   }
 

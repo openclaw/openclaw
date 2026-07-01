@@ -100,26 +100,16 @@ export type TelegramCustomCommand = {
   description: string;
 };
 
-export type TelegramBotToBotRateLimitConfig = {
-  /** Sliding-window size for future per-chat/per-bot admission limiting. */
-  windowMs?: number;
-  /** Max bot-originated messages allowed inside the rate-limit window. */
-  maxMessages?: number;
-};
-
 export type TelegramBotToBotConfig = {
   /** Opt-in gate for bot-originated Telegram messages. Default: false. */
   enabled?: boolean;
   /** Emergency switch that drops all bot-originated messages before allowlist checks. */
   killSwitch?: boolean;
-  /** Telegram bot usernames allowed when bot-to-bot admission is enabled. */
-  allowUsernames?: string[];
-  /** Future loop-depth cap carried by bot-to-bot metadata. */
-  maxDepth?: number;
-  /** Future hop-count cap carried by bot-to-bot metadata. */
-  maxHops?: number;
-  /** Future per-chat/per-bot rate-limit settings. */
-  rateLimit?: TelegramBotToBotRateLimitConfig;
+  /**
+   * Numeric Telegram bot/user IDs allowed when bot-to-bot admission is enabled.
+   * Usernames are diagnostics/display only and are not used for admission.
+   */
+  allowBotIds?: Array<string | number>;
 };
 
 export type TelegramAccountConfig = {

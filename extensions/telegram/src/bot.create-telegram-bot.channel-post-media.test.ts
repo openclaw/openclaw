@@ -83,7 +83,6 @@ function setOpenChannelPostConfig() {
     channels: {
       telegram: {
         groupPolicy: "open",
-        botToBot: { enabled: true, allowUsernames: ["wake_channel"] },
         groups: {
           "-100777111222": {
             enabled: true,
@@ -96,12 +95,16 @@ function setOpenChannelPostConfig() {
 }
 
 function getChannelPostHandler() {
-  createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
+  createTelegramBot({
+    token: "tok",
+    proxyFetch: globalThis.fetch,
+    testTimings: TELEGRAM_TEST_TIMINGS,
+  });
   return getOnHandler("channel_post") as (ctx: Record<string, unknown>) => Promise<void>;
 }
 
 function getChannelPostHandlerWithRuntimeTimings() {
-  createTelegramBot({ token: "tok" });
+  createTelegramBot({ token: "tok", proxyFetch: globalThis.fetch });
   return getOnHandler("channel_post") as (ctx: Record<string, unknown>) => Promise<void>;
 }
 
@@ -306,7 +309,6 @@ describe("createTelegramBot channel_post media", () => {
         telegram: {
           groupPolicy: "open",
           mediaGroupFlushMs: 75,
-          botToBot: { enabled: true, allowUsernames: ["wake_channel"] },
           groups: {
             "-100777111222": {
               enabled: true,
@@ -698,10 +700,12 @@ describe("createTelegramBot channel_post media", () => {
     setOpenChannelPostConfig();
 
     const runtimeError = vi.fn();
+    const fetchSpy = createImageFetchSpy();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       createTelegramBot({
         token: "tok",
+        proxyFetch: globalThis.fetch,
         testTimings: TELEGRAM_TEST_TIMINGS,
         runtime: { error: runtimeError } as unknown as RuntimeEnv,
       });
@@ -726,6 +730,7 @@ describe("createTelegramBot channel_post media", () => {
       expect(replySpy).not.toHaveBeenCalled();
     } finally {
       setTimeoutSpy.mockRestore();
+      fetchSpy.mockRestore();
     }
   });
 });
