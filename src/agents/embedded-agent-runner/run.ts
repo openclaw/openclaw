@@ -2671,6 +2671,57 @@ async function runEmbeddedAgentInternal(
               }
               continue;
             }
+            if (!toolResultTruncationAttempted && !preflightRecovery) {
+              const contextWindowTokens = ctxInfo.tokens;
+              const toolResultMaxChars = resolveLiveToolResultMaxChars({
+                contextWindowTokens,
+                cfg: params.config,
+                agentId: sessionAgentId,
+              });
+              const hasOversized = attempt.messagesSnapshot
+                ? sessionLikelyHasOversizedToolResults({
+                    messages: attempt.messagesSnapshot,
+                    contextWindowTokens,
+                    maxCharsOverride: toolResultMaxChars,
+                  })
+                : false;
+
+              if (hasOversized) {
+                toolResultTruncationAttempted = true;
+                log.warn(
+                  `[context-overflow-recovery] Attempting tool result truncation before compaction for ${provider}/${modelId} ` +
+                    `(contextWindow=${contextWindowTokens} tokens)`,
+                );
+                const truncResult = await truncateOversizedToolResultsInSession({
+                  sessionFile: activeSessionFile,
+                  contextWindowTokens,
+                  maxCharsOverride: toolResultMaxChars,
+                  sessionId: activeSessionId,
+                  sessionKey: params.sessionKey,
+                  config: params.config,
+                });
+                if (truncResult.truncated) {
+                  log.info(
+                    `[context-overflow-recovery] Truncated ${truncResult.truncatedCount} tool result(s); retrying prompt`,
+                  );
+                  if (
+                    params.currentMessageId !== undefined &&
+                    params.currentMessageId === lastPersistedCurrentMessageId
+                  ) {
+                    // The failed attempt reached the embedded agent far enough to persist this user turn.
+                    // Retrying the original prompt would replay it, so resume from the
+                    // truncated transcript and suppress the next user append.
+                    nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
+                    suppressNextUserMessagePersistence = true;
+                  }
+                  continue;
+                }
+                log.warn(
+                  `[context-overflow-recovery] Tool result truncation did not help before compaction: ${truncResult.reason ?? "unknown"}`,
+                );
+              }
+            }
+
             // Attempt explicit overflow compaction only when this attempt did not
             // already auto-compact.
             if (
