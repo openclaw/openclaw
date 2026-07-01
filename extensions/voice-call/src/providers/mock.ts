@@ -30,9 +30,14 @@ import type { VoiceCallProvider } from "./base.js";
 export class MockProvider implements VoiceCallProvider {
   readonly name = "mock" as const;
 
+  /** Track seen request keys so repeated deliveries are flagged as replay. */
+  private readonly seenKeys = new Set<string>();
+
   verifyWebhook(_ctx: WebhookContext): WebhookVerificationResult {
     const key = `mock:${crypto.createHash("sha256").update(`${_ctx.method}\n${_ctx.url}\n${_ctx.rawBody}`).digest("hex")}`;
-    return { ok: true, verifiedRequestKey: key };
+    const isReplay = this.seenKeys.has(key);
+    this.seenKeys.add(key);
+    return { ok: true, verifiedRequestKey: key, isReplay };
   }
 
   parseWebhookEvent(
