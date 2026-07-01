@@ -790,6 +790,38 @@ describe("gateway agent handler", () => {
     expect(entry.lastInteractionAt).not.toBe(1);
   });
 
+  it("clears automatic recovery quarantine state when a user turn rotates the session id", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    dateOnlyFakeClockActive = true;
+    vi.setSystemTime(new Date("2026-05-07T12:00:00.000Z"));
+    const staleEntry = {
+      sessionId: "quarantined-session-id",
+      updatedAt: 0,
+      sessionStartedAt: 0,
+      lastInteractionAt: 0,
+      abortedLastRun: true,
+      restartRecoveryAttempts: 3,
+      restartRecoveryQuarantinedAt: 1,
+      restartRecoveryQuarantineReason: "exceeded_restart_retry_budget",
+      subagentRecovery: {
+        automaticAttempts: 2,
+        lastAttemptAt: 3,
+        wedgedAt: 4,
+        wedgedReason: "automatic_attempt_budget_exceeded",
+      },
+    };
+    mockMainSessionEntry(staleEntry);
+
+    const capturedEntry = await runMainAgentAndCaptureEntry("test-idem-rotated-recovery-clear");
+
+    expect(capturedEntry.sessionId).not.toBe("quarantined-session-id");
+    expect(capturedEntry.abortedLastRun).toBeUndefined();
+    expect(capturedEntry.restartRecoveryAttempts).toBeUndefined();
+    expect(capturedEntry.restartRecoveryQuarantinedAt).toBeUndefined();
+    expect(capturedEntry.restartRecoveryQuarantineReason).toBeUndefined();
+    expect(capturedEntry.subagentRecovery).toBeUndefined();
+  });
+
   it("disables single-entry persistence when admission prunes legacy store keys", async () => {
     mocks.loadConfigReturn = {
       session: { mainKey: "work" },
