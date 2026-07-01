@@ -59,6 +59,47 @@ describe("crabline transport", () => {
     });
   });
 
+  it("injects Telegram native commands through the shared transport adapter", async () => {
+    await withTempDir("qa-crabline-transport-", async (outputDir) => {
+      const transport = await createQaCrablineTransportAdapter({
+        outputDir,
+        selection: createSelection(),
+        state: createQaBusState(),
+      });
+
+      try {
+        await transport.sendNativeCommand({
+          command: "stop",
+          conversation: { id: "alice", kind: "direct" },
+          senderId: "alice",
+          senderName: "Alice",
+        });
+
+        const manifest = JSON.parse(
+          await fs.readFile(path.join(outputDir, OPENCLAW_CRABLINE_MANIFEST_PATH), "utf8"),
+        ) as {
+          botToken: string;
+          endpoints: { apiRoot: string };
+        };
+        const response = await fetch(
+          `${manifest.endpoints.apiRoot}/bot${manifest.botToken}/getUpdates`,
+        );
+        await expect(response.json()).resolves.toMatchObject({
+          result: [
+            {
+              message: {
+                entities: [{ length: 5, offset: 0, type: "bot_command" }],
+                text: "/stop",
+              },
+            },
+          ],
+        });
+      } finally {
+        await transport.cleanup?.();
+      }
+    });
+  });
+
   it("configures OpenClaw's Slack plugin against a Crabline local provider server", async () => {
     await withTempDir("qa-crabline-transport-", async (outputDir) => {
       const transport = await createQaCrablineTransportAdapter({
