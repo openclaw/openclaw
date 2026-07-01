@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import { resolveDurableRuntimeSqlitePath } from "./config.js";
 import {
   DURABLE_RUNTIME_SQLITE_SCHEMA_VERSION,
   openDurableRuntimeSqliteStore,
@@ -62,6 +64,25 @@ describe("durable runtime sqlite store", () => {
       );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses shared state private-mode hardening when it creates the state database", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-durable-state-mode-"));
+    fs.chmodSync(stateDir, 0o755);
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const pathname = resolveDurableRuntimeSqlitePath(env);
+    const store = openDurableRuntimeSqliteStore({ env });
+    try {
+      expect(fs.statSync(path.dirname(pathname)).mode & 0o777).toBe(0o700);
+      for (const candidate of resolveSqliteDatabaseFilePaths(pathname)) {
+        if (fs.existsSync(candidate)) {
+          expect(fs.statSync(candidate).mode & 0o777).toBe(0o600);
+        }
+      }
+    } finally {
+      store.close();
+      fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
 

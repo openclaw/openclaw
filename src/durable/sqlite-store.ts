@@ -1,11 +1,11 @@
 // SQLite-backed durable runtime store for the native control-plane prototype.
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { configureSqliteConnectionPragmas } from "../infra/sqlite-wal.js";
+import { ensureOpenClawStatePermissions } from "../state/openclaw-state-db.js";
 import { resolveDurableRuntimeSqlitePath } from "./config.js";
 import type {
   AppendDurableRuntimeEventInput,
@@ -606,8 +606,9 @@ export function openDurableRuntimeSqliteStore(options?: {
   path?: string;
   env?: NodeJS.ProcessEnv;
 }): DurableRuntimeStore {
-  const pathname = path.resolve(options?.path ?? resolveDurableRuntimeSqlitePath(options?.env));
-  fs.mkdirSync(path.dirname(pathname), { recursive: true, mode: 0o700 });
+  const env = options?.env ?? process.env;
+  const pathname = path.resolve(options?.path ?? resolveDurableRuntimeSqlitePath(env));
+  ensureOpenClawStatePermissions(pathname, env);
   const sqlite = requireNodeSqlite();
   const db = new sqlite.DatabaseSync(pathname);
   const walMaintenance = configureSqliteConnectionPragmas(db, {
@@ -617,7 +618,16 @@ export function openDurableRuntimeSqliteStore(options?: {
     foreignKeys: true,
     synchronous: "NORMAL",
   });
-  ensureDurableRuntimeSchema(db);
+  try {
+    ensureDurableRuntimeSchema(db);
+    ensureOpenClawStatePermissions(pathname, env);
+  } catch (err) {
+    walMaintenance.close();
+    if (db.isOpen) {
+      db.close();
+    }
+    throw err;
+  }
 
   return {
     createRun(input: CreateDurableRuntimeRunInput): DurableRuntimeRun {
