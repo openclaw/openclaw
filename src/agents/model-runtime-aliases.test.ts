@@ -34,6 +34,38 @@ function createAnthropicAuthConfig(params: {
   } as OpenClawConfig;
 }
 
+function createGoogleGeminiCliSetupBackend() {
+  return {
+    pluginId: "google",
+    backend: {
+      id: "google-gemini-cli",
+      modelProvider: "google",
+      config: { command: "gemini" },
+      bundleMcp: true,
+    },
+  };
+}
+
+function createGoogleGeminiCliAuthConfig(params: {
+  order?: Record<string, string[]>;
+  includeDirectGoogleProfile?: boolean;
+} = {}): OpenClawConfig {
+  return {
+    auth: {
+      order: params.order,
+      profiles: {
+        ...(params.includeDirectGoogleProfile
+          ? { "google:api": { provider: "google", mode: "api_key" } }
+          : {}),
+        "google-gemini-cli:user@example.com": {
+          provider: "google-gemini-cli",
+          mode: "oauth",
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
 describe("resolveCliRuntimeExecutionProvider", () => {
   beforeEach(() => {
     cliBackendsTesting.setDepsForTest({
@@ -44,6 +76,7 @@ describe("resolveCliRuntimeExecutionProvider", () => {
         autoEnableProbes: [],
         diagnostics: [],
       }),
+      resolvePluginSetupCliBackend: () => undefined,
       resolveRuntimeCliBackends: () => [
         {
           id: "claude-cli",
@@ -101,6 +134,57 @@ describe("resolveCliRuntimeExecutionProvider", () => {
         modelId: "opus-4.7",
       }),
     ).toBe("claude-cli");
+  });
+
+  it("keeps existing Gemini CLI auth profiles routed through the setup-registry backend", () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupCliBackend: ({ backend }) =>
+        backend === "google-gemini-cli" ? createGoogleGeminiCliSetupBackend() : undefined,
+    });
+
+    expect(
+      resolveCliRuntimeExecutionProvider({
+        authProfileId: "google-gemini-cli:user@example.com",
+        cfg: createGoogleGeminiCliAuthConfig(),
+        provider: "google",
+        modelId: "gemini-3.1-pro-preview",
+      }),
+    ).toBe("google-gemini-cli");
+  });
+
+  it("migrates legacy Gemini CLI auth order to canonical google runtime execution", () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupCliBackend: ({ backend }) =>
+        backend === "google-gemini-cli" ? createGoogleGeminiCliSetupBackend() : undefined,
+    });
+
+    expect(
+      resolveCliRuntimeExecutionProvider({
+        cfg: createGoogleGeminiCliAuthConfig({
+          order: { "google-gemini-cli": ["google-gemini-cli:user@example.com"] },
+        }),
+        provider: "google",
+        modelId: "gemini-3.1-pro-preview",
+      }),
+    ).toBe("google-gemini-cli");
+  });
+
+  it("does not infer Gemini CLI when a direct google profile is also present without auth order", () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupCliBackend: ({ backend }) =>
+        backend === "google-gemini-cli" ? createGoogleGeminiCliSetupBackend() : undefined,
+    });
+
+    expect(
+      resolveCliRuntimeExecutionProvider({
+        cfg: createGoogleGeminiCliAuthConfig({ includeDirectGoogleProfile: true }),
+        provider: "google",
+        modelId: "gemini-3.1-pro-preview",
+      }),
+    ).toBeUndefined();
   });
 
   it("does not override an explicit OpenClaw model-runtime policy with CLI auth", () => {
