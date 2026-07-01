@@ -338,25 +338,34 @@ export function hashCommandList(commands: TelegramMenuCommand[]): string {
   return createHash("sha256").update(JSON.stringify(sorted)).digest("hex").slice(0, 16);
 }
 
+type SyncedCommandState = {
+  hash: string;
+  registeredCommands: TelegramMenuCommand[];
+};
+
 // Keep the sync cache process-local so restarts always re-register commands.
-const syncedCommandHashes = new Map<string, string>();
+const syncedCommandStates = new Map<string, SyncedCommandState>();
 
 function getCommandHashKey(accountId?: string, botIdentity?: string): string {
   return `${accountId ?? "default"}:${botIdentity ?? ""}`;
 }
 
-function readCachedCommandHash(accountId?: string, botIdentity?: string): string | null {
+function readCachedCommandState(
+  accountId?: string,
+  botIdentity?: string,
+): SyncedCommandState | null {
   const key = getCommandHashKey(accountId, botIdentity);
-  return syncedCommandHashes.get(key) ?? null;
+  return syncedCommandStates.get(key) ?? null;
 }
 
-function writeCachedCommandHash(
+function writeCachedCommandState(
   accountId: string | undefined,
   botIdentity: string | undefined,
   hash: string,
+  registeredCommands: TelegramMenuCommand[],
 ): void {
   const key = getCommandHashKey(accountId, botIdentity);
-  syncedCommandHashes.set(key, hash);
+  syncedCommandStates.set(key, { hash, registeredCommands });
 }
 
 function normalizeTelegramLanguageCode(languageCode: string): string | null {
@@ -462,6 +471,42 @@ async function deleteTelegramMenuCommandsForScopes(params: {
   return allDeleted;
 }
 
+function collectTelegramCommandLanguageCodes(commands: TelegramMenuCommand[]): string[] {
+  const languageCodes = new Set<string>();
+  for (const command of commands) {
+    for (const languageCode of Object.keys(command.descriptionLocalizations ?? {})) {
+      const normalized = normalizeTelegramLanguageCode(languageCode);
+      if (normalized) {
+        languageCodes.add(normalized);
+      }
+    }
+  }
+  return [...languageCodes].toSorted();
+}
+
+async function hasRemoteTelegramMenuCommands(params: {
+  bot: Bot;
+  commands: TelegramMenuCommand[];
+}): Promise<boolean> {
+  const languageCodes = collectTelegramCommandLanguageCodes(params.commands);
+  for (const scope of TELEGRAM_COMMAND_MENU_SCOPES) {
+    const baseCommands = await params.bot.api.getMyCommands(scope.options);
+    if (baseCommands.length === 0) {
+      return false;
+    }
+    for (const languageCode of languageCodes) {
+      const localizedCommands = await params.bot.api.getMyCommands({
+        ...scope.options,
+        language_code: languageCode as LanguageCode,
+      });
+      if (localizedCommands.length === 0) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 async function setTelegramMenuCommandsForScopes(params: {
   bot: Bot;
   runtime: RuntimeEnv;
@@ -503,10 +548,35 @@ export function syncTelegramMenuCommands(params: {
     // is restarted several times in quick succession.
     // See: openclaw/openclaw#32017
     const currentHash = hashCommandList(commandsToRegister);
-    const cachedHash = readCachedCommandHash(accountId, botIdentity);
-    if (cachedHash === currentHash) {
-      logVerbose("telegram: command menu unchanged; skipping sync");
-      return;
+    const cachedState = readCachedCommandState(accountId, botIdentity);
+    if (cachedState?.hash === currentHash) {
+      if (commandsToRegister.length === 0) {
+        logVerbose("telegram: empty command menu unchanged; skipping sync");
+        return;
+      }
+      // The local hash matches, but the remote Telegram state may have been
+      // cleared (e.g. after an interrupted sync or gateway restart).  Verify
+      // every scope and language variant we write before skipping.  See #92944.
+      // Localized command menus (setMyCommands with language_code) must also
+      // be checked — a stale hash can leave those variants empty.  See #92945.
+      try {
+        if (
+          await hasRemoteTelegramMenuCommands({
+            bot,
+            commands: cachedState.registeredCommands,
+          })
+        ) {
+          logVerbose("telegram: command menu unchanged; skipping sync");
+          return;
+        }
+        logVerbose(
+          "telegram: command menu hash matches but remote is empty in at least one scope or language variant; re-syncing",
+        );
+      } catch {
+        // If getMyCommands fails (network, rate limit, etc.), fall through to
+        // re-sync rather than trusting the stale hash.
+        logVerbose("telegram: getMyCommands failed; re-syncing command menu");
+      }
     }
 
     // Keep delete -> set ordering to avoid stale deletions racing after fresh registrations.
@@ -520,7 +590,7 @@ export function syncTelegramMenuCommands(params: {
       if (typeof bot.api.deleteMyCommands !== "function") {
         await setTelegramMenuCommandsForScopes({ bot, runtime, commands: [] });
       }
-      writeCachedCommandHash(accountId, botIdentity, currentHash);
+      writeCachedCommandState(accountId, botIdentity, currentHash, []);
       return;
     }
 
@@ -584,7 +654,7 @@ export function syncTelegramMenuCommands(params: {
         languageCode: variant.languageCode,
       });
     }
-    writeCachedCommandHash(accountId, botIdentity, currentHash);
+    writeCachedCommandState(accountId, botIdentity, currentHash, acceptedCommands);
   };
 
   void sync().catch((err: unknown) => {
