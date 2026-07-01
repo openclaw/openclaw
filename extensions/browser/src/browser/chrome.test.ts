@@ -985,11 +985,11 @@ describe("browser chrome helpers", () => {
       expect(version.Browser).toBe("Chrome/130");
     });
 
-    it("throws when content-length exceeds 16 MiB", async () => {
+    it("throws when body exceeds 16 MiB", async () => {
       vi.stubGlobal(
         "fetch",
         vi.fn().mockResolvedValue(
-          new Response(JSON.stringify({ Browser: "Chrome/130" }), {
+          new Response(new ArrayBuffer(16 * 1024 * 1024 + 1), {
             status: 200,
             headers: {
               "content-type": "application/json",

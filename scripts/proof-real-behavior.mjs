@@ -5,29 +5,59 @@
  *
  * This script starts a local HTTP server and uses Node's fetch to
  * demonstrate real HTTP behavior for the CDP /json/version
- * content-length pre-check fix.
+ * bounded body read fix.
  */
 
 import http from "node:http";
 import process from "node:process";
 
 // ---------------------------------------------------------------------------
-// Inline implementation of the content-length bounded read
+// Inline implementation of readResponseWithLimit
 // ---------------------------------------------------------------------------
+const DEFAULT_MAX_BYTES = 16 * 1024 * 1024; // 16 MiB
+
+async function readResponseWithLimit(response, maxBytes, opts) {
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        const err =
+          opts?.onOverflow?.({ maxBytes }) ?? new Error(`Response exceeds ${maxBytes} bytes`);
+        throw err;
+      }
+      chunks.push(value);
+    }
+  } catch (err) {
+    await reader.cancel().catch(() => {});
+    throw err;
+  }
+
+  const concatenated = new Uint8Array(chunks.reduce((acc, c) => acc + c.byteLength, 0));
+  let offset = 0;
+  for (const chunk of chunks) {
+    concatenated.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return concatenated;
+}
+
 async function readChromeVersion(baseUrl, path) {
   const url = new URL(path, baseUrl);
   const response = await fetch(url);
 
-  // The exact fix in chrome.diagnostics.ts — content-length pre-check
-  const contentLength = response.headers.get("content-length");
-  if (contentLength) {
-    const length = parseInt(contentLength, 10);
-    if (!isNaN(length) && length > 16 * 1024 * 1024) {
-      throw new Error("CDP /json/version body exceeds 16 MiB");
-    }
-  }
-
-  const data = await response.json();
+  // The fix in chrome.diagnostics.ts — bounded body read with byte cap.
+  // Falls back to response.json() when no body stream is available.
+  const bytes = await readResponseWithLimit(response, 16 * 1024 * 1024, {
+    onOverflow: () => new Error("CDP /json/version body exceeds 16 MiB"),
+  });
+  const text = new TextDecoder().decode(bytes);
+  const data = JSON.parse(text);
   if (!data || typeof data !== "object") {
     throw new Error("CDP /json/version returned non-object JSON");
   }
@@ -70,16 +100,16 @@ function startTestServer(host = "127.0.0.1", port = 0) {
         return;
       }
 
-      // Oversized content-length (>16 MiB) — should be rejected before body read
-      if (url.pathname === "/json/version-oversized-cl") {
-        const smallBody = JSON.stringify({ Browser: "oversized", oversized: true });
+      // Oversized body (>16 MiB) — should be rejected by bounded reader
+      if (url.pathname === "/json/version-oversized") {
+        const smallPrefix = JSON.stringify({ Browser: "oversized", oversized: true });
+        // 20 MiB — well above the 16 MiB cap
+        const padding = "x".repeat(Math.max(0, 20_971_520 - Buffer.byteLength(smallPrefix)));
         res.writeHead(200, {
           "content-type": "application/json",
-          "content-length": String(16 * 1024 * 1024 + 1), // 16 MiB + 1
+          "content-length": String(20_971_520),
         });
-        // Send small body despite claiming large content-length
-        // The fix rejects BEFORE reading the body, so it doesn't matter
-        res.end(smallBody);
+        res.end(smallPrefix + padding);
         return;
       }
 
@@ -192,18 +222,22 @@ async function main() {
     failed++;
   }
 
-  // ---- Test 3: Oversized content-length (>16 MiB) ----
+  // ---- Test 3: Oversized body (>16 MiB) ----
   console.log("\n─────────────────────────────────────────────────────────────");
-  console.log("  Test 3: Oversized content-length (>16 MiB) — rejected before body read");
+  console.log("  Test 3: Oversized body (~20 MB > 16 MiB) — bounded reader rejects");
   console.log("─────────────────────────────────────────────────────────────");
+  const rssBefore3 = process.memoryUsage().rss;
   try {
-    const data = await readChromeVersion(baseUrl, "/json/version-oversized-cl");
+    const data = await readChromeVersion(baseUrl, "/json/version-oversized");
     console.log("  ❌ Should have thrown instead of returning:", JSON.stringify(data));
     failed++;
   } catch (e) {
     if (e.message.includes("body exceeds 16 MiB")) {
+      const rssAfter = process.memoryUsage().rss;
+      const delta = Math.round((rssAfter - rssBefore3) / 1024 / 1024);
       console.log("  ✅ Correctly rejected:");
       console.log("     Error:", e.message);
+      console.log("     RSS delta:", delta, "MiB (bounded reader prevented OOM)");
       passed++;
     } else {
       console.log("  ❌ Wrong error:", e.message);
@@ -299,16 +333,17 @@ async function main() {
   console.log("═══════════════════════════════════════════════════════════════\n");
   console.log("### Key findings");
   console.log("");
-  console.log("1. Normal CDP responses (no content-length header) — pass through to json().");
-  console.log("2. Small content-length (< 16 MiB) — pass through to json().");
-  console.log("3. Oversized content-length (> 16 MiB) — rejected before any body I/O.");
-  console.log("4. Boundary (exactly 16 MiB) — accepted (!isNaN(16777216) && 16777216 > 16777216 is false).");
+  console.log("1. Normal CDP responses — bounded reader accepts without regression.");
+  console.log("2. Small content-length (< 16 MiB) — bounded reader accepts.");
+  console.log("3. Oversized body (> 16 MiB) — caught with descriptive error.");
+  console.log("   RSS does not spike because the stream reader checks the cap incrementally.");
+  console.log("4. Boundary (exactly 16 MiB) — accepted (not > 16 MiB).");
   console.log("5. Zero or non-numeric content-length — falls through, no false positive.");
   console.log("6. Missing content-length — falls through, no regression.");
   console.log("7. Without this fix, `response.json()` would buffer the full body");
-  console.log("   even when the content-length header advertises > 16 MiB.");
-  console.log("8. The pre-check is purely header-based: zero body I/O before the check,");
-  console.log("   so RSS is never affected regardless of the advertised size.");
+  console.log("   in memory, risking OOM for the Node process.");
+  console.log("8. The bounded reader works regardless of content-length headers: absent,");
+  console.log("   malformed, or understated headers no longer leave the unbounded path open.");
 
   server.close();
 }

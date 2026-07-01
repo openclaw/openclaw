@@ -4,6 +4,7 @@
  * Probes /json/version and WebSocket health, redacts sensitive endpoint data,
  * and formats status output for browser doctor/status flows.
  */
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { rawDataToString } from "../infra/ws.js";
@@ -110,16 +111,19 @@ export async function readChromeVersion(
       ssrfPolicy,
     );
     try {
-      // Bounded read: check content-length header before parsing JSON
-      // to prevent OOM from oversized CDP responses.
-      const contentLength = (response.headers as Headers | undefined)?.get?.("content-length");
-      if (contentLength) {
-        const length = parseInt(contentLength, 10);
-        if (!isNaN(length) && length > 16 * 1024 * 1024) {
-          throw new Error("CDP /json/version body exceeds 16 MiB");
-        }
+      // Bounded read: use stream reader with byte cap to prevent OOM from
+      // oversized CDP responses. Falls back to response.json() when the
+      // response body stream is unavailable (e.g. test mocks).
+      let data: ChromeVersion;
+      const useBodyRead = typeof (response as Response).body?.getReader === "function";
+      if (useBodyRead) {
+        const bytes = await readResponseWithLimit(response, 16 * 1024 * 1024, {
+          onOverflow: () => new Error("CDP /json/version body exceeds 16 MiB"),
+        });
+        data = JSON.parse(new TextDecoder().decode(bytes)) as ChromeVersion;
+      } else {
+        data = (await response.json()) as ChromeVersion;
       }
-      const data = (await response.json()) as ChromeVersion;
       if (!data || typeof data !== "object") {
         throw new Error("CDP /json/version returned non-object JSON");
       }
