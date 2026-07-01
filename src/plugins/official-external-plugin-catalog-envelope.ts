@@ -1,11 +1,10 @@
-import crypto from "node:crypto";
+import { verifyEd25519Signature } from "../infra/ed25519-signature.js";
 import { isRecord } from "../utils.js";
 import {
   isOfficialExternalPluginCatalogFeed,
   type OfficialExternalPluginCatalogFeed,
 } from "./official-external-plugin-catalog.js";
 
-const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 export const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE =
   "openclaw.official-external-plugin-catalog-feed.v1";
 const OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENVELOPE_SIGNING_CONTEXT = "openclaw.feed-envelope.v1";
@@ -98,7 +97,7 @@ export function verifyOfficialExternalPluginCatalogSignedEnvelope(
       verifyEd25519Signature({
         publicKey: trustedKey.publicKey,
         payload: signingInput,
-        signature: envelopeSignature.signature,
+        signatureBase64Url: envelopeSignature.signature,
       })
     ) {
       trustedSignatureKeyId = trustedKey.keyId;
@@ -181,29 +180,5 @@ function decodeOfficialExternalPluginCatalogEnvelopePayload(
     return isOfficialExternalPluginCatalogFeed(raw) ? raw : null;
   } catch {
     return null;
-  }
-}
-
-function verifyEd25519Signature(params: {
-  publicKey: string;
-  payload: string;
-  signature: string;
-}): boolean {
-  try {
-    const key = params.publicKey.includes("BEGIN")
-      ? crypto.createPublicKey(params.publicKey)
-      : crypto.createPublicKey({
-          key: Buffer.concat([ED25519_SPKI_PREFIX, Buffer.from(params.publicKey, "base64url")]),
-          type: "spki",
-          format: "der",
-        });
-    return crypto.verify(
-      null,
-      Buffer.from(params.payload, "utf8"),
-      key,
-      Buffer.from(params.signature, "base64url"),
-    );
-  } catch {
-    return false;
   }
 }

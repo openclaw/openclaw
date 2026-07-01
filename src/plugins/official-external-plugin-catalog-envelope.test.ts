@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
+import { publicKeyRawBase64UrlFromEd25519Pem } from "../infra/ed25519-signature.js";
 import {
   OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PAYLOAD_TYPE,
   createOfficialExternalPluginCatalogEnvelopePayload,
@@ -8,8 +9,6 @@ import {
   type OfficialExternalPluginCatalogSignedEnvelope,
 } from "./official-external-plugin-catalog-envelope.js";
 import type { OfficialExternalPluginCatalogFeed } from "./official-external-plugin-catalog.js";
-
-const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 
 function fixtureFeed(): OfficialExternalPluginCatalogFeed {
   return {
@@ -27,19 +26,6 @@ function fixtureFeed(): OfficialExternalPluginCatalogFeed {
       },
     ],
   };
-}
-
-function exportRawPublicKeyBase64Url(publicKeyPem: string): string {
-  const key = crypto.createPublicKey(publicKeyPem);
-  const spki = key.export({ type: "spki", format: "der" });
-  if (
-    Buffer.isBuffer(spki) &&
-    spki.length === ED25519_SPKI_PREFIX.length + 32 &&
-    spki.subarray(0, ED25519_SPKI_PREFIX.length).equals(ED25519_SPKI_PREFIX)
-  ) {
-    return spki.subarray(ED25519_SPKI_PREFIX.length).toString("base64url");
-  }
-  throw new Error("Expected Ed25519 SPKI public key");
 }
 
 function signedEnvelope(params?: {
@@ -90,7 +76,7 @@ function signedEnvelope(params?: {
       ],
     },
     publicKeyPem: publicKey,
-    rawPublicKey: exportRawPublicKeyBase64Url(publicKey),
+    rawPublicKey: publicKeyRawBase64UrlFromEd25519Pem(publicKey),
   };
 }
 
