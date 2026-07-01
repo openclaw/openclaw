@@ -64,15 +64,42 @@ const APPLE_MODIFIER_MULTILINE_CALLS =
   /\.(?:navigationTitle|accessibilityLabel|accessibilityHint|help|alert|confirmationDialog)\s*\(\s*"""([\s\S]*?)"""/gu;
 const ANDROID_CALLS =
   /\b(?:Text|OutlinedTextField|BasicTextField|Button|IconButton|TopAppBar|Snackbar|AlertDialog)\s*\(\s*(?:text\s*=\s*)?"((?:\\.|[^"\\])*)"/gu;
-const ANDROID_PROPERTIES =
-  /\b(?:contentDescription|label|placeholder|title|message|supportingText)\s*=\s*"((?:\\.|[^"\\])*)"/gu;
-const ANDROID_WRAPPER_ARGS =
-  /\b[A-Z][A-Za-z0-9_]*\s*\([^)\n]{0,160}?\b(?:text|title|label|message|contentDescription|placeholder)\s*=\s*"((?:\\.|[^"\\])*)"/gu;
+const ANDROID_NAMED_LITERALS =
+  /\b(?:contentDescription|label|placeholder|title|message|supportingText|text)\s*=\s*"((?:\\.|[^"\\])*)"/gu;
 const ANDROID_TOAST_ARGS =
   /\b(?:Toast\.makeText|Snackbar\.make)\s*\([^,\n]*,\s*"((?:\\.|[^"\\])*)"/gu;
 const ANDROID_DIALOG_CALLS =
   /\.(?:setTitle|setMessage|setPositiveButton|setNegativeButton|setNeutralButton)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
-const ANDROID_STATE_CALLS = /\b(?:MutableStateFlow|StateFlow|flowOf)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
+const ANDROID_UI_STATE_TEXT =
+  /\b[A-Za-z_][A-Za-z0-9_]*(?:Status|Message|Error|Title|Label)Text\b[^=\n]*=\s*(?:MutableStateFlow|StateFlow|flowOf|runtimeState)\s*\([^"\n]*"((?:\\.|[^"\\])*)"/giu;
+const ANDROID_COMPOSABLE_FUNCTION =
+  /@Composable[\s\S]{0,240}?\bfun\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/gu;
+const ANDROID_BUILTIN_UI_CALLS = new Set([
+  "AlertDialog",
+  "BasicTextField",
+  "Box",
+  "Button",
+  "Card",
+  "Checkbox",
+  "Column",
+  "DropdownMenuItem",
+  "Icon",
+  "IconButton",
+  "Label",
+  "LazyColumn",
+  "LazyRow",
+  "OutlinedButton",
+  "OutlinedTextField",
+  "RadioButton",
+  "Row",
+  "Scaffold",
+  "Snackbar",
+  "Surface",
+  "Switch",
+  "Text",
+  "TextButton",
+  "TopAppBar",
+]);
 const CONDITIONAL_BRANCHES = [
   /\bif\s*\([^)]*\)\s*"((?:\\.|[^"\\])*)"\s*else\s*"((?:\\.|[^"\\])*)"/gu,
   /\?\s*"((?:\\.|[^"\\])*)"\s*:\s*"((?:\\.|[^"\\])*)"/gu,
@@ -84,6 +111,8 @@ const ANDROID_RESOURCE_ITEMS = /<item\b[^>]*>([\s\S]*?)<\/item>/gu;
 const APPLE_NAMED_LITERALS =
   /\b(?:title|subtitle|label|message|text|prompt|description|help)\s*:\s*(?:"""([\s\S]*?)"""|"((?:\\.|[^"\\])*)")/gu;
 const APPLE_VIEW_TYPE = /\bstruct\s+([A-Za-z_][A-Za-z0-9_]*)[^:{\n]*:\s*[^{\n]*\bView\b/gu;
+const APPLE_VIEW_FUNCTION = /\bfunc\s+([A-Za-z_][A-Za-z0-9_]*)[^\n{]*->\s*some\s+View\b/gu;
+const APPLE_ALERT_FUNCTION = /\bfunc\s+([A-Za-z_][A-Za-z0-9_]*)[^{]*\{[^{}]{0,600}\bNSAlert\s*\(/gu;
 const APPLE_BUILTIN_UI_TYPES = new Set([
   "Alert",
   "Button",
@@ -261,7 +290,7 @@ function extractCandidates(
   surface: NativeI18nSurface,
   repoPath: string,
   source: string,
-  appleUiTypes: ReadonlySet<string>,
+  uiCallNames: ReadonlySet<string>,
 ): Candidate[] {
   const entries: Candidate[] = [];
   const patterns =
@@ -275,11 +304,9 @@ function extractCandidates(
         ]
       : [
           [ANDROID_CALLS, "ui-call"],
-          [ANDROID_PROPERTIES, "ui-property"],
-          [ANDROID_WRAPPER_ARGS, "ui-wrapper-argument"],
           [ANDROID_TOAST_ARGS, "ui-toast"],
           [ANDROID_DIALOG_CALLS, "ui-dialog"],
-          [ANDROID_STATE_CALLS, "ui-state"],
+          [ANDROID_UI_STATE_TEXT, "ui-state-text"],
           ...CONDITIONAL_BRANCHES.map((pattern) => [pattern, "conditional-branch"] as const),
         ];
   for (const [pattern, kind] of patterns) {
@@ -295,7 +322,7 @@ function extractCandidates(
   if (surface === "apple") {
     for (const match of source.matchAll(APPLE_NAMED_LITERALS)) {
       const callName = enclosingCallName(source, match.index ?? 0);
-      if (!callName || !appleUiTypes.has(callName)) {
+      if (!callName || !uiCallNames.has(callName)) {
         continue;
       }
       const multiline = match[1];
@@ -310,6 +337,22 @@ function extractCandidates(
           lineNumber(source, match.index ?? 0),
         );
       }
+    }
+  }
+  if (surface === "android") {
+    for (const match of source.matchAll(ANDROID_NAMED_LITERALS)) {
+      const callName = enclosingCallName(source, match.index ?? 0);
+      if (!callName || !uiCallNames.has(callName) || !match[1]) {
+        continue;
+      }
+      addCandidate(
+        entries,
+        surface,
+        repoPath,
+        match[1],
+        "ui-named-argument",
+        lineNumber(source, match.index ?? 0),
+      );
     }
   }
   if (surface === "android" && /\/res\/values\/[^/]+\.xml$/u.test(repoPath)) {
@@ -437,19 +480,26 @@ export async function collectNativeI18nEntries(): Promise<NativeI18nEntry[]> {
       }
     }
   }
-  const appleUiTypes = new Set(APPLE_BUILTIN_UI_TYPES);
+  const uiCallNames = new Set([...APPLE_BUILTIN_UI_TYPES, ...ANDROID_BUILTIN_UI_CALLS]);
   for (const { source, surface } of sources) {
-    if (surface !== "apple") {
+    if (surface === "android") {
+      for (const match of source.matchAll(ANDROID_COMPOSABLE_FUNCTION)) {
+        if (match[1]) {
+          uiCallNames.add(match[1]);
+        }
+      }
       continue;
     }
-    for (const match of source.matchAll(APPLE_VIEW_TYPE)) {
-      if (match[1]) {
-        appleUiTypes.add(match[1]);
+    for (const pattern of [APPLE_VIEW_TYPE, APPLE_VIEW_FUNCTION, APPLE_ALERT_FUNCTION]) {
+      for (const match of source.matchAll(pattern)) {
+        if (match[1]) {
+          uiCallNames.add(match[1]);
+        }
       }
     }
   }
   const entries = sources.flatMap(({ repoPath, source, surface }) =>
-    extractCandidates(surface, repoPath, source, appleUiTypes),
+    extractCandidates(surface, repoPath, source, uiCallNames),
   );
   return withIds(entries);
 }

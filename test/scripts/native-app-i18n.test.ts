@@ -44,6 +44,8 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "Loading chat")).toBe(true);
     expect(entries.some((entry) => entry.source === "DIARY")).toBe(true);
     expect(entries.some((entry) => entry.source === "ask OpenClaw $prompt")).toBe(true);
+    expect(entries.some((entry) => entry.source === "OpenClaw is paused")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Last issue")).toBe(true);
     expect(
       entries.some(
         (entry) =>
@@ -60,6 +62,18 @@ describe("native app i18n inventory", () => {
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "$(PRODUCT_BUNDLE_IDENTIFIER)")).toBe(false);
     expect(entries.some((entry) => entry.source === "ai.openclaw.screenRecord.writer")).toBe(false);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.surface === "android" && entry.source === "INVALID_REQUEST: expected JSON object",
+      ),
+    ).toBe(false);
+    expect(
+      entries.some(
+        (entry) =>
+          entry.surface === "android" && ["off", "talk-orb", "pulse"].includes(entry.source),
+      ),
+    ).toBe(false);
     expect(entries.some((entry) => entry.source === "false")).toBe(false);
     expect(entries.some((entry) => entry.source === "ws")).toBe(false);
     expect(entries.some((entry) => entry.source === '{"includeSecrets":true}')).toBe(false);
