@@ -22,8 +22,8 @@ For Anthropic models routed through Cloudflare AI Gateway, use your **Anthropic 
 OpenClaw strips trailing assistant prefill turns before sending Anthropic
 Messages payloads through Cloudflare AI Gateway when thinking is enabled.
 Claude Sonnet 5 does not support assistant prefilling at all, so OpenClaw also
-strips those turns when thinking is disabled. Other non-thinking Anthropic
-models keep ordinary assistant prefills.
+strips those turns when thinking is disabled. Other Anthropic models retain
+their model-specific prefill behavior.
 
 ## Install plugin
 

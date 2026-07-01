@@ -153,7 +153,7 @@ export function createAnthropicVertexStreamFn(
     const fable5 = isClaudeFable5Model(contractModelId);
     const sonnet5 = isClaudeSonnet5Model(contractModelId);
     const mandatoryAdaptiveThinking = fable5 || isClaudeMythos5Model(contractModelId);
-    const requestedReasoning = options?.reasoning as ModelThinkingLevel | undefined;
+    const requestedReasoning = options?.reasoning;
     const reasoning =
       requestedReasoning === "off" && mandatoryAdaptiveThinking
         ? fable5
