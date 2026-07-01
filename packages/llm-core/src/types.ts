@@ -118,11 +118,6 @@ export interface StreamOptions {
    */
   timeoutMs?: number;
   /**
-   * Timeout in milliseconds between accepted streaming HTTP headers and the
-   * first parsed stream event. This is separate from inter-event idle timeouts.
-   */
-  firstEventTimeoutMs?: number;
-  /**
    * Maximum retry attempts for providers/SDKs that support client-side retries.
    * For example, OpenAI and Anthropic SDK clients default to 2.
    */

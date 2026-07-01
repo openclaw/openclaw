@@ -167,6 +167,10 @@ type BaseStreamOptions = {
   seed?: number;
 };
 
+function getFirstEventTimeoutMs(options: unknown): number | undefined {
+  return (options as { firstEventTimeoutMs?: number } | undefined)?.firstEventTimeoutMs;
+}
+
 type ModelStreamCooperativeScheduler = {
   afterEvent: () => Promise<void>;
 };
@@ -2073,7 +2077,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
         await processResponsesStream(responseStream, output, stream, model, {
           serviceTier: responsesOptions?.serviceTier,
           applyServiceTierPricing,
-          firstEventTimeoutMs: options?.firstEventTimeoutMs,
+          firstEventTimeoutMs: getFirstEventTimeoutMs(options),
           abortFirstEventStream: firstEventAbort.abort,
           signal: options?.signal,
           authProfileId: responsesOptions?.authProfileId,
@@ -2525,7 +2529,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
         stream.push({ type: "start", partial: output as never });
         await processResponsesStream(responseStream, output, stream, model, {
           firstEventTimeoutMs:
-            options?.firstEventTimeoutMs ?? AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS,
+            getFirstEventTimeoutMs(options) ?? AZURE_RESPONSES_FIRST_EVENT_TIMEOUT_MS,
           abortFirstEventStream: firstEventAbort.abort,
           signal: options?.signal,
           authProfileId: responsesOptions?.authProfileId,
@@ -2779,7 +2783,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         await processOpenAICompletionsStream(responseStream, output, model, stream, {
           signal: options?.signal,
           emitReasoning,
-          firstEventTimeoutMs: options?.firstEventTimeoutMs,
+          firstEventTimeoutMs: getFirstEventTimeoutMs(options),
           abortFirstEventStream: firstEventAbort.abort,
         });
         finalizeTransportStream({ stream, output, signal: options?.signal });

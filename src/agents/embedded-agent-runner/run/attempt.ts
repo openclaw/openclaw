@@ -3172,11 +3172,14 @@ export async function runEmbeddedAttempt(
       });
       if (firstEventTimeoutMs > 0) {
         const baseStreamFn = activeSession.agent.streamFn;
-        activeSession.agent.streamFn = (model, context, options) =>
-          baseStreamFn(model, context, {
+        activeSession.agent.streamFn = (model, context, options) => {
+          type FirstEventStreamOptions = { firstEventTimeoutMs?: number };
+          const optionsWithFirstEvent = options as FirstEventStreamOptions | undefined;
+          return baseStreamFn(model, context, {
             ...options,
-            firstEventTimeoutMs: options?.firstEventTimeoutMs ?? firstEventTimeoutMs,
-          });
+            firstEventTimeoutMs: optionsWithFirstEvent?.firstEventTimeoutMs ?? firstEventTimeoutMs,
+          } as typeof options);
+        };
       }
       let diagnosticModelCallSeq = 0;
       activeSession.agent.streamFn = wrapStreamFnWithDiagnosticModelCallEvents(

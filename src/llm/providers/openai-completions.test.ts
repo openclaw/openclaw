@@ -2,7 +2,7 @@
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-boundary.js";
-import type { Context, Model } from "../types.js";
+import type { Context, Model, SimpleStreamOptions } from "../types.js";
 
 type DeepPartial<T> = { [P in keyof T]?: DeepPartial<T[P]> };
 type OpenAICompatibleDelta = DeepPartial<ChatCompletionChunk["choices"][number]["delta"]> & {
@@ -14,6 +14,7 @@ type OpenAICompatibleChoice = Omit<DeepPartial<ChatCompletionChunk["choices"][nu
 type OpenAICompatibleChatCompletionChunk = Omit<DeepPartial<ChatCompletionChunk>, "choices"> & {
   choices?: OpenAICompatibleChoice[];
 };
+type FirstEventSimpleStreamOptions = SimpleStreamOptions & { firstEventTimeoutMs?: number };
 
 const mockChunksRef: {
   chunks: OpenAICompatibleChatCompletionChunk[];
@@ -211,10 +212,11 @@ describe("OpenAI-compatible completions params", () => {
     try {
       mockChunksRef.stream = createNeverYieldingStream();
 
-      const stream = streamSimpleOpenAICompletions(model, context, {
+      const simpleOptions: FirstEventSimpleStreamOptions = {
         apiKey: "sk-test",
         firstEventTimeoutMs: 5,
-      });
+      };
+      const stream = streamSimpleOpenAICompletions(model, context, simpleOptions);
       const resultPromise = stream.result();
 
       await vi.advanceTimersByTimeAsync(5);

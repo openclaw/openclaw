@@ -104,6 +104,7 @@ function sanitizeToolResultText(text: string, fallback: string): string {
 }
 
 export interface OpenAICompletionsOptions extends StreamOptions {
+  firstEventTimeoutMs?: number;
   toolChoice?: OpenAICompletionsToolChoice;
   reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
 }
