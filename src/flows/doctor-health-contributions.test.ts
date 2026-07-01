@@ -75,6 +75,7 @@ const mocks = vi.hoisted(() => ({
   }),
   gatherDaemonStatus: vi.fn(),
   noteWorkspaceStatus: vi.fn(),
+  collectWorkspaceStatusHealthFindings: vi.fn().mockResolvedValue([]),
   applyWizardMetadata: vi.fn((cfg: unknown) => cfg),
   logConfigUpdated: vi.fn(),
   isRecord: vi.fn(
@@ -268,6 +269,7 @@ vi.mock("../cli/daemon-cli/status.gather.js", () => ({
 
 vi.mock("../commands/doctor-workspace-status.js", () => ({
   noteWorkspaceStatus: mocks.noteWorkspaceStatus,
+  collectWorkspaceStatusHealthFindings: mocks.collectWorkspaceStatusHealthFindings,
 }));
 
 vi.mock("../commands/onboard-helpers.js", () => ({
@@ -440,6 +442,8 @@ describe("doctor health contributions", () => {
     mocks.gatherDaemonStatus.mockReset();
     mocks.gatherDaemonStatus.mockResolvedValue({});
     mocks.noteWorkspaceStatus.mockReset();
+    mocks.collectWorkspaceStatusHealthFindings.mockReset();
+    mocks.collectWorkspaceStatusHealthFindings.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -665,6 +669,70 @@ describe("doctor health contributions", () => {
 
     expect(ids.indexOf("doctor:skills")).toBeGreaterThan(-1);
     expect(ids.indexOf("doctor:skills")).toBeLessThan(ids.indexOf("doctor:write-config"));
+  });
+
+  it("keeps workspace status opt-in for structured lint selection", async () => {
+    const contribution = requireDoctorContribution("doctor:workspace-status");
+    const check = contribution.healthChecks[0] as HealthCheck & { defaultEnabled?: boolean };
+    expect(contribution.healthCheckIds).toEqual(["core/doctor/workspace-status"]);
+    expect(check.defaultEnabled).toBe(false);
+
+    const pluginVersionDrift = {
+      gatewayVersion: "2026.6.1",
+      drifts: [
+        {
+          pluginId: "codex",
+          installedVersion: "2026.5.30-beta.1",
+          gatewayVersion: "2026.6.1",
+          source: "npm" as const,
+        },
+      ],
+    };
+    mocks.gatherDaemonStatus.mockResolvedValueOnce({
+      gateway: { version: "2026.6.1" },
+      pluginVersionDrift,
+    });
+    mocks.collectWorkspaceStatusHealthFindings.mockResolvedValueOnce([
+      {
+        checkId: "core/doctor/workspace-status",
+        severity: "warning",
+        message: "Plugin codex is stale.",
+        path: "plugins.entries.codex",
+      },
+    ]);
+    const ctx = {
+      cfg: { plugins: { entries: { codex: { enabled: true } } } },
+      mode: "lint",
+      allowExecSecretRefs: true,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+
+    await expect(runDoctorLintChecks(ctx, { checks: [check] })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    expect(mocks.collectWorkspaceStatusHealthFindings).not.toHaveBeenCalled();
+
+    await expect(
+      runDoctorLintChecks(ctx, { checks: [check], onlyIds: ["core/doctor/workspace-status"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [expect.objectContaining({ checkId: "core/doctor/workspace-status" })],
+    });
+    expect(mocks.collectWorkspaceStatusHealthFindings).toHaveBeenCalledWith(ctx.cfg, {
+      pluginVersionDrift,
+    });
+    expect(mocks.gatherDaemonStatus).toHaveBeenCalledWith({
+      rpc: {
+        timeout: "3000",
+        json: true,
+      },
+      probe: true,
+      requireRpc: false,
+      deep: false,
+      allowExecSecretRefs: true,
+    });
   });
 
   it("passes daemon-context plugin drift into the workspace status note", async () => {
