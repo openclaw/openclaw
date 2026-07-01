@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import OpenClaw
 
@@ -37,15 +38,9 @@ struct ExecApprovalsSocketAuthTests {
     @Test
     func `exec host limiter keeps escaped response below jsonl requester cap`() throws {
         let escaped = String(repeating: "\u{0}", count: 3 * 1024 * 1024)
-        let payload = ExecHostRunResult(
-            exitCode: 0,
-            timedOut: false,
-            success: true,
+        let encoded = try encodedExecHostResponseBytes(
             stdout: ExecHostOutputLimiter.limit(escaped),
-            stderr: ExecHostOutputLimiter.limit(escaped),
-            error: nil)
-        let response = ExecHostResponse(type: "exec-res", id: "test", ok: true, payload: payload, error: nil)
-        let encoded = try JSONEncoder().encode(response)
+            stderr: ExecHostOutputLimiter.limit(escaped))
 
         #expect(encoded.count < ExecHostOutputLimiter.maxJsonlResponseBytes)
     }
@@ -61,18 +56,29 @@ struct ExecApprovalsSocketAuthTests {
             cwd: nil,
             env: nil,
             timeout: 10)
-        let payload = ExecHostRunResult(
-            exitCode: result.exitCode,
-            timedOut: result.timedOut,
-            success: result.success,
-            stdout: ExecHostOutputLimiter.limit(result.stdout),
-            stderr: ExecHostOutputLimiter.limit(result.stderr),
-            error: result.errorMessage)
-        let response = ExecHostResponse(type: "exec-res", id: "test", ok: true, payload: payload, error: nil)
-        let encoded = try JSONEncoder().encode(response)
+        let stdout = ExecHostOutputLimiter.limit(result.stdout)
+        let stderr = ExecHostOutputLimiter.limit(result.stderr)
+        let encoded = try encodedExecHostResponseBytes(stdout: stdout, stderr: stderr)
 
-        #expect(payload.stdout.hasPrefix("... (truncated) "))
-        #expect(payload.stderr.hasPrefix("... (truncated) "))
+        #expect(stdout.hasPrefix("... (truncated) "))
+        #expect(stderr.hasPrefix("... (truncated) "))
         #expect(encoded.count < ExecHostOutputLimiter.maxJsonlResponseBytes)
+    }
+
+    private func encodedExecHostResponseBytes(stdout: String, stderr: String) throws -> Data {
+        let payload: [String: Any] = [
+            "exitCode": 0,
+            "timedOut": false,
+            "success": true,
+            "stdout": stdout,
+            "stderr": stderr,
+        ]
+        let response: [String: Any] = [
+            "type": "exec-res",
+            "id": "test",
+            "ok": true,
+            "payload": payload,
+        ]
+        return try JSONSerialization.data(withJSONObject: response)
     }
 }

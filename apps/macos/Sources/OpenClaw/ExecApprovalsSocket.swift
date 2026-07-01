@@ -123,7 +123,7 @@ struct ExecHostRequest: Codable {
     var approvalDecision: ExecApprovalDecision?
 }
 
-struct ExecHostRunResult: Codable {
+private struct ExecHostRunResult: Codable {
     var exitCode: Int?
     var timedOut: Bool
     var success: Bool
@@ -157,7 +157,7 @@ struct ExecHostError: Codable, Error {
     var reason: String?
 }
 
-struct ExecHostResponse: Codable {
+private struct ExecHostResponse: Codable {
     var type: String
     var id: String
     var ok: Bool
