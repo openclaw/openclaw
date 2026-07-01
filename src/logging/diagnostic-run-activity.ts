@@ -271,7 +271,17 @@ function recordRunProgress(event: DiagnosticRunProgressActivityEvent): void {
   markDiagnosticRunProgress(event);
 }
 
+function isPassiveRunProgressReason(reason: string): boolean {
+  return reason === "cli_live:tool_running";
+}
+
 export function markDiagnosticRunProgress(params: DiagnosticRunProgressActivityEvent): void {
+  // Claude live active-tool heartbeats are observability ticks, not work progress.
+  // Refreshing the session clock (or even creating activity) here can hide wedged
+  // CLI tools from stall detection.
+  if (isPassiveRunProgressReason(params.reason)) {
+    return;
+  }
   const activity = resolveSessionActivity({ ...params, create: true });
   if (!activity) {
     return;
