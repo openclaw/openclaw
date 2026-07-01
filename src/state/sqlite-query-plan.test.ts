@@ -1,9 +1,7 @@
 // SQLite query-plan tests pin hot OpenClaw state indexes used by perf proof.
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -13,8 +11,10 @@ import {
   openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
 
+const planTempDirs: string[] = [];
+
 function createTempStateDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-plan-"));
+  return makeTempDir(planTempDirs, "openclaw-sqlite-plan-");
 }
 
 function explainQueryPlan(
@@ -47,6 +47,10 @@ function expectPlanIncludes(params: {
 }): void {
   expect(explainQueryPlan(params.db, params.sql, params.params)).toContain(params.expected);
 }
+
+afterAll(() => {
+  cleanupTempDirs(planTempDirs);
+});
 
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
