@@ -38,6 +38,15 @@ describe("google plugin Gemini CLI harness registration", () => {
     });
   });
 
+  it("does not expose Gemini CLI from default bundled runtime registration", () => {
+    delete process.env[GOOGLE_GEMINI_CLI_HARNESS_ENV];
+
+    const registrations = collectGooglePluginRegistrations();
+
+    expect(registrations.providerIds).not.toContain("google-gemini-cli");
+    expect(registrations.cliBackendIds).not.toContain("google-gemini-cli");
+  });
+
   it("registers Gemini CLI provider and backend only after explicit opt-in", () => {
     process.env[GOOGLE_GEMINI_CLI_HARNESS_ENV] = "1";
 
