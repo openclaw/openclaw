@@ -412,6 +412,10 @@ to them directly without OTLP export.
 - `exec.process.completed` - terminal outcome, duration, target, mode, exit
   code, and failure kind. Command text and working directories are not
   included.
+- `exec.approval.followup_suppressed` - stale approval follow-up dropped after
+  a session rebound. Includes `approvalId`, `reason` (`session_rebound`),
+  `phase` (`direct_delivery` or `gateway_preflight`), and the dispatcher
+  timestamp. Session keys, routes, and command text are not included.
 
 ## Without an exporter
 
