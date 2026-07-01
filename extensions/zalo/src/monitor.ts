@@ -64,6 +64,7 @@ const ZALO_TEXT_LIMIT = 2000;
 const DEFAULT_MEDIA_MAX_MB = 5;
 const WEBHOOK_CLEANUP_TIMEOUT_MS = 5_000;
 const ZALO_TYPING_TIMEOUT_MS = 5_000;
+const UNIX_MILLISECONDS_THRESHOLD = 1_000_000_000_000;
 
 type ZaloCoreRuntime = ReturnType<typeof getZaloRuntime>;
 type ZaloStatusSink = (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
@@ -92,6 +93,13 @@ type ZaloUpdateProcessingParams = ZaloProcessingContext & {
 
 let zaloWebhookModulePromise: Promise<ZaloWebhookModule> | undefined;
 const hostedMediaRouteRefs = new Map<string, { count: number; unregisters: Array<() => void> }>();
+
+function resolveZaloTimestampMs(date: number | undefined): number | undefined {
+  if (!date) {
+    return undefined;
+  }
+  return date >= UNIX_MILLISECONDS_THRESHOLD ? date : date * 1000;
+}
 
 function loadZaloWebhookModule(): Promise<ZaloWebhookModule> {
   zaloWebhookModulePromise ??= import("./monitor.webhook.js");
@@ -564,10 +572,11 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
   }
 
   const fromLabel = isGroup ? `group:${chatId}` : senderName || `user:${senderId}`;
+  const timestamp = resolveZaloTimestampMs(date);
   const { storePath, body } = buildEnvelope({
     channel: "Zalo",
     from: fromLabel,
-    timestamp: date ? date * 1000 : undefined,
+    timestamp,
     body: rawBody,
   });
 
@@ -575,7 +584,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     channel: "zalo",
     accountId: route.accountId,
     messageId: message_id,
-    timestamp: date ? date * 1000 : undefined,
+    timestamp,
     from: isGroup ? `zalo:group:${chatId}` : `zalo:${senderId}`,
     sender: {
       id: senderId,
