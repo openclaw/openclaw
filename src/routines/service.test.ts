@@ -90,7 +90,11 @@ function createFakeCronService(): FakeCronService {
     })),
     add: vi.fn(async (input: CronJobCreate) => {
       seq += 1;
-      const job = createCronJob(input, input.id ?? `cron-${seq}`, seq);
+      const id = input.id ?? `cron-${seq}`;
+      if (jobs.has(id)) {
+        throw new Error(`cron job already exists: ${id}`);
+      }
+      const job = createCronJob(input, id, seq);
       jobs.set(job.id, job);
       return job;
     }),
@@ -202,6 +206,7 @@ describe("routine service", () => {
     await withOpenClawTestState({ prefix: "routine-delivery-last-idempotent-" }, async () => {
       const cron = createFakeCronService();
       const input = createRoutineInput({
+        owner: { agentId: "ops", sessionKey: "session-1" },
         target: {
           sessionTarget: "isolated",
           wakeMode: "now",
@@ -212,6 +217,7 @@ describe("routine service", () => {
 
       const replay = await createRoutine(
         createRoutineInput({
+          owner: { agentId: "ops", sessionKey: "session-1" },
           target: {
             sessionTarget: "isolated",
             wakeMode: "now",
@@ -224,6 +230,46 @@ describe("routine service", () => {
       expect(replay.created).toBe(false);
       expect(replay.idempotent).toBe(true);
       expect(cron.add).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("defaults keyless routines without delivery to no delivery", async () => {
+    await withOpenClawTestState({ prefix: "routine-keyless-none-" }, async () => {
+      const cron = createFakeCronService();
+      const created = await createRoutine(
+        createRoutineInput({
+          owner: undefined,
+          target: {
+            sessionTarget: "isolated",
+            wakeMode: "now",
+          },
+        }),
+        { cron },
+      );
+
+      expect(cron.add.mock.calls[0]?.[0].delivery).toEqual({ mode: "none" });
+      expect(created.routine.target.delivery).toEqual({ mode: "none" });
+    });
+  });
+
+  it("rejects keyless announce delivery without a stable target", async () => {
+    await withOpenClawTestState({ prefix: "routine-keyless-announce-" }, async () => {
+      const cron = createFakeCronService();
+
+      await expect(
+        createRoutine(
+          createRoutineInput({
+            owner: undefined,
+            target: {
+              sessionTarget: "isolated",
+              wakeMode: "now",
+              delivery: { mode: "announce" },
+            },
+          }),
+          { cron },
+        ),
+      ).rejects.toThrow("routine announce delivery requires owner.sessionKey or delivery.to");
+      expect(cron.add).not.toHaveBeenCalled();
     });
   });
 
@@ -359,6 +405,29 @@ describe("routine service", () => {
 
       expect(cron.remove).toHaveBeenCalledWith(cronJobId);
       expect(cron.jobs.has(cronJobId)).toBe(false);
+    });
+  });
+
+  it("adopts a matching deterministic backing cron job when the registry row is missing", async () => {
+    await withOpenClawTestState({ prefix: "routine-adopt-orphan-" }, async () => {
+      const cron = createFakeCronService();
+      const input = createRoutineInput();
+      const created = await createRoutine(input, { cron, cronStorePath: "/tmp/cron.sqlite" });
+      const cronJobId = created.routine.trigger.cronJobId;
+      openOpenClawStateDatabase().db.exec("DELETE FROM routine_records");
+
+      const replay = await createRoutine(input, { cron, cronStorePath: "/tmp/cron.sqlite" });
+
+      expect(replay.created).toBe(false);
+      expect(replay.idempotent).toBe(true);
+      expect(replay.routine.trigger.cronJobId).toBe(cronJobId);
+      expect(cron.add).toHaveBeenCalledTimes(1);
+      expect(
+        await inspectRoutine("daily-ops", { cron, cronStorePath: "/tmp/cron.sqlite" }),
+      ).toMatchObject({
+        id: "daily-ops",
+        status: { backing: "linked" },
+      });
     });
   });
 

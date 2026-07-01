@@ -152,11 +152,7 @@ export class RoutineInvalidRequestError extends Error {
   }
 }
 
-const ROUTINE_SELECT_COLUMNS = [
-  "routine_id",
-  "backing_cron_store_key",
-  "routine_json",
-] as const;
+const ROUTINE_SELECT_COLUMNS = ["routine_id", "backing_cron_store_key", "routine_json"] as const;
 
 let cachedDatabase: RoutineRegistryDatabase | null = null;
 const routineMutationLocks = new Map<string, Promise<unknown>>();
@@ -376,11 +372,34 @@ function assertRoutinePayloadNonBlank(payload: CronPayload): void {
   }
 }
 
+function routineDeliveryHasStableTarget(owner: RoutineOwner, delivery: CronDelivery): boolean {
+  return Boolean(owner.sessionKey || normalizeOptionalString(delivery.to));
+}
+
+function normalizeRoutineDelivery(
+  owner: RoutineOwner,
+  delivery: CronDelivery | undefined,
+): CronDelivery | undefined {
+  if (!delivery) {
+    return owner.sessionKey ? undefined : { mode: "none" };
+  }
+  if (
+    (delivery.mode ?? "announce") === "announce" &&
+    !routineDeliveryHasStableTarget(owner, delivery)
+  ) {
+    throw routineInvalidRequest(
+      "routine announce delivery requires owner.sessionKey or delivery.to",
+    );
+  }
+  return delivery;
+}
+
 function normalizeRoutineCreateInput(input: RoutineCreateInput): NormalizedRoutineCreate {
   const id = normalizeRoutineId(input.id);
   const name = requireNonBlankString(input.name, "routine name");
   const description = normalizeOptionalString(input.description);
   const owner = normalizeRoutineOwner(input);
+  const delivery = normalizeRoutineDelivery(owner, input.target?.delivery);
   const sessionTarget = input.target?.sessionTarget ?? inferSessionTarget(input.action);
   const wakeMode = input.target?.wakeMode ?? "now";
   const cronInput = normalizeCronJobCreate(
@@ -395,7 +414,7 @@ function normalizeRoutineCreateInput(input: RoutineCreateInput): NormalizedRouti
       sessionTarget,
       wakeMode,
       payload: input.action,
-      delivery: input.target?.delivery,
+      delivery,
     },
     {
       sessionContext: { sessionKey: owner.sessionKey },
@@ -817,6 +836,30 @@ async function createRoutineBackingCronJob(params: {
   return added;
 }
 
+function persistAdoptedRoutineRecord(params: {
+  draft: RoutineRecord;
+  normalized: NormalizedRoutineCreate;
+  cronJob: CronJob;
+  cronStorePath?: string;
+}): RoutineRecord {
+  assertRoutineBackingCronJobMatches(params.draft, params.normalized, params.cronJob);
+  const record = createRoutineRecord({
+    normalized: params.normalized,
+    enabled: params.cronJob.enabled,
+    cronJobId: params.cronJob.id,
+    action: params.cronJob.payload,
+    cronStorePath: params.cronStorePath,
+    createdAtMs: params.cronJob.createdAtMs,
+    updatedAtMs: params.cronJob.updatedAtMs,
+  });
+  try {
+    upsertRoutineRecordToSqlite(record);
+  } catch (err) {
+    throw new Error(`failed to persist routine: ${formatErrorMessage(err)}`, { cause: err });
+  }
+  return record;
+}
+
 async function removeCreatedRoutineBackingCronJob(params: {
   context: RoutineCronContext;
   cronJobId: string;
@@ -965,6 +1008,20 @@ export async function createRoutine(
         updatedAtMs: nowMs,
         cronStorePath: context.cronStorePath,
       });
+      const existingBackingCronJob = await context.cron.readJob(draft.trigger.cronJobId);
+      if (existingBackingCronJob) {
+        const record = persistAdoptedRoutineRecord({
+          draft,
+          normalized,
+          cronJob: existingBackingCronJob,
+          cronStorePath: context.cronStorePath,
+        });
+        return {
+          routine: toRoutineView(record, existingBackingCronJob),
+          created: false,
+          idempotent: true,
+        };
+      }
       const cronJob = await createRoutineBackingCronJob({ record: draft, normalized, context });
       const record = createRoutineRecord({
         normalized,
