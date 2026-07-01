@@ -89,6 +89,28 @@ describe("Zalo API request methods", () => {
     );
   });
 
+  it("accepts the native Zalo getMe identity fields", async () => {
+    const fetcher: ZaloFetch = vi.fn(async () =>
+      Response.json({
+        ok: true,
+        result: {
+          account_name: "bot.example",
+          account_type: "BASIC",
+          can_join_groups: false,
+          id: "1459232241454765289",
+        },
+      }),
+    );
+
+    await expect(getMe("test-token", undefined, fetcher)).resolves.toMatchObject({
+      result: {
+        account_name: "bot.example",
+        account_type: "BASIC",
+        can_join_groups: false,
+      },
+    });
+  });
+
   it("uses ZALO_API_URL for provider-compatible alternate endpoints", async () => {
     vi.stubEnv("ZALO_API_URL", " http://127.0.0.1:49152/zalo/ ");
     const fetcher = createOkFetcher();
