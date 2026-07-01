@@ -48,6 +48,9 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "Last issue")).toBe(true);
     expect(entries.some((entry) => entry.source === "Agent chat and recent work.")).toBe(true);
     expect(entries.some((entry) => entry.source === "No sessions yet")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Don’t show this again")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Use Manual Gateway")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Session target")).toBe(true);
     expect(
       entries.some(
         (entry) =>
