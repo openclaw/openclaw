@@ -1844,8 +1844,8 @@ describe("createCopilotAgentHarness", () => {
         expect.objectContaining({
           availableTools: [],
           continuePendingWork: false,
+          disableResume: true,
           model: "gpt-4.1",
-          suppressResumeEvent: true,
           tools: [],
           workingDirectory: "/workspace",
         }),
@@ -2056,9 +2056,9 @@ describe("createCopilotAgentHarness", () => {
         "sdk-sess-token",
         expect.objectContaining({
           continuePendingWork: false,
+          disableResume: true,
           gitHubToken: "ghp_test",
           model: "gpt-4.1",
-          suppressResumeEvent: true,
           workingDirectory: "/workspace",
         }),
       );
