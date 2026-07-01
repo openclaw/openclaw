@@ -1,5 +1,4 @@
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
-import os from "node:os";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -9,6 +8,7 @@ import {
   syncNativeLocale,
   type NativeI18nEntry,
 } from "../../scripts/native-app-i18n.ts";
+import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 
 describe("native app i18n inventory", () => {
   it("collects stable Android and Apple UI entries", async () => {
@@ -123,7 +123,8 @@ describe("native app i18n inventory", () => {
   });
 
   it("creates a first-run locale artifact and leaves a complete artifact unchanged", async () => {
-    const translationsDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-native-i18n-"));
+    const tempDirs: string[] = [];
+    const translationsDir = makeTempDir(tempDirs, "openclaw-native-i18n-");
     const entries: NativeI18nEntry[] = [
       {
         id: "native.android.hello",
@@ -193,12 +194,13 @@ describe("native app i18n inventory", () => {
       expect(await readFile(artifactPath, "utf8")).toBe(firstContents);
       expect((await stat(artifactPath)).mtimeMs).toBe(firstModifiedAt);
     } finally {
-      await rm(translationsDir, { force: true, recursive: true });
+      cleanupTempDirs(tempDirs);
     }
   });
 
   it("rejects native printf placeholder drift", async () => {
-    const translationsDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-native-i18n-"));
+    const tempDirs: string[] = [];
+    const translationsDir = makeTempDir(tempDirs, "openclaw-native-i18n-");
     const cases = [
       {
         entry: {
@@ -237,7 +239,7 @@ describe("native app i18n inventory", () => {
         );
       }
     } finally {
-      await rm(translationsDir, { force: true, recursive: true });
+      cleanupTempDirs(tempDirs);
     }
   });
 
