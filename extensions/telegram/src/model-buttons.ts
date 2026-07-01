@@ -137,15 +137,14 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
  * Catches same-count-but-different-content changes that totalCount alone misses.
  */
 function computeModelListFingerprint(sortedModels: readonly string[]): string {
-  // Use the first and last model names as a lightweight checksum — most
-  // list mutations change one of these boundaries.
-  const first = sortedModels[0] ?? "";
-  const last = sortedModels[sortedModels.length - 1] ?? "";
-  const raw = `${first}|${last}|${sortedModels.length}`;
+  // Rolling hash over all model names. Catches any change to the sorted
+  // list (add, remove, reorder, rename) regardless of count.
   let hash = 0;
-  for (let i = 0; i < raw.length; i++) {
-    hash = (hash << 5) - hash + raw.charCodeAt(i);
-    hash |= 0;
+  for (const name of sortedModels) {
+    for (let i = 0; i < name.length; i++) {
+      hash = (hash << 5) - hash + name.charCodeAt(i);
+      hash |= 0;
+    }
   }
   return (hash >>> 0).toString(16).slice(0, 4);
 }
