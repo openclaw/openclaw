@@ -371,6 +371,13 @@ const TELEGRAM_RICH_HTML_TAG_SUPPORT: TelegramHtmlTagSupport = {
   attrPatterns: TELEGRAM_RICH_ATTR_HTML_TAG_PATTERNS,
 };
 
+/** Tags that survive upstream tool-call filtering but should be stripped
+ *  from Telegram rich output instead of escaped.  <parameter> wrappers
+ *  inside rich content would otherwise be HTML-escaped and appear as
+ *  visible markup.  Tags inside <code> or <pre> blocks are NOT stripped
+ *  — they may be literal XML that users expect to see. */
+const TELEGRAM_RICH_STRIP_TAGS = new Set(["parameter"]);
+
 function popLastTagName(tags: string[], name: string): boolean {
   for (let index = tags.length - 1; index >= 0; index -= 1) {
     if (tags[index] === name) {
@@ -441,6 +448,7 @@ function preserveTelegramHtmlTag(
 function escapeUnsupportedTelegramHtml(
   text: string,
   support: TelegramHtmlTagSupport = TELEGRAM_LEGACY_HTML_TAG_SUPPORT,
+  stripTags?: ReadonlySet<string>,
 ): string {
   let result = "";
   let index = 0;
@@ -462,6 +470,10 @@ function escapeUnsupportedTelegramHtml(
       const end = text.indexOf(">", index + 1);
       if (end !== -1) {
         const rawTag = text.slice(index, end + 1);
+        if (stripTags && shouldStripTelegramHtmlTag(rawTag, stripTags, openTags)) {
+          index = end + 1;
+          continue;
+        }
         result += preserveTelegramHtmlTag(rawTag, openTags, escapeHtml, support);
         index = end + 1;
       } else {
@@ -479,6 +491,38 @@ function escapeUnsupportedTelegramHtml(
     index += 1;
   }
   return result;
+}
+
+/**
+ * Check whether an HTML tag should be stripped entirely (opening and closing)
+ * instead of escaped.  Tags inside `<code>` or `<pre>` blocks are preserved
+ * (escaped) because they may be literal tool-call XML that users want to see.
+ */
+function shouldStripTelegramHtmlTag(
+  rawTag: string,
+  stripTags: ReadonlySet<string>,
+  openTags: string[],
+): boolean {
+  const match = HTML_MODE_TAG_PATTERN.exec(rawTag);
+  if (!match) {
+    return false;
+  }
+  const closing = match[1] === "/";
+  const tagName = normalizeLowercaseStringOrEmpty(match[2]);
+  if (!stripTags.has(tagName)) {
+    return false;
+  }
+  // Preserve parameter tags inside code/pre — they're not tool-call wrappers,
+  // they're literal XML the user wants to see.
+  if (hasOpenTelegramHtmlTag(openTags, "code") || hasOpenTelegramHtmlTag(openTags, "pre")) {
+    return false;
+  }
+  if (!closing) {
+    openTags.push(tagName);
+  } else {
+    popLastTagName(openTags, tagName);
+  }
+  return true;
 }
 
 function isValidTelegramHtmlEntityCodePoint(codePoint: number): boolean {
@@ -753,12 +797,17 @@ export function normalizeTelegramOutboundRichHtml(
     materializeTelegramRichHtmlLineBreaks(
       normalizeTelegramRichLiteralWhitespaceEscapes(
         isolateTelegramRichMediaBlocks(
-        // Strip standalone tool-call parameter wrappers that survive upstream
-        // filtering.
-        const withoutParameterTags = tableNormalized.html.replace(/<\/?(?:parameter)\b[^>]*>/gi, "");
-          escapeUnsupportedTelegramHtml(withoutParameterTags, TELEGRAM_RICH_HTML_TAG_SUPPORT),
+          escapeUnsupportedTelegramHtml(tableNormalized.html, TELEGRAM_RICH_HTML_TAG_SUPPORT, TELEGRAM_RICH_STRIP_TAGS),
         ),
       ),
+    ),
+    TELEGRAM_RICH_NESTING_LIMIT,
+  );
+  return {
+    html: safeHtml,
+    degradationReasons: tableNormalized.degradationReasons,
+  };
+}
     ),
     TELEGRAM_RICH_NESTING_LIMIT,
   );
