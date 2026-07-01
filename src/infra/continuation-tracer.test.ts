@@ -2026,7 +2026,7 @@ describe("continuation-tracer :: diagnostics fail-safe boundary (I3)", () => {
     const context = {
       traceId: "0af7651916cd43dd8448eb211c80319c",
       spanId: "b7ad6b7169203331",
-      traceFlags: 1,
+      traceFlags: "01",
     };
     let result: string | undefined;
     expect(() => {
