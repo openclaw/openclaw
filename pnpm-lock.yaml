@@ -488,6 +488,19 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/claude:
+    dependencies:
+      '@zeroaltitude/openclaw-claude-bridge':
+        specifier: 0.2.16
+        version: 0.2.16(@anthropic-ai/sdk@0.100.1(zod@4.4.3))(zod@4.4.3)
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/clickclack:
     dependencies:
       ws:
@@ -4565,6 +4578,11 @@ packages:
   '@zed-industries/codex-acp@0.15.0':
     resolution: {integrity: sha512-eAv7sGBeiYrYkOulF729nrM51szS7WIhBtugRj5wWq6csRKZUhAZfoUZlF8xUWdHPtOIzd/eT6MNG6gMHu6z0w==}
     deprecated: This package has been replaced by @agentclientprotocol/codex-acp. Please migrate to continue receiving updates.
+    hasBin: true
+
+  '@zeroaltitude/openclaw-claude-bridge@0.2.16':
+    resolution: {integrity: sha512-u0ySSWXt5lBInqMq6cdUcjb5gtkexqtkUv1ttUKS0sVl3xs4cRrRr0/upTUzhey+Rmx4J6QzBVDl0JaGAsSkJg==}
+    engines: {node: '>=22.0.0'}
     hasBin: true
 
   abort-controller@3.0.0:
@@ -10564,6 +10582,17 @@ snapshots:
       '@zed-industries/codex-acp-linux-x64': 0.15.0
       '@zed-industries/codex-acp-win32-arm64': 0.15.0
       '@zed-industries/codex-acp-win32-x64': 0.15.0
+
+  '@zeroaltitude/openclaw-claude-bridge@0.2.16(@anthropic-ai/sdk@0.100.1(zod@4.4.3))(zod@4.4.3)':
+    dependencies:
+      '@anthropic-ai/claude-agent-sdk': 0.3.156(@anthropic-ai/sdk@0.100.1(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(zod@4.4.3)
+      '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
+      ajv: 8.20.0
+    transitivePeerDependencies:
+      - '@anthropic-ai/sdk'
+      - '@cfworker/json-schema'
+      - supports-color
+      - zod
 
   abort-controller@3.0.0:
     dependencies:

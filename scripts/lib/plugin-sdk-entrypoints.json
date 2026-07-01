@@ -11,6 +11,7 @@
   "health",
   "runtime-doctor",
   "runtime-env",
+  "host-env-security",
   "runtime-logger",
   "proxy-capture",
   "runtime-secret-resolution",

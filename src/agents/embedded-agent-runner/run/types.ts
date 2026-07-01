@@ -252,4 +252,13 @@ export type EmbeddedRunAttemptResult = {
     providerStarted?: boolean;
     aborted?: boolean;
   }) => void;
+  /**
+   * Opt-in: when true, the runner annotates the final-reply payload with
+   * `preserveDraftPreview: true` so channel renderers preserve any
+   * draft/live-preview message (M_draft) and deliver the final answer as a
+   * new message below it instead of editing M_draft in place. See
+   * `ReplyPayload.preserveDraftPreview` and `deliverFinalizableLivePreview`
+   * in `src/channels/message/live.ts` for the central enforcement point.
+   */
+  preserveDraftPreviewOnFinalReply?: boolean;
 };

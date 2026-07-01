@@ -48,6 +48,9 @@ const bundledPluginIgnoredRuntimeDependencies = [
   "@pierre/theme",
   "@tloncorp/tlon-skill",
   "@zed-industries/codex-acp",
+  // Runtime-spawned bridge binary (resolved from PATH, never statically
+  // imported) — mirrors the codex app-server binaries above.
+  "@zeroaltitude/openclaw-claude-bridge",
   "jiti",
   "json5",
   "lit",

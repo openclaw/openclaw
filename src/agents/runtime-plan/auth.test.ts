@@ -101,4 +101,34 @@ describe("buildAgentRuntimeAuthPlan", () => {
     expect(plan.authProfileProviderForAuth).toBe("fixture");
     expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
+
+  it("treats the Claude bridge harness as the Anthropic auth owner", () => {
+    const plan = buildAgentRuntimeAuthPlan({
+      provider: "anthropic",
+      authProfileProvider: "anthropic",
+      sessionAuthProfileId: "anthropic:default",
+      harnessId: "claude-bridge",
+      harnessRuntime: "claude-bridge",
+      allowHarnessAuthProfileForwarding: true,
+    });
+
+    expect(plan.harnessAuthProvider).toBe("anthropic");
+    expect(plan.forwardedAuthProfileId).toBe("anthropic:default");
+  });
+
+  it("treats the Codex harness as the OpenAI auth owner", () => {
+    const plan = buildAgentRuntimeAuthPlan({
+      provider: "openai",
+      authProfileProvider: "openai",
+      sessionAuthProfileId: "openai:chatgpt",
+      sessionAuthProfileCandidateIds: ["openai:chatgpt"],
+      harnessId: "codex",
+      harnessRuntime: "codex",
+      allowHarnessAuthProfileForwarding: true,
+    });
+
+    expect(plan.harnessAuthProvider).toBe("openai");
+    expect(plan.forwardedAuthProfileId).toBe("openai:chatgpt");
+    expect(plan.forwardedAuthProfileCandidateIds).toEqual(["openai:chatgpt"]);
+  });
 });
