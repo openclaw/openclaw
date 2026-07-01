@@ -6,6 +6,7 @@
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { resolveAgentConfig, resolveSessionAgentId } from "../agent-scope.js";
 import {
   isConfiguredAwsSdkAuthProfileForProvider,
   isStoredCredentialCompatibleWithAuthProvider,
@@ -172,6 +173,34 @@ export async function resolveSessionAuthProfileOverride(params: {
   if (current && order.length > 0 && !order.includes(current) && source !== "user") {
     await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
     current = undefined;
+  }
+
+  // When the override was set automatically (via fallback) and the current
+  // run's provider differs from the agent's configured default model provider,
+  // include the default provider's auth profiles in the order list. This
+  // prevents a fallback from permanently locking the session to the fallback
+  // provider's auth profile (https://github.com/openclaw/openclaw/issues/85126).
+  if (source === "auto") {
+    const sessionAgentId = resolveSessionAgentId({ config: cfg, sessionKey });
+    const agentCfg = resolveAgentConfig(cfg, sessionAgentId);
+    const rawModel: string | { primary?: string } | undefined =
+      agentCfg?.model ?? cfg.agents?.defaults?.model;
+    const agentPrimary =
+      typeof rawModel === "string"
+        ? rawModel
+        : rawModel && typeof rawModel === "object" && "primary" in rawModel
+          ? (rawModel as { primary: string }).primary
+          : undefined;
+    if (agentPrimary) {
+      const agentProvider = agentPrimary.split("/")[0];
+      if (agentProvider && agentProvider !== provider) {
+        const agentOrder = resolveAuthProfileOrder({ cfg, store, provider: agentProvider });
+        if (agentOrder.length > 0) {
+          // Prepend default provider's order so it's preferred over the fallback's
+          order.splice(0, order.length, ...new Set([...agentOrder, ...order]));
+        }
+      }
+    }
   }
 
   if (order.length === 0) {
