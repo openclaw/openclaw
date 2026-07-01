@@ -251,8 +251,18 @@ fun OnboardingFlow(
           )
         },
         text = {
+          val message =
+            if (prompt.previousFingerprintSha256.isNullOrBlank()) {
+              stringResource(R.string.gateway_trust_first_seen, prompt.fingerprintSha256)
+            } else {
+              stringResource(
+                R.string.gateway_trust_changed,
+                prompt.previousFingerprintSha256,
+                prompt.fingerprintSha256,
+              )
+            }
           Text(
-            "Verify the certificate fingerprint before continuing.\n\n${prompt.fingerprintSha256}",
+            message,
             style = ClawTheme.type.body,
             color = ClawTheme.colors.textMuted,
           )
@@ -650,7 +660,7 @@ private fun GatewayRecoveryScreen(
 
   ClawScaffold(modifier = modifier, contentPadding = PaddingValues(horizontal = 18.dp, vertical = 16.dp)) {
     Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-      OnboardingHeader(title = stringResource(R.string.gateway_setup), onBack = onBack)
+      OnboardingHeader(title = stringResource(R.string.gateway_recovery), onBack = onBack)
       Spacer(modifier = Modifier.height(12.dp))
       Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Icon(

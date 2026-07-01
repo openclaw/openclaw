@@ -31,4 +31,7 @@
     <string name="connect_manual_url">เชื่อมต่อโดยใช้ URL ด้วยตนเอง</string>
     <string name="permissions">สิทธิ์</string>
     <string name="done">เสร็จสิ้น</string>
+    <string name="gateway_trust_first_seen">ตรวจสอบลายนิ้วมือของใบรับรองก่อนเชื่อถือเกตเวย์นี้\n\n%1$s</string>
+    <string name="gateway_trust_changed">ใบรับรองของเกตเวย์มีการเปลี่ยนแปลง ดำเนินการต่อเมื่อคุณคาดว่าจะมีการเปลี่ยนแปลงนี้เท่านั้น\n\nSHA-256 เดิม:\n%1$s\n\nSHA-256 ใหม่:\n%2$s</string>
+    <string name="gateway_recovery">การกู้คืนเกตเวย์</string>
 </resources>

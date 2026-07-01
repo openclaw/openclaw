@@ -106,9 +106,13 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
       text = {
         val message =
           if (prompt.previousFingerprintSha256.isNullOrBlank()) {
-            "First-time TLS connection.\n\nVerify this SHA-256 fingerprint before trusting:\n${prompt.fingerprintSha256}"
+            stringResource(R.string.gateway_trust_first_seen, prompt.fingerprintSha256)
           } else {
-            "The gateway TLS certificate changed. Only continue if you expected this.\n\nOld SHA-256 fingerprint:\n${prompt.previousFingerprintSha256}\n\nNew SHA-256 fingerprint:\n${prompt.fingerprintSha256}"
+            stringResource(
+              R.string.gateway_trust_changed,
+              prompt.previousFingerprintSha256,
+              prompt.fingerprintSha256,
+            )
           }
         Text(
           message,
@@ -162,8 +166,11 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
       Text(stringResource(R.string.gateway_connection), style = mobileTitle1, color = mobileText)
       Text(
-        if (isConnected) stringResource(R.string.connected_gateway_ready)
-        else stringResource(R.string.connect_gateway_get_started),
+        if (isConnected) {
+          stringResource(R.string.connected_gateway_ready)
+        } else {
+          stringResource(R.string.connect_gateway_get_started)
+        },
         style = mobileCallout,
         color = mobileTextSecondary,
       )
@@ -651,7 +658,11 @@ private fun CommandBlock(command: String) {
 private fun EndpointPreview(endpoint: String) {
   Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
     HorizontalDivider(color = mobileBorder)
-    Text("Resolved endpoint", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
+    Text(
+      stringResource(R.string.resolved_endpoint),
+      style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
+      color = mobileTextSecondary,
+    )
     Text(endpoint, style = mobileCallout.copy(fontFamily = FontFamily.Monospace), color = mobileText)
     HorizontalDivider(color = mobileBorder)
   }

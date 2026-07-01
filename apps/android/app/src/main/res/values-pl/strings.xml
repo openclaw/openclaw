@@ -31,4 +31,7 @@
     <string name="connect_manual_url">Połącz, używając ręcznego URL</string>
     <string name="permissions">Uprawnienia</string>
     <string name="done">Gotowe</string>
+    <string name="gateway_trust_first_seen">Sprawdź odcisk certyfikatu, zanim zaufasz tej bramie.\n\n%1$s</string>
+    <string name="gateway_trust_changed">Certyfikat bramy uległ zmianie. Kontynuuj tylko wtedy, gdy oczekujesz tej zmiany.\n\nStary SHA-256:\n%1$s\n\nNowy SHA-256:\n%2$s</string>
+    <string name="gateway_recovery">Odzyskiwanie bramy</string>
 </resources>

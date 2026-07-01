@@ -31,4 +31,7 @@
     <string name="connect_manual_url">Kết nối bằng URL thủ công</string>
     <string name="permissions">Quyền</string>
     <string name="done">Xong</string>
+    <string name="gateway_trust_first_seen">Xác minh dấu vân tay chứng chỉ trước khi tin cậy cổng này.\n\n%1$s</string>
+    <string name="gateway_trust_changed">Chứng chỉ cổng đã thay đổi. Chỉ tiếp tục nếu bạn mong đợi thay đổi này.\n\nSHA-256 cũ:\n%1$s\n\nSHA-256 mới:\n%2$s</string>
+    <string name="gateway_recovery">Khôi phục cổng</string>
 </resources>
