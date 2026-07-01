@@ -33,6 +33,7 @@ import {
 import {
   createMattermostClient,
   fetchMattermostMe,
+  fetchMattermostThread,
   normalizeMattermostBaseUrl,
   updateMattermostPost,
   type MattermostClient,
@@ -491,6 +492,88 @@ export function resolveMattermostReactionChannelId(
   );
 }
 
+/**
+ * Backfill in-memory thread history from the server when the local history window
+ * for a thread is empty (e.g. after a gateway restart or a session clear). Without
+ * this, a user who @mentions the bot inside an existing thread to wake it gets a
+ * reply with no thread context. Fetches the full thread via
+ * `GET /posts/{threadRootId}/thread`, maps posts to history entries (resolving
+ * usernames), and seeds the most recent entries up to `historyLimit`. Failures are
+ * logged and swallowed so inbound handling continues.
+ */
+export async function backfillMattermostThreadHistory(params: {
+  client: MattermostClient;
+  threadRootId: string;
+  historyKey: string;
+  channelHistories: Map<string, HistoryEntry[]>;
+  historyLimit: number;
+  currentPostId?: string;
+  resolveUserInfo: (userId: string) => Promise<MattermostUser | null>;
+  /** Current agent session id for this thread; backfill runs at most once per session id. */
+  sessionId?: string;
+  /** Per-historyKey record of the session id last backfilled (recovery-gate state). */
+  backfilledSessionIds: Map<string, string>;
+  log?: (message: string) => void;
+}): Promise<void> {
+  if (params.historyLimit <= 0) {
+    return;
+  }
+  if ((params.channelHistories.get(params.historyKey)?.length ?? 0) > 0) {
+    // The active thread already has in-memory history, so no server fetch is needed — but mark
+    // this session serviced first. Otherwise a non-empty first sighting returns without recording
+    // the session, and the next same-session follow-up (after the turn kernel clears the window)
+    // mis-reads the empty window as a cold start and refetches the whole server thread on an
+    // ordinary reply, adding an awaited REST call and re-injecting context the session already has.
+    if (params.sessionId) {
+      params.backfilledSessionIds.set(params.historyKey, params.sessionId);
+    }
+    return;
+  }
+  // Recovery gate: the in-memory window is cleared after every turn, so "window empty" also
+  // matches normal active-thread follow-ups. The agent session id only rotates on /new or a
+  // restart — exactly when the thread context is actually missing — so backfill at most once
+  // per session id and skip the server fetch while it is unchanged.
+  if (params.sessionId && params.backfilledSessionIds.get(params.historyKey) === params.sessionId) {
+    return;
+  }
+  try {
+    const thread = await fetchMattermostThread(params.client, params.threadRootId);
+    const order = Array.isArray(thread?.order) ? thread.order : [];
+    const posts = thread?.posts ?? {};
+    const entries: HistoryEntry[] = [];
+    for (const postId of order) {
+      const threadPost = posts[postId];
+      if (!threadPost || threadPost.id === params.currentPostId) {
+        continue;
+      }
+      const userId = normalizeOptionalString(threadPost.user_id);
+      const username = userId
+        ? normalizeOptionalString((await params.resolveUserInfo(userId))?.username)
+        : undefined;
+      entries.push({
+        sender: username ? `@${username}` : (userId ?? "unknown"),
+        body: normalizeOptionalString(threadPost.message) ?? "[attachment]",
+        timestamp: typeof threadPost.create_at === "number" ? threadPost.create_at : undefined,
+        messageId: normalizeOptionalString(threadPost.id),
+      });
+    }
+    if (entries.length > 0) {
+      params.channelHistories.set(params.historyKey, entries.slice(-params.historyLimit));
+    }
+    // Record even when the server thread had no extra posts, so the same session is not
+    // refetched on every follow-up turn within its lifetime.
+    if (params.sessionId) {
+      params.backfilledSessionIds.set(params.historyKey, params.sessionId);
+    }
+  } catch (err) {
+    params.log?.(
+      `mattermost: thread history backfill failed (thread=${params.threadRootId}): ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
+}
+
 function buildMattermostAttachmentPlaceholder(mediaList: MattermostMediaInfo[]): string {
   if (mediaList.length === 0) {
     return "";
@@ -869,6 +952,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const channelHistories = new Map<string, HistoryEntry[]>();
+  // Tracks the agent session id last backfilled per thread historyKey so thread history is
+  // seeded once per session (on /new or restart) instead of on every active-thread follow-up.
+  const backfilledSessionIds = new Map<string, string>();
   const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const { groupPolicy, providerMissingFallbackApplied } =
@@ -1577,6 +1663,28 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           chatType,
           sender: { name: senderName, id: senderId },
         });
+        if (historyKey && threadRootId) {
+          const threadStorePath = core.channel.session.resolveStorePath(cfg.session?.store, {
+            agentId: route.agentId,
+          });
+          const threadSessionId = core.agent.session.getSessionEntry({
+            storePath: threadStorePath,
+            sessionKey: historyKey,
+            agentId: route.agentId,
+          })?.sessionId;
+          await backfillMattermostThreadHistory({
+            client,
+            threadRootId,
+            historyKey,
+            channelHistories,
+            historyLimit,
+            currentPostId: post.id ?? undefined,
+            resolveUserInfo,
+            sessionId: threadSessionId,
+            backfilledSessionIds,
+            log: (message) => logVerboseMessage(message),
+          });
+        }
         let combinedBody = body;
         if (historyKey) {
           const channelHistory = createChannelHistoryWindow({ historyMap: channelHistories });
