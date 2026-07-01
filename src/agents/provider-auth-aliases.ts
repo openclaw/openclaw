@@ -30,6 +30,10 @@ type ProviderAuthAliasCandidate = {
   origin?: PluginOrigin;
   target: string;
 };
+type ProviderAuthAliasPluginMetadata = Pick<
+  PluginManifestRecord,
+  "id" | "origin" | "providerAuthAliases" | "providerAuthChoices"
+>;
 
 const PROVIDER_AUTH_ALIAS_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
   config: 0,
@@ -70,7 +74,7 @@ function resolveProviderAuthAliasOriginPriority(origin: PluginOrigin | undefined
 }
 
 function isWorkspacePluginTrustedForAuthAliases(
-  plugin: PluginManifestRecord,
+  plugin: ProviderAuthAliasPluginMetadata,
   config: OpenClawConfig | undefined,
 ): boolean {
   return isWorkspacePluginAllowedByConfig({
@@ -82,13 +86,28 @@ function isWorkspacePluginTrustedForAuthAliases(
 }
 
 function shouldUsePluginAuthAliases(
-  plugin: PluginManifestRecord,
+  plugin: ProviderAuthAliasPluginMetadata,
   params: ProviderAuthAliasLookupParams | undefined,
 ): boolean {
   if (plugin.origin !== "workspace" || params?.includeUntrustedWorkspacePlugins === true) {
     return true;
   }
   return isWorkspacePluginTrustedForAuthAliases(plugin, params?.config);
+}
+
+function readProviderAuthAliasPluginMetadata(
+  plugin: PluginManifestRecord,
+): ProviderAuthAliasPluginMetadata | undefined {
+  try {
+    return {
+      id: plugin.id,
+      origin: plugin.origin,
+      providerAuthAliases: plugin.providerAuthAliases,
+      providerAuthChoices: plugin.providerAuthChoices,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function setPreferredAlias(params: {
@@ -171,7 +190,11 @@ export function resolveProviderAuthAliasMap(
     });
   const preferredAliases = new Map<string, ProviderAuthAliasCandidate>();
   const aliases: Record<string, string> = Object.create(null) as Record<string, string>;
-  for (const plugin of snapshot.plugins) {
+  for (const snapshotPlugin of snapshot.plugins) {
+    const plugin = readProviderAuthAliasPluginMetadata(snapshotPlugin);
+    if (!plugin) {
+      continue;
+    }
     if (!shouldUsePluginAuthAliases(plugin, params)) {
       continue;
     }
