@@ -83,6 +83,14 @@ export type SessionMcpRuntime = {
   listPrompts?: (serverName: string) => Promise<unknown>;
   getPrompt?: (serverName: string, name: string, args?: Record<string, string>) => Promise<unknown>;
   dispose: () => Promise<void>;
+  /**
+   * Disposes the transport session for a specific MCP server and invalidates
+   * the tool catalog so the next `getCatalog()` call reconnects and re-fetches
+   * tools. Use when the upstream server's tool list changed but it does not
+   * emit `notifications/tools/list_changed` (e.g. after a new Composio
+   * integration is connected).
+   */
+  reloadServer?: (serverName: string) => Promise<void>;
 };
 
 /** Manager for session-scoped MCP runtimes and their idle lifecycle. */

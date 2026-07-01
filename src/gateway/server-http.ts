@@ -82,6 +82,7 @@ let sessionHistoryHttpModulePromise:
   | Promise<typeof import("./sessions-history-http.js")>
   | undefined;
 let sessionKillHttpModulePromise: Promise<typeof import("./session-kill-http.js")> | undefined;
+let mcpReloadHttpModulePromise: Promise<typeof import("./mcp-reload-http.js")> | undefined;
 let toolsInvokeHttpModulePromise: Promise<typeof import("./tools-invoke-http.js")> | undefined;
 let pluginNodeCapabilityAuthModulePromise:
   | Promise<typeof import("./server/plugin-node-capability-auth.js")>
@@ -134,6 +135,11 @@ function getSessionHistoryHttpModule() {
 function getSessionKillHttpModule() {
   sessionKillHttpModulePromise ??= import("./session-kill-http.js");
   return sessionKillHttpModulePromise;
+}
+
+function getMcpReloadHttpModule() {
+  mcpReloadHttpModulePromise ??= import("./mcp-reload-http.js");
+  return mcpReloadHttpModulePromise;
 }
 
 function getToolsInvokeHttpModule() {
@@ -227,6 +233,10 @@ function isManagedOutgoingImagePath(pathname: string): boolean {
 
 function isSessionKillPath(pathname: string): boolean {
   return /^\/sessions\/[^/]+\/kill$/.test(pathname);
+}
+
+function isMcpServerReloadPath(pathname: string): boolean {
+  return /^\/api\/mcp\/servers\/[^/]+\/reload$/.test(pathname);
 }
 
 function isSessionHistoryPath(pathname: string): boolean {
@@ -645,6 +655,18 @@ export function createGatewayHttpServer(opts: {
           name: "sessions-kill",
           run: async () =>
             (await getSessionKillHttpModule()).handleSessionKillHttpRequest(req, res, {
+              auth: resolvedAuthValue,
+              trustedProxies,
+              allowRealIpFallback,
+              rateLimiter,
+            }),
+        });
+      }
+      if (isMcpServerReloadPath(scopedRequestPath)) {
+        requestStages.push({
+          name: "mcp-server-reload",
+          run: async () =>
+            (await getMcpReloadHttpModule()).handleMcpReloadHttpRequest(req, res, {
               auth: resolvedAuthValue,
               trustedProxies,
               allowRealIpFallback,
