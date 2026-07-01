@@ -896,7 +896,10 @@ export function logSessionStateChange(
     state.activeQueuedTurn = state.queueDepth > 0;
   }
   if (params.state === "idle") {
-    state.queueDepth = Math.max(0, state.queueDepth - 1);
+    // Reset queueDepth to 0 on idle.  A single embedded run may absorb
+    // multiple steered messages (each incrementing queueDepth), so a
+    // single decrement on completion leaves residual stale depth (#98685).
+    state.queueDepth = 0;
     state.activeQueuedTurn = false;
   }
   if (!isProbeSession && diag.isEnabled("debug")) {

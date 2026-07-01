@@ -235,6 +235,16 @@ describe("diagnostic session state pruning", () => {
     expect(getDiagnosticSessionState({ sessionKey }).queueDepth).toBe(0);
     expect(getDiagnosticSessionStateCountForTest()).toBe(1);
   });
+
+  it("resets queueDepth to 0 on idle even after multiple queued messages (#98685)", () => {
+    const sessionKey = "multi-queue-depth-test";
+    logMessageQueued({ sessionKey, source: "embedded" });
+    logMessageQueued({ sessionKey, source: "embedded" });
+    logMessageQueued({ sessionKey, source: "embedded" });
+    expect(getDiagnosticSessionState({ sessionKey }).queueDepth).toBe(3);
+    logSessionStateChange({ sessionKey, state: "idle", reason: "run_completed" });
+    expect(getDiagnosticSessionState({ sessionKey }).queueDepth).toBe(0);
+  });
 });
 
 describe("diagnostic session activity aliases", () => {
