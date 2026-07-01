@@ -8,6 +8,22 @@ export type RuntimeEnv = {
   exit: (code: number) => void;
 };
 
+/**
+ * Control-flow signal thrown in place of `process.exit` by non-exiting runtimes.
+ *
+ * Generic `try/catch` blocks around CLI command bodies can accidentally swallow
+ * the simulated exit if it is a plain `Error`. Callers that need to honor the
+ * exit can check `err instanceof ExitError` instead of relying on message text.
+ */
+export class ExitError extends Error {
+  readonly exitCode: number;
+  constructor(code: number) {
+    super(`exit ${code}`);
+    this.name = "ExitError";
+    this.exitCode = code;
+  }
+}
+
 export type OutputRuntimeEnv = RuntimeEnv & {
   writeStdout: (value: string) => void;
   writeJson: (value: unknown, space?: number) => void;
@@ -99,7 +115,7 @@ export function createNonExitingRuntime(): OutputRuntimeEnv {
   return {
     ...createRuntimeIo(),
     exit: (code: number) => {
-      throw new Error(`exit ${code}`);
+      throw new ExitError(code);
     },
   };
 }
