@@ -20,6 +20,20 @@ function addName(names: Set<string>, value: unknown): void {
   }
 }
 
+export function collectReadableToolNames(tools: readonly { readonly name?: unknown }[]): string[] {
+  const names: string[] = [];
+  for (const tool of tools) {
+    try {
+      if (typeof tool.name === "string") {
+        names.push(tool.name);
+      }
+    } catch {
+      continue;
+    }
+  }
+  return names;
+}
+
 export function collectAllowedToolNames(params: {
   tools: AgentTool[];
   clientTools?: ClientToolDefinition[];
