@@ -12,6 +12,7 @@ import {
   type ExecApprovalPendingReplyParams,
   type ExecApprovalReplyDecision,
 } from "../infra/exec-approval-reply.js";
+import { formatAllowAlwaysUnavailableMessage } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import {
   buildApprovalPendingReplyPayload,
@@ -212,19 +213,7 @@ function buildManualInstructionSection(params: {
 }): string[] {
   const lines: string[] = [];
   if (!params.allowedDecisions.includes("allow-always")) {
-    if (params.ask === "always") {
-      lines.push(
-        "Allow Always is unavailable because the effective policy requires approval every time.",
-      );
-    } else if (params.ask != null) {
-      lines.push(
-        "Allow Always is unavailable for this command. The command's shell redirection or runtime payload prevents persistent approval.",
-      );
-    } else {
-      lines.push(
-        "Allow Always is unavailable because the effective policy requires approval every time.",
-      );
-    }
+    lines.push(formatAllowAlwaysUnavailableMessage(params.ask));
   }
   if (params.allowedDecisions.length > 0) {
     lines.push(
