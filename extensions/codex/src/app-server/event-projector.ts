@@ -25,6 +25,7 @@ import { generatedImageAssetFromBase64 } from "openclaw/plugin-sdk/image-generat
 import type { AssistantMessage, Usage } from "openclaw/plugin-sdk/llm";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { resolveCodexToolAbortTerminalReason } from "./dynamic-tool-execution.js";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import {
   readCodexNotificationThreadId,
@@ -67,8 +68,163 @@ export type CodexAppServerToolTelemetry = {
 export type CodexAppServerEventProjectorOptions = {
   nativePostToolUseRelayEnabled?: boolean;
   onNativeToolResultRecorded?: () => void | Promise<void>;
+  runAbortSignal?: AbortSignal;
   trajectoryRecorder?: CodexTrajectoryRecorder | null;
 };
+
+type CodexNativeToolLifecycleContext = Pick<
+  EmbeddedRunAttemptParams,
+  "agentId" | "runId" | "sessionId" | "sessionKey"
+>;
+
+/** Projects metadata-only lifecycle diagnostics for native tool items. */
+export class CodexNativeToolLifecycleProjector {
+  private readonly startedAtByItem = new Map<string, number>();
+  private readonly activeItems = new Map<string, { toolName: string }>();
+  private readonly completedItemIds = new Set<string>();
+
+  constructor(
+    private readonly context: CodexNativeToolLifecycleContext,
+    private readonly threadId: string,
+    private readonly turnId: string,
+    private readonly runAbortSignal?: AbortSignal,
+  ) {}
+
+  handleNotification(notification: CodexServerNotification): void {
+    const params = isJsonObject(notification.params) ? notification.params : undefined;
+    if (
+      !params ||
+      readCodexNotificationThreadId(params) !== this.threadId ||
+      readCodexNotificationTurnId(params) !== this.turnId
+    ) {
+      return;
+    }
+    if (notification.method === "turn/completed") {
+      const turn = readCodexTurn(params.turn);
+      if (!turn || turn.id !== this.turnId) {
+        return;
+      }
+      for (const item of turn.items ?? []) {
+        this.recordSnapshotItem(item);
+      }
+      return;
+    }
+    if (notification.method !== "item/started" && notification.method !== "item/completed") {
+      return;
+    }
+    const item = readItem(params.item);
+    if (!item) {
+      return;
+    }
+    this.recordItem({
+      phase: notification.method === "item/started" ? "start" : "result",
+      item,
+    });
+  }
+
+  recordItem(params: { phase: "start" | "result"; item: CodexThreadItem }): void {
+    const toolName = auditNativeToolName(params.item);
+    if (!toolName || this.completedItemIds.has(params.item.id)) {
+      return;
+    }
+    if (params.phase === "start") {
+      this.recordStarted(params.item.id, toolName);
+      return;
+    }
+
+    this.completedItemIds.add(params.item.id);
+    this.activeItems.delete(params.item.id);
+    const startedAt = this.startedAtByItem.get(params.item.id);
+    this.startedAtByItem.delete(params.item.id);
+    const itemDurationMs =
+      typeof params.item.durationMs === "number" ? params.item.durationMs : undefined;
+    const durationMs =
+      itemDurationMs ?? (startedAt === undefined ? 0 : Math.max(0, Date.now() - startedAt));
+    const status = itemStatus(params.item);
+    const terminalEvent =
+      status === "blocked"
+        ? {
+            type: "tool.execution.blocked" as const,
+            reason: "codex_native_tool_blocked",
+            deniedReason: "codex_native_tool_blocked",
+          }
+        : status === "failed"
+          ? {
+              type: "tool.execution.error" as const,
+              durationMs,
+              errorCategory: "codex_native_tool_error",
+              terminalReason: this.runAbortSignal?.aborted
+                ? resolveCodexToolAbortTerminalReason(this.runAbortSignal)
+                : ("failed" as const),
+            }
+          : {
+              type: "tool.execution.completed" as const,
+              durationMs,
+            };
+    emitTrustedDiagnosticEvent({
+      ...this.buildBase(params.item.id, toolName),
+      ...terminalEvent,
+    });
+  }
+
+  finalizeActive(): void {
+    const terminalReason = this.runAbortSignal?.aborted
+      ? resolveCodexToolAbortTerminalReason(this.runAbortSignal)
+      : "failed";
+    for (const [toolCallId, { toolName }] of this.activeItems) {
+      const startedAt = this.startedAtByItem.get(toolCallId);
+      emitTrustedDiagnosticEvent({
+        type: "tool.execution.error",
+        ...this.buildBase(toolCallId, toolName),
+        durationMs: startedAt === undefined ? 0 : Math.max(0, Date.now() - startedAt),
+        errorCategory: "codex_native_tool_error",
+        terminalReason,
+      });
+      this.completedItemIds.add(toolCallId);
+      this.startedAtByItem.delete(toolCallId);
+    }
+    this.activeItems.clear();
+  }
+
+  private recordSnapshotItem(item: CodexThreadItem): void {
+    if (
+      !auditNativeToolName(item) ||
+      this.completedItemIds.has(item.id) ||
+      itemStatus(item) === "running"
+    ) {
+      return;
+    }
+    const toolName = auditNativeToolName(item);
+    if (!toolName) {
+      return;
+    }
+    this.recordStarted(item.id, toolName);
+    this.recordItem({ phase: "result", item });
+  }
+
+  private recordStarted(toolCallId: string, toolName: string): void {
+    if (this.activeItems.has(toolCallId)) {
+      return;
+    }
+    this.startedAtByItem.set(toolCallId, Date.now());
+    this.activeItems.set(toolCallId, { toolName });
+    emitTrustedDiagnosticEvent({
+      type: "tool.execution.started",
+      ...this.buildBase(toolCallId, toolName),
+    });
+  }
+
+  private buildBase(toolCallId: string, toolName: string) {
+    return {
+      agentId: this.context.agentId,
+      runId: this.context.runId,
+      sessionId: this.context.sessionId,
+      sessionKey: this.context.sessionKey,
+      toolName,
+      toolCallId,
+    };
+  }
+}
 
 type ReasoningDeltaMethod = "item/reasoning/summaryTextDelta" | "item/reasoning/textDelta";
 
@@ -191,7 +347,7 @@ export class CodexAppServerEventProjector {
   private lastNativeToolError: EmbeddedRunAttemptResult["lastToolError"];
   private readonly nativeGeneratedMediaItemIds = new Set<string>();
   private readonly nativeGeneratedMediaUrlsByItemId = new Map<string, string>();
-  private readonly diagnosticToolStartedAtByItem = new Map<string, number>();
+  private readonly nativeToolLifecycleProjector: CodexNativeToolLifecycleProjector;
   private readonly afterToolCallObservedItemIds = new Set<string>();
   private assistantStarted = false;
   private reasoningStarted = false;
@@ -213,7 +369,14 @@ export class CodexAppServerEventProjector {
     private readonly threadId: string,
     private readonly turnId: string,
     private readonly options: CodexAppServerEventProjectorOptions = {},
-  ) {}
+  ) {
+    this.nativeToolLifecycleProjector = new CodexNativeToolLifecycleProjector(
+      params,
+      threadId,
+      turnId,
+      options.runAbortSignal,
+    );
+  }
 
   getCompletedTurnStatus(): CodexTurn["status"] | undefined {
     return this.completedTurn?.status;
@@ -256,6 +419,7 @@ export class CodexAppServerEventProjector {
     } else if (!this.isNotificationForTurn(params)) {
       return;
     }
+    this.nativeToolLifecycleProjector.handleNotification(notification);
 
     switch (notification.method) {
       case "item/agentMessage/delta":
@@ -316,6 +480,9 @@ export class CodexAppServerEventProjector {
     toolTelemetry: CodexAppServerToolTelemetry,
     options?: { yieldDetected?: boolean },
   ): EmbeddedRunAttemptResult {
+    // Result construction runs after the notification queue drains. Close any
+    // tool lacking a terminal item so audit consumers never retain an open action.
+    this.nativeToolLifecycleProjector.finalizeActive();
     const assistantTexts = this.collectAssistantTexts();
     const reasoningText = collectReasoningTextValues(
       this.reasoningTextByGroup,
@@ -1179,7 +1346,6 @@ export class CodexAppServerEventProjector {
     const args = itemToolArgs(item);
     const meta = itemMeta(item, this.toolProgressDetailMode());
     this.recordToolTrajectoryEvent({ phase: params.phase, item, name, args, status });
-    this.emitDiagnosticToolExecutionEvent({ phase: params.phase, item, name, status });
     if (params.phase === "result") {
       this.recordNativeToolError({ item, name, meta, status });
     }
@@ -1304,54 +1470,6 @@ export class CodexAppServerEventProjector {
       ...(toolResult ? { result: toolResult } : {}),
       ...(output ? { output } : {}),
     });
-  }
-
-  private emitDiagnosticToolExecutionEvent(params: {
-    phase: "start" | "result";
-    item: CodexThreadItem;
-    name: string;
-    status: ReturnType<typeof itemStatus>;
-  }): void {
-    const base = {
-      runId: this.params.runId,
-      sessionId: this.params.sessionId,
-      sessionKey: this.params.sessionKey,
-      toolName: params.name,
-      toolCallId: params.item.id,
-    };
-    if (params.phase === "start") {
-      this.diagnosticToolStartedAtByItem.set(params.item.id, Date.now());
-      emitTrustedDiagnosticEvent({
-        type: "tool.execution.started",
-        ...base,
-      });
-      return;
-    }
-
-    const startedAt = this.diagnosticToolStartedAtByItem.get(params.item.id);
-    this.diagnosticToolStartedAtByItem.delete(params.item.id);
-    const itemDurationMs =
-      typeof params.item.durationMs === "number" ? params.item.durationMs : undefined;
-    const durationMs =
-      itemDurationMs ?? (startedAt === undefined ? 0 : Math.max(0, Date.now() - startedAt));
-    const terminalEvent =
-      params.status === "blocked"
-        ? {
-            type: "tool.execution.blocked" as const,
-            reason: "codex_native_tool_blocked",
-            deniedReason: "codex_native_tool_blocked",
-          }
-        : params.status === "failed"
-          ? {
-              type: "tool.execution.error" as const,
-              durationMs,
-              errorCategory: "codex_native_tool_error",
-            }
-          : {
-              type: "tool.execution.completed" as const,
-              durationMs,
-            };
-    emitTrustedDiagnosticEvent({ ...base, ...terminalEvent });
   }
 
   private emitAfterToolCallObservation(item: CodexThreadItem): void {
@@ -2236,7 +2354,7 @@ function itemTitle(item: CodexThreadItem): string {
 
 function itemStatus(item: CodexThreadItem): "completed" | "failed" | "running" | "blocked" {
   const status = readItemString(item, "status");
-  if (status === "failed") {
+  if (status === "failed" || status === "error") {
     return "failed";
   }
   if (status === "declined") {
@@ -2272,6 +2390,33 @@ function itemName(item: CodexThreadItem): string | undefined {
   }
   if (item.type === "webSearch") {
     return "web_search";
+  }
+  return undefined;
+}
+
+function auditNativeToolName(item: CodexThreadItem): string | undefined {
+  // The app-server web-search item drops the Responses terminal status. Omit it
+  // from audit projection rather than inventing success for failed/incomplete calls.
+  if (item.type === "dynamicToolCall" || item.type === "webSearch") {
+    return undefined;
+  }
+  const progressName = itemName(item);
+  if (progressName) {
+    return progressName;
+  }
+  if (item.type === "collabAgentToolCall") {
+    return typeof item.tool === "string" && item.tool.trim()
+      ? `collab.${item.tool.trim()}`
+      : "collab_agent";
+  }
+  if (item.type === "imageGeneration") {
+    return "image_generation";
+  }
+  if (item.type === "imageView") {
+    return "image_view";
+  }
+  if (item.type === "sleep") {
+    return "sleep";
   }
   return undefined;
 }

@@ -3377,6 +3377,35 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.resolveAcpExplicitTurnPolicyErrorMock).not.toHaveBeenCalled();
     expect(state.resolveAcpDispatchPolicyErrorMock).toHaveBeenCalledTimes(1);
     expect(state.acpRunTurnMock).not.toHaveBeenCalled();
+    expect(state.emitAcpLifecycleErrorMock).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalOutcome: "blocked" }),
+    );
+  });
+
+  it("preserves ACP cancelled results without a stop reason", async () => {
+    state.acpResolveSessionMock.mockReturnValue({
+      kind: "ready",
+      meta: {
+        agent: "claude",
+        cwd: "/tmp/workspace",
+      },
+    });
+    state.acpRunTurnMock.mockImplementationOnce(async (params: unknown) => {
+      const onEvent = (params as { onEvent?: (event: unknown) => void }).onEvent;
+      onEvent?.({ type: "done", status: "cancelled" });
+    });
+
+    await agentCommand({
+      message: "cancelled ACP turn",
+      sessionKey: "agent:main:main",
+    });
+
+    expect(state.emitAcpLifecycleEndMock).toHaveBeenCalledWith(
+      expect.objectContaining({ resultStatus: "cancelled", stopReason: undefined }),
+    );
+    expect(state.buildAcpResultMock).toHaveBeenCalledWith(
+      expect.objectContaining({ resultStatus: "cancelled", stopReason: undefined }),
+    );
   });
 
   it("flips hasSessionModelOverride on provider-only switch with same model", async () => {

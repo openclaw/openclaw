@@ -96,6 +96,11 @@ export type SessionsDeleteParams = SchemaType<"SessionsDeleteParams">;
 export type SessionsCompactParams = SchemaType<"SessionsCompactParams">;
 export type SessionsUsageParams = SchemaType<"SessionsUsageParams">;
 
+/** Metadata-only audit query payloads. */
+export type AuditEvent = SchemaType<"AuditEvent">;
+export type AuditListParams = SchemaType<"AuditListParams">;
+export type AuditListResult = SchemaType<"AuditListResult">;
+
 /** Task ledger query and cancellation payloads. */
 export type TaskSummary = SchemaType<"TaskSummary">;
 export type TasksListParams = SchemaType<"TasksListParams">;

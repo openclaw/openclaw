@@ -1958,6 +1958,245 @@ describe("CodexAppServerEventProjector", () => {
     expect(toolResultContentItem.content).toBe("ok");
   });
 
+  it.each([
+    ["cancelled", "cancelled"],
+    [Object.assign(new Error("turn timed out"), { name: "TimeoutError" }), "timed_out"],
+  ] as const)(
+    "preserves enclosing %s provenance for failed native tools",
+    async (abortReason, terminalReason) => {
+      const abortController = new AbortController();
+      abortController.abort(abortReason);
+      const diagnosticEvents: DiagnosticEventPayload[] = [];
+      const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+      const projector = await createProjector(undefined, {
+        runAbortSignal: abortController.signal,
+      });
+      const commandItem = {
+        type: "commandExecution",
+        id: "cmd-aborted",
+        command: "pnpm test extensions/codex",
+        cwd: "/workspace",
+        processId: null,
+        source: "agent",
+        status: "inProgress",
+        commandActions: [],
+        aggregatedOutput: null,
+        exitCode: null,
+        durationMs: null,
+      };
+
+      try {
+        await projector.handleNotification(forCurrentTurn("item/started", { item: commandItem }));
+        await projector.handleNotification(
+          forCurrentTurn("item/completed", {
+            item: { ...commandItem, status: "failed", durationMs: 4 },
+          }),
+        );
+        await flushDiagnosticEvents();
+      } finally {
+        unsubscribe();
+      }
+
+      expect(diagnosticEvents).toContainEqual(
+        expect.objectContaining({
+          type: "tool.execution.error",
+          toolCallId: "cmd-aborted",
+          terminalReason,
+        }),
+      );
+    },
+  );
+
+  it.each([
+    ["cancelled", "cancelled"],
+    [Object.assign(new Error("turn timed out"), { name: "TimeoutError" }), "timed_out"],
+  ] as const)(
+    "finalizes an active native tool as %s when building an interrupted result",
+    async (abortReason, terminalReason) => {
+      const abortController = new AbortController();
+      abortController.abort(abortReason);
+      const diagnosticEvents: DiagnosticEventPayload[] = [];
+      const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+      const projector = await createProjector(undefined, {
+        runAbortSignal: abortController.signal,
+      });
+
+      try {
+        await projector.handleNotification(
+          forCurrentTurn("item/started", {
+            item: {
+              type: "commandExecution",
+              id: "cmd-active-abort",
+              command: "pnpm test extensions/codex",
+              cwd: "/workspace",
+              processId: null,
+              source: "agent",
+              status: "inProgress",
+              commandActions: [],
+              aggregatedOutput: null,
+              exitCode: null,
+              durationMs: null,
+            },
+          }),
+        );
+        projector.buildResult(buildEmptyToolTelemetry());
+        await flushDiagnosticEvents();
+      } finally {
+        unsubscribe();
+      }
+
+      expect(diagnosticEvents).toContainEqual(
+        expect.objectContaining({
+          type: "tool.execution.error",
+          toolCallId: "cmd-active-abort",
+          terminalReason,
+        }),
+      );
+      expect(
+        diagnosticEvents
+          .filter((event) => "toolCallId" in event && event.toolCallId === "cmd-active-abort")
+          .map((event) => event.type),
+      ).toEqual(["tool.execution.started", "tool.execution.error"]);
+    },
+  );
+
+  it.each([
+    [
+      "collaboration",
+      {
+        id: "collab-audit-1",
+        type: "collabAgentToolCall",
+        tool: "spawnAgent",
+        status: "completed",
+        senderThreadId: THREAD_ID,
+        receiverThreadIds: ["child-thread-1"],
+        prompt: "sensitive prompt text",
+        model: null,
+        reasoningEffort: null,
+        agentsStates: {},
+      },
+      "collab.spawnAgent",
+    ],
+    [
+      "image generation",
+      {
+        id: "image-generation-audit-1",
+        type: "imageGeneration",
+        status: "completed",
+        revisedPrompt: "sensitive revised prompt",
+        result: "sensitive image payload",
+      },
+      "image_generation",
+    ],
+    [
+      "image view",
+      {
+        id: "image-view-audit-1",
+        type: "imageView",
+        path: "/workspace/sensitive-filename.png",
+      },
+      "image_view",
+    ],
+    [
+      "sleep",
+      {
+        id: "sleep-audit-1",
+        type: "sleep",
+        durationMs: 250,
+      },
+      "sleep",
+    ],
+  ] as const)(
+    "emits metadata-only lifecycle diagnostics for native %s items",
+    async (_, item, toolName) => {
+      const diagnosticEvents: DiagnosticEventPayload[] = [];
+      const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+      const projector = await createProjector();
+
+      try {
+        await projector.handleNotification(forCurrentTurn("item/started", { item }));
+        await projector.handleNotification(forCurrentTurn("item/completed", { item }));
+        await flushDiagnosticEvents();
+      } finally {
+        unsubscribe();
+      }
+
+      expect(
+        diagnosticEvents
+          .filter((event) => "toolCallId" in event && event.toolCallId === item.id)
+          .map((event) => ({
+            type: event.type,
+            toolName: "toolName" in event ? event.toolName : null,
+          })),
+      ).toEqual([
+        { type: "tool.execution.started", toolName },
+        { type: "tool.execution.completed", toolName },
+      ]);
+      expect(JSON.stringify(diagnosticEvents)).not.toContain("sensitive");
+    },
+  );
+
+  it("does not project status-less native web searches as successful audit actions", async () => {
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+    const projector = await createProjector();
+    const item = {
+      id: "web-search-audit-1",
+      type: "webSearch",
+      query: "sensitive query",
+      action: { type: "search", query: "sensitive query", queries: null },
+    };
+
+    try {
+      await projector.handleNotification(forCurrentTurn("item/started", { item }));
+      await projector.handleNotification(forCurrentTurn("item/completed", { item }));
+      await flushDiagnosticEvents();
+    } finally {
+      unsubscribe();
+    }
+
+    expect(
+      diagnosticEvents.filter((event) => "toolCallId" in event && event.toolCallId === item.id),
+    ).toEqual([]);
+  });
+
+  it("projects native image-generation error status as a failed audit action", async () => {
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+    const projector = await createProjector();
+    const startedItem = {
+      id: "image-generation-error-1",
+      type: "imageGeneration",
+      status: "in_progress",
+      revisedPrompt: null,
+      result: null,
+    };
+
+    try {
+      await projector.handleNotification(forCurrentTurn("item/started", { item: startedItem }));
+      await projector.handleNotification(
+        forCurrentTurn("item/completed", {
+          item: { ...startedItem, status: "error" },
+        }),
+      );
+      await flushDiagnosticEvents();
+    } finally {
+      unsubscribe();
+    }
+
+    expect(
+      diagnosticEvents
+        .filter((event) => "toolCallId" in event && event.toolCallId === startedItem.id)
+        .map((event) => ({
+          type: event.type,
+          terminalReason: "terminalReason" in event ? event.terminalReason : undefined,
+        })),
+    ).toEqual([
+      { type: "tool.execution.started", terminalReason: undefined },
+      { type: "tool.execution.error", terminalReason: "failed" },
+    ]);
+  });
+
   it("synthesizes native tool progress from turn completion snapshots", async () => {
     const onAgentEvent = vi.fn();
     const onToolResult = vi.fn();

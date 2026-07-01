@@ -492,6 +492,26 @@ describe("agent-events sequencing", () => {
     expect(receivedSessionKey).toBe("session-quietchat-context");
   });
 
+  test("stamps the resolved agent owner for unscoped session keys", () => {
+    registerAgentRunContext("run-unscoped", {
+      sessionKey: "global",
+      agentId: "support",
+    });
+
+    let received: AgentEventPayload | undefined;
+    const stop = onAgentEvent((event) => {
+      received = event;
+    });
+    emitAgentEvent({
+      runId: "run-unscoped",
+      stream: "lifecycle",
+      data: { phase: "start" },
+    });
+    stop();
+
+    expect(received).toMatchObject({ sessionKey: "global", agentId: "support" });
+  });
+
   test("merges later run context updates into existing runs", () => {
     resetAgentRunContextForTest();
     registerAgentRunContext("run-ctx", {

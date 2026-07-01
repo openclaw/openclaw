@@ -687,6 +687,7 @@ export function createFollowupRunner(params: {
         registerAgentRunContext(runId, {
           sessionKey: run.sessionKey,
           ...(run.sessionId ? { sessionId: run.sessionId } : {}),
+          agentId: run.agentId,
           lifecycleGeneration,
           verboseLevel: run.verboseLevel,
           isControlUiVisible: shouldSurfaceToControlUi,
@@ -740,6 +741,7 @@ export function createFollowupRunner(params: {
         registerAgentRunContext(runId, {
           sessionKey: run.sessionKey,
           ...(owningSessionId ? { sessionId: owningSessionId } : {}),
+          agentId: run.agentId,
           lifecycleGeneration,
           verboseLevel: run.verboseLevel,
           isControlUiVisible: shouldSurfaceToControlUi,

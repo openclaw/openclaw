@@ -74,6 +74,10 @@ const loadArtifactsHandlers = lazyHandlerModule(
   () => import("./server-methods/artifacts.js"),
   (module) => module.artifactsHandlers,
 );
+const loadAuditHandlers = lazyHandlerModule(
+  () => import("./server-methods/audit.js"),
+  (module) => module.auditHandlers,
+);
 const loadAttachHandlers = lazyHandlerModule(
   () => import("./server-methods/attach.js"),
   (module) => module.attachHandlers,
@@ -427,6 +431,10 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "talk.mode",
     ],
     loadHandlers: loadTalkHandlers,
+  }),
+  ...createLazyCoreHandlers({
+    methods: ["audit.list"],
+    loadHandlers: loadAuditHandlers,
   }),
   ...createLazyCoreHandlers({
     methods: ["tasks.list", "tasks.get", "tasks.cancel"],

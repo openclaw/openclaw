@@ -33,6 +33,7 @@ describe("runCliAgentWithLifecycle", () => {
     const events: Array<{
       stream?: string;
       lifecycleGeneration?: string;
+      agentId?: string;
       data?: Record<string, unknown>;
     }> = [];
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -53,6 +54,7 @@ describe("runCliAgentWithLifecycle", () => {
         provider: "claude-cli",
         runParams: {
           sessionId: "session-1",
+          agentId: "support",
           sessionFile: "/tmp/session.jsonl",
           workspaceDir: "/tmp/workspace",
           prompt: "hello",
@@ -72,6 +74,7 @@ describe("runCliAgentWithLifecycle", () => {
     expect(
       lifecycleEvents.every((event) => event.lifecycleGeneration === lifecycleGeneration),
     ).toBe(true);
+    expect(lifecycleEvents.every((event) => event.agentId === "support")).toBe(true);
   });
 
   it("preserves restart ownership when the CLI resolves after cancellation", async () => {

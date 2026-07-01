@@ -2243,6 +2243,7 @@ export async function runCodexAppServerAttempt(
       });
       emitDynamicToolStartedDiagnostic({
         call,
+        agentId: sessionAgentId,
         runId: params.runId,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
@@ -2366,6 +2367,7 @@ export async function runCodexAppServerAttempt(
           emitDynamicToolTerminalDiagnostic({
             response,
             call,
+            agentId: sessionAgentId,
             runId: params.runId,
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
@@ -2399,6 +2401,7 @@ export async function runCodexAppServerAttempt(
         ) {
           emitDynamicToolErrorDiagnostic({
             call,
+            agentId: sessionAgentId,
             runId: params.runId,
             sessionId: params.sessionId,
             sessionKey: params.sessionKey,
@@ -2814,6 +2817,7 @@ export async function runCodexAppServerAttempt(
       nativePostToolUseRelayEnabled:
         nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
         nativeHookRelay.shouldRelayEvent("post_tool_use"),
+      runAbortSignal: runAbortController.signal,
       trajectoryRecorder,
       onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
     },

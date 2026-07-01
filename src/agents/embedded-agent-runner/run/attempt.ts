@@ -1532,6 +1532,7 @@ export async function runEmbeddedAttempt(
           diagnostics,
           tools: sourceTools,
           runId: params.runId,
+          agentId: sessionAgentId,
           sessionKey: params.sessionKey,
           sessionId: params.sessionId,
         }),
@@ -1628,6 +1629,7 @@ export async function runEmbeddedAttempt(
                 diagnostics,
                 tools: sourceTools,
                 runId: params.runId,
+                agentId: sessionAgentId,
                 sessionKey: params.sessionKey,
                 sessionId: params.sessionId,
               }),
@@ -1655,6 +1657,7 @@ export async function runEmbeddedAttempt(
       diagnostics: uncompactedToolSchemaProjection.diagnostics,
       tools: projectedUncompactedEffectiveTools,
       runId: params.runId,
+      agentId: sessionAgentId,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
     });
@@ -1760,6 +1763,7 @@ export async function runEmbeddedAttempt(
       diagnostics: toolSearchSchemaProjection.diagnostics,
       tools: projectedToolSearchTools,
       runId: params.runId,
+      agentId: sessionAgentId,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
     });

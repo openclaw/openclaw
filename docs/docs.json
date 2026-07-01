@@ -1695,6 +1695,7 @@
                     "pages": [
                       "cli/agent",
                       "cli/agents",
+                      "cli/audit",
                       "cli/hooks",
                       "cli/infer",
                       "cli/memory",

@@ -502,9 +502,10 @@ describe("createCodexDynamicToolBridge", () => {
         ],
         signal: new AbortController().signal,
         hookContext: {
+          agentId: "agent-quarantine",
           runId: "run-1",
           sessionId: "session-1",
-          sessionKey: "agent:main:session-1",
+          sessionKey: "global",
         },
       });
       await waitForDiagnosticEventsDrained();
@@ -538,9 +539,10 @@ describe("createCodexDynamicToolBridge", () => {
     expect(blockedEvents).toContainEqual(
       expect.objectContaining({
         type: "tool.execution.blocked",
+        agentId: "agent-quarantine",
         runId: "run-1",
         sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
+        sessionKey: "global",
         toolName: "fuzzplugin_move_angles",
         deniedReason: "unsupported_tool_schema",
         reason: 'fuzzplugin_move_angles.inputSchema.type must be "object"',

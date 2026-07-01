@@ -1245,6 +1245,16 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Notes
   - H2: Related
 
+## cli/audit.md
+
+- Route: /cli/audit
+- Headings:
+  - H1: openclaw audit
+  - H2: Filters
+  - H2: Recorded events
+  - H2: Gateway RPC
+  - H2: Related
+
 ## cli/backup.md
 
 - Route: /cli/backup
@@ -3569,6 +3579,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Common RPC method families
   - H3: Common event families
   - H3: Node helper methods
+  - H3: Audit ledger RPC
   - H3: Task ledger RPCs
   - H3: Operator helper methods
   - H3: models.list views

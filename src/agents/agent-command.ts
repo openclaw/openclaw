@@ -968,17 +968,25 @@ async function agentCommandInternal(
       registerAgentRunContext(
         runId,
         suppressVisibleSessionEffects
-          ? { isControlUiVisible: false, lifecycleGeneration }
+          ? { agentId: sessionAgentId, isControlUiVisible: false, lifecycleGeneration }
           : {
               sessionKey,
               sessionId,
+              agentId: sessionAgentId,
               lifecycleGeneration,
             },
       );
-      attemptExecutionRuntime.emitAcpLifecycleStart({ runId, startedAt, lifecycleGeneration });
+      attemptExecutionRuntime.emitAcpLifecycleStart({
+        runId,
+        startedAt,
+        agentId: sessionAgentId,
+        lifecycleGeneration,
+      });
 
       const visibleTextAccumulator = attemptExecutionRuntime.createAcpVisibleTextAccumulator();
       let stopReason: string | undefined;
+      let resultStatus: "completed" | "cancelled" | undefined;
+      let terminalOutcome: "blocked" | undefined;
       try {
         const {
           resolveAcpAgentPolicyError,
@@ -990,6 +998,7 @@ async function agentCommandInternal(
             ? resolveAcpExplicitTurnPolicyError(cfg)
             : resolveAcpDispatchPolicyError(cfg);
         if (turnPolicyError) {
+          terminalOutcome = "blocked";
           throw turnPolicyError;
         }
         const acpAgent = normalizeAgentId(
@@ -997,6 +1006,7 @@ async function agentCommandInternal(
         );
         const agentPolicyError = resolveAcpAgentPolicyError(cfg, acpAgent);
         if (agentPolicyError) {
+          terminalOutcome = "blocked";
           throw agentPolicyError;
         }
 
@@ -1024,11 +1034,14 @@ async function agentCommandInternal(
               attemptExecutionRuntime.emitAcpRuntimeEvent({
                 runId,
                 sessionKey,
+                agentId: sessionAgentId,
+                abortSignal: opts.abortSignal,
                 event,
               });
             }
             if (event.type === "done") {
               stopReason = event.stopReason;
+              resultStatus = event.status;
               return;
             }
             if (event.type !== "text_delta") {
@@ -1065,8 +1078,10 @@ async function agentCommandInternal(
           runId,
           error: acpError,
           sessionKey,
+          agentId: sessionAgentId,
           lifecycleGeneration,
           abortSignal: opts.abortSignal,
+          ...(terminalOutcome ? { terminalOutcome } : {}),
         });
         throw acpError;
       }
@@ -1133,6 +1148,7 @@ async function agentCommandInternal(
           runId,
           error: restartAbortReason,
           sessionKey,
+          agentId: sessionAgentId,
           lifecycleGeneration,
           abortSignal: opts.abortSignal,
         });
@@ -1140,8 +1156,11 @@ async function agentCommandInternal(
       }
       attemptExecutionRuntime.emitAcpLifecycleEnd({
         runId,
+        agentId: sessionAgentId,
         lifecycleGeneration,
         abortSignal: opts.abortSignal,
+        stopReason,
+        resultStatus,
       });
 
       const result = applyAgentRunAbortMetadata(
@@ -1149,6 +1168,7 @@ async function agentCommandInternal(
           payloadText: finalText,
           startedAt,
           stopReason,
+          resultStatus,
           abortSignal: opts.abortSignal,
         }),
         opts.abortSignal,
@@ -1177,6 +1197,7 @@ async function agentCommandInternal(
     if (sessionKey || suppressVisibleSessionEffects) {
       registerAgentRunContext(runId, {
         ...(sessionKey && !suppressVisibleSessionEffects ? { sessionKey, sessionId } : {}),
+        agentId: sessionAgentId,
         lifecycleGeneration,
         verboseLevel: resolvedVerboseLevel,
         isControlUiVisible: !suppressVisibleSessionEffects,

@@ -80,6 +80,26 @@ export interface ApnsRegistrations {
   updated_at_ms: number;
 }
 
+export interface AuditEvents {
+  action: string;
+  actor_id: string;
+  actor_type: string;
+  agent_id: string;
+  error_code: string | null;
+  event_id: string;
+  kind: string;
+  occurred_at: number;
+  run_id: string;
+  sequence: Generated<number>;
+  session_id: string | null;
+  session_key: string | null;
+  source_id: string;
+  source_sequence: number;
+  status: string;
+  tool_call_id: string | null;
+  tool_name: string | null;
+}
+
 export interface AuthProfileState {
   state_json: string;
   store_key: string;
@@ -961,6 +981,7 @@ export interface DB {
   agent_model_catalogs: AgentModelCatalogs;
   android_notification_recent_packages: AndroidNotificationRecentPackages;
   apns_registrations: ApnsRegistrations;
+  audit_events: AuditEvents;
   auth_profile_state: AuthProfileState;
   auth_profile_stores: AuthProfileStores;
   backup_runs: BackupRuns;

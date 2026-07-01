@@ -88,6 +88,7 @@ import {
   ArtifactsListParamsSchema,
   ArtifactsListResultSchema,
 } from "./artifacts.js";
+import { AuditEventSchema, AuditListParamsSchema, AuditListResultSchema } from "./audit.js";
 import {
   ChannelsStartParamsSchema,
   ChannelsStopParamsSchema,
@@ -410,7 +411,10 @@ export const ProtocolSchemas = {
   SessionsCompactParams: SessionsCompactParamsSchema,
   SessionsUsageParams: SessionsUsageParamsSchema,
 
-  // Task ledger and config/wizard setup payloads.
+  // Audit/task ledgers and config/wizard setup payloads.
+  AuditEvent: AuditEventSchema,
+  AuditListParams: AuditListParamsSchema,
+  AuditListResult: AuditListResultSchema,
   TaskSummary: TaskSummarySchema,
   TasksListParams: TasksListParamsSchema,
   TasksListResult: TasksListResultSchema,

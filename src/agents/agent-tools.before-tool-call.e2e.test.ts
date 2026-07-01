@@ -816,6 +816,64 @@ describe("before_tool_call loop detection behavior", () => {
     });
   });
 
+  it("classifies a tool error as cancelled only when the run signal is aborted", async () => {
+    const abortController = new AbortController();
+    const execute = vi.fn().mockImplementation(() => {
+      abortController.abort();
+      throw new Error("tool stopped with run");
+    });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+
+    await withToolExecutionEvents(async (emitted, flush) => {
+      await expect(
+        tool.execute(
+          "tool-call-cancelled",
+          { path: "/tmp/file" },
+          abortController.signal,
+          undefined,
+        ),
+      ).rejects.toThrow("tool stopped with run");
+      await flush();
+
+      expectEventFields(emitted[1], {
+        type: "tool.execution.error",
+        toolCallId: "tool-call-cancelled",
+        errorCategory: "aborted",
+        terminalReason: "cancelled",
+      });
+    });
+  });
+
+  it("classifies a tool error as timed out when the run timeout signal is aborted", async () => {
+    const abortController = new AbortController();
+    const execute = vi.fn().mockImplementation(() => {
+      abortController.abort(Object.assign(new Error("timed out"), { name: "TimeoutError" }));
+      throw new Error("tool stopped with timeout");
+    });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+
+    await withToolExecutionEvents(async (emitted, flush) => {
+      await expect(
+        tool.execute("tool-call-timeout", { path: "/tmp/file" }, abortController.signal, undefined),
+      ).rejects.toThrow("tool stopped with timeout");
+      await flush();
+
+      expectEventFields(emitted[1], {
+        type: "tool.execution.error",
+        toolCallId: "tool-call-timeout",
+        terminalReason: "timed_out",
+      });
+    });
+  });
+
   it("emits blocked diagnostics without error severity for intentional hook vetoes", async () => {
     hookRunner.hasHooks.mockImplementation((hookName: string) => hookName === "before_tool_call");
     hookRunner.runBeforeToolCall.mockResolvedValue({

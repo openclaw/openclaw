@@ -14,6 +14,7 @@ import {
   assertAgentRunLifecycleGenerationCurrent,
   emitAgentEvent,
 } from "../../infra/agent-events.js";
+import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -61,6 +62,7 @@ import {
 } from "../embedded-agent-subscribe.tools.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
+import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
 import {
   rotateClaudeLiveMcpCaptureKeyForContext,
@@ -652,6 +654,16 @@ export async function executePreparedCliRun(
             : {}),
         };
       };
+      const resolveToolTerminalReason = (error?: unknown) => {
+        const abortFields = resolveAgentRunAbortLifecycleFields(params.abortSignal);
+        if (abortFields.aborted) {
+          return abortFields.stopReason === "timeout" ? "timed_out" : "cancelled";
+        }
+        return error instanceof FailoverError && error.reason === "timeout"
+          ? "timed_out"
+          : "failed";
+      };
+      let finalizeParsedTools = () => {};
       try {
         cliBackendLog.info(
           buildCliExecLogLine({
@@ -897,6 +909,7 @@ export async function executePreparedCliRun(
         beginGatewayCapture(initialGatewayCaptureKey);
         let observedCliActivity = false;
         const emitLiveEvents = params.executionMode !== "side-question";
+        const activeParsedTools = new Map<string, { startedAt: number; toolName: string }>();
         const emitCliToolUseStart = (event: {
           toolCallId: string;
           name: string;
@@ -970,6 +983,84 @@ export async function executePreparedCliRun(
               result: sanitizeToolResult(event.result),
             },
           });
+        };
+        const emitParsedToolUseStart = (event: {
+          toolCallId: string;
+          name: string;
+          args: Record<string, unknown>;
+        }) => {
+          const startedAt = Date.now();
+          activeParsedTools.set(event.toolCallId, { startedAt, toolName: event.name });
+          emitTrustedDiagnosticEvent({
+            type: "tool.execution.started",
+            runId: params.runId,
+            sessionId: params.sessionId,
+            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+            ...(params.agentId ? { agentId: params.agentId } : {}),
+            toolName: event.name,
+            toolSource: event.name.startsWith("mcp__") ? "mcp" : "core",
+            toolOwner: "cli-runner",
+            toolCallId: event.toolCallId,
+          });
+          emitCliToolUseStart(event);
+        };
+        const emitParsedToolResult = (event: {
+          toolCallId: string;
+          name: string;
+          isError: boolean;
+          result?: unknown;
+        }) => {
+          const activeTool = activeParsedTools.get(event.toolCallId);
+          activeParsedTools.delete(event.toolCallId);
+          const toolName = activeTool?.toolName ?? event.name;
+          const now = Date.now();
+          const terminalReason = resolveToolTerminalReason();
+          const diagnosticBase = {
+            runId: params.runId,
+            sessionId: params.sessionId,
+            ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+            ...(params.agentId ? { agentId: params.agentId } : {}),
+            toolName,
+            toolSource: toolName.startsWith("mcp__") ? ("mcp" as const) : ("core" as const),
+            toolOwner: "cli-runner",
+            toolCallId: event.toolCallId,
+            durationMs: Math.max(0, now - (activeTool?.startedAt ?? now)),
+          };
+          emitTrustedDiagnosticEvent(
+            event.isError
+              ? {
+                  type: "tool.execution.error",
+                  ...diagnosticBase,
+                  errorCategory: terminalReason === "cancelled" ? "aborted" : "cli_tool",
+                  terminalReason,
+                }
+              : {
+                  type: "tool.execution.completed",
+                  ...diagnosticBase,
+                },
+          );
+          emitCliToolResult(event);
+        };
+        finalizeParsedTools = () => {
+          const now = Date.now();
+          const terminalReason = resolveToolTerminalReason(runError);
+          for (const [toolCallId, activeTool] of activeParsedTools) {
+            emitTrustedDiagnosticEvent({
+              type: "tool.execution.error",
+              runId: params.runId,
+              sessionId: params.sessionId,
+              ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+              ...(params.agentId ? { agentId: params.agentId } : {}),
+              toolName: activeTool.toolName,
+              toolSource: activeTool.toolName.startsWith("mcp__") ? "mcp" : "core",
+              toolOwner: "cli-runner",
+              toolCallId,
+              durationMs: Math.max(0, now - activeTool.startedAt),
+              errorCategory: terminalReason === "cancelled" ? "aborted" : "cli_tool_incomplete",
+              terminalReason,
+            });
+          }
+          activeParsedTools.clear();
         };
         let commentaryCounter = 0;
         const emitCliCommentaryText = (text: string) => {
@@ -1076,8 +1167,8 @@ export async function executePreparedCliRun(
                 backend,
                 providerId: context.backendResolved.id,
                 onAssistantDelta: emitCliAssistantDelta,
-                onToolUseStart: emitCliToolUseStart,
-                onToolResult: emitCliToolResult,
+                onToolUseStart: emitParsedToolUseStart,
+                onToolResult: emitParsedToolResult,
                 onCommentaryText:
                   emitLiveEvents && context.params.emitCommentaryText
                     ? emitCliCommentaryText
@@ -1376,6 +1467,7 @@ export async function executePreparedCliRun(
       } catch (error) {
         recordRunError(error);
       } finally {
+        finalizeParsedTools();
         try {
           if (!gatewayCaptureKey && pendingMessagingCalls.size > 0) {
             const unresolvedJsonlMessagingCalls = Array.from(pendingMessagingCalls.values());

@@ -1214,5 +1214,21 @@
   {
     "source": "Docs map",
     "target": "文档地图"
+  },
+  {
+    "source": "Audit records",
+    "target": "审计记录"
+  },
+  {
+    "source": "Gateway protocol",
+    "target": "网关协议"
+  },
+  {
+    "source": "Tasks",
+    "target": "任务"
+  },
+  {
+    "source": "Cron jobs",
+    "target": "Cron 任务"
   }
 ]

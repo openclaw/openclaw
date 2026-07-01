@@ -218,6 +218,7 @@ describe("dynamic tool execution helpers", () => {
         },
       ],
     });
+    expect((await response).diagnosticTerminalReason).toBe("timed_out");
     expect(capturedSignal?.aborted).toBe(true);
     expect(onFallbackSelected).toHaveBeenCalledOnce();
     expect(onTimeout).toHaveBeenCalledTimes(1);
@@ -239,7 +240,7 @@ describe("dynamic tool execution helpers", () => {
     });
   });
 
-  it("reports pre-execution aborts to the private result observer", async () => {
+  it("reports pre-execution cancellations to the private result observer", async () => {
     const controller = new AbortController();
     controller.abort(new Error("run cancelled"));
     const onAgentToolResult = vi.fn();
@@ -266,6 +267,7 @@ describe("dynamic tool execution helpers", () => {
         { type: "inputText", text: "OpenClaw dynamic tool call aborted before execution." },
       ],
     });
+    expect(result.diagnosticTerminalReason).toBe("cancelled");
     expect(handleToolCall).not.toHaveBeenCalled();
     expect(onAgentToolResult).toHaveBeenCalledOnce();
     expect(onAgentToolResult).toHaveBeenCalledWith({
@@ -278,6 +280,53 @@ describe("dynamic tool execution helpers", () => {
         },
       },
       isError: true,
+    });
+  });
+
+  it.each([
+    Object.assign(new Error("gateway timeout"), { name: "TimeoutError" }),
+    "turn_completion_idle_timeout",
+  ])("preserves enclosing timeout provenance for pre-execution aborts", async (reason) => {
+    const controller = new AbortController();
+    controller.abort(reason);
+
+    const result = await handleDynamicToolCallWithTimeout({
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-timeout-abort",
+        namespace: null,
+        tool: "memory_search",
+        arguments: {},
+      },
+      toolBridge: { handleToolCall: vi.fn() },
+      signal: controller.signal,
+      timeoutMs: 1_000,
+    });
+
+    expect(result.diagnosticTerminalReason).toBe("timed_out");
+  });
+
+  it("preserves enclosing timeout provenance for active tool aborts", async () => {
+    const controller = new AbortController();
+    const resultPromise = handleDynamicToolCallWithTimeout({
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-active-timeout-abort",
+        namespace: null,
+        tool: "memory_search",
+        arguments: {},
+      },
+      toolBridge: { handleToolCall: vi.fn(() => new Promise<never>(() => {})) },
+      signal: controller.signal,
+      timeoutMs: 1_000,
+    });
+    controller.abort(Object.assign(new Error("gateway timeout"), { name: "TimeoutError" }));
+
+    await expect(resultPromise).resolves.toMatchObject({
+      success: false,
+      diagnosticTerminalReason: "timed_out",
     });
   });
 

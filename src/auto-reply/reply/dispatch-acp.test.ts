@@ -32,6 +32,13 @@ const managerMocks = vi.hoisted(() => ({
   })),
 }));
 
+const auditMocks = vi.hoisted(() => ({
+  emitAcpLifecycleStart: vi.fn(),
+  emitAcpRuntimeEvent: vi.fn(),
+  emitAcpLifecycleEnd: vi.fn(),
+  emitAcpLifecycleError: vi.fn(),
+}));
+
 const policyMocks = vi.hoisted(() => ({
   resolveAcpDispatchPolicyError: vi.fn<(cfg: OpenClawConfig) => AcpRuntimeError | null>(() => null),
   resolveAcpAgentPolicyError: vi.fn<(cfg: OpenClawConfig, agent: string) => AcpRuntimeError | null>(
@@ -114,6 +121,13 @@ vi.mock("./dispatch-acp-manager.runtime.js", () => ({
       bindingServiceMocks.listBySession(targetSessionKey),
     unbind: (input: unknown) => bindingServiceMocks.unbind(input),
   }),
+}));
+
+vi.mock("../../agents/command/attempt-execution.runtime.js", () => ({
+  emitAcpLifecycleStart: auditMocks.emitAcpLifecycleStart,
+  emitAcpRuntimeEvent: auditMocks.emitAcpRuntimeEvent,
+  emitAcpLifecycleEnd: auditMocks.emitAcpLifecycleEnd,
+  emitAcpLifecycleError: auditMocks.emitAcpLifecycleError,
 }));
 
 vi.mock("../../acp/policy.js", () => ({
@@ -434,6 +448,10 @@ function expectRoutedPayload(callIndex: number, payload: Partial<MockTtsReply>) 
 
 describe("tryDispatchAcpReply", () => {
   beforeEach(() => {
+    auditMocks.emitAcpLifecycleStart.mockReset();
+    auditMocks.emitAcpRuntimeEvent.mockReset();
+    auditMocks.emitAcpLifecycleEnd.mockReset();
+    auditMocks.emitAcpLifecycleError.mockReset();
     managerMocks.resolveSession.mockReset();
     managerMocks.runTurn.mockReset();
     managerMocks.runTurn.mockImplementation(
@@ -474,6 +492,33 @@ describe("tryDispatchAcpReply", () => {
     bindingServiceMocks.unbind.mockReset();
     bindingServiceMocks.unbind.mockResolvedValue([]);
     globalThis.fetch = originalFetch;
+  });
+
+  it("projects normal ACP dispatch lifecycle and tool events into audit diagnostics", async () => {
+    setReadyAcpResolution();
+    mockToolLifecycleTurn("tool-audit");
+
+    await runDispatch({ bodyForAgent: "audit this turn" });
+
+    expect(auditMocks.emitAcpLifecycleStart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: expect.any(String),
+        sessionKey,
+        startedAt: expect.any(Number),
+      }),
+    );
+    expect(auditMocks.emitAcpRuntimeEvent).toHaveBeenCalledTimes(3);
+    expect(auditMocks.emitAcpRuntimeEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: expect.any(String),
+        sessionKey,
+        event: expect.objectContaining({ type: "tool_call", toolCallId: "tool-audit" }),
+      }),
+    );
+    expect(auditMocks.emitAcpLifecycleEnd).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: expect.any(String), sessionKey }),
+    );
+    expect(auditMocks.emitAcpLifecycleError).not.toHaveBeenCalled();
   });
 
   it("routes default ACP output to the originating channel as a final reply", async () => {
@@ -1414,6 +1459,11 @@ describe("tryDispatchAcpReply", () => {
       "ACP dispatch is disabled by policy.",
     );
     expect(bindingServiceMocks.unbind).not.toHaveBeenCalled();
+    expect(auditMocks.emitAcpLifecycleStart).toHaveBeenCalledOnce();
+    expect(auditMocks.emitAcpLifecycleError).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalOutcome: "blocked" }),
+    );
+    expect(auditMocks.emitAcpLifecycleEnd).not.toHaveBeenCalled();
   });
 
   it("fails closed when ACP dispatch cannot enforce restrictive runtime toolsAllow", async () => {
@@ -1429,6 +1479,25 @@ describe("tryDispatchAcpReply", () => {
     expect(managerMocks.runTurn).not.toHaveBeenCalled();
     expect(dispatcherCall(dispatcher.sendFinalReply).isError).toBe(true);
     expect(dispatcherCall(dispatcher.sendFinalReply).text).toContain("runtime toolsAllow");
+    expect(auditMocks.emitAcpLifecycleError).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalOutcome: "blocked" }),
+    );
+  });
+
+  it("audits ACP agent-policy rejections as blocked attempts", async () => {
+    setReadyAcpResolution();
+    policyMocks.resolveAcpAgentPolicyError.mockReturnValue(
+      new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP agent is not allowed by policy."),
+    );
+
+    await runDispatch({ bodyForAgent: "test" });
+
+    expect(managerMocks.runTurn).not.toHaveBeenCalled();
+    expect(auditMocks.emitAcpLifecycleStart).toHaveBeenCalledOnce();
+    expect(auditMocks.emitAcpLifecycleError).toHaveBeenCalledWith(
+      expect.objectContaining({ terminalOutcome: "blocked" }),
+    );
+    expect(auditMocks.emitAcpLifecycleEnd).not.toHaveBeenCalled();
   });
 
   it("allows wildcard runtime toolsAllow through ACP dispatch", async () => {

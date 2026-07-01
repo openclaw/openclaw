@@ -943,6 +943,7 @@ function emitQuarantinedDynamicToolDiagnostics(
   for (const tool of tools) {
     emitTrustedDiagnosticEvent({
       type: "tool.execution.blocked",
+      agentId: ctx?.agentId,
       runId: ctx?.runId,
       sessionId: ctx?.sessionId,
       sessionKey: ctx?.sessionKey,

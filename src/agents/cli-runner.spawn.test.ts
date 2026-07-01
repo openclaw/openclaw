@@ -1999,10 +1999,16 @@ ${JSON.stringify({
                 role: "assistant",
                 content: [
                   {
-                    type: "tool_use",
+                    type: "mcp_tool_use",
                     id: "tool-live-1",
-                    name: "Bash",
-                    input: { command: "sleep 45" },
+                    name: "mcp__team__lookup",
+                    input: { query: "status" },
+                  },
+                  {
+                    type: "server_tool_use",
+                    id: "tool-live-2",
+                    name: "web_search",
+                    input: { query: "release status" },
                   },
                 ],
               },
@@ -2061,7 +2067,7 @@ ${JSON.stringify({
           getDiagnosticSessionActivitySnapshot({
             sessionKey: "agent:main:diagnostics",
           }).activeToolName,
-        ).toBe("Bash"),
+        ).toBe("mcp__team__lookup"),
       );
       expect(
         getDiagnosticSessionActivitySnapshot({ sessionKey: "agent:main:diagnostics" })
@@ -2090,6 +2096,12 @@ ${JSON.stringify({
                 {
                   type: "tool_result",
                   tool_use_id: "tool-live-1",
+                  content: "lookup failed",
+                  is_error: true,
+                },
+                {
+                  type: "tool_result",
+                  tool_use_id: "tool-live-2",
                   content: "done",
                 },
               ],
@@ -2121,12 +2133,117 @@ ${JSON.stringify({
         getDiagnosticSessionActivitySnapshot({ sessionKey: "agent:main:diagnostics" })
           .lastProgressReason,
       ).toBe("cli_live:result");
-      expect(diagnosticEvents).toContain("tool.execution.started");
+      expect(diagnosticEvents.filter((event) => event === "tool.execution.started")).toHaveLength(
+        2,
+      );
       expect(diagnosticEvents).toContain("tool.execution.completed");
+      expect(diagnosticEvents).toContain("tool.execution.error");
     } finally {
       stopDiagnostics();
     }
   });
+
+  it.each([
+    [
+      "timeout",
+      Object.assign(new Error("gateway timeout"), { name: "TimeoutError" }),
+      "TimeoutError",
+      "timed_out",
+    ],
+    ["cancellation", new Error("operator cancelled"), "AbortError", "cancelled"],
+  ] as const)(
+    "preserves enclosing %s provenance for active Claude live tools",
+    async (_, abortReason, expectedErrorName, terminalReason) => {
+      const abortController = new AbortController();
+      const diagnosticEvents: Array<Record<string, unknown>> = [];
+      const stopDiagnostics = onInternalDiagnosticEvent((event) => {
+        if (event.type === "tool.execution.error") {
+          diagnosticEvents.push(event as unknown as Record<string, unknown>);
+        }
+      });
+      let stdoutListener: ((chunk: string) => void) | undefined;
+      const stdin = {
+        write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+          stdoutListener?.(
+            [
+              JSON.stringify({ type: "system", subtype: "init", session_id: "live-timeout" }),
+              JSON.stringify({
+                type: "assistant",
+                session_id: "live-timeout",
+                message: {
+                  role: "assistant",
+                  content: [
+                    {
+                      type: "server_tool_use",
+                      id: "tool-live-timeout",
+                      name: "web_search",
+                      input: { query: "status" },
+                    },
+                  ],
+                },
+              }),
+            ].join("\n") + "\n",
+          );
+          cb?.();
+        }),
+        end: vi.fn(),
+      };
+      supervisorSpawnMock.mockImplementation(async (...args: unknown[]) => {
+        const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+        stdoutListener = input.onStdout;
+        return {
+          runId: "live-run-timeout",
+          pid: 3061,
+          startedAtMs: Date.now(),
+          stdin,
+          wait: vi.fn(() => new Promise(() => {})),
+          cancel: vi.fn(),
+        };
+      });
+
+      try {
+        const context = buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-live-timeout",
+          sessionId: "session-live-timeout",
+          sessionKey: "agent:main:timeout",
+          backend: { liveSession: "claude-stdio" },
+        });
+        context.params.abortSignal = abortController.signal;
+        const resultPromise = runClaudeLiveSessionTurn({
+          context,
+          args: context.preparedBackend.backend.args ?? [],
+          env: {},
+          prompt: "hello",
+          useResume: false,
+          noOutputTimeoutMs: 120_000,
+          getProcessSupervisor: () => ({
+            spawn: (params: Parameters<SupervisorSpawnFn>[0]) =>
+              supervisorSpawnMock(params) as ReturnType<SupervisorSpawnFn>,
+            cancel: vi.fn(),
+            cancelScope: vi.fn(),
+            getRecord: vi.fn(),
+          }),
+          onAssistantDelta: () => {},
+          cleanup: async () => {},
+        });
+
+        await vi.waitFor(() => expect(stdoutListener).toBeDefined());
+        abortController.abort(abortReason);
+        await expectRejectsWithFields(resultPromise, { name: expectedErrorName });
+        await waitForDiagnosticEventsDrained();
+        expect(diagnosticEvents).toContainEqual(
+          expect.objectContaining({
+            toolCallId: "tool-live-timeout",
+            terminalReason,
+          }),
+        );
+      } finally {
+        stopDiagnostics();
+      }
+    },
+  );
 
   it("answers Claude live control_request can_use_tool with deny when exec policy is restrictive", async () => {
     let stdoutListener: ((chunk: string) => void) | undefined;

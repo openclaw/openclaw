@@ -156,6 +156,11 @@ surfaces, while Codex native hooks remain a separate lower-level Codex mechanism
 - `assistant`: streamed deltas from the agent runtime
 - `tool`: streamed tool events from the agent runtime
 
+The Gateway projects lifecycle and tool start/terminal events into the bounded,
+metadata-only [audit ledger](/cli/audit). This projection records provenance and
+result codes without copying prompts, messages, tool arguments, tool results,
+or raw errors out of the transcript/runtime path.
+
 ## Chat channel handling
 
 - Assistant deltas are buffered into chat `delta` messages.

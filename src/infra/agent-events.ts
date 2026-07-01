@@ -127,6 +127,8 @@ export type AgentEventPayload = {
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
 export type AgentRunContext = {
   sessionKey?: string;
+  /** Resolved agent owner, including for unscoped session keys. */
+  agentId?: string;
   /** Owning run's sessionId; stamped onto lifecycle events (see AgentEventPayload.sessionId). */
   sessionId?: string;
   /** Gateway lifecycle generation captured when the run was registered. */
@@ -242,6 +244,9 @@ export function registerAgentRunContext(runId: string, context: AgentRunContext)
   }
   if (context.sessionId && existing.sessionId !== context.sessionId) {
     existing.sessionId = context.sessionId;
+  }
+  if (context.agentId && existing.agentId !== context.agentId) {
+    existing.agentId = context.agentId;
   }
   if (context.verboseLevel && existing.verboseLevel !== context.verboseLevel) {
     existing.verboseLevel = context.verboseLevel;
@@ -454,10 +459,12 @@ export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
     event.stream === "lifecycle"
       ? (ownedLifecycleGeneration ?? state.lifecycleGeneration)
       : ownedLifecycleGeneration;
+  const agentId = event.agentId ?? context?.agentId;
   const enriched: AgentEventPayload = {
     ...event,
     sessionKey,
     ...(sessionId ? { sessionId } : {}),
+    ...(agentId ? { agentId } : {}),
     seq: nextSeq,
     ts: Date.now(),
   };

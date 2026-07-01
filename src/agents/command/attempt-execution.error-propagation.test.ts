@@ -1,5 +1,6 @@
 // Covers ACP diagnostic event propagation and sanitized error formatting.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { ACP_TURN_TIMEOUT_DETAIL_CODE } from "../../acp/control-plane/manager.turn-timeout.js";
 import { AcpRuntimeError, formatAcpErrorChain } from "../../acp/runtime/errors.js";
 import {
   type AgentEventPayload,
@@ -7,25 +8,49 @@ import {
   resetAgentEventsForTest,
 } from "../../infra/agent-events.js";
 import {
+  onTrustedToolExecutionEvent,
+  resetDiagnosticEventsForTest,
+  type TrustedToolExecutionEvent,
+} from "../../infra/diagnostic-events.js";
+import {
+  buildAcpResult,
+  emitAcpLifecycleEnd,
   emitAcpLifecycleError,
   emitAcpPromptSubmitted,
   emitAcpRuntimeEvent,
 } from "./attempt-execution.js";
 
 let captured: AgentEventPayload[] = [];
+let capturedTools: TrustedToolExecutionEvent[] = [];
 let unsubscribe: (() => void) | undefined;
+let unsubscribeTools: (() => void) | undefined;
 
 beforeEach(() => {
   resetAgentEventsForTest();
+  resetDiagnosticEventsForTest();
   captured = [];
+  capturedTools = [];
   // Subscribe to the process-level event bus so tests observe exactly what
   // parent relay diagnostics would receive.
   unsubscribe = onAgentEvent((evt) => {
     captured.push(evt);
   });
+  unsubscribeTools = onTrustedToolExecutionEvent((event) => {
+    capturedTools.push(event);
+  });
 });
 
 describe("ACP diagnostic events", () => {
+  it("preserves cancelled result metadata without a stop reason", () => {
+    const result = buildAcpResult({
+      payloadText: "",
+      startedAt: Date.now(),
+      resultStatus: "cancelled",
+    });
+
+    expect(result.meta).toMatchObject({ aborted: true, stopReason: "stop" });
+  });
+
   it("emits prompt-submitted state with proxy env names but not values", () => {
     const previous = process.env.HTTPS_PROXY;
     process.env.HTTPS_PROXY = "http://proxy.example.invalid:8080";
@@ -74,12 +99,237 @@ describe("ACP diagnostic events", () => {
     expect(String(event?.data.text)).toContain("connecting");
     expect(String(event?.data.text)).not.toContain("sk-abcdefghijklmnopqrstuvwxyz123456");
   });
+
+  it("emits metadata-only tool lifecycle events without ACP text or title", () => {
+    const secret = "secret tool payload";
+    emitAcpRuntimeEvent({
+      runId: "run-tool",
+      sessionKey: "agent:main:acp:child",
+      agentId: "main",
+      event: {
+        type: "tool_call",
+        tag: "tool_call",
+        text: secret,
+        title: secret,
+        kind: "read",
+        toolCallId: "call-1",
+        status: "in_progress",
+      },
+    });
+    emitAcpRuntimeEvent({
+      runId: "run-tool",
+      sessionKey: "agent:main:acp:child",
+      agentId: "main",
+      event: {
+        type: "tool_call",
+        tag: "tool_call_update",
+        text: secret,
+        title: secret,
+        kind: "read",
+        toolCallId: "call-1",
+        status: "completed",
+      },
+    });
+
+    expect(capturedTools).toMatchObject([
+      {
+        type: "tool.execution.started",
+        runId: "run-tool",
+        sessionKey: "agent:main:acp:child",
+        agentId: "main",
+        toolCallId: "call-1",
+        toolName: "acp_read",
+      },
+      {
+        type: "tool.execution.completed",
+        runId: "run-tool",
+        sessionKey: "agent:main:acp:child",
+        agentId: "main",
+        toolCallId: "call-1",
+        toolName: "acp_read",
+      },
+    ]);
+    expect(JSON.stringify(capturedTools)).not.toContain(secret);
+  });
+
+  it("finishes outstanding tools when the ACP runtime ends", () => {
+    const params = {
+      runId: "run-incomplete-tool",
+      sessionKey: "agent:main:acp:child",
+    };
+    emitAcpRuntimeEvent({
+      ...params,
+      event: {
+        type: "tool_call",
+        tag: "tool_call",
+        text: "running",
+        kind: "execute",
+        toolCallId: "call-incomplete",
+        status: "in_progress",
+      },
+    });
+    emitAcpRuntimeEvent({
+      ...params,
+      event: { type: "done", status: "completed", stopReason: "end_turn" },
+    });
+    emitAcpLifecycleEnd({
+      ...params,
+      resultStatus: "completed",
+      stopReason: "end_turn",
+    });
+
+    expect(capturedTools).toMatchObject([
+      {
+        type: "tool.execution.started",
+        toolCallId: "call-incomplete",
+      },
+      {
+        type: "tool.execution.error",
+        toolCallId: "call-incomplete",
+        errorCategory: "acp_tool_incomplete",
+      },
+    ]);
+
+    emitAcpRuntimeEvent({
+      ...params,
+      event: {
+        type: "tool_call",
+        tag: "tool_call",
+        text: "retry",
+        kind: "execute",
+        toolCallId: "call-incomplete",
+        status: "completed",
+      },
+    });
+    expect(capturedTools.slice(2)).toMatchObject([
+      { type: "tool.execution.started", toolCallId: "call-incomplete" },
+      { type: "tool.execution.completed", toolCallId: "call-incomplete" },
+    ]);
+  });
+
+  it("cancels outstanding tools when the ACP result reports cancellation", () => {
+    const params = {
+      runId: "run-cancelled-tool",
+      sessionKey: "agent:main:acp:child",
+    };
+    emitAcpRuntimeEvent({
+      ...params,
+      event: {
+        type: "tool_call",
+        tag: "tool_call",
+        text: "running",
+        kind: "execute",
+        toolCallId: "call-cancelled",
+        status: "in_progress",
+      },
+    });
+    emitAcpRuntimeEvent({
+      ...params,
+      event: { type: "done", status: "cancelled" },
+    });
+    emitAcpLifecycleEnd({
+      ...params,
+      resultStatus: "cancelled",
+    });
+
+    expect(capturedTools).toMatchObject([
+      { type: "tool.execution.started", toolCallId: "call-cancelled" },
+      {
+        type: "tool.execution.error",
+        toolCallId: "call-cancelled",
+        errorCategory: "aborted",
+        terminalReason: "cancelled",
+      },
+    ]);
+
+    expect(captured.at(-1)?.data).toMatchObject({
+      phase: "end",
+      aborted: true,
+      stopReason: "stop",
+      status: "cancelled",
+    });
+  });
+
+  it("times out outstanding tools when the enclosing ACP run times out", () => {
+    const abortController = new AbortController();
+    const params = {
+      runId: "run-timeout-tool",
+      sessionKey: "agent:main:acp:child",
+      abortSignal: abortController.signal,
+    };
+    emitAcpRuntimeEvent({
+      ...params,
+      event: {
+        type: "tool_call",
+        tag: "tool_call",
+        text: "running",
+        kind: "execute",
+        toolCallId: "call-timeout",
+        status: "in_progress",
+      },
+    });
+    abortController.abort(Object.assign(new Error("timed out"), { name: "TimeoutError" }));
+    emitAcpRuntimeEvent({
+      ...params,
+      event: { type: "done", status: "cancelled", stopReason: "timeout" },
+    });
+    emitAcpLifecycleEnd({
+      ...params,
+      resultStatus: "cancelled",
+      stopReason: "timeout",
+    });
+
+    expect(capturedTools).toMatchObject([
+      { type: "tool.execution.started", toolCallId: "call-timeout" },
+      {
+        type: "tool.execution.error",
+        toolCallId: "call-timeout",
+        terminalReason: "timed_out",
+      },
+    ]);
+  });
+
+  it("preserves manager-owned ACP timeout attribution without an aborted caller signal", () => {
+    emitAcpRuntimeEvent({
+      runId: "run-manager-timeout",
+      event: {
+        type: "tool_call",
+        tag: "tool_call",
+        text: "running",
+        kind: "execute",
+        toolCallId: "call-manager-timeout",
+        status: "in_progress",
+      },
+    });
+
+    emitAcpLifecycleError({
+      runId: "run-manager-timeout",
+      error: new AcpRuntimeError("ACP_TURN_FAILED", "ACP turn timed out.", {
+        detailCode: ACP_TURN_TIMEOUT_DETAIL_CODE,
+      }),
+    });
+
+    expect(capturedTools.at(-1)).toMatchObject({
+      type: "tool.execution.error",
+      toolCallId: "call-manager-timeout",
+      terminalReason: "timed_out",
+    });
+    expect(captured.at(-1)?.data).toMatchObject({
+      phase: "error",
+      aborted: true,
+      stopReason: "timeout",
+      status: "timed_out",
+    });
+  });
 });
 
 afterEach(() => {
   unsubscribe?.();
   unsubscribe = undefined;
+  unsubscribeTools?.();
+  unsubscribeTools = undefined;
   resetAgentEventsForTest();
+  resetDiagnosticEventsForTest();
 });
 
 describe("emitAcpLifecycleError preserves AcpRuntimeError detail (regression: openclaw-4a8)", () => {

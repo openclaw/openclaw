@@ -424,6 +424,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `agents.list` returns configured agent entries, including effective model and runtime metadata.
     - `agents.create`, `agents.update`, and `agents.delete` manage agent records and workspace wiring.
     - `agents.files.list`, `agents.files.get`, and `agents.files.set` manage the bootstrap workspace files exposed for an agent.
+    - `audit.list` returns a bounded metadata-only ledger of agent run and tool action events.
     - `tasks.list`, `tasks.get`, and `tasks.cancel` expose the Gateway task ledger to SDK and operator clients.
     - `artifacts.list`, `artifacts.get`, and `artifacts.download` expose transcript-derived artifact summaries and downloads for an explicit `sessionKey`, `runId`, or `taskId` scope. Run and task queries resolve the owning session server-side and only return transcript media with matching provenance; unsafe or local URL sources return unsupported downloads instead of fetching server-side.
     - `environments.list` and `environments.status` expose read-only Gateway-local and node environment discovery for SDK clients.
@@ -519,6 +520,31 @@ enumeration of `src/gateway/server-methods/*.ts`.
 
 - Nodes may call `skills.bins` to fetch the current list of skill executables
   for auto-allow checks.
+
+### Audit ledger RPC
+
+`audit.list` gives operator clients a stable newest-first view of agent run and
+tool action metadata. It requires `operator.read`. Queries exclude records
+older than 30 days, and the shared SQLite ledger is capped at 100,000 records.
+Expired rows are deleted during Gateway startup, hourly maintenance, and later
+writes.
+
+- Params: optional exact `agentId`, `sessionKey`, or `runId`; optional `kind`
+  (`"agent_run"` or `"tool_action"`); optional `status` (`"started"`,
+  `"succeeded"`, `"failed"`, `"cancelled"`, `"timed_out"`, or `"blocked"`);
+  optional inclusive `after` / `before` Unix-millisecond bounds; optional
+  `limit` from `1` to `500`; and optional string `cursor` from the preceding
+  page.
+- Result: `{ "events": AuditEvent[], "nextCursor"?: string }`.
+
+Each event includes a stable event id, monotonic ledger sequence, source event
+sequence, timestamp, actor, agent/session/run provenance, action, status, and a
+normalized error code when applicable. Tool events may include tool call id and
+tool name. The `redaction` field is always `"metadata_only"`: the ledger does
+not store prompts, messages, tool arguments, tool results, command output, or
+raw error text.
+
+Use [`openclaw audit`](/cli/audit) for text queries and bounded JSON exports.
 
 ### Task ledger RPCs
 

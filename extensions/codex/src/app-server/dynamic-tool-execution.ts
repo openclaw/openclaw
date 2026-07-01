@@ -29,12 +29,35 @@ export const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 /** Timeout for message-delivery dynamic tool calls. */
 export const CODEX_DYNAMIC_MESSAGE_TOOL_TIMEOUT_MS = 120_000;
 const LOG_FIELD_MAX_LENGTH = 160;
+const CODEX_TIMEOUT_ABORT_REASONS = new Set([
+  "codex_startup_timeout",
+  "turn_completion_idle_timeout",
+  "turn_progress_idle_timeout",
+  "turn_terminal_idle_timeout",
+]);
 
 type DynamicToolTimeoutDetails = {
   responseMessage: string;
   consoleMessage: string;
   meta: Record<string, unknown>;
 };
+
+/** Preserves timeout provenance when an enclosing run aborts an active tool. */
+export function resolveCodexToolAbortTerminalReason(
+  signal: AbortSignal,
+): "cancelled" | "timed_out" {
+  const reason = signal.reason;
+  if (typeof reason === "string") {
+    return CODEX_TIMEOUT_ABORT_REASONS.has(reason) ? "timed_out" : "cancelled";
+  }
+  if (reason && typeof reason === "object") {
+    const record = reason as { name?: unknown; reason?: unknown };
+    if (record.name === "TimeoutError" || record.reason === "timeout") {
+      return "timed_out";
+    }
+  }
+  return "cancelled";
+}
 
 function normalizeLogField(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -163,7 +186,9 @@ export async function handleDynamicToolCallWithTimeout(params: {
     const message = "OpenClaw dynamic tool call aborted before execution.";
     params.onFallbackSelected?.();
     notifyFailedToolResult(message);
-    return failedDynamicToolResponse(message);
+    return failedDynamicToolResponse(message, {
+      terminalReason: resolveCodexToolAbortTerminalReason(params.signal),
+    });
   }
 
   const controller = new AbortController();
@@ -175,7 +200,12 @@ export async function handleDynamicToolCallWithTimeout(params: {
     params.onFallbackSelected?.();
     controller.abort(params.signal.reason ?? new Error(message));
     notifyFailedToolResult(message);
-    resolveAbort?.(failedDynamicToolResponse(message, { sideEffectEvidence: true }));
+    resolveAbort?.(
+      failedDynamicToolResponse(message, {
+        sideEffectEvidence: true,
+        terminalReason: resolveCodexToolAbortTerminalReason(params.signal),
+      }),
+    );
   };
   const abortPromise = new Promise<CodexDynamicToolCallResponse>((resolve) => {
     resolveAbort = resolve;
@@ -194,7 +224,10 @@ export async function handleDynamicToolCallWithTimeout(params: {
       });
       notifyFailedToolResult(timeoutDetails.responseMessage);
       resolve(
-        failedDynamicToolResponse(timeoutDetails.responseMessage, { sideEffectEvidence: true }),
+        failedDynamicToolResponse(timeoutDetails.responseMessage, {
+          sideEffectEvidence: true,
+          terminalReason: "timed_out",
+        }),
       );
     }, timeoutMs);
     timeout.unref?.();
@@ -248,7 +281,10 @@ function readDynamicToolResponseText(response: CodexDynamicToolCallResponse): st
 
 function failedDynamicToolResponse(
   message: string,
-  options?: { sideEffectEvidence?: boolean },
+  options?: {
+    sideEffectEvidence?: boolean;
+    terminalReason?: "failed" | "cancelled" | "timed_out";
+  },
 ): CodexDynamicToolCallResponse {
   const response: CodexDynamicToolCallResponse = {
     contentItems: [{ type: "inputText", text: message }],
@@ -258,6 +294,11 @@ function failedDynamicToolResponse(
     configurable: true,
     enumerable: false,
     value: "error",
+  });
+  Object.defineProperty(response, "diagnosticTerminalReason", {
+    configurable: true,
+    enumerable: false,
+    value: options?.terminalReason ?? "failed",
   });
   if (options?.sideEffectEvidence === true) {
     Object.defineProperty(response, "sideEffectEvidence", {

@@ -10,6 +10,11 @@ import {
   resolveMcpLoopbackYieldContext,
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
+import {
+  onTrustedToolExecutionEvent,
+  resetDiagnosticEventsForTest,
+  type TrustedToolExecutionEvent,
+} from "../../infra/diagnostic-events.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { createManagedRun, supervisorSpawnMock } from "../cli-runner.test-support.js";
 import { getCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
@@ -97,6 +102,7 @@ function requireSupervisorSpawnInput(): SupervisorSpawnInput {
 
 beforeEach(() => {
   resetAgentEventsForTest();
+  resetDiagnosticEventsForTest();
   supervisorSpawnMock.mockReset();
 });
 
@@ -342,6 +348,239 @@ describe("executePreparedCliRun supervisor output capture", () => {
     } finally {
       stop();
     }
+  });
+
+  it("emits metadata-only lifecycle records for parsed CLI tools", async () => {
+    const secret = "secret tool input and result";
+    const toolEvents: TrustedToolExecutionEvent[] = [];
+    const stop = onTrustedToolExecutionEvent((event) => toolEvents.push(event));
+    const chunks = [
+      `${JSON.stringify({
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "mcp_tool_use",
+              id: "call-1",
+              name: "mcp__team__lookup",
+              input: { query: secret },
+            },
+            {
+              type: "mcp_tool_result",
+              tool_use_id: "call-1",
+              content: [{ type: "text", text: secret }],
+            },
+          ],
+        },
+      })}\n`,
+      `${JSON.stringify({ type: "result", session_id: "session-jsonl", result: "done" })}\n`,
+    ];
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      for (const chunk of chunks) {
+        input.onStdout?.(chunk);
+      }
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
+    context.params.sessionKey = "agent:coder:main";
+    context.params.agentId = "coder";
+
+    try {
+      await executePreparedCliRun(context);
+    } finally {
+      stop();
+    }
+
+    expect(toolEvents).toEqual([
+      expect.objectContaining({
+        type: "tool.execution.started",
+        runId: "run-jsonl",
+        sessionKey: "agent:coder:main",
+        sessionId: "session-1",
+        agentId: "coder",
+        toolName: "mcp__team__lookup",
+        toolSource: "mcp",
+        toolOwner: "cli-runner",
+        toolCallId: "call-1",
+      }),
+      expect.objectContaining({
+        type: "tool.execution.completed",
+        runId: "run-jsonl",
+        toolCallId: "call-1",
+      }),
+    ]);
+    expect(JSON.stringify(toolEvents)).not.toContain(secret);
+  });
+
+  it("finishes parsed CLI tools when the process exits before a tool result", async () => {
+    const toolEvents: TrustedToolExecutionEvent[] = [];
+    const stop = onTrustedToolExecutionEvent((event) => toolEvents.push(event));
+    const toolStart = `${JSON.stringify({
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "mcp_tool_use",
+            id: "call-incomplete",
+            name: "mcp__team__lookup",
+            input: {},
+          },
+        ],
+      },
+    })}\n`;
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(toolStart);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 1,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "failed",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+
+    try {
+      await expect(
+        executePreparedCliRun(
+          buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" }),
+        ),
+      ).rejects.toThrow();
+    } finally {
+      stop();
+    }
+
+    expect(toolEvents).toMatchObject([
+      {
+        type: "tool.execution.started",
+        toolCallId: "call-incomplete",
+      },
+      {
+        type: "tool.execution.error",
+        toolCallId: "call-incomplete",
+        errorCategory: "cli_tool_incomplete",
+      },
+    ]);
+  });
+
+  it("cancels an outstanding parsed CLI tool when the enclosing run is aborted", async () => {
+    const toolEvents: TrustedToolExecutionEvent[] = [];
+    const stop = onTrustedToolExecutionEvent((event) => toolEvents.push(event));
+    const abortController = new AbortController();
+    const toolStart = `${JSON.stringify({
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "mcp_tool_use",
+            id: "call-cancelled",
+            name: "mcp__team__lookup",
+            input: {},
+          },
+        ],
+      },
+    })}\n`;
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(toolStart);
+      abortController.abort();
+      return createManagedRun({
+        reason: "manual-cancel",
+        exitCode: null,
+        exitSignal: "SIGTERM",
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
+    context.params.abortSignal = abortController.signal;
+
+    try {
+      await expect(executePreparedCliRun(context)).rejects.toThrow("aborted");
+    } finally {
+      stop();
+    }
+
+    expect(toolEvents).toMatchObject([
+      { type: "tool.execution.started", toolCallId: "call-cancelled" },
+      {
+        type: "tool.execution.error",
+        toolCallId: "call-cancelled",
+        errorCategory: "aborted",
+        terminalReason: "cancelled",
+      },
+    ]);
+  });
+
+  it("times out an outstanding parsed CLI tool with the enclosing run", async () => {
+    const toolEvents: TrustedToolExecutionEvent[] = [];
+    const stop = onTrustedToolExecutionEvent((event) => toolEvents.push(event));
+    const toolStart = `${JSON.stringify({
+      type: "assistant",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "mcp_tool_use",
+            id: "call-timeout",
+            name: "mcp__team__lookup",
+            input: {},
+          },
+        ],
+      },
+    })}\n`;
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as SupervisorSpawnInput;
+      input.onStdout?.(toolStart);
+      return createManagedRun({
+        reason: "overall-timeout",
+        exitCode: null,
+        exitSignal: "SIGTERM",
+        durationMs: 1_000,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: false,
+      });
+    });
+
+    try {
+      await expect(
+        executePreparedCliRun(
+          buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" }),
+        ),
+      ).rejects.toThrow("exceeded timeout");
+    } finally {
+      stop();
+    }
+
+    expect(toolEvents).toMatchObject([
+      { type: "tool.execution.started", toolCallId: "call-timeout" },
+      {
+        type: "tool.execution.error",
+        toolCallId: "call-timeout",
+        terminalReason: "timed_out",
+      },
+    ]);
   });
 
   it("reports only confirmed message deliveries from correlated JSONL tool events", async () => {
