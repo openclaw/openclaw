@@ -191,6 +191,11 @@ function getConfiguredMemoryEmbeddingProvider(
         if (resolvedAdapter) {
           return { adapter: resolvedAdapter, resolvedId };
         }
+        // resolvedId may point to a generic (not legacy) embedding provider,
+        // e.g. "openai-compatible" for baseUrl-only configs. Thread it through
+        // so downstream createEmbeddingProvider → getAdapter resolves it via
+        // the dual (legacy + generic) registry lookup.
+        return { adapter: directAdapter, resolvedId };
       }
     }
     return { adapter: directAdapter };
