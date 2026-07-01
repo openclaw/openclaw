@@ -3356,7 +3356,8 @@ async function runEmbeddedAgentInternal(
             genericUnknownReasoningError ||
             assistantFailoverReason === "no_error_details" ||
             assistantFailoverReason === "unclassified" ||
-            assistantFailoverReason === "unknown";
+            assistantFailoverReason === "unknown" ||
+            assistantFailoverReason === "server_error";
           // Retry replay-safe non-visible provider errors before assistant
           // failover surfaces them as terminal provider failures.
           if (

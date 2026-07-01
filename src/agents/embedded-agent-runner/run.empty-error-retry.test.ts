@@ -136,11 +136,8 @@ describe("runEmbeddedAgent silent-error retry", () => {
     expect(result.payloads).toBeUndefined();
   });
 
-  it.each([
-    ["timeout", "LLM request timed out."],
-    ["server_error", "Internal server error"],
-  ] as const)("does not intercept recognized %s failover errors", async (reason, errorMessage) => {
-    mockedClassifyAssistantFailoverReason.mockReturnValue(reason);
+  it("does not intercept recognized timeout failover errors", async () => {
+    mockedClassifyAssistantFailoverReason.mockReturnValue("timeout");
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       emptyErrorAttempt(
         "anthropic",
@@ -153,7 +150,7 @@ describe("runEmbeddedAgent silent-error retry", () => {
             thinkingSignature: JSON.stringify({ id: "rs_error", type: "reasoning" }),
           },
         ],
-        errorMessage,
+        "LLM request timed out.",
       ),
     );
 
@@ -161,10 +158,31 @@ describe("runEmbeddedAgent silent-error retry", () => {
       ...overflowBaseRunParams,
       provider: "anthropic",
       model: "claude-opus-4-8",
-      runId: `run-empty-error-retry-${reason}`,
+      runId: "run-empty-error-retry-timeout",
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries server_error when the turn is otherwise silent (#97877)", async () => {
+    // Real provider 5xx produces server_error.  #97877 ensures classified
+    // server_error enters the empty-error retry gate alongside stopReason=error
+    // checks so transient provider blips get MAX_EMPTY_ERROR_RETRIES=3 retries.
+    mockedClassifyAssistantFailoverReason.mockReturnValue("server_error");
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      emptyErrorAttempt("anthropic", "claude-opus-4-8", 0, [], "Internal server error"),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(successAttempt("anthropic", "claude-opus-4-8"));
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      runId: "run-empty-error-retry-server-error",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads).toBeUndefined();
   });
 
   it("does not intercept concrete non-transient failover errors", async () => {
@@ -274,36 +292,52 @@ describe("runEmbeddedAgent silent-error retry", () => {
     expect(result.payloads).toBeUndefined();
   });
 
-  it("does not retry when the failed attempt recorded side effects", async () => {
-    // Resubmission would duplicate side effects when replay metadata cannot
-    // prove the failed turn is safe to replay.
+  it("retries empty-error even with stale replayMetadata when no tool actually ran (#97877)", async () => {
+    // Stale accumulated replayMetadata from a prior turn should NOT block retry
+    // of the current turn when the current turn produced zero output and zero
+    // concrete tool execution.  The retry is a model resubmission, not a
+    // transcript replay — tool results are not duplicated.
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
-        assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "error",
-          provider: "ollama",
-          model: "glm-5.1:cloud",
-          content: [],
-          usage: { input: 100, output: 0, totalTokens: 100 },
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        ...emptyErrorAttempt("ollama", "glm-5.1:cloud"),
         replayMetadata: {
           hadPotentialSideEffects: true,
           replaySafe: false,
         },
       }),
     );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(successAttempt("ollama", "glm-5.1:cloud"));
 
     const result = await runEmbeddedAgent({
       ...overflowBaseRunParams,
       provider: "ollama",
       model: "glm-5.1:cloud",
-      runId: "run-empty-error-retry-skip-side-effects",
+      runId: "run-empty-error-retry-stale-side-effects",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(result.payloads).toBeUndefined();
+  });
+
+  it("does not retry empty-error when the current attempt has concrete tool state", async () => {
+    // Actual tool state in the current attempt must block retry: the runner
+    // surfaces an incomplete-turn tool-use terminal, not an error payload.
+    // One attempt means no empty-error retry fired.  (#97877)
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        ...emptyErrorAttempt("ollama", "glm-5.1:cloud"),
+        lastToolError: "exec tool failed",
+      }),
+    );
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "ollama",
+      model: "glm-5.1:cloud",
+      runId: "run-empty-error-retry-concrete-tools",
     });
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
-    expect(result.payloads?.[0]?.isError).toBe(true);
   });
 
   it.each([
