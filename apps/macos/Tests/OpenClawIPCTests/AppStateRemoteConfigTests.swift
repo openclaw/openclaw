@@ -38,6 +38,44 @@ struct AppStateRemoteConfigTests {
     }
 
     @Test
+    func `updated remote gateway config sets trimmed password`() {
+        let remote = AppState._testUpdatedRemoteGatewayConfig(
+            current: [:],
+            draft: .init(
+                transport: .direct,
+                remoteUrl: "wss://gateway.example",
+                remoteHost: nil,
+                remoteTarget: "",
+                remoteIdentity: "",
+                remoteToken: "",
+                remoteTokenDirty: false,
+                remotePassword: "  gateway-password  ", // pragma: allowlist secret
+                remotePasswordDirty: true))
+
+        #expect(remote["password"] as? String == "gateway-password") // pragma: allowlist secret
+    }
+
+    @Test
+    func `updated remote gateway config clears password when blank`() {
+        let remote = AppState._testUpdatedRemoteGatewayConfig(
+            current: [
+                "password": "old-password", // pragma: allowlist secret
+            ],
+            draft: .init(
+                transport: .direct,
+                remoteUrl: "wss://gateway.example",
+                remoteHost: nil,
+                remoteTarget: "",
+                remoteIdentity: "",
+                remoteToken: "",
+                remoteTokenDirty: false,
+                remotePassword: "   ",
+                remotePasswordDirty: true))
+
+        #expect((remote["password"] as? String) == nil)
+    }
+
+    @Test
     func `updated remote gateway config pins loopback url for ssh transport`() {
         let remote = AppState._testUpdatedRemoteGatewayConfig(
             current: ["url": "ws://gateway.example:18789"],
@@ -195,6 +233,9 @@ struct AppStateRemoteConfigTests {
                     "token": [
                         "$secretRef": "gateway-token", // pragma: allowlist secret
                     ],
+                    "password": [
+                        "$secretRef": "gateway-password", // pragma: allowlist secret
+                    ],
                 ],
             ],
         ]
@@ -212,6 +253,8 @@ struct AppStateRemoteConfigTests {
         let sshRemote = (sshRoot["gateway"] as? [String: Any])?["remote"] as? [String: Any]
         #expect((sshRemote?["token"] as? [String: String])?["$secretRef"] ==
             "gateway-token") // pragma: allowlist secret
+        #expect((sshRemote?["password"] as? [String: String])?["$secretRef"] ==
+            "gateway-password") // pragma: allowlist secret
 
         let localRoot = AppState._testSyncedGatewayRoot(
             currentRoot: sshRoot,
@@ -228,6 +271,8 @@ struct AppStateRemoteConfigTests {
         #expect(localGateway?["mode"] as? String == "local")
         #expect((localRemote?["token"] as? [String: String])?["$secretRef"] ==
             "gateway-token") // pragma: allowlist secret
+        #expect((localRemote?["password"] as? [String: String])?["$secretRef"] ==
+            "gateway-password") // pragma: allowlist secret
     }
 
     @Test
@@ -281,6 +326,66 @@ struct AppStateRemoteConfigTests {
                 remoteToken: "   ",
                 remoteTokenDirty: true))
         #expect((cleared["token"] as? String) == nil)
+    }
+
+    @Test
+    func `updated remote gateway config replaces object password when user enters plaintext`() {
+        let remote = AppState._testUpdatedRemoteGatewayConfig(
+            current: [
+                "password": [
+                    "$secretRef": "gateway-password", // pragma: allowlist secret
+                ],
+            ],
+            draft: .init(
+                transport: .direct,
+                remoteUrl: "wss://gateway.example",
+                remoteHost: nil,
+                remoteTarget: "",
+                remoteIdentity: "",
+                remoteToken: "",
+                remoteTokenDirty: false,
+                remotePassword: "  fresh-password  ", // pragma: allowlist secret
+                remotePasswordDirty: true))
+
+        #expect(remote["password"] as? String == "fresh-password") // pragma: allowlist secret
+    }
+
+    @Test
+    func `updated remote gateway config clears object password only after explicit edit`() {
+        let current: [String: Any] = [
+            "password": [
+                "$secretRef": "gateway-password", // pragma: allowlist secret
+            ],
+        ]
+
+        let preserved = AppState._testUpdatedRemoteGatewayConfig(
+            current: current,
+            draft: .init(
+                transport: .direct,
+                remoteUrl: "wss://gateway.example",
+                remoteHost: nil,
+                remoteTarget: "",
+                remoteIdentity: "",
+                remoteToken: "",
+                remoteTokenDirty: false,
+                remotePassword: "",
+                remotePasswordDirty: false))
+        #expect((preserved["password"] as? [String: String])?["$secretRef"] ==
+            "gateway-password") // pragma: allowlist secret
+
+        let cleared = AppState._testUpdatedRemoteGatewayConfig(
+            current: current,
+            draft: .init(
+                transport: .direct,
+                remoteUrl: "wss://gateway.example",
+                remoteHost: nil,
+                remoteTarget: "",
+                remoteIdentity: "",
+                remoteToken: "",
+                remoteTokenDirty: false,
+                remotePassword: "   ",
+                remotePasswordDirty: true))
+        #expect((cleared["password"] as? String) == nil)
     }
 
     @Test

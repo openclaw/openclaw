@@ -102,7 +102,49 @@ struct OnboardingRemoteAuthPromptTests {
             showAdvancedConnection: false,
             remoteToken: "",
             remoteTokenUnsupported: false,
+            authIssue: .passwordRequired) == false)
+        #expect(OnboardingView.shouldShowRemoteTokenField(
+            showAdvancedConnection: false,
+            remoteToken: "",
+            remoteTokenUnsupported: false,
             authIssue: .pairingRequired) == false)
+    }
+
+    @Test func `password field visibility follows onboarding rules`() {
+        #expect(OnboardingView.shouldShowRemotePasswordField(
+            showAdvancedConnection: false,
+            remotePassword: "",
+            authIssue: nil) == false)
+        #expect(OnboardingView.shouldShowRemotePasswordField(
+            showAdvancedConnection: true,
+            remotePassword: "",
+            authIssue: nil))
+        #expect(OnboardingView.shouldShowRemotePasswordField(
+            showAdvancedConnection: false,
+            remotePassword: "secret",
+            authIssue: nil))
+        #expect(OnboardingView.shouldShowRemotePasswordField(
+            showAdvancedConnection: false,
+            remotePassword: "",
+            authIssue: .passwordRequired))
+        #expect(OnboardingView.shouldShowRemotePasswordField(
+            showAdvancedConnection: false,
+            remotePassword: "",
+            authIssue: .tokenRequired) == false)
+        #expect(OnboardingView.shouldShowRemotePasswordField(
+            showAdvancedConnection: false,
+            remotePassword: "",
+            authIssue: .pairingRequired) == false)
+    }
+
+    @Test func `password required copy asks for remote gateway password`() {
+        let issue = RemoteGatewayAuthIssue.passwordRequired
+
+        #expect(issue.showsPasswordField)
+        #expect(issue.title == "This gateway requires a password")
+        #expect(issue.body.contains("`gateway.remote.password`"))
+        #expect(issue.statusMessage.contains("gateway.remote.password"))
+        #expect(issue.body.contains("does not support password auth yet") == false)
     }
 
     @Test func `pairing required copy points users to pair approve`() {
@@ -118,6 +160,7 @@ struct OnboardingRemoteAuthPromptTests {
         let pairedDevice = RemoteGatewayProbeSuccess(authSource: .deviceToken)
         let bootstrap = RemoteGatewayProbeSuccess(authSource: .bootstrapToken)
         let sharedToken = RemoteGatewayProbeSuccess(authSource: .sharedToken)
+        let password = RemoteGatewayProbeSuccess(authSource: .password)
         let noAuth = RemoteGatewayProbeSuccess(authSource: GatewayAuthSource.none)
 
         #expect(pairedDevice.title == "Connected via paired device")
@@ -129,6 +172,8 @@ struct OnboardingRemoteAuthPromptTests {
             "This Mac is still using the temporary setup code. Approve pairing to finish provisioning device-scoped auth.")
         #expect(sharedToken.title == "Connected with gateway token")
         #expect(sharedToken.detail == nil)
+        #expect(password.title == "Connected with password")
+        #expect(password.detail == nil)
         #expect(noAuth.title == "Remote gateway ready")
         #expect(noAuth.detail == nil)
     }

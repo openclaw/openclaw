@@ -355,6 +355,7 @@ struct GeneralSettings: View {
                     self.remoteDirectRow
                 }
                 self.remoteTokenRow
+                self.remotePasswordRow
             }
 
             SettingsCardGroup("Discovery & Status") {
@@ -536,8 +537,7 @@ struct GeneralSettings: View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsCardRow(
                 title: "Gateway token",
-                subtitle: "Used when the remote gateway requires token auth.",
-                showsDivider: false)
+                subtitle: "Used when the remote gateway requires token auth.")
             {
                 SecureField("remote gateway auth token (gateway.remote.token)", text: self.$state.remoteToken)
                     .textFieldStyle(.roundedBorder)
@@ -553,6 +553,18 @@ struct GeneralSettings: View {
                     .padding(.horizontal, 14)
                     .padding(.bottom, 10)
             }
+        }
+    }
+
+    private var remotePasswordRow: some View {
+        SettingsCardRow(
+            title: "Gateway password",
+            subtitle: "Used when the remote gateway requires password auth.",
+            showsDivider: false)
+        {
+            SecureField("remote gateway password (gateway.remote.password)", text: self.$state.remotePassword)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: Self.remoteSecretFieldWidth)
         }
     }
 
