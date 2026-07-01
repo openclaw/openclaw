@@ -639,10 +639,12 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `off` (default)
     - `first`
     - `all`
+    - `batched`
 
     When reply threading is enabled and the original Telegram text or caption is available, OpenClaw includes a native Telegram quote excerpt automatically. Telegram caps native quote text at 1024 UTF-16 code units, so longer messages are quoted from the start and fall back to a plain reply if Telegram rejects the quote.
 
     Note: `off` disables implicit reply threading. Explicit `[[reply_to_*]]` tags are still honored.
+    `batched` only attaches the native reply reference when the inbound event was a debounced batch of multiple messages. Useful when you want native replies mainly for bursty multi-message chats without attaching one to every single-message turn.
 
   </Accordion>
 
