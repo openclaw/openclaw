@@ -33,7 +33,6 @@ import { CHAT_HISTORY_RENDER_LIMIT } from "../chat/history-limits.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../chat/input-history.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
 import { getPinnedMessageSummary } from "../chat/pinned-summary.ts";
-import { analyzePromptQuality, type PromptQualityResult } from "../chat/prompt-quality.ts";
 import {
   REALTIME_TALK_FALLBACK_PROVIDERS,
   listSelectableRealtimeTalkProviders,
@@ -534,8 +533,6 @@ interface ChatEphemeralState {
     scrollTop: number;
   } | null;
   historyRenderAnchorFrame: number | null;
-  promptQualityReviewDraft: string | null;
-  promptQualityBypassedDraft: string | null;
   clarificationRunId: string | null;
   clarificationAnswer: string;
 }
@@ -562,8 +559,6 @@ function createChatEphemeralState(): ChatEphemeralState {
     historyRenderExpansionFrame: null,
     historyRenderAnchorAdjustment: null,
     historyRenderAnchorFrame: null,
-    promptQualityReviewDraft: null,
-    promptQualityBypassedDraft: null,
     clarificationRunId: null,
     clarificationAnswer: "",
   };
@@ -1706,60 +1701,6 @@ function getSlashArgOptionId(commandName: string, arg: string): string {
   return `chat-slash-option-arg-${slashOptionIdSegment(commandName)}-${slashOptionIdSegment(arg)}`;
 }
 
-function isPromptQualityReviewVisible(prompt: string): boolean {
-  return vs.promptQualityReviewDraft === prompt && prompt !== vs.promptQualityBypassedDraft;
-}
-
-function renderPromptQualityReview(
-  quality: PromptQualityResult,
-  props: ChatProps,
-  value: string,
-  requestUpdate: () => void,
-) {
-  if (quality.level !== "review" || !isPromptQualityReviewVisible(value)) {
-    return nothing;
-  }
-  const updateWithStructure = () => {
-    const next = quality.template;
-    commitComposerDraft(props, next);
-    vs.promptQualityReviewDraft = null;
-    vs.promptQualityBypassedDraft = null;
-    requestUpdate();
-  };
-  const sendAnyway = () => {
-    vs.promptQualityBypassedDraft = value;
-    commitComposerDraft(props, value);
-    requestUpdate();
-    props.onSend();
-  };
-  return html`
-    <section class="agent-chat__prompt-quality" role="status" aria-live="polite">
-      <div class="agent-chat__prompt-quality-header">
-        <span class="agent-chat__prompt-quality-icon">${icons.alertTriangle}</span>
-        <div>
-          <div class="agent-chat__prompt-quality-title">Prompt could use more detail</div>
-          <div class="agent-chat__prompt-quality-subtitle">
-            Better prompts give the agent a target, context, and finish line.
-          </div>
-        </div>
-      </div>
-      <ul class="agent-chat__prompt-quality-list">
-        ${quality.issues.map((issue) => html`<li>${issue.label}</li>`)}
-      </ul>
-      <div class="agent-chat__prompt-quality-actions">
-        <button type="button" class="agent-chat__input-btn" @click=${updateWithStructure}>
-          ${icons.fileText}
-          <span class="agent-chat__control-label">Add structure</span>
-        </button>
-        <button type="button" class="agent-chat__input-btn" @click=${sendAnyway}>
-          ${icons.send}
-          <span class="agent-chat__control-label">Send anyway</span>
-        </button>
-      </div>
-    </section>
-  `;
-}
-
 function renderChatClarification(
   clarification: PendingChatClarification | null | undefined,
   props: ChatProps,
@@ -1778,8 +1719,8 @@ function renderChatClarification(
     vs.clarificationAnswer = target.value;
     requestUpdate();
   };
-  const submit = () => {
-    const value = vs.clarificationAnswer.trim();
+  const submit = (answerOverride?: string) => {
+    const value = (answerOverride ?? vs.clarificationAnswer).trim();
     if (!value || !props.onClarificationAnswer) {
       return;
     }
@@ -1810,7 +1751,27 @@ function renderChatClarification(
             </ul>
           `
         : nothing}
-      ${clarification.suggestions?.length
+      ${clarification.options?.length
+        ? html`
+            <div class="agent-chat__clarification-options" role="list">
+              ${clarification.options.map(
+                (option) => html`
+                  <button
+                    type="button"
+                    class="agent-chat__clarification-option"
+                    role="listitem"
+                    @click=${() => submit(option.answer)}
+                    ?disabled=${!props.connected}
+                  >
+                    <span class="agent-chat__clarification-option-label">${option.label}</span>
+                    <span class="agent-chat__clarification-option-answer">${option.answer}</span>
+                  </button>
+                `,
+              )}
+            </div>
+          `
+        : nothing}
+      ${clarification.suggestions?.length && !clarification.options?.length
         ? html`
             <ul class="agent-chat__clarification-suggestions">
               ${clarification.suggestions.map((suggestion) => html`<li>${suggestion}</li>`)}
@@ -1821,18 +1782,18 @@ function renderChatClarification(
         class="agent-chat__clarification-answer"
         .value=${answer}
         rows="2"
-        placeholder="Add the missing context"
+        placeholder="Custom answer"
         @input=${handleInput}
       ></textarea>
       <div class="agent-chat__prompt-quality-actions">
         <button
           type="button"
           class="agent-chat__input-btn"
-          @click=${submit}
+          @click=${() => submit()}
           ?disabled=${!answer.trim() || !props.connected}
         >
           ${icons.send}
-          <span class="agent-chat__control-label">Send answer</span>
+          <span class="agent-chat__control-label">Send custom</span>
         </button>
         <button type="button" class="agent-chat__input-btn" @click=${cancel}>
           ${icons.x}
@@ -2552,13 +2513,6 @@ export function renderChat(props: ChatProps) {
   ) => {
     adjustTextareaHeight(target);
     draftMirror.value = target.value;
-    const trimmed = target.value.trim();
-    if (vs.promptQualityReviewDraft && vs.promptQualityReviewDraft !== trimmed) {
-      vs.promptQualityReviewDraft = null;
-    }
-    if (vs.promptQualityBypassedDraft && vs.promptQualityBypassedDraft !== trimmed) {
-      vs.promptQualityBypassedDraft = null;
-    }
     const hostDraftNeeded = isBusy || showAbortableUi || props.queue.length > 0;
     if (
       options.forceCommit ||
@@ -2591,21 +2545,6 @@ export function renderChat(props: ChatProps) {
     commitComposerDraft(props, target.value);
   };
   const handleSend = () => {
-    const value = draftMirror.value.trim();
-    const quality = analyzePromptQuality(value, {
-      hasAttachments: Boolean(props.attachments?.length),
-    });
-    if (
-      value &&
-      quality.level === "review" &&
-      !isPromptQualityReviewVisible(value) &&
-      value !== vs.promptQualityBypassedDraft
-    ) {
-      commitComposerDraft(props, draftMirror.value);
-      vs.promptQualityReviewDraft = value;
-      requestUpdate();
-      return;
-    }
     commitComposerDraft(props, draftMirror.value);
     props.onSend();
     syncComposerDraftAfterSend(composerTextarea);
@@ -2613,9 +2552,6 @@ export function renderChat(props: ChatProps) {
   const slashMenuVisible = isSlashMenuVisible();
   const activeSlashMenuOptionId = getActiveSlashMenuOptionId();
   const activeSlashMenuOptionLabel = getActiveSlashMenuOptionLabel();
-  const promptQuality = analyzePromptQuality(visibleDraft, {
-    hasAttachments: Boolean(props.attachments?.length),
-  });
   const chatColumnFooter = html`
     ${renderChatQueue({
       queue: props.queue,
@@ -2660,7 +2596,6 @@ export function renderChat(props: ChatProps) {
 
       ${renderRealtimeTalkOptions(props)}
       ${renderChatClarification(props.clarification, props, requestUpdate)}
-      ${renderPromptQualityReview(promptQuality, props, visibleDraft.trim(), requestUpdate)}
       ${props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
         ? html`
             <div

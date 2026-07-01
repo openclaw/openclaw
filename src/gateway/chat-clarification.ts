@@ -12,9 +12,16 @@ export type ChatClarificationIssue = {
   label: string;
 };
 
+export type ChatClarificationOption = {
+  id: string;
+  label: string;
+  answer: string;
+};
+
 export type ChatClarificationRequest = {
   question: string;
   issues: ChatClarificationIssue[];
+  options: ChatClarificationOption[];
   suggestions: string[];
 };
 
@@ -67,6 +74,66 @@ function buildClarificationQuestion(keys: ChatClarificationIssueKey[]): string {
     return "What exactly should I work on, where should I look, and what does a good result look like?";
   }
   return "What context or finish line should I use before starting?";
+}
+
+function buildClarificationOptions(keys: ChatClarificationIssueKey[]): ChatClarificationOption[] {
+  if (issue(keys, "risky_action")) {
+    return [
+      {
+        id: "inspect-first",
+        label: "Inspect first",
+        answer: "Inspect first and summarize the exact planned change before making it.",
+      },
+      {
+        id: "exact-target-only",
+        label: "Exact target only",
+        answer: "Only change the exact target I name, and leave everything else untouched.",
+      },
+      {
+        id: "custom-boundaries",
+        label: "I'll specify boundaries",
+        answer: "I will provide the exact target, boundaries, and confirmation in a custom answer.",
+      },
+    ];
+  }
+  if (issue(keys, "vague_reference") || issue(keys, "missing_context")) {
+    return [
+      {
+        id: "use-current-context",
+        label: "Use current context",
+        answer:
+          "Use the current chat/session context as the target, make the smallest useful fix, and summarize checks.",
+      },
+      {
+        id: "investigate-first",
+        label: "Investigate first",
+        answer: "First investigate and report what needs to change before editing anything.",
+      },
+      {
+        id: "ask-for-target",
+        label: "Ask for target",
+        answer:
+          "Ask me only for the missing target if you cannot infer it from the current session.",
+      },
+    ];
+  }
+  return [
+    {
+      id: "smallest-useful-change",
+      label: "Smallest useful change",
+      answer: "Make the smallest useful change and summarize what changed plus any checks run.",
+    },
+    {
+      id: "explain-only",
+      label: "Explain only",
+      answer: "Do not edit yet; explain the likely approach and what information is missing.",
+    },
+    {
+      id: "finish-line-summary",
+      label: "Summarize outcome",
+      answer: "When done, summarize the outcome, checks run, and anything remaining.",
+    },
+  ];
 }
 
 function shouldClarify(keys: ChatClarificationIssueKey[]): boolean {
@@ -144,6 +211,7 @@ export function evaluateChatClarification(
     clarification: {
       question: buildClarificationQuestion(uniqueKeys),
       issues: uniqueKeys.map((key) => ({ key, label: labels[key] })),
+      options: buildClarificationOptions(uniqueKeys),
       suggestions: [
         "Name the target: repo, file, card, issue, screen, or message.",
         "Add constraints: what to preserve, avoid, or ask before changing.",

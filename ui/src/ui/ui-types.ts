@@ -18,9 +18,16 @@ export type ChatClarificationIssue = {
   label: string;
 };
 
+export type ChatClarificationOption = {
+  id: string;
+  label: string;
+  answer: string;
+};
+
 export type ChatClarificationRequest = {
   question: string;
   issues: ChatClarificationIssue[];
+  options?: ChatClarificationOption[];
   suggestions?: string[];
 };
 

@@ -1093,6 +1093,7 @@ async function sendQueuedChatMessage(
             ack.clarification?.question ??
             "What exactly should I work on, where should I look, and what does a good result look like?",
           issues: ack.clarification?.issues ?? [],
+          ...(ack.clarification?.options ? { options: ack.clarification.options } : {}),
           ...(ack.clarification?.suggestions ? { suggestions: ack.clarification.suggestions } : {}),
           runId: ack.runId,
           sessionKey,

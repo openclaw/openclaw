@@ -1512,6 +1512,13 @@ describe("handleSendChat", () => {
           clarification: {
             question: "What exactly should I work on?",
             issues: [{ key: "missing_context", label: "Add context." }],
+            options: [
+              {
+                id: "inspect-first",
+                label: "Inspect first",
+                answer: "First investigate and report what needs to change before editing.",
+              },
+            ],
             suggestions: ["Name the target."],
           },
         };
@@ -1538,6 +1545,13 @@ describe("handleSendChat", () => {
       originalMessage: "fix this",
       question: "What exactly should I work on?",
       issues: [{ key: "missing_context", label: "Add context." }],
+      options: [
+        {
+          id: "inspect-first",
+          label: "Inspect first",
+          answer: "First investigate and report what needs to change before editing.",
+        },
+      ],
       suggestions: ["Name the target."],
     });
     expect(eventPayloads(host, "control-ui.chat.send")).toEqual(

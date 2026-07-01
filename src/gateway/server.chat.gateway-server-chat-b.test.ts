@@ -989,6 +989,13 @@ describe("gateway server chat", () => {
                 expect.objectContaining({ key: "vague_reference" }),
                 expect.objectContaining({ key: "missing_context" }),
               ]),
+              options: expect.arrayContaining([
+                expect.objectContaining({
+                  id: expect.any(String),
+                  label: expect.any(String),
+                  answer: expect.any(String),
+                }),
+              ]),
               suggestions: expect.any(Array),
             },
           },

@@ -962,9 +962,28 @@ function normalizeChatClarificationRequest(value: unknown): ChatClarificationReq
         .map((suggestion) => suggestion.trim())
         .filter(Boolean)
     : undefined;
+  const options = Array.isArray(record.options)
+    ? record.options
+        .map((option) => {
+          if (!option || typeof option !== "object") {
+            return null;
+          }
+          const entry = option as Record<string, unknown>;
+          const id = typeof entry.id === "string" && entry.id.trim() ? entry.id.trim() : "";
+          const label =
+            typeof entry.label === "string" && entry.label.trim() ? entry.label.trim() : "";
+          const answer =
+            typeof entry.answer === "string" && entry.answer.trim() ? entry.answer.trim() : "";
+          return id && label && answer ? { id, label, answer } : null;
+        })
+        .filter(
+          (option): option is { id: string; label: string; answer: string } => option !== null,
+        )
+    : undefined;
   return {
     question,
     issues,
+    ...(options && options.length > 0 ? { options } : {}),
     ...(suggestions && suggestions.length > 0 ? { suggestions } : {}),
   };
 }

@@ -1967,6 +1967,14 @@ describe("sendChatMessage", () => {
           { key: "missing_context", label: "Add context." },
           { key: "", label: "ignored" },
         ],
+        options: [
+          {
+            id: "inspect-first",
+            label: "Inspect first",
+            answer: "First investigate and report what needs to change before editing.",
+          },
+          { id: "", label: "ignored", answer: "ignored" },
+        ],
         suggestions: ["Name the target.", ""],
       },
     });
@@ -1987,6 +1995,13 @@ describe("sendChatMessage", () => {
       clarification: {
         question: "What exactly should I work on?",
         issues: [{ key: "missing_context", label: "Add context." }],
+        options: [
+          {
+            id: "inspect-first",
+            label: "Inspect first",
+            answer: "First investigate and report what needs to change before editing.",
+          },
+        ],
         suggestions: ["Name the target."],
       },
     });

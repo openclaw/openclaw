@@ -1910,7 +1910,13 @@ describe("chat slash menu accessibility", () => {
         originalMessage: "fix this",
         question: "What exactly should I work on?",
         issues: [{ key: "missing_context", label: "Add context." }],
-        suggestions: ["Name the target."],
+        options: [
+          {
+            id: "inspect-first",
+            label: "Inspect first",
+            answer: "First investigate and report what needs to change before editing anything.",
+          },
+        ],
       },
       onClarificationAnswer,
       onClarificationCancel,
@@ -1922,6 +1928,12 @@ describe("chat slash menu accessibility", () => {
 
     expect(container.textContent).toContain("More detail needed before starting");
     expect(container.textContent).toContain("What exactly should I work on?");
+    expect(container.textContent).toContain("Inspect first");
+    container.querySelector<HTMLButtonElement>(".agent-chat__clarification-option")!.click();
+    expect(onClarificationAnswer).toHaveBeenCalledWith(
+      "First investigate and report what needs to change before editing anything.",
+    );
+
     const answer = container.querySelector<HTMLTextAreaElement>(
       ".agent-chat__clarification-answer",
     );
@@ -1935,6 +1947,7 @@ describe("chat slash menu accessibility", () => {
     expect(onClarificationAnswer).toHaveBeenCalledWith(
       "Use ui/src/ui/views/chat.ts and add tests.",
     );
+    expect(onClarificationAnswer).toHaveBeenCalledTimes(2);
 
     const cancelContainer = renderChatView({
       clarification: {

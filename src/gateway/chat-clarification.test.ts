@@ -14,6 +14,15 @@ describe("chat clarification gate", () => {
         "missing_context",
         "missing_outcome",
       ]);
+      expect(decision.clarification.options).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "use-current-context",
+            label: "Use current context",
+            answer: expect.stringContaining("current chat/session context"),
+          }),
+        ]),
+      );
     }
   });
 
