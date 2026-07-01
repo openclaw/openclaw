@@ -749,6 +749,14 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
+  fun recoveryProgressDoesNotRenderSeparateNodeApprovalDots() {
+    assertEquals(
+      emptyList<GatewayRecoveryProgressItem>(),
+      gatewayRecoveryProgressItems(state = GatewayRecoveryUiState.NodeCapabilityApprovalPending),
+    )
+  }
+
+  @Test
   fun resolvesOnboardingSetupCodeConnectConfigForScannedQr() {
     val setupCode =
       encodeSetupCode("""{"url":"ws://10.0.2.2:18789","bootstrapToken":"bootstrap-1"}""")
