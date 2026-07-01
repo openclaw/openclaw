@@ -753,8 +753,8 @@ export function resolveConfiguredModelRef(
   } & ModelManifestNormalizationContext,
 ): ModelRef {
   const rawModel = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ?? "";
-  if (rawModel) {
-    const trimmed = rawModel.trim();
+  const trimmed = rawModel.trim();
+  if (trimmed) {
     const { model: modelWithoutProfile } = splitTrailingAuthProfile(trimmed);
     const manifestPluginContext = createModelManifestPluginContext(params);
     const profileStripped = Boolean(modelWithoutProfile && modelWithoutProfile !== trimmed);
