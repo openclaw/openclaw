@@ -5,6 +5,7 @@ import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "../../../src/gateway/events.js";
 import type { ActivityEntry } from "./activity-model.ts";
 import { connectGateway, resolveControlUiClientVersion } from "./app-gateway.ts";
 import type { GatewayHelloOk } from "./gateway.ts";
+import type { SessionsListResult } from "./types.ts";
 import type { ChatQueueItem } from "./ui-types.ts";
 
 const loadChatHistoryMock = vi.hoisted(() => vi.fn(async () => undefined));
@@ -141,6 +142,7 @@ type TestGatewayHost = Parameters<typeof connectGateway>[0] & {
   chatSideResult: unknown;
   chatSideResultTerminalRuns: Set<string>;
   chatStream: string | null;
+  sessionsResult: SessionsListResult | null;
   updateComplete?: Promise<unknown>;
   chatToolMessages: Record<string, unknown>[];
   activityEntries: ActivityEntry[];
@@ -430,7 +432,7 @@ describe("connectGateway", () => {
         ts: 0,
         path: "",
         count: 1,
-        defaults: {},
+        defaults: { contextTokens: null, model: null, modelProvider: null },
         sessions: [
           {
             key: "main",
@@ -1747,6 +1749,252 @@ describe("connectGateway", () => {
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
   });
 
+  it("does not apply deferred transcript thinking from a different session final", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "main-run-cross-session";
+    (
+      host as typeof host & {
+        pendingSessionMessageReloadSessionKey?: string | null;
+        pendingSessionMessageReloadHasThinking?: boolean;
+      }
+    ).pendingSessionMessageReloadSessionKey = "agent:other:main";
+    (
+      host as typeof host & {
+        pendingSessionMessageReloadSessionKey?: string | null;
+        pendingSessionMessageReloadHasThinking?: boolean;
+      }
+    ).pendingSessionMessageReloadHasThinking = true;
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "main-run-cross-session",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Final answer" }],
+        },
+      },
+    });
+
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatMessages).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer" }],
+      },
+    ]);
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("does not reload the selected chat for a deferred thinking final from a previous session", () => {
+    const { host, client } = connectHostGateway();
+    host.sessionKey = "agent:other:main";
+    host.chatRunId = "main-run-after-switch";
+    (
+      host as typeof host & {
+        pendingSessionMessageReloadSessionKey?: string | null;
+        pendingSessionMessageReloadHasThinking?: boolean;
+      }
+    ).pendingSessionMessageReloadSessionKey = "main";
+    (
+      host as typeof host & {
+        pendingSessionMessageReloadSessionKey?: string | null;
+        pendingSessionMessageReloadHasThinking?: boolean;
+      }
+    ).pendingSessionMessageReloadHasThinking = true;
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "main-run-after-switch",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Final answer" }],
+        },
+      },
+    });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("does not arm deferred transcript thinking from user message text", () => {
+    const { host, client } = connectHostGateway();
+    host.chatRunId = "main-run-user-thinking-tag";
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "session.message",
+      payload: {
+        sessionKey: "main",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "literal <thinking>example</thinking>" }],
+        },
+      },
+    });
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "main-run-user-thinking-tag",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Final answer" }],
+        },
+      },
+    });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("reloads deferred transcript thinking after a renderable final assistant payload", () => {
+    const { host, client } = connectHostGateway();
+    const persistedUser = {
+      role: "user",
+      content: [{ type: "text", text: "Think then answer" }],
+      timestamp: 100,
+    };
+    const persistedAssistant = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "private reasoning" },
+        { type: "text", text: "Final answer" },
+      ],
+      timestamp: 101,
+    };
+    host.chatRunId = "main-run-reasoning";
+    host.chatMessages = [persistedUser];
+    host.sessionsResult = {
+      count: 1,
+      defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
+      path: "",
+      sessions: [
+        {
+          key: "main",
+          kind: "direct",
+          status: "done",
+          hasActiveRun: false,
+          updatedAt: Date.now(),
+        },
+      ],
+      ts: Date.now(),
+    };
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "session.message",
+      payload: {
+        sessionKey: "main",
+        message: persistedAssistant,
+      },
+    });
+    expect(host.chatRunId).toBe("main-run-reasoning");
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "main-run-reasoning",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Final answer" }],
+        },
+      },
+    });
+
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatMessages).toEqual([
+      persistedUser,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer" }],
+      },
+    ]);
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+    expect(
+      (
+        host as typeof host & {
+          pendingSessionMessageReloadSessionKey?: string | null;
+          pendingSessionMessageReloadHasThinking?: boolean;
+        }
+      ).pendingSessionMessageReloadSessionKey,
+    ).toBeNull();
+    expect(
+      (
+        host as typeof host & {
+          pendingSessionMessageReloadSessionKey?: string | null;
+          pendingSessionMessageReloadHasThinking?: boolean;
+        }
+      ).pendingSessionMessageReloadHasThinking,
+    ).toBe(false);
+  });
+
+  it("reloads deferred transcript thinking for selected global alias finals", () => {
+    const { host, client } = connectHostGateway();
+    const persistedAssistant = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "private global reasoning" },
+        { type: "text", text: "Final answer" },
+      ],
+    };
+    host.sessionKey = "agent:main:main";
+    host.chatRunId = "global-run-reasoning";
+    (host as typeof host & { applySettings?: ReturnType<typeof vi.fn> }).applySettings = vi.fn();
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "session.message",
+      payload: {
+        sessionKey: "global",
+        agentId: "main",
+        message: persistedAssistant,
+      },
+    });
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "global-run-reasoning",
+        sessionKey: "global",
+        agentId: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Final answer" }],
+        },
+      },
+    });
+
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+    expect(
+      (
+        host as typeof host & {
+          pendingSessionMessageReloadSessionKey?: string | null;
+          pendingSessionMessageReloadHasThinking?: boolean;
+        }
+      ).pendingSessionMessageReloadSessionKey,
+    ).toBeNull();
+    expect(
+      (
+        host as typeof host & {
+          pendingSessionMessageReloadSessionKey?: string | null;
+          pendingSessionMessageReloadHasThinking?: boolean;
+        }
+      ).pendingSessionMessageReloadHasThinking,
+    ).toBe(false);
+  });
+
   it("keeps source-reply finals live even when message tool events were seen", () => {
     const { host, client } = connectHostGateway();
     host.chatRunId = "main-run-with-message-tool";
@@ -1794,6 +2042,62 @@ describe("connectGateway", () => {
     ]);
     expect(host.toolStreamOrder).toHaveLength(1);
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("reloads deferred transcript thinking after a tool-backed renderable final payload", async () => {
+    const { host, client } = connectHostGateway();
+    const persistedUser = {
+      role: "user",
+      content: [{ type: "text", text: "Use a tool, then think" }],
+      timestamp: 100,
+    };
+    const persistedAssistant = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "private tool reasoning" },
+        { type: "text", text: "Tool-backed final answer" },
+      ],
+      timestamp: 101,
+    };
+    host.chatRunId = "main-run-tool-reasoning";
+    host.chatMessages = [persistedUser];
+    emitToolResultEvent(client);
+    expect(host.toolStreamOrder).toHaveLength(1);
+    loadChatHistoryMock.mockClear();
+
+    client.emitEvent({
+      event: "session.message",
+      payload: {
+        sessionKey: "main",
+        message: persistedAssistant,
+      },
+    });
+    client.emitEvent({
+      event: "chat",
+      payload: {
+        runId: "main-run-tool-reasoning",
+        sessionKey: "main",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Tool-backed final answer" }],
+        },
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatMessages).toEqual([
+      persistedUser,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Tool-backed final answer" }],
+      },
+    ]);
+    expect(host.toolStreamOrder).toHaveLength(0);
+    expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
   });
 
   it("replays deferred session.message reloads after legacy silent final payload", () => {
