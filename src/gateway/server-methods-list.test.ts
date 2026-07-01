@@ -40,7 +40,7 @@ describe("listGatewayMethods", () => {
       "doctor.memory.dreamDiary",
       "doctor.memory.backfillDreamDiary",
     ]);
-    expect(methods.slice(32, 37)).toEqual([
+    expect(methods.slice(33, 38)).toEqual([
       "exec.approvals.get",
       "exec.approvals.set",
       "exec.approvals.node.get",

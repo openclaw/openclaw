@@ -445,6 +445,24 @@ public struct EnvironmentSummary: Codable, Sendable {
     }
 }
 
+public struct ImageProvidersResult: Codable, Sendable {
+    public let providers: [[String: AnyCodable]]
+    public let active: AnyCodable
+
+    public init(
+        providers: [[String: AnyCodable]],
+        active: AnyCodable)
+    {
+        self.providers = providers
+        self.active = active
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case providers
+        case active
+    }
+}
+
 public struct EnvironmentsListParams: Codable, Sendable {}
 
 public struct EnvironmentsListResult: Codable, Sendable {

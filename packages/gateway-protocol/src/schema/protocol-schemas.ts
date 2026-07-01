@@ -192,6 +192,7 @@ import {
   ShutdownEventSchema,
   TickEventSchema,
 } from "./frames.js";
+import { ImageProvidersResultSchema } from "./image-generation.js";
 import {
   ChatAbortedEventSchema,
   ChatAbortParamsSchema,
@@ -327,6 +328,9 @@ export const ProtocolSchemas = {
   // Environment and agent-facing control RPC payloads.
   EnvironmentStatus: EnvironmentStatusSchema,
   EnvironmentSummary: EnvironmentSummarySchema,
+
+  // Image generation provider inventory.
+  ImageProvidersResult: ImageProvidersResultSchema,
   EnvironmentsListParams: EnvironmentsListParamsSchema,
   EnvironmentsListResult: EnvironmentsListResultSchema,
   EnvironmentsStatusParams: EnvironmentsStatusParamsSchema,
