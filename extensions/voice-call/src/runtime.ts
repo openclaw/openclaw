@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   consultRealtimeVoiceAgent,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -57,13 +58,6 @@ type Logger = {
 
 type ResolvedRealtimeProvider = ResolvedRealtimeVoiceProvider;
 
-type TelnyxProviderModule = typeof import("./providers/telnyx.js");
-type TwilioProviderModule = typeof import("./providers/twilio.js");
-type PlivoProviderModule = typeof import("./providers/plivo.js");
-type MockProviderModule = typeof import("./providers/mock.js");
-type RealtimeVoiceRuntimeModule = typeof import("./realtime-voice.runtime.js");
-type RealtimeHandlerModule = typeof import("./webhook/realtime-handler.js");
-
 const REALTIME_VOICE_CONSULT_SYSTEM_PROMPT = [
   "You are the configured OpenClaw agent receiving delegated requests from a live phone voice bridge.",
   "Act on behalf of the caller using the normal available tools when the caller asks you to do work.",
@@ -73,42 +67,19 @@ const REALTIME_VOICE_CONSULT_SYSTEM_PROMPT = [
   "Be accurate, brief, and speakable.",
 ].join(" ");
 
-let telnyxProviderPromise: Promise<TelnyxProviderModule> | undefined;
-let twilioProviderPromise: Promise<TwilioProviderModule> | undefined;
-let plivoProviderPromise: Promise<PlivoProviderModule> | undefined;
-let mockProviderPromise: Promise<MockProviderModule> | undefined;
-let realtimeVoiceRuntimePromise: Promise<RealtimeVoiceRuntimeModule> | undefined;
-let realtimeHandlerPromise: Promise<RealtimeHandlerModule> | undefined;
+const loadTelnyxProvider = createLazyRuntimeModule(() => import("./providers/telnyx.js"));
 
-function loadTelnyxProvider(): Promise<TelnyxProviderModule> {
-  telnyxProviderPromise ??= import("./providers/telnyx.js");
-  return telnyxProviderPromise;
-}
+const loadTwilioProvider = createLazyRuntimeModule(() => import("./providers/twilio.js"));
 
-function loadTwilioProvider(): Promise<TwilioProviderModule> {
-  twilioProviderPromise ??= import("./providers/twilio.js");
-  return twilioProviderPromise;
-}
+const loadPlivoProvider = createLazyRuntimeModule(() => import("./providers/plivo.js"));
 
-function loadPlivoProvider(): Promise<PlivoProviderModule> {
-  plivoProviderPromise ??= import("./providers/plivo.js");
-  return plivoProviderPromise;
-}
+const loadMockProvider = createLazyRuntimeModule(() => import("./providers/mock.js"));
 
-function loadMockProvider(): Promise<MockProviderModule> {
-  mockProviderPromise ??= import("./providers/mock.js");
-  return mockProviderPromise;
-}
+const loadRealtimeVoiceRuntime = createLazyRuntimeModule(
+  () => import("./realtime-voice.runtime.js"),
+);
 
-function loadRealtimeVoiceRuntime(): Promise<RealtimeVoiceRuntimeModule> {
-  realtimeVoiceRuntimePromise ??= import("./realtime-voice.runtime.js");
-  return realtimeVoiceRuntimePromise;
-}
-
-function loadRealtimeHandler(): Promise<RealtimeHandlerModule> {
-  realtimeHandlerPromise ??= import("./webhook/realtime-handler.js");
-  return realtimeHandlerPromise;
-}
+const loadRealtimeHandler = createLazyRuntimeModule(() => import("./webhook/realtime-handler.js"));
 
 function resolveVoiceCallConsultSessionKey(call: {
   config: VoiceCallConfig;

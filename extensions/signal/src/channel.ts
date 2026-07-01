@@ -11,6 +11,7 @@ import {
   attachChannelToResults,
 } from "openclaw/plugin-sdk/channel-send-result";
 import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
 import { chunkText, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
@@ -40,34 +41,19 @@ import {
   signalSecurityAdapter,
   signalSetupWizard,
 } from "./shared.js";
+
 type SignalSendFn = typeof import("./send.runtime.js").sendMessageSignal;
 type SignalProbe = import("./probe.js").SignalProbe;
-type SignalApprovalReactionsModule = typeof import("./approval-reactions.js");
 
-let signalMonitorModulePromise: Promise<typeof import("./monitor.js")> | null = null;
-let signalProbeModulePromise: Promise<typeof import("./probe.js")> | null = null;
-let signalSendRuntimePromise: Promise<typeof import("./send.runtime.js")> | null = null;
-let signalApprovalReactionsModulePromise: Promise<SignalApprovalReactionsModule> | null = null;
+const loadSignalMonitorModule = createLazyRuntimeModule(() => import("./monitor.js"));
 
-async function loadSignalMonitorModule() {
-  signalMonitorModulePromise ??= import("./monitor.js");
-  return await signalMonitorModulePromise;
-}
+const loadSignalProbeModule = createLazyRuntimeModule(() => import("./probe.js"));
 
-async function loadSignalProbeModule() {
-  signalProbeModulePromise ??= import("./probe.js");
-  return await signalProbeModulePromise;
-}
+const loadSignalSendRuntime = createLazyRuntimeModule(() => import("./send.runtime.js"));
 
-async function loadSignalSendRuntime() {
-  signalSendRuntimePromise ??= import("./send.runtime.js");
-  return await signalSendRuntimePromise;
-}
-
-async function loadSignalApprovalReactionsModule() {
-  signalApprovalReactionsModulePromise ??= import("./approval-reactions.js");
-  return await signalApprovalReactionsModulePromise;
-}
+const loadSignalApprovalReactionsModule = createLazyRuntimeModule(
+  () => import("./approval-reactions.js"),
+);
 
 async function resolveSignalSendContext(params: {
   cfg: Parameters<typeof resolveSignalAccount>[0]["cfg"];

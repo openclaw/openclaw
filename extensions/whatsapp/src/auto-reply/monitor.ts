@@ -7,6 +7,7 @@ import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runti
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -65,13 +66,9 @@ function isNonRetryableWebCloseStatus(statusCode: unknown): boolean {
 type ReplyResolver = typeof import("./reply-resolver.runtime.js").getReplyFromConfig;
 type WhatsAppRuntimeConfig = ReturnType<typeof getRuntimeConfig>;
 
-let replyResolverRuntimePromise: Promise<typeof import("./reply-resolver.runtime.js")> | null =
-  null;
-
-function loadReplyResolverRuntime() {
-  replyResolverRuntimePromise ??= import("./reply-resolver.runtime.js");
-  return replyResolverRuntimePromise;
-}
+const loadReplyResolverRuntime = createLazyRuntimeModule(
+  () => import("./reply-resolver.runtime.js"),
+);
 
 function resolveWebMonitorConfigSnapshot(params: {
   cfg: WhatsAppRuntimeConfig;

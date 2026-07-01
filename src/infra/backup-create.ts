@@ -15,6 +15,7 @@ import {
   resolveBackupPlanFromDisk,
 } from "../commands/backup-shared.js";
 import { isPathWithin } from "../commands/cleanup-utils.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -22,14 +23,7 @@ import { isVolatileBackupPath } from "./backup-volatile-filter.js";
 import { writeJson } from "./json-files.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 
-type TarRuntime = typeof import("tar");
-
-let tarRuntimePromise: Promise<TarRuntime> | undefined;
-
-function loadTarRuntime(): Promise<TarRuntime> {
-  tarRuntimePromise ??= import("tar");
-  return tarRuntimePromise;
-}
+const loadTarRuntime = createLazyRuntimeModule(() => import("tar"));
 
 type BackupLinkCacheKey = `${number}:${number}`;
 
