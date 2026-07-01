@@ -215,6 +215,11 @@ export class TranscriptsStore {
         } finally {
           lines.close();
           stream.destroy();
+          if (!stream.closed) {
+            await new Promise<void>((resolve) => {
+              stream.once("close", resolve);
+            });
+          }
         }
       } catch (err) {
         if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") {
