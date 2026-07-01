@@ -25,6 +25,7 @@ import {
   classifyOAuthRefreshFailureError,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import type { BootstrapContextRunKind } from "../../agents/bootstrap-mode.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import {
@@ -81,6 +82,7 @@ import {
 } from "../../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { resolveHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
@@ -2120,6 +2122,12 @@ export async function runAgentTurnWithFallback(params: {
         offAnnounced: false,
         resetAnnounced: false,
       };
+      const bootstrapContextRunKind: BootstrapContextRunKind =
+        resolveHeartbeatRunScope(params.opts) === "commitment-only"
+          ? "commitment-only"
+          : params.opts?.isHeartbeat
+            ? "heartbeat"
+            : "default";
       // Profiler-only milestone: it separates fallback setup from the actual
       // model run without adding extra live logs/snapshots to normal turns.
       agentTurnTiming.logMilestoneIfSlow({
@@ -2421,6 +2429,8 @@ export async function runAgentTurnWithFallback(params: {
                     cliSessionId: cliSessionBinding?.sessionId,
                     cliSessionBinding,
                     authProfileId: authProfile.authProfileId,
+                    bootstrapContextMode: params.opts?.bootstrapContextMode,
+                    bootstrapContextRunKind,
                     bootstrapPromptWarningSignaturesSeen,
                     bootstrapPromptWarningSignature:
                       bootstrapPromptWarningSignaturesSeen[
@@ -2585,7 +2595,7 @@ export async function runAgentTurnWithFallback(params: {
                     enableHeartbeatTool: params.opts?.enableHeartbeatTool,
                     forceHeartbeatTool: params.opts?.forceHeartbeatTool,
                     bootstrapContextMode: params.opts?.bootstrapContextMode,
-                    bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
+                    bootstrapContextRunKind,
                     images: currentTurnImages.images,
                     imageOrder: currentTurnImages.imageOrder,
                     abortSignal: runAbortSignal,

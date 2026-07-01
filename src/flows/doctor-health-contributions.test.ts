@@ -76,6 +76,7 @@ const mocks = vi.hoisted(() => ({
   gatherDaemonStatus: vi.fn(),
   noteWorkspaceStatus: vi.fn(),
   collectWorkspaceStatusHealthFindings: vi.fn().mockResolvedValue([]),
+  collectDevicePairingHealthFindings: vi.fn(async () => []),
   applyWizardMetadata: vi.fn((cfg: unknown) => cfg),
   logConfigUpdated: vi.fn(),
   isRecord: vi.fn(
@@ -272,6 +273,11 @@ vi.mock("../commands/doctor-workspace-status.js", () => ({
   collectWorkspaceStatusHealthFindings: mocks.collectWorkspaceStatusHealthFindings,
 }));
 
+vi.mock("../commands/doctor-device-pairing.js", () => ({
+  collectDevicePairingHealthFindings: mocks.collectDevicePairingHealthFindings,
+  noteDevicePairingHealth: vi.fn().mockResolvedValue(undefined),
+}));
+
 vi.mock("../commands/onboard-helpers.js", () => ({
   applyWizardMetadata: mocks.applyWizardMetadata,
   randomToken: vi.fn(() => "generated-gateway-token"),
@@ -444,6 +450,8 @@ describe("doctor health contributions", () => {
     mocks.noteWorkspaceStatus.mockReset();
     mocks.collectWorkspaceStatusHealthFindings.mockReset();
     mocks.collectWorkspaceStatusHealthFindings.mockResolvedValue([]);
+    mocks.collectDevicePairingHealthFindings.mockReset();
+    mocks.collectDevicePairingHealthFindings.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -1160,6 +1168,7 @@ describe("doctor health contributions", () => {
     expect(contributionIds).toContain("core/doctor/session-snapshots");
     expect(contributionIds).toContain("core/doctor/plugin-registry");
     expect(contributionIds).toContain("core/doctor/configured-plugin-installs");
+    expect(contributionIds).toContain("core/doctor/device-pairing");
     expect(contributionChecks.map((check) => check.id)).toEqual(contributionIds);
   });
 
@@ -1254,6 +1263,39 @@ describe("doctor health contributions", () => {
     });
 
     expect(findings).toEqual([]);
+  });
+
+  it("keeps device pairing opt-in for default lint selection", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const devicePairingCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/device-pairing",
+    );
+    expect(devicePairingCheck).toMatchObject({ defaultEnabled: false });
+    expect(devicePairingCheck).toBeDefined();
+
+    const ctx = {
+      cfg: { gateway: { mode: "local" } },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [devicePairingCheck!];
+
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    expect(mocks.collectDevicePairingHealthFindings).not.toHaveBeenCalled();
+
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/device-pairing"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+    });
+    expect(mocks.collectDevicePairingHealthFindings).toHaveBeenCalledWith({
+      cfg: ctx.cfg,
+      healthOk: false,
+    });
   });
 
   it("uses legacy run when a contribution also declares structured health", async () => {
