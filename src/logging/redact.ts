@@ -122,6 +122,7 @@ const STANDALONE_ASSIGNMENT_REDACT_PATTERN = String.raw`(^|[\s,;])(?:${STANDALON
 // delimiters like `/` and `=` still qualify) but skip explicit `;base64,` payload spans, so
 // data-URL media is never corrupted while tokens in URL paths or assignments still redact.
 const BASE64_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9])(?<!;base64,[A-Za-z0-9+/=]*)`;
+const IDENTIFIER_SAFE_TOKEN_BOUNDARY = String.raw`(^|[^A-Za-z0-9_])`;
 const SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES = new Set([
   ENV_ASSIGNMENT_REDACT_PATTERN,
   ESCAPED_ENV_ASSIGNMENT_REDACT_PATTERN,
@@ -129,9 +130,8 @@ const SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES = new Set([
   STANDALONE_ASSIGNMENT_REDACT_PATTERN,
 ]);
 const shellReferencePreservingPatterns = new WeakSet<RegExp>();
-// Patterns whose left-context assertions (BASE64_SAFE_TOKEN_BOUNDARY) break under chunked
-// replacement: a chunk start satisfies `^` and hides the `;base64,` container from the
-// lookbehind, so these must always run against the full string.
+// Patterns whose left-context assertions or complete token can cross a chunk boundary must run
+// against the full string; chunking can invent a `^` boundary or split the secret itself.
 const chunkUnsafePatterns = new WeakSet<RegExp>();
 
 const DEFAULT_REDACT_PATTERNS: string[] = [
@@ -235,9 +235,9 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   String.raw`(mem0_[A-Za-z0-9]{10,})`,
   String.raw`(brv_[A-Za-z0-9]{10,})`,
   String.raw`(xai-[A-Za-z0-9]{30,})`,
-  String.raw`(^|[^A-Za-z0-9_])(fw-[A-Za-z0-9]{30,})`,
-  String.raw`(^|[^A-Za-z0-9_])(fw_[A-Za-z0-9]{30,})`,
-  String.raw`(^|[^A-Za-z0-9_])(fpk_[A-Za-z0-9]{30,})`,
+  String.raw`${IDENTIFIER_SAFE_TOKEN_BOUNDARY}(fw-[A-Za-z0-9]{30,})`,
+  String.raw`${IDENTIFIER_SAFE_TOKEN_BOUNDARY}(fw_[A-Za-z0-9]{30,})`,
+  String.raw`${IDENTIFIER_SAFE_TOKEN_BOUNDARY}(fpk_[A-Za-z0-9]{30,})`,
   // Additional access-key and token-style prefixes.
   String.raw`${BASE64_SAFE_TOKEN_BOUNDARY}(AKIA[A-Z0-9]{16})`,
   String.raw`${BASE64_SAFE_TOKEN_BOUNDARY}(ASIA[A-Z0-9]{16})`,
@@ -316,7 +316,11 @@ function parsePattern(raw: RedactPattern): RegExp | null {
   if (pattern && typeof raw === "string" && SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES.has(raw)) {
     shellReferencePreservingPatterns.add(pattern);
   }
-  if (pattern && typeof raw === "string" && raw.startsWith(BASE64_SAFE_TOKEN_BOUNDARY)) {
+  if (
+    pattern &&
+    typeof raw === "string" &&
+    (raw.startsWith(BASE64_SAFE_TOKEN_BOUNDARY) || raw.startsWith(IDENTIFIER_SAFE_TOKEN_BOUNDARY))
+  ) {
     chunkUnsafePatterns.add(pattern);
   }
   return pattern;

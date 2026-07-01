@@ -1,5 +1,7 @@
 // Interactive grouped auth-choice prompt used by onboarding and agent setup.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 import { buildAuthChoiceGroups, compareAuthChoiceGroups } from "./auth-choice-options.js";
@@ -8,45 +10,103 @@ import type { AuthChoice } from "./onboard-types.js";
 
 const BACK_VALUE = "__back";
 const MORE_VALUE = "__more";
+export const KEEP_CURRENT_AUTH_CHOICE = "__keep-current";
 
-type AuthChoiceOrBack = AuthChoice | typeof BACK_VALUE;
-
-function isGroupFeatured(group: AuthChoiceGroup): boolean {
-  return group.options.some((option) => option.onboardingFeatured);
-}
-
-function groupToOption(group: AuthChoiceGroup): WizardSelectOption {
-  return { value: group.value, label: group.label, hint: group.hint };
-}
-
-/** Prompt for a provider group and auth method, with fallback flat selection when needed. */
-export async function promptAuthChoiceGrouped(params: {
+type KeepCurrentAuthChoice = typeof KEEP_CURRENT_AUTH_CHOICE;
+type PromptAuthChoiceResult = AuthChoice | KeepCurrentAuthChoice;
+type AuthChoiceOrBack = PromptAuthChoiceResult | typeof BACK_VALUE;
+type PromptAuthChoiceGroupedParams = {
   prompter: WizardPrompter;
   store: AuthProfileStore;
   includeSkip: boolean;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-}): Promise<AuthChoice> {
+  allowKeepCurrentProvider?: boolean;
+};
+
+function isGroupFeatured(group: AuthChoiceGroup): boolean {
+  return group.options.some((option) => option.onboardingFeatured);
+}
+
+function resolveConfiguredModelRef(config?: OpenClawConfig): string | undefined {
+  return resolveAgentModelPrimaryValue(config?.agents?.defaults?.model);
+}
+
+function resolveConfiguredProvider(config?: OpenClawConfig): string | undefined {
+  const modelRef = resolveConfiguredModelRef(config);
+  const slashIndex = modelRef?.indexOf("/") ?? -1;
+  if (!modelRef || slashIndex <= 0) {
+    return undefined;
+  }
+  const provider = normalizeProviderId(modelRef.slice(0, slashIndex));
+  return provider || undefined;
+}
+
+function groupMatchesProvider(group: AuthChoiceGroup, provider: string | undefined): boolean {
+  if (!provider) {
+    return false;
+  }
+  const candidates = [group.value, ...(group.providerIds ?? [])];
+  return candidates.some((candidate) => normalizeProviderId(candidate) === provider);
+}
+
+function groupToOption(
+  group: AuthChoiceGroup,
+  configuredProvider: string | undefined,
+): WizardSelectOption {
+  const configured = groupMatchesProvider(group, configuredProvider);
+  return {
+    value: group.value,
+    label: configured ? `${group.label} (currently configured)` : group.label,
+    hint: group.hint,
+  };
+}
+
+/** Prompt for a provider group and auth method, with fallback flat selection when needed. */
+export function promptAuthChoiceGrouped(
+  params: PromptAuthChoiceGroupedParams & { allowKeepCurrentProvider: true },
+): Promise<PromptAuthChoiceResult>;
+export function promptAuthChoiceGrouped(params: PromptAuthChoiceGroupedParams): Promise<AuthChoice>;
+export async function promptAuthChoiceGrouped(
+  params: PromptAuthChoiceGroupedParams,
+): Promise<PromptAuthChoiceResult> {
   const { groups, skipOption } = buildAuthChoiceGroups(params);
   const availableGroups = groups.filter((group) => group.options.length > 0);
   const groupById = new Map(availableGroups.map((group) => [group.value, group] as const));
   const featuredGroups = availableGroups.filter(isGroupFeatured).toSorted(compareAuthChoiceGroups);
   const moreGroups = [...availableGroups].toSorted(compareAuthChoiceGroups);
+  const configuredModelRef = resolveConfiguredModelRef(params.config);
+  const configuredProvider = params.allowKeepCurrentProvider
+    ? resolveConfiguredProvider(params.config)
+    : undefined;
 
   const pickMethod = async (group: AuthChoiceGroup): Promise<AuthChoiceOrBack> => {
-    if (group.options.length === 1) {
+    const keepCurrentOption = groupMatchesProvider(group, configuredProvider)
+      ? ({
+          value: KEEP_CURRENT_AUTH_CHOICE,
+          label: "Keep current config",
+          ...(configuredModelRef ? { hint: `Keep ${configuredModelRef}` } : {}),
+        } satisfies WizardSelectOption<KeepCurrentAuthChoice>)
+      : undefined;
+    if (group.options.length === 1 && !keepCurrentOption) {
       return group.options[0].value;
     }
     return (await params.prompter.select({
       message: `${group.label} auth method`,
-      options: [...group.options, { value: BACK_VALUE, label: "Back" }],
+      options: [
+        ...(keepCurrentOption ? [keepCurrentOption] : []),
+        ...group.options,
+        { value: BACK_VALUE, label: "Back" },
+      ],
     })) as AuthChoiceOrBack;
   };
 
   const pickFromMore = async (): Promise<AuthChoiceOrBack> => {
     while (true) {
-      const options: WizardSelectOption[] = moreGroups.map(groupToOption);
+      const options: WizardSelectOption[] = moreGroups.map((group) =>
+        groupToOption(group, configuredProvider),
+      );
       options.push({ value: BACK_VALUE, label: "Back" });
       const selection = await params.prompter.select({
         message: "Model/auth provider",
@@ -70,9 +130,11 @@ export async function promptAuthChoiceGrouped(params: {
 
   // No featured groups available → fall back to the original flat list so we
   // never strand the user behind an empty "More…" indirection.
-  const runFlat = async (): Promise<AuthChoice> => {
+  const runFlat = async (): Promise<PromptAuthChoiceResult> => {
     while (true) {
-      const flatOptions: WizardSelectOption[] = moreGroups.map(groupToOption);
+      const flatOptions: WizardSelectOption[] = moreGroups.map((group) =>
+        groupToOption(group, configuredProvider),
+      );
       if (skipOption) {
         flatOptions.push({ value: skipOption.value, label: skipOption.label });
       }
@@ -105,7 +167,9 @@ export async function promptAuthChoiceGrouped(params: {
   }
 
   while (true) {
-    const topTier: WizardSelectOption[] = featuredGroups.map(groupToOption);
+    const topTier: WizardSelectOption[] = featuredGroups.map((group) =>
+      groupToOption(group, configuredProvider),
+    );
     topTier.push({ value: MORE_VALUE, label: "More…" });
     if (skipOption) {
       topTier.push({ value: skipOption.value, label: skipOption.label });

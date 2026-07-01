@@ -1644,6 +1644,9 @@ describe("TelegramPollingSession", () => {
         await vi.waitFor(() => expect(events).toEqual(["topic10:42"]));
         const before = await claimedAtForUpdate(tempDir, 42);
 
+        await new Promise((resolve) => {
+          setTimeout(resolve, 2);
+        });
         refreshHarness.triggerRefresh();
         await vi.waitFor(async () =>
           expect(await claimedAtForUpdate(tempDir, 42)).toBeGreaterThan(before),

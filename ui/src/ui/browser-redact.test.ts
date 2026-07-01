@@ -11,8 +11,8 @@ describe("browser tool detail redaction", () => {
         "client_secret=clientSecretValueThatShouldNotRender",
         "AIzaSyDUMMYGoogleApiKeyValue1234567890",
         `bare Fireworks key fw-${"C".repeat(40)}`,
-        `bare Fireworks legacy key fw_${"A".repeat(40)}`,
-        `bare Fireworks Fire Pass key fpk_${"B".repeat(40)}`,
+        `https://example.test?debug=fw_${"A".repeat(40)}&ok=1`,
+        `X-Debug: fpk_${"B".repeat(40)}`,
         "-----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----",
         'cookie: "sessionid=verySensitiveCookieValue"',
       ].join("\n"),
@@ -30,11 +30,24 @@ describe("browser tool detail redaction", () => {
     expect(redacted).not.toContain("longOAuthRefreshTokenValue");
     expect(redacted).not.toContain("clientSecretValueThatShouldNotRender");
     expect(redacted).not.toContain("DUMMYGoogleApiKeyValue1234567890");
-    expect(redacted).not.toContain(`fw-${"C".repeat(40)}`);
-    expect(redacted).not.toContain(`fw_${"A".repeat(40)}`);
-    expect(redacted).not.toContain(`fpk_${"B".repeat(40)}`);
+    expect(redacted).toContain("bare Fireworks key fw-CCC...CCCC");
+    expect(redacted).toContain("https://example.test?debug=fw_AAA...AAAA&ok=1");
+    expect(redacted).toContain("X-Debug: fpk_BB...BBBB");
     expect(redacted).not.toContain("abc123");
     expect(redacted).not.toContain("verySensitiveCookieValue");
+    for (const masked of ["fw-CCC...CCCC", "fw_AAA...AAAA", "fpk_BB...BBBB"]) {
+      expect(redactToolDetail(masked)).toBe(masked);
+    }
+  });
+
+  it("preserves long non-token identifiers containing Fireworks prefixes", () => {
+    const input = [
+      `fixturefw-${"C".repeat(40)}`,
+      `fixture_fw_${"A".repeat(40)}`,
+      `fixture_fpk_${"B".repeat(40)}`,
+    ].join(" ");
+
+    expect(redactToolDetail(input)).toBe(input);
   });
 
   it("exposes the tool payload redaction name used by shared display modules", () => {

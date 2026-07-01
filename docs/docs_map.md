@@ -1887,7 +1887,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Headings:
   - H1: openclaw setup
   - H2: Options
-  - H3: Wizard auto-trigger
+  - H3: Baseline mode
   - H2: Examples
   - H2: Notes
   - H2: Related

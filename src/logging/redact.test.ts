@@ -735,6 +735,11 @@ describe("redactSensitiveText", () => {
   });
 
   it("masks expanded vendor-prefix token corpus", () => {
+    const fireworksTokens = [
+      { token: `fw-${"C".repeat(40)}`, redacted: "fw-CCC…CCCC" },
+      { token: `fw_${"A".repeat(40)}`, redacted: "fw_AAA…AAAA" },
+      { token: `fpk_${"B".repeat(40)}`, redacted: "fpk_BB…BBBB" },
+    ];
     const tokens = [
       "sk-ant-abcdefghijklmnopqrstuvwxyz",
       "gho_abcdefghijklmnopqrstuvwxyz",
@@ -797,9 +802,7 @@ describe("redactSensitiveText", () => {
       "mem0_abcdefghijklmnopqrstuvwxyz",
       "brv_abcdefghijklmnopqrstuvwxyz",
       "xai-abcdefghijklmnopqrstuvwxyzABCDE",
-      `fw-${"C".repeat(40)}`,
-      `fw_${"A".repeat(40)}`,
-      `fpk_${"B".repeat(40)}`,
+      ...fireworksTokens.map(({ token }) => token),
     ];
     // Redact each fixture alone so every vendor pattern proves it stays reachable through
     // DEFAULT_REDACT_PREFILTER_RE; a joined corpus would let one trigger unlock all others.
@@ -820,22 +823,34 @@ describe("redactSensitiveText", () => {
     expect(redactSensitiveText("xai-abcdefghijklmnopqrstuvwxyzABCDE", { mode: "tools" })).toBe(
       "xai-ab…BCDE",
     );
-    expect(redactSensitiveText(`fw-${"C".repeat(40)}`, { mode: "tools" })).not.toContain(
-      `fw-${"C".repeat(40)}`,
-    );
-    expect(redactSensitiveText(`fw_${"A".repeat(40)}`, { mode: "tools" })).not.toContain(
-      `fw_${"A".repeat(40)}`,
-    );
-    expect(redactSensitiveText(`fpk_${"B".repeat(40)}`, { mode: "tools" })).not.toContain(
-      `fpk_${"B".repeat(40)}`,
-    );
+    for (const { token, redacted } of fireworksTokens) {
+      expect(redactSensitiveText(token, { mode: "tools" })).toBe(redacted);
+      expect(redactSensitiveText(redacted, { mode: "tools" })).toBe(redacted);
+    }
   });
 
   it("does not redact ordinary identifiers containing short token-prefix substrings", () => {
-    const input =
-      "npm_telegram_package_spec ask_openclaw_query_patterns team_management risk_assessment glpat-docs dapi-example sbp_short nfp_site CCIPAT_docs ATATT-example fw-tooshort fw_tooshort fpk_tooshort";
+    const input = [
+      "npm_telegram_package_spec ask_openclaw_query_patterns team_management risk_assessment glpat-docs dapi-example sbp_short nfp_site CCIPAT_docs ATATT-example fw-tooshort fw_tooshort fpk_tooshort",
+      `fixturefw-${"C".repeat(40)}`,
+      `fixture_fw_${"A".repeat(40)}`,
+      `fixture_fpk_${"B".repeat(40)}`,
+    ].join(" ");
     const output = redactSensitiveText(input, { mode: "tools" });
     expect(output).toBe(input);
+  });
+
+  it("masks Fireworks tokens that cross bounded-replacement chunk boundaries", () => {
+    const chunkSize = 16_384;
+    const prefix = `${"x".repeat(chunkSize - 2)} `;
+    const suffix = "y".repeat(chunkSize);
+    const tokens = [`fw-${"C".repeat(40)}`, `fw_${"A".repeat(40)}`, `fpk_${"B".repeat(40)}`];
+
+    for (const token of tokens) {
+      expect(redactSensitiveText(`${prefix}${token}${suffix}`, { mode: "tools" })).not.toContain(
+        token,
+      );
+    }
   });
 
   it("does not corrupt base64 blobs that embed token-prefix shapes", () => {

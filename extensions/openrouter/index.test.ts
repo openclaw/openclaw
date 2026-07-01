@@ -65,6 +65,26 @@ function createOpenRouterDoneStream(params: { responseId: string; totalCost: num
   return stream;
 }
 
+function createOpenRouterDoneStreamWithoutGeneration() {
+  const stream = createAssistantMessageEventStream();
+  queueMicrotask(() => {
+    stream.push({
+      type: "done",
+      reason: "stop",
+      message: {
+        role: "assistant",
+        api: "openai-completions",
+        provider: "openrouter",
+        model: "openrouter/auto",
+        content: [{ type: "text", text: "ok" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      } as never,
+    });
+  });
+  return stream;
+}
+
 function createOpenRouterAbortedStream() {
   const stream = createAssistantMessageEventStream();
   queueMicrotask(() => {
@@ -746,6 +766,42 @@ describe("openrouter provider hooks", () => {
     expect(capturedPayload?.provider).toEqual({
       order: ["moonshot"],
     });
+  });
+
+  it("forwards resolved API keys as explicit OpenRouter auth headers", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const baseStreamFn = vi.fn((..._args: unknown[]) =>
+      createOpenRouterDoneStreamWithoutGeneration(),
+    );
+
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "openrouter",
+      modelId: "openrouter/auto",
+      streamFn: baseStreamFn,
+    } as never);
+    if (!wrapped) {
+      throw new Error("expected OpenRouter wrapper");
+    }
+
+    const stream = await wrapped(
+      {
+        provider: "openrouter",
+        api: "openai-completions",
+        id: "openrouter/auto",
+        baseUrl: "https://openrouter.ai/api/v1",
+        compat: {},
+      } as never,
+      { messages: [] } as never,
+      { apiKey: "or-test-key" } as never,
+    );
+    await stream.result();
+
+    expect(baseStreamFn).toHaveBeenCalledOnce();
+    const options = baseStreamFn.mock.calls[0]?.[2] as { headers?: HeadersInit } | undefined;
+    const headers = new Headers(options?.headers);
+    expect(headers.get("authorization")).toBe("Bearer or-test-key");
+    expect(headers.get("http-referer")).toBe("https://openclaw.ai");
+    expect(headers.get("x-openrouter-title")).toBe("OpenClaw");
   });
 
   it("reconciles OpenRouter streamed usage with generation metadata cost", async () => {

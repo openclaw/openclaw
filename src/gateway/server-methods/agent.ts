@@ -152,6 +152,7 @@ import {
   canonicalizeSpawnedByForAgent,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
+  resolveDeletedAgentIdFromSessionKey,
   resolveGatewaySessionStoreTarget,
   resolveGatewayModelSupportsImages,
   resolveSessionStoreKey,
@@ -218,6 +219,53 @@ function logAttachmentFailure(
 function clientHasAdminScope(client: GatewayRequestHandlerOptions["client"]): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return scopes.includes(ADMIN_SCOPE);
+}
+
+function respondDeletedAgentSession(params: {
+  cfg: OpenClawConfig;
+  canonicalKey: string;
+  entry?: SessionEntry | null;
+  acpMetadataSessionKey?: string;
+  respond: GatewayRequestHandlerOptions["respond"];
+}): boolean {
+  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(
+    params.cfg,
+    params.canonicalKey,
+    params.entry,
+    {
+      acpMetadataSessionKey: params.acpMetadataSessionKey ?? params.canonicalKey,
+    },
+  );
+  if (deletedAgentId === null) {
+    return false;
+  }
+  params.respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      `Agent "${deletedAgentId}" no longer exists in configuration`,
+    ),
+  );
+  return true;
+}
+
+function respondDeletedAgentSessionForKey(params: {
+  sessionKey: string;
+  agentId?: string;
+  respond: GatewayRequestHandlerOptions["respond"];
+}): boolean {
+  const { cfg, entry, canonicalKey, legacyKey } = loadSessionEntry(params.sessionKey, {
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    clone: false,
+  });
+  return respondDeletedAgentSession({
+    cfg,
+    canonicalKey,
+    entry,
+    acpMetadataSessionKey: legacyKey,
+    respond: params.respond,
+  });
 }
 
 function resolveAllowModelOverrideFromClient(
@@ -1405,6 +1453,45 @@ export const agentHandlers: GatewayRequestHandlers = {
         agentId = inferredAgentId;
       }
     }
+    let requestedSessionKey =
+      requestedSessionKeyRaw ??
+      (!requestedSessionId
+        ? resolveExplicitAgentSessionKey({
+            cfg,
+            agentId,
+          })
+        : undefined);
+    if (agentId && requestedSessionKeyRaw) {
+      const parsedRequestedSessionKey = parseAgentSessionKey(requestedSessionKeyRaw);
+      const requestedCanonicalKey = resolveSessionStoreKey({
+        cfg,
+        sessionKey: requestedSessionKeyRaw,
+      });
+      const sessionAgentId = parsedRequestedSessionKey?.agentId
+        ? normalizeAgentId(parsedRequestedSessionKey.agentId)
+        : requestedCanonicalKey === "global"
+          ? agentId
+          : resolveAgentIdFromSessionKey(requestedSessionKeyRaw);
+      if (sessionAgentId !== agentId) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid agent params: agent "${request.agentId}" does not match session key agent "${sessionAgentId}"`,
+          ),
+        );
+        return;
+      }
+    }
+    // Keep deleted-agent rejection ahead of dedupe, media offload, reset, and
+    // dispatch so agent RPC shares the chat.send / sessions.send boundary.
+    if (
+      requestedSessionKey &&
+      respondDeletedAgentSessionForKey({ sessionKey: requestedSessionKey, agentId, respond })
+    ) {
+      return;
+    }
     // Drop an exec-approval followup whose session key was rebound by /new or
     // /reset while the approval was pending, before the handler touches the
     // rebound session (store write, run registration, dedupe, accepted ack).
@@ -1440,37 +1527,6 @@ export const agentHandlers: GatewayRequestHandlers = {
           entry: { ts: Date.now(), ok: true, payload: droppedPayload },
         });
         respond(true, droppedPayload, undefined, { runId });
-        return;
-      }
-    }
-    let requestedSessionKey =
-      requestedSessionKeyRaw ??
-      (!requestedSessionId
-        ? resolveExplicitAgentSessionKey({
-            cfg,
-            agentId,
-          })
-        : undefined);
-    if (agentId && requestedSessionKeyRaw) {
-      const parsedRequestedSessionKey = parseAgentSessionKey(requestedSessionKeyRaw);
-      const requestedCanonicalKey = resolveSessionStoreKey({
-        cfg,
-        sessionKey: requestedSessionKeyRaw,
-      });
-      const sessionAgentId = parsedRequestedSessionKey?.agentId
-        ? normalizeAgentId(parsedRequestedSessionKey.agentId)
-        : requestedCanonicalKey === "global"
-          ? agentId
-          : resolveAgentIdFromSessionKey(requestedSessionKeyRaw);
-      if (sessionAgentId !== agentId) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid agent params: agent "${request.agentId}" does not match session key agent "${sessionAgentId}"`,
-          ),
-        );
         return;
       }
     }
@@ -1789,8 +1845,20 @@ export const agentHandlers: GatewayRequestHandlers = {
           storePath,
           entry,
           canonicalKey,
+          legacyKey,
         } = loadSessionEntry(requestedSessionKey, sessionLoadOptions);
         cfgForAgent = cfgLocal;
+        if (
+          respondDeletedAgentSession({
+            cfg: cfgLocal,
+            canonicalKey,
+            entry,
+            acpMetadataSessionKey: legacyKey,
+            respond,
+          })
+        ) {
+          return;
+        }
         const sessionMaintenanceConfig = resolveMaintenanceConfigFromInput(
           cfgLocal.session?.maintenance,
         );

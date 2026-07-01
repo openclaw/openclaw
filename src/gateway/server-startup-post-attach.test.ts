@@ -388,6 +388,11 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.setInternalHooksEnabled).not.toHaveBeenCalled();
     expect(hoisted.logGatewayStartup).toHaveBeenCalledTimes(1);
     expect(firstStartupLog().loadedPluginIds).toEqual(["beta", "alpha"]);
+    expect(hoisted.logGatewayStartup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activationSourceConfig: { hooks: { internal: { enabled: false } } },
+      }),
+    );
     expect(log.info).toHaveBeenCalledWith("gateway ready");
     expect(hoisted.scheduleRestartAbortedMainSessionRecovery).toHaveBeenCalledWith({
       cfg: { hooks: { internal: { enabled: false } } },
@@ -2240,6 +2245,7 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
       error: vi.fn(),
     },
     gatewayPluginConfigAtStart: { hooks: { internal: { enabled: false } } } as never,
+    activationSourceConfig: { hooks: { internal: { enabled: false } } } as never,
     pluginRegistry: {
       plugins: [
         { id: "beta", status: "loaded" },

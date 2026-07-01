@@ -1060,6 +1060,26 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(members).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards bot sender status to ctxPayload when allowBots admits the bot", async () => {
+    const { slackCtx } = createOwnerScopedBotRoomCtx({ members: ["UOWNER"] });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ allowBots: true }),
+      createBotRoomMessage(),
+    );
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.SenderIsBot).toBe(true);
+  });
+
+  it("omits SenderIsBot for human messages", async () => {
+    const prepared = await prepareWithDefaultCtx(createSlackMessage({ text: "hello" }));
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.SenderIsBot).toBeUndefined();
+  });
+
   it("allows bot-authored room messages when the bot is explicitly channel-allowlisted (#59284)", async () => {
     const members = vi.fn();
     const slackCtx = createInboundSlackCtx({
