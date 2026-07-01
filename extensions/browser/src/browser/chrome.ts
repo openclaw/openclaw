@@ -706,6 +706,8 @@ export type RunningChrome = {
   browserWsUrl?: string;
   /** Interval flushing cookies to disk so they survive ungraceful kills (#96704). */
   cookieFlushTimer?: NodeJS.Timeout;
+  /** Idempotent cleanup for the cookie flush timer and process exit listeners. */
+  stopCookieFlush?: () => void;
   /**
    * @deprecated CDP managed-proxy bypasses are scoped at exact request URLs.
    * Kept so older in-memory callers can pass stale RunningChrome objects
@@ -1130,7 +1132,7 @@ export async function launchOpenClawChrome(
         `🦞 openclaw browser started (${exe.kind}) profile "${profile.name}" on 127.0.0.1:${profile.cdpPort} (pid ${pid})`,
       );
 
-      return {
+      const running: RunningChrome = {
         pid,
         exe,
         userDataDir,
@@ -1142,6 +1144,21 @@ export async function launchOpenClawChrome(
         browserWsUrl,
         cookieFlushTimer,
       };
+      if (cookieFlushTimer) {
+        const stopCookieFlush = () => {
+          if (running.cookieFlushTimer) {
+            clearInterval(running.cookieFlushTimer);
+            running.cookieFlushTimer = undefined;
+          }
+          running.proc.off("exit", stopCookieFlush);
+          running.proc.off("close", stopCookieFlush);
+        };
+        running.stopCookieFlush = stopCookieFlush;
+        proc.once("exit", stopCookieFlush);
+        proc.once("close", stopCookieFlush);
+      }
+
+      return running;
     } finally {
       // Chrome started successfully or launch failed — detach the stderr listener
       // and release the buffer.
@@ -1165,8 +1182,10 @@ export async function stopOpenClawChrome(
     }
     // Stop the periodic flush and take a final cookie snapshot while CDP is
     // still reachable, before we kill Chrome.
+    running.stopCookieFlush?.();
     if (running.cookieFlushTimer) {
       clearInterval(running.cookieFlushTimer);
+      running.cookieFlushTimer = undefined;
     }
     if (running.browserWsUrl) {
       await saveManagedChromeCookies(running.browserWsUrl, running.userDataDir);

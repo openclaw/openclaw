@@ -938,6 +938,23 @@ describe("browser chrome helpers", () => {
     });
   });
 
+  it("stopOpenClawChrome uses the cookie flush cleanup hook", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
+    const proc = makeChromeTestProc();
+    const stopCookieFlush = vi.fn();
+    await stopOpenClawChrome(
+      {
+        proc,
+        cdpPort: 12345,
+        stopCookieFlush,
+      } as unknown as StopChromeTarget,
+      10,
+    );
+
+    expect(stopCookieFlush).toHaveBeenCalledOnce();
+    expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
   it("stopOpenClawChrome escalates to SIGKILL when CDP stays reachable", async () => {
     vi.stubGlobal(
       "fetch",

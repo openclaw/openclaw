@@ -36,8 +36,8 @@ export function resolveCookieStorePath(userDataDir: string): string {
 }
 
 /**
- * Snapshot all cookies over CDP into the sidecar (0600). Skips writing on an
- * empty result so a transient read failure cannot wipe a good saved jar.
+ * Snapshot all cookies over CDP into the sidecar (0600). A successful empty
+ * result clears the sidecar so logout / cookie clearing is not undone later.
  */
 export async function saveManagedChromeCookies(wsUrl: string, userDataDir: string): Promise<void> {
   try {
@@ -47,15 +47,17 @@ export async function saveManagedChromeCookies(wsUrl: string, userDataDir: strin
     const res = (await withCdpSocket(wsUrl, (send) => send("Storage.getCookies"), cdpOpts)) as {
       cookies?: unknown[];
     };
-    const cookies = Array.isArray(res?.cookies) ? res.cookies : [];
-    if (cookies.length === 0) {
+    if (!Array.isArray(res?.cookies)) {
       return;
     }
-    fs.writeFileSync(
-      resolveCookieStorePath(userDataDir),
-      JSON.stringify({ savedAt: Date.now(), cookies }),
-      { mode: 0o600 },
-    );
+    const cookies = res.cookies;
+    const file = resolveCookieStorePath(userDataDir);
+    if (cookies.length === 0) {
+      fs.rmSync(file, { force: true });
+      log.debug(`cleared saved cookies for ${userDataDir}`);
+      return;
+    }
+    fs.writeFileSync(file, JSON.stringify({ savedAt: Date.now(), cookies }), { mode: 0o600 });
     log.debug(`saved ${cookies.length} cookies for ${userDataDir}`);
   } catch (err) {
     log.debug(`cookie save skipped: ${err instanceof Error ? err.message : String(err)}`);
