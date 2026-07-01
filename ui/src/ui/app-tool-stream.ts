@@ -1,7 +1,9 @@
 // Control UI module implements app tool stream behavior.
+import { stripInlineDirectiveTagsForDelivery } from "../../../src/utils/directive-tags.js";
 import { updateActivityFromToolEvent, type ActivityEntry } from "./activity-model.ts";
 import { createChatModelOverride } from "./chat-model-ref.ts";
 import type { ChatModelOverride } from "./chat-model-ref.types.ts";
+import type { ChatStreamSegment } from "./chat/stream-text.ts";
 import { formatUnknownText, truncateText } from "./format.ts";
 import {
   buildAgentMainSessionKey,
@@ -61,7 +63,7 @@ type ToolStreamHost = {
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
-  chatStreamSegments: Array<{ text: string; ts: number; toolCallId?: string }>;
+  chatStreamSegments: ChatStreamSegment[];
   toolStreamById: Map<string, ToolStreamEntry>;
   toolStreamOrder: string[];
   chatToolMessages: Record<string, unknown>[];
@@ -722,6 +724,81 @@ function handleLifecycleFallbackEvent(host: CompactionHost, payload: AgentEventP
   }, FALLBACK_TOAST_DURATION_MS);
 }
 
+function readPreambleProgressEvent(
+  payload: AgentEventPayload,
+): { text: string; itemId?: string } | null {
+  if (payload.stream !== "item") {
+    return null;
+  }
+  const data = payload.data ?? {};
+  if (data.kind !== "preamble") {
+    return null;
+  }
+  const rawItemId =
+    typeof data.itemId === "string" && data.itemId.trim()
+      ? data.itemId
+      : typeof data.id === "string" && data.id.trim()
+        ? data.id
+        : null;
+  const itemId = rawItemId?.trim();
+  const progressText = normalizePreambleProgressText(data.progressText);
+  if (!progressText && !itemId) {
+    return null;
+  }
+  return {
+    text: progressText,
+    ...(itemId ? { itemId } : {}),
+  };
+}
+
+function normalizePreambleProgressText(value: unknown): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+  const stripped = stripInlineDirectiveTagsForDelivery(value).text.trim();
+  const normalized = stripped.replace(/^[\s*_`~]+|[\s*_`~]+$/gu, "").trim();
+  return /^NO_REPLY$/iu.test(normalized) ? "" : stripped;
+}
+
+function handlePreambleProgressEvent(host: ToolStreamHost, payload: AgentEventPayload): boolean {
+  const progress = readPreambleProgressEvent(payload);
+  if (!progress) {
+    return false;
+  }
+  if (progress.itemId && !progress.text.trim()) {
+    host.chatStreamSegments = host.chatStreamSegments.filter(
+      (segment) => segment.itemId !== progress.itemId,
+    );
+    return true;
+  }
+  const existingIndex = progress.itemId
+    ? host.chatStreamSegments.findIndex((segment) => segment.itemId === progress.itemId)
+    : -1;
+  if (existingIndex >= 0) {
+    const existing = host.chatStreamSegments[existingIndex];
+    if (!existing) {
+      return true;
+    }
+    host.chatStreamSegments = host.chatStreamSegments.map((segment, index) =>
+      index === existingIndex ? { ...segment, text: progress.text } : segment,
+    );
+    return true;
+  }
+  const last = host.chatStreamSegments[host.chatStreamSegments.length - 1];
+  if (!progress.itemId && last && !last.toolCallId && last.text === progress.text) {
+    return true;
+  }
+  host.chatStreamSegments = [
+    ...host.chatStreamSegments,
+    {
+      text: progress.text,
+      ts: Date.now(),
+      ...(progress.itemId ? { itemId: progress.itemId } : {}),
+    },
+  ];
+  return true;
+}
+
 export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload) {
   if (!payload) {
     return;
@@ -755,6 +832,10 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
 
   if (payload.stream === "fallback") {
     handleLifecycleFallbackEvent(host as CompactionHost, payload);
+    return;
+  }
+
+  if (handlePreambleProgressEvent(host, payload)) {
     return;
   }
 

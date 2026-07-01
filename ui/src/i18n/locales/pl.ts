@@ -1335,6 +1335,8 @@ export const pl: TranslationMap = {
     settings: "Ustawienia czatu",
     thinkingToggle: "Przełącz wyświetlanie myślenia/pracy asystenta",
     toolCallsToggle: "Przełącz wyświetlanie wywołań narzędzi i wyników narzędzi",
+    commentaryToggle: "Zachowaj komentarz po ostatecznej odpowiedzi",
+    commentaryLabel: "Komentarz",
     autoScrollMode: "Tryb automatycznego przewijania",
     autoScrollAlways: "Zawsze",
     autoScrollNearBottom: "Blisko dołu",

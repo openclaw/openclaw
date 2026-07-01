@@ -179,7 +179,13 @@ function isStaggeredCronRunAtMs(job: CronJob, runAtMs: number): boolean {
   if (job.schedule.kind !== "cron" || !isFiniteTimestamp(runAtMs)) {
     return false;
   }
-  const previous = computeStaggeredCronPreviousRunAtMs(job, runAtMs + 1);
+  // Probe past the candidate second. Croner-style second-granular schedules
+  // normalize a 1ms probe back to the candidate's second, so
+  // `previousRuns(1, runAtMs + 1)` returns the slot before the candidate
+  // rather than the candidate itself and exact-second slots get misclassified
+  // as stale. A 1s probe lands past the candidate second, matching the cursor
+  // step used elsewhere in this file (cf. #81691).
+  const previous = computeStaggeredCronPreviousRunAtMs(job, runAtMs + 1_000);
   return previous === runAtMs;
 }
 
@@ -999,6 +1005,8 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   applyAgentTurnToolsAllowPatch(next, patch, existing);
   if (typeof patch.thinking === "string") {
     next.thinking = patch.thinking;
+  } else if (patch.thinking === null) {
+    delete next.thinking;
   }
   if (typeof patch.timeoutSeconds === "number") {
     next.timeoutSeconds = patch.timeoutSeconds;
@@ -1045,7 +1053,7 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     message: patch.message,
     model: typeof patch.model === "string" ? patch.model : undefined,
     fallbacks: Array.isArray(patch.fallbacks) ? patch.fallbacks : undefined,
-    thinking: patch.thinking,
+    thinking: typeof patch.thinking === "string" ? patch.thinking : undefined,
     timeoutSeconds: patch.timeoutSeconds,
     lightContext: patch.lightContext,
     allowUnsafeExternalContent: patch.allowUnsafeExternalContent,

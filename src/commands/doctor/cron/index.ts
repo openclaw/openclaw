@@ -10,6 +10,7 @@ import {
   resolveCronJobsStorePath,
   saveCronQuarantineFile,
   saveCronJobsStore,
+  saveCronJobsStoreWithMetadata,
 } from "../../../cron/store.js";
 import type { CronJob } from "../../../cron/types.js";
 import { shortenHomePath } from "../../../utils.js";
@@ -25,9 +26,16 @@ import {
 } from "./legacy-run-log-migration.js";
 import {
   archiveLegacyCronStoreForMigration,
+  assertLegacyCronMigrationSourceCurrent,
   legacyCronStoreFilesExist,
   loadLegacyCronStoreForMigration,
+  type LegacyCronMigrationSource,
 } from "./legacy-store-migration.js";
+import {
+  acquireLegacyCronMigrationReceipt,
+  hasLegacyCronMigrationReceipt,
+  markLegacyCronMigrationSourceRemoved,
+} from "./migration-ledger.js";
 import {
   formatLegacyIssuePreview,
   formatUnresolvedCommandPromptAdvisory,
@@ -63,6 +71,8 @@ type LegacyCronRepairState = {
   quarantinePath: string;
   legacyStoreDetected: boolean;
   legacyRunLogDetected: boolean;
+  legacyMigrationSource?: LegacyCronMigrationSource;
+  legacyMigrationAlreadyImported: boolean;
   legacyImportCount: number;
   sqliteProjectionBackfillCount: number;
   rawJobs: Array<Record<string, unknown>>;
@@ -106,14 +116,22 @@ async function loadLegacyCronRepairState(params: {
       : 0;
   let rawJobs = currentJobs;
   let legacyImportCount = 0;
+  let legacyMigrationSource: LegacyCronMigrationSource | undefined;
+  let legacyMigrationAlreadyImported = false;
   if (legacyStoreDetected) {
-    const legacyStore = (await loadLegacyCronStoreForMigration(storePath)).store;
-    const merged = mergeLegacyCronJobs({
-      currentJobs: rawJobs,
-      legacyJobs: legacyStore.jobs as unknown as Array<Record<string, unknown>>,
-    });
-    rawJobs = merged.jobs;
-    legacyImportCount = merged.importedCount;
+    const loadedLegacy = await loadLegacyCronStoreForMigration(storePath);
+    legacyMigrationSource = loadedLegacy.migrationSource;
+    legacyMigrationAlreadyImported = legacyMigrationSource
+      ? hasLegacyCronMigrationReceipt(legacyMigrationSource)
+      : false;
+    if (!legacyMigrationAlreadyImported) {
+      const merged = mergeLegacyCronJobs({
+        currentJobs: rawJobs,
+        legacyJobs: loadedLegacy.store.jobs as unknown as Array<Record<string, unknown>>,
+      });
+      rawJobs = merged.jobs;
+      legacyImportCount = merged.importedCount;
+    }
   }
 
   return {
@@ -121,6 +139,8 @@ async function loadLegacyCronRepairState(params: {
     quarantinePath,
     legacyStoreDetected,
     legacyRunLogDetected,
+    legacyMigrationSource,
+    legacyMigrationAlreadyImported,
     legacyImportCount,
     sqliteProjectionBackfillCount,
     rawJobs,
@@ -144,18 +164,18 @@ async function applyLegacyCronStoreRepair(params: {
   const dreamingMigration = migrateLegacyDreamingPayloadShape(state.rawJobs);
   warnings.push(...notifyMigration.warnings);
 
-  const changed =
-    state.legacyStoreDetected ||
-    state.legacyRunLogDetected ||
+  const storeChanged =
+    (state.legacyStoreDetected && !state.legacyMigrationAlreadyImported) ||
     state.sqliteProjectionBackfillCount > 0 ||
     normalized.mutated ||
     notifyMigration.changed ||
     dreamingMigration.changed;
+  const changed = state.legacyStoreDetected || state.legacyRunLogDetected || storeChanged;
   if (!changed && warnings.length === 0) {
     return { changes, warnings };
   }
 
-  if (changed) {
+  if (storeChanged) {
     try {
       if (normalized.removedJobs.length > 0) {
         await saveCronQuarantineFile({
@@ -168,10 +188,19 @@ async function applyLegacyCronStoreRepair(params: {
           })),
         });
       }
-      await saveCronJobsStore(state.storePath, {
+      const store = {
         version: 1,
         jobs: state.rawJobs as unknown as CronJob[],
-      });
+      } as const;
+      const migrationSource = state.legacyMigrationSource;
+      if (migrationSource && !state.legacyMigrationAlreadyImported) {
+        await assertLegacyCronMigrationSourceCurrent(migrationSource);
+        await saveCronJobsStoreWithMetadata(state.storePath, store, (db) => {
+          return acquireLegacyCronMigrationReceipt(db, migrationSource);
+        });
+      } else {
+        await saveCronJobsStore(state.storePath, store);
+      }
     } catch (err) {
       return {
         changes,
@@ -195,15 +224,38 @@ async function applyLegacyCronStoreRepair(params: {
   }
 
   if (state.legacyStoreDetected) {
-    await archiveLegacyCronStoreForMigration(state.storePath);
-    changes.push(
-      `Cron store migrated to SQLite at ${shortenHomePath(state.storePath)}.${formatRunLogMigrationNote(importedRunLogs)}`,
+    const archiveResult = await archiveLegacyCronStoreForMigration(
+      state.storePath,
+      state.legacyMigrationSource,
     );
+    if (archiveResult.ok) {
+      if (state.legacyMigrationSource) {
+        try {
+          markLegacyCronMigrationSourceRemoved(state.legacyMigrationSource);
+        } catch (err) {
+          warnings.push(
+            `Cron store was archived, but its migration receipt could not be finalized: ${errorMessage(err)}`,
+          );
+        }
+      }
+      changes.push(
+        `Cron store migrated to SQLite at ${shortenHomePath(state.storePath)}.${formatRunLogMigrationNote(importedRunLogs)}`,
+      );
+    } else {
+      // SQLite already holds the migrated jobs, but the legacy file could not be
+      // archived (e.g. EXDEV copy+unlink failed), so report it honestly instead of
+      // claiming a finished migration; doctor re-detects the leftover and retries.
+      for (const failure of archiveResult.failures) {
+        warnings.push(
+          `Migrated cron jobs to SQLite but could not archive the legacy cron file at ${shortenHomePath(failure.path)}: ${failure.reason}. Remove it manually or rerun ${formatCliCommand("openclaw doctor --fix")} to retry.`,
+        );
+      }
+    }
   } else if (state.legacyRunLogDetected && importedRunLogs > 0) {
     changes.push(
       `Cron run logs migrated to SQLite at ${shortenHomePath(state.storePath)}.${formatRunLogMigrationNote(importedRunLogs)}`,
     );
-  } else if (changed) {
+  } else if (storeChanged) {
     changes.push(`Cron store normalized at ${shortenHomePath(state.storePath)}.`);
   }
   if (dreamingMigration.rewrittenCount > 0) {

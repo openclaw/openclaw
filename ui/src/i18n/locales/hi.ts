@@ -1316,6 +1316,8 @@ export const hi: TranslationMap = {
     settings: "चैट सेटिंग्स",
     thinkingToggle: "सहायक की सोच/कार्य आउटपुट टॉगल करें",
     toolCallsToggle: "टूल कॉल और टूल परिणाम टॉगल करें",
+    commentaryToggle: "Keep commentary after the final answer",
+    commentaryLabel: "Commentary",
     autoScrollMode: "ऑटो-स्क्रॉल मोड",
     autoScrollAlways: "हमेशा",
     autoScrollNearBottom: "नीचे के पास",
@@ -1686,7 +1688,7 @@ export const hi: TranslationMap = {
     jobState: {
       status: "स्थिति",
       running: "चल रहा है",
-      notRunning: "Not running",
+      notRunning: "नहीं चल रहा है",
       next: "अगला",
       last: "अंतिम",
     },

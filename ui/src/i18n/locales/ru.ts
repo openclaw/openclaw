@@ -1340,6 +1340,8 @@ export const ru: TranslationMap = {
     settings: "Настройки чата",
     thinkingToggle: "Показать или скрыть вывод размышлений/работы ассистента",
     toolCallsToggle: "Показать или скрыть вызовы инструментов и их результаты",
+    commentaryToggle: "Keep commentary after the final answer",
+    commentaryLabel: "Commentary",
     autoScrollMode: "Режим автопрокрутки",
     autoScrollAlways: "Всегда",
     autoScrollNearBottom: "Рядом с нижним краем",
@@ -1719,7 +1721,7 @@ export const ru: TranslationMap = {
     jobState: {
       status: "Статус",
       running: "Выполняется",
-      notRunning: "Not running",
+      notRunning: "Не выполняется",
       next: "Следующий",
       last: "Последний",
     },

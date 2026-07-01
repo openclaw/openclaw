@@ -181,6 +181,7 @@ describe("provider attribution", () => {
       throw new Error("expected NVIDIA attribution policy");
     }
 
+    expect(policy).toBeDefined();
     expect(policy).toEqual({
       provider: "nvidia",
       enabledByDefault: true,

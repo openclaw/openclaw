@@ -1,15 +1,14 @@
 {
   "fallbackKeys": [
-    "agents.cronPanel.jobId",
-    "cron.jobList.id",
-    "cron.jobState.notRunning"
+    "chat.commentaryLabel",
+    "chat.commentaryToggle"
   ],
-  "generatedAt": "2026-06-28T11:11:45.988Z",
+  "generatedAt": "2026-07-01T07:54:01.849Z",
   "locale": "ru",
   "model": "gpt-5.5",
   "provider": "openai",
-  "sourceHash": "5343c06f1676b136fed0738bad1a9b895360337eaad99660d27d5d16049950e6",
-  "totalKeys": 1420,
-  "translatedKeys": 1417,
+  "sourceHash": "5fe1227ea269b289ab027dd879552594fcb0bdecfa290de16c3250f0a66bb360",
+  "totalKeys": 1422,
+  "translatedKeys": 1420,
   "workflow": 1
 }

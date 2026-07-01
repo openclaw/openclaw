@@ -20,6 +20,7 @@ import {
   resolveControlUiLinks,
   waitForGatewayReachable,
 } from "../onboard-helpers.js";
+import { enableDefaultOnboardingInternalHooks } from "../onboard-hooks.js";
 import type { OnboardOptions } from "../onboard-types.js";
 import { commitNonInteractiveOnboardConfig } from "./config-write.js";
 import { applyNonInteractiveGatewayConfig } from "./local/gateway-config.js";
@@ -220,6 +221,9 @@ export async function runNonInteractiveLocalSetup(params: {
   nextConfig = gatewayResult.nextConfig;
 
   nextConfig = applyNonInteractiveSkillsConfig({ nextConfig, opts, runtime });
+  if (!opts.skipHooks) {
+    nextConfig = enableDefaultOnboardingInternalHooks(nextConfig);
+  }
 
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   nextConfig = await commitNonInteractiveOnboardConfig({

@@ -503,6 +503,7 @@ export function buildChannelInboundEventContext(
     SenderId: params.sender.id,
     SenderUsername: params.sender.username,
     SenderTag: params.sender.tag,
+    SenderIsBot: params.sender.isBot,
     MemberRoleIds: params.sender.roles,
     Timestamp: params.timestamp,
     Provider: params.provider ?? params.channel,
