@@ -8626,6 +8626,19 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Acceptance Tests
   - H2: Open Questions
 
+## specs/durable-session-task-runtime-rfc.md
+
+- Route: /specs/durable-session-task-runtime-rfc
+- Headings:
+  - H1: Durable Session and Task Runtime RFC
+  - H2: Problem
+  - H2: Proposed Core Model
+  - H2: Boundary With Existing Surfaces
+  - H2: First Review Slice
+  - H2: Non-Goals
+  - H2: Maintainer Decision Requested
+  - H2: Follow-Ups After The Core Slice
+
 ## start/bootstrapping.md
 
 - Route: /start/bootstrapping
