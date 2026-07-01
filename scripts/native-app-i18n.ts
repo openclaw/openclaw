@@ -26,6 +26,7 @@ export const NATIVE_I18N_LOCALES = [
   "nl",
   "fa",
   "ru",
+  "sv",
 ] as const;
 
 export type NativeI18nEntry = {
@@ -88,6 +89,9 @@ function isTranslatableCandidate(source: string, kind: string): boolean {
   }
   BUILD_SETTING_RE.lastIndex = 0;
   if (/^[a-z0-9_.:/$-]+$/u.test(source) || /^[A-Z0-9_.:/$-]+$/u.test(source)) {
+    return false;
+  }
+  if (kind === "conditional-branch" && /^[a-z]+(?:[A-Z][A-Za-z0-9]*)+$/u.test(source)) {
     return false;
   }
   if (/[{}[\]]/u.test(source) && !/(?:\\\(|\$\{)/u.test(source)) {
