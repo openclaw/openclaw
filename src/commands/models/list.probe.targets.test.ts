@@ -16,6 +16,13 @@ const resolveAuthProfileEligibilityMock = vi.fn(() => ({
   reasonCode: "invalid_expires" as const,
 }));
 const resolveSecretRefStringMock = vi.fn(async () => "resolved-secret");
+const externalCliDiscoveryScopedMock = vi.fn((params: Record<string, unknown> = {}) => ({
+  mode: "scoped",
+  ...params,
+}));
+const ensureAuthProfileStoreMock = vi.fn((agentDir?: string) =>
+  agentDir === "/tmp/coder-agent" && mockAgentStore ? mockAgentStore : mockStore,
+);
 
 vi.mock("../../agents/model-catalog.js", () => ({
   loadModelCatalog: loadModelCatalogMock,
@@ -76,12 +83,8 @@ vi.mock("./shared.js", () => ({
 }));
 
 vi.mock("../../agents/auth-profiles.js", () => ({
-  externalCliDiscoveryScoped: (params: Record<string, unknown> = {}) => ({
-    mode: "scoped",
-    ...params,
-  }),
-  ensureAuthProfileStore: (agentDir?: string) =>
-    agentDir === "/tmp/coder-agent" && mockAgentStore ? mockAgentStore : mockStore,
+  externalCliDiscoveryScoped: externalCliDiscoveryScopedMock,
+  ensureAuthProfileStore: ensureAuthProfileStoreMock,
   listProfilesForProvider: (store: AuthProfileStore, provider: string) =>
     Object.entries(store.profiles)
       .filter(
@@ -180,6 +183,8 @@ describe("buildProbeTargets reason codes", () => {
     resolveAuthProfileEligibilityMock.mockClear();
     resolveSecretRefStringMock.mockReset();
     resolveSecretRefStringMock.mockResolvedValue("resolved-secret");
+    externalCliDiscoveryScopedMock.mockClear();
+    ensureAuthProfileStoreMock.mockClear();
     resolveAuthProfileEligibilityMock.mockReturnValue({
       eligible: false,
       reasonCode: "invalid_expires",
@@ -483,5 +488,44 @@ describe("buildProbeTargets reason codes", () => {
         source: "profile",
       },
     ]);
+  });
+
+  it("scopes external CLI auth discovery to requested probe providers and profiles", async () => {
+    mockStore = {
+      version: 1,
+      profiles: {},
+      order: {},
+    };
+
+    await buildProbeTargets({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "openai-codex/gpt-5.4" },
+          },
+        },
+      } as OpenClawConfig,
+      providers: ["anthropic", "openai-codex"],
+      modelCandidates: ["openai-codex/gpt-5.4"],
+      options: {
+        provider: "openai-codex",
+        profileIds: ["openai-codex:default"],
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+      },
+    });
+
+    expect(ensureAuthProfileStoreMock).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        externalCli: expect.objectContaining({
+          allowKeychainPrompt: false,
+          config: expect.any(Object),
+          providerIds: ["openai-codex"],
+          profileIds: ["openai-codex:default"],
+        }),
+      }),
+    );
   });
 });
