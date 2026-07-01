@@ -534,28 +534,96 @@ export function assessLastAssistantMessage(message: AgentMessage): RecoveryAsses
   return "valid";
 }
 
-function shouldRecoverAnthropicThinkingError(
+export function shouldRecoverAnthropicThinkingError(
   error: unknown,
   sessionMeta: RecoverySessionMeta,
 ): boolean {
   // Provider detail survives genericization in different carriers across the
-  // Anthropic SDK, failover wrapping, and terminal stream messages.
+  // Anthropic SDK, failover wrapping, and terminal stream messages. The most
+  // common production carrier is `ProviderHttpError.errorBody` (a JSON-string
+  // holding the raw provider response), which the original 5-field list does
+  // not traverse. We also accept structured `data: { error: { message: ... } }`
+  // shapes from generic SDK wrappers, but only when the carrier is the
+  // top-level error argument (i.e. not nested via .cause, where a parent
+  // Error's own fields are already traversed as strings and serializing the
+  // parent would double-traverse). The JSON-serialization path is also gated
+  // on error-shape heuristics so that ordinary response objects (e.g. an
+  // AssistantMessage with a content[0].text field containing a thinking-block
+  // string) are not mistaken for error payloads.
   const candidates = collectErrorGraphCandidates(error, (current) => [
     current.cause,
     current.error,
     current.rawError,
     current.errorMessage,
     current.message,
+    current.errorBody,
+    current.body,
+    current.detail,
+    current.responseBody,
+    current.data,
   ]);
   for (const candidate of candidates) {
-    if (
-      typeof candidate === "string" &&
-      shouldRecoverAnthropicThinkingErrorMessage(candidate, sessionMeta)
-    ) {
-      return true;
+    if (typeof candidate === "string") {
+      if (shouldRecoverAnthropicThinkingErrorMessage(candidate, sessionMeta)) {
+        return true;
+      }
+      continue;
+    }
+    if (candidate && typeof candidate === "object" && looksLikeErrorPayload(candidate)) {
+      const serialized = safeJsonStringifyForPattern(candidate);
+      if (
+        serialized !== null &&
+        shouldRecoverAnthropicThinkingErrorMessage(serialized, sessionMeta)
+      ) {
+        return true;
+      }
     }
   }
   return false;
+}
+
+/**
+ * Heuristic to distinguish an "error payload" object (e.g. a parsed provider
+ * response, an SDK `data` carrier, an Axios response body) from an ordinary
+ * response object (e.g. an AssistantMessage with content/usage fields). We
+ * require at least one of the standard error-shape keys to be present at the
+ * top level of the object. This prevents ordinary objects from being
+ * serialized and false-positive matching the thinking-block pattern via
+ * unrelated text fields deep in their JSON.
+ */
+function looksLikeErrorPayload(value: object): boolean {
+  const v = value as Record<string, unknown>;
+  return (
+    "error" in v ||
+    "code" in v ||
+    "errors" in v ||
+    "statusCode" in v ||
+    "response" in v ||
+    "status" in v
+  );
+}
+
+/**
+ * Bounded JSON serialization for pattern matching. Returns null for values
+ * that are not safely stringifiable (cycles, BigInt, etc.) or that exceed
+ * the cap, so we never let a hostile provider payload OOM the recovery
+ * detector or trigger a regex cataclysm on gigabytes of text.
+ */
+const MAX_JSON_STRINGIFY_BYTES_FOR_PATTERN = 20 * 1024;
+
+function safeJsonStringifyForPattern(value: unknown): string | null {
+  try {
+    const serialized = JSON.stringify(value);
+    if (typeof serialized !== "string") {
+      return null;
+    }
+    if (serialized.length > MAX_JSON_STRINGIFY_BYTES_FOR_PATTERN) {
+      return null;
+    }
+    return serialized;
+  } catch {
+    return null;
+  }
 }
 
 function shouldRecoverAnthropicThinkingErrorMessage(

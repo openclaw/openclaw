@@ -10,6 +10,7 @@ import {
   dropReasoningFromHistory,
   dropThinkingBlocks,
   isAssistantMessageWithContent,
+  shouldRecoverAnthropicThinkingError,
   stripInvalidThinkingSignatures,
   stripStaleThinkingSignaturesForCompactionReplay,
   wrapAnthropicStreamWithRecovery,
@@ -1221,5 +1222,161 @@ describe("stripStaleThinkingSignaturesForCompactionReplay", () => {
     const result = stripStaleThinkingSignaturesForCompactionReplay(messages);
     // Same millisecond as compaction: treated as post-compaction; signature preserved
     expect(result).toBe(messages);
+  });
+});
+
+// Exercises the broadened candidate list at
+// shouldRecoverAnthropicThinkingError so the production ProviderHttpError shape
+// (generic .message, raw provider detail on .errorBody) — plus structured
+// `data: { error: { message: ... } }` carriers — both surface the
+// thinking-block detail to the recovery detector. Mirrors the 3 reproduction
+// cases in issue #98308 plus negative cases that must NOT trigger recovery
+// (rate limit, context overflow, auth error, generic-only schema rejection,
+// unrelated uses of the word "invalid", and the `recoveredAnthropicThinking`
+// per-session one-shot guard).
+describe("shouldRecoverAnthropicThinkingError — broadened candidate set", () => {
+  const sessionMeta = { id: "test-session" };
+
+  it("recovers when the thinking detail is on .message (regression: existing path)", () => {
+    const err = new Error(
+      "thinking or redacted_thinking blocks in the latest assistant message cannot be modified",
+    );
+    expect(shouldRecoverAnthropicThinkingError(err, sessionMeta)).toBe(true);
+  });
+
+  it("recovers when the thinking detail is nested in .cause (regression: existing path)", () => {
+    const outer = new Error(
+      "LLM request failed: provider rejected the request schema or tool payload.",
+    );
+    outer.cause = new Error("Invalid `signature` in `thinking` block");
+    expect(shouldRecoverAnthropicThinkingError(outer, sessionMeta)).toBe(true);
+  });
+
+  it("recovers when the thinking detail is on ProviderHttpError.errorBody (production case)", () => {
+    // Mirrors the production failure shape: ProviderHttpError exposes a
+    // generic .message ("LLM request failed: provider rejected the request
+    // schema or tool payload.") while the raw provider response containing
+    // the actionable Anthropic detail is stored on .errorBody as a JSON
+    // string. Without the broadened candidate set, the recovery detector
+    // returns false and the session gets bricked.
+    const err = new Error(
+      "LLM request failed: provider rejected the request schema or tool payload.",
+    );
+    err.errorBody = JSON.stringify({
+      error: {
+        message: "messages.12.content.3: Invalid `signature` in `thinking` block",
+        type: "invalid_request_error",
+      },
+    });
+    expect(shouldRecoverAnthropicThinkingError(err, sessionMeta)).toBe(true);
+  });
+
+  it("recovers when the thinking detail is a structured object on .data", () => {
+    // Generic SDK wrappers sometimes surface the provider response as a
+    // parsed object rather than a JSON string. The detector must serialize
+    // the object and pattern-match the serialized form.
+    const err = new Error("LLM request failed.");
+    err.data = {
+      error: { message: "Invalid signature on thinking block" },
+    };
+    expect(shouldRecoverAnthropicThinkingError(err, sessionMeta)).toBe(true);
+  });
+
+  it("does NOT recover for a rate-limit error (negative)", () => {
+    const err = new Error("rate_limit_error: too many requests");
+    err.errorBody = JSON.stringify({ error: { message: "rate_limit_error: too many requests" } });
+    expect(shouldRecoverAnthropicThinkingError(err, sessionMeta)).toBe(false);
+  });
+
+  it("does NOT recover for a context-overflow error (negative)", () => {
+    const err = new Error("context length exceeded");
+    err.errorBody = JSON.stringify({ error: { message: "context length exceeded" } });
+    expect(shouldRecoverAnthropicThinkingError(err, sessionMeta)).toBe(false);
+  });
+
+  it("does NOT recover for an auth error (negative)", () => {
+    const err = new Error("invalid api key");
+    err.errorBody = JSON.stringify({ error: { message: "invalid api key" } });
+    expect(shouldRecoverAnthropicThinkingError(err, sessionMeta)).toBe(false);
+  });
+
+  it("does NOT recover for a generic-only schema rejection (no provider detail anywhere)", () => {
+    // Generic .message with empty .errorBody — must NOT trigger, since
+    // this is the failure shape that the broadened candidate set could
+    // accidentally over-match if pattern was too loose.
+    const err = new Error(
+      "LLM request failed: provider rejected the request schema or tool payload.",
+    );
+    err.errorBody = "";
+    expect(shouldRecoverAnthropicThinkingError(err, sessionMeta)).toBe(false);
+  });
+
+  it("does NOT recover for an unrelated use of the word 'invalid' (negative)", () => {
+    const err = new Error("LLM request failed: invalid model name");
+    err.errorBody = JSON.stringify({ error: { message: "invalid model name 'foo-bar'" } });
+    expect(shouldRecoverAnthropicThinkingError(err, sessionMeta)).toBe(false);
+  });
+
+  it("does NOT recover when recoveredAnthropicThinking is already true (one-shot guard)", () => {
+    const err = new Error("Invalid `signature` in `thinking` block");
+    expect(
+      shouldRecoverAnthropicThinkingError(err, {
+        id: "test-session",
+        recoveredAnthropicThinking: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("does NOT match a 25 KiB errorBody payload (bounded-serialization guard)", () => {
+    // The bounded-serialization guard exists so a hostile provider payload
+    // can never OOM the recovery detector or trigger a regex cataclysm.
+    // Anything beyond MAX_JSON_STRINGIFY_BYTES_FOR_PATTERN (20 KiB) returns
+    // null from safeJsonStringifyForPattern and never reaches the pattern
+    // matcher.
+    const huge = "thinking or redacted_thinking blocks ".repeat(1500); // ~52 KiB
+    const err = new Error(
+      "LLM request failed: provider rejected the request schema or tool payload.",
+    );
+    err.errorBody = JSON.stringify({
+      error: { message: huge },
+    });
+    expect(shouldRecoverAnthropicThinkingError(err, sessionMeta)).toBe(false);
+  });
+
+  it("does NOT match a non-error object with a thinking-block string deep inside (heuristic guard)", () => {
+    // The pre-existing wrapAnthropicStreamWithRecovery test
+    // "does not retry non-thinking terminal stream-error events" relies on
+    // the detector NOT matching a stream-error chunk that happens to be an
+    // AssistantMessage with content[0].text containing the thinking-block
+    // marker. Without the looksLikeErrorPayload heuristic, the broadened
+    // candidate set would JSON.stringify the entire AssistantMessage
+    // (which is a regular response object, not an error payload) and the
+    // pattern would match on the embedded content text. The heuristic
+    // gates JSON serialization on the object having at least one
+    // error-shape key at the top level, which AssistantMessage does not.
+    const chunk = {
+      role: "assistant",
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      timestamp: 0,
+      content: [
+        {
+          type: "text",
+          text: "ValidationException: invalid signature on thinking block in message history",
+        },
+      ],
+      stopReason: "error",
+      errorMessage: "rate limit exceeded",
+    };
+    expect(shouldRecoverAnthropicThinkingError(chunk, sessionMeta)).toBe(false);
   });
 });
