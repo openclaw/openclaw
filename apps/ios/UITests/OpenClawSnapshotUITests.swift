@@ -30,15 +30,15 @@ final class OpenClawSnapshotUITests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
-        app?.terminate()
-        app = nil
+        self.app?.terminate()
+        self.app = nil
         try super.tearDownWithError()
     }
 
     func testConnectedGatewayTabs() {
         for appearance in ScreenshotAppearance.allCases {
             for target in Self.screenshotTargets {
-                launchApp(for: target, appearance: appearance)
+                self.launchApp(for: target, appearance: appearance)
                 let name = appearance == .light ? target.name : "\(target.name)-dark"
                 snapshot(name, timeWaitingForIdle: 5)
             }
@@ -47,26 +47,50 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
     func testControlOverviewNavigation() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone control hub only")
-        launchApp(for: ScreenshotTarget(
+        self.launchApp(for: ScreenshotTarget(
             initialTab: "control",
             initialDestination: "control",
-            name: "control-overview-navigation"
-        ))
+            name: "control-overview-navigation"))
 
-        let overview = app?.buttons.containing(.staticText, identifier: "Overview").firstMatch
+        let overview = self.app?.buttons.containing(.staticText, identifier: "Overview").firstMatch
         XCTAssertTrue(overview?.waitForExistence(timeout: 5) == true)
         overview?.tap()
 
-        XCTAssertTrue(app?.buttons["Back to Control"].waitForExistence(timeout: 5) == true)
-        XCTAssertEqual(app?.state, .runningForeground)
+        XCTAssertTrue(self.app?.buttons["Back to Control"].waitForExistence(timeout: 5) == true)
+        XCTAssertEqual(self.app?.state, .runningForeground)
+    }
+
+    func testChatComposerStartsCompactAndGrowsWithDraft() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone composer proof only")
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "chat",
+            initialDestination: "chat",
+            name: "chat-composer-growth"))
+
+        let textField = try XCTUnwrap(app?.textFields.firstMatch)
+        XCTAssertTrue(textField.waitForExistence(timeout: 8))
+        let compactHeight = textField.frame.height
+        XCTAssertLessThanOrEqual(compactHeight, 44)
+        self.attachScreenshot(named: "chat-composer-compact")
+
+        textField.tap()
+        textField.typeText(
+            "Draft a polished launch note that covers the new design, validation, rollout plan, and follow-up details for the team.")
+        let composerGrew = expectation(
+            for: NSPredicate { _, _ in textField.frame.height >= compactHeight + 12 },
+            evaluatedWith: textField)
+        wait(for: [composerGrew], timeout: 4)
+        self.attachScreenshot(named: "chat-composer-expanded")
+
+        self.app?.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        XCTAssertTrue(self.app?.keyboards.firstMatch.waitForNonExistence(timeout: 3) == true)
     }
 
     func testLiveGatewayControlOverviewNavigation() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone control hub only")
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["OPENCLAW_IOS_LIVE_GATEWAY"] == "1",
-            "Set OPENCLAW_IOS_LIVE_GATEWAY=1 and copy a fresh setup code to the simulator pasteboard"
-        )
+            "Set OPENCLAW_IOS_LIVE_GATEWAY=1 and copy a fresh setup code to the simulator pasteboard")
 
         let app = XCUIApplication()
         addUIInterruptionMonitor(withDescription: "Local network access") { alert in
@@ -104,10 +128,10 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         let overview = app.buttons.containing(.staticText, identifier: "Overview").firstMatch
         XCTAssertTrue(overview.waitForExistence(timeout: 8))
-        attachScreenshot(named: "live-gateway-control")
+        self.attachScreenshot(named: "live-gateway-control")
         overview.tap()
         XCTAssertTrue(app.buttons["Back to Control"].waitForExistence(timeout: 8))
-        attachScreenshot(named: "live-gateway-overview")
+        self.attachScreenshot(named: "live-gateway-overview")
         XCTAssertEqual(app.state, .runningForeground)
     }
 
@@ -137,7 +161,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
     }
 
     private func attachScreenshot(named name: String) {
-        guard let app = app else { return }
+        guard let app else { return }
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = name
         attachment.lifetime = .keepAlways
