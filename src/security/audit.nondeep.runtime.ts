@@ -18,6 +18,7 @@ export {
   collectSandboxDockerNoopFindings,
   collectSecretsInConfigFindings,
   collectSyncedFolderFindings,
+  getConfigEnvVarEntries,
 } from "./audit-extra.sync.js";
 
 export {

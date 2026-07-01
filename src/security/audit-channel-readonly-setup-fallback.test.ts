@@ -61,6 +61,7 @@ vi.mock("./audit.nondeep.runtime.js", () => ({
   collectSecretsInConfigFindings: collectNoFindings,
   collectSmallModelRiskFindings: collectNoFindings,
   collectSyncedFolderFindings: collectNoFindings,
+  getConfigEnvVarEntries: collectNoFindings,
   readConfigSnapshotForAudit: vi.fn(async () => null),
 }));
 
