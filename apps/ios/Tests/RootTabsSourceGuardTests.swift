@@ -67,6 +67,25 @@ struct RootTabsSourceGuardTests {
         #expect(!drawerContent.contains("NavigationSplitView"))
     }
 
+    @Test func `phone tab bar keeps chat first product order`() throws {
+        let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
+        let phoneTabContent = try Self.extract(
+            source,
+            from: "private var phoneTabContent: some View",
+            to: "private var sidebarSplitContent: some View")
+
+        let chatRange = try #require(phoneTabContent.range(of: "ChatProTab(openSettings:"))
+        let talkRange = try #require(phoneTabContent.range(of: "TalkProTab(openSettings:"))
+        let controlRange = try #require(phoneTabContent.range(of: "RootTabsPhoneControlHub("))
+        let agentRange = try #require(phoneTabContent.range(of: "AgentProTab("))
+        let settingsRange = try #require(phoneTabContent.range(of: "SettingsProTab("))
+
+        #expect(chatRange.lowerBound < talkRange.lowerBound)
+        #expect(talkRange.lowerBound < controlRange.lowerBound)
+        #expect(controlRange.lowerBound < agentRange.lowerBound)
+        #expect(agentRange.lowerBound < settingsRange.lowerBound)
+    }
+
     @Test func `sidebar keeps navigation model destination only`() throws {
         let source = try String(contentsOf: Self.rootTabsSourceURL(), encoding: .utf8)
         let navigationSource = try String(contentsOf: Self.rootTabsNavigationSourceURL(), encoding: .utf8)
@@ -618,7 +637,8 @@ struct RootTabsSourceGuardTests {
         #expect(actionsSource.contains("self.gatewayController.refreshActiveGatewayRegistrationFromSettings()"))
         #expect(actionsSource.contains("self.gatewayController.restartDiscovery()"))
         #expect(actionsSource.contains("await self.appModel.refreshGatewayOverviewIfConnected()"))
-        #expect(actionsSource.contains("self.gatewayController.requestLocalNetworkAccess(reason: \"settings_preflight\")"))
+        #expect(actionsSource
+            .contains("self.gatewayController.requestLocalNetworkAccess(reason: \"settings_preflight\")"))
         #expect(actionsSource.contains("await TCPProbe.probe(host: trimmed, port: port"))
         #expect(actionsSource.contains("Check Tailscale or LAN."))
         #expect(actionsSource.contains("Tailscale is off on this device. Turn it on, then try again."))
@@ -658,7 +678,8 @@ struct RootTabsSourceGuardTests {
 
         #expect(onboardingSource.contains("self.requestLocalNetworkAccess(reason: \"onboarding_continue\")"))
         #expect(onboardingSource.contains("self.requestLocalNetworkAccessIfPastIntro(reason: \"onboarding_appear\")"))
-        #expect(actionsSource.contains("self.gatewayController.requestLocalNetworkAccess(reason: \"settings_preflight\")"))
+        #expect(actionsSource
+            .contains("self.gatewayController.requestLocalNetworkAccess(reason: \"settings_preflight\")"))
     }
 
     @Test func `gateway settings preview matrix covers primary states`() throws {
