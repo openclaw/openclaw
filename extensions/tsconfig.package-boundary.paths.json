@@ -47,6 +47,9 @@
       "openclaw/plugin-sdk/provider-test-contracts": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/provider-test-contracts.d.ts"
       ],
+      "openclaw/plugin-sdk/provider-transport-replay-runtime": [
+        "../packages/plugin-sdk/dist/src/plugin-sdk/provider-transport-replay-runtime.d.ts"
+      ],
       "openclaw/plugin-sdk/test-env": [
         "../packages/plugin-sdk/dist/src/plugin-sdk/test-env.d.ts"
       ],
