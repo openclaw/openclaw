@@ -15,12 +15,23 @@ type TestPluginWebFetchConfig = {
   };
 };
 
-const { resolvePluginWebFetchProvidersMock, resolveRuntimeWebFetchProvidersMock } = vi.hoisted(
-  () => ({
-    resolvePluginWebFetchProvidersMock: vi.fn<() => PluginWebFetchProviderEntry[]>(() => []),
-    resolveRuntimeWebFetchProvidersMock: vi.fn<() => PluginWebFetchProviderEntry[]>(() => []),
-  }),
-);
+const {
+  getActivePluginRegistryVersionMock,
+  resolvePluginWebFetchProvidersMock,
+  resolveRuntimeWebFetchProvidersMock,
+} = vi.hoisted(() => ({
+  getActivePluginRegistryVersionMock: vi.fn(() => 1),
+  resolvePluginWebFetchProvidersMock: vi.fn<() => PluginWebFetchProviderEntry[]>(() => []),
+  resolveRuntimeWebFetchProvidersMock: vi.fn<() => PluginWebFetchProviderEntry[]>(() => []),
+}));
+
+vi.mock("../plugins/runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/runtime.js")>();
+  return {
+    ...actual,
+    getActivePluginRegistryVersion: getActivePluginRegistryVersionMock,
+  };
+});
 
 vi.mock("../plugins/web-fetch-providers.runtime.js", () => ({
   resolvePluginWebFetchProviders: resolvePluginWebFetchProvidersMock,
@@ -99,6 +110,8 @@ describe("web fetch runtime", () => {
 
   beforeEach(() => {
     clearWebFetchRuntimeCachesForTest();
+    getActivePluginRegistryVersionMock.mockReset();
+    getActivePluginRegistryVersionMock.mockReturnValue(1);
     resolvePluginWebFetchProvidersMock.mockReset();
     resolveRuntimeWebFetchProvidersMock.mockReset();
     resolvePluginWebFetchProvidersMock.mockReturnValue([]);
@@ -247,6 +260,30 @@ describe("web fetch runtime", () => {
     expect(first.provider).toBe(second.provider);
     expect(resolvePluginWebFetchProvidersMock).toHaveBeenCalledTimes(1);
     expect(createTool).toHaveBeenCalledTimes(2);
+  });
+
+  it("invalidates provider discovery when the active plugin registry version changes", () => {
+    const firecrawl = createFirecrawlProvider({
+      getConfiguredCredentialValue: () => "firecrawl-key",
+    });
+    const external = createThirdPartyFetchProvider();
+    resolvePluginWebFetchProvidersMock
+      .mockReturnValueOnce([firecrawl])
+      .mockReturnValueOnce([external]);
+    getActivePluginRegistryVersionMock
+      .mockReturnValueOnce(10)
+      .mockReturnValueOnce(10)
+      .mockReturnValueOnce(11);
+    const config = createFirecrawlPluginConfig("firecrawl-key");
+
+    const first = requireResolvedWebFetch(resolveWebFetchDefinition({ config }));
+    const second = requireResolvedWebFetch(resolveWebFetchDefinition({ config }));
+    const third = requireResolvedWebFetch(resolveWebFetchDefinition({ config }));
+
+    expect(first.provider.id).toBe("firecrawl");
+    expect(second.provider.id).toBe("firecrawl");
+    expect(third.provider.id).toBe("thirdparty");
+    expect(resolvePluginWebFetchProvidersMock).toHaveBeenCalledTimes(2);
   });
 
   it("reuses runtime provider discovery across runtime-selected providers", () => {

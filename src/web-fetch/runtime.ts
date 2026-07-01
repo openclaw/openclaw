@@ -9,6 +9,7 @@ import {
 } from "../../packages/web-content-core/src/provider-runtime-shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose } from "../globals.js";
+import { getActivePluginRegistryVersion } from "../plugins/runtime.js";
 import type {
   PluginWebFetchProviderEntry,
   WebFetchProviderToolDefinition,
@@ -193,7 +194,11 @@ function resolveConfiguredWebFetchProviderId(params: {
 function resolveWebFetchProviderCacheKey(
   options: ResolveWebFetchDefinitionParams | undefined,
 ): string {
-  return JSON.stringify([options?.sandboxed === true, options?.preferRuntimeProviders === true]);
+  return JSON.stringify([
+    getActivePluginRegistryVersion(),
+    options?.sandboxed === true,
+    options?.preferRuntimeProviders === true,
+  ]);
 }
 
 function resolveCachedWebFetchProviders(params: {
