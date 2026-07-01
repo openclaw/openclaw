@@ -1903,6 +1903,14 @@ function updateTaskStateByRunId(params: {
         terminalOutcome: params.terminalOutcome,
       });
     }
+    if (
+      current.runtime === "subagent" &&
+      nextStatus === "succeeded" &&
+      patch.terminalOutcome === "blocked" &&
+      current.deliveryStatus === "failed"
+    ) {
+      patch.deliveryStatus = "pending";
+    }
     const eventSummary =
       normalizeTaskSummary(params.eventSummary) ??
       (nextStatus === "failed"
