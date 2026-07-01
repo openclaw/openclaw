@@ -204,9 +204,14 @@ function materializeVisibleAssistantStreamMessages(
 ): unknown[] {
   return materializeVisibleStreamState(messages, state, {
     ...opts,
+    persistCommentary: chatPersistCommentaryEnabled(state),
     isHiddenAssistantMessage: shouldHideAssistantChatMessage,
     isHiddenStreamText: isHiddenAssistantStreamText,
   });
+}
+
+function chatPersistCommentaryEnabled(state: ChatState): boolean {
+  return state.settings?.chatPersistCommentary === true;
 }
 
 function hasTranscriptMeta(message: unknown): boolean {
@@ -405,6 +410,7 @@ export type ChatState = {
   agentsList?: ChatAgentsListSnapshot | null;
   agentsSelectedId?: string | null;
   hello?: GatewayHelloOk | null;
+  settings?: { chatPersistCommentary?: boolean };
 };
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
@@ -768,6 +774,7 @@ async function loadChatHistoryUncached(
     const resetStream = !state.chatRunId || state.chatRunId === previousRunId;
     if (resetStream) {
       const streamReconciliation = {
+        persistCommentary: chatPersistCommentaryEnabled(state),
         isHiddenAssistantMessage: shouldHideAssistantChatMessage,
         isHiddenStreamText: isHiddenAssistantStreamText,
       };
@@ -1365,6 +1372,17 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
+      if (
+        hasVisibleStreamParts(state, {
+          includeCurrent: false,
+          isHiddenStreamText: isHiddenAssistantStreamText,
+        })
+      ) {
+        state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
+          includeCurrent: false,
+        });
+        clearToolStreamSegments(state);
+      }
       state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, finalMessage);
     } else {
       state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);

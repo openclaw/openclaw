@@ -245,4 +245,108 @@ describe("Mistral provider", () => {
     expect(systemMessage?.content).toBe("Stable\nDynamic");
     expect(JSON.stringify(payload)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
   });
+
+  it("serializes structured non-image blocks in tool results as JSON text", async () => {
+    const testContext = {
+      messages: [
+        {
+          role: "user",
+          content: "hello",
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          provider: "mistral",
+          api: "mistral-conversations",
+          model: "mistral-large-latest",
+          stopReason: "toolUse",
+          timestamp: 0,
+          content: [{ type: "toolCall", id: "tool_1", name: "fetch", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "tool_1",
+          content: [
+            {
+              type: "resource",
+              resource: {
+                uri: "https://example.com/data.json",
+                mimeType: "application/json",
+                text: '{"key":"value"}',
+              },
+            },
+          ],
+          isError: false,
+          timestamp: 0,
+        },
+      ],
+    } as unknown as Context;
+
+    const stream = streamMistral(makeMistralModel(), testContext, {
+      apiKey: "sk-mistral-provider",
+    });
+    await stream.result();
+
+    const payload = mistralMockState.payloads[0] as {
+      messages: Array<{ role: string; content: string | Array<{ type: string; text?: string }> }>;
+    };
+    const toolMessage = payload.messages.find((message) => message.role === "tool");
+    expect(toolMessage).toBeDefined();
+    const toolContent = Array.isArray(toolMessage!.content) ? toolMessage!.content : [];
+    const textBlock = toolContent.find((block) => block.type === "text");
+    expect(textBlock?.text).toEqual(expect.stringContaining('{"type":"resource"'));
+    expect(textBlock?.text).toContain('{\\"key\\":\\"value\\"}');
+  });
+
+  it("serializes structured-only tool results instead of empty fallback", async () => {
+    const testContext = {
+      messages: [
+        {
+          role: "user",
+          content: "hello",
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          provider: "mistral",
+          api: "mistral-conversations",
+          model: "mistral-large-latest",
+          stopReason: "toolUse",
+          timestamp: 0,
+          content: [{ type: "toolCall", id: "tool_1", name: "get_file", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "tool_1",
+          content: [
+            {
+              type: "resource_link",
+              uri: "https://example.com/file.txt",
+              name: "file.txt",
+              mimeType: "text/plain",
+              size: 100,
+            },
+          ],
+          isError: false,
+          timestamp: 0,
+        },
+      ],
+    } as unknown as Context;
+
+    const stream = streamMistral(makeMistralModel(), testContext, {
+      apiKey: "sk-mistral-provider",
+    });
+    await stream.result();
+
+    const payload = mistralMockState.payloads[0] as {
+      messages: Array<{ role: string; content: string | Array<{ type: string; text?: string }> }>;
+    };
+    const toolMessage = payload.messages.find((message) => message.role === "tool");
+    expect(toolMessage).toBeDefined();
+    const toolContent = Array.isArray(toolMessage!.content) ? toolMessage!.content : [];
+    const textBlock = toolContent.find((block) => block.type === "text");
+    // Structured blocks should provide the output, not an empty fallback
+    expect(textBlock?.text).toEqual(expect.stringContaining('{"type":"resource_link"'));
+    expect(textBlock?.text).not.toContain("(no tool output)");
+  });
 });

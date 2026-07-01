@@ -519,7 +519,7 @@ describe("buildAuthHealthSummary", () => {
     expect(provider?.expiresAt).toBeUndefined();
   });
 
-  it("falls back to provider.profiles when explicitOrder references stale profile IDs", () => {
+  it("keeps unavailable profiles in explicit auth order authoritative", () => {
     vi.spyOn(Date, "now").mockReturnValue(now);
     const store = {
       version: 1,
@@ -542,44 +542,9 @@ describe("buildAuthHealthSummary", () => {
     const summary = buildAuthHealthSummary({ cfg, store });
 
     const provider = summary.providers.find((entry) => entry.provider === "claude-cli");
-    expect(provider?.status).not.toBe("missing");
-    expect(provider?.effectiveProfiles?.length).toBeGreaterThan(0);
-    expect(provider?.effectiveProfiles?.map((p) => p.profileId)).toContain("claude-cli:token");
-  });
-
-  it("keeps provider missing when explicit order names an existing incompatible profile ID", () => {
-    vi.spyOn(Date, "now").mockReturnValue(now);
-    const store = {
-      version: 1,
-      profiles: {
-        "openai:prod": {
-          type: "api_key" as const,
-          provider: "openai",
-          key: "sk-openai",
-        },
-        "claude-cli:token": {
-          type: "token" as const,
-          provider: "claude-cli",
-          token: "fresh-setup-token",
-        },
-      },
-    };
-    const cfg = {
-      auth: {
-        order: {
-          // openai:prod exists in the store but belongs to a different
-          // provider — claude-cli should stay missing, not silently fall
-          // back to all claude-cli profiles.
-          "claude-cli": ["openai:prod"],
-        },
-      },
-    };
-
-    const summary = buildAuthHealthSummary({ cfg, store });
-
-    const claudeCli = summary.providers.find((entry) => entry.provider === "claude-cli");
-    expect(claudeCli?.status).toBe("missing");
-    expect(claudeCli?.effectiveProfiles).toEqual([]);
+    expect(provider?.status).toBe("missing");
+    expect(provider?.effectiveProfiles).toEqual([]);
+    expect(provider?.profiles.map((profile) => profile.profileId)).toEqual(["claude-cli:token"]);
   });
 
   it("does not normalize provider aliases when filtering and grouping profile health", () => {

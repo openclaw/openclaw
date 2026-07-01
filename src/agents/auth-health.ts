@@ -366,21 +366,9 @@ export function buildAuthHealthSummary(params: {
     }
 
     if (explicitOrder) {
-      const explicitProfiles = explicitOrder
+      return explicitOrder
         .map((profileId) => provider.profiles.find((profile) => profile.profileId === profileId))
         .filter((profile): profile is AuthProfileHealth => Boolean(profile));
-      if (explicitProfiles.length > 0) {
-        return explicitProfiles;
-      }
-      // Only fall through to provider.profiles when every ordered profile ID
-      // is absent from the store (stale/deleted after migration, e.g. OAuth →
-      // setup-token). Existing but incompatible ordered profile IDs preserve
-      // the documented auth.order hard filter so the provider stays missing.
-      const allOrderedIdsAbsent = explicitOrder.every((id) => !(id in params.store.profiles));
-      if (allOrderedIdsAbsent) {
-        return provider.profiles;
-      }
-      return [];
     }
 
     return provider.profiles;

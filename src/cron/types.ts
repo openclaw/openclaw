@@ -258,10 +258,11 @@ type CronAgentTurnPayload = {
 
 type CronAgentTurnPayloadPatch = {
   kind: "agentTurn";
-} & Partial<Omit<CronAgentTurnPayloadFields, "model" | "fallbacks" | "toolsAllow">> & {
+} & Partial<Omit<CronAgentTurnPayloadFields, "model" | "fallbacks" | "toolsAllow" | "thinking">> & {
     model?: string | null;
     fallbacks?: string[] | null;
     toolsAllow?: string[] | null;
+    thinking?: string | null;
   };
 
 type CronCommandPayloadFields = {

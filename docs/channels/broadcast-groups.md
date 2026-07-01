@@ -20,6 +20,8 @@ Current scope: **WhatsApp only** (web channel).
 
 Broadcast groups are evaluated after channel allowlists and group activation rules. In WhatsApp groups, this means broadcasts happen when OpenClaw would normally reply (for example: on mention, depending on your group settings).
 
+The live WhatsApp QA lane includes `whatsapp-broadcast-group-fanout`, which verifies that one mentioned group message can produce distinct visible replies from two configured agents.
+
 ## Use cases
 
 <AccordionGroup>

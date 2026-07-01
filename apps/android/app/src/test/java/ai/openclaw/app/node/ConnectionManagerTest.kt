@@ -124,6 +124,20 @@ class ConnectionManagerTest {
   }
 
   @Test
+  fun resolveTlsParamsForEndpoint_manualMdnsRespectsManualTlsToggle() {
+    val endpoint = GatewayEndpoint.manual(host = "gateway.local", port = 18789)
+
+    val params =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = null,
+        manualTlsEnabled = false,
+      )
+
+    assertNull(params)
+  }
+
+  @Test
   fun resolveTlsParamsForEndpoint_manualPrivateLanCleartextCanOverrideStoredPin() {
     val endpoint = GatewayEndpoint.manual(host = "192.168.1.20", port = 18789)
 
@@ -168,6 +182,30 @@ class ConnectionManagerTest {
         stableId = "_openclaw-gw._tcp.|local.|Test",
         name = "Test",
         host = "192.168.1.20",
+        port = 18789,
+        tlsEnabled = false,
+        tlsFingerprintSha256 = null,
+      )
+
+    val params =
+      ConnectionManager.resolveTlsParamsForEndpoint(
+        endpoint,
+        storedFingerprint = null,
+        manualTlsEnabled = false,
+      )
+
+    assertEquals(true, params?.required)
+    assertNull(params?.expectedFingerprint)
+    assertEquals(false, params?.allowTOFU)
+  }
+
+  @Test
+  fun resolveTlsParamsForEndpoint_discoveryMdnsWithoutHintsStillRequiresTls() {
+    val endpoint =
+      GatewayEndpoint(
+        stableId = "_openclaw-gw._tcp.|local.|Test",
+        name = "Test",
+        host = "gateway.local",
         port = 18789,
         tlsEnabled = false,
         tlsFingerprintSha256 = null,
@@ -258,9 +296,16 @@ class ConnectionManagerTest {
   }
 
   @Test
-  fun isLocalCleartextGatewayHost_acceptsLanIpsButRejectsMdnsAndTailnetHosts() {
+  fun isLocalCleartextGatewayHost_acceptsLanIpsAndMdnsButRejectsRemoteHosts() {
     assertTrue(isLocalCleartextGatewayHost("192.168.1.20"))
-    assertFalse(isLocalCleartextGatewayHost("gateway.local"))
+    assertTrue(isLocalCleartextGatewayHost("gateway.local"))
+    assertTrue(isLocalCleartextGatewayHost("GATEWAY.LOCAL."))
+    assertFalse(isLocalCleartextGatewayHost("gateway.local.evil.com"))
+    assertFalse(isLocalCleartextGatewayHost("gatewaylocal"))
+    assertFalse(isLocalCleartextGatewayHost("local"))
+    assertFalse(isLocalCleartextGatewayHost(".local"))
+    assertFalse(isLocalCleartextGatewayHost("gateway..local"))
+    assertFalse(isLocalCleartextGatewayHost("gateway.local%25wlan0"))
     assertFalse(isLocalCleartextGatewayHost("100.64.0.9"))
     assertFalse(isLocalCleartextGatewayHost("gateway.tailnet.ts.net"))
   }
