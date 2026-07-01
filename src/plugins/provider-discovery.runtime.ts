@@ -124,14 +124,18 @@ function hasProviderAuthEnvCredential(
   plugin: PluginManifestRecord,
   env: NodeJS.ProcessEnv,
 ): boolean {
-  const envVars = [
-    ...(plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []),
-    ...Object.values(plugin.providerAuthEnvVars ?? {}).flat(),
-  ];
-  return envVars.some((name) => {
-    const value = env[name]?.trim();
-    return value !== undefined && value !== "";
-  });
+  try {
+    const envVars = [
+      ...(plugin.setup?.providers ?? []).flatMap((provider) => provider.envVars ?? []),
+      ...Object.values(plugin.providerAuthEnvVars ?? {}).flat(),
+    ];
+    return envVars.some((name) => {
+      const value = env[name]?.trim();
+      return value !== undefined && value !== "";
+    });
+  } catch {
+    return false;
+  }
 }
 
 function modelDefinitionCostFromManifestRow(
