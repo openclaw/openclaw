@@ -19,6 +19,7 @@ import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
 } from "../../agents/system-prompt-cache-boundary.js";
+import { prepareClaudeSonnet5RequestContext } from "../../shared/anthropic-assistant-prefill.js";
 import {
   omitFoundryBearerCredentialHeaders,
   usesFoundryBearerAuth,
@@ -452,6 +453,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
   options?: AnthropicOptions,
 ) => {
   const stream = new AssistantMessageEventStream();
+  const requestContext = prepareClaudeSonnet5RequestContext(model, context);
 
   void (async () => {
     const output: AssistantMessage = {
@@ -492,9 +494,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 
         let copilotDynamicHeaders: Record<string, string> | undefined;
         if (model.provider === "github-copilot") {
-          const hasImages = hasCopilotVisionInput(context.messages);
+          const hasImages = hasCopilotVisionInput(requestContext.messages);
           copilotDynamicHeaders = buildCopilotDynamicHeaders({
-            messages: context.messages,
+            messages: requestContext.messages,
             hasImages,
           });
         }
@@ -506,7 +508,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
           model,
           apiKey,
           options?.interleavedThinking ?? true,
-          shouldUseFineGrainedToolStreamingBeta(model, context),
+          shouldUseFineGrainedToolStreamingBeta(model, requestContext),
           options?.headers,
           copilotDynamicHeaders,
           cacheSessionId,
@@ -514,7 +516,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
         client = created.client;
         isOAuth = created.isOAuthToken;
       }
-      const builtParams = buildParams(model, context, isOAuth, options);
+      const builtParams = buildParams(model, requestContext, isOAuth, options);
       let params = builtParams.params;
       const toolProjection = builtParams.toolProjection;
       const nextParams = await options?.onPayload?.(params, model);

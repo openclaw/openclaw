@@ -49,6 +49,31 @@ function makeAnthropicModel(overrides: Partial<Model<"anthropic-messages">> = {}
   } satisfies Model<"anthropic-messages">;
 }
 
+function makeAssistantPrefillContext(): Context {
+  return {
+    messages: [
+      { role: "user", content: "Return JSON.", timestamp: 0 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "{" }],
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-sonnet-5",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 1,
+      },
+    ],
+  };
+}
+
 describe("Anthropic provider", () => {
   beforeEach(() => {
     anthropicMockState.configs = [];
@@ -437,7 +462,7 @@ describe("Anthropic provider", () => {
         name,
         provider,
       }),
-      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      makeAssistantPrefillContext(),
       { apiKey, client: client as never },
     );
     const eventTypes: string[] = [];
@@ -719,7 +744,7 @@ describe("Anthropic provider", () => {
         maxTokens: 128_000,
         thinkingLevelMap: { xhigh: "xhigh", max: "max" },
       }),
-      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      makeAssistantPrefillContext(),
       {
         apiKey: "sk-ant-provider",
         temperature: 0.2,
@@ -734,8 +759,43 @@ describe("Anthropic provider", () => {
     expect(capturedPayload).toMatchObject({
       thinking: { type: "adaptive", display: "summarized" },
       output_config: { effort: "high" },
+      messages: [{ role: "user" }],
     });
     expect(capturedPayload).not.toHaveProperty("temperature");
+  });
+
+  it("strips Sonnet 5 assistant prefills on the low-level SDK transport", async () => {
+    let capturedPayload: unknown;
+    const client = {
+      messages: {
+        create: vi.fn(() => ({
+          asResponse: () => Promise.resolve(createSseResponse()),
+        })),
+      },
+    };
+    const stream = streamAnthropic(
+      makeAnthropicModel({
+        id: "claude-sonnet-5",
+        name: "Claude Sonnet 5",
+        maxTokens: 128_000,
+      }),
+      makeAssistantPrefillContext(),
+      {
+        apiKey: "sk-ant-provider",
+        client: client as never,
+        thinkingEnabled: false,
+        onPayload: (payload) => {
+          capturedPayload = payload;
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect(capturedPayload).toMatchObject({
+      thinking: { type: "disabled" },
+      messages: [{ role: "user" }],
+    });
   });
 
   it("disables thinking for an explicit Claude Sonnet 5 off level", async () => {
@@ -748,7 +808,7 @@ describe("Anthropic provider", () => {
         maxTokens: 128_000,
         thinkingLevelMap: { xhigh: "xhigh", max: "max" },
       }),
-      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      makeAssistantPrefillContext(),
       {
         apiKey: "sk-ant-provider",
         reasoning: "off",
@@ -761,7 +821,10 @@ describe("Anthropic provider", () => {
 
     await stream.result();
 
-    expect(capturedPayload).toMatchObject({ thinking: { type: "disabled" } });
+    expect(capturedPayload).toMatchObject({
+      thinking: { type: "disabled" },
+      messages: [{ role: "user" }],
+    });
     expect(capturedPayload).not.toHaveProperty("output_config");
     expect(capturedPayload).not.toHaveProperty("temperature");
   });

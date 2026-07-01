@@ -21,6 +21,7 @@ import type {
   ThinkingLevel,
 } from "../llm/types.js";
 import { parseStreamingJson } from "../llm/utils/json-parse.js";
+import { prepareClaudeSonnet5RequestContext } from "../shared/anthropic-assistant-prefill.js";
 import {
   omitFoundryBearerCredentialHeaders,
   usesFoundryBearerAuth,
@@ -28,6 +29,7 @@ import {
 import {
   defaultsClaudeAdaptiveThinking,
   resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeSonnet5ModelIdentity,
   requiresClaudeAdaptiveThinking,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
@@ -227,13 +229,18 @@ function resolvePositiveAnthropicMaxTokens(value: unknown): number | undefined {
 function resolveAnthropicMessagesMaxTokens(params: {
   modelMaxTokens: number | undefined;
   requestedMaxTokens: number | undefined;
+  useModelDefault?: boolean;
 }): number | undefined {
   const requested = resolvePositiveAnthropicMaxTokens(params.requestedMaxTokens);
   if (requested !== undefined) {
     return requested;
   }
   const modelMax = resolvePositiveAnthropicMaxTokens(params.modelMaxTokens);
-  return modelMax !== undefined ? Math.min(modelMax, 32_000) : undefined;
+  return modelMax !== undefined
+    ? params.useModelDefault
+      ? modelMax
+      : Math.min(modelMax, 32_000)
+    : undefined;
 }
 
 function adjustMaxTokensForThinking(params: {
@@ -1045,6 +1052,7 @@ function resolveAnthropicTransportOptions(
   const baseMaxTokens = resolveAnthropicMessagesMaxTokens({
     modelMaxTokens: model.maxTokens,
     requestedMaxTokens: options?.maxTokens,
+    useModelDefault: resolveClaudeSonnet5ModelIdentity(model) !== undefined,
   });
   if (baseMaxTokens === undefined) {
     throw new Error(
@@ -1139,13 +1147,19 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           throw new Error(`No API key for provider: ${model.provider}`);
         }
         const transportOptions = resolveAnthropicTransportOptions(model, options, apiKey);
+        const requestContext = prepareClaudeSonnet5RequestContext(model, context);
         const { client, isOAuthToken } = createAnthropicTransportClient({
           model,
-          context,
+          context: requestContext,
           apiKey,
           options: transportOptions,
         });
-        const builtParams = buildAnthropicParams(model, context, isOAuthToken, transportOptions);
+        const builtParams = buildAnthropicParams(
+          model,
+          requestContext,
+          isOAuthToken,
+          transportOptions,
+        );
         let params = builtParams.params;
         const toolProjection = builtParams.toolProjection;
         const nextParams = await transportOptions.onPayload?.(params, model);

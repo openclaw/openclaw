@@ -172,6 +172,31 @@ function makeAnthropicTransportModel(
   );
 }
 
+function makeAnthropicAssistantPrefillContext(): AnthropicStreamContext {
+  return {
+    messages: [
+      { role: "user", content: "Return JSON.", timestamp: 0 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "{" }],
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-sonnet-5",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: 1,
+      },
+    ],
+  };
+}
+
 async function runTransportStream(
   model: AnthropicMessagesModel,
   context: AnthropicStreamContext,
@@ -2771,7 +2796,7 @@ describe("anthropic transport stream", () => {
     await runTransportStream(
       model,
       {
-        messages: [{ role: "user", content: "Think carefully." }],
+        ...makeAnthropicAssistantPrefillContext(),
         tools: [
           {
             name: "lookup",
@@ -2784,6 +2809,8 @@ describe("anthropic transport stream", () => {
     );
 
     const payload = latestAnthropicRequest().payload;
+    expect(payload.max_tokens).toBe(128_000);
+    expect(payload.messages).toEqual([expect.objectContaining({ role: "user" })]);
     expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
     expect(payload.output_config).toEqual({ effort: "high" });
     expect(payload.tool_choice).toEqual({ type: "auto" });
@@ -2799,7 +2826,7 @@ describe("anthropic transport stream", () => {
     await runTransportStream(
       model,
       {
-        messages: [{ role: "user", content: "Reply briefly." }],
+        ...makeAnthropicAssistantPrefillContext(),
         tools: [
           {
             name: "lookup",
@@ -2812,6 +2839,8 @@ describe("anthropic transport stream", () => {
     );
 
     const payload = latestAnthropicRequest().payload;
+    expect(payload.max_tokens).toBe(128_000);
+    expect(payload.messages).toEqual([expect.objectContaining({ role: "user" })]);
     expect(payload.thinking).toEqual({ type: "disabled" });
     expect(payload.output_config).toBeUndefined();
     expect(payload.tool_choice).toEqual({ type: "any" });

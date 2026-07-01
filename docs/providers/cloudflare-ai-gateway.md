@@ -19,10 +19,11 @@ Cloudflare AI Gateway sits in front of provider APIs and lets you add analytics,
 For Anthropic models routed through Cloudflare AI Gateway, use your **Anthropic API key** as the provider key.
 </Note>
 
-When thinking is enabled for Anthropic Messages models, OpenClaw strips trailing
-assistant prefill turns before sending the payload through Cloudflare AI Gateway.
-Anthropic rejects response prefilling with extended thinking, while ordinary
-non-thinking prefill remains available.
+OpenClaw strips trailing assistant prefill turns before sending Anthropic
+Messages payloads through Cloudflare AI Gateway when thinking is enabled.
+Claude Sonnet 5 does not support assistant prefilling at all, so OpenClaw also
+strips those turns when thinking is disabled. Other non-thinking Anthropic
+models keep ordinary assistant prefills.
 
 ## Install plugin
 
