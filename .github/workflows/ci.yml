@@ -837,7 +837,6 @@ jobs:
         run: pnpm android:i18n:check
 
       - name: Check Apple app i18n catalogs
-        if: needs.preflight.outputs.run_macos == 'true'
         run: pnpm apple:i18n:check
 
   checks-fast-core:
