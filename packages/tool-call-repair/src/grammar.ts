@@ -45,6 +45,13 @@ export const XMLISH_INVOKE_OPEN_RE = new RegExp(
   `^<\\s*${TOOL_CALL_TAG_NAMESPACE}invoke\\s+name\\s*=\\s*("[^"]*"|'[^']*')\\s*>`,
   "i",
 );
+// Self-closing invoke (`<invoke name="x"/>`), optionally namespaced. This is a
+// complete, argument-less block; kept narrow (not folded into the open recognizer,
+// which feeds promotion openings) so only strip/scrub paths treat it as complete.
+export const XMLISH_INVOKE_SELF_CLOSE_RE = new RegExp(
+  `^<\\s*${TOOL_CALL_TAG_NAMESPACE}invoke\\s+name\\s*=\\s*("[^"]*"|'[^']*')\\s*/\\s*>`,
+  "i",
+);
 export const XMLISH_INVOKE_CLOSE_RE = new RegExp(
   `^<\\s*/\\s*${TOOL_CALL_TAG_NAMESPACE}invoke\\s*>`,
   "i",
@@ -305,6 +312,16 @@ function consumeXmlishAttributeParameterEnd(text: string, start: number): number
   return payloadStart + closeMatch.index + closeMatch[0].length;
 }
 
+/** Consumes the optional `<function_calls>` wrapper close plus one trailing line break. */
+function finishXmlishInvokeToolCallEnd(text: string, invokeEnd: number): number {
+  // The wrapper close only follows the final invoke; leave it for the next
+  // prefix when more invoke blocks share one `<function_calls>` wrapper.
+  const afterInvoke = skipWhitespace(text, invokeEnd);
+  const wrapperClose = XMLISH_FUNCTION_CALLS_CLOSE_RE.exec(text.slice(afterInvoke));
+  const cursor = wrapperClose ? afterInvoke + wrapperClose[0].length : invokeEnd;
+  return skipSerializedToolCallTrailingLineBreak(text, cursor);
+}
+
 /** Returns the end offset for one complete attribute-dialect invoke tool call. */
 function findXmlishInvokeToolCallEnd(text: string): number | null {
   let cursor = 0;
@@ -312,38 +329,32 @@ function findXmlishInvokeToolCallEnd(text: string): number | null {
   if (wrapperOpen) {
     cursor = skipWhitespace(text, wrapperOpen[0].length);
   }
+  // A self-closing invoke (`<invoke name="x"/>`) is the whole block. 0-param and
+  // self-closing invokes are strippable here; promotion is gated separately in
+  // payload.ts so an argument-less call is never executed from text.
+  const selfClose = XMLISH_INVOKE_SELF_CLOSE_RE.exec(text.slice(cursor));
+  if (selfClose) {
+    return finishXmlishInvokeToolCallEnd(text, cursor + selfClose[0].length);
+  }
   const invokeOpen = XMLISH_INVOKE_OPEN_RE.exec(text.slice(cursor));
   if (!invokeOpen) {
     return null;
   }
   cursor = skipWhitespace(text, cursor + invokeOpen[0].length);
 
-  let parameterCount = 0;
   while (true) {
     const parameterEnd = consumeXmlishAttributeParameterEnd(text, cursor);
     if (parameterEnd === null) {
       break;
     }
-    parameterCount += 1;
     cursor = skipWhitespace(text, parameterEnd);
   }
-  // Self-closing/no-parameter invoke blocks are intentionally not treated as a
-  // complete tool call so they are never promoted from text.
-  if (parameterCount === 0) {
-    return null;
-  }
 
+  // A real `</invoke>` close is still required: an unclosed bare open stays
+  // incomplete (returns null) so it is deferred, never greedily consumed.
   const invokeClose = XMLISH_INVOKE_CLOSE_RE.exec(text.slice(cursor));
   if (!invokeClose) {
     return null;
   }
-  cursor += invokeClose[0].length;
-  // The wrapper close only follows the final invoke; leave it for the next
-  // prefix when more invoke blocks share one `<function_calls>` wrapper.
-  const afterInvoke = skipWhitespace(text, cursor);
-  const wrapperClose = XMLISH_FUNCTION_CALLS_CLOSE_RE.exec(text.slice(afterInvoke));
-  if (wrapperClose) {
-    cursor = afterInvoke + wrapperClose[0].length;
-  }
-  return skipSerializedToolCallTrailingLineBreak(text, cursor);
+  return finishXmlishInvokeToolCallEnd(text, cursor + invokeClose[0].length);
 }

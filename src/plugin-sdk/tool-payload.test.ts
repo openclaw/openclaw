@@ -361,6 +361,14 @@ describe("parseStandalonePlainTextToolCallBlocks", () => {
         allowedToolNames: ["exec"],
       }),
     ).toBeNull();
+    // A closed 0-param invoke wrapped in <function_calls> is still argument-less;
+    // promotion must reject it even though the strip path treats it as complete.
+    expect(
+      parseStandalonePlainTextToolCallBlocks(
+        '<function_calls><invoke name="read"></invoke></function_calls>',
+        { allowedToolNames: ["read"] },
+      ),
+    ).toBeNull();
   });
 
   it("rejects attribute-dialect invoke calls with unknown tool names", () => {
@@ -668,5 +676,46 @@ describe("stripPlainTextToolCallBlocks", () => {
         "after",
       ].join("\n"),
     );
+  });
+
+  it("strips standalone closed zero-parameter invoke blocks", () => {
+    // A complete, argument-less invoke is a #97750 degraded leak, not an example;
+    // scrub the bare, wrapped, and namespaced closed forms from visible text.
+    expect(
+      stripPlainTextToolCallBlocks(["before", '<invoke name="read"></invoke>', "after"].join("\n")),
+    ).toBe("before\nafter");
+    expect(
+      stripPlainTextToolCallBlocks(
+        ["before", '<function_calls><invoke name="read"></invoke></function_calls>', "after"].join(
+          "\n",
+        ),
+      ),
+    ).toBe("before\nafter");
+    expect(
+      stripPlainTextToolCallBlocks(
+        ["before", '<mm:invoke name="read"></mm:invoke>', "after"].join("\n"),
+      ),
+    ).toBe("before\nafter");
+    expect(
+      stripPlainTextToolCallBlocks(["before", '<invoke name="read"></invoke>', "after"].join("\n")),
+    ).toBe("before\nafter");
+  });
+
+  it("strips a standalone self-closing invoke block", () => {
+    expect(
+      stripPlainTextToolCallBlocks(["before", '<invoke name="read"/>', "after"].join("\n")),
+    ).toBe("before\nafter");
+  });
+
+  it("preserves a line-leading closed zero-parameter invoke followed by same-line prose", () => {
+    const raw = '<invoke name="read"></invoke> trailing prose stays.';
+
+    expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
+  });
+
+  it("preserves a fenced closed zero-parameter invoke example", () => {
+    const raw = ["Example:", "```", '<invoke name="read"></invoke>', "```", "done"].join("\n");
+
+    expect(stripPlainTextToolCallBlocks(raw)).toBe(raw);
   });
 });

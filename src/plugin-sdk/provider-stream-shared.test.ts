@@ -693,6 +693,169 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     expect(JSON.stringify(events)).not.toContain("<invoke");
   });
 
+  // #97750 P2: a COMPLETE closed/self-closing argument-less invoke must be scrubbed
+  // from the stream (strip path) while promotion still rejects it (never executed).
+  async function collectCompatEvents(baseStreamFn: StreamFn): Promise<unknown[]> {
+    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const events: unknown[] = [];
+    for await (const event of wrapped(
+      {} as never,
+      { tools: [{ name: "read" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>) {
+      events.push(event);
+    }
+    return events;
+  }
+
+  function hasToolCallStart(events: readonly unknown[]): boolean {
+    return events.some((event) => (event as { type?: string }).type === "toolcall_start");
+  }
+
+  it("scrubs a closed zero-parameter invoke split across text deltas without promoting it", async () => {
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_delta", contentIndex: 0, delta: '<invoke name="read">' },
+        { type: "text_delta", contentIndex: 0, delta: "</invoke>" },
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: '<invoke name="read"></invoke>' }],
+            stopReason: "stop",
+          },
+        },
+      ]);
+    const events = await collectCompatEvents(baseStreamFn);
+
+    expect(JSON.stringify(events)).not.toContain("invoke");
+    expect(hasToolCallStart(events)).toBe(false);
+    const done = events.at(-1) as { type?: string; message?: { content?: unknown } };
+    expect(done.type).toBe("done");
+    expect(done.message?.content).toEqual([]);
+  });
+
+  it("scrubs a self-closing invoke streamed across text deltas without promoting it", async () => {
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_delta", contentIndex: 0, delta: '<invoke name="read"' },
+        { type: "text_delta", contentIndex: 0, delta: "/>" },
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: '<invoke name="read"/>' }],
+            stopReason: "stop",
+          },
+        },
+      ]);
+    const events = await collectCompatEvents(baseStreamFn);
+
+    expect(JSON.stringify(events)).not.toContain("invoke");
+    expect(hasToolCallStart(events)).toBe(false);
+    expect((events.at(-1) as { message?: { content?: unknown } }).message?.content).toEqual([]);
+  });
+
+  it("scrubs a done-message-only closed zero-parameter invoke", async () => {
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: '<invoke name="read"></invoke>' }],
+            stopReason: "stop",
+          },
+        },
+      ]);
+    const events = await collectCompatEvents(baseStreamFn);
+
+    expect(events.map((event) => (event as { type?: string }).type)).toEqual(["done"]);
+    expect(JSON.stringify(events)).not.toContain("invoke");
+    expect((events.at(-1) as { message?: { content?: unknown } }).message?.content).toEqual([]);
+  });
+
+  it("scrubs an unclosed bare invoke at done via the incomplete path without promoting it", async () => {
+    // Boundary: an unclosed `<invoke name="read">` (no </invoke>, no />) is not a
+    // complete block, so it must never be greedily consumed/promoted; it scrubs via
+    // the existing incomplete-prefix path to an empty assistant message.
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_delta", contentIndex: 0, delta: '<invoke name="read">' },
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: '<invoke name="read">' }],
+            stopReason: "stop",
+          },
+        },
+      ]);
+    const events = await collectCompatEvents(baseStreamFn);
+
+    expect(JSON.stringify(events)).not.toContain("invoke");
+    expect(hasToolCallStart(events)).toBe(false);
+    expect((events.at(-1) as { message?: { content?: unknown } }).message?.content).toEqual([]);
+  });
+
+  it("promotes a with-parameters invoke while argument-less siblings are rejected", async () => {
+    const rawToolText =
+      '<invoke name="read"><parameter name="path">src/index.ts</parameter></invoke>';
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_delta", contentIndex: 0, delta: rawToolText },
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: rawToolText }],
+            stopReason: "stop",
+          },
+        },
+      ]);
+    const events = await collectCompatEvents(baseStreamFn);
+
+    expect(hasToolCallStart(events)).toBe(true);
+    const done = events.at(-1) as { message?: { content?: unknown; stopReason?: unknown } };
+    expect(done.message?.stopReason).toBe("toolUse");
+    expect(done.message?.content).toEqual([
+      expect.objectContaining({
+        type: "toolCall",
+        name: "read",
+        arguments: { path: "src/index.ts" },
+      }),
+    ]);
+  });
+
+  it("preserves visible text after a closed or self-closing zero-parameter invoke", async () => {
+    for (const invoke of ['<invoke name="read"></invoke>', '<invoke name="read"/>']) {
+      const raw = `${invoke}\nHello`;
+      const baseStreamFn: StreamFn = () =>
+        createEventStream([
+          { type: "text_delta", contentIndex: 0, delta: raw },
+          {
+            type: "done",
+            reason: "stop",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: raw }],
+              stopReason: "stop",
+            },
+          },
+        ]);
+      const events = await collectCompatEvents(baseStreamFn);
+
+      // The stream layer defers mixed content to the visible-text scrubber, but it
+      // must not over-scrub the trailing prose, and it must not promote a call.
+      expect(JSON.stringify(events)).toContain("Hello");
+      expect(hasToolCallStart(events)).toBe(false);
+    }
+  });
   it("does not promote complete-looking text tool calls after a length stop", async () => {
     const rawToolText = '[tool:read] {"path":"/tmp/file.txt"}';
     const baseStreamFn: StreamFn = () =>

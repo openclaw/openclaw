@@ -13,7 +13,9 @@ import {
   stripXmlishAttributeQuotes,
   XMLISH_FUNCTION_CALLS_OPEN_RE,
   XMLISH_INVOKE_OPEN_RE,
+  XMLISH_INVOKE_SELF_CLOSE_RE,
 } from "./grammar.js";
+import { parseStandalonePlainTextToolCallBlocks } from "./payload.js";
 
 export type PlainTextToolCallNameMatcher = {
   /** True only when the candidate is a complete tool name this request may repair. */
@@ -81,6 +83,22 @@ function couldStillBeXmlishParameterPayload(text: string, start: number): boolea
   // Parameter payload may arrive in the equals dialect (`<parameter=name>`) or
   // the attribute dialect (`<parameter name="...">`), each optionally namespaced.
   return XMLISH_INVOKE_NAMESPACES.some((ns) => matchesLiteralPrefix(rest, `<${ns}parameter`));
+}
+
+// True while streamed bytes after a complete invoke open could still become the
+// `</invoke>` close (bare or namespaced). A closed 0-param invoke has no parameter
+// payload, so accepting a partial/complete close keeps it buffered for scrub
+// instead of letting it fall through as visible text.
+function couldStillBeXmlishInvokeCloseTail(text: string, start: number): boolean {
+  let cursor = start;
+  while (cursor < text.length && /\s/.test(text[cursor] ?? "")) {
+    cursor += 1;
+  }
+  if (cursor >= text.length) {
+    return true;
+  }
+  const rest = text.slice(cursor).toLowerCase();
+  return XMLISH_INVOKE_NAMESPACES.some((ns) => matchesLiteralPrefix(rest, `</${ns}invoke`));
 }
 
 // Phase-scan result for an optional grammar token: either fully consumed (with the
@@ -247,8 +265,10 @@ function isViableXmlishInvokeOpenPrefix(
   if (!matcher.hasExactName(text.slice(cursor, close))) {
     return false;
   }
-  // After the closing quote only optional whitespace and the `>` remain.
-  return /^\s*>?$/.test(text.slice(close + 1));
+  // After the closing quote only optional whitespace and the `>` remain, or a
+  // self-closing `/>` tail (`<invoke name="x"/>`); accept a partial of either so
+  // a streaming self-close stays buffered instead of leaking as visible text.
+  return /^\s*\/?\s*>?$/.test(text.slice(close + 1));
 }
 
 function couldStillBeXmlishInvokeOpen(
@@ -263,7 +283,13 @@ function couldStillBeXmlishInvokeOpen(
     if (!matcher.hasExactName(stripXmlishAttributeQuotes(complete[1]))) {
       return false;
     }
-    return couldStillBeXmlishParameterPayload(text, complete[0].length);
+    // After a complete open, either a parameter payload or the `</invoke>` close
+    // keeps the buffer viable. Arbitrary non-close text (mixed prose) is neither,
+    // so it still falls through to visible text unaffected.
+    return (
+      couldStillBeXmlishParameterPayload(text, complete[0].length) ||
+      couldStillBeXmlishInvokeCloseTail(text, complete[0].length)
+    );
   }
   return isViableXmlishInvokeOpenPrefix(text, matcher);
 }
@@ -494,6 +520,12 @@ function matchXmlishInvokeOpenName(text: string): string | null {
   const wrapper = XMLISH_FUNCTION_CALLS_OPEN_RE.exec(rest);
   if (wrapper) {
     rest = rest.slice(wrapper[0].length).replace(/^\s+/, "");
+  }
+  // Recognize the self-closing form too so its strip extent is computed and
+  // mixed self-close content is not over-scrubbed.
+  const selfClose = XMLISH_INVOKE_SELF_CLOSE_RE.exec(rest);
+  if (selfClose?.[1]) {
+    return stripXmlishAttributeQuotes(selfClose[1]);
   }
   const invoke = XMLISH_INVOKE_OPEN_RE.exec(rest);
   return invoke?.[1] ? stripXmlishAttributeQuotes(invoke[1]) : null;
@@ -1237,10 +1269,15 @@ export function scrubOverCapPlainTextToolCallMessage(params: {
     // block to promote, yet the whole buffer is leaked tool-call markup. stripSerializedToolCall-
     // Prefixes returns null only when no complete prefix can be consumed, which separates this
     // truncated-stream case from a complete block (returns the trailing remainder, "" when fully
-    // consumed) that must still fall through to promotion. Scrub it so the raw invoke/parameter
-    // XML is removed instead of flushed as visible text via the done branch.
-    if (stripSerializedToolCallPrefixes(candidateText, params.matcher) !== null) {
-      return undefined;
+    // consumed). A complete block still defers to promotion, but only when visible text follows
+    // it or it is actually promotable (has parameters); a pure closed or self-closing 0-param
+    // invoke is neither, so it falls through to scrub instead of flushing raw invoke XML (#97750).
+    const strippedRemainder = stripSerializedToolCallPrefixes(candidateText, params.matcher);
+    if (strippedRemainder !== null) {
+      const promotable = parseStandalonePlainTextToolCallBlocks(candidateText) !== null;
+      if (strippedRemainder.trim() || promotable) {
+        return undefined;
+      }
     }
     const scrubbed = scrubPlainTextToolCallContent(record.content, candidateText, params.matcher);
     return scrubbed.changed ? { ...record, content: scrubbed.content } : undefined;

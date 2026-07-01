@@ -14,6 +14,7 @@ import {
   XMLISH_FUNCTION_CALLS_OPEN_RE,
   XMLISH_INVOKE_CLOSE_RE,
   XMLISH_INVOKE_OPEN_RE,
+  XMLISH_INVOKE_SELF_CLOSE_RE,
   XMLISH_PARAMETER_CLOSE_RE,
   XMLISH_PARAMETER_OPEN_RE,
   xmlishParameterName,
@@ -52,6 +53,9 @@ type PlainTextToolCallOpening = {
   end: number;
   name: string;
   requiresClosing: boolean;
+  // A self-closing invoke (`<invoke name="x"/>`) already closed at the open tag;
+  // only an optional `</function_calls>` wrapper close may still follow.
+  selfClosed?: boolean;
 };
 
 function parseBracketOpening(text: string, start: number): PlainTextToolCallOpening | null {
@@ -145,6 +149,16 @@ function parseXmlishInvokeOpening(text: string, start: number): PlainTextToolCal
   const wrapperMatch = XMLISH_FUNCTION_CALLS_OPEN_RE.exec(text.slice(cursor));
   if (wrapperMatch) {
     cursor = skipWhitespace(text, cursor + wrapperMatch[0].length);
+  }
+  const selfCloseMatch = XMLISH_INVOKE_SELF_CLOSE_RE.exec(text.slice(cursor));
+  if (selfCloseMatch?.[1]) {
+    return {
+      attributeDialectInvoke: true,
+      end: cursor + selfCloseMatch[0].length,
+      name: stripXmlishAttributeQuotes(selfCloseMatch[1]),
+      requiresClosing: false,
+      selfClosed: true,
+    };
   }
   const invokeMatch = XMLISH_INVOKE_OPEN_RE.exec(text.slice(cursor));
   if (!invokeMatch?.[1]) {
@@ -349,6 +363,10 @@ function consumeXmlishToolCallClose(
   start: number,
   opening: PlainTextToolCallOpening,
 ): number | null {
+  if (opening.selfClosed) {
+    // Already closed at the open tag; only an optional wrapper close may follow.
+    return consumeOptionalXmlishWrapperClose(text, start);
+  }
   if (opening.attributeDialectInvoke) {
     return consumeXmlishInvokeClose(text, start);
   }
@@ -363,18 +381,15 @@ function parseXmlishPlainTextToolCallBlockEndAt(text: string, start: number): nu
     return null;
   }
 
+  // 0-param/self-closing invokes are strippable here; promotion is gated
+  // separately in parseXmlishPlainTextToolCallBlockAt so they are never executed.
   let cursor = opening.end;
-  let parameterCount = 0;
   while (true) {
     const parameter = findXmlishParameterBlock(text, cursor);
     if (!parameter) {
       break;
     }
-    parameterCount += 1;
     cursor = parameter.end;
-  }
-  if (parameterCount === 0) {
-    return null;
   }
   return consumeXmlishToolCallClose(text, cursor, opening);
 }
