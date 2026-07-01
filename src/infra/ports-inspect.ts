@@ -53,12 +53,15 @@ function parseLsofFieldOutput(output: string): PortListener[] {
   for (const line of lines) {
     if (line.startsWith("p")) {
       const pid = Number.parseInt(line.slice(1), 10);
-      processFields = Number.isFinite(pid) ? { pid } : {};
+      processFields = Number.isFinite(pid) && pid > 0 ? { pid } : {};
     } else if (line.startsWith("c")) {
       processFields.command = line.slice(1);
     } else if (line.startsWith("n")) {
       // TCP 127.0.0.1:18789 (LISTEN)
       // TCP *:18789 (LISTEN)
+      if (!processFields.pid) {
+        continue;
+      }
       listeners.push({ ...processFields, address: line.slice(1) });
     }
   }
