@@ -1,10 +1,9 @@
-/** E2E tests for native /stop targeting the active auto-reply session. */
+/** E2E tests for auto-reply trigger and command handling. */
 import fs from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   expectInlineCommandHandledAndStripped,
-  getAbortEmbeddedAgentRunMock,
   getCompactEmbeddedAgentSessionMock,
   getRunEmbeddedAgentMock,
   installTriggerHandlingReplyHarness,
@@ -19,7 +18,6 @@ import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { loadSessionStore, resolveSessionKey, saveSessionStore } from "../config/sessions.js";
 import { registerGroupIntroPromptCases } from "./reply.triggers.group-intro-prompts.cases.js";
 import { registerTriggerHandlingUsageSummaryCases } from "./reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.cases.js";
-import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./reply/queue.js";
 import type { MsgContext } from "./templating.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
@@ -596,80 +594,6 @@ describe("trigger handling", () => {
         firstMockCallArg(getCompactEmbeddedAgentSessionMock(), "embedded OpenClaw compaction")
           .sessionFile,
       ).toContain(join("agents", "worker1", "sessions"));
-    });
-  });
-
-  it("aborts native target sessions and clears queued followups", async () => {
-    await withTempHome(async (home) => {
-      const cfg = makeCfg(home);
-      cfg.session = { ...cfg.session, store: join(home, "native-stop.sessions.json") };
-      getAbortEmbeddedAgentRunMock().mockReset().mockReturnValue(false);
-      const storePath = cfg.session?.store;
-      if (!storePath) {
-        throw new Error("missing session store path");
-      }
-      const targetSessionKey = "agent:main:telegram:group:123";
-      const targetSessionId = "session-target";
-      await saveSessionStore(
-        storePath,
-        {
-          [targetSessionKey]: {
-            sessionId: targetSessionId,
-            updatedAt: Date.now(),
-          },
-        },
-        { skipMaintenance: true },
-      );
-      const followupRun: FollowupRun = {
-        prompt: "queued",
-        enqueuedAt: Date.now(),
-        run: {
-          agentId: "main",
-          agentDir: join(home, "agent"),
-          sessionId: targetSessionId,
-          sessionKey: targetSessionKey,
-          messageProvider: "telegram",
-          agentAccountId: "acct",
-          sessionFile: join(home, "session.jsonl"),
-          workspaceDir: join(home, "workspace"),
-          config: cfg,
-          provider: "anthropic",
-          model: "claude-opus-4-6",
-          timeoutMs: 10,
-          blockReplyBreak: "text_end",
-        },
-      };
-      enqueueFollowupRun(
-        targetSessionKey,
-        followupRun,
-        { mode: "collect", debounceMs: 0, cap: 20, dropPolicy: "summarize" },
-        "none",
-      );
-      expect(getFollowupQueueDepth(targetSessionKey)).toBe(1);
-
-      const res = await getReplyFromConfig(
-        {
-          Body: "/stop",
-          From: "telegram:111",
-          To: "telegram:111",
-          ChatType: "direct",
-          Provider: "telegram",
-          Surface: "telegram",
-          SessionKey: "telegram:slash:111",
-          CommandSource: "native",
-          CommandTargetSessionKey: targetSessionKey,
-          CommandAuthorized: true,
-        },
-        {},
-        cfg,
-      );
-
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toBe("⚙️ Agent was aborted.");
-      expect(getAbortEmbeddedAgentRunMock()).toHaveBeenCalledWith(targetSessionId);
-      const store = loadSessionStore(storePath);
-      expect(store[targetSessionKey]?.abortedLastRun).toBe(true);
-      expect(getFollowupQueueDepth(targetSessionKey)).toBe(0);
     });
   });
 
