@@ -32,6 +32,13 @@ import {
 import { normalizeLowercaseStringOrEmpty, sanitizeFileName } from "../utils/string-normalize.js";
 import { audioFileToSilkBase64, shouldTranscodeVoice, waitForFile } from "./outbound-audio-port.js";
 import {
+  isPathWithinRoot,
+  mergeMediaLocalRoots,
+  resolveOutboundMediaLocalRoots,
+  resolveWorkspacePathCandidate,
+  resolveWorkspacePathCandidates,
+} from "./outbound-media-path.js";
+import {
   buildDailyLimitExceededResult,
   buildFileTooLargeResult,
 } from "./outbound-result-helpers.js";
@@ -107,28 +114,8 @@ type SendDocumentOptions = {
   allowQQBotDataDownloads?: boolean;
 };
 
-function resolveOutboundMediaLocalRoots(ctx: OutboundMediaAccessContext): string[] | undefined {
-  return mergeLocalRoots(
-    ctx.mediaAccess?.localRoots,
-    ctx.mediaLocalRoots,
-    ctx.mediaAccess?.workspaceDir ? [ctx.mediaAccess.workspaceDir] : undefined,
-  );
-}
-
-function mergeLocalRoots(...groups: Array<readonly string[] | undefined>): string[] | undefined {
-  const roots = groups
-    .flatMap((group) => group ?? [])
-    .map((root) => root.trim())
-    .filter(Boolean);
-  return roots.length > 0 ? Array.from(new Set(roots)) : undefined;
-}
-
 function isHttpOrDataSource(pathValue: string): boolean {
-  return (
-    pathValue.startsWith("http://") ||
-    pathValue.startsWith("https://") ||
-    pathValue.startsWith("data:")
-  );
+  return /^https?:\/\//i.test(pathValue) || pathValue.startsWith("data:");
 }
 
 function resolveMissingPathWithinRoots(
@@ -146,55 +133,6 @@ function resolveMissingPathWithinRoots(
       label: "QQ Bot local roots",
       allowMissing: true,
     })?.path ?? null
-  );
-}
-
-function resolvePathInsideWorkspace(
-  workspaceDir: string,
-  pathWithinWorkspace: string,
-): string | null {
-  const mappedPath = path.resolve(workspaceDir, pathWithinWorkspace);
-  return isPathWithinRoot(mappedPath, workspaceDir) ? mappedPath : null;
-}
-
-function resolveWorkspacePathCandidate(
-  normalizedPath: string,
-  workspaceDir?: string,
-): string | null {
-  if (!workspaceDir) {
-    return normalizedPath;
-  }
-  if (normalizedPath === "/workspace") {
-    return workspaceDir;
-  }
-  if (normalizedPath.startsWith("/workspace/")) {
-    return resolvePathInsideWorkspace(workspaceDir, normalizedPath.slice("/workspace/".length));
-  }
-  if (path.isAbsolute(normalizedPath)) {
-    return normalizedPath;
-  }
-  return resolvePathInsideWorkspace(workspaceDir, normalizedPath);
-}
-
-function resolveWorkspacePathCandidates(normalizedPath: string, workspaceDir?: string): string[] {
-  const mappedPath = resolveWorkspacePathCandidate(normalizedPath, workspaceDir);
-  if (!mappedPath) {
-    return [];
-  }
-  if (mappedPath === normalizedPath) {
-    return [normalizedPath];
-  }
-  return path.isAbsolute(normalizedPath) ? [normalizedPath, mappedPath] : [mappedPath];
-}
-
-function isPathWithinRoot(candidatePath: string, rootPath: string): boolean {
-  const resolvedRoot = path.resolve(rootPath);
-  if (resolvedRoot === path.parse(resolvedRoot).root) {
-    return false;
-  }
-  const relative = path.relative(resolvedRoot, path.resolve(candidatePath));
-  return (
-    relative === "" || (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
   );
 }
 
@@ -253,12 +191,12 @@ function mediaFileTypeForKind(mediaKind: QQBotMediaKind): MediaFileType {
 function senderKindForLoadedMedia(
   mediaKind: QQBotMediaKind,
   loadedKind: "image" | "audio" | "video" | "document" | undefined,
-): "image" | "video" | "file" {
+): "image" | "video" | "file" | null {
   if (mediaKind === "image") {
-    return "image";
+    return loadedKind === "image" ? "image" : null;
   }
   if (mediaKind === "video") {
-    return "video";
+    return loadedKind === "video" ? "video" : null;
   }
   if (mediaKind === "file") {
     return "file";
@@ -339,6 +277,12 @@ async function trySendViaHostRead(
       workspaceDir: mediaAccess?.workspaceDir,
     });
     const kind = senderKindForLoadedMedia(mediaKind, loaded.kind);
+    if (!kind) {
+      return {
+        channel: "qqbot",
+        error: `Unsupported ${mediaKind} media type: ${loaded.kind ?? "unknown"}`,
+      };
+    }
     const creds = accountToCreds(ctx.account);
     const target: DeliveryTarget = { type: ctx.targetType, id: ctx.targetId };
     if (target.type !== "c2c" && target.type !== "group") {
@@ -408,7 +352,7 @@ export function resolveOutboundMediaPath(
   }
 
   if (options.allowMissingLocalPath) {
-    const missingRoots = mergeLocalRoots([getQQBotMediaDir()], options.extraLocalRoots);
+    const missingRoots = mergeMediaLocalRoots([getQQBotMediaDir()], options.extraLocalRoots);
     if (missingRoots) {
       for (const candidatePath of candidatePaths) {
         const allowedMissingPath = resolveMissingPathWithinRoots(candidatePath, missingRoots);
@@ -821,7 +765,7 @@ export async function sendDocument(
   if (hostReadResult) {
     return hostReadResult;
   }
-  const extraLocalRoots = mergeLocalRoots(
+  const extraLocalRoots = mergeMediaLocalRoots(
     options.allowQQBotDataDownloads ? [getQQBotDataDir("downloads")] : undefined,
     resolveOutboundMediaLocalRoots(ctx),
   );

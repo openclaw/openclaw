@@ -41,6 +41,15 @@ vi.mock("../messaging/sender.js", () => ({
   withTokenRetry: async (_creds: unknown, fn: () => Promise<unknown>) => await fn(),
 }));
 
+vi.mock("../utils/image-size.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../utils/image-size.js")>("../utils/image-size.js");
+  return {
+    ...actual,
+    getImageSize: vi.fn(async () => ({ width: 640, height: 480 })),
+  };
+});
+
 vi.mock("../utils/audio.js", () => ({
   audioFileToSilkBase64: audioFileToSilkBase64Mock,
 }));
@@ -965,6 +974,27 @@ describe("dispatchOutbound", () => {
 
     expect(sendTextMock.mock.calls.map((call) => call[1])).toEqual([progress, "final answer"]);
     expect(sendTextMock.mock.calls[0]?.[3]).toMatchObject({ forcePlainText: true });
+    expect(sendMediaMock).not.toHaveBeenCalled();
+  });
+
+  it("normalizes markdown image destinations with titles before dedupe and dimension backfill", async () => {
+    const imageUrl = "https://cdn.example.com/chart.png";
+    const runtime = makeRuntime({
+      onDeliver: async (deliver) => {
+        await deliver({ text: `Here is ![chart](${imageUrl} "chart")` }, { kind: "block" });
+      },
+    });
+
+    await dispatchOutbound(makeInbound(), {
+      runtime,
+      cfg: {},
+      account: { ...account, markdownSupport: true },
+    });
+
+    const sentText = sendTextMock.mock.calls.map((call) => String(call[1])).join("\n");
+    expect(sentText.match(/https:\/\/cdn\.example\.com\/chart\.png/g)).toHaveLength(1);
+    expect(sentText).toContain(`![#640px #480px](${imageUrl})`);
+    expect(sentText).not.toContain(`${imageUrl} "chart"`);
     expect(sendMediaMock).not.toHaveBeenCalled();
   });
 

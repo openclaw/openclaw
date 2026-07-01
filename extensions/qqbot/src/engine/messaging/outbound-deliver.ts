@@ -763,7 +763,11 @@ async function sendMarkdownReply(
   }
 
   // Handle public image URLs — format as markdown images with dimensions.
-  const existingMdUrls = new Set(mdMatches.map((m) => m[2]));
+  const existingMdUrls = new Set(
+    mdMatches
+      .map((m) => extractMarkdownImageUrl(m[2]))
+      .filter((url): url is string => Boolean(url)),
+  );
   const imagesToAppend: string[] = [];
 
   for (const url of httpImageUrls) {
@@ -785,9 +789,9 @@ async function sendMarkdownReply(
   let result = textWithoutImages;
   for (const m of mdMatches) {
     const fullMatch = m[0];
-    const imgUrl = m[2];
-    const isHttpUrl = imgUrl.startsWith("http://") || imgUrl.startsWith("https://");
-    if (isHttpUrl && !hasQQBotImageSize(fullMatch)) {
+    const imgUrl = extractMarkdownImageUrl(m[2]);
+    const isHttpUrl = imgUrl?.startsWith("http://") || imgUrl?.startsWith("https://");
+    if (imgUrl && isHttpUrl && !hasQQBotImageSize(fullMatch)) {
       try {
         const size = await getImageSize(imgUrl);
         result = result.replace(fullMatch, formatQQBotMarkdownImage(imgUrl, size));

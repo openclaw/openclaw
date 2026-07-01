@@ -59,6 +59,7 @@ import {
   resolveOutboundMediaPath,
   sendDocument,
   sendPhoto,
+  sendVideoMsg,
   sendVoice,
 } from "./outbound-media-send.js";
 import { OUTBOUND_ERROR_CODES } from "./outbound-types.js";
@@ -223,16 +224,52 @@ describe("trySendViaHostRead error handling", () => {
     );
   });
 
-  it("returns OutboundResult.error when senderSendMedia rejects", async () => {
+  it("rejects host-read image sends when the loaded media is not an image", async () => {
     mockedLoadOutboundMediaFromUrl.mockResolvedValue({
       buffer: Buffer.from("report"),
       kind: "document",
-      fileName: "report.docx",
-      contentType: "application/octet-stream",
+      fileName: "report.pdf",
+      contentType: "application/pdf",
+    });
+    mockedSenderSendMedia.mockResolvedValue({ id: "media-1", timestamp: 123 });
+
+    const result = await sendPhoto(makeCtx(), "/workspace/report.pdf");
+
+    expect(result).toMatchObject({
+      channel: "qqbot",
+      error: expect.stringContaining("Unsupported image"),
+    });
+    expect(mockedSenderSendMedia).not.toHaveBeenCalled();
+  });
+
+  it("rejects host-read video sends when the loaded media is not a video", async () => {
+    mockedLoadOutboundMediaFromUrl.mockResolvedValue({
+      buffer: Buffer.from("report"),
+      kind: "document",
+      fileName: "report.pdf",
+      contentType: "application/pdf",
+    });
+    mockedSenderSendMedia.mockResolvedValue({ id: "media-1", timestamp: 123 });
+
+    const result = await sendVideoMsg(makeCtx(), "/workspace/report.pdf");
+
+    expect(result).toMatchObject({
+      channel: "qqbot",
+      error: expect.stringContaining("Unsupported video"),
+    });
+    expect(mockedSenderSendMedia).not.toHaveBeenCalled();
+  });
+
+  it("returns OutboundResult.error when senderSendMedia rejects", async () => {
+    mockedLoadOutboundMediaFromUrl.mockResolvedValue({
+      buffer: Buffer.from("image"),
+      kind: "image",
+      fileName: "chart.png",
+      contentType: "image/png",
     });
     mockedSenderSendMedia.mockRejectedValue(new Error("qq upload quota exceeded"));
 
-    const result = await sendPhoto(makeCtx(), "/tmp/openclaw-sandbox/report.docx");
+    const result = await sendPhoto(makeCtx(), "/tmp/openclaw-sandbox/chart.png");
 
     expect(result).toMatchObject({ channel: "qqbot", error: expect.any(String) });
     expect(result.error).toContain("qq upload quota exceeded");
@@ -249,7 +286,7 @@ describe("trySendViaHostRead error handling", () => {
       new MockUploadDailyLimitExceededError("<buffer>", 2048, "daily quota"),
     );
 
-    const result = await sendPhoto(makeCtx(), "report.docx");
+    const result = await sendDocument(makeCtx(), "report.docx");
 
     expect(result).toMatchObject({
       channel: "qqbot",
@@ -269,7 +306,7 @@ describe("trySendViaHostRead error handling", () => {
     });
     mockedSenderSendMedia.mockResolvedValue({ id: "media-1", timestamp: 123 });
 
-    const result = await sendPhoto(makeCtx(), "/workspace/report.docx");
+    const result = await sendDocument(makeCtx(), "/workspace/report.docx");
 
     expect(result).toMatchObject({ channel: "qqbot", messageId: "media-1" });
     expect(mockedLoadOutboundMediaFromUrl).toHaveBeenCalledWith(
@@ -319,7 +356,7 @@ describe("trySendViaHostRead error handling", () => {
     });
     mockedSenderSendMedia.mockResolvedValue({ id: "media-1", timestamp: 123 });
 
-    const result = await sendPhoto(
+    const result = await sendDocument(
       {
         ...makeCtx(),
         mediaAccess: {

@@ -22,6 +22,10 @@ import { normalizePath } from "../utils/platform.js";
 import { normalizeLowercaseStringOrEmpty } from "../utils/string-normalize.js";
 import { sanitizeFileName } from "../utils/string-normalize.js";
 import { openLocalFile } from "./media-source.js";
+import {
+  resolveOutboundMediaLocalRoots,
+  resolveWorkspacePathCandidates,
+} from "./outbound-media-path.js";
 import type { OutboundMediaAccessContext } from "./outbound-types.js";
 import {
   sendText as senderSendText,
@@ -205,77 +209,22 @@ function formatMediaTypeLabel(mediaType: StructuredPayloadMediaType): string {
   return mediaType[0].toUpperCase() + mediaType.slice(1);
 }
 
-function resolveStructuredPayloadLocalRoots(ctx: ReplyContext): string[] | undefined {
-  const roots = [
-    ...(ctx.mediaAccess?.localRoots ?? []),
-    ...(ctx.mediaLocalRoots ?? []),
-    ...(ctx.mediaAccess?.workspaceDir ? [ctx.mediaAccess.workspaceDir] : []),
-  ].filter((root) => root.trim());
-  return roots.length > 0 ? Array.from(new Set(roots)) : undefined;
-}
-
-function isPathWithinRoot(candidatePath: string, rootPath: string): boolean {
-  const resolvedRoot = path.resolve(rootPath);
-  if (resolvedRoot === path.parse(resolvedRoot).root) {
-    return false;
-  }
-  const relative = path.relative(resolvedRoot, path.resolve(candidatePath));
-  return (
-    relative === "" || (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
-  );
-}
-
-function resolvePathInsideWorkspace(
-  workspaceDir: string,
-  pathWithinWorkspace: string,
-): string | null {
-  const mappedPath = path.resolve(workspaceDir, pathWithinWorkspace);
-  return isPathWithinRoot(mappedPath, workspaceDir) ? mappedPath : null;
-}
-
-function resolveStructuredPayloadCandidate(ctx: ReplyContext, payloadPath: string): string | null {
-  const normalizedPath = normalizePath(payloadPath);
-  const workspaceDir = ctx.mediaAccess?.workspaceDir;
-  if (!workspaceDir) {
-    return normalizedPath;
-  }
-  if (normalizedPath === "/workspace") {
-    return workspaceDir;
-  }
-  if (normalizedPath.startsWith("/workspace/")) {
-    return resolvePathInsideWorkspace(workspaceDir, normalizedPath.slice("/workspace/".length));
-  }
-  if (path.isAbsolute(normalizedPath)) {
-    return normalizedPath;
-  }
-  return resolvePathInsideWorkspace(workspaceDir, normalizedPath);
-}
-
-function resolveStructuredPayloadCandidates(ctx: ReplyContext, payloadPath: string): string[] {
-  const normalizedPath = normalizePath(payloadPath);
-  const mappedPath = resolveStructuredPayloadCandidate(ctx, payloadPath);
-  if (!mappedPath) {
-    return [];
-  }
-  if (mappedPath === normalizedPath) {
-    return [normalizedPath];
-  }
-  return path.isAbsolute(normalizedPath) ? [normalizedPath, mappedPath] : [mappedPath];
-}
-
 function validateStructuredPayloadLocalPath(
   ctx: ReplyContext,
   payloadPath: string,
   mediaType: StructuredPayloadMediaType,
 ): string | null {
-  const candidatePaths = resolveStructuredPayloadCandidates(ctx, payloadPath);
+  const candidatePaths = resolveWorkspacePathCandidates(
+    normalizePath(payloadPath),
+    ctx.mediaAccess?.workspaceDir,
+  );
+  const localRoots = resolveOutboundMediaLocalRoots(ctx);
   for (const candidatePath of candidatePaths) {
     const allowedPath = resolveTrustedOutboundMediaPath(candidatePath);
     if (allowedPath) {
       return allowedPath;
     }
 
-    const localRoots = resolveStructuredPayloadLocalRoots(ctx);
     if (localRoots) {
       const scopedPath = resolveLocalPathFromRootsSync({
         filePath: candidatePath,
