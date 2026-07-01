@@ -87,7 +87,11 @@ export async function ingestMemoryWikiSource(params: {
     ].join("\n"),
   });
 
-  const existing = created ? "" : await fs.readFile(pagePath, "utf8").catch(() => "");
+  // Avoid treating a transient read failure as "no existing page":
+  // .catch(() => "") silently wipes the user ## Notes block when the
+  // re-read races with a concurrent writer (path-mismatch) or hits I/O
+  // errors.  Let the error propagate so the caller can retry.
+  const existing = created ? "" : await fs.readFile(pagePath, "utf8");
   await fs.writeFile(
     pagePath,
     existing ? preserveHumanNotesBlock(markdown, existing) : markdown,

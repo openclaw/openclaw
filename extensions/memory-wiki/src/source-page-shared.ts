@@ -52,7 +52,11 @@ export async function writeImportedSourcePage(params: {
 
   const raw = await fs.readFile(params.sourcePath, "utf8");
   const rendered = params.buildRendered(raw, updatedAt);
-  const existing = pageStat ? await vault.readText(params.pagePath).catch(() => "") : "";
+  // Avoid treating a transient read failure as "no existing page":
+  // .catch(() => "") silently wipes the user ## Notes block when the
+  // re-read races with a concurrent writer (path-mismatch) or hits I/O
+  // errors.  Let the error propagate so the caller can retry.
+  const existing = pageStat ? await vault.readText(params.pagePath) : "";
   const nextRendered = existing ? preserveHumanNotesBlock(rendered, existing) : rendered;
   if (existing !== nextRendered) {
     await writeGuardedVaultPage({
