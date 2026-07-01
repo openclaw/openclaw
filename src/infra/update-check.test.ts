@@ -196,13 +196,16 @@ describe("resolveNpmChannelTag", () => {
 
   it("uses the public registry when no npm command is available", async () => {
     const fetch = vi.fn(async () => {
-      return {
-        ok: true,
-        json: async () => ({
+      return new Response(
+        JSON.stringify({
           version: "2026.6.8",
           engines: { node: ">=22.19.0" },
         }),
-      } as Response;
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
     });
     vi.stubGlobal("fetch", fetch);
 
@@ -235,6 +238,73 @@ describe("resolveNpmChannelTag", () => {
       error: "HTTP 503",
     });
     expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects oversized NPM registry responses", async () => {
+    const ONE_MIB = 1024 * 1024;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let i = 0; i < 5; i++) controller.enqueue(new Uint8Array(ONE_MIB));
+        controller.close();
+      },
+    });
+    const fetch = vi.fn(
+      async () =>
+        new Response(body, {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    const result = await fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 5000 });
+
+    expect(result.error).toContain("NPM registry response exceeds");
+    expect(result.version).toBeNull();
+  });
+
+  it("rejects oversized NPM registry responses from a real HTTP server (behavior proof)", async () => {
+    let socketDestroyed = false;
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      const ONE_MIB = 1024 * 1024;
+      const chunk = Buffer.alloc(ONE_MIB, 0x41);
+      const writeMore = () => {
+        if (socketDestroyed) return;
+        for (let i = 0; i < 4 && !socketDestroyed; i++) {
+          if (!res.write(chunk)) {
+            res.once("drain", writeMore);
+            return;
+          }
+        }
+        if (!socketDestroyed) setImmediate(writeMore);
+      };
+      writeMore();
+    });
+    server.on("connection", (socket) => {
+      socket.on("close", () => {
+        socketDestroyed = true;
+      });
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const port = (server.address() as { port: number }).port;
+
+    try {
+      const realFetch = fetch;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url: string | URL, init?: RequestInit) => {
+          return realFetch(`http://127.0.0.1:${port}`, init);
+        }),
+      );
+
+      const result = await fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 5000 });
+
+      expect(result.error).toContain("NPM registry response exceeds");
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it("falls back to latest when beta is older", async () => {

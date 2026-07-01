@@ -81,6 +81,39 @@ describe("loginMiniMaxPortalOAuth", () => {
     expect(textSpy).not.toHaveBeenCalled();
   });
 
+  it("rejects oversized OAuth authorization response bodies and cancels the stream", async () => {
+    let canceled = false;
+    const ONE_MIB = 1024 * 1024;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let i = 0; i < 18; i++) controller.enqueue(new Uint8Array(ONE_MIB));
+        controller.close();
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(body, {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }),
+    );
+
+    const error = await loginMiniMaxPortalOAuth({
+      openUrl: vi.fn(async () => undefined),
+      note: vi.fn(async () => undefined),
+      progress: { update: vi.fn(), stop: vi.fn() },
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("MiniMax OAuth authorization: JSON response exceeds");
+    expect(canceled).toBe(true);
+  });
+
   it("bounds token error bodies without using response.text()", async () => {
     const tracked = cancelTrackedResponse(`${"minimax token unavailable ".repeat(1024)}tail`, {
       status: 503,
