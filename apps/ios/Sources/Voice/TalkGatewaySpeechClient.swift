@@ -197,18 +197,25 @@ final class TalkBufferedAudioPlayer: NSObject, TalkBufferedAudioPlaying, @precon
         return interruptedAt
     }
 
-    func audioPlayerDidFinishPlaying(_: AVAudioPlayer, successfully flag: Bool) {
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         self.finish(
-            playback: self.playback,
+            playback: self.activePlayback(for: player),
             result: .init(finished: flag, interruptedAt: nil))
     }
 
-    func audioPlayerDecodeErrorDidOccur(_: AVAudioPlayer, error: (any Error)?) {
+    func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: (any Error)?) {
         let message = error?.localizedDescription ?? "unknown decode error"
         self.logger.error("talk buffered audio decode failed: \(message, privacy: .public)")
         self.finish(
-            playback: self.playback,
+            playback: self.activePlayback(for: player),
             result: .init(finished: false, interruptedAt: nil))
+    }
+
+    private func activePlayback(for player: AVAudioPlayer) -> Playback? {
+        // AVAudioPlayer can deliver callbacks after stop/replacement. Keep a stale
+        // player from completing the current reply's continuation.
+        guard self.player === player else { return nil }
+        return self.playback
     }
 
     private func stopInternal() {

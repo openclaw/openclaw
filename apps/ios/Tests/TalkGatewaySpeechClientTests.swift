@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import OpenClawKit
 import OpenClawProtocol
@@ -80,8 +81,8 @@ private final class InterruptibleBufferedAudioPlayer: TalkBufferedAudioPlaying {
 }
 
 @MainActor
-@Suite struct TalkGatewaySpeechClientTests {
-    @Test func forwardsTalkDirectivesAndDecodesAudio() async throws {
+struct TalkGatewaySpeechClientTests {
+    @Test func `forwards talk directives and decodes audio`() async throws {
         let expectedAudio = Data([1, 2, 3])
         var requestedMethod: String?
         var requestedParams: TalkSpeakParams?
@@ -127,7 +128,7 @@ private final class InterruptibleBufferedAudioPlayer: TalkBufferedAudioPlaying {
         #expect(audio.playbackMode == .buffered)
     }
 
-    @Test func resolvesGatewayAudioPlaybackMetadata() {
+    @Test func `resolves gateway audio playback metadata`() {
         let pcm = TalkGatewaySpeechAudio(
             data: Data([0, 1]),
             provider: "elevenlabs",
@@ -166,7 +167,7 @@ private final class InterruptibleBufferedAudioPlayer: TalkBufferedAudioPlaying {
         #expect(microsoftRIFF.playbackMode == .buffered)
     }
 
-    @Test func gatewaySpeechProviderStaysNativeAndUsesTalkSpeak() async {
+    @Test func `gateway speech provider stays native and uses talk speak`() async {
         let parsed = Self.parseSpeechProvider("xiaomi")
         let routing = TalkModeRoutingResolver.resolve(
             parsed: parsed,
@@ -200,7 +201,7 @@ private final class InterruptibleBufferedAudioPlayer: TalkBufferedAudioPlaying {
         #expect(audioPlayer.payloads == [expectedAudio])
     }
 
-    @Test func persistedVoiceAndModelOverridesReachLaterGatewayRequests() async {
+    @Test func `persisted voice and model overrides reach later gateway requests`() async {
         let parsed = Self.parseSpeechProvider("xiaomi")
         let synthesizer = RecordingGatewaySpeechSynthesizer(audio: TalkGatewaySpeechAudio(
             data: Data([4, 5, 6]),
@@ -220,7 +221,7 @@ private final class InterruptibleBufferedAudioPlayer: TalkBufferedAudioPlaying {
         #expect(synthesizer.requests[1].modelId == "expressive")
     }
 
-    @Test func omittedGatewayModelDoesNotSendElevenLabsFallback() async {
+    @Test func `omitted gateway model does not send eleven labs fallback`() async {
         let parsed = Self.parseSpeechProvider("openai", model: nil)
         let synthesizer = RecordingGatewaySpeechSynthesizer(audio: TalkGatewaySpeechAudio(
             data: Data([4, 5, 6]),
@@ -239,7 +240,7 @@ private final class InterruptibleBufferedAudioPlayer: TalkBufferedAudioPlaying {
         #expect(manager.gatewayTalkDefaultModelId == nil)
     }
 
-    @Test func stoppedTalkDoesNotPlayCompletedGatewaySynthesis() async {
+    @Test func `stopped talk does not play completed gateway synthesis`() async {
         let parsed = Self.parseSpeechProvider("xiaomi")
         let synthesizer = SuspendedGatewaySpeechSynthesizer()
         let audioPlayer = RecordingBufferedAudioPlayer()
@@ -260,7 +261,23 @@ private final class InterruptibleBufferedAudioPlayer: TalkBufferedAudioPlaying {
         #expect(audioPlayer.payloads.isEmpty)
     }
 
-    @Test func interruptedGatewayPlaybackStopsSpeechRecognition() async {
+    @Test func `stale buffered player callback does not finish replacement`() async throws {
+        let player = TalkBufferedAudioPlayer()
+        let wav = makeWav16Mono(sampleRate: 8000, samples: 8000)
+        let stalePlayer = try AVAudioPlayer(data: wav)
+        let stopAfterStaleCallback = Task { @MainActor in
+            player.audioPlayerDidFinishPlaying(stalePlayer, successfully: true)
+            return player.stop()
+        }
+
+        let result = await player.play(data: wav)
+        let interruptedAt = await stopAfterStaleCallback.value
+
+        #expect(interruptedAt != nil)
+        #expect(!result.finished)
+    }
+
+    @Test func `interrupted gateway playback stops speech recognition`() async {
         let parsed = Self.parseSpeechProvider("xiaomi", interruptOnSpeech: true)
         let synthesizer = RecordingGatewaySpeechSynthesizer(audio: TalkGatewaySpeechAudio(
             data: Data([4, 5, 6]),
@@ -286,7 +303,7 @@ private final class InterruptibleBufferedAudioPlayer: TalkBufferedAudioPlaying {
         #expect(manager._test_lastInterruptedAtSeconds() == nil)
     }
 
-    @Test func openAISpeechProviderWithoutRealtimeConfigUsesTalkSpeak() {
+    @Test func `open AI speech provider without realtime config uses talk speak`() {
         let parsed = Self.parseSpeechProvider("openai")
 
         let routing = TalkModeRoutingResolver.resolve(
@@ -300,7 +317,7 @@ private final class InterruptibleBufferedAudioPlayer: TalkBufferedAudioPlaying {
         #expect(routing.route == .gatewayTalkSpeak)
     }
 
-    @Test func explicitRealtimeConfigKeepsRealtimeRelay() {
+    @Test func `explicit realtime config keeps realtime relay`() {
         let parsed = TalkModeGatewayConfigParser.parse(
             config: [
                 "talk": [
@@ -364,5 +381,42 @@ private final class InterruptibleBufferedAudioPlayer: TalkBufferedAudioPlaying {
             defaultModelIdFallback: "eleven_v3",
             defaultRealtimeModelIdFallback: "gpt-realtime-2",
             defaultSilenceTimeoutMs: 900)
+    }
+}
+
+private func makeWav16Mono(sampleRate: UInt32, samples: Int) -> Data {
+    let channels: UInt16 = 1
+    let bitsPerSample: UInt16 = 16
+    let blockAlign = channels * (bitsPerSample / 8)
+    let byteRate = sampleRate * UInt32(blockAlign)
+    let dataSize = UInt32(samples) * UInt32(blockAlign)
+
+    var data = Data()
+    data.append(contentsOf: [0x52, 0x49, 0x46, 0x46])
+    data.appendTestLEUInt32(36 + dataSize)
+    data.append(contentsOf: [0x57, 0x41, 0x56, 0x45])
+    data.append(contentsOf: [0x66, 0x6D, 0x74, 0x20])
+    data.appendTestLEUInt32(16)
+    data.appendTestLEUInt16(1)
+    data.appendTestLEUInt16(channels)
+    data.appendTestLEUInt32(sampleRate)
+    data.appendTestLEUInt32(byteRate)
+    data.appendTestLEUInt16(blockAlign)
+    data.appendTestLEUInt16(bitsPerSample)
+    data.append(contentsOf: [0x64, 0x61, 0x74, 0x61])
+    data.appendTestLEUInt32(dataSize)
+    data.append(Data(repeating: 0, count: Int(dataSize)))
+    return data
+}
+
+extension Data {
+    fileprivate mutating func appendTestLEUInt16(_ value: UInt16) {
+        var value = value.littleEndian
+        Swift.withUnsafeBytes(of: &value) { self.append(contentsOf: $0) }
+    }
+
+    fileprivate mutating func appendTestLEUInt32(_ value: UInt32) {
+        var value = value.littleEndian
+        Swift.withUnsafeBytes(of: &value) { self.append(contentsOf: $0) }
     }
 }
