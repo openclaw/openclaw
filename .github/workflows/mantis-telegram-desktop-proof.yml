@@ -82,12 +82,6 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
-            if (context.eventName === "pull_request_target") {
-              core.info(`Accepted Mantis label trigger from ${context.actor}.`);
-              core.setOutput("authorized", "true");
-              return;
-            }
-
             const allowed = new Set(["admin", "maintain", "write"]);
             const { owner, repo } = context.repo;
             const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
