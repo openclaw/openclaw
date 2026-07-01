@@ -49,7 +49,7 @@ function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChar
 }
 
 function buildToolSchemaStats(
-  parameters: AgentTool["parameters"],
+  parameters: AgentTool["parameters"] | undefined,
 ): Pick<ToolReportEntry, "propertiesCount" | "schemaChars" | "schemaHash"> {
   if (!parameters || typeof parameters !== "object") {
     return { schemaChars: 0, schemaHash: sha256(""), propertiesCount: null };
@@ -67,19 +67,33 @@ function buildToolSchemaStats(
   const stats = {
     schemaChars: schemaJson.length,
     schemaHash: sha256(schemaJson),
-    propertiesCount: (() => {
-      const schema = parameters as Record<string, unknown>;
-      const props = typeof schema.properties === "object" ? schema.properties : null;
-      if (!props || typeof props !== "object") {
-        return null;
-      }
-      return Object.keys(props as Record<string, unknown>).length;
-    })(),
+    propertiesCount: countToolSchemaProperties(parameters),
   };
   // Tool parameter objects are reused across runs; cache their stable size/hash
   // so report generation stays cheap during frequent prompt rebuilds.
   toolSchemaStatsCache.set(parameters, stats);
   return stats;
+}
+
+function countToolSchemaProperties(parameters: object): number | null {
+  try {
+    const schema = parameters as Record<string, unknown>;
+    const props = typeof schema.properties === "object" ? schema.properties : null;
+    if (!props || typeof props !== "object") {
+      return null;
+    }
+    return Object.keys(props as Record<string, unknown>).length;
+  } catch {
+    return null;
+  }
+}
+
+function readToolParameters(tool: AgentTool): AgentTool["parameters"] | undefined {
+  try {
+    return tool.parameters;
+  } catch {
+    return undefined;
+  }
 }
 
 function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools"]["entries"] {
@@ -91,7 +105,7 @@ function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools
     const name = tool.name;
     const summary = tool.description?.trim() || tool.label?.trim() || "";
     const summaryChars = summary.length;
-    const schemaStats = buildToolSchemaStats(tool.parameters);
+    const schemaStats = buildToolSchemaStats(readToolParameters(tool));
     const entry = { name, summaryChars, summaryHash: sha256(summary), ...schemaStats };
     toolReportEntryCache.set(tool, entry);
     return entry;

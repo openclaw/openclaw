@@ -220,4 +220,83 @@ describe("buildSystemPromptReport", () => {
     });
     expect(report.tools.entries[0]?.schemaHash).toMatch(/^[a-f0-9]{64}$/u);
   });
+
+  it("keeps reporting when a tool schema getter throws", () => {
+    const file = makeBootstrapFile({ path: "/tmp/workspace/AGENTS.md" });
+    const brokenTool = {
+      name: "broken",
+      description: "Broken schema",
+    };
+    Object.defineProperty(brokenTool, "parameters", {
+      get() {
+        throw new Error("schema getter exploded");
+      },
+    });
+
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "system",
+      bootstrapFiles: [file],
+      injectedFiles: [],
+      skillsPrompt: "",
+      tools: [
+        brokenTool,
+        {
+          name: "healthy",
+          description: "Healthy schema",
+          parameters: {
+            type: "object",
+            properties: { path: { type: "string" } },
+          },
+        },
+      ] as never,
+    });
+
+    expect(report.tools.entries).toHaveLength(2);
+    expect(report.tools.entries[0]).toMatchObject({
+      name: "broken",
+      schemaChars: 0,
+      propertiesCount: null,
+    });
+    expect(report.tools.entries[1]).toMatchObject({
+      name: "healthy",
+      propertiesCount: 1,
+    });
+  });
+
+  it("keeps reporting when a tool schema properties getter throws", () => {
+    const file = makeBootstrapFile({ path: "/tmp/workspace/AGENTS.md" });
+    const schema = { type: "object" };
+    Object.defineProperty(schema, "properties", {
+      get() {
+        throw new Error("properties getter exploded");
+      },
+      enumerable: true,
+    });
+
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "system",
+      bootstrapFiles: [file],
+      injectedFiles: [],
+      skillsPrompt: "",
+      tools: [
+        {
+          name: "broken",
+          description: "Broken schema",
+          parameters: schema,
+        },
+      ] as never,
+    });
+
+    expect(report.tools.entries[0]).toMatchObject({
+      name: "broken",
+      schemaChars: 0,
+      propertiesCount: null,
+    });
+  });
 });
