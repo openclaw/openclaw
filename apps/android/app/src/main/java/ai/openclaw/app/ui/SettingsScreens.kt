@@ -3,6 +3,7 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayAgentSummary
+import ai.openclaw.app.GatewayConnectionProblem
 import ai.openclaw.app.GatewayCronJobSummary
 import ai.openclaw.app.GatewayExecApprovalSummary
 import ai.openclaw.app.GatewayUsageProviderSummary
@@ -841,6 +842,7 @@ private fun GatewaySettingsScreen(
   val isConnected by viewModel.isConnected.collectAsState()
   val isNodeConnected by viewModel.isNodeConnected.collectAsState()
   val statusText by viewModel.statusText.collectAsState()
+  val gatewayConnectionProblem by viewModel.gatewayConnectionProblem.collectAsState()
   val serverName by viewModel.serverName.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
   val manualHost by viewModel.manualHost.collectAsState()
@@ -866,7 +868,10 @@ private fun GatewaySettingsScreen(
           SettingsMetric("Node", if (isNodeConnected) "Online" else "Not paired"),
           SettingsMetric("Gateway", serverName?.takeIf { it.isNotBlank() } ?: "Home Gateway"),
           SettingsMetric("Address", remoteAddress?.takeIf { it.isNotBlank() } ?: "Not available"),
-          SettingsMetric("Status", gatewayStatusLabel(statusText = statusText, isConnected = isConnected)),
+          SettingsMetric(
+            "Status",
+            gatewayStatusLabel(statusText = statusText, isConnected = isConnected, gatewayConnectionProblem = gatewayConnectionProblem),
+          ),
         ),
     )
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -997,16 +1002,17 @@ internal fun appearanceThemeOptions(): List<String> = AppearanceThemeMode.entrie
 internal fun appearanceThemeModeForLabel(label: String): AppearanceThemeMode = AppearanceThemeMode.fromDisplayLabel(label)
 
 /** Converts raw gateway connection text into stable settings metric labels. */
-private fun gatewayStatusLabel(
+internal fun gatewayStatusLabel(
   statusText: String,
   isConnected: Boolean,
+  gatewayConnectionProblem: GatewayConnectionProblem? = null,
 ): String {
   if (isConnected) return "Ready"
   val status = statusText.trim().lowercase()
   return when {
     status.contains("connecting") || status.contains("reconnecting") -> "Connecting..."
     status.contains("pair") -> "Pairing needed"
-    status.contains("auth") -> "Authentication needed"
+    status.contains("auth") -> gatewayAuthNeededSummary(gatewayConnectionProblem)
     status.contains("fingerprint verification timed out") -> "TLS timed out"
     status.contains("no tls endpoint") -> "No TLS endpoint"
     status.contains("certificate") || status.contains("tls") -> "Certificate review needed"
