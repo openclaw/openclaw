@@ -1,3 +1,4 @@
+import { createLazyPromise } from "openclaw/plugin-sdk/lazy-runtime";
 /**
  * Lazy-loaded dependency bundle for remote-profile tab operation tests.
  */
@@ -19,43 +20,42 @@ export type RemoteProfileTestDeps = {
   originalFetch: typeof import("./server-context.remote-tab-ops.harness.js").originalFetch;
 };
 
-let remoteProfileTestDepsPromise: Promise<RemoteProfileTestDeps> | undefined;
-
 /** Loads remote-profile tab operation dependencies after Chrome mocks are installed. */
-export async function loadRemoteProfileTestDeps(): Promise<RemoteProfileTestDeps> {
-  remoteProfileTestDepsPromise ??= (async () => {
-    await import("./server-context.chrome-test-harness.js");
-    const cdpModule = await import("./cdp.js");
-    const chromeModule = await import("./chrome.js");
-    const { BrowserCdpEndpointBlockedError } = await import("./errors.js");
-    const { InvalidBrowserNavigationUrlError } = await import("./navigation-guard.js");
-    const pwAiModule = await import("./pw-ai-module.js");
-    const { closePlaywrightBrowserConnection } = await import("./pw-session.js");
-    const { createBrowserRouteContext } = await import("./server-context.js");
-    const {
-      createJsonListFetchMock,
-      createRemoteRouteHarness,
-      createSequentialPageLister,
-      makeState,
-      originalFetch,
-    } = await import("./server-context.remote-tab-ops.harness.js");
-    return {
-      cdpModule,
-      chromeModule,
-      BrowserCdpEndpointBlockedError,
-      InvalidBrowserNavigationUrlError,
-      pwAiModule,
-      closePlaywrightBrowserConnection,
-      createBrowserRouteContext,
-      createJsonListFetchMock,
-      createRemoteRouteHarness,
-      createSequentialPageLister,
-      makeState,
-      originalFetch,
-    };
-  })();
-  return await remoteProfileTestDepsPromise;
-}
+export const loadRemoteProfileTestDeps = createLazyPromise(
+  () =>
+    (async () => {
+      await import("./server-context.chrome-test-harness.js");
+      const cdpModule = await import("./cdp.js");
+      const chromeModule = await import("./chrome.js");
+      const { BrowserCdpEndpointBlockedError } = await import("./errors.js");
+      const { InvalidBrowserNavigationUrlError } = await import("./navigation-guard.js");
+      const pwAiModule = await import("./pw-ai-module.js");
+      const { closePlaywrightBrowserConnection } = await import("./pw-session.js");
+      const { createBrowserRouteContext } = await import("./server-context.js");
+      const {
+        createJsonListFetchMock,
+        createRemoteRouteHarness,
+        createSequentialPageLister,
+        makeState,
+        originalFetch,
+      } = await import("./server-context.remote-tab-ops.harness.js");
+      return {
+        cdpModule,
+        chromeModule,
+        BrowserCdpEndpointBlockedError,
+        InvalidBrowserNavigationUrlError,
+        pwAiModule,
+        closePlaywrightBrowserConnection,
+        createBrowserRouteContext,
+        createJsonListFetchMock,
+        createRemoteRouteHarness,
+        createSequentialPageLister,
+        makeState,
+        originalFetch,
+      };
+    })(),
+  { cacheRejections: true },
+);
 
 /** Installs per-test mock reset and Playwright connection cleanup. */
 export function installRemoteProfileTestLifecycle(deps: RemoteProfileTestDeps): void {

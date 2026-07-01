@@ -1247,7 +1247,12 @@ describe("plugin-sdk subpath exports", () => {
       "mergeAllowFromEntries",
     ]);
     expectSourceMentions("setup-tools", ["formatCliCommand", "detectBinary", "formatDocsLink"]);
-    expectSourceMentions("lazy-runtime", ["createLazyRuntimeSurface", "createLazyRuntimeModule"]);
+    expectSourceMentions("lazy-runtime", [
+      "createLazyPromise",
+      "createLazyPromiseLoader",
+      "createLazyRuntimeSurface",
+      "createLazyRuntimeModule",
+    ]);
     expectSourceContract("self-hosted-provider-setup", {
       mentions: [
         "applyProviderDefaultModel",

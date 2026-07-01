@@ -54,13 +54,14 @@ import {
   pinActivePluginHttpRouteRegistry,
   pinActivePluginSessionExtensionRegistry,
 } from "../plugins/runtime.js";
-import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { getTotalQueueSize, isGatewayDraining } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeConfigSnapshot,
 } from "../secrets/runtime-state.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { createLazyPromise } from "../shared/lazy-runtime.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import type { RestartRecoveryCandidate } from "./chat-abort.js";
@@ -123,13 +124,9 @@ import { maybeSeedControlUiAllowedOriginsAtStartup } from "./startup-control-ui-
 
 type LoadGatewayModelCatalog = typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
 
-let gatewayModelCatalogModulePromise: Promise<typeof import("./server-model-catalog.js")> | null =
-  null;
-
-const loadGatewayModelCatalogModule = async () => {
-  gatewayModelCatalogModulePromise ??= import("./server-model-catalog.js");
-  return await gatewayModelCatalogModulePromise;
-};
+const loadGatewayModelCatalogModule = createLazyRuntimeModule(
+  () => import("./server-model-catalog.js"),
+);
 
 export async function resetModelCatalogCacheForTest(): Promise<void> {
   const { resetModelCatalogCacheForTest: resetModelCatalogCacheForTestLocal } =
@@ -151,23 +148,13 @@ type GatewayStartupChannelPlugin = {
   };
 };
 
-let gatewayStartupEarlyModulePromise: Promise<typeof import("./server-startup-early.js")> | null =
-  null;
-let gatewayStartupPostAttachModulePromise: Promise<
-  typeof import("./server-startup-post-attach.js")
-> | null = null;
+const loadGatewayStartupEarlyModule = createLazyRuntimeModule(
+  () => import("./server-startup-early.js"),
+);
 
-function loadGatewayStartupEarlyModule(): Promise<typeof import("./server-startup-early.js")> {
-  gatewayStartupEarlyModulePromise ??= import("./server-startup-early.js");
-  return gatewayStartupEarlyModulePromise;
-}
-
-function loadGatewayStartupPostAttachModule(): Promise<
-  typeof import("./server-startup-post-attach.js")
-> {
-  gatewayStartupPostAttachModulePromise ??= import("./server-startup-post-attach.js");
-  return gatewayStartupPostAttachModulePromise;
-}
+const loadGatewayStartupPostAttachModule = createLazyRuntimeModule(
+  () => import("./server-startup-post-attach.js"),
+);
 
 function listGatewayStartupChannelPlugins(): GatewayStartupChannelPlugin[] {
   return listLoadedChannelPlugins() as GatewayStartupChannelPlugin[];
@@ -187,40 +174,27 @@ const logDiscovery = log.child("discovery");
 const logTailscale = log.child("tailscale");
 const logChannels = log.child("channels");
 
-let cachedChannelRuntimePromise: Promise<PluginRuntime["channel"]> | null = null;
-
-function getChannelRuntime() {
-  cachedChannelRuntimePromise ??= import("../plugins/runtime/runtime-channel.js").then(
-    ({ createRuntimeChannel }) => createRuntimeChannel(),
-  );
-  return cachedChannelRuntimePromise;
-}
+const getChannelRuntime = createLazyRuntimeModule(() =>
+  import("../plugins/runtime/runtime-channel.js").then(({ createRuntimeChannel }) =>
+    createRuntimeChannel(),
+  ),
+);
 
 async function closeMcpLoopbackServerOnDemand(): Promise<void> {
   const { closeMcpLoopbackServer } = await import("./mcp-http.js");
   await closeMcpLoopbackServer();
 }
 
-let gatewayCloseModulePromise: Promise<typeof import("./server-close.runtime.js")> | null = null;
-
-function loadGatewayCloseModule(): Promise<typeof import("./server-close.runtime.js")> {
-  gatewayCloseModulePromise ??= import("./server-close.runtime.js");
-  return gatewayCloseModulePromise;
-}
+const loadGatewayCloseModule = createLazyRuntimeModule(() => import("./server-close.runtime.js"));
 
 const loadGatewayModelCatalog: LoadGatewayModelCatalog = async (...args) => {
   const mod = await loadGatewayModelCatalogModule();
   return mod.loadGatewayModelCatalog(...args);
 };
 
-let gatewayPluginBootstrapModulePromise: Promise<
-  typeof import("./server-plugin-bootstrap.js")
-> | null = null;
-
-const loadGatewayPluginBootstrapModule = async () => {
-  gatewayPluginBootstrapModulePromise ??= import("./server-plugin-bootstrap.js");
-  return await gatewayPluginBootstrapModulePromise;
-};
+const loadGatewayPluginBootstrapModule = createLazyRuntimeModule(
+  () => import("./server-plugin-bootstrap.js"),
+);
 
 const logHealth = log.child("health");
 const logCron = log.child("cron");
@@ -596,12 +570,9 @@ export async function startGatewayServer(
   }
   const startupTrace = createGatewayStartupTrace();
   const startupConfigModulePromise = import("./server-startup-config.js");
-  let startupPluginsModulePromise: Promise<typeof import("./server-startup-plugins.js")> | null =
-    null;
-  const loadStartupPluginsModule = () => {
-    startupPluginsModulePromise ??= import("./server-startup-plugins.js");
-    return startupPluginsModulePromise;
-  };
+  const loadStartupPluginsModule = createLazyPromise(() => import("./server-startup-plugins.js"), {
+    cacheRejections: true,
+  });
   const { loadGatewayStartupConfigSnapshot } = await startupConfigModulePromise;
 
   const startupConfigLoad = await startupTrace.measure("config.snapshot", () =>
@@ -1589,13 +1560,10 @@ export async function startGatewayServer(
     const sessionDeliveryRecoveryMaxEnqueuedAt = Date.now();
     let postAttachRuntimeReturned = false;
     let scheduledServicesActivated = false;
-    let scheduledServicesModulePromise: Promise<
-      typeof import("./server-runtime-services.js")
-    > | null = null;
-    const loadScheduledServicesModule = () => {
-      scheduledServicesModulePromise ??= import("./server-runtime-services.js");
-      return scheduledServicesModulePromise;
-    };
+    const loadScheduledServicesModule = createLazyPromise(
+      () => import("./server-runtime-services.js"),
+      { cacheRejections: true },
+    );
     const activateScheduledServicesWhenReady = () => {
       if (
         closePreludeStarted ||

@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 /**
  * Shared Browser control-server test harness with mocked Chrome, CDP,
  * Playwright, Chrome MCP, config, and media dependencies.
@@ -534,12 +535,7 @@ vi.mock("./screenshot.js", () => ({
   })),
 }));
 
-let browserServerModulePromise: Promise<typeof import("../server.js")> | undefined;
-
-async function loadBrowserServerModule() {
-  browserServerModulePromise ??= import("../server.js");
-  return await browserServerModulePromise;
-}
+const loadBrowserServerModule = createLazyRuntimeModule(() => import("../server.js"));
 
 /** Starts the Browser control server from the mocked config module. */
 export async function startBrowserControlServerFromConfig() {

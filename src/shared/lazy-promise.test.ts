@@ -60,8 +60,11 @@ describe("createLazyPromiseLoader", () => {
     let calls = 0;
     const loader = createLazyPromiseLoader(() => `loaded-${++calls}`);
 
+    expect(loader.peek()).toBeUndefined();
     await expect(loader.load()).resolves.toBe("loaded-1");
+    await expect(loader.peek()).resolves.toBe("loaded-1");
     loader.clear();
+    expect(loader.peek()).toBeUndefined();
     await expect(loader.load()).resolves.toBe("loaded-2");
   });
 });

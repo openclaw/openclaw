@@ -1,5 +1,8 @@
 import { createLazyPromise } from "./lazy-promise.js";
 
+export { createLazyPromise, createLazyPromiseLoader } from "./lazy-promise.js";
+export type { LazyPromiseLoader } from "./lazy-promise.js";
+
 // Lazy runtime helpers expose dynamic imports through cached runtime surfaces.
 export function createLazyRuntimeSurface<TModule, TSurface>(
   importer: () => Promise<TModule>,
