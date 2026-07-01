@@ -410,4 +410,3 @@ export const testing = {
     return [...ADAPTERS_BY_CHANNEL_ACCOUNT.keys()];
   },
 };
-export { testing as __testing };

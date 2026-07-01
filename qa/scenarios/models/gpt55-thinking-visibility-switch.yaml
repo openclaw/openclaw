@@ -122,7 +122,7 @@ flow:
             message:
               expr: "`missing off marker; saw ${offMessages.map((message) => message.text).join(' | ')}`"
         - assert:
-            expr: "!offMessages.some((candidate) => candidate.text.trimStart().startsWith('Reasoning:') && !candidate.text.includes('Native reasoning was produced; no summary text was returned.'))"
+            expr: "!offMessages.some((candidate) => candidate.text.trimStart().startsWith('Reasoning:'))"
             message:
               expr: "`disabled thinking unexpectedly emitted reasoning: ${offMessages.map((message) => message.text).join(' | ')}`"
         - if:

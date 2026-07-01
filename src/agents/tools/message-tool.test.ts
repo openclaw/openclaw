@@ -526,6 +526,44 @@ describe("message tool secret scoping", () => {
     expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
   });
 
+  it("defaults internal WebChat message tool sends to the source-reply sink", async () => {
+    mockSendResult();
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        currentChannelProvider: "webchat",
+        agentSessionKey: "agent:main:webchat:dm:dashboard",
+      },
+    });
+
+    expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
+    expect(input?.params).toMatchObject({ action: "send", message: "hi" });
+  });
+
+  it("keeps automatic WebChat final-answer guidance while selecting the tool-local sink", async () => {
+    mockSendResult();
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        currentChannelProvider: "webchat",
+        sourceReplyDeliveryMode: "automatic",
+        agentSessionKey: "agent:main:webchat:dm:dashboard",
+      },
+    });
+
+    expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
+    const tool = createMessageTool({
+      currentChannelProvider: "webchat",
+      sourceReplyDeliveryMode: "automatic",
+      agentSessionKey: "agent:main:webchat:dm:dashboard",
+    });
+    expect(tool.description).not.toContain("Normal final answers stay private");
+  });
+
   it("passes current inbound audio to the outbound runner", async () => {
     mockSendResult();
 

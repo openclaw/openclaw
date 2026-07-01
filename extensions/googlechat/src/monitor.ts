@@ -311,6 +311,7 @@ async function processMessageWithPipeline(params: {
       id: senderId,
       name: senderName || undefined,
       username: senderEmail,
+      isBot: isBotSender || undefined,
     },
     conversation: {
       kind: isGroup ? "channel" : "direct",

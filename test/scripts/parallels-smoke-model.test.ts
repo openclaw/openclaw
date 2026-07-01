@@ -424,7 +424,9 @@ describe("Parallels smoke model selection", () => {
     expect(script).not.toContain("'openclaw-parallels-plugin-isolation.cjs'");
     expect(script).toContain("try {");
     expect(script).toContain("} finally {");
-    expect(script).toContain("Remove-Item $isolationScriptPath -Force -ErrorAction SilentlyContinue");
+    expect(script).toContain(
+      "Remove-Item $isolationScriptPath -Force -ErrorAction SilentlyContinue",
+    );
     expect(script).toContain("Remove-Item Env:OPENCLAW_PARALLELS_PLUGIN_ISOLATION");
   });
 
@@ -1463,14 +1465,27 @@ if (isPrlctl) {
 
     expect(script).toContain("guestPowerShellBackground");
     expect(script).toContain("runWindowsBackgroundPowerShell");
-    expect(transports).toContain("Join-Path $env:TEMP");
+    expect(transports).toContain("Join-Path (Join-Path $env:WINDIR 'Temp\\\\openclaw-parallels')");
+    expect(transports).toContain("icacls.exe $runDir /inheritance:r");
     expect(transports).toContain("__OPENCLAW_BACKGROUND_DONE__");
     expect(transports).toContain("__OPENCLAW_BACKGROUND_EXIT__");
-    expect(transports).toContain("__OPENCLAW_LOG_OFFSET__");
     expect(transports).toContain("poll.status !== 0 && poll.status !== 124");
-    expect(transports).toContain("Start-Process -FilePath powershell.exe");
+    expect(transports).toContain('cmd.exe /d /s /c start "" /b powershell.exe');
+    expect(transports).toContain('if exist "${windowsDonePath}"');
+    expect(transports).toContain('type "%WINDIR%\\\\Temp\\\\${guestRunDir}\\\\run.log"');
+    expect(transports).toContain("WINDOWS_BACKGROUND_LOG_MAX_BYTES");
+    expect(transports).toContain("Write-OpenClawUtf8File $pidPath ([string]$PID)");
     expect(transports).toContain('launch.stdout.includes("started")');
     expect(transports).toContain("waitForWindowsBackgroundMaterialized");
+  });
+
+  it("runs Windows package installs through the detached done-file runner", () => {
+    const script = readFileSync(TS_PATHS.windows, "utf8");
+
+    expect(script).toContain('guestPowerShellBackground(\n      "install-latest"');
+    expect(script).toContain("guestPowerShellBackground(\n      `install-main-${");
+    expect(script).not.toMatch(/private installMain\(tempName: string\): void/u);
+    expect(script).not.toMatch(/private installLatestRelease\(\): void/u);
   });
 
   it("paces ambiguous Windows background launch materialization probes", async () => {
@@ -2096,9 +2111,7 @@ setInterval(() => {}, 1000);
     );
 
     expect(duplicateNpmUpdatePlatformResult.status).toBe(1);
-    expect(duplicateNpmUpdatePlatformResult.stderr).toContain(
-      "duplicate --platform entry: macos",
-    );
+    expect(duplicateNpmUpdatePlatformResult.stderr).toContain("duplicate --platform entry: macos");
 
     expect(readFileSync(TS_PATHS.macos, "utf8")).toContain(
       'this.updateDevTimeoutSeconds = readPositiveIntEnv(\n      "OPENCLAW_PARALLELS_MACOS_UPDATE_DEV_TIMEOUT_S"',

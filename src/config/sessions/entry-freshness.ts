@@ -45,7 +45,7 @@ export type ResolvedSessionEntryResetFreshness =
       resetType: SessionResetType;
     };
 
-function hasProviderOwnedSession(entry: SessionEntry | undefined): boolean {
+export function hasProviderOwnedSession(entry: SessionEntry | undefined): boolean {
   const provider = normalizeOptionalString(entry?.providerOverride ?? entry?.modelProvider);
   return Boolean(provider && getCliSessionBinding(entry, provider));
 }

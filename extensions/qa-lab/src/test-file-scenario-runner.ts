@@ -430,7 +430,9 @@ async function runScenarioCommandSteps(params: {
     logChunks.push(`$ ${formatCommand(step)}\n`);
     try {
       const timeoutMs =
-        params.scenario.execution.kind === "script" ? params.commandTimeoutMs : undefined;
+        params.scenario.execution.kind === "script"
+          ? (params.scenario.execution.timeoutMs ?? params.commandTimeoutMs)
+          : undefined;
       const result = await params.runCommand({
         command: step.command,
         args: step.args,

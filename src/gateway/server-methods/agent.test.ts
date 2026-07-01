@@ -4118,6 +4118,61 @@ describe("gateway agent handler", () => {
     }
   });
 
+  it("keeps a provider-owned CLI session across the daily default boundary on the gateway path", async () => {
+    const now = Date.parse("2026-04-25T12:00:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      mocks.resolveExplicitAgentSessionKey.mockReturnValue("agent:main:main");
+      mockMainSessionEntry({
+        sessionId: "provider-owned-session-id",
+        updatedAt: now,
+        sessionStartedAt: now - 25 * 60 * 60_000,
+        lastInteractionAt: now - 25 * 60 * 60_000,
+        modelProvider: "claude-cli",
+        cliSessionBindings: { "claude-cli": { sessionId: "claude-cli-conversation-123" } },
+      });
+      const loaded = mocks.loadSessionEntry();
+      let capturedEntry: Record<string, unknown> | undefined;
+      mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+        const store: Record<string, unknown> = {
+          [loaded.canonicalKey]: structuredClone(loaded.entry),
+        };
+        const result = await updater(store);
+        capturedEntry = result as Record<string, unknown>;
+        return result;
+      });
+      mocks.agentCommand.mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: { durationMs: 100 },
+      });
+
+      await invokeAgent(
+        {
+          message: "provider-owned daily boundary",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          idempotencyKey: "provider-owned-daily-boundary",
+        },
+        { reqId: "provider-owned-daily-boundary" },
+      );
+
+      const call = await waitForAgentCommandCall<{
+        sessionId?: string;
+        sessionKey?: string;
+      }>();
+      expect(call.sessionKey).toBe("agent:main:main");
+      expect(call.sessionId).toBe("provider-owned-session-id");
+      expect(capturedEntry?.sessionStartedAt).toBe(now - 25 * 60 * 60_000);
+      expect(capturedEntry?.cliSessionBindings).toMatchObject({
+        "claude-cli": { sessionId: "claude-cli-conversation-123" },
+      });
+      expect(mocks.emitGatewaySessionEndPluginHook).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("emits idle lifecycle reason when inactivity rotates a gateway agent session", async () => {
     const now = Date.parse("2026-04-25T12:00:00.000Z");
     vi.useFakeTimers();
@@ -5374,6 +5429,8 @@ describe("gateway agent handler", () => {
   });
 
   it("does not auto-route voice wake requests with another agent's explicit main session", async () => {
+    const opsAgentCfg = { agents: { list: [{ id: "main" }, { id: "ops" }] } };
+    mocks.listAgentIds.mockReturnValue(["main", "ops"]);
     mocks.loadVoiceWakeRoutingConfig.mockResolvedValue({
       version: 1,
       defaultTarget: { sessionKey: "agent:main:voice" },
@@ -5383,7 +5440,7 @@ describe("gateway agent handler", () => {
     mocks.resolveVoiceWakeRouteByTrigger.mockReturnValue({ sessionKey: "agent:main:voice" });
 
     mocks.loadSessionEntry.mockImplementation((sessionKey: string) => ({
-      cfg: {},
+      cfg: opsAgentCfg,
       storePath: "/tmp/sessions.json",
       entry: {
         sessionId: "voice-session-id",
@@ -5398,6 +5455,7 @@ describe("gateway agent handler", () => {
     });
     mocks.loadVoiceWakeRoutingConfig.mockClear();
     mocks.resolveVoiceWakeRouteByTrigger.mockClear();
+    mocks.agentCommand.mockClear();
 
     const respond = vi.fn();
     await invokeAgent(
