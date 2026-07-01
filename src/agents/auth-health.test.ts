@@ -121,7 +121,7 @@ describe("buildAuthHealthSummary", () => {
     expect(statuses["anthropic:api"]).toBe("static");
 
     const provider = summary.providers.find((entry) => entry.provider === "anthropic");
-    expect(provider?.status).toBe("expired");
+    expect(provider?.status).toBe("expiring");
     expect(
       provider?.profiles.find((profile) => profile.profileId === "anthropic:expired")?.status,
     ).toBe("expired");
