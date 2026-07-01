@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   noteLegacyCodexProviderOverride: vi.fn(),
   noteMemorySearchHealth: vi.fn().mockResolvedValue(undefined),
   buildGatewayConnectionDetails: vi.fn(() => ({ message: "gateway details" })),
+  callGateway: vi.fn(),
   resolveSecretInputRef: vi.fn((params: { value?: unknown }) => ({
     ref:
       params.value === "exec-token"
@@ -164,6 +165,7 @@ vi.mock("../commands/doctor-memory-search.js", () => ({
 
 vi.mock("../gateway/call.js", () => ({
   buildGatewayConnectionDetails: mocks.buildGatewayConnectionDetails,
+  callGateway: mocks.callGateway,
 }));
 
 vi.mock("../commands/doctor-platform-notes.js", () => ({
@@ -360,6 +362,8 @@ describe("doctor health contributions", () => {
     mocks.noteMemorySearchHealth.mockResolvedValue(undefined);
     mocks.buildGatewayConnectionDetails.mockClear();
     mocks.buildGatewayConnectionDetails.mockReturnValue({ message: "gateway details" });
+    mocks.callGateway.mockReset();
+    mocks.callGateway.mockResolvedValue({});
     mocks.resolveSecretInputRef.mockClear();
     mocks.resolveGatewayAuth.mockClear();
     mocks.resolveGatewayAuth.mockReturnValue({ mode: "token", token: undefined });
@@ -1311,11 +1315,7 @@ describe("doctor health contributions", () => {
         cpuCoreRatio: 0.4,
       },
     };
-    mocks.checkGatewayHealth.mockResolvedValueOnce({
-      authenticated: true,
-      healthOk: true,
-      status,
-    });
+    mocks.callGateway.mockResolvedValueOnce(status);
     mocks.collectWhatsappResponsivenessHealthFindings.mockReturnValueOnce([
       {
         checkId: "core/doctor/whatsapp-responsiveness",
@@ -1333,14 +1333,38 @@ describe("doctor health contributions", () => {
       checksSkipped: 0,
       findings: [expect.objectContaining({ checkId: "core/doctor/whatsapp-responsiveness" })],
     });
-    expect(mocks.checkGatewayHealth).toHaveBeenCalledWith({
-      runtime: ctx.runtime,
-      cfg: ctx.cfg,
+    expect(mocks.checkGatewayHealth).not.toHaveBeenCalled();
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "status",
+      params: { includeChannelSummary: false },
       timeoutMs: 3000,
+      config: ctx.cfg,
     });
     expect(mocks.collectWhatsappResponsivenessHealthFindings).toHaveBeenCalledWith({
       cfg: ctx.cfg,
       status,
+    });
+
+    mocks.callGateway.mockRejectedValueOnce(new Error("gateway unavailable"));
+    mocks.collectWhatsappResponsivenessHealthFindings.mockReturnValueOnce([]);
+    const error = vi.fn();
+    await expect(
+      runDoctorLintChecks(
+        {
+          ...ctx,
+          runtime: { log: vi.fn(), error, exit: vi.fn() },
+        },
+        { checks, onlyIds: ["core/doctor/whatsapp-responsiveness"] },
+      ),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [],
+    });
+    expect(error).not.toHaveBeenCalled();
+    expect(mocks.collectWhatsappResponsivenessHealthFindings).toHaveBeenLastCalledWith({
+      cfg: ctx.cfg,
+      status: undefined,
     });
   });
 
