@@ -460,6 +460,52 @@ describe("createPluginApprovalHandlers", () => {
       manager.resolve(approvalId, "deny");
       await handlerPromise;
     });
+
+    it("accepts nullable optional request fields", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const respond = vi.fn();
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        {
+          pluginId: null,
+          title: "Nullable metadata",
+          description: "Optional plugin approval metadata may be null",
+          severity: null,
+          toolName: null,
+          toolCallId: null,
+          allowedDecisions: null,
+          agentId: null,
+          sessionKey: null,
+          turnSourceChannel: null,
+          turnSourceTo: null,
+          turnSourceAccountId: null,
+          turnSourceThreadId: null,
+          twoPhase: true,
+        },
+        { respond },
+      );
+
+      const handlerPromise = handlers["plugin.approval.request"](opts);
+      const approvalId = await waitForAcceptedApproval(respond);
+      expect(manager.getSnapshot(approvalId)?.request).toMatchObject({
+        pluginId: null,
+        title: "Nullable metadata",
+        description: "Optional plugin approval metadata may be null",
+        severity: null,
+        toolName: null,
+        toolCallId: null,
+        agentId: null,
+        sessionKey: null,
+        turnSourceChannel: null,
+        turnSourceTo: null,
+        turnSourceAccountId: null,
+        turnSourceThreadId: null,
+      });
+      expect(manager.getSnapshot(approvalId)?.request.allowedDecisions).toBeUndefined();
+
+      manager.resolve(approvalId, "allow-once");
+      await handlerPromise;
+    });
   });
 
   describe("plugin.approval.list", () => {
