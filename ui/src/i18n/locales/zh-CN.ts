@@ -1340,9 +1340,9 @@ export const zh_CN: TranslationMap = {
       retryQueuedMessage: "重试排队消息",
     },
     pairingQrExpired: {
-      title: "Pairing QR expired",
-      reason: "Run /pair qr again to generate a fresh setup code.",
-      badge: "Expired",
+      title: "配对二维码已过期",
+      reason: "再次运行 /pair qr 以生成新的设置代码。",
+      badge: "已过期",
     },
     composer: {
       placeholder: "给 {name} 发消息（Enter 发送）",
