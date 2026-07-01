@@ -753,7 +753,10 @@ export function normalizeTelegramOutboundRichHtml(
     materializeTelegramRichHtmlLineBreaks(
       normalizeTelegramRichLiteralWhitespaceEscapes(
         isolateTelegramRichMediaBlocks(
-          escapeUnsupportedTelegramHtml(tableNormalized.html, TELEGRAM_RICH_HTML_TAG_SUPPORT),
+        // Strip standalone tool-call parameter wrappers that survive upstream
+        // filtering.
+        const withoutParameterTags = tableNormalized.html.replace(/<\/?(?:parameter)\b[^>]*>/gi, "");
+          escapeUnsupportedTelegramHtml(withoutParameterTags, TELEGRAM_RICH_HTML_TAG_SUPPORT),
         ),
       ),
     ),
