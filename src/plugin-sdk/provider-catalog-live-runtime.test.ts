@@ -69,9 +69,11 @@ describe("provider-catalog-live-runtime", () => {
     expect(request).toMatchObject({
       url: "https://provider.example.test/v1/models",
       auditContext: "provider-model-discovery",
-      timeoutMs: 1234,
       signal: controller.signal,
     });
+    // ponytail: AbortSignal.timeout(1234) can drift by 1ms between creation and read
+    expect(request?.timeoutMs).toBeGreaterThanOrEqual(1233);
+    expect(request?.timeoutMs).toBeLessThanOrEqual(1234);
     const headers = request?.init?.headers;
     expect(headers).toBeInstanceOf(Headers);
     expect((headers as Headers).get("authorization")).toBe("Bearer resolved-provider-key");
