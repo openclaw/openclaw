@@ -388,7 +388,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--dashboard") {
             self.webChatAutoLogger.info("Auto-opening dashboard via CLI flag")
             Task { @MainActor in
-                if DashboardManager.shared.showConfiguredWindowIfPossible() {
+                if await DashboardManager.shared.showConfiguredWindowIfPossible() {
                     return
                 }
                 do {
