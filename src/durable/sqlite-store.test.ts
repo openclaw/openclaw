@@ -96,7 +96,7 @@ describe("durable runtime sqlite store", () => {
         operationKind: "test.runtime",
         idempotencyKey: "request-1",
         requestHash: "hash-1",
-        workUnitId: "workboard:default:card-1",
+        workUnitId: "wu:test:card-1",
         reportRouteId: "discord:bo-main",
         metadata: { surface: "test" },
         now: 100,
@@ -123,7 +123,7 @@ describe("durable runtime sqlite store", () => {
           runtimeRunId: first.runtimeRunId,
           operationKind: "test.runtime",
           status: "received",
-          workUnitId: "workboard:default:card-1",
+          workUnitId: "wu:test:card-1",
           reportRouteId: "discord:bo-main",
         },
       ]);
@@ -131,7 +131,7 @@ describe("durable runtime sqlite store", () => {
         runtimeRunId: first.runtimeRunId,
         status: "succeeded",
         recoveryState: "terminal",
-        workUnitId: "workboard:default:card-1-updated",
+        workUnitId: "wu:test:card-1-updated",
         completedAt: 300,
         now: 300,
       });
@@ -142,7 +142,7 @@ describe("durable runtime sqlite store", () => {
         runtimeRunId: first.runtimeRunId,
         status: "succeeded",
         recoveryState: "terminal",
-        workUnitId: "workboard:default:card-1-updated",
+        workUnitId: "wu:test:card-1-updated",
         reportRouteId: "discord:bo-main",
         completedAt: 300,
       });
