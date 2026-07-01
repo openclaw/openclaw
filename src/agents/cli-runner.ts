@@ -409,6 +409,14 @@ async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedA
   if (params.trigger === "cron") {
     const startedAt = Date.now();
     const hookRunner = getGlobalHookRunner();
+    // Always notify the watchdog that the CLI agent reached the execution
+    // phase, even when no before_agent_reply hooks are registered, so the
+    // pre-execution timeout is always cleared for cron triggers.
+    params.onExecutionPhase?.({
+      phase: "before_agent_reply",
+      provider: params.provider,
+      model: params.model ?? "",
+    });
     if (hookRunner?.hasHooks("before_agent_reply")) {
       const hookContext = {
         runId: params.runId,
@@ -426,11 +434,6 @@ async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedA
           channelContext: params.channelContext,
         }),
       } as const;
-      params.onExecutionPhase?.({
-        phase: "before_agent_reply",
-        provider: params.provider,
-        model: params.model ?? "",
-      });
       const hookResult = await hookRunner.runBeforeAgentReply(
         { cleanedBody: params.prompt },
         hookContext,
@@ -454,12 +457,12 @@ async function runCliAgentInternal(params: RunCliAgentParams): Promise<EmbeddedA
           },
         };
       }
-      params.onExecutionPhase?.({
-        phase: "runtime_plugins",
-        provider: params.provider,
-        model: params.model ?? "",
-      });
     }
+    params.onExecutionPhase?.({
+      phase: "runtime_plugins",
+      provider: params.provider,
+      model: params.model ?? "",
+    });
   }
   const { prepareCliRunContext } = await import("./cli-runner/prepare.runtime.js");
   const context = await prepareCliRunContext(params);
