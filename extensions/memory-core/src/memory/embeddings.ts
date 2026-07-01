@@ -31,6 +31,7 @@ export type EmbeddingProviderResult = {
 
 type CreateEmbeddingProviderOptions = MemoryEmbeddingProviderCreateOptions & {
   provider: EmbeddingProviderRequest;
+  actualProvider?: EmbeddingProviderRequest;
   fallback: EmbeddingProviderFallback;
 };
 
@@ -242,7 +243,8 @@ export async function createEmbeddingProvider(
 ): Promise<EmbeddingProviderResult> {
   const provider =
     options.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : options.provider;
-  const primaryAdapter = getAdapter(provider, options.config);
+  const lookupProvider = options.actualProvider ?? provider;
+  const primaryAdapter = getAdapter(lookupProvider, options.config);
   try {
     return await createWithAdapter(primaryAdapter, {
       ...options,

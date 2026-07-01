@@ -313,6 +313,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       config: params.cfg,
       agentDir: resolveAgentDir(params.cfg, params.agentId),
       ...resolveMemoryPrimaryProviderRequest({ settings: params.settings }),
+      ...(params.settings.actualProvider ? { actualProvider: params.settings.actualProvider } : {}),
     });
   }
 
