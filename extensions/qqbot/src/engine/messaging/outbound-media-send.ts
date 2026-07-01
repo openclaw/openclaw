@@ -232,7 +232,7 @@ function resolveHostReadMediaAccess(
     return undefined;
   }
   return {
-    ...(ctx.mediaAccess ?? {}),
+    ...ctx.mediaAccess,
     ...(mediaLocalRoots ? { localRoots: mediaLocalRoots } : {}),
   };
 }
