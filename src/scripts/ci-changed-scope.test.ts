@@ -141,7 +141,7 @@ describe("detectChangedScope", () => {
       "scripts/android-app-i18n.ts",
       "scripts/apple-app-i18n.ts",
       "test/scripts/native-app-i18n.test.ts",
-      ".github/workflows/native-locale-refresh.yml",
+      ".github/workflows/native-app-locale-refresh.yml",
       ".github/workflows/ci.yml",
     ]) {
       expect(shouldRunNativeI18n([changedPath]), changedPath).toBe(true);

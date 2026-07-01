@@ -52,7 +52,7 @@ const TEST_ONLY_PATH_RE =
 const CONTROL_UI_I18N_SCOPE_RE =
   /^(ui\/src\/i18n\/|scripts\/control-ui-i18n\.ts$|\.github\/workflows\/control-ui-locale-refresh\.yml$)/;
 const NATIVE_I18N_SCOPE_RE =
-  /^(?:apps\/\.i18n\/|apps\/android\/app\/src\/main\/|apps\/ios\/|apps\/macos\/Sources\/|apps\/shared\/OpenClawKit\/Sources\/|scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.ts$|test\/scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.test\.ts$|\.github\/workflows\/(?:ci|native-locale-refresh)\.yml$)/;
+  /^(?:apps\/\.i18n\/|apps\/android\/app\/src\/main\/|apps\/ios\/|apps\/macos\/Sources\/|apps\/shared\/OpenClawKit\/Sources\/|scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.ts$|test\/scripts\/(?:android-app-i18n|apple-app-i18n|native-app-i18n)\.test\.ts$|\.github\/workflows\/(?:ci|native-app-locale-refresh)\.yml$)/;
 const NATIVE_ONLY_RE =
   /^(apps\/android\/|apps\/ios\/|apps\/macos\/|apps\/macos-mlx-tts\/|apps\/shared\/|apps\/swabble\/|Swabble\/|appcast\.xml$)/;
 const FAST_INSTALL_SMOKE_SCOPE_RE =
