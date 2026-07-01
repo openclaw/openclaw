@@ -25,7 +25,11 @@ import {
   resolvePluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
 import { ensureStandaloneRuntimePluginRegistryLoaded } from "./runtime/standalone-runtime-registry-loader.js";
-import { findUndeclaredPluginToolNames } from "./tool-contracts.js";
+import {
+  findUndeclaredPluginToolNames,
+  pluginToolContractMatchesAnyName,
+  pluginToolContractMatchesName,
+} from "./tool-contracts.js";
 import {
   buildPluginToolDescriptorCacheKey,
   capturePluginToolDescriptor,
@@ -327,7 +331,15 @@ function isOptionalToolEntryPotentiallyAllowed(params: {
   if (params.names.length === 0) {
     return true;
   }
-  return params.names.some((name) => params.allowlist.has(normalizeToolName(name)));
+  return params.names.some((name) => {
+    const normalizedName = normalizeToolName(name);
+    if (params.allowlist.has(normalizedName)) {
+      return true;
+    }
+    return [...params.allowlist].some((allowlistedName) =>
+      pluginToolContractMatchesName({ contractName: name, toolName: allowlistedName }),
+    );
+  });
 }
 
 function readPluginToolName(tool: unknown): string {
@@ -508,9 +520,15 @@ function listManifestToolNamesForAllowlist(params: {
   if (params.allowlist.has(pluginKey)) {
     return [...params.toolNames];
   }
-  const matchedToolNames = params.toolNames.filter((name) =>
-    params.allowlist.has(normalizeToolName(name)),
-  );
+  const matchedToolNames = params.toolNames.filter((name) => {
+    if (params.allowlist.has(normalizeToolName(name))) {
+      return true;
+    }
+    return pluginToolContractMatchesAnyName({
+      contractName: name,
+      toolNames: [...params.allowlist],
+    });
+  });
   if (!allowlistIncludesDefaultPluginTools(params.allowlist)) {
     return matchedToolNames;
   }
@@ -1280,6 +1298,9 @@ export function resolvePluginTools(params: {
       ? listRaw.filter((tool) => {
           const toolName = readPluginToolName(tool);
           const normalizedToolName = normalizeToolName(toolName);
+          const matchingManifestContractNames = availabilityNames.filter((name) =>
+            pluginToolContractMatchesName({ contractName: name, toolName }),
+          );
           if (
             isManifestToolOptional(manifestPlugin, toolName) &&
             !isOptionalToolAllowed({
@@ -1292,8 +1313,12 @@ export function resolvePluginTools(params: {
           }
           if (
             selectedManifestToolNames &&
-            manifestContractToolNames?.has(normalizedToolName) &&
-            !selectedManifestToolNames.has(normalizedToolName)
+            (manifestContractToolNames?.has(normalizedToolName) ||
+              matchingManifestContractNames.length > 0) &&
+            !selectedManifestToolNames.has(normalizedToolName) &&
+            !matchingManifestContractNames.some((name) =>
+              selectedManifestToolNames.has(normalizeToolName(name)),
+            )
           ) {
             return false;
           }
