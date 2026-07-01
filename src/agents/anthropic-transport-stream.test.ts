@@ -1731,7 +1731,7 @@ describe("anthropic transport stream", () => {
     expect(requireRecord(tool.input_schema, "input schema").properties).toEqual({
       query: { type: "string" },
     });
-    expect(tool.input_schema.additionalProperties).toBe(false);
+    expect(requireRecord(tool.input_schema, "input schema").additionalProperties).toBe(false);
   });
 
   it("omits automatic Anthropic tool choice when every provided schema is unreadable", async () => {
