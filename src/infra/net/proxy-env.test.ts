@@ -143,6 +143,29 @@ describe("resolveEnvHttpProxyAgentOptions", () => {
       } as NodeJS.ProcessEnv,
       expected: undefined,
     },
+    {
+      name: "passes NO_PROXY through as noProxy option",
+      env: {
+        HTTPS_PROXY: "http://https-proxy.test:8443",
+        NO_PROXY: ".myqcloud.com,localhost",
+      } as NodeJS.ProcessEnv,
+      expected: {
+        httpsProxy: "http://https-proxy.test:8443",
+        noProxy: ".myqcloud.com,localhost",
+      },
+    },
+    {
+      name: "prefers lower-case no_proxy over upper-case NO_PROXY",
+      env: {
+        HTTPS_PROXY: "http://https-proxy.test:8443",
+        no_proxy: ".example.test",
+        NO_PROXY: "localhost",
+      } as NodeJS.ProcessEnv,
+      expected: {
+        httpsProxy: "http://https-proxy.test:8443",
+        noProxy: ".example.test",
+      },
+    },
   ])("$name", ({ env, expected }) => {
     expect(resolveEnvHttpProxyAgentOptions(env)).toEqual(expected);
     expect(hasEnvHttpProxyAgentConfigured(env)).toBe(expected !== undefined);
