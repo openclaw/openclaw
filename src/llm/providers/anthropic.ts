@@ -15,6 +15,7 @@ import {
   type AnthropicProjectedToolChoice,
   type AnthropicToolProjection,
 } from "../../agents/anthropic-tool-projection.js";
+import { buildGuardedModelFetch } from "../../agents/provider-transport-fetch.js";
 import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
@@ -969,6 +970,7 @@ function createClient(
         dynamicHeaders,
         optionsHeaders,
       ),
+      fetch: buildGuardedModelFetch(model),
     });
 
     return { client, isOAuthToken: false };
