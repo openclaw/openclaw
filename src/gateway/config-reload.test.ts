@@ -1586,6 +1586,41 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
+  it("does not dedupe same-hash watcher events when plugin install records changed", async () => {
+    const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
+      makeSnapshot({
+        config: {
+          gateway: { reload: { debounceMs: 0 } },
+        },
+        hash: "startup-internal-1",
+      }),
+    );
+    const readPluginInstallRecords = vi.fn().mockResolvedValue({
+      brave: {
+        source: "npm",
+        spec: "@openclaw/brave-plugin@2026.6.11",
+        installPath: "/tmp/brave-stable",
+      },
+    } satisfies Record<string, PluginInstallRecord>);
+    const harness = createReloaderHarness(readSnapshot, {
+      initialInternalWriteHash: "startup-internal-1",
+      initialPluginInstallRecords: {},
+      readPluginInstallRecords,
+    });
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(readSnapshot).toHaveBeenCalledTimes(1);
+    expect(readPluginInstallRecords).toHaveBeenCalledTimes(2);
+    const [plan] = getOnlyRestartCall(harness);
+    expect(plan.changedPaths).toEqual(["plugins.installs.brave"]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toEqual(["plugins.installs.brave"]);
+
+    await harness.reloader.stop();
+  });
+
   it("does not dedupe when initialInternalWriteHash is null (#67436)", async () => {
     const readSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>().mockResolvedValueOnce(
       makeSnapshot({
