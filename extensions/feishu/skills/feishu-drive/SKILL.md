@@ -20,13 +20,27 @@ From URL `https://xxx.feishu.cn/drive/folder/ABC123` → `folder_token` = `ABC12
 { "action": "list" }
 ```
 
-Root directory (no folder_token).
+Root directory (no folder_token). Returns first page (max 10 items).
 
 ```json
 { "action": "list", "folder_token": "fldcnXXX" }
 ```
 
-Returns: files with token, name, type, url, timestamps.
+Returns first page. Supports optional pagination params:
+
+```json
+{ "action": "list", "folder_token": "fldcnXXX", "page_size": 50, "page_token": "cursor_2" }
+```
+
+```json
+{ "action": "list", "folder_token": "fldcnXXX", "all": true }
+```
+
+- `page_size`: Items per page (default/max varies by API)
+- `page_token`: Cursor from previous response's `next_page_token`
+- `all`: If true, auto-fetches all pages (bounded at 100)
+
+Returns: `{ files: [...], has_more, next_page_token }`.
 
 ### Get File Info
 

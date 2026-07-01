@@ -328,54 +328,105 @@ async function getRootFolderToken(client: Lark.Client): Promise<string> {
   return token;
 }
 
-async function listFolder(client: Lark.Client, folderToken?: string) {
+async function listFolder(
+  client: Lark.Client,
+  folderToken?: string,
+  opts?: { pageSize?: number; pageToken?: string; all?: boolean },
+) {
   // Filter out invalid folder_token values (empty, "0", etc.)
   const validFolderToken = folderToken && folderToken !== "0" ? folderToken : undefined;
-  const res = await client.drive.file.list({
-    params: validFolderToken ? { folder_token: validFolderToken } : {},
-  });
-  if (res.code !== 0) {
-    throw new Error(res.msg);
+  const allFiles: Array<{
+    token: string;
+    name: string;
+    type: string;
+    url?: string;
+    created_time?: string;
+    modified_time?: string;
+    owner_id?: string;
+  }> = [];
+  let pageToken = opts?.pageToken;
+  let hasMore = true;
+  let lastHasMore = false;
+  let pageCount = 0;
+  const MAX_LIST_PAGES = 100;
+  const seenTokens = new Set<string>();
+  if (pageToken) seenTokens.add(pageToken);
+  while (hasMore && pageCount < MAX_LIST_PAGES) {
+    const params: Record<string, string | number> = {};
+    if (validFolderToken) {
+      params.folder_token = validFolderToken;
+    }
+    if (opts?.pageSize) {
+      params.page_size = opts.pageSize;
+    }
+    if (pageToken) {
+      params.page_token = pageToken;
+    }
+    const res = await client.drive.file.list({ params });
+    if (res.code !== 0) {
+      throw new Error(res.msg);
+    }
+    const files = (res.data?.files ?? []).map((f) => ({
+      token: f.token,
+      name: f.name,
+      type: f.type,
+      url: f.url,
+      created_time: f.created_time,
+      modified_time: f.modified_time,
+      owner_id: f.owner_id,
+    }));
+    allFiles.push(...files);
+    pageCount += 1;
+    lastHasMore = res.data?.has_more === true;
+    hasMore = lastHasMore && opts?.all === true;
+    pageToken = res.data?.next_page_token ?? undefined;
+    if (pageToken && seenTokens.has(pageToken)) {
+      break; // Repeated cursor: avoid duplicate pages
+    }
+    if (pageToken) seenTokens.add(pageToken);
   }
-
-  return {
-    files:
-      res.data?.files?.map((f) => ({
-        token: f.token,
-        name: f.name,
-        type: f.type,
-        url: f.url,
-        created_time: f.created_time,
-        modified_time: f.modified_time,
-        owner_id: f.owner_id,
-      })) ?? [],
-    next_page_token: res.data?.next_page_token,
-  };
+  return { files: allFiles, has_more: lastHasMore, next_page_token: pageToken };
 }
 
 async function getFileInfo(client: Lark.Client, fileToken: string, folderToken?: string) {
-  // Use list with folder_token to find file info
-  const res = await client.drive.file.list({
-    params: folderToken ? { folder_token: folderToken } : {},
-  });
-  if (res.code !== 0) {
-    throw new Error(res.msg);
+  // Search across all pages to find the file
+  const validFolderToken = folderToken && folderToken !== "0" ? folderToken : undefined;
+  let pageToken: string | undefined;
+  const seenTokens = new Set<string>();
+  for (let page = 0; page < 100; page += 1) {
+    const params: Record<string, string | number> = {};
+    if (validFolderToken) {
+      params.folder_token = validFolderToken;
+    }
+    if (pageToken) {
+      params.page_token = pageToken;
+    }
+    const res = await client.drive.file.list({ params });
+    if (res.code !== 0) {
+      throw new Error(res.msg);
+    }
+    const file = res.data?.files?.find((f) => f.token === fileToken);
+    if (file) {
+      return {
+        token: file.token,
+        name: file.name,
+        type: file.type,
+        url: file.url,
+        created_time: file.created_time,
+        modified_time: file.modified_time,
+        owner_id: file.owner_id,
+      };
+    }
+    if (res.data?.has_more !== true || !res.data?.next_page_token) {
+      break;
+    }
+    pageToken = res.data.next_page_token;
+    if (seenTokens.has(pageToken)) {
+      break; // Repeated cursor: avoid infinite loop on stale token
+    }
+    seenTokens.add(pageToken);
   }
-
-  const file = res.data?.files?.find((f) => f.token === fileToken);
-  if (!file) {
-    throw new Error(`File not found: ${fileToken}`);
-  }
-
-  return {
-    token: file.token,
-    name: file.name,
-    type: file.type,
-    url: file.url,
-    created_time: file.created_time,
-    modified_time: file.modified_time,
-    owner_id: file.owner_id,
-  };
+  throw new Error(`File not found: ${fileToken}`);
 }
 
 async function createFolder(client: Lark.Client, name: string, folderToken?: string) {
@@ -769,9 +820,15 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
             });
             switch (p.action) {
               case "list":
-                return jsonToolResult(await listFolder(client, p.folder_token));
+                return jsonToolResult(
+                  await listFolder(client, p.folder_token, {
+                    pageSize: p.page_size,
+                    pageToken: p.page_token,
+                    all: p.all,
+                  }),
+                );
               case "info":
-                return jsonToolResult(await getFileInfo(client, p.file_token));
+                return jsonToolResult(await getFileInfo(client, p.file_token, p.folder_token));
               case "create_folder":
                 return jsonToolResult(await createFolder(client, p.name, p.folder_token));
               case "move":

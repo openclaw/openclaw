@@ -142,6 +142,156 @@ describe("registerFeishuDriveTools", () => {
     cleanupAmbientCommentTypingReactionMock.mockResolvedValue(false);
   });
 
+  it("forwards list pagination cursors and returns continuation metadata", async () => {
+    const registerTool = vi.fn();
+    const driveFileList = vi.fn().mockResolvedValue({
+      code: 0,
+      data: {
+        files: [
+          {
+            token: "file_1",
+            name: "Roadmap",
+            type: "docx",
+            url: "https://example.test/file_1",
+            created_time: "1710000000",
+            modified_time: "1710000100",
+            owner_id: "ou_owner",
+          },
+        ],
+        has_more: true,
+        next_page_token: "cursor_2",
+      },
+    });
+    createFeishuToolClientMock.mockReturnValue({
+      drive: { file: { list: driveFileList } },
+    });
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret", // pragma: allowlist secret
+              tools: { drive: true },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({ agentAccountId: undefined });
+
+    const result = await tool.execute("call-list-page", {
+      action: "list",
+      folder_token: "folder_1",
+      page_size: 25,
+      page_token: "cursor_1",
+    });
+
+    expect(driveFileList).toHaveBeenCalledTimes(1);
+    expect(driveFileList).toHaveBeenCalledWith({
+      params: {
+        folder_token: "folder_1",
+        page_size: 25,
+        page_token: "cursor_1",
+      },
+    });
+    expect(result.details).toEqual({
+      files: [
+        {
+          token: "file_1",
+          name: "Roadmap",
+          type: "docx",
+          url: "https://example.test/file_1",
+          created_time: "1710000000",
+          modified_time: "1710000100",
+          owner_id: "ou_owner",
+        },
+      ],
+      has_more: true,
+      next_page_token: "cursor_2",
+    });
+  });
+
+  it("searches subsequent drive pages for info while preserving folder scope", async () => {
+    const registerTool = vi.fn();
+    const driveFileList = vi
+      .fn()
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          files: [{ token: "other_file", name: "Other", type: "file" }],
+          has_more: true,
+          next_page_token: "cursor_2",
+        },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          files: [
+            {
+              token: "target_file",
+              name: "Target",
+              type: "docx",
+              url: "https://example.test/target_file",
+              created_time: "1710000200",
+              modified_time: "1710000300",
+              owner_id: "ou_owner",
+            },
+          ],
+          has_more: false,
+        },
+      });
+    createFeishuToolClientMock.mockReturnValue({
+      drive: { file: { list: driveFileList } },
+    });
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret", // pragma: allowlist secret
+              tools: { drive: true },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({ agentAccountId: undefined });
+
+    const result = await tool.execute("call-info-page", {
+      action: "info",
+      file_token: "target_file",
+      type: "docx",
+      folder_token: "folder_1",
+    });
+
+    expect(driveFileList).toHaveBeenCalledTimes(2);
+    expect(driveFileList).toHaveBeenNthCalledWith(1, {
+      params: { folder_token: "folder_1" },
+    });
+    expect(driveFileList).toHaveBeenNthCalledWith(2, {
+      params: { folder_token: "folder_1", page_token: "cursor_2" },
+    });
+    expect(result.details).toEqual({
+      token: "target_file",
+      name: "Target",
+      type: "docx",
+      url: "https://example.test/target_file",
+      created_time: "1710000200",
+      modified_time: "1710000300",
+      owner_id: "ou_owner",
+    });
+  });
+
   it("registers feishu_drive and handles comment actions", async () => {
     const registerTool = vi.fn();
     registerFeishuDriveTools(
@@ -1236,5 +1386,68 @@ describe("registerFeishuDriveTools", () => {
     expect((result.details as { error?: string }).error).toBe(
       "block_id is only supported for docx comments",
     );
+  });
+
+  it("list with all:true paginates through multiple pages", async () => {
+    const registerTool = vi.fn();
+    const driveFileList = vi
+      .fn()
+      .mockResolvedValueOnce({
+        code: 0,
+        data: { files: [{ token: "t1", name: "F1" }], has_more: true, next_page_token: "c2" },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: { files: [{ token: "t2", name: "F2" }], has_more: true, next_page_token: "c3" },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: { files: [{ token: "t3", name: "F3" }], has_more: false },
+      });
+    createFeishuToolClientMock.mockReturnValue({
+      drive: { file: { list: driveFileList } },
+    });
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: { channels: { feishu: { enabled: true, appId: "a", appSecret: "s", tools: { drive: true } } } },
+        registerTool,
+      }),
+    );
+    const tool = firstToolFactory(registerTool)({ agentAccountId: undefined });
+    const result = await tool.execute("call-list-all", {
+      action: "list",
+      folder_token: "root",
+      all: true,
+    });
+    expect(driveFileList).toHaveBeenCalledTimes(3);
+    const files = (result.details as { files?: Array<{ name: string }> }).files ?? [];
+    expect(files.some((f) => f.name === "F1")).toBe(true);
+    expect(files.some((f) => f.name === "F2")).toBe(true);
+    expect(files.some((f) => f.name === "F3")).toBe(true);
+  });
+
+  it("list without all:true does not paginate when has_more is true", async () => {
+    const registerTool = vi.fn();
+    const driveFileList = vi.fn().mockResolvedValue({
+      code: 0,
+      data: { files: [{ token: "t1", name: "Single" }], has_more: true, next_page_token: "c2" },
+    });
+    createFeishuToolClientMock.mockReturnValue({
+      drive: { file: { list: driveFileList } },
+    });
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: { channels: { feishu: { enabled: true, appId: "a", appSecret: "s", tools: { drive: true } } } },
+        registerTool,
+      }),
+    );
+    const tool = firstToolFactory(registerTool)({ agentAccountId: undefined });
+    const result = await tool.execute("call-list-once", {
+      action: "list",
+      folder_token: "root",
+    });
+    expect(driveFileList).toHaveBeenCalledTimes(1);
+    const files2 = (result.details as { files?: Array<{ name: string }> }).files ?? [];
+    expect(files2.some((f) => f.name === "Single")).toBe(true);
   });
 });
