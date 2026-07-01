@@ -363,7 +363,15 @@ function guardSpan(span: Span, log?: (message: string) => void): Span {
       guard("setAttributes", () => span.setAttributes(attrs));
     },
     setStatus(status: SpanStatus, message?: string): void {
-      guard("setStatus", () => span.setStatus(status, message));
+      guard("setStatus", () => {
+        // Preserve call arity: forward the message only when present so the
+        // adapter sees the same argument shape as an unwrapped span.
+        if (message === undefined) {
+          span.setStatus(status);
+        } else {
+          span.setStatus(status, message);
+        }
+      });
     },
     recordException(err: unknown): void {
       guard("recordException", () => span.recordException(err));
