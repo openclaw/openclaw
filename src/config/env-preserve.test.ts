@@ -833,4 +833,32 @@ describe("restoreEnvVarRefs", () => {
       resolved: "${MY_TOKEN}", // should restore ref
     });
   });
+
+  describe("${VAR:json} structured references", () => {
+    const jsonEnv = {
+      ALLOW_FROM: '["alice","bob"]',
+      LIMITS: '{"max":5}',
+    } as unknown as NodeJS.ProcessEnv;
+
+    it("restores ${VAR:json} when the incoming array matches the resolved value", () => {
+      const incoming = { allowFrom: ["alice", "bob"] };
+      const parsed = { allowFrom: "${ALLOW_FROM:json}" };
+      const result = restoreEnvVarRefs(incoming, parsed, jsonEnv);
+      expect(result).toEqual({ allowFrom: "${ALLOW_FROM:json}" });
+    });
+
+    it("restores ${VAR:json} when the incoming object matches the resolved value", () => {
+      const incoming = { limits: { max: 5 } };
+      const parsed = { limits: "${LIMITS:json}" };
+      const result = restoreEnvVarRefs(incoming, parsed, jsonEnv);
+      expect(result).toEqual({ limits: "${LIMITS:json}" });
+    });
+
+    it("keeps the new structured value when the caller changed it", () => {
+      const incoming = { allowFrom: ["alice", "carol"] };
+      const parsed = { allowFrom: "${ALLOW_FROM:json}" };
+      const result = restoreEnvVarRefs(incoming, parsed, jsonEnv);
+      expect(result).toEqual({ allowFrom: ["alice", "carol"] });
+    });
+  });
 });
