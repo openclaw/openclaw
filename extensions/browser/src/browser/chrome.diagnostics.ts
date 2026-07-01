@@ -110,6 +110,15 @@ export async function readChromeVersion(
       ssrfPolicy,
     );
     try {
+      // Bounded read: check content-length header before parsing JSON
+      // to prevent OOM from oversized CDP responses.
+      const contentLength = (response.headers as Headers | undefined)?.get?.("content-length");
+      if (contentLength) {
+        const length = parseInt(contentLength, 10);
+        if (!isNaN(length) && length > 16 * 1024 * 1024) {
+          throw new Error("CDP /json/version body exceeds 16 MiB");
+        }
+      }
       const data = (await response.json()) as ChromeVersion;
       if (!data || typeof data !== "object") {
         throw new Error("CDP /json/version returned non-object JSON");
