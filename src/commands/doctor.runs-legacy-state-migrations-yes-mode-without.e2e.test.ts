@@ -76,14 +76,12 @@ describe("doctor command", () => {
     expect(confirm).not.toHaveBeenCalled();
   }, 30_000);
 
-  it("refuses doctor repair mode in Nix before repair side effects", async () => {
+  it("allows doctor repair mode in Nix when no config mutation is required", async () => {
     const previous = process.env.OPENCLAW_NIX_MODE;
     process.env.OPENCLAW_NIX_MODE = "1";
     try {
       mockDoctorConfigSnapshot();
-      await expect(doctorCommand(createDoctorRuntime(), { repair: true })).rejects.toThrow(
-        "OPENCLAW_NIX_MODE=1",
-      );
+      await expect(doctorCommand(createDoctorRuntime(), { repair: true })).resolves.toBeUndefined();
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_NIX_MODE;
@@ -95,14 +93,14 @@ describe("doctor command", () => {
     expect(writeConfigFile).not.toHaveBeenCalled();
   });
 
-  it("refuses doctor gateway token generation in Nix before config writes", async () => {
+  it("allows doctor gateway token generation in Nix before config writes", async () => {
     const previous = process.env.OPENCLAW_NIX_MODE;
     process.env.OPENCLAW_NIX_MODE = "1";
     try {
       mockDoctorConfigSnapshot();
       await expect(
         doctorCommand(createDoctorRuntime(), { generateGatewayToken: true }),
-      ).rejects.toThrow("OPENCLAW_NIX_MODE=1");
+      ).resolves.toBeUndefined();
     } finally {
       if (previous === undefined) {
         delete process.env.OPENCLAW_NIX_MODE;
