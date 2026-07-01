@@ -90,6 +90,51 @@ function makeFetch(map: Record<string, FetchResponse>) {
 describe("detectZaiEndpoint", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    delete process.env.OPENCLAW_VERSION;
+  });
+
+  it("sends a User-Agent header on the probe so z.ai does not 429 it (#98100)", async () => {
+    // z.ai's edge rejects User-Agent-less requests with HTTP 429 (code 1305),
+    // which makes detectZaiEndpoint return null even for valid Coding Plan
+    // keys. Node's fetch (undici) does not add a default User-Agent, so the
+    // probe must set one explicitly.
+    process.env.OPENCLAW_VERSION = "2026.6.11";
+    let capturedHeaders: Record<string, string> | undefined;
+    const fetchFn = (async (url: string, init?: RequestInit) => {
+      capturedHeaders = init?.headers as Record<string, string> | undefined;
+      return new Response("{}", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    await detectZaiEndpoint({
+      apiKey: "sk-test", // pragma: allowlist secret
+      endpoint: "global",
+      fetchFn,
+    });
+
+    expect(capturedHeaders?.["user-agent"]).toMatch(/^openclaw\/2026\.6\.11/);
+  });
+
+  it("falls back to openclaw/dev User-Agent when OPENCLAW_VERSION is absent (#98100)", async () => {
+    delete process.env.OPENCLAW_VERSION;
+    let capturedHeaders: Record<string, string> | undefined;
+    const fetchFn = (async (url: string, init?: RequestInit) => {
+      capturedHeaders = init?.headers as Record<string, string> | undefined;
+      return new Response("{}", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    await detectZaiEndpoint({
+      apiKey: "sk-test", // pragma: allowlist secret
+      endpoint: "global",
+      fetchFn,
+    });
+
+    expect(capturedHeaders?.["user-agent"]).toBe("openclaw/dev");
   });
 
   it("resolves preferred/fallback endpoints and null when probes fail", async () => {
