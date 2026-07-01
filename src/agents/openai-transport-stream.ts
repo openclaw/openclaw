@@ -2669,6 +2669,7 @@ function createOpenAICompletionsClient(
   context: Context,
   apiKey: string,
   optionHeaders?: Record<string, string>,
+  opts?: { fetch?: typeof globalThis.fetch },
 ) {
   const clientConfig = buildOpenAICompletionsClientConfig(model, context, optionHeaders);
   return new OpenAI({
@@ -2677,7 +2678,7 @@ function createOpenAICompletionsClient(
     dangerouslyAllowBrowser: true,
     defaultHeaders: clientConfig.defaultHeaders,
     defaultQuery: clientConfig.defaultQuery,
-    fetch: buildGuardedModelFetch(model),
+    fetch: opts?.fetch ?? buildGuardedModelFetch(model),
     ...buildOpenAISdkClientOptions(model),
   });
 }
@@ -2777,7 +2778,58 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
       };
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-        const client = createOpenAICompletionsClient(model, context, apiKey, options?.headers);
+        // Wrap fetch to detect SSE [DONE] (consumed by the OpenAI SDK internally).
+        // Providers that omit finish_reason but terminate the stream cleanly with
+        // data: [DONE] should still trigger tool execution. The flag distinguishes
+        // Scan raw SSE body for an exact `data: [DONE]` terminal event.
+        // Only a real SSE-level DONE advances the flag; provider content or
+        // tool-argument strings containing "[DONE]" do not match.
+        let sawStreamDONE = false;
+        const decoder = new TextDecoder();
+        let buffer = "";
+        const SSE_DONE_RE = /^data:\s*\[DONE\]\s*$/i;
+        const processText = (text: string) => {
+          buffer += text;
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!sawStreamDONE && SSE_DONE_RE.test(line)) {
+              sawStreamDONE = true;
+            }
+          }
+          if (buffer.length > 10000) {
+            buffer = buffer.slice(-1000);
+          }
+        };
+        const baseFetch = buildGuardedModelFetch(model);
+        const doneDetectingFetch: typeof globalThis.fetch = async (url, init) => {
+          const response = await baseFetch(url as never, init);
+          if (!response.body || !response.ok) {
+            return response;
+          }
+          if (typeof TransformStream === "undefined" || !response.body.pipeThrough) {
+            return response;
+          }
+          const transformed = response.body.pipeThrough(
+            new TransformStream({
+              transform(chunk, controller) {
+                processText(decoder.decode(chunk, { stream: true }));
+                controller.enqueue(chunk);
+              },
+              flush() {
+                processText(decoder.decode());
+              },
+            }),
+          );
+          return new Response(transformed, {
+            headers: response.headers,
+            status: response.status,
+            statusText: response.statusText,
+          });
+        };
+        const client = createOpenAICompletionsClient(model, context, apiKey, options?.headers, {
+          fetch: doneDetectingFetch,
+        });
         let params = buildOpenAICompletionsParams(
           model as OpenAIModeModel,
           context,
@@ -2810,6 +2862,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         await processOpenAICompletionsStream(responseStream, output, model, stream, {
           signal: options?.signal,
           emitReasoning,
+          sawStreamDONE: () => sawStreamDONE,
         });
         finalizeTransportStream({ stream, output, signal: options?.signal });
       } catch (error) {
@@ -2825,7 +2878,7 @@ async function processOpenAICompletionsStream(
   output: MutableAssistantOutput,
   model: Model,
   stream: { push(event: unknown): void },
-  options?: { signal?: AbortSignal; emitReasoning?: boolean },
+  options?: { signal?: AbortSignal; emitReasoning?: boolean; sawStreamDONE?: () => boolean },
 ) {
   const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
   const MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES = 256_000;
@@ -2860,6 +2913,7 @@ async function processOpenAICompletionsStream(
   const toolCallBlockBytes = new WeakMap<ToolCallBlock, number>();
   const toolCallBlockIndices = new WeakMap<ToolCallBlock, number>();
   let sawStopFinishReason = false;
+  let sawNativeToolCallDelta = false;
   const blockIndex = () => output.content.length - 1;
   const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
   let chunkPushedEvent = false;
@@ -3167,6 +3221,7 @@ async function processOpenAICompletionsStream(
       }
     }
     if (choiceDelta.tool_calls && choiceDelta.tool_calls.length > 0) {
+      sawNativeToolCallDelta = true;
       flushReasoningTagTextPartitionerAtEnd();
       for (const toolCall of choiceDelta.tool_calls) {
         const streamIndex = typeof toolCall.index === "number" ? toolCall.index : undefined;
@@ -3249,9 +3304,20 @@ async function processOpenAICompletionsStream(
   if (output.stopReason === "toolUse" && !hasToolCalls) {
     output.stopReason = "stop";
   }
-  // Tool-call recovery is executable only after an explicit provider terminal.
-  // EOF alone can mean transport truncation, even when the recovered call parses.
-  if (sawStopFinishReason && output.stopReason === "stop" && hasToolCalls && !hasVisibleText) {
+  // Promote complete silent tool-call-only responses when the stream finished
+  // cleanly (reached post-loop). Two paths:
+  //   sawStopFinishReason: explicit provider terminal (legacy DSML / #88791)
+  //   sawNativeToolCallDelta + sawStreamDONE: structured delta.tool_calls with
+  //     a clean SSE [DONE] terminal but no finish_reason (e.g. Evolink
+  //     DeepSeek V4). [DONE] tracking distinguishes clean termination from
+  //     connection drops (EOF without [DONE] remains fail-closed).
+  // Truncated streams throw before reaching this code.
+  if (
+    output.stopReason === "stop" &&
+    hasToolCalls &&
+    !hasVisibleText &&
+    (sawStopFinishReason || (sawNativeToolCallDelta && (options?.sawStreamDONE?.() ?? false)))
+  ) {
     output.stopReason = "toolUse";
   }
   if (hasToolCalls && output.stopReason !== "toolUse") {
