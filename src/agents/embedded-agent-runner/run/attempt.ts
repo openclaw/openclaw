@@ -24,7 +24,7 @@ import {
   type OwnedSessionTranscriptWriteOptions,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
-import type { SessionEntry } from "../../../config/sessions/types.js";
+import type { SessionEntry as ConfigSessionEntry } from "../../../config/sessions/types.js";
 import {
   assertContextEngineHostSupport,
   OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
@@ -207,6 +207,7 @@ import { acquireSessionWriteLock } from "../../session-write-lock.js";
 import {
   createAgentSession,
   SessionManager,
+  type SessionEntry as SessionManagerEntry,
   type SessionMessageEntry,
 } from "../../sessions/index.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
@@ -660,10 +661,10 @@ type OrphanRepairSessionManager = Pick<
 
 type OrphanRepairCandidate = {
   messageEntry: SessionMessageEntry;
-  trailingEntries: SessionEntry[];
+  trailingEntries: SessionManagerEntry[];
 };
 
-function canSkipTrailingEntryForOrphanRepair(entry: SessionEntry): boolean {
+function canSkipTrailingEntryForOrphanRepair(entry: SessionManagerEntry): boolean {
   return (
     entry.type === "thinking_level_change" ||
     entry.type === "model_change" ||
@@ -677,7 +678,7 @@ function findTrailingMessageEntryForOrphanRepair(
   sessionManager: OrphanRepairSessionManager,
 ): OrphanRepairCandidate | undefined {
   const visited = new Set<string>();
-  const trailingEntries: SessionEntry[] = [];
+  const trailingEntries: SessionManagerEntry[] = [];
   let entry = sessionManager.getLeafEntry();
   while (entry && entry.type !== "message" && canSkipTrailingEntryForOrphanRepair(entry)) {
     if (visited.has(entry.id)) {
@@ -694,7 +695,7 @@ function findTrailingMessageEntryForOrphanRepair(
 
 function appendTrailingEntryForOrphanRepair(
   sessionManager: OrphanRepairSessionManager,
-  entry: SessionEntry,
+  entry: SessionManagerEntry,
 ): void {
   if (entry.type === "thinking_level_change") {
     sessionManager.appendThinkingLevelChange(entry.thinkingLevel);
@@ -719,7 +720,7 @@ function appendTrailingEntryForOrphanRepair(
 
 function replayTrailingEntriesForOrphanRepair(
   sessionManager: OrphanRepairSessionManager,
-  trailingEntries: SessionEntry[],
+  trailingEntries: SessionManagerEntry[],
 ): void {
   for (const entry of trailingEntries) {
     appendTrailingEntryForOrphanRepair(sessionManager, entry);
@@ -739,8 +740,8 @@ function isUserAgentMessage(message: AgentMessage | undefined): message is UserM
 }
 
 function optionalMessageFieldMatches(left: AgentMessage, right: UserMessage, field: string): boolean {
-  const leftValue = (left as Record<string, unknown>)[field];
-  const rightValue = (right as Record<string, unknown>)[field];
+  const leftValue = (left as unknown as Record<string, unknown>)[field];
+  const rightValue = (right as unknown as Record<string, unknown>)[field];
   return rightValue === undefined || leftValue === undefined || leftValue === rightValue;
 }
 
@@ -931,7 +932,7 @@ function collectAttemptExplicitToolAllowlistSources(params: {
 async function loadAttemptSessionEntryAfterQuotaMaintenance(params: {
   storePath: string;
   sessionKey: string;
-}): Promise<SessionEntry | undefined> {
+}): Promise<ConfigSessionEntry | undefined> {
   const entry = loadSessionEntry({
     storePath: params.storePath,
     sessionKey: params.sessionKey,
