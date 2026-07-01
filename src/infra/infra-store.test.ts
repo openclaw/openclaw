@@ -1,3 +1,4 @@
+// Tests infra store file persistence and recovery.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -109,7 +110,7 @@ describe("infra store", () => {
       });
     });
 
-    it("sanitizes malformed persisted config values", async () => {
+    it("ignores retired JSON trigger files at runtime", async () => {
       await withTempDir("openclaw-voicewake-", async (baseDir) => {
         await fs.mkdir(path.join(baseDir, "settings"), { recursive: true });
         await fs.writeFile(
@@ -122,7 +123,7 @@ describe("infra store", () => {
         );
 
         const loaded = await loadVoiceWakeConfig(baseDir);
-        expect(loaded.triggers).toEqual(["wake"]);
+        expect(loaded.triggers).toEqual(defaultVoiceWakeTriggers());
         expect(loaded.updatedAtMs).toBe(0);
       });
     });
@@ -283,6 +284,14 @@ describe("infra store", () => {
       expect(cache.check("a", 120)).toBe(false);
       expect(cache.check("c", 200)).toBe(false);
       expect(cache.size()).toBe(2);
+    });
+
+    it("bounds non-finite ttl and max size options", () => {
+      const cache = createDedupeCache({ ttlMs: Number.NaN, maxSize: Number.NaN });
+
+      expect(cache.check("a", 100)).toBe(false);
+      expect(cache.peek("a", 100)).toBe(false);
+      expect(cache.size()).toBe(0);
     });
 
     it("supports non-mutating existence checks via peek()", () => {

@@ -1,3 +1,4 @@
+// Plugin runtime load context helpers resolve agent and workspace facts for runtime activation.
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
@@ -7,18 +8,21 @@ import { createSubsystemLogger } from "../../logging.js";
 import { resolvePluginActivationSourceConfig } from "../activation-source-config.js";
 import {
   clearCurrentPluginMetadataSnapshot,
-  getCurrentPluginMetadataSnapshot,
   isReusableCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
 } from "../current-plugin-metadata-snapshot.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../installed-plugin-index-install-records.js";
 import type { PluginLoadOptions } from "../loader.js";
 import type { PluginManifestRegistry } from "../manifest-registry.js";
-import { loadPluginMetadataSnapshot } from "../plugin-metadata-snapshot.js";
+import {
+  isPluginMetadataSnapshotCompatible,
+  resolvePluginMetadataSnapshot,
+} from "../plugin-metadata-snapshot.js";
 import type { PluginLogger } from "../types.js";
 
 const log = createSubsystemLogger("plugins");
 
+/** Resolved plugin runtime load context shared by runtime loader callers. */
 export type PluginRuntimeLoadContext = {
   rawConfig: OpenClawConfig;
   config: OpenClawConfig;
@@ -31,6 +35,7 @@ export type PluginRuntimeLoadContext = {
   installRecords?: Record<string, PluginInstallRecord>;
 };
 
+/** Runtime load option values that can be passed directly to plugin loading. */
 export type PluginRuntimeResolvedLoadValues = Pick<
   PluginLoadOptions,
   | "config"
@@ -43,6 +48,7 @@ export type PluginRuntimeResolvedLoadValues = Pick<
   | "installRecords"
 >;
 
+/** Options accepted while resolving plugin runtime load context. */
 export type PluginRuntimeLoadContextOptions = {
   config?: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
@@ -52,6 +58,7 @@ export type PluginRuntimeLoadContextOptions = {
   manifestRegistry?: PluginManifestRegistry;
 };
 
+/** Creates the default plugin runtime loader logger. */
 export function createPluginRuntimeLoaderLogger(): PluginLogger {
   return {
     info: (message) => log.info(message),
@@ -61,6 +68,7 @@ export function createPluginRuntimeLoaderLogger(): PluginLogger {
   };
 }
 
+/** Resolves config, manifests, install records, and auto-enable state for runtime loads. */
 export function resolvePluginRuntimeLoadContext(
   options?: PluginRuntimeLoadContextOptions,
 ): PluginRuntimeLoadContext {
@@ -68,22 +76,16 @@ export function resolvePluginRuntimeLoadContext(
   const rawConfig = options?.config ?? getRuntimeConfig();
   const rawWorkspaceDir =
     options?.workspaceDir ?? resolveAgentWorkspaceDir(rawConfig, resolveDefaultAgentId(rawConfig));
-  const metadataSnapshot = options?.manifestRegistry
-    ? undefined
-    : (getCurrentPluginMetadataSnapshot({
-        config: rawConfig,
-        env,
-        workspaceDir: rawWorkspaceDir,
-      }) ??
-      loadPluginMetadataSnapshot({
-        config: rawConfig,
-        env,
-        workspaceDir: rawWorkspaceDir,
-      }));
-  const manifestRegistry = options?.manifestRegistry ?? metadataSnapshot?.manifestRegistry;
-  const installRecords = metadataSnapshot
-    ? extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index)
-    : undefined;
+  const initialMetadataSnapshot =
+    options?.manifestRegistry === undefined
+      ? resolvePluginMetadataSnapshot({
+          config: rawConfig,
+          env,
+          workspaceDir: rawWorkspaceDir,
+          allowWorkspaceScopedCurrent: true,
+        })
+      : undefined;
+  const manifestRegistry = options?.manifestRegistry ?? initialMetadataSnapshot?.manifestRegistry;
   const activationSourceConfig = resolvePluginActivationSourceConfig({
     config: rawConfig,
     activationSourceConfig: options?.activationSourceConfig,
@@ -92,11 +94,35 @@ export function resolvePluginRuntimeLoadContext(
     config: rawConfig,
     env,
     manifestRegistry,
+    discovery: initialMetadataSnapshot?.discovery,
   });
   const config = autoEnabled.config;
   const workspaceDir =
     options?.workspaceDir ?? resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+  const metadataSnapshot =
+    options?.manifestRegistry !== undefined
+      ? undefined
+      : initialMetadataSnapshot &&
+          isPluginMetadataSnapshotCompatible({
+            snapshot: initialMetadataSnapshot,
+            config,
+            env,
+            workspaceDir,
+          })
+        ? initialMetadataSnapshot
+        : resolvePluginMetadataSnapshot({
+            config,
+            env,
+            workspaceDir,
+            allowWorkspaceScopedCurrent: true,
+            ...(initialMetadataSnapshot ? { index: initialMetadataSnapshot.index } : {}),
+          });
+  const finalManifestRegistry = options?.manifestRegistry ?? metadataSnapshot?.manifestRegistry;
+  const installRecords = metadataSnapshot
+    ? extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index)
+    : undefined;
   if (metadataSnapshot) {
+    // Reusable snapshots stay available to later manifest-policy lookups for this runtime load.
     if (isReusableCurrentPluginMetadataSnapshot(metadataSnapshot)) {
       setCurrentPluginMetadataSnapshot(metadataSnapshot, {
         config: rawConfig,
@@ -116,11 +142,12 @@ export function resolvePluginRuntimeLoadContext(
     workspaceDir,
     env,
     logger: options?.logger ?? createPluginRuntimeLoaderLogger(),
-    ...(manifestRegistry ? { manifestRegistry } : {}),
+    ...(finalManifestRegistry ? { manifestRegistry: finalManifestRegistry } : {}),
     installRecords,
   };
 }
 
+/** Builds plugin load options from a resolved runtime load context. */
 export function buildPluginRuntimeLoadOptions(
   context: PluginRuntimeLoadContext,
   overrides?: Partial<PluginLoadOptions>,
@@ -128,6 +155,7 @@ export function buildPluginRuntimeLoadOptions(
   return buildPluginRuntimeLoadOptionsFromValues(context, overrides);
 }
 
+/** Builds plugin load options from explicit runtime load values. */
 export function buildPluginRuntimeLoadOptionsFromValues(
   values: PluginRuntimeResolvedLoadValues,
   overrides?: Partial<PluginLoadOptions>,
@@ -139,7 +167,7 @@ export function buildPluginRuntimeLoadOptionsFromValues(
     workspaceDir: values.workspaceDir,
     env: values.env,
     logger: values.logger,
-    ...(values.manifestRegistry ? { manifestRegistry: values.manifestRegistry } : {}),
+    manifestRegistry: values.manifestRegistry,
     installRecords: values.installRecords,
     ...overrides,
   };

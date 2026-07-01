@@ -1,20 +1,23 @@
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
+// Doctor warnings for plugin allowlists that make configured tool policies ineffective.
+import { isRecord as hasRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  sortUniqueStrings,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
+import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "../../../agents/agent-bundle-mcp-names.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../../../agents/glob-pattern.js";
-import { parseModelRef } from "../../../agents/model-selection-normalize.js";
-import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "../../../agents/pi-bundle-mcp-names.js";
-import { normalizeProviderId } from "../../../agents/provider-id.js";
+import { resolveProviderToolPolicy } from "../../../agents/provider-tool-policy.js";
 import {
   mergeAlsoAllowPolicy,
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "../../../agents/tool-policy.js";
-import { resolveAgentModelPrimaryValue } from "../../../config/model-input.js";
 import type { AgentModelConfig } from "../../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRegistry } from "../../../plugins/manifest-registry.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
+import { resolveDoctorPrimaryModelRef } from "./primary-model-ref.js";
 
 type ToolAllowlistSource = {
   label: string;
@@ -41,10 +44,6 @@ type ToolPolicyConfig = {
   profile?: string;
   byProvider?: unknown;
 };
-
-function hasRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function normalizePluginIdMaybe(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? normalizePluginId(value) : undefined;
@@ -99,7 +98,7 @@ function collectToolAllowlistSources(cfg: OpenClawConfig): ToolAllowlistSource[]
 }
 
 function collectSortedSourceLabels(labels: Iterable<string>): string[] {
-  return [...new Set(labels)].toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(labels);
 }
 
 function formatSortedSourceLabels(sorted: readonly string[]): string {
@@ -152,67 +151,8 @@ function collectConfiguredMcpServerNames(cfg: OpenClawConfig): string[] {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-function normalizeProviderKey(value: string): string {
-  const normalized = normalizeLowercaseStringOrEmpty(value);
-  const slashIndex = normalized.indexOf("/");
-  if (slashIndex <= 0) {
-    return normalizeProviderId(normalized);
-  }
-  const provider = normalizeProviderId(normalized.slice(0, slashIndex));
-  const modelId = normalized.slice(slashIndex + 1);
-  return modelId ? `${provider}/${modelId}` : provider;
-}
-
-function isCanonicalProviderKey(value: string): boolean {
-  return normalizeLowercaseStringOrEmpty(value) === normalizeProviderKey(value);
-}
-
 function asToolPolicyConfig(value: unknown): ToolPolicyConfig | undefined {
   return hasRecord(value) ? (value as ToolPolicyConfig) : undefined;
-}
-
-function resolveProviderToolPolicy(params: {
-  byProvider: unknown;
-  modelProvider: string;
-  modelId: string;
-}): ToolPolicyConfig | undefined {
-  if (!hasRecord(params.byProvider)) {
-    return undefined;
-  }
-  const provider = normalizeProviderId(params.modelProvider);
-  const modelId = normalizeLowercaseStringOrEmpty(params.modelId);
-  const providerModel = modelId ? `${provider}/${modelId}` : undefined;
-  const lookup = new Map<string, { canonical: boolean; policy: ToolPolicyConfig }>();
-  for (const [key, value] of Object.entries(params.byProvider)) {
-    const normalizedKey = normalizeProviderKey(key);
-    const policy = asToolPolicyConfig(value);
-    if (normalizedKey && policy) {
-      const canonical = isCanonicalProviderKey(key);
-      const existing = lookup.get(normalizedKey);
-      if (!existing || (canonical && !existing.canonical)) {
-        lookup.set(normalizedKey, { canonical, policy });
-      }
-    }
-  }
-  return (
-    (providerModel ? lookup.get(providerModel)?.policy : undefined) ?? lookup.get(provider)?.policy
-  );
-}
-
-function resolvePrimaryModelRef(
-  cfg: OpenClawConfig,
-  agentModel?: AgentModelConfig,
-): { provider: string; model: string } {
-  const raw =
-    resolveAgentModelPrimaryValue(agentModel) ??
-    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ??
-    DEFAULT_MODEL;
-  return (
-    parseModelRef(raw, DEFAULT_PROVIDER, { allowPluginNormalization: false }) ?? {
-      provider: DEFAULT_PROVIDER,
-      model: DEFAULT_MODEL,
-    }
-  );
 }
 
 function isSandboxModeActive(mode: unknown): boolean {
@@ -301,7 +241,9 @@ function buildEffectiveSandboxToolPolicy(params: {
     Boolean(label),
   );
   const labels = allowLabels.length > 0 ? allowLabels : ["tools.sandbox.tools.alsoAllow (unset)"];
-  const dedupeLabels = Array.from(new Set([...labels, deny.label].filter(Boolean)));
+  const dedupeLabels = uniqueStrings(
+    [...labels, deny.label].filter((label): label is string => Boolean(label)),
+  );
 
   return {
     labels,
@@ -488,14 +430,17 @@ function nonSandboxToolPoliciesBlockMcp(params: {
 }): boolean {
   const globalTools = params.cfg.tools;
   const agentTools = asToolPolicyConfig(params.agent?.tools);
-  const modelRef = resolvePrimaryModelRef(params.cfg, params.agent?.model as AgentModelConfig);
+  const modelRef = resolveDoctorPrimaryModelRef(
+    params.cfg,
+    params.agent?.model as AgentModelConfig,
+  );
   const globalProviderPolicy = resolveProviderToolPolicy({
     byProvider: globalTools?.byProvider,
     modelProvider: modelRef.provider,
     modelId: modelRef.model,
   });
   const agentProviderPolicy = resolveProviderToolPolicy({
-    byProvider: agentTools?.byProvider,
+    byProvider: hasRecord(agentTools?.byProvider) ? agentTools.byProvider : undefined,
     modelProvider: modelRef.provider,
     modelId: modelRef.model,
   });
@@ -543,7 +488,10 @@ function collectSandboxMcpAllowlistWarnings(cfg: OpenClawConfig): string[] {
         !sandboxPolicyAllowsAllMcpServers(policy, serverNames) &&
         !sandboxPolicyIntentionallyDeniesAllMcpServers(policy, serverNames),
     )
-    .filter(({ nonSandboxToolPolicyBlocksMcp }) => !nonSandboxToolPolicyBlocksMcp)
+    .filter(
+      ({ nonSandboxToolPolicyBlocksMcp: nonSandboxToolPolicyBlocksMcpLocal }) =>
+        !nonSandboxToolPolicyBlocksMcpLocal,
+    )
     .flatMap(({ labels }) => labels);
   if (issueSources.length === 0) {
     return [];
@@ -567,6 +515,7 @@ function addIssue(issues: Map<string, Set<string>>, key: string, sourceLabel: st
   issues.set(key, sources);
 }
 
+/** Collect warnings when plugin allowlists block tools referenced by active tool policies. */
 export function collectPluginToolAllowlistWarnings(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -654,22 +603,4 @@ export function collectPluginToolAllowlistWarnings(params: {
   }
 
   return warnings;
-}
-
-export function collectBundledProviderAllowlistPolicyWarnings(params: {
-  cfg: OpenClawConfig;
-}): string[] {
-  if (params.cfg.plugins?.enabled === false) {
-    return [];
-  }
-  const allow = params.cfg.plugins?.allow;
-  if (!Array.isArray(allow) || allow.length === 0) {
-    return [];
-  }
-  if (params.cfg.plugins?.bundledDiscovery !== "compat") {
-    return [];
-  }
-  return [
-    '- plugins.allow is restrictive, but bundled provider discovery is still in legacy compatibility mode. Bundled provider plugins can still appear in runtime provider inventories; set plugins.bundledDiscovery to "allowlist" after confirming omitted bundled providers are intentionally blocked.',
-  ];
 }

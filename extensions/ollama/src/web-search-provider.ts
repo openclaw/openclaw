@@ -1,12 +1,14 @@
+// Ollama provider module implements model/runtime integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   isNonSecretApiKeyMarker,
   normalizeOptionalSecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import { resolveEnvApiKey } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   enablePluginInConfig,
-  readNumberParam,
+  readPositiveIntegerParam,
   readResponseText,
   readStringParam,
   resolveProviderWebSearchPluginConfig,
@@ -32,7 +34,7 @@ const OLLAMA_WEB_SEARCH_SCHEMA = Type.Object(
   {
     query: Type.String({ description: "Search query string." }),
     count: Type.Optional(
-      Type.Number({
+      Type.Integer({
         description: "Number of results to return (1-10).",
         minimum: 1,
         maximum: 10,
@@ -66,11 +68,7 @@ type OllamaWebSearchAttempt = {
 };
 
 async function readOllamaWebSearchResponse(response: Response): Promise<OllamaWebSearchResponse> {
-  try {
-    return (await response.json()) as OllamaWebSearchResponse;
-  } catch (cause) {
-    throw new Error("Ollama web search returned malformed JSON", { cause });
-  }
+  return await readProviderJsonResponse<OllamaWebSearchResponse>(response, "Ollama web search");
 }
 
 function isOllamaCloudBaseUrl(baseUrl: string): boolean {
@@ -330,7 +328,10 @@ export function createOllamaWebSearchProvider(): WebSearchProviderPlugin {
         await runOllamaWebSearch({
           config: ctx.config,
           query: readStringParam(args, "query", { required: true }),
-          count: readNumberParam(args, "count", { integer: true }),
+          count: readPositiveIntegerParam(args, "count", {
+            max: 10,
+            message: "count must be an integer from 1 to 10.",
+          }),
         }),
     }),
   };

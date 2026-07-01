@@ -1,16 +1,13 @@
+// Resolves queue settings from config, directives, and fallback policy.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { InboundDebounceByProvider } from "../../../config/types.messages.js";
-import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 import {
   normalizePersistedQueueMode,
   normalizeQueueDropPolicy,
   normalizeQueueMode,
 } from "./normalize.js";
 import { DEFAULT_QUEUE_CAP, DEFAULT_QUEUE_DEBOUNCE_MS, DEFAULT_QUEUE_DROP } from "./state.js";
-import type { QueueMode, QueueSettings, ResolveQueueSettingsParams } from "./types.js";
-
-function defaultQueueModeForChannel(_channel?: string): QueueMode {
-  return "steer";
-}
+import type { QueueSettings, ResolveQueueSettingsParams } from "./types.js";
 
 /** Resolve per-channel debounce override from debounceMsByChannel map. */
 function resolveChannelDebounce(
@@ -36,7 +33,7 @@ export function resolveQueueSettings(params: ResolveQueueSettingsParams): QueueS
     normalizePersistedQueueMode(params.sessionEntry?.queueMode) ??
     normalizeQueueMode(providerModeRaw) ??
     normalizeQueueMode(queueCfg?.mode) ??
-    defaultQueueModeForChannel(channelKey);
+    "steer";
   const debounceRaw =
     params.inlineOptions?.debounceMs ??
     params.sessionEntry?.queueDebounceMs ??

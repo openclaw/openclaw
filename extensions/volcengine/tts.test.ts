@@ -1,3 +1,4 @@
+// Volcengine tests cover tts plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildVolcengineSpeechProvider } from "./speech-provider.js";
 import { volcengineTTS } from "./tts.js";
@@ -5,6 +6,8 @@ import { volcengineTTS } from "./tts.js";
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
 }));
+
+const PROVIDER_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
@@ -42,6 +45,18 @@ function clearTtsEnv() {
   delete process.env.VOLCENGINE_TTS_API_KEY;
   delete process.env.VOLCENGINE_TTS_APPID;
   delete process.env.VOLCENGINE_TTS_TOKEN;
+}
+
+function makeOversizedStreamResponse(): Response {
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(PROVIDER_RESPONSE_MAX_BYTES));
+        controller.enqueue(new Uint8Array(1));
+        controller.close();
+      },
+    }),
+  );
 }
 
 function restoreOptionalEnv(key: string, value: string | undefined) {
@@ -130,6 +145,28 @@ describe("Volcengine speech provider", () => {
     });
   });
 
+  it("rejects non-decimal speedRatio directive values", () => {
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "speed",
+        value: "0x1",
+        policy: {
+          enabled: true,
+          allowText: true,
+          allowProvider: true,
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+          allowNormalization: true,
+          allowSeed: true,
+        },
+      }),
+    ).toEqual({
+      handled: true,
+      warnings: ['invalid Volcengine speedRatio "0x1"'],
+    });
+  });
+
   it("sends the documented Seed Speech API key payload and returns voice-note Opus metadata", async () => {
     const release = vi.fn();
     fetchWithSsrFGuardMock.mockResolvedValue({
@@ -187,6 +224,34 @@ describe("Volcengine speech provider", () => {
       auditContext: "volcengine.tts",
     });
     expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops malformed speed ratios before synthesis", async () => {
+    const release = vi.fn();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        JSON.stringify({
+          code: 0,
+          data: Buffer.from("voice-audio").toString("base64"),
+        }),
+      ),
+      release,
+    });
+
+    await provider.synthesize({
+      text: "hello",
+      cfg: {},
+      providerConfig: makeProviderConfig({ speedRatio: 4 }),
+      target: "audio-file",
+      providerOverrides: { speedRatio: -1 },
+      timeoutMs: 1234,
+    });
+
+    const call = requireFirstGuardedFetchCall() as { init: { body: string } };
+    const body = JSON.parse(call.init.body) as {
+      req_params?: { speed_ratio?: number };
+    };
+    expect(body.req_params).not.toHaveProperty("speed_ratio");
   });
 });
 
@@ -250,6 +315,23 @@ describe("volcengineTTS", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("bounds Seed Speech success response reads", async () => {
+    const release = vi.fn();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: makeOversizedStreamResponse(),
+      release,
+    });
+
+    await expect(
+      volcengineTTS({
+        text: "hello",
+        apiKey: "secret-api-key",
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow("BytePlus Seed Speech TTS response exceeds 16777216 bytes");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("reports provider errors without exposing credentials", async () => {
     const release = vi.fn();
     fetchWithSsrFGuardMock.mockResolvedValue({
@@ -274,6 +356,24 @@ describe("volcengineTTS", () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe("Volcengine TTS error 3001: load grant failed");
     expect((error as Error).message).not.toContain("secret-token");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds legacy Volcengine success response reads", async () => {
+    const release = vi.fn();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: makeOversizedStreamResponse(),
+      release,
+    });
+
+    await expect(
+      volcengineTTS({
+        text: "hello",
+        appId: "app-id",
+        token: "secret-token",
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow("Volcengine TTS response exceeds 16777216 bytes");
     expect(release).toHaveBeenCalledTimes(1);
   });
 });

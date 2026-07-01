@@ -11,6 +11,22 @@ IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-codex-on-demand-e2e" OPENCLAW_C
 DOCKER_TARGET="${OPENCLAW_CODEX_ON_DEMAND_DOCKER_TARGET:-bare}"
 HOST_BUILD="${OPENCLAW_CODEX_ON_DEMAND_HOST_BUILD:-1}"
 PACKAGE_TGZ="${OPENCLAW_CURRENT_PACKAGE_TGZ:-}"
+run_log=""
+
+# This lane installs the package and then exercises a managed npm install of Codex.
+# Keep the package install budget above the shared default so slow npm hosts reach
+# the Codex assertions instead of failing as a silent package-install timeout.
+export OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-1200s}"
+
+cleanup() {
+  if [ -n "${PACKAGE_TGZ:-}" ]; then
+    docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
+  fi
+  if [ -n "${run_log:-}" ]; then
+    rm -f "$run_log"
+  fi
+}
+trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" codex-on-demand "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "$DOCKER_TARGET"
 
@@ -66,6 +82,7 @@ chmod 700 "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE" || true
 
 openclaw_e2e_install_package /tmp/openclaw-install.log
 command -v openclaw >/dev/null
+openclaw_e2e_enable_openclaw_cli_timeout
 
 openclaw_e2e_assert_dep_absent "@openclaw/codex" "$HOME/.openclaw" "$NPM_CONFIG_PREFIX"
 openclaw_e2e_assert_dep_absent "@openai/codex" "$HOME/.openclaw" "$NPM_CONFIG_PREFIX"
@@ -89,9 +106,7 @@ node scripts/e2e/lib/codex-on-demand/assertions.mjs
 echo "Codex on-demand Docker E2E passed"
 EOF
   docker_e2e_print_log "$run_log"
-  rm -f "$run_log"
   exit 1
 fi
 
-rm -f "$run_log"
 echo "Codex on-demand Docker E2E passed"

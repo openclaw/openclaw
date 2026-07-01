@@ -1,3 +1,4 @@
+// Daemon runtime path tests cover executable and config path resolution.
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const fsMocks = vi.hoisted(() => ({
@@ -19,10 +20,10 @@ vi.mock("node:fs/promises", async () => {
   };
 });
 
+import { resolveStableNodePath } from "../infra/stable-node-path.js";
 import {
   renderSystemNodeWarning,
   resolvePreferredNodePath,
-  resolveStableNodePath,
   resolveSystemNodeInfo,
 } from "./runtime-paths.js";
 

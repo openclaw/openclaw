@@ -1,4 +1,5 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+// Xai plugin module implements x search tool shared behavior.
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 
 export function buildMissingXSearchApiKeyPayload() {
@@ -19,7 +20,10 @@ export function createXSearchToolDefinition(
     description:
       "Search X (formerly Twitter) using xAI, including targeted post or thread lookups. For per-post stats like reposts, replies, bookmarks, or views, prefer the exact post URL or status ID.",
     parameters: Type.Object({
-      query: Type.String({ description: "X search query string." }),
+      query: Type.String({
+        description:
+          "Natural-language instruction sent to the Grok X-search agent. Must be meaningful and non-empty.",
+      }),
       allowed_x_handles: Type.Optional(
         Type.Array(Type.String({ minLength: 1 }), {
           description: "Only include posts from these X handles.",

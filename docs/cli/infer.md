@@ -129,7 +129,7 @@ This table maps common inference tasks to the corresponding infer command.
 - Use `model run --thinking <level>` to pass a one-shot thinking/reasoning level (`off`, `minimal`, `low`, `medium`, `high`, `adaptive`, `xhigh`, or `max`) while keeping the run raw.
 - For `image describe`, `audio transcribe`, and `video describe`, `--model` must use the form `<provider/model>`.
 - For `image describe`, `--file` accepts local paths and HTTP(S) image URLs. Remote URLs use the normal media-fetch SSRF policy.
-- For `image describe`, an explicit `--model` runs that provider/model directly. The model must be image-capable in the model catalog or provider config. `codex/<model>` runs a bounded Codex app-server image-understanding turn; `openai-codex/<model>` uses the OpenAI Codex OAuth provider path.
+- For `image describe`, an explicit `--model` runs that provider/model first, then tries configured `agents.defaults.imageModel.fallbacks` when the model call fails. Input preparation errors, such as missing files or unsupported URLs, fail before fallback attempts. The model must be image-capable in the model catalog or provider config. `codex/<model>` runs a bounded Codex app-server image-understanding turn; `openai/<model>` uses the OpenAI provider path with either API-key or ChatGPT/Codex OAuth auth.
 - Stateless execution commands default to local.
 - Gateway-managed state commands default to gateway.
 - The normal local path does not require the gateway to be running.
@@ -163,7 +163,7 @@ openclaw infer model run --local --model google/gemini-2.5-flash --prompt "Reply
 openclaw infer model run --local --model groq/llama-3.1-8b-instant --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model mistral/mistral-medium-3-5 --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model mistral/mistral-small-latest --prompt "Reply with exactly: pong" --json
-openclaw infer model run --local --model openai/gpt-4.1 --prompt "Reply with exactly: pong" --json
+openclaw infer model run --local --model openai/gpt-5.5 --prompt "Reply with exactly: pong" --json
 openclaw infer model run --local --model ollama/qwen2.5vl:7b --prompt "Describe this image." --file ./photo.jpg --json
 ```
 
@@ -172,7 +172,7 @@ Notes:
 - Local `model run` is the narrowest CLI smoke for provider/model/auth health because, for non-Codex providers, it sends only the supplied prompt to the selected model.
 - Local `model run --model <provider/model>` can use exact bundled static catalog rows from `models list --all` before that provider is written to config. Provider auth is still required; missing credentials fail as auth errors, not `Unknown model`.
 - For Mistral Medium 3.5 reasoning probes, leave temperature unset/default. Mistral rejects `reasoning_effort="high"` plus `temperature: 0`; use `mistral/mistral-medium-3-5` with default temperature or a non-zero reasoning-mode value such as `0.7`.
-- `openai-codex/*` local probes are the narrow exception: OpenClaw adds a minimal system instruction so the Codex Responses transport can populate its required `instructions` field, without adding full agent context, tools, memory, or session transcript.
+- Codex Responses local probes are the narrow exception: OpenClaw adds a minimal system instruction so the transport can populate its required `instructions` field, without adding full agent context, tools, memory, or session transcript.
 - Local `model run --file` keeps that lean path and attaches image content directly to the single user message. Common image files such as PNG, JPEG, and WebP work when their MIME type is detected as `image/*`; unsupported or unrecognized files fail before the provider is called.
 - `model run --file` is best when you want to test the selected multimodal text model directly. Use `infer image describe` when you want OpenClaw's image-understanding provider selection and default image-model routing.
 - The selected model must support image input; text-only models may reject the request at the provider layer.
@@ -189,6 +189,7 @@ Use `image` for generation, edit, and description.
 openclaw infer image generate --prompt "friendly lobster illustration" --json
 openclaw infer image generate --prompt "cinematic product photo of headphones" --json
 openclaw infer image generate --model openai/gpt-image-1.5 --output-format png --background transparent --prompt "simple red circle sticker on a transparent background" --json
+openclaw infer image generate --model openai/gpt-image-2 --quality low --openai-moderation low --prompt "low-cost draft poster" --json
 openclaw infer image generate --prompt "slow image backend" --timeout-ms 180000 --json
 openclaw infer image edit --file ./logo.png --model openai/gpt-image-1.5 --output-format png --background transparent --prompt "keep the logo, remove the background" --json
 openclaw infer image edit --file ./poster.png --prompt "make this a vertical story ad" --size 2160x3840 --aspect-ratio 9:16 --resolution 4K --json
@@ -196,7 +197,7 @@ openclaw infer image describe --file ./photo.jpg --json
 openclaw infer image describe --file https://example.com/photo.png --json
 openclaw infer image describe --file ./receipt.jpg --prompt "Extract the merchant, date, and total" --json
 openclaw infer image describe-many --file ./before.png --file ./after.png --prompt "Compare the screenshots and list visible UI changes" --json
-openclaw infer image describe --file ./ui-screenshot.png --model openai/gpt-4.1-mini --json
+openclaw infer image describe --file ./ui-screenshot.png --model openai/gpt-5.4-mini --json
 openclaw infer image describe --file ./photo.jpg --model ollama/qwen2.5vl:7b --prompt "Describe the image in one sentence" --timeout-ms 300000 --json
 ```
 
@@ -209,6 +210,9 @@ Notes:
   `--model openai/gpt-image-1.5` for transparent-background OpenAI PNG output;
   `--openai-background` remains available as an OpenAI-specific alias. Providers
   that do not declare background support report the hint as an ignored override.
+- Use `--quality low|medium|high|auto` for providers that support image quality
+  hints, including OpenAI. OpenAI also accepts `--openai-moderation low|auto` for
+  the provider-specific moderation hint.
 - Use `image providers --json` to verify which bundled image providers are
   discoverable, configured, selected, and which generation/edit capabilities
   each provider exposes.
@@ -231,6 +235,8 @@ Notes:
 - For `image describe` and `image describe-many`, use `--prompt` to give the vision model a task-specific instruction such as OCR, comparison, UI inspection, or concise captioning.
 - Use `--timeout-ms` with slow local vision models or cold Ollama starts.
 - For `image describe`, `--model` must be an image-capable `<provider/model>`.
+  When set, OpenClaw tries that explicit model first and then configured
+  image-model fallbacks if the model call fails.
 - For local Ollama vision models, pull the model first and set `OLLAMA_API_KEY` to any placeholder value, for example `ollama-local`. See [Ollama](/providers/ollama#vision-and-image-description).
 
 ## Audio
@@ -272,7 +278,7 @@ Use `video` for generation and description.
 openclaw infer video generate --prompt "cinematic sunset over the ocean" --json
 openclaw infer video generate --prompt "slow drone shot over a forest lake" --resolution 768P --duration 6 --json
 openclaw infer video describe --file ./clip.mp4 --json
-openclaw infer video describe --file ./clip.mp4 --model openai/gpt-4.1-mini --json
+openclaw infer video describe --file ./clip.mp4 --model openai/gpt-5.4-mini --json
 ```
 
 Notes:

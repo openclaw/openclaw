@@ -1,3 +1,4 @@
+// Diagnostic phase helpers measure named phases and emit timing diagnostics.
 import { performance } from "node:perf_hooks";
 import {
   areDiagnosticsEnabledForProcess,
@@ -6,6 +7,7 @@ import {
   type DiagnosticPhaseSnapshot,
 } from "../infra/diagnostic-events.js";
 
+// Tracks nested diagnostic phases for recent-phase snapshots and optional event emission.
 const RECENT_PHASE_CAPACITY = 40;
 
 type ActiveDiagnosticPhase = {
@@ -53,6 +55,7 @@ export function getRecentDiagnosticPhases(limit = 8): DiagnosticPhaseSnapshot[] 
   return recentPhases.slice(-resolved).map((phase) => Object.assign({}, phase));
 }
 
+/** Records a completed phase in memory and emits it when diagnostics are enabled. */
 export function recordDiagnosticPhase(snapshot: DiagnosticPhaseSnapshot): void {
   pushRecentPhase(snapshot);
   if (!areDiagnosticsEnabledForProcess()) {
@@ -64,6 +67,7 @@ export function recordDiagnosticPhase(snapshot: DiagnosticPhaseSnapshot): void {
   });
 }
 
+/** Runs work inside a measured diagnostic phase with wall-clock and CPU metrics. */
 export async function withDiagnosticPhase<T>(
   name: string,
   run: () => Promise<T> | T,
@@ -80,6 +84,7 @@ export async function withDiagnosticPhase<T>(
   try {
     return await run();
   } finally {
+    // Remove by identity so nested or overlapping phases do not corrupt the active stack.
     const endedAt = Date.now();
     const durationMs = roundMetric(performance.now() - active.startedWallMs, 1);
     const cpu = process.cpuUsage(active.cpuStarted);
@@ -101,6 +106,7 @@ export async function withDiagnosticPhase<T>(
   }
 }
 
+/** Clears phase history and active stack for isolated tests. */
 export function resetDiagnosticPhasesForTest(): void {
   activePhaseStack = [];
   recentPhases = [];

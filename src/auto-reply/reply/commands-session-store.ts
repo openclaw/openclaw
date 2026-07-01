@@ -1,20 +1,53 @@
-import type { SessionEntry } from "../../config/sessions.js";
-import { updateSessionStore } from "../../config/sessions.js";
+// Shared session-store helpers for command handlers that mutate sessions.
+import { resolveSessionStoreEntry, type SessionEntry } from "../../config/sessions.js";
+import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
 import { applyAbortCutoffToSessionEntry, type AbortCutoff } from "./abort-cutoff.js";
 import type { CommandHandler } from "./commands-types.js";
 
 type CommandParams = Parameters<CommandHandler>[0];
+type PersistSessionEntryParams = Pick<
+  CommandParams,
+  "sessionEntry" | "sessionStore" | "sessionKey" | "storePath"
+>;
 
-export async function persistSessionEntry(params: CommandParams): Promise<boolean> {
+/** Resolves a command target entry through canonical and legacy session keys. */
+export function resolveCommandSessionEntryForKey(
+  store: Record<string, SessionEntry> | undefined,
+  sessionKey: string | undefined,
+): { entry?: SessionEntry; key?: string } {
+  if (!store || !sessionKey) {
+    return {};
+  }
+  const resolved = resolveSessionStoreEntry({ store, sessionKey });
+  if (!resolved.existing) {
+    return {};
+  }
+  return {
+    entry: resolved.existing,
+    key: resolved.normalizedKey,
+  };
+}
+
+export async function persistSessionEntry(params: PersistSessionEntryParams): Promise<boolean> {
   if (!params.sessionEntry || !params.sessionStore || !params.sessionKey) {
     return false;
   }
-  params.sessionEntry.updatedAt = Date.now();
-  params.sessionStore[params.sessionKey] = params.sessionEntry;
+  const sessionEntry = params.sessionEntry;
+  sessionEntry.updatedAt = Date.now();
+  params.sessionStore[params.sessionKey] = sessionEntry;
   if (params.storePath) {
-    await updateSessionStore(params.storePath, (store) => {
-      store[params.sessionKey] = params.sessionEntry as SessionEntry;
-    });
+    // Slash commands mutate one known session entry; skipping global session
+    // maintenance avoids scanning the whole sessions directory for simple
+    // command-only writes.
+    await patchSessionEntry(
+      { storePath: params.storePath, sessionKey: params.sessionKey },
+      () => sessionEntry,
+      {
+        fallbackEntry: sessionEntry,
+        replaceEntry: true,
+        skipMaintenance: true,
+      },
+    );
   }
   return true;
 }
@@ -37,16 +70,20 @@ export async function persistAbortTargetEntry(params: {
   sessionStore[key] = entry;
 
   if (storePath) {
-    await updateSessionStore(storePath, (store) => {
-      const nextEntry = store[key] ?? entry;
-      if (!nextEntry) {
-        return;
-      }
-      nextEntry.abortedLastRun = true;
-      applyAbortCutoffToSessionEntry(nextEntry, abortCutoff);
-      nextEntry.updatedAt = Date.now();
-      store[key] = nextEntry;
-    });
+    await patchSessionEntry(
+      { storePath, sessionKey: key },
+      (nextEntry) => {
+        nextEntry.abortedLastRun = true;
+        applyAbortCutoffToSessionEntry(nextEntry, abortCutoff);
+        nextEntry.updatedAt = Date.now();
+        return nextEntry;
+      },
+      {
+        fallbackEntry: entry,
+        replaceEntry: true,
+        skipMaintenance: true,
+      },
+    );
   }
 
   return true;

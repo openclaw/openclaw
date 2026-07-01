@@ -1,3 +1,4 @@
+// Control UI view renders agents utils screen content.
 import { html, nothing } from "lit";
 import {
   expandToolGroups,
@@ -6,6 +7,7 @@ import {
 } from "../../../../src/agents/tool-policy-shared.js";
 import { DEFAULT_ASSISTANT_AVATAR } from "../assistant-identity.ts";
 import { buildQualifiedChatModelValue } from "../chat-model-ref.ts";
+import { controlUiPublicAssetPath } from "../public-assets.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import type {
   AgentIdentityResult,
@@ -244,13 +246,11 @@ export function resolveChatAvatarRenderUrl(
 }
 
 export function agentLogoUrl(basePath: string): string {
-  const base = normalizeOptionalString(basePath)?.replace(/\/$/, "") ?? "";
-  return base ? `${base}/favicon.svg` : "favicon.svg";
+  return controlUiPublicAssetPath("favicon.svg", basePath);
 }
 
 export function assistantAvatarFallbackUrl(basePath: string): string {
-  const base = normalizeOptionalString(basePath)?.replace(/\/$/, "") ?? "";
-  return base ? `${base}/apple-touch-icon.png` : "apple-touch-icon.png";
+  return controlUiPublicAssetPath("apple-touch-icon.png", basePath);
 }
 
 function isAvatarUrl(value: string): boolean {
@@ -279,53 +279,6 @@ export function resolveAssistantTextAvatar(value: string | null | undefined): st
   return trimmed;
 }
 
-function isLikelyEmoji(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (trimmed.length > 16) {
-    return false;
-  }
-  let hasNonAscii = false;
-  for (let i = 0; i < trimmed.length; i += 1) {
-    if (trimmed.charCodeAt(i) > 127) {
-      hasNonAscii = true;
-      break;
-    }
-  }
-  if (!hasNonAscii) {
-    return false;
-  }
-  if (trimmed.includes("://") || trimmed.includes("/") || trimmed.includes(".")) {
-    return false;
-  }
-  return true;
-}
-
-export function resolveAgentEmoji(
-  agent: { identity?: { emoji?: string; avatar?: string } },
-  agentIdentity?: AgentIdentityResult | null,
-) {
-  const identityEmoji = normalizeOptionalString(agentIdentity?.emoji);
-  if (identityEmoji && isLikelyEmoji(identityEmoji)) {
-    return identityEmoji;
-  }
-  const agentEmoji = normalizeOptionalString(agent.identity?.emoji);
-  if (agentEmoji && isLikelyEmoji(agentEmoji)) {
-    return agentEmoji;
-  }
-  const identityAvatar = normalizeOptionalString(agentIdentity?.avatar);
-  if (identityAvatar && isLikelyEmoji(identityAvatar)) {
-    return identityAvatar;
-  }
-  const avatar = normalizeOptionalString(agent.identity?.avatar);
-  if (avatar && isLikelyEmoji(avatar)) {
-    return avatar;
-  }
-  return "";
-}
-
 function resolveAgentTextAvatar(
   agent: { identity?: { emoji?: string; avatar?: string } },
   agentIdentity?: AgentIdentityResult | null,
@@ -347,14 +300,6 @@ function resolveAgentTextAvatar(
 
 export function agentBadgeText(agentId: string, defaultId: string | null) {
   return defaultId && agentId === defaultId ? "default" : null;
-}
-
-export function agentAvatarHue(id: string): number {
-  let hash = 0;
-  for (let i = 0; i < id.length; i += 1) {
-    hash = (hash * 31 + id.charCodeAt(i)) | 0;
-  }
-  return ((hash % 360) + 360) % 360;
 }
 
 export function formatBytes(bytes?: number) {

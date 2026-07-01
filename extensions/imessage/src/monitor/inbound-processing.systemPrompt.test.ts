@@ -1,3 +1,4 @@
+// Imessage tests cover inbound processing.systemPrompt plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
@@ -213,6 +214,7 @@ describe("buildIMessageInboundContext forwards GroupSystemPrompt", () => {
         replyContext: null,
         effectiveWasMentioned: false,
         commandAuthorized: false,
+        hasControlCommand: false,
         effectiveDmAllowFrom: [],
         effectiveGroupAllowFrom: [],
         groupSystemPrompt: decision.groupSystemPrompt,
@@ -229,22 +231,22 @@ describe("buildIMessageInboundContext forwards GroupSystemPrompt", () => {
     } as Parameters<typeof buildIMessageInboundContext>[0];
   }
 
-  it("sets ctxPayload.GroupSystemPrompt for group messages", () => {
-    const { ctxPayload } = buildIMessageInboundContext(
+  it("sets ctxPayload.GroupSystemPrompt for group messages", async () => {
+    const { ctxPayload } = await buildIMessageInboundContext(
       buildBuildParams({ isGroup: true, groupSystemPrompt: "Be concise." }),
     );
     expect(ctxPayload.GroupSystemPrompt).toBe("Be concise.");
   });
 
-  it("leaves ctxPayload.GroupSystemPrompt undefined when no per-group prompt is configured", () => {
-    const { ctxPayload } = buildIMessageInboundContext(
+  it("leaves ctxPayload.GroupSystemPrompt undefined when no per-group prompt is configured", async () => {
+    const { ctxPayload } = await buildIMessageInboundContext(
       buildBuildParams({ isGroup: true, groupSystemPrompt: undefined }),
     );
     expect(ctxPayload.GroupSystemPrompt).toBeUndefined();
   });
 
-  it("leaves ctxPayload.GroupSystemPrompt undefined for DMs even if a prompt is somehow on decision", () => {
-    const { ctxPayload } = buildIMessageInboundContext(
+  it("leaves ctxPayload.GroupSystemPrompt undefined for DMs even if a prompt is somehow on decision", async () => {
+    const { ctxPayload } = await buildIMessageInboundContext(
       buildBuildParams({ isGroup: false, groupSystemPrompt: "should-not-leak" }),
     );
     expect(ctxPayload.GroupSystemPrompt).toBeUndefined();

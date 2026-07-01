@@ -1,7 +1,10 @@
+// Session id resolution helpers resolve user-provided session references.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions.js";
 import { toAgentRequestSessionKey } from "../routing/session-key.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
+// Session-id matching resolves fuzzy CLI/user input against store keys while
+// avoiding silent picks when multiple plausible sessions tie.
 type SessionIdMatch = [string, SessionEntry];
 type NormalizedSessionIdMatch = {
   sessionKey: string;
@@ -12,7 +15,7 @@ type NormalizedSessionIdMatch = {
   isStructural: boolean;
 };
 
-export type SessionIdMatchSelection =
+type SessionIdMatchSelection =
   | { kind: "none" }
   | { kind: "ambiguous"; sessionKeys: string[] }
   | { kind: "selected"; sessionKey: string };
@@ -66,6 +69,8 @@ function collapseAliasMatches(matches: NormalizedSessionIdMatch[]): NormalizedSe
     if (group.length === 1) {
       return group[0];
     }
+    // Aliases that normalize to the same request key represent one session.
+    // Prefer freshest canonical key so ambiguity only reports distinct sessions.
     return [...group].toSorted((a, b) => {
       const timeDiff = compareNormalizedUpdatedAtDescending(a, b);
       if (timeDiff !== 0) {
@@ -93,6 +98,8 @@ function selectFreshestUniqueMatch(
   return undefined;
 }
 
+// Selection contract: structural suffix/request-key matches beat fuzzy matches;
+// tied structural or fuzzy matches stay ambiguous for caller-visible errors.
 export function resolveSessionIdMatchSelection(
   matches: Array<[string, SessionEntry]>,
   sessionId: string,

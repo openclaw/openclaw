@@ -1,10 +1,15 @@
+/**
+ * Projects enabled bundle MCP servers into Codex app-server thread config.
+ * The projection keeps loopback approval defaults and header env placeholders
+ * compatible with Codex's MCP config shape.
+ */
 import crypto from "node:crypto";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   loadEnabledBundleMcpConfig,
   type BundleMcpConfig,
   type BundleMcpServerConfig,
 } from "../plugins/bundle-mcp.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import {
   applyCommonServerConfig,
@@ -16,7 +21,7 @@ import type {
   CodexMcpServersConfig,
   LoadCodexBundleMcpThreadConfigParams,
 } from "./codex-mcp-config.types.js";
-import { shouldCreateBundleMcpRuntimeForAttempt } from "./pi-embedded-runner/run/attempt-tool-construction-plan.js";
+import { shouldCreateBundleMcpRuntimeForAttempt } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
 
 export type {
   CodexBundleMcpThreadConfig,
@@ -61,6 +66,7 @@ function resolveCodexDefaultToolsApprovalMode(
   );
 }
 
+/** Normalizes one bundle MCP server into Codex's mcp_servers shape. */
 export function normalizeCodexMcpServerConfig(
   name: string,
   server: BundleMcpServerConfig,
@@ -71,23 +77,26 @@ export function normalizeCodexMcpServerConfig(
   if (defaultToolsApprovalMode) {
     next.default_tools_approval_mode = defaultToolsApprovalMode;
   } else if (isOpenClawLoopbackMcpServer(name, server)) {
+    // OpenClaw's loopback MCP exposes local tools; Codex should ask for approval
+    // unless plugin metadata explicitly selected another approval mode.
     next.default_tools_approval_mode = "approve";
   }
   const httpHeaders = normalizeStringRecord(server.headers);
   if (httpHeaders) {
     const staticHeaders: Record<string, string> = {};
     const envHeaders: Record<string, string> = {};
-    for (const [name, value] of Object.entries(httpHeaders)) {
+    for (const [nameLocal, value] of Object.entries(httpHeaders)) {
       const decoded = decodeHeaderEnvPlaceholder(value);
       if (!decoded) {
-        staticHeaders[name] = value;
+        staticHeaders[nameLocal] = value;
         continue;
       }
-      if (decoded.bearer && normalizeOptionalLowercaseString(name) === "authorization") {
+      if (decoded.bearer && normalizeOptionalLowercaseString(nameLocal) === "authorization") {
+        // Codex has a dedicated bearer token env field for Authorization headers.
         next.bearer_token_env_var = decoded.envVar;
         continue;
       }
-      envHeaders[name] = decoded.envVar;
+      envHeaders[nameLocal] = decoded.envVar;
     }
     if (Object.keys(staticHeaders).length > 0) {
       next.http_headers = staticHeaders;
@@ -99,6 +108,7 @@ export function normalizeCodexMcpServerConfig(
   return next;
 }
 
+/** Build Codex `mcp_servers` config from normalized bundle MCP config. */
 export function buildCodexMcpServersConfig(config: BundleMcpConfig): CodexMcpServersConfig {
   return Object.fromEntries(
     Object.entries(config.mcpServers).map(([name, server]) => [
@@ -129,6 +139,7 @@ function fingerprintCodexMcpServersConfig(config: CodexMcpServersConfig): string
     .digest("hex");
 }
 
+/** Load bundle MCP config for one Codex app-server thread. */
 export function loadCodexBundleMcpThreadConfig(
   params: LoadCodexBundleMcpThreadConfigParams,
 ): CodexBundleMcpThreadConfig {

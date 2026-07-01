@@ -1,3 +1,4 @@
+// Inspects plugin registry shape for diagnostics and snapshots.
 import type { PluginRegistry } from "./registry.js";
 import { hasKind } from "./slots.js";
 
@@ -9,6 +10,8 @@ export type PluginCapabilityKind =
   | "realtime-transcription"
   | "realtime-voice"
   | "media-understanding"
+  | "transcript-source"
+  | "document-extractors"
   | "image-generation"
   | "video-generation"
   | "music-generation"
@@ -47,6 +50,8 @@ function buildPluginCapabilityEntries(
     { kind: "realtime-transcription" as const, ids: plugin.realtimeTranscriptionProviderIds },
     { kind: "realtime-voice" as const, ids: plugin.realtimeVoiceProviderIds },
     { kind: "media-understanding" as const, ids: plugin.mediaUnderstandingProviderIds },
+    { kind: "transcript-source" as const, ids: plugin.transcriptSourceProviderIds },
+    { kind: "document-extractors" as const, ids: plugin.contracts?.documentExtractors ?? [] },
     { kind: "image-generation" as const, ids: plugin.imageGenerationProviderIds },
     { kind: "video-generation" as const, ids: plugin.videoGenerationProviderIds },
     { kind: "music-generation" as const, ids: plugin.musicGenerationProviderIds },

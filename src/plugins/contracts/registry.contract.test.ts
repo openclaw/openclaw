@@ -1,3 +1,4 @@
+// Registry contract tests cover plugin contract registry contents and lookup behavior.
 import { describe, expect, it } from "vitest";
 import { uniqueSortedStrings } from "../../plugin-sdk/test-helpers/string-utils.js";
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "../manifest-registry.js";
@@ -8,6 +9,11 @@ import {
   providerContractLoadError,
   providerContractPluginIds,
 } from "./registry.js";
+
+const ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS = ["codex", "qa-lab"] as const;
+const ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_ID_SET = new Set<string>(
+  ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS,
+);
 
 describe("plugin contract registry", () => {
   function expectUniqueIds(ids: readonly string[]) {
@@ -24,6 +30,36 @@ describe("plugin contract registry", () => {
   }
 
   function resolveBundledManifestPluginIds(predicate: (plugin: PluginManifestRecord) => boolean) {
+    if (process.env.VITEST) {
+      return BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.map(
+        (entry) =>
+          ({
+            id: entry.pluginId,
+            origin: "bundled",
+            providers: entry.providerIds,
+            contracts: {
+              embeddingProviders: entry.embeddingProviderIds,
+              speechProviders: entry.speechProviderIds,
+              realtimeTranscriptionProviders: entry.realtimeTranscriptionProviderIds,
+              realtimeVoiceProviders: entry.realtimeVoiceProviderIds,
+              mediaUnderstandingProviders: entry.mediaUnderstandingProviderIds,
+              transcriptSourceProviders: entry.transcriptSourceProviderIds,
+              documentExtractors: entry.documentExtractorIds,
+              imageGenerationProviders: entry.imageGenerationProviderIds,
+              videoGenerationProviders: entry.videoGenerationProviderIds,
+              musicGenerationProviders: entry.musicGenerationProviderIds,
+              webContentExtractors: entry.webContentExtractorIds,
+              webFetchProviders: entry.webFetchProviderIds,
+              webSearchProviders: entry.webSearchProviderIds,
+              migrationProviders: entry.migrationProviderIds,
+              tools: entry.toolNames,
+            },
+          }) as PluginManifestRecord,
+      )
+        .filter(predicate)
+        .map((plugin) => plugin.id)
+        .toSorted((left, right) => left.localeCompare(right));
+    }
     const snapshotPluginIds = new Set(
       BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.map((entry) => entry.pluginId),
     );
@@ -61,6 +97,11 @@ describe("plugin contract registry", () => {
       name: "does not duplicate bundled media provider ids",
       ids: () =>
         pluginRegistrationContractRegistry.flatMap((entry) => entry.mediaUnderstandingProviderIds),
+    },
+    {
+      name: "does not duplicate bundled transcripts source provider ids",
+      ids: () =>
+        pluginRegistrationContractRegistry.flatMap((entry) => entry.transcriptSourceProviderIds),
     },
     {
       name: "does not duplicate bundled realtime transcription provider ids",
@@ -179,6 +220,17 @@ describe("plugin contract registry", () => {
     });
   });
 
+  it("covers every bundled transcripts source plugin discovered from manifests", () => {
+    expectRegistryPluginIds({
+      actualPluginIds: pluginRegistrationContractRegistry
+        .filter((entry) => entry.transcriptSourceProviderIds.length > 0)
+        .map((entry) => entry.pluginId),
+      predicate: (plugin) =>
+        plugin.origin === "bundled" &&
+        (plugin.contracts?.transcriptSourceProviders?.length ?? 0) > 0,
+    });
+  });
+
   it("covers every bundled web fetch plugin from the shared resolver", () => {
     const bundledWebFetchPluginIds = resolveManifestContractPluginIds({
       contract: "webFetchProviders",
@@ -201,15 +253,25 @@ describe("plugin contract registry", () => {
     const bundledWebSearchPluginIds = resolveManifestContractPluginIds({
       contract: "webSearchProviders",
       origin: "bundled",
-    }).filter((pluginId) => snapshotPluginIds.has(pluginId));
+    }).filter(
+      (pluginId) =>
+        snapshotPluginIds.has(pluginId) &&
+        !ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_ID_SET.has(pluginId),
+    );
+    const expectedPluginIds = uniqueSortedStrings([
+      ...bundledWebSearchPluginIds,
+      ...ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS,
+    ]);
+    const actualPluginIds = uniqueSortedStrings(
+      pluginRegistrationContractRegistry
+        .filter((entry) => entry.webSearchProviderIds.length > 0)
+        .map((entry) => entry.pluginId),
+    );
 
+    expect(actualPluginIds).toEqual(expectedPluginIds);
     expect(
-      uniqueSortedStrings(
-        pluginRegistrationContractRegistry
-          .filter((entry) => entry.webSearchProviderIds.length > 0)
-          .map((entry) => entry.pluginId),
-      ),
-    ).toEqual(bundledWebSearchPluginIds);
+      actualPluginIds.filter((pluginId) => !bundledWebSearchPluginIds.includes(pluginId)),
+    ).toEqual([...ACTIVATION_SCOPED_WEB_SEARCH_PLUGIN_IDS]);
   });
 
   it("covers every bundled migration provider plugin discovered from manifests", () => {

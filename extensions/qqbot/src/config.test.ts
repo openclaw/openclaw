@@ -1,6 +1,10 @@
+// Qqbot tests cover config plugin behavior.
 import fs from "node:fs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { type JsonSchemaObject, validateJsonSchemaValue } from "openclaw/plugin-sdk/config-schema";
+import {
+  type JsonSchemaObject,
+  validateJsonSchemaValue,
+} from "openclaw/plugin-sdk/json-schema-runtime";
 import { describe, expect, it } from "vitest";
 import { qqbotSetupAdapterShared } from "./bridge/config-shared.js";
 import {
@@ -126,6 +130,42 @@ describe("qqbot config", () => {
     });
 
     expect(parsed.success).toBe(true);
+  });
+
+  it("accepts canonical group tools config", () => {
+    const parsed = QQBotConfigSchema.safeParse({
+      groups: {
+        G1: {
+          requireMention: true,
+          commandLevel: "safety",
+          tools: { deny: ["*"] },
+          toolsBySender: {
+            "id:alice": { allow: ["read"] },
+          },
+        },
+      },
+      accounts: {
+        bot2: {
+          groups: {
+            G1: { commandLevel: "strict", tools: { allow: [] } },
+          },
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects retired group toolPolicy config", () => {
+    const parsed = QQBotConfigSchema.safeParse({
+      groups: {
+        G1: {
+          toolPolicy: "none",
+        },
+      },
+    });
+
+    expect(parsed.success).toBe(false);
   });
 
   it("preserves top-level media and upgrade config on the default account", () => {

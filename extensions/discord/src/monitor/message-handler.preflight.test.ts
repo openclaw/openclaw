@@ -1,3 +1,4 @@
+// Discord tests cover message handler.preflight plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, MessageType } from "../internal/discord.js";
 import { createPartialDiscordChannelWithThrowingGetters } from "../test-support/partial-channel.js";
@@ -959,6 +960,65 @@ describe("preflightDiscordMessage", () => {
     const preflight = expectPreflightResult(result);
     expect(preflight.sender.isPluralKit).toBe(true);
     expect(preflight.canonicalMessageId).toBe("orig-123");
+  });
+
+  it("uses the resolved PluralKit member id when creating DM pairing requests", async () => {
+    fetchPluralKitMessageInfoMock.mockResolvedValue({
+      id: "proxy-dm-1",
+      original: "orig-dm-1",
+      member: { id: "pk-member-1", name: "Echo" },
+      system: { id: "system-1", name: "System" },
+    });
+    resolveDiscordDmCommandAccessMock.mockResolvedValue({
+      senderAccess: {
+        allowed: false,
+        decision: "pairing",
+        reasonCode: "dm_policy_pairing_required",
+      },
+      commandAccess: {
+        authorized: false,
+      },
+    });
+
+    const result = await runDmPreflight({
+      channelId: "dm-channel-pk-1",
+      message: createDiscordMessage({
+        id: "proxy-dm-1",
+        channelId: "dm-channel-pk-1",
+        content: "hello",
+        webhookId: "pluralkit-webhook-1",
+        author: {
+          id: "webhook-author",
+          bot: true,
+          username: "PluralKit",
+        },
+      }),
+      discordConfig: {
+        allowBots: true,
+        dmPolicy: "pairing",
+        pluralkit: { enabled: true },
+      } as DiscordConfig,
+    });
+
+    expect(result).toBeNull();
+    expect(resolveDiscordDmCommandAccessMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sender: {
+          id: "pk-member-1",
+          name: "Echo",
+          tag: "Echo",
+        },
+      }),
+    );
+    expect(handleDiscordDmCommandDecisionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sender: {
+          id: "pk:pk-member-1",
+          tag: "Echo",
+          name: "Echo",
+        },
+      }),
+    );
   });
 
   it("skips PluralKit lookup for bound-thread webhook echoes", async () => {
@@ -2251,5 +2311,41 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
         webhookId: "wh-1",
       }),
     ).toBe(true);
+  });
+
+  it("does not suppress unbound thread webhook echoes when echo expiry overflows", async () => {
+    const manager = createThreadBindingManager({
+      cfg: DEFAULT_PREFLIGHT_CFG,
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+    });
+    const binding = await manager.bindTarget({
+      threadId: "thread-overflow",
+      channelId: "parent-1",
+      targetKind: "subagent",
+      targetSessionKey: "agent:main:subagent:child-1",
+      agentId: "main",
+      webhookId: "wh-overflow",
+      webhookToken: "tok-1",
+    });
+    expect(binding).not.toBeNull();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    try {
+      manager.unbindThread({
+        threadId: "thread-overflow",
+        sendFarewell: false,
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(
+      shouldIgnoreBoundThreadWebhookMessage({
+        accountId: "default",
+        threadId: "thread-overflow",
+        webhookId: "wh-overflow",
+      }),
+    ).toBe(false);
   });
 });

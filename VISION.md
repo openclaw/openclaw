@@ -38,6 +38,15 @@ Contribution rules:
 - Do not open large batches of tiny PRs at once; each PR has review cost.
 - For very small related fixes, grouping into one focused PR is encouraged.
 
+Configuration compatibility:
+
+OpenClaw runtime code reads the current configuration schema only.
+We do not keep long-lived aliases or compatibility branches that silently accept old, renamed, or malformed config keys.
+
+When a config change makes existing user config invalid, the same change needs a doctor migration.
+`openclaw doctor --fix` should detect the old shape, explain it, back it up when needed, and rewrite it to the canonical format.
+Core-owned config and auth state are repaired in core doctor code; plugin-owned config is repaired by that plugin's doctor contract.
+
 ## Security
 
 Security in OpenClaw is a deliberate tradeoff: strong defaults without killing capability.
@@ -52,7 +61,7 @@ We prioritize secure defaults, but also expose clear knobs for trusted high-powe
 ## Plugins & Memory
 
 OpenClaw has an extensive plugin API.
-Core stays lean; optional capability should usually ship as plugins.
+Core stays lean; optional capabilities should usually ship as plugins.
 We are generally slimming down core while expanding what plugins can do.
 If a useful feature cannot be built as a plugin yet, we welcome PRs and design discussions that extend the plugin API instead of adding one-off core behavior.
 

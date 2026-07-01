@@ -1,8 +1,10 @@
+// Covers task executor runtime selection, lifecycle updates, and error paths.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resetAgentEventsForTest, resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { resetHeartbeatWakeStateForTests } from "../infra/heartbeat-wake.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { captureEnv } from "../test-utils/env.js";
 import {
   getDetachedTaskLifecycleRuntime,
   resetDetachedTaskLifecycleRuntimeForTests,
@@ -13,22 +15,22 @@ import {
   cancelFlowByIdForOwner,
   cancelDetachedTaskRunById,
   completeTaskRunByRunId,
-  createQueuedTaskRun,
-  createRunningTaskRun,
+  createQueuedTaskRun as createQueuedTaskRunOrNull,
+  createRunningTaskRun as createRunningTaskRunOrNull,
   failTaskRunByRunId,
   recordTaskRunProgressByRunId,
-  retryBlockedFlowAsQueuedTaskRun,
   runTaskInFlow,
   runTaskInFlowForOwner,
   setDetachedTaskDeliveryStatusByRunId,
   startTaskRunByRunId,
 } from "./task-executor.js";
 import {
-  createManagedTaskFlow,
+  createManagedTaskFlow as createManagedTaskFlowOrNull,
   getTaskFlowById,
   listTaskFlowRecords,
   resetTaskFlowRegistryForTests,
 } from "./task-flow-registry.js";
+import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   setTaskRegistryDeliveryRuntimeForTests,
   getTaskById,
@@ -39,8 +41,37 @@ import {
   resetTaskRegistryForTests,
   setTaskRegistryControlRuntimeForTests,
 } from "./task-registry.js";
+import type { TaskRecord } from "./task-registry.types.js";
 
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
+
+function createQueuedTaskRun(params: Parameters<typeof createQueuedTaskRunOrNull>[0]): TaskRecord {
+  const task = createQueuedTaskRunOrNull(params);
+  if (!task) {
+    throw new Error("expected queued task creation to succeed");
+  }
+  return task;
+}
+
+function createRunningTaskRun(
+  params: Parameters<typeof createRunningTaskRunOrNull>[0],
+): TaskRecord {
+  const task = createRunningTaskRunOrNull(params);
+  if (!task) {
+    throw new Error("expected running task creation to succeed");
+  }
+  return task;
+}
+
+function createManagedTaskFlow(
+  params: Parameters<typeof createManagedTaskFlowOrNull>[0],
+): TaskFlowRecord {
+  const flow = createManagedTaskFlowOrNull(params);
+  if (!flow) {
+    throw new Error("expected managed TaskFlow creation to succeed");
+  }
+  return flow;
+}
 const hoisted = vi.hoisted(() => {
   const sendMessageMock = vi.fn();
   const cancelSessionMock = vi.fn();
@@ -179,11 +210,7 @@ function expectCancelledAcpChildTask(
 
 describe("task-executor", () => {
   afterEach(() => {
-    if (ORIGINAL_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-    }
+    ORIGINAL_ENV.restore();
     resetSystemEventsForTest();
     resetHeartbeatWakeStateForTests();
     resetAgentEventsForTest();
@@ -350,75 +377,6 @@ describe("task-executor", () => {
 
       expect(created.parentFlowId).toBeUndefined();
       expect(listTaskFlowRecords()).toStrictEqual([]);
-    });
-  });
-
-  it("records blocked metadata on one-task flows and reuses the same flow for queued retries", async () => {
-    await withTaskExecutorStateDir(async () => {
-      const created = createRunningTaskRun({
-        runtime: "acp",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
-        requesterOrigin: {
-          channel: "notifychat",
-          to: "notifychat:123",
-        },
-        childSessionKey: "agent:codex:acp:child",
-        runId: "run-executor-blocked",
-        task: "Patch file",
-        startedAt: 10,
-        deliveryStatus: "pending",
-      });
-
-      completeTaskRunByRunId({
-        runId: "run-executor-blocked",
-        endedAt: 40,
-        lastEventAt: 40,
-        terminalOutcome: "blocked",
-        terminalSummary: "Writable session required.",
-      });
-
-      const blockedTask = getTaskById(created.taskId);
-      expect(blockedTask?.taskId).toBe(created.taskId);
-      expect(blockedTask?.status).toBe("succeeded");
-      expect(blockedTask?.terminalOutcome).toBe("blocked");
-      expect(blockedTask?.terminalSummary).toBe("Writable session required.");
-      const parentFlowId = expectParentFlowId(created);
-      const blockedFlow = getTaskFlowById(parentFlowId);
-      expect(blockedFlow?.flowId).toBe(parentFlowId);
-      expect(blockedFlow?.status).toBe("blocked");
-      expect(blockedFlow?.blockedTaskId).toBe(created.taskId);
-      expect(blockedFlow?.blockedSummary).toBe("Writable session required.");
-      expect(blockedFlow?.endedAt).toBe(40);
-
-      const retried = retryBlockedFlowAsQueuedTaskRun({
-        flowId: parentFlowId,
-        runId: "run-executor-retry",
-        childSessionKey: "agent:codex:acp:retry-child",
-      });
-
-      expect(retried.found).toBe(true);
-      expect(retried.retried).toBe(true);
-      if (!retried.retried) {
-        throw new Error("Expected blocked flow retry");
-      }
-      if (!retried.previousTask || !retried.task) {
-        throw new Error("Expected retry result payload");
-      }
-      expect(retried.previousTask.taskId).toBe(created.taskId);
-      expect(retried.task.parentFlowId).toBe(parentFlowId);
-      expect(retried.task.parentTaskId).toBe(created.taskId);
-      expect(retried.task.status).toBe("queued");
-      expect(retried.task.runId).toBe("run-executor-retry");
-      const queuedFlow = getTaskFlowById(parentFlowId);
-      expect(queuedFlow?.flowId).toBe(parentFlowId);
-      expect(queuedFlow?.status).toBe("queued");
-      expect(findLatestTaskForFlowId(parentFlowId)?.runId).toBe("run-executor-retry");
-      const original = findTaskByRunId("run-executor-blocked");
-      expect(original?.taskId).toBe(created.taskId);
-      expect(original?.status).toBe("succeeded");
-      expect(original?.terminalOutcome).toBe("blocked");
-      expect(original?.terminalSummary).toBe("Writable session required.");
     });
   });
 

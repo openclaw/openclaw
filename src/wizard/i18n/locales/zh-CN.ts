@@ -1,3 +1,4 @@
+// Simplified Chinese wizard translations provide localized onboarding copy.
 import type { WizardTranslationMap } from "../types.js";
 
 export const zh_CN = {
@@ -29,14 +30,18 @@ export const zh_CN = {
       compatibilityAnthropicHint: "使用 /messages",
       compatibilityOpenAi: "兼容 OpenAI",
       compatibilityOpenAiHint: "使用 /chat/completions",
+      compatibilityOpenAiResponses: "兼容 OpenAI Responses",
+      compatibilityOpenAiResponsesHint: "使用 /responses",
       compatibilityUnknown: "未知（自动检测）",
-      compatibilityUnknownHint: "先探测 OpenAI，再探测 Anthropic 端点",
+      compatibilityUnknownHint: "先探测 OpenAI Chat、OpenAI Responses，再探测 Anthropic 端点",
       detectionFailed: "无法检测端点类型。",
-      detectionFailedNote: "这个端点没有响应 OpenAI 或 Anthropic 风格的请求。",
+      detectionFailedNote:
+        "这个端点没有响应 OpenAI Chat、OpenAI Responses 或 Anthropic 风格的请求。",
       detectionNoteTitle: "端点检测",
       detectionProgress: "正在检测端点类型...",
       detectedAnthropic: "检测到兼容 Anthropic 的端点。",
       detectedOpenAi: "检测到兼容 OpenAI 的端点。",
+      detectedOpenAiResponses: "检测到兼容 OpenAI Responses 的端点。",
       endpointId: "端点 ID",
       endpointIdRequired: "端点 ID 必填。",
       endpointIdRenamed: '端点 ID "{from}" 已用于不同的基础 URL。将使用 "{to}"。',
@@ -124,7 +129,13 @@ export const zh_CN = {
       appliedTitle: "迁移已应用",
       cancelled: "迁移已取消",
       complete: "迁移完成。下一步运行 `openclaw doctor`。",
+      continuing: "迁移完成。继续设置。",
+      importFrom: "从 {source} 导入",
+      includeCredentials: "同时导入支持的认证凭据？",
       previewTitle: "迁移预览",
+      setupModelSeparately: "单独设置模型",
+      setupModelSeparatelyHint: "不导入其他 agent，直接配置模型认证",
+      setupSource: "你想如何设置这个 agent？",
       source: "迁移来源",
       sourceAgentHome: "源 agent home",
       sourcePathHint: "下一步输入源路径",
@@ -230,9 +241,14 @@ export const zh_CN = {
       authChoiceRequired: "必须选择认证方式",
       channelsTitle: "频道",
       configHandling: "配置处理",
+      durationNote:
+        "接下来会依次设置模型/认证、工作区、Gateway、频道、网页搜索、技能和可选插件。QuickStart 通常只需几分钟，但提供商登录、频道配对、daemon 安装、网络下载和可选依赖可能需要更久。你可以跳过可选步骤，之后用 {command} 返回配置。",
+      durationTitle: "设置流程",
       existingConfigTitle: "检测到已有配置",
       flowAdvanced: "手动设置",
       flowAdvancedHint: "选择 Gateway 端口、网络暴露、Tailscale 和认证方式。",
+      flowKeepModel: "保留现有模型配置",
+      flowKeepModelHint: "跳过模型/认证设置，保留当前默认模型。",
       flowQuickstart: "QuickStart（推荐）",
       flowQuickstartHint: "推荐的本地设置。之后可用 {command} 修改细节。",
       intro: "OpenClaw 设置",
@@ -318,6 +334,7 @@ export const zh_CN = {
       setEnv: "为 {name} 设置 {env}？",
       skipDepsHint: "继续，不安装依赖",
       statusTitle: "技能状态",
+      allReadyTitle: "所有技能已就绪",
     },
     channels: {
       account: "{label} 账号",
@@ -860,6 +877,7 @@ export const zh_CN = {
       },
     },
     search: {
+      apiKeyRequired: "需要 API key",
       chooseProvider: "选择一个提供方。有些提供方需要 API key，有些无需 key。",
       configured: "已配置",
       configureLaterHint: "稍后可用 openclaw configure --section web 配置",
@@ -937,6 +955,9 @@ export const zh_CN = {
       reinstall: "重新安装",
       rerunInstallDaemon: "或重新运行：{command}",
       restart: "重启",
+      containerRuntimeTitle: "容器运行环境",
+      containerSystemdUnavailable:
+        "此容器内没有 systemd 用户服务。OpenClaw 只会跳过后台服务安装；请以前台方式运行 Gateway，或使用你的容器 supervisor。",
       securityReminder:
         "在你的电脑上运行 agent 存在风险，请加固设置：https://docs.openclaw.ai/security",
       secretRefAuthFailed: "无法解析用于设置认证的 {field} SecretRef。",
@@ -948,6 +969,9 @@ export const zh_CN = {
       systemdLingerReason:
         "Linux 安装默认使用 systemd 用户服务。没有 lingering 时，systemd 会在用户会话退出/空闲后停止会话并终止 Gateway。",
       systemdUnavailable: "systemd 用户服务不可用。跳过 lingering 检查和服务安装。",
+      sessionGatewayStarting: "正在启动本次会话的 Gateway...",
+      sessionGatewayStarted: "本次会话的 Gateway 已启动。",
+      sessionGatewayStartFailed: "本次会话的 Gateway 启动失败。",
       terminalHatch: "在终端中启动（推荐）",
       webDocs: "文档：https://docs.openclaw.ai/tools/web",
       webSearchAutoDetected: "Web search 可通过 {provider} 使用（自动检测）。",
@@ -956,6 +980,7 @@ export const zh_CN = {
       webSearchGetKey: "获取 key：{url}",
       webSearchAuthProfile: "凭据：使用已有 {provider} auth profile。",
       webSearchKeyEnv: "API key：通过 {env} 环境变量提供。",
+      webSearchKeyFree: "Web search 已就绪 —— 此 provider 无需 API key。",
       webSearchKeyRef: "API key：通过 secret reference 配置。",
       webSearchKeyStored: "API key：已存入配置。",
       webSearchNeedsKey: "添加 key 前 web_search 无法工作。",

@@ -1,5 +1,7 @@
+// Perplexity tests cover perplexity web search provider plugin behavior.
 import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 import { createPerplexityWebSearchProvider } from "./perplexity-web-search-provider.js";
 import { testing } from "./perplexity-web-search-provider.runtime.js";
 
@@ -137,6 +139,28 @@ describe("perplexity web search provider", () => {
     });
   });
 
+  it.each([
+    ["max_tokens", 0, "max_tokens must be a positive integer."],
+    ["max_tokens", 1.5, "max_tokens must be a positive integer."],
+    ["max_tokens", 1_000_001, "max_tokens must be a positive integer."],
+    ["max_tokens_per_page", 1.5, "max_tokens_per_page must be a positive integer."],
+  ])("rejects invalid native token budget %s=%s", async (key, value, message) => {
+    await withEnvAsync(
+      { [perplexityApiKeyEnv]: directPerplexityApiKey, [openRouterApiKeyEnv]: undefined },
+      async () => {
+        const provider = createPerplexityWebSearchProvider();
+        const tool = provider.createTool({ config: {}, searchConfig: {} });
+        if (!tool) {
+          throw new Error("Expected tool definition");
+        }
+
+        await expect(tool.execute({ query: "OpenClaw docs", [key]: value })).rejects.toThrow(
+          message,
+        );
+      },
+    );
+  });
+
   it("reports malformed Search API JSON with a stable provider error", async () => {
     await expect(
       testing.readPerplexityJsonResponse(new Response("{ nope"), "Perplexity Search"),
@@ -147,5 +171,23 @@ describe("perplexity web search provider", () => {
     await expect(
       testing.readPerplexityJsonResponse(new Response("{ nope"), "Perplexity"),
     ).rejects.toThrow("Perplexity: malformed JSON response");
+  });
+
+  it("bounds successful Perplexity JSON bodies before parsing", async () => {
+    const streamed = createStreamingResponse({
+      chunkCount: 32,
+      chunkSize: 1024 * 1024,
+      text: "x",
+      headers: { "content-type": "application/json" },
+    });
+    const jsonSpy = vi.spyOn(streamed.response, "json").mockRejectedValue(new Error("unbounded"));
+
+    await expect(
+      testing.readPerplexityJsonResponse(streamed.response, "Perplexity Search"),
+    ).rejects.toThrow("Perplexity Search: JSON response exceeds 16777216 bytes");
+
+    expect(streamed.getReadCount()).toBeLessThan(32);
+    expect(streamed.wasCanceled()).toBe(true);
+    expect(jsonSpy).not.toHaveBeenCalled();
   });
 });

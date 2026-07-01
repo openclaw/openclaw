@@ -1,4 +1,6 @@
+// Nextcloud Talk plugin module implements room info behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { ssrfPolicyFromPrivateNetworkOptIn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { fetchWithSsrFGuard, type RuntimeEnv } from "../runtime-api.js";
@@ -24,14 +26,10 @@ function resolveRoomCacheKey(params: { accountId: string; roomToken: string }) {
 }
 
 function coerceRoomType(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
     return value;
   }
-  if (typeof value === "string" && value.trim()) {
-    const parsed = Number.parseInt(value, 10);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
+  return parseStrictPositiveInteger(value);
 }
 
 function resolveRoomKindFromType(type: number | undefined): "direct" | "group" | undefined {

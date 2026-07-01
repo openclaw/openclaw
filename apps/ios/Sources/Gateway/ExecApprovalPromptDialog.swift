@@ -2,12 +2,14 @@ import SwiftUI
 
 private struct ExecApprovalPromptDialogModifier: ViewModifier {
     @Environment(NodeAppModel.self) private var appModel: NodeAppModel
-    @Environment(\.colorScheme) private var colorScheme
+    let suppressedApprovalID: String?
 
     func body(content: Content) -> some View {
         content
             .overlay {
-                if let prompt = self.appModel.pendingExecApprovalPrompt {
+                if let prompt = self.appModel.pendingExecApprovalPrompt,
+                   prompt.id != self.suppressedApprovalID
+                {
                     ZStack {
                         Color.black.opacity(0.38)
                             .ignoresSafeArea()
@@ -16,7 +18,6 @@ private struct ExecApprovalPromptDialogModifier: ViewModifier {
                             prompt: prompt,
                             isResolving: self.appModel.pendingExecApprovalPromptResolving,
                             errorText: self.appModel.pendingExecApprovalPromptErrorText,
-                            brighten: self.colorScheme == .light,
                             onAllowOnce: {
                                 Task {
                                     await self.appModel.resolvePendingExecApprovalPrompt(decision: "allow-once")
@@ -50,7 +51,6 @@ private struct ExecApprovalPromptCard: View {
     let prompt: NodeAppModel.ExecApprovalPrompt
     let isResolving: Bool
     let errorText: String?
-    let brighten: Bool
     let onAllowOnce: () -> Void
     let onAllowAlways: () -> Void
     let onDeny: () -> Void
@@ -61,7 +61,7 @@ private struct ExecApprovalPromptCard: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Exec approval required")
                     .font(.headline)
-                Text("OpenClaw opened from a notification. Review this exec request before continuing.")
+                Text("Review this exec request before continuing. Your decision will be sent back to the gateway.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -90,7 +90,7 @@ private struct ExecApprovalPromptCard: View {
             if let errorText = self.normalized(self.errorText) {
                 Text(errorText)
                     .font(.footnote)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(OpenClawBrand.danger)
             }
 
             if self.isResolving {
@@ -147,7 +147,8 @@ private struct ExecApprovalPromptCard: View {
             .controlSize(.large)
             .frame(maxWidth: .infinity)
         }
-        .statusGlassCard(brighten: self.brighten, verticalPadding: 18, horizontalPadding: 18)
+        .padding(18)
+        .proPanelSurface(tint: OpenClawBrand.accentHot, radius: 20, isProminent: true)
     }
 
     private func normalized(_ value: String?) -> String? {
@@ -190,7 +191,7 @@ private struct ExecApprovalPromptMetadataRow: View {
 }
 
 extension View {
-    func execApprovalPromptDialog() -> some View {
-        self.modifier(ExecApprovalPromptDialogModifier())
+    func execApprovalPromptDialog(suppressedApprovalID: String? = nil) -> some View {
+        self.modifier(ExecApprovalPromptDialogModifier(suppressedApprovalID: suppressedApprovalID))
     }
 }

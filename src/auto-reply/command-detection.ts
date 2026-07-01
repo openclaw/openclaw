@@ -1,14 +1,16 @@
-import type { OpenClawConfig } from "../config/types.js";
+/** Command detectors used by inbound authorization and control-command routing. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.js";
 import { listChatCommands, listChatCommandsForConfig } from "./commands-registry-list.js";
 import { normalizeCommandBody } from "./commands-registry-normalize.js";
 import type { CommandNormalizeOptions } from "./commands-registry.types.js";
 import { isAbortTrigger } from "./reply/abort-primitives.js";
 import { stripInboundMetadata } from "./reply/strip-inbound-meta.js";
 
+/** Returns true when text starts with a configured control command alias. */
 export function hasControlCommand(
   text?: string,
   cfg?: OpenClawConfig,
@@ -51,6 +53,7 @@ export function hasControlCommand(
   return false;
 }
 
+/** Returns true for exact control commands or abort triggers after metadata stripping. */
 export function isControlCommandMessage(
   text?: string,
   cfg?: OpenClawConfig,
@@ -87,6 +90,7 @@ export function hasInlineCommandTokens(text?: string): boolean {
   return /(?:^|\s)[/!][a-z]/i.test(body);
 }
 
+/** Returns true when a message may need command authorization metadata. */
 export function shouldComputeCommandAuthorized(
   text?: string,
   cfg?: OpenClawConfig,

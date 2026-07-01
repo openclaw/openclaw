@@ -1,4 +1,7 @@
-import type { Context } from "@earendil-works/pi-ai";
+/**
+ * Builds GitHub Copilot provider compatibility headers from message content.
+ */
+import type { Context } from "../llm/types.js";
 
 /** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export const COPILOT_EDITOR_VERSION = "vscode/1.107.0";
@@ -48,6 +51,7 @@ function containsCopilotContentType(value: unknown, type: string): boolean {
   return entry.type === type || containsCopilotContentType(entry.content, type);
 }
 
+/** Return true when Copilot should receive its vision request header. */
 export function hasCopilotVisionInput(messages: Context["messages"]): boolean {
   return messages.some((message) => {
     if (message.role === "user" && Array.isArray(message.content)) {
@@ -60,6 +64,7 @@ export function hasCopilotVisionInput(messages: Context["messages"]): boolean {
   });
 }
 
+/** Build per-request Copilot headers, including initiator and vision flags. */
 export function buildCopilotDynamicHeaders(params: {
   messages: Context["messages"];
   hasImages: boolean;

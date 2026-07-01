@@ -1,4 +1,6 @@
+// Status scan fast-json tests cover scan defaults, memory config, and JSON-safe status payloads.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import {
   applyStatusScanDefaults,
   createStatusMemorySearchConfig,
@@ -11,6 +13,7 @@ import {
 
 const mocks = {
   ...createStatusScanSharedMocks("status-fast-json"),
+  callGateway: vi.fn(),
   getStatusCommandSecretTargetIds: vi.fn(() => []),
   resolveMemorySearchConfig: vi.fn(),
 };
@@ -18,6 +21,26 @@ const mocks = {
 let originalForceStderr: boolean;
 let loggingStateRef: typeof import("../logging/state.js").loggingState;
 let scanStatusJsonFast: typeof import("./status.scan.fast-json.js").scanStatusJsonFast;
+
+const STATUS_JSON_TEST_CHANNEL_ENV_PREFIXES = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter(
+  (entry) => entry.configurable !== false,
+).map((entry) => `${entry.channelId.replace(/[^a-z0-9]+/gi, "_").toUpperCase()}_`);
+const STATUS_JSON_TEST_CHANNEL_ENV_VARS = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter(
+  (entry) => entry.configurable !== false,
+).flatMap((entry) => entry.channelEnvVars ?? []);
+
+function clearStatusJsonChannelEnv(): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {};
+  for (const key of STATUS_JSON_TEST_CHANNEL_ENV_VARS) {
+    env[key] = undefined;
+  }
+  for (const key of Object.keys(process.env)) {
+    if (STATUS_JSON_TEST_CHANNEL_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+      env[key] = undefined;
+    }
+  }
+  return env;
+}
 
 function configureFastJsonStatus() {
   applyStatusScanDefaults(mocks, {
@@ -28,7 +51,7 @@ function configureFastJsonStatus() {
   });
   mocks.getStatusCommandSecretTargetIds.mockReturnValue([]);
   mocks.resolveMemorySearchConfig.mockReturnValue({
-    store: { path: "/tmp/main.sqlite" },
+    store: { databasePath: "/tmp/main.sqlite" },
   });
 }
 
@@ -59,17 +82,22 @@ afterEach(() => {
 
 describe("scanStatusJsonFast", () => {
   it("does not preload configured channel plugins for the lean JSON path", async () => {
-    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+    mocks.hasConfiguredChannels.mockReturnValue(true);
 
     await scanStatusJsonFast({}, {} as never);
 
+    expect(mocks.getStatusCommandSecretTargetIds).toHaveBeenCalledWith(
+      createStatusMemorySearchConfig(),
+      process.env,
+      { includeChannelTargets: false },
+    );
     expect(mocks.hasConfiguredChannelsForReadOnlyScope).not.toHaveBeenCalled();
     expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
     expect(loggingStateRef.forceConsoleToStderr).toBe(false);
   });
 
   it("keeps resolved and source channel configs available without loading runtime plugins", async () => {
-    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+    mocks.hasConfiguredChannels.mockReturnValue(true);
     applyStatusScanDefaults(mocks, {
       hasConfiguredChannels: true,
       sourceConfig: {
@@ -100,15 +128,94 @@ describe("scanStatusJsonFast", () => {
   });
 
   it("skips plugin compatibility loading even when configured channels are present", async () => {
-    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+    mocks.hasConfiguredChannels.mockReturnValue(true);
 
     await scanStatusJsonFast({}, {} as never);
 
     expect(mocks.buildPluginCompatibilityNotices).not.toHaveBeenCalled();
   });
 
+  it("keeps default fast JSON update scans local-only", async () => {
+    mocks.hasConfiguredChannels.mockReturnValue(true);
+
+    await scanStatusJsonFast({ timeoutMs: 1234 }, {} as never);
+
+    expect(mocks.getUpdateCheckResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 1234,
+        fetchGit: false,
+        includeRegistry: false,
+      }),
+    );
+  });
+
+  it("restores registry-backed update checks and remote git fetches when --all is requested", async () => {
+    mocks.hasConfiguredChannels.mockReturnValue(true);
+
+    await scanStatusJsonFast({ all: true }, {} as never);
+
+    expect(mocks.getUpdateCheckResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 6500,
+        fetchGit: true,
+        includeRegistry: true,
+      }),
+    );
+  });
+
+  it("keeps the local status RPC fallback off the default fast JSON path", async () => {
+    mocks.hasConfiguredChannels.mockReturnValue(true);
+    mocks.callGateway.mockResolvedValue({ sessions: 1 });
+
+    await scanStatusJsonFast({}, {} as never);
+
+    expect(mocks.probeGateway).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 1000 }));
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("honors explicit gateway probe timeouts on the lean JSON path", async () => {
+    mocks.hasConfiguredChannels.mockReturnValue(true);
+
+    await scanStatusJsonFast({ timeoutMs: 5000 }, {} as never);
+
+    expect(mocks.probeGateway).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 5000 }));
+  });
+
+  it("keeps configured gateway handshake timeouts on the lean JSON path", async () => {
+    mocks.hasConfiguredChannels.mockReturnValue(true);
+    applyStatusScanDefaults(mocks, {
+      resolvedConfig: {
+        ...createStatusMemorySearchConfig(),
+        gateway: { handshakeTimeoutMs: 30_000 },
+      } as never,
+    });
+
+    await scanStatusJsonFast({}, {} as never);
+
+    expect(mocks.probeGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preauthHandshakeTimeoutMs: 30_000,
+        timeoutMs: 30_000,
+      }),
+    );
+  });
+
+  it("restores the local status RPC fallback when --all is requested", async () => {
+    mocks.hasConfiguredChannels.mockReturnValue(true);
+    mocks.callGateway.mockResolvedValue({ sessions: 1 });
+
+    await scanStatusJsonFast({ all: true }, {} as never);
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "status",
+        timeoutMs: 2000,
+      }),
+    );
+  });
+
   it("keeps the fast JSON summary off the channel plugin summary path", async () => {
-    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+    mocks.hasConfiguredChannels.mockReturnValue(true);
 
     await scanStatusJsonFast({}, {} as never);
 
@@ -123,11 +230,7 @@ describe("scanStatusJsonFast", () => {
     const result = await scanStatusJsonFast({}, {} as never);
 
     expect(result.memory).toBeNull();
-    expect(mocks.hasPotentialConfiguredChannels).toHaveBeenCalledWith(
-      createStatusMemorySearchConfig(),
-      process.env,
-      { includePersistedAuthState: false },
-    );
+    expect(mocks.hasConfiguredChannels).not.toHaveBeenCalled();
     expect(mocks.resolveMemorySearchConfig).not.toHaveBeenCalled();
     expect(mocks.getMemorySearchManager).not.toHaveBeenCalled();
   });
@@ -155,6 +258,9 @@ describe("scanStatusJsonFast", () => {
   it("skips gateway and update probes on cold-start status --json", async () => {
     await withTemporaryEnv(
       {
+        ...clearStatusJsonChannelEnv(),
+        OPENCLAW_TWITCH_ACCESS_TOKEN: undefined,
+        TELEGRAM_BOT_TOKEN: undefined,
         VITEST: undefined,
         VITEST_POOL_ID: undefined,
         NODE_ENV: undefined,
@@ -166,5 +272,28 @@ describe("scanStatusJsonFast", () => {
 
     expect(mocks.getUpdateCheckResult).not.toHaveBeenCalled();
     expect(mocks.probeGateway).not.toHaveBeenCalled();
+  });
+
+  it("keeps cold-start gateway probes with local-only updates when a channel is configured from manifest env vars", async () => {
+    await withTemporaryEnv(
+      {
+        ...clearStatusJsonChannelEnv(),
+        OPENCLAW_TWITCH_ACCESS_TOKEN: "token",
+        VITEST: undefined,
+        VITEST_POOL_ID: undefined,
+        NODE_ENV: undefined,
+      },
+      async () => {
+        await scanStatusJsonFast({}, {} as never);
+      },
+    );
+
+    expect(mocks.getUpdateCheckResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fetchGit: false,
+        includeRegistry: false,
+      }),
+    );
+    expect(mocks.probeGateway).toHaveBeenCalled();
   });
 });

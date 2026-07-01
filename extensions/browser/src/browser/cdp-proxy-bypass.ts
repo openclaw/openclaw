@@ -9,6 +9,7 @@
  */
 import http from "node:http";
 import https from "node:https";
+import { registerManagedProxyBrowserCdpBypass } from "openclaw/plugin-sdk/ssrf-runtime-internal";
 import { isLoopbackHost } from "../gateway/net.js";
 import { hasProxyEnvConfigured } from "../infra/net/proxy-env.js";
 
@@ -64,10 +65,6 @@ function noProxyAlreadyCoversLocalhost(): boolean {
 
 function appendLoopbackEntries(value: string | undefined): string {
   return value ? `${value},${LOOPBACK_ENTRIES}` : LOOPBACK_ENTRIES;
-}
-
-export async function withNoProxyForLocalhost<T>(fn: () => Promise<T>): Promise<T> {
-  return await withNoProxyForCdpUrl("http://127.0.0.1", fn);
 }
 
 function isLoopbackCdpUrl(url: string): boolean {
@@ -162,4 +159,42 @@ export async function withNoProxyForCdpUrl<T>(url: string, fn: () => Promise<T>)
   } finally {
     release?.();
   }
+}
+
+/**
+ * Scoped managed-proxy bypass for the exact CDP URL about to be used.
+ *
+ * Proxyline dynamic bypass registrations are exact URL matches, so callers
+ * must register the concrete `/json/version` or `ws://.../devtools/...` URL
+ * rather than a CDP base URL.
+ */
+export function withManagedProxyForCdpUrl<T>(url: string, fn: () => T): T {
+  const release = registerManagedProxyBrowserCdpBypass(url);
+  let result: T;
+  try {
+    result = fn();
+  } catch (err) {
+    release?.();
+    throw err;
+  }
+
+  const maybeThenable = result as unknown;
+  if (
+    typeof maybeThenable === "object" &&
+    maybeThenable !== null &&
+    "finally" in maybeThenable &&
+    typeof maybeThenable.finally === "function"
+  ) {
+    return maybeThenable.finally(() => release?.()) as T;
+  }
+  release?.();
+  return result;
+}
+
+/**
+ * Validate managed-proxy loopback policy without keeping a long-lived bypass.
+ * Exact CDP request sites install their own scoped bypasses.
+ */
+export function assertManagedProxyAllowsCdpUrl(url: string): void {
+  withManagedProxyForCdpUrl(url, () => undefined);
 }

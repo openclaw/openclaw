@@ -1,3 +1,4 @@
+// Memory Core tests cover hybrid plugin behavior.
 import { describe, expect, it } from "vitest";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 
@@ -51,7 +52,7 @@ describe("memory hybrid helpers", () => {
           endLine: 4,
           source: "memory",
           snippet: "kw-b",
-          textScore: 1.0,
+          textScore: 1,
         },
       ],
     });
@@ -62,9 +63,9 @@ describe("memory hybrid helpers", () => {
     expect(a?.score).toBeCloseTo(0.7 * 0.9);
     expect(a?.vectorScore).toBeCloseTo(0.9);
     expect(a?.textScore).toBe(0);
-    expect(b?.score).toBeCloseTo(0.3 * 1.0);
+    expect(b?.score).toBeCloseTo(0.3 * 1);
     expect(b?.vectorScore).toBe(0);
-    expect(b?.textScore).toBeCloseTo(1.0);
+    expect(b?.textScore).toBeCloseTo(1);
   });
 
   it("mergeHybridResults prefers keyword snippet when ids overlap", async () => {
@@ -90,15 +91,15 @@ describe("memory hybrid helpers", () => {
           endLine: 2,
           source: "memory",
           snippet: "kw-a",
-          textScore: 1.0,
+          textScore: 1,
         },
       ],
     });
 
     expect(merged).toHaveLength(1);
     expect(merged[0]?.snippet).toBe("kw-a");
-    expect(merged[0]?.score).toBeCloseTo(0.5 * 0.2 + 0.5 * 1.0);
+    expect(merged[0]?.score).toBeCloseTo(0.5 * 0.2 + 0.5 * 1);
     expect(merged[0]?.vectorScore).toBeCloseTo(0.2);
-    expect(merged[0]?.textScore).toBeCloseTo(1.0);
+    expect(merged[0]?.textScore).toBeCloseTo(1);
   });
 });

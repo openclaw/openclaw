@@ -1,13 +1,21 @@
+// Bench Gateway Restart script supports OpenClaw repository automation.
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { request } from "node:http";
-import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import { writeGatewayRestartIntentSync } from "../src/infra/restart.js";
 import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
+import { delay, stopChild, type StopChildResult } from "./lib/gateway-bench-child.ts";
+import {
+  getFreePort,
+  parseProcessRssKb,
+  readProcessRssMb,
+  readProcessTreeCpuMs,
+  requestProbeStatus,
+} from "./lib/gateway-bench-probes.ts";
 
 type GatewayBenchCase = {
   config: Record<string, unknown>;
@@ -98,6 +106,7 @@ type GatewayRestartSample = {
   childExitCode: number | null;
   childSignal: string | null;
   events: BenchmarkEvent[];
+  exitedBeforeTeardown: boolean;
   failureCode: GatewayRestartFailureCode | null;
   firstOutputMs: number | null;
   initialGatewayReadyLogLine: string | null;
@@ -138,12 +147,19 @@ type CaseResult = {
   };
 };
 
+type BenchmarkEvidenceFailure = {
+  id: string;
+  reason: string;
+  sampleIndex: number | null;
+};
+
 type PluginFixtureResult = {
   pluginIds: string[];
   pluginsDir: string;
 };
 
 type CliOptions = {
+  allowFailures: boolean;
   cases: GatewayBenchCase[];
   entry: string;
   json: boolean;
@@ -161,7 +177,21 @@ const DEFAULT_RESTARTS = 5;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_POST_READY_DELAY_MS = 250;
 const DEFAULT_ENTRY = "dist/entry.js";
-const RESTART_INTENT_FILENAME = "gateway-restart-intent.json";
+const BOOLEAN_FLAGS = new Set(["--allow-failures", "--help", "-h", "--json"]);
+const VALUE_FLAGS = new Set([
+  "--case",
+  "--entry",
+  "--output",
+  "--post-ready-delay-ms",
+  "--restarts",
+  "--runs",
+  "--timeout-ms",
+  "--warmup",
+]);
+
+class CliArgumentError extends Error {
+  override name = "CliArgumentError";
+}
 
 const BASE_CONFIG = {
   browser: { enabled: false },
@@ -214,20 +244,51 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
   },
 ] as const;
 
-function parseFlagValue(flag: string): string | undefined {
-  const index = process.argv.indexOf(flag);
-  if (index === -1) {
-    return undefined;
+function readRequiredFlagValue(argv: string[], index: number, flag: string): string {
+  const value = argv[index + 1];
+  if (!value || value.startsWith("-")) {
+    throw new CliArgumentError(`${flag} requires a value`);
   }
-  return process.argv[index + 1];
+  return value;
 }
 
-function hasFlag(flag: string): boolean {
-  return process.argv.includes(flag);
+function validateCliArgs(argv: string[]): void {
+  const seenSingleValueFlags = new Set<string>();
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index] ?? "";
+    if (BOOLEAN_FLAGS.has(arg)) {
+      continue;
+    }
+    if (VALUE_FLAGS.has(arg)) {
+      if (arg !== "--case") {
+        if (seenSingleValueFlags.has(arg)) {
+          throw new CliArgumentError(`${arg} was provided more than once`);
+        }
+        seenSingleValueFlags.add(arg);
+      }
+      readRequiredFlagValue(argv, index, arg);
+      index += 1;
+      continue;
+    }
+    throw new CliArgumentError(`Unknown argument: ${arg}`);
+  }
 }
 
-function hasHelpFlag(): boolean {
-  return hasFlag("--help") || hasFlag("-h");
+function parseFlagValue(argv: string[], flag: string): string | undefined {
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] === flag) {
+      return readRequiredFlagValue(argv, index, flag);
+    }
+  }
+  return undefined;
+}
+
+function hasFlag(argv: string[], flag: string): boolean {
+  return argv.includes(flag);
+}
+
+function hasHelpFlag(argv: string[]): boolean {
+  return hasFlag(argv, "--help") || hasFlag(argv, "-h");
 }
 
 function ensureSupportedRestartPlatform(platform: NodeJS.Platform = process.platform): void {
@@ -238,11 +299,12 @@ function ensureSupportedRestartPlatform(platform: NodeJS.Platform = process.plat
   }
 }
 
-function parseRepeatableFlag(flag: string): string[] {
+function parseRepeatableFlag(argv: string[], flag: string): string[] {
   const values: string[] = [];
-  for (let index = 0; index < process.argv.length; index += 1) {
-    if (process.argv[index] === flag && process.argv[index + 1]) {
-      values.push(process.argv[index + 1]);
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] === flag) {
+      values.push(readRequiredFlagValue(argv, index, flag));
+      index += 1;
     }
   }
   return values;
@@ -282,8 +344,13 @@ function resolveCases(caseIds: string[]): GatewayBenchCase[] {
   if (caseIds.length === 0) {
     return [GATEWAY_CASES[0]];
   }
+  const seenIds = new Set<string>();
   const byId = new Map(GATEWAY_CASES.map((benchCase) => [benchCase.id, benchCase]));
   return caseIds.map((id) => {
+    if (seenIds.has(id)) {
+      throw new CliArgumentError(`Duplicate --case "${id}"`);
+    }
+    seenIds.add(id);
     const benchCase = byId.get(id);
     if (!benchCase) {
       throw new Error(`Unknown --case "${id}"`);
@@ -292,21 +359,27 @@ function resolveCases(caseIds: string[]): GatewayBenchCase[] {
   });
 }
 
-function parseOptions(): CliOptions {
+function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
+  validateCliArgs(argv);
   return {
-    cases: resolveCases(parseRepeatableFlag("--case")),
-    entry: resolveEntry(parseFlagValue("--entry")),
-    json: hasFlag("--json"),
-    output: resolveOutputPath(parseFlagValue("--output")),
+    allowFailures: hasFlag(argv, "--allow-failures"),
+    cases: resolveCases(parseRepeatableFlag(argv, "--case")),
+    entry: resolveEntry(parseFlagValue(argv, "--entry")),
+    json: hasFlag(argv, "--json"),
+    output: resolveOutputPath(parseFlagValue(argv, "--output")),
     postReadyDelayMs: parseNonNegativeInt(
-      parseFlagValue("--post-ready-delay-ms"),
+      parseFlagValue(argv, "--post-ready-delay-ms"),
       DEFAULT_POST_READY_DELAY_MS,
       "--post-ready-delay-ms",
     ),
-    restarts: parsePositiveInt(parseFlagValue("--restarts"), DEFAULT_RESTARTS, "--restarts"),
-    runs: parsePositiveInt(parseFlagValue("--runs"), DEFAULT_RUNS, "--runs"),
-    timeoutMs: parsePositiveInt(parseFlagValue("--timeout-ms"), DEFAULT_TIMEOUT_MS, "--timeout-ms"),
-    warmup: parseNonNegativeInt(parseFlagValue("--warmup"), DEFAULT_WARMUP, "--warmup"),
+    restarts: parsePositiveInt(parseFlagValue(argv, "--restarts"), DEFAULT_RESTARTS, "--restarts"),
+    runs: parsePositiveInt(parseFlagValue(argv, "--runs"), DEFAULT_RUNS, "--runs"),
+    timeoutMs: parsePositiveInt(
+      parseFlagValue(argv, "--timeout-ms"),
+      DEFAULT_TIMEOUT_MS,
+      "--timeout-ms",
+    ),
+    warmup: parseNonNegativeInt(parseFlagValue(argv, "--warmup"), DEFAULT_WARMUP, "--warmup"),
   };
 }
 
@@ -323,10 +396,11 @@ Options:
   --runs <n>               Measured process samples per case (default: ${DEFAULT_RUNS})
   --warmup <n>             Warmup process samples per case (default: ${DEFAULT_WARMUP})
   --restarts <n>           In-process restarts per process sample (default: ${DEFAULT_RESTARTS})
-  --timeout-ms <ms>        Per-process timeout (default: ${DEFAULT_TIMEOUT_MS})
+  --timeout-ms <ms>        Timeout for initial startup and each restart (default: ${DEFAULT_TIMEOUT_MS})
   --post-ready-delay-ms <ms> Resource snapshot delay after next ready (default: ${DEFAULT_POST_READY_DELAY_MS})
   --output <path>          Write machine-readable JSON to a file
   --json                   Emit machine-readable JSON
+  --allow-failures         Exit 0 even when restart failures are measured
   --help, -h               Show this text
 
 Case ids:
@@ -536,22 +610,6 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewayRestartSampl
   };
 }
 
-async function getFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        server.close(() => reject(new Error("failed to allocate port")));
-        return;
-      }
-      const { port } = address;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
 async function waitForProbeReady(params: {
   deadlineAt: number;
   isDone?: () => boolean;
@@ -701,63 +759,6 @@ async function waitForRestartProbe(params: {
   };
 }
 
-async function requestProbeStatus(
-  port: number,
-  pathname: string,
-): Promise<{ errorKind: string | null; status: number | null }> {
-  try {
-    const status = await requestStatus(port, pathname);
-    return {
-      errorKind: status === 200 ? null : `http-${status}`,
-      status,
-    };
-  } catch (error) {
-    return {
-      errorKind: classifyProbeErrorKind(error),
-      status: null,
-    };
-  }
-}
-
-function classifyProbeErrorKind(error: unknown): string {
-  if (typeof error === "object" && error !== null) {
-    const code = (error as { code?: unknown }).code;
-    if (typeof code === "string" && code.trim()) {
-      return code.trim().toLowerCase();
-    }
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === "string" && message.toLowerCase().includes("probe timeout")) {
-      return "timeout";
-    }
-    const name = (error as { name?: unknown }).name;
-    if (typeof name === "string" && name.trim()) {
-      return name.trim().toLowerCase();
-    }
-  }
-  return "error";
-}
-
-function requestStatus(port: number, pathname: string): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const req = request(
-      { host: "127.0.0.1", method: "GET", path: pathname, port, timeout: 100 },
-      (res) => {
-        res.resume();
-        res.on("end", () => resolve(res.statusCode ?? 0));
-      },
-    );
-    req.on("error", reject);
-    req.on("timeout", () => {
-      req.destroy(new Error("probe timeout"));
-    });
-    req.end();
-  });
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function writePluginFixtures(
   root: string,
   count: number,
@@ -843,74 +844,7 @@ function sanitizedEnv(
 }
 
 function writeRestartIntent(env: NodeJS.ProcessEnv, targetPid: number, reason: string): boolean {
-  const stateDir = env.OPENCLAW_STATE_DIR;
-  if (!stateDir) {
-    return false;
-  }
-  try {
-    mkdirSync(stateDir, { recursive: true });
-    const intentPath = path.join(stateDir, RESTART_INTENT_FILENAME);
-    writeFileSync(
-      intentPath,
-      `${JSON.stringify({
-        kind: "gateway-restart",
-        pid: targetPid,
-        createdAt: Date.now(),
-        reason,
-      })}\n`,
-      { mode: 0o600 },
-    );
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function stopChild(child: ChildProcessWithoutNullStreams): Promise<{
-  exitCode: number | null;
-  signal: string | null;
-}> {
-  if (child.exitCode != null || child.signalCode != null) {
-    return { exitCode: child.exitCode, signal: child.signalCode };
-  }
-  const exited = new Promise<{ exitCode: number | null; signal: string | null }>((resolve) => {
-    child.once("exit", (exitCode, signal) => resolve({ exitCode, signal }));
-  });
-  killProcessTree(child, "SIGTERM");
-  const timeout = delay(2000).then(() => {
-    if (child.exitCode == null && child.signalCode == null) {
-      killProcessTree(child, "SIGKILL");
-    }
-    return exited;
-  });
-  return Promise.race([exited, timeout]);
-}
-
-function killProcessTree(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
-  if (process.platform !== "win32" && child.pid !== undefined) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // Fall back to the direct child below.
-    }
-  }
-  child.kill(signal);
-}
-
-function readProcessRssMb(pid: number | undefined): number | null {
-  if (!pid || process.platform === "win32") {
-    return null;
-  }
-  const result = spawnSync("ps", ["-o", "rss=", "-p", String(pid)], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
-    return null;
-  }
-  const rssKb = Number.parseInt(result.stdout.trim(), 10);
-  return Number.isFinite(rssKb) && rssKb > 0 ? rssKb / 1024 : null;
+  return writeGatewayRestartIntentSync({ env, reason, targetPid });
 }
 
 function readProcessFdCount(pid: number | undefined): number | null {
@@ -947,71 +881,6 @@ function countLsofFileDescriptors(raw: string): number | null {
     }
   }
   return count;
-}
-
-function parsePsCpuTimeMs(raw: string): number | null {
-  const parts = raw.trim().split(":").map(Number);
-  if (parts.some((part) => !Number.isFinite(part) || part < 0)) {
-    return null;
-  }
-  if (parts.length === 2) {
-    return Math.round((parts[0] * 60 + parts[1]) * 1000);
-  }
-  if (parts.length === 3) {
-    return Math.round((parts[0] * 60 * 60 + parts[1] * 60 + parts[2]) * 1000);
-  }
-  return null;
-}
-
-function readProcessTreeCpuMs(rootPid: number | undefined): number | null {
-  if (!rootPid || process.platform === "win32") {
-    return null;
-  }
-  const result = spawnSync("ps", ["-eo", "pid=,ppid=,time="], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
-    return null;
-  }
-
-  const childrenByParent = new Map<number, number[]>();
-  const cpuByPid = new Map<number, number>();
-  for (const line of result.stdout.split("\n")) {
-    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)$/u);
-    if (!match) {
-      continue;
-    }
-    const pid = Number(match[1]);
-    const ppid = Number(match[2]);
-    const cpuMs = parsePsCpuTimeMs(match[3]);
-    if (!Number.isInteger(pid) || !Number.isInteger(ppid) || cpuMs === null) {
-      continue;
-    }
-    cpuByPid.set(pid, cpuMs);
-    const children = childrenByParent.get(ppid) ?? [];
-    children.push(pid);
-    childrenByParent.set(ppid, children);
-  }
-  if (!cpuByPid.has(rootPid)) {
-    return null;
-  }
-
-  let totalCpuMs = 0;
-  const seen = new Set<number>();
-  const stack = [rootPid];
-  while (stack.length > 0) {
-    const pid = stack.pop();
-    if (!pid || seen.has(pid)) {
-      continue;
-    }
-    seen.add(pid);
-    totalCpuMs += cpuByPid.get(pid) ?? 0;
-    for (const childPid of childrenByParent.get(pid) ?? []) {
-      stack.push(childPid);
-    }
-  }
-  return totalCpuMs;
 }
 
 function snapshotResources(
@@ -1194,6 +1063,15 @@ function resolveRestartDeadlineFailure(childExited: boolean): GatewayRestartFail
   return childExited ? "restart_child_exited" : "restart_deadline_timeout";
 }
 
+function resolveSampleExitFailure(exit: StopChildResult): GatewayRestartFailureCode | null {
+  if (!exit.exitedBeforeTeardown) {
+    return null;
+  }
+  return exit.exitCode !== null && exit.exitCode !== 0
+    ? "child_nonzero_exit"
+    : "restart_child_exited";
+}
+
 function computeResourceSlope(iterations: RestartIteration[]): ResourceSlope {
   return {
     activeHandlesCountPerRestart: slope(
@@ -1254,6 +1132,10 @@ async function waitForIterationCondition(
   return predicate();
 }
 
+function resolvePhaseDeadlineAt(startedAt: number, timeoutMs: number): number {
+  return startedAt + timeoutMs;
+}
+
 async function runGatewaySample(options: {
   benchCase: GatewayBenchCase;
   entry: string;
@@ -1267,7 +1149,7 @@ async function runGatewaySample(options: {
   const configPath = writeConfig(root, options.benchCase);
   const env = sanitizedEnv(root, configPath, options.benchCase);
   const sampleStartAt = performance.now();
-  const deadlineAt = sampleStartAt + options.timeoutMs;
+  const initialDeadlineAt = resolvePhaseDeadlineAt(sampleStartAt, options.timeoutMs);
   const initialStartupTrace: Record<string, number> = {};
   const events: BenchmarkEvent[] = [{ ms: 0, type: "process.spawn.start" }];
   const output: string[] = [];
@@ -1385,7 +1267,7 @@ async function runGatewaySample(options: {
 
   let failureCode: GatewayRestartFailureCode | null = null;
   const initialHealthz = await waitForProbeReady({
-    deadlineAt,
+    deadlineAt: initialDeadlineAt,
     isDone: () => childExited,
     path: "/healthz",
     port,
@@ -1397,7 +1279,7 @@ async function runGatewaySample(options: {
   const initialReadyz =
     failureCode === null
       ? await waitForProbeReady({
-          deadlineAt,
+          deadlineAt: initialDeadlineAt,
           isDone: () => childExited,
           path: "/readyz",
           port,
@@ -1412,7 +1294,7 @@ async function runGatewaySample(options: {
     flushOutputLineBuffers(outputBuffers, onLine, performance.now() - sampleStartAt);
     await waitForIterationCondition(
       () => hasInitialReadyLogs({ initialGatewayReadyLogMs, initialHttpListenLogMs }),
-      deadlineAt,
+      initialDeadlineAt,
     );
     flushOutputLineBuffers(outputBuffers, onLine, performance.now() - sampleStartAt);
     if (!hasInitialReadyLogs({ initialGatewayReadyLogMs, initialHttpListenLogMs })) {
@@ -1423,7 +1305,7 @@ async function runGatewaySample(options: {
   const iterations: RestartIteration[] = [];
   if (failureCode === null) {
     for (let index = 1; index <= options.restarts; index += 1) {
-      if (performance.now() >= deadlineAt || childExited) {
+      if (childExited) {
         failureCode = resolveRestartDeadlineFailure(childExited);
         break;
       }
@@ -1453,10 +1335,11 @@ async function runGatewaySample(options: {
       }
       const signalSentAt = performance.now();
       iteration.signalSentMs = signalSentAt - sampleStartAt;
+      const iterationDeadlineAt = resolvePhaseDeadlineAt(signalSentAt, options.timeoutMs);
       events.push({ iteration: index, ms: iteration.signalSentMs, type: "restart-signal-sent" });
 
       const healthzPromise = waitForRestartProbe({
-        deadlineAt,
+        deadlineAt: iterationDeadlineAt,
         events,
         isDone: () => hasRestartReadySignal(iteration),
         isProcessDone: () => childExited,
@@ -1467,7 +1350,7 @@ async function runGatewaySample(options: {
         signalSentAt,
       });
       const readyzPromise = waitForRestartProbe({
-        deadlineAt,
+        deadlineAt: iterationDeadlineAt,
         events,
         isDone: () => hasRestartReadySignal(iteration),
         isProcessDone: () => childExited,
@@ -1481,10 +1364,10 @@ async function runGatewaySample(options: {
       iteration.healthz = healthz;
       iteration.readyz = readyz;
       iteration.resourceSnapshots.push(snapshotResources(child, sampleStartAt, "after-next-ready"));
-      await waitForIterationCondition(() => hasRestartReadySignal(iteration), deadlineAt);
-      if (options.postReadyDelayMs > 0 && performance.now() < deadlineAt) {
+      await waitForIterationCondition(() => hasRestartReadySignal(iteration), iterationDeadlineAt);
+      if (options.postReadyDelayMs > 0 && performance.now() < iterationDeadlineAt) {
         await delay(
-          Math.min(options.postReadyDelayMs, Math.max(0, deadlineAt - performance.now())),
+          Math.min(options.postReadyDelayMs, Math.max(0, iterationDeadlineAt - performance.now())),
         );
       }
       iteration.resourceSnapshots.push(
@@ -1516,13 +1399,12 @@ async function runGatewaySample(options: {
   const exit = await stopChild(child);
   clearInterval(rssTimer);
   sampleRss();
-  await childExitPromise.catch(() => null);
+  // stopChild is the bounded teardown wait; the raw exit promise may never settle.
+  void childExitPromise.catch(() => null);
   flushOutputLineBuffers(outputBuffers, onLine, performance.now() - sampleStartAt, {
     flushPartial: true,
   });
-  if (exit.exitCode !== null && exit.exitCode !== 0 && failureCode === null) {
-    failureCode = "child_nonzero_exit";
-  }
+  failureCode ??= resolveSampleExitFailure(exit);
   try {
     rmSync(root, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
   } catch {
@@ -1533,6 +1415,7 @@ async function runGatewaySample(options: {
     childExitCode: exit.exitCode,
     childSignal: exit.signal,
     events,
+    exitedBeforeTeardown: exit.exitedBeforeTeardown,
     failureCode,
     firstOutputMs,
     initialGatewayReadyLogLine,
@@ -1605,14 +1488,114 @@ function printResult(result: CaseResult): void {
   }
 }
 
+function hasBenchmarkFailures(results: CaseResult[]): boolean {
+  return results.some(
+    (result) => result.summary.failureRate > 0 || result.summary.firstFailureCode !== null,
+  );
+}
+
+function hasPositiveNumber(value: number | null): boolean {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
+}
+
+function hasFiniteNumber(value: number | null): boolean {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function hasIterationRssEvidence(iteration: RestartIteration): boolean {
+  return hasPositiveNumber(
+    traceValue(iteration, "restart.ready.rssMb", "restart.ready.memory.ready.rssMb") ??
+      lastSnapshotValue(iteration, "rssMb"),
+  );
+}
+
+function isFailureFreeSample(sample: GatewayRestartSample): boolean {
+  return (
+    sample.failureCode === null &&
+    sample.iterations.every((iteration) => iteration.failureCode === null)
+  );
+}
+
+function collectBenchmarkEvidenceFailures(results: CaseResult[]): BenchmarkEvidenceFailure[] {
+  const failures: BenchmarkEvidenceFailure[] = [];
+  for (const result of results) {
+    if (result.samples.length === 0) {
+      failures.push({
+        id: result.id,
+        reason: "missing measured samples",
+        sampleIndex: null,
+      });
+      continue;
+    }
+
+    for (const [index, sample] of result.samples.entries()) {
+      if (!isFailureFreeSample(sample)) {
+        continue;
+      }
+      const sampleIndex = index + 1;
+      if (sample.iterations.length === 0) {
+        failures.push({
+          id: result.id,
+          reason: "missing restart iterations",
+          sampleIndex,
+        });
+        continue;
+      }
+      if (!hasPositiveNumber(sample.maxRssMb)) {
+        failures.push({
+          id: result.id,
+          reason: "missing positive RSS sample",
+          sampleIndex,
+        });
+      }
+      if (sample.iterations.some((iteration) => !hasIterationRssEvidence(iteration))) {
+        failures.push({
+          id: result.id,
+          reason: "missing per-restart RSS evidence",
+          sampleIndex,
+        });
+      }
+      if (sample.iterations.length >= 2 && !hasFiniteNumber(sample.resourceSlope.rssMbPerRestart)) {
+        failures.push({
+          id: result.id,
+          reason: "missing RSS slope",
+          sampleIndex,
+        });
+      }
+    }
+  }
+  return failures;
+}
+
+function hasInvalidBenchmarkEvidence(results: CaseResult[]): boolean {
+  return collectBenchmarkEvidenceFailures(results).length > 0;
+}
+
+function shouldFailBenchmark(results: CaseResult[], options: { allowFailures: boolean }): boolean {
+  return (
+    hasInvalidBenchmarkEvidence(results) ||
+    (!options.allowFailures && hasBenchmarkFailures(results))
+  );
+}
+
+function printBenchmarkEvidenceFailures(failures: BenchmarkEvidenceFailure[]): void {
+  for (const failure of failures) {
+    const sample = failure.sampleIndex === null ? "" : ` sample ${failure.sampleIndex}`;
+    console.error(
+      `[gateway-restart-bench] ${failure.id}${sample}: ${failure.reason}; benchmark evidence is incomplete`,
+    );
+  }
+}
+
 async function main() {
-  if (hasHelpFlag()) {
+  const argv = process.argv.slice(2);
+  if (hasHelpFlag(argv)) {
     printUsage();
     return;
   }
 
+  const options = parseOptions(argv);
   ensureSupportedRestartPlatform();
-  const options = parseOptions();
   const results: CaseResult[] = [];
   for (const benchCase of options.cases) {
     results.push(
@@ -1642,18 +1625,27 @@ async function main() {
     mkdirSync(path.dirname(options.output), { recursive: true });
     writeFileSync(options.output, `${JSON.stringify(payload, null, 2)}\n`);
   }
+  const evidenceFailures = collectBenchmarkEvidenceFailures(results);
+  if (evidenceFailures.length > 0) {
+    printBenchmarkEvidenceFailures(evidenceFailures);
+  }
   if (options.json) {
     console.log(JSON.stringify(payload, null, 2));
+    if (shouldFailBenchmark(results, options)) {
+      process.exitCode = 1;
+    }
     return;
   }
   for (const result of results) {
     printResult(result);
   }
+  if (shouldFailBenchmark(results, options)) {
+    process.exitCode = 1;
+  }
 }
 
 export const testing = {
   classifyGatewayReadyLog,
-  classifyProbeErrorKind,
   collectOutputLines,
   collectTraceLine,
   countLsofFileDescriptors,
@@ -1662,20 +1654,35 @@ export const testing = {
   ensureSupportedRestartPlatform,
   finalizeRestartIteration,
   flushOutputLineBuffers,
+  collectBenchmarkEvidenceFailures,
   hasInitialReadyLogs,
+  hasBenchmarkFailures,
+  hasInvalidBenchmarkEvidence,
   parseNonNegativeInt,
+  parseOptions,
   parsePositiveInt,
+  parseProcessRssKb,
   resolveRestartDeadlineFailure,
   resolveEntry,
+  resolvePhaseDeadlineAt,
+  resolveSampleExitFailure,
   sanitizedEnv,
+  shouldFailBenchmark,
+  stopChild,
   summarizeCase,
+  validateCliArgs,
   waitForRestartProbe,
   writeConfig,
   writeRestartIntent,
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  main().catch((err) => {
+  main().catch((err: unknown) => {
+    if (err instanceof CliArgumentError) {
+      console.error(err.message);
+      process.exitCode = 1;
+      return;
+    }
     console.error(err instanceof Error ? err.stack : String(err));
     process.exitCode = 1;
   });

@@ -1,12 +1,13 @@
+// Onboard channels e2e tests cover setup wizard adapters, plugin install hooks, and channel picker behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
+import { getChannelSetupPlugin } from "../channels/plugins/setup-registry.js";
+import type { ChannelSetupWizardAdapter } from "../channels/plugins/setup-wizard-types.js";
 import {
   ensureChannelSetupPluginInstalled,
   loadChannelSetupPluginRegistrySnapshotForChannel,
-  reloadChannelSetupPluginRegistry,
 } from "../commands/channel-setup/plugin-install.js";
-import { getChannelSetupWizardAdapter } from "../commands/channel-setup/registry.js";
-import type { ChannelSetupWizardAdapter } from "../commands/channel-setup/types.js";
+import { resolveChannelSetupWizardAdapterForPlugin } from "../commands/channel-setup/registry.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -357,7 +358,7 @@ function mockMSTeamsRegistrySnapshot(params?: { includeSetupWizard?: boolean }) 
 }
 
 function patchTelegramAdapter(overrides: ChannelSetupWizardAdapterPatch) {
-  const adapter = getChannelSetupWizardAdapter("telegram");
+  const adapter = resolveChannelSetupWizardAdapterForPlugin(getChannelSetupPlugin("telegram"));
   if (!adapter) {
     throw new Error("missing setup adapter for telegram");
   }
@@ -374,41 +375,41 @@ function patchTelegramAdapter(overrides: ChannelSetupWizardAdapterPatch) {
   };
   const previous: PatchedSetupAdapterFields = {};
 
-  if (Object.prototype.hasOwnProperty.call(patch, "getStatus")) {
+  if (Object.hasOwn(patch, "getStatus")) {
     previous.getStatus = adapter.getStatus;
     adapter.getStatus = patch.getStatus ?? adapter.getStatus;
   }
-  if (Object.prototype.hasOwnProperty.call(patch, "afterConfigWritten")) {
+  if (Object.hasOwn(patch, "afterConfigWritten")) {
     previous.afterConfigWritten = adapter.afterConfigWritten;
     adapter.afterConfigWritten = patch.afterConfigWritten;
   }
-  if (Object.prototype.hasOwnProperty.call(patch, "configure")) {
+  if (Object.hasOwn(patch, "configure")) {
     previous.configure = adapter.configure;
     adapter.configure = patch.configure ?? adapter.configure;
   }
-  if (Object.prototype.hasOwnProperty.call(patch, "configureInteractive")) {
+  if (Object.hasOwn(patch, "configureInteractive")) {
     previous.configureInteractive = adapter.configureInteractive;
     adapter.configureInteractive = patch.configureInteractive;
   }
-  if (Object.prototype.hasOwnProperty.call(patch, "configureWhenConfigured")) {
+  if (Object.hasOwn(patch, "configureWhenConfigured")) {
     previous.configureWhenConfigured = adapter.configureWhenConfigured;
     adapter.configureWhenConfigured = patch.configureWhenConfigured;
   }
 
   return () => {
-    if (Object.prototype.hasOwnProperty.call(patch, "getStatus")) {
+    if (Object.hasOwn(patch, "getStatus")) {
       adapter.getStatus = previous.getStatus!;
     }
-    if (Object.prototype.hasOwnProperty.call(patch, "afterConfigWritten")) {
+    if (Object.hasOwn(patch, "afterConfigWritten")) {
       adapter.afterConfigWritten = previous.afterConfigWritten;
     }
-    if (Object.prototype.hasOwnProperty.call(patch, "configure")) {
+    if (Object.hasOwn(patch, "configure")) {
       adapter.configure = previous.configure!;
     }
-    if (Object.prototype.hasOwnProperty.call(patch, "configureInteractive")) {
+    if (Object.hasOwn(patch, "configureInteractive")) {
       adapter.configureInteractive = previous.configureInteractive;
     }
-    if (Object.prototype.hasOwnProperty.call(patch, "configureWhenConfigured")) {
+    if (Object.hasOwn(patch, "configureWhenConfigured")) {
       adapter.configureWhenConfigured = previous.configureWhenConfigured;
     }
   };
@@ -493,15 +494,28 @@ vi.mock("../channels/plugins/catalog.js", async () => {
   const actual = await vi.importActual<typeof import("../channels/plugins/catalog.js")>(
     "../channels/plugins/catalog.js",
   );
+  const listChannelPluginCatalogEntries = (
+    ...args: Parameters<typeof actual.listChannelPluginCatalogEntries>
+  ) => {
+    const implementation = catalogMocks.listChannelPluginCatalogEntries.getMockImplementation();
+    if (implementation) {
+      return catalogMocks.listChannelPluginCatalogEntries(...args);
+    }
+    return actual.listChannelPluginCatalogEntries(...args);
+  };
+  const listRawChannelPluginCatalogEntries = (
+    ...args: Parameters<typeof actual.listRawChannelPluginCatalogEntries>
+  ) => {
+    const implementation = catalogMocks.listChannelPluginCatalogEntries.getMockImplementation();
+    if (implementation) {
+      return catalogMocks.listChannelPluginCatalogEntries(...args);
+    }
+    return actual.listRawChannelPluginCatalogEntries(...args);
+  };
   return {
     ...actual,
-    listChannelPluginCatalogEntries: ((...args) => {
-      const implementation = catalogMocks.listChannelPluginCatalogEntries.getMockImplementation();
-      if (implementation) {
-        return catalogMocks.listChannelPluginCatalogEntries(...args);
-      }
-      return actual.listChannelPluginCatalogEntries(...args);
-    }) as typeof actual.listChannelPluginCatalogEntries,
+    listChannelPluginCatalogEntries,
+    listRawChannelPluginCatalogEntries,
   };
 });
 
@@ -597,7 +611,6 @@ vi.mock("../commands/channel-setup/plugin-install.js", async () => {
     })),
     // Allow tests to simulate an empty plugin registry during setup.
     loadChannelSetupPluginRegistrySnapshotForChannel: vi.fn(() => createEmptyPluginRegistry()),
-    reloadChannelSetupPluginRegistry: vi.fn(() => {}),
   };
 });
 
@@ -619,7 +632,6 @@ describe("setupChannels", () => {
       status: "installed",
     }));
     vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockClear();
-    vi.mocked(reloadChannelSetupPluginRegistry).mockClear();
   });
   it("continues Telegram setup when the plugin registry is empty", async () => {
     // Simulate missing registry entries (the scenario reported in #25545).
@@ -656,7 +668,6 @@ describe("setupChannels", () => {
     });
     expect(sawHardStop).toBe(false);
     expect(cfg.channels?.telegram?.botToken).toBe("123:token");
-    expect(reloadChannelSetupPluginRegistry).not.toHaveBeenCalled();
   });
 
   it("shows explicit dmScope config command in channel primer", async () => {

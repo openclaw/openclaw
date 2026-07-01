@@ -1,3 +1,4 @@
+// Voice Call tests cover runtime plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCallConfig } from "./config.js";
@@ -28,22 +29,42 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./config.js", () => ({
   resolveVoiceCallSessionKey: (params: {
-    config: Pick<VoiceCallConfig, "sessionScope">;
+    config: Pick<VoiceCallConfig, "agentId" | "sessionScope">;
     callId: string;
     phone?: string;
     explicitSessionKey?: string;
   }) => {
     const explicit = params.explicitSessionKey?.trim();
     if (explicit) {
-      return explicit;
+      const lower = explicit.toLowerCase();
+      return lower === "global" || lower === "unknown" || lower.startsWith("agent:")
+        ? explicit
+        : `agent:${params.config.agentId?.trim().toLowerCase() || "main"}:${explicit}`;
     }
+    const agentId = params.config.agentId?.trim().toLowerCase() || "main";
+    const prefix = `agent:${agentId}:voice`;
     if (params.config.sessionScope === "per-call") {
-      return `voice:call:${params.callId}`;
+      return `${prefix}:call:${params.callId}`.toLowerCase();
     }
     const normalizedPhone = params.phone?.replace(/\D/g, "");
-    return normalizedPhone ? `voice:${normalizedPhone}` : `voice:${params.callId}`;
+    return (
+      normalizedPhone ? `${prefix}:${normalizedPhone}` : `${prefix}:${params.callId}`
+    ).toLowerCase();
   },
-  resolveVoiceCallEffectiveConfig: (config: VoiceCallConfig) => ({ config }),
+  resolveVoiceCallNumberRouteKeyForCall: (call: {
+    direction?: "inbound" | "outbound";
+    to?: string;
+    metadata?: { numberRouteKey?: unknown };
+  }) =>
+    call.direction === "inbound"
+      ? typeof call.metadata?.numberRouteKey === "string"
+        ? call.metadata.numberRouteKey
+        : call.to
+      : undefined,
+  resolveVoiceCallEffectiveConfig: (config: VoiceCallConfig, numberRouteKey?: string) => {
+    const route = numberRouteKey ? config.numbers[numberRouteKey] : undefined;
+    return route ? { config: { ...config, ...route }, numberRouteKey } : { config };
+  },
   resolveVoiceCallConfig: mocks.resolveVoiceCallConfig,
   resolveTwilioAuthToken: mocks.resolveTwilioAuthToken,
   validateProviderConfig: mocks.validateProviderConfig,
@@ -377,9 +398,13 @@ describe("createVoiceCallRuntime lifecycle", () => {
     await runtime.stop();
   });
 
-  it("wires the shared realtime agent consult tool and handler", async () => {
+  it("wires realtime consults and keeps outbound calls off inbound number routes", async () => {
     const config = createBaseConfig();
     config.inboundPolicy = "allowlist";
+    config.numbers["+15550009999"] = {
+      agentId: "inbound-route",
+      responseModel: "openai/gpt-5.5",
+    };
     config.realtime.enabled = true;
     config.realtime.tools = [
       {
@@ -390,7 +415,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       },
     ];
     const sessionStore: Record<string, unknown> = {};
-    const runEmbeddedPiAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async () => ({
       payloads: [{ text: "Use the shipment status." }],
       meta: {},
     }));
@@ -403,7 +428,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       resolveAgentTimeoutMs: vi.fn(() => 30_000),
       ensureAgentWorkspace: vi.fn(async () => {}),
       session: createMockSessionRuntime(sessionStore),
-      runEmbeddedPiAgent,
+      runEmbeddedAgent,
     };
     mocks.managerGetCall.mockReturnValue({
       callId: "call-1",
@@ -440,12 +465,12 @@ describe("createVoiceCallRuntime lifecycle", () => {
     ).resolves.toEqual({
       text: "Use the shipment status.",
     });
-    expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     const consultParams = requireRecord(
-      firstCallParam(runEmbeddedPiAgent.mock.calls as unknown[][], "embedded PI consult"),
-      "embedded PI consult params",
+      firstCallParam(runEmbeddedAgent.mock.calls as unknown[][], "embedded OpenClaw consult"),
+      "embedded OpenClaw consult params",
     );
-    expect(consultParams.sessionKey).toBe("voice:15550009999");
+    expect(consultParams.sessionKey).toBe("agent:main:voice:15550009999");
     expect(consultParams.spawnedBy).toBe("agent:main:discord:channel:general");
     expect(consultParams.messageProvider).toBe("voice");
     expect(consultParams.lane).toBe("voice");
@@ -464,12 +489,12 @@ describe("createVoiceCallRuntime lifecycle", () => {
     expect(consultParams.prompt).toContain("Caller: Also check the ETA.");
   });
 
-  it("uses persisted per-call session keys for realtime consults", async () => {
+  it("canonicalizes restored legacy per-call keys for realtime consults", async () => {
     const config = createBaseConfig();
     config.inboundPolicy = "allowlist";
     config.realtime.enabled = true;
     config.sessionScope = "per-call";
-    const runEmbeddedPiAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async () => ({
       payloads: [{ text: "Per-call consult answer." }],
       meta: {},
     }));
@@ -483,7 +508,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       resolveAgentTimeoutMs: vi.fn(() => 30_000),
       ensureAgentWorkspace: vi.fn(async () => {}),
       session: createMockSessionRuntime(sessionStore),
-      runEmbeddedPiAgent,
+      runEmbeddedAgent,
     };
     mocks.managerGetCall.mockReturnValue({
       callId: "call-1",
@@ -504,12 +529,15 @@ describe("createVoiceCallRuntime lifecycle", () => {
     await expect(handler({ question: "What should I say?" }, "call-1")).resolves.toEqual({
       text: "Per-call consult answer.",
     });
-    expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     const consultParams = requireRecord(
-      firstCallParam(runEmbeddedPiAgent.mock.calls as unknown[][], "per-call embedded PI consult"),
-      "per-call embedded PI consult params",
+      firstCallParam(
+        runEmbeddedAgent.mock.calls as unknown[][],
+        "per-call embedded OpenClaw consult",
+      ),
+      "per-call embedded OpenClaw consult params",
     );
-    expect(consultParams.sessionKey).toBe("voice:call:call-1");
+    expect(consultParams.sessionKey).toBe("agent:main:voice:call:call-1");
   });
 
   it("answers realtime consults from fast memory context before starting the full agent", async () => {
@@ -522,7 +550,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       sources: ["memory"],
       fallbackToConsult: false,
     };
-    const runEmbeddedPiAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async () => ({
       payloads: [{ text: "slow answer" }],
       meta: {},
     }));
@@ -535,7 +563,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       resolveAgentTimeoutMs: vi.fn(() => 30_000),
       ensureAgentWorkspace: vi.fn(async () => {}),
       session: createMockSessionRuntime(sessionStore),
-      runEmbeddedPiAgent,
+      runEmbeddedAgent,
     };
     mocks.managerGetCall.mockReturnValue({
       callId: "call-1",
@@ -578,9 +606,9 @@ describe("createVoiceCallRuntime lifecycle", () => {
         error: console.error,
         debug: console.debug,
       },
-      sessionKey: "voice:15550001234",
+      sessionKey: "agent:main:voice:15550001234",
     });
-    expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
   it("uses the configured realtime consult thinking level when set", async () => {
@@ -590,7 +618,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
     config.realtime.consultThinkingLevel = "low";
     config.realtime.consultFastMode = true;
     const sessionStore: Record<string, unknown> = {};
-    const runEmbeddedPiAgent = vi.fn(async () => ({
+    const runEmbeddedAgent = vi.fn(async () => ({
       payloads: [{ text: "Done." }],
       meta: {},
     }));
@@ -603,7 +631,7 @@ describe("createVoiceCallRuntime lifecycle", () => {
       resolveAgentTimeoutMs: vi.fn(() => 30_000),
       ensureAgentWorkspace: vi.fn(async () => {}),
       session: createMockSessionRuntime(sessionStore),
-      runEmbeddedPiAgent,
+      runEmbeddedAgent,
     };
     mocks.managerGetCall.mockReturnValue({
       callId: "call-1",
@@ -625,13 +653,13 @@ describe("createVoiceCallRuntime lifecycle", () => {
     });
 
     expect(agentRuntime.resolveThinkingDefault).not.toHaveBeenCalled();
-    expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     const consultParams = requireRecord(
       firstCallParam(
-        runEmbeddedPiAgent.mock.calls as unknown[][],
-        "configured embedded PI consult",
+        runEmbeddedAgent.mock.calls as unknown[][],
+        "configured embedded OpenClaw consult",
       ),
-      "configured embedded PI consult params",
+      "configured embedded OpenClaw consult params",
     );
     expect(consultParams.thinkLevel).toBe("low");
     expect(consultParams.fastMode).toBe(true);

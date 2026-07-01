@@ -1,3 +1,4 @@
+// Elevenlabs tests cover tts plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createStreamingErrorResponse } from "../test-support/streaming-error-response.js";
 import { elevenLabsTTS, elevenLabsTTSStream } from "./tts.js";
@@ -18,7 +19,7 @@ describe("elevenlabs tts diagnostics", () => {
         similarityBoost: 0.75,
         style: 0,
         useSpeakerBoost: true,
-        speed: 1.0,
+        speed: 1,
       },
       timeoutMs: 5_000,
     };
@@ -158,6 +159,20 @@ describe("elevenlabs tts diagnostics", () => {
       latency_optimization_level?: number;
     };
     expect(body.latency_optimization_level).toBeUndefined();
+  });
+
+  it("rejects fractional latency optimization instead of truncating it", async () => {
+    const fetchMock = vi.fn(async () => new Response(Buffer.from("mp3")));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(
+      elevenLabsTTS({
+        ...createDefaultTtsRequest(),
+        latencyTier: 3.9,
+      }),
+    ).rejects.toThrow("latencyTier must be an integer");
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("omits latency optimization for eleven_v3 because the API rejects it", async () => {

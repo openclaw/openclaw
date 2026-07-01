@@ -1,3 +1,4 @@
+// Codex tests cover native subagent notification plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   extractCodexNativeSubagentCompletions,
@@ -47,6 +48,30 @@ describe("Codex native subagent notifications", () => {
         status: "succeeded",
         statusLabel: "completed",
         result: "done",
+      },
+    ]);
+  });
+
+  it("preserves Codex completed-without-final as a typed reason", () => {
+    expect(
+      extractCodexNativeSubagentCompletionsFromText(
+        '<subagent_notification>{"agent_path":"null-child","status":{"completed":null}}' +
+          "</subagent_notification>\n" +
+          '<subagent_notification>{"agent_path":"empty-child","status":{"completed":"  "}}' +
+          "</subagent_notification>",
+      ),
+    ).toEqual([
+      {
+        agentPath: "null-child",
+        status: "succeeded",
+        statusLabel: "completed_without_final_message",
+        result: "Codex native subagent completed without a final assistant message.",
+      },
+      {
+        agentPath: "empty-child",
+        status: "succeeded",
+        statusLabel: "completed_without_final_message",
+        result: "Codex native subagent completed without a final assistant message.",
       },
     ]);
   });

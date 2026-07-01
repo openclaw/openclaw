@@ -19,8 +19,9 @@ a per-agent SQLite database and needs no extra dependencies to get started.
 
 ## Getting started
 
-If you have an API key for OpenAI, Gemini, Voyage, Mistral, or DeepInfra, the builtin
-engine auto-detects it and enables vector search. No config needed.
+By default, the builtin engine uses OpenAI embeddings. If you already have
+`OPENAI_API_KEY` or `models.providers.openai.apiKey` configured, vector search
+works with no extra memory config.
 
 To set a provider explicitly:
 
@@ -38,9 +39,12 @@ To set a provider explicitly:
 
 Without an embedding provider, only keyword search is available.
 
-To force the built-in local embedding provider, install the optional
-`node-llama-cpp` runtime package next to OpenClaw, then point `local.modelPath`
-at a GGUF file:
+To force local GGUF embeddings, install the official llama.cpp provider plugin,
+then point `local.modelPath` at a GGUF file:
+
+```bash
+openclaw plugins install @openclaw/llama-cpp-provider
+```
 
 ```json5
 {
@@ -60,25 +64,28 @@ at a GGUF file:
 
 ## Supported embedding providers
 
-| Provider  | ID          | Auto-detected | Notes                               |
-| --------- | ----------- | ------------- | ----------------------------------- |
-| OpenAI    | `openai`    | Yes           | Default: `text-embedding-3-small`   |
-| Gemini    | `gemini`    | Yes           | Supports multimodal (image + audio) |
-| Voyage    | `voyage`    | Yes           |                                     |
-| Mistral   | `mistral`   | Yes           |                                     |
-| DeepInfra | `deepinfra` | Yes           | Default: `BAAI/bge-m3`              |
-| Ollama    | `ollama`    | No            | Local, set explicitly               |
-| Local     | `local`     | Yes (first)   | Optional `node-llama-cpp` runtime   |
+| Provider          | ID                  | Notes                               |
+| ----------------- | ------------------- | ----------------------------------- |
+| Bedrock           | `bedrock`           | Uses AWS credential chain           |
+| DeepInfra         | `deepinfra`         | Default: `BAAI/bge-m3`              |
+| Gemini            | `gemini`            | Supports multimodal (image + audio) |
+| GitHub Copilot    | `github-copilot`    | Uses Copilot subscription           |
+| Local             | `local`             | `@openclaw/llama-cpp-provider`      |
+| Mistral           | `mistral`           |                                     |
+| Ollama            | `ollama`            | Local/self-hosted                   |
+| OpenAI            | `openai`            | Default: `text-embedding-3-small`   |
+| OpenAI-compatible | `openai-compatible` | Generic `/v1/embeddings` endpoint   |
+| Voyage            | `voyage`            |                                     |
 
-Auto-detection picks the first provider whose API key can be resolved, in the
-order shown. Set `memorySearch.provider` to override.
+Set `memorySearch.provider` to switch away from OpenAI.
 
 ## How indexing works
 
 OpenClaw indexes `MEMORY.md` and `memory/*.md` into chunks (~400 tokens with
 80-token overlap) and stores them in a per-agent SQLite database.
 
-- **Index location:** `~/.openclaw/memory/<agentId>.sqlite`
+- **Index location:** the owning agent database at
+  `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
 - **Storage maintenance:** SQLite WAL sidecars are bounded with periodic and
   shutdown checkpoints.
 - **File watching:** changes to memory files trigger a debounced reindex (1.5s).
@@ -120,8 +127,7 @@ openclaw memory index --force --agent main
 ```
 
 Both standalone CLI commands and the Gateway use the same `local` provider id.
-If the provider is set to `auto`, local embeddings are considered first only
-when `memorySearch.local.modelPath` points to an existing local file.
+Set `memorySearch.provider: "local"` when you want local embeddings.
 
 **Stale results?** Run `openclaw memory index --force` to rebuild. The watcher
 may miss changes in rare edge cases.

@@ -1,5 +1,10 @@
+/**
+ * Regression coverage for compact tool display formatting.
+ * Ensures tool names, actions, and details stay readable and redacted.
+ */
 import { describe, expect, it } from "vitest";
 import { resolveToolSearchCodeDisplayTarget } from "./tool-display-common.js";
+import { resolveExecDetail } from "./tool-display-exec.js";
 import { formatToolDetail, formatToolSummary, resolveToolDisplay } from "./tool-display.js";
 
 describe("tool display details", () => {
@@ -28,6 +33,19 @@ describe("tool display details", () => {
       displayArgs: { command: "echo hi" },
       detail: "echo hi",
       bridgeVerb: "call",
+    });
+  });
+
+  it("preserves JS numeric literals in tool-search call args", () => {
+    expect(
+      resolveToolSearchCodeDisplayTarget({
+        code: 'return await openclaw.tools.call("web_search", { query: "OpenClaw", count: 1e3, limit: +3, threshold: .5 });',
+      })?.displayArgs,
+    ).toEqual({
+      query: "OpenClaw",
+      count: 1000,
+      limit: 3,
+      threshold: 0.5,
     });
   });
 
@@ -142,6 +160,23 @@ describe("tool display details", () => {
         }),
       ),
     ).toBe('for "latest Kimi model", "latest Gemini model", "latest Claude model"…');
+  });
+
+  it("formats Parallel's native objective + search_queries shape", () => {
+    expect(
+      formatToolDetail(
+        resolveToolDisplay({
+          name: "web_search",
+          args: {
+            objective: "Find the OpenClaw repository on GitHub",
+            search_queries: ["openclaw github", "openclaw repository"],
+            count: 5,
+          },
+        }),
+      ),
+    ).toBe(
+      'for "Find the OpenClaw repository on GitHub", "openclaw github", "openclaw repository" (top 5)',
+    );
   });
 
   it("summarizes exec commands with context", () => {
@@ -427,5 +462,192 @@ describe("tool display details", () => {
     expect(pyDetail).toContain("run python3 inline script (heredoc)");
     expect(nodeCheckDetail).toContain("check js syntax for /tmp/test.js");
     expect(nodeShortCheckDetail).toContain("check js syntax for /tmp/test.js");
+  });
+
+  it("appends node name to exec detail when node is set", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: {
+          command: "docker pull pihole/pihole:latest",
+          host: "node",
+          node: "raspberrypi",
+        },
+      }),
+    );
+
+    expect(detail).toContain("node: raspberrypi");
+  });
+
+  it("includes both cwd and node name in exec detail for known commands", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: {
+          command: "npm install",
+          workdir: "/app",
+          host: "node",
+          node: "raspberrypi",
+        },
+      }),
+    );
+
+    expect(detail).toContain("(in /app)");
+    expect(detail).toContain("node: raspberrypi");
+  });
+
+  it("omits node label when node param is absent or empty", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: { command: "npm install", host: "gateway" },
+      }),
+    );
+
+    expect(detail).not.toContain("node:");
+  });
+
+  it("omits node label when host is not 'node' even if node is set", () => {
+    for (const host of ["gateway", "sandbox", "auto"]) {
+      const detail = formatToolDetail(
+        resolveToolDisplay({
+          name: "exec",
+          args: { command: "npm install", host, node: "raspberrypi" },
+        }),
+      );
+
+      expect(detail).not.toContain("node:");
+    }
+  });
+});
+
+describe("compactRawCommand middle truncation", () => {
+  it("preserves start and end of long commands", () => {
+    // Use an unknown binary so resolveExecDetail returns the compact raw form directly.
+    const longCommand =
+      "/opt/custom/bin/my-processor --input /data/warehouse/2024/q1/transactions/raw/batch_001.csv --output /data/warehouse/2024/q1/transactions/processed/batch_001_clean.csv";
+    const result = resolveExecDetail({ command: longCommand });
+    // Should contain the start of the command
+    expect(result).toContain("/opt/custom/bin/my-processor");
+    // Should contain the end (filename)
+    expect(result).toContain("batch_001_clean.csv");
+    // Should contain the ellipsis for middle truncation
+    expect(result).toContain("…");
+    // Ellipsis should be in the middle, not at the end
+    expect(result).not.toMatch(/…$/);
+  });
+
+  it("does not truncate short commands", () => {
+    // Use an unknown binary so resolveExecDetail returns the compact raw form directly.
+    const result = resolveExecDetail({ command: "/opt/custom/bin/my-tool --version" });
+    expect(result).toBe("/opt/custom/bin/my-tool --version");
+  });
+
+  it("redacts credential-like tails before middle truncation", () => {
+    // The --token flag and its value sit in the middle of a long command.
+    // Without redaction-before-truncation, middle truncation could cut out
+    // the --token flag context but preserve the raw secret at the tail.
+    const longCommand =
+      "/opt/custom/bin/deploy --region us-east-1 --token sk-proj-ABCDEFGHIJKLMNOP1234567890abcdefghij --output /data/results/deploy-output.json";
+    const result = resolveExecDetail({ command: longCommand });
+    // The sk- prefixed token must be redacted (masked) before truncation
+    expect(result).not.toContain("ABCDEFGHIJKLMNOP1234567890abcdefghij");
+  });
+
+  it("uses the canonical tool payload redactor before compacting raw commands", () => {
+    const longCommand =
+      "/opt/custom/bin/deploy --aws-key AKIDABCDEFGHIJKLMNOP1234567890 --output /data/results/deploy-output.json";
+    const result = resolveExecDetail({ command: longCommand });
+
+    expect(result).not.toContain("AKIDABCDEFGHIJKLMNOP1234567890");
+    expect(result).toContain("AKIDAB…7890");
+  });
+
+  it("does not split a surrogate pair when the head boundary lands on an emoji", () => {
+    // The one-line form is 140 UTF-16 units. With the default maxLength=120 the head
+    // slice ends at index 59, but the 😀 emoji (U+1F600, a surrogate pair) occupies
+    // indices 58-59 — so a raw .slice(0, 59) would keep the high surrogate and drop
+    // its low half, leaving a lone surrogate that renders as the replacement char.
+    const emoji = String.fromCodePoint(0x1f600);
+    // Unknown binary so resolveExecDetail returns the compact raw form directly.
+    const longCommand = `/opt/custom/bin/run ${"a".repeat(38)}${emoji}${"b".repeat(80)}`;
+    const result = resolveExecDetail({ command: longCommand });
+
+    expect(result).toBeDefined();
+    // The whole emoji is dropped at the boundary rather than half of it.
+    expect(result).not.toContain(emoji);
+    // No dangling/lone surrogate code units remain in the rendered detail.
+    expect(result).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(result).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+    // Start and end of the command are still preserved around the ellipsis.
+    expect(result).toContain("/opt/custom/bin/run");
+    expect(result).toContain("…");
+    expect(result).toMatch(/b{4}$/);
+  });
+});
+
+describe("coerceDisplayValue middle truncation", () => {
+  it("preserves start and end of long string values", () => {
+    const longPath =
+      "/usr/local/share/very/deeply/nested/directory/structure/" +
+      "a".repeat(150) +
+      "/important-file.txt";
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "sessions_spawn",
+        args: { task: longPath },
+      }),
+    );
+    // Should contain the start of the path
+    expect(detail).toContain("/usr/local/share/");
+    // Should contain the end (filename)
+    expect(detail).toContain("important-file.txt");
+    // Should contain the ellipsis for middle truncation
+    expect(detail).toContain("…");
+  });
+
+  it("does not truncate short string values", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "sessions_spawn",
+        args: { task: "short-task-name" },
+      }),
+    );
+    expect(detail).toBe("short-task-name");
+    expect(detail).not.toContain("…");
+  });
+
+  it("redacts credential-like values in long generic string details", () => {
+    // A long string whose tail contains a GitHub PAT. Without
+    // redaction-before-truncation, middle truncation could preserve
+    // the raw token at the tail after its prefix context is cut.
+    const longValue =
+      "Deploying service to production cluster with auth ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop and " +
+      "x".repeat(200) +
+      " final-step";
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "sessions_spawn",
+        args: { task: longValue },
+      }),
+    );
+    // The ghp_ token must be redacted before truncation
+    expect(detail).not.toContain("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnop");
+  });
+
+  it("uses the canonical tool payload redactor before compacting string details", () => {
+    const longValue =
+      "Deploying with AWS key AKIDABCDEFGHIJKLMNOP1234567890 and " +
+      "x".repeat(200) +
+      " final-step";
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "sessions_spawn",
+        args: { task: longValue },
+      }),
+    );
+
+    expect(detail).not.toContain("AKIDABCDEFGHIJKLMNOP1234567890");
+    expect(detail).toContain("AKIDAB…7890");
   });
 });

@@ -1,3 +1,7 @@
+/**
+ * Browser profile availability operations: reachability probes, managed Chrome
+ * launch/restart, Chrome MCP attach, and profile stop handling.
+ */
 import fs from "node:fs";
 import { resolveCdpReachabilityPolicy } from "./cdp-reachability-policy.js";
 import {
@@ -133,6 +137,7 @@ function assertManagedLaunchNotCoolingDown(profileName: string, profileState: Pr
   );
 }
 
+/** Builds reachability, ensure, and stop operations for one resolved browser profile. */
 export function createProfileAvailability({
   opts,
   profile,
@@ -286,7 +291,9 @@ export function createProfileAvailability({
       if (await isReachable(attemptTimeoutMs)) {
         return;
       }
-      await new Promise((r) => setTimeout(r, CDP_READY_AFTER_LAUNCH_POLL_MS));
+      await new Promise((r) => {
+        setTimeout(r, CDP_READY_AFTER_LAUNCH_POLL_MS);
+      });
     }
     throw new Error(
       `Chrome CDP websocket for profile "${profile.name}" is not reachable after start. ${await describeCdpFailure(
@@ -306,7 +313,9 @@ export function createProfileAvailability({
       } catch (err) {
         lastError = err;
       }
-      await new Promise((r) => setTimeout(r, CHROME_MCP_ATTACH_READY_POLL_MS));
+      await new Promise((r) => {
+        setTimeout(r, CHROME_MCP_ATTACH_READY_POLL_MS);
+      });
     }
     throw new BrowserProfileUnavailableError(formatChromeMcpAttachFailure(lastError));
   };

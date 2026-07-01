@@ -1,3 +1,4 @@
+// Control UI tests cover tool helpers behavior.
 import { describe, it, expect } from "vitest";
 import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
 
@@ -57,6 +58,15 @@ describe("tool-helpers", () => {
       const result = formatToolOutputForSidebar(input);
 
       expect(result).toBe("This is plain text output");
+    });
+
+    it("wraps block art output in a fence while preserving quiet-zone whitespace", () => {
+      const input = "  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  ";
+      const result = formatToolOutputForSidebar(input);
+
+      expect(result).toBe(`\`\`\`
+${input}
+\`\`\``);
     });
 
     it("returns as-is for invalid JSON starting with {", () => {

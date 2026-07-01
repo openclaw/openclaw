@@ -1,3 +1,4 @@
+// Telegram plugin module implements token behavior.
 import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-core";
 import type { BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/channel-core";
@@ -132,7 +133,7 @@ export function resolveTelegramToken(
   if (accountId !== DEFAULT_ACCOUNT_ID && !accountCfg) {
     const accounts = telegramCfg?.accounts;
     const hasConfiguredAccounts =
-      !!accounts &&
+      Boolean(accounts) &&
       typeof accounts === "object" &&
       !Array.isArray(accounts) &&
       Object.keys(accounts).length > 0;

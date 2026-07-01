@@ -1,3 +1,4 @@
+// Runway tests cover video generation provider plugin behavior.
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
@@ -50,6 +51,36 @@ function firstFetchWithTimeoutCall() {
   };
 }
 
+function streamedVideoResponse(bytes: string): Response {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(bytes));
+        controller.close();
+      },
+    }),
+    { headers: { "content-type": "video/mp4" } },
+  );
+}
+
+// Response.json keeps object fixtures on the standard Response body path so create/poll
+// reads exercise the byte-bounded reader instead of an unbounded res.json().
+function streamedJsonResponse(payload: unknown): Response {
+  return Response.json(payload);
+}
+
+function streamedRawResponse(text: string): Response {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(text));
+        controller.close();
+      },
+    }),
+    { headers: { "content-type": "application/json" } },
+  );
+}
+
 describe("runway video generation provider", () => {
   it("declares explicit mode capabilities", () => {
     expectExplicitVideoGenerationCapabilities(buildRunwayVideoGenerationProvider());
@@ -57,22 +88,19 @@ describe("runway video generation provider", () => {
 
   it("submits a text-to-video task, polls it, and downloads the output", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({
-          id: "task-1",
-        }),
-      },
+      response: streamedJsonResponse({
+        id: "task-1",
+      }),
       release: vi.fn(async () => {}),
     });
     fetchWithTimeoutMock
-      .mockResolvedValueOnce({
-        json: async () => ({
+      .mockResolvedValueOnce(
+        streamedJsonResponse({
           id: "task-1",
           status: "SUCCEEDED",
           output: ["https://example.com/out.mp4"],
         }),
-        headers: new Headers(),
-      })
+      )
       .mockResolvedValueOnce({
         arrayBuffer: async () => Buffer.from("mp4-bytes"),
         headers: new Headers({ "content-type": "video/webm" }),
@@ -115,22 +143,77 @@ describe("runway video generation provider", () => {
     expect(metadata.endpoint).toBe("/v1/text_to_video");
   });
 
-  it("accepts local image buffers by converting them into data URIs", async () => {
+  it("rejects generated video downloads that exceed the configured media cap", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({ id: "task-2" }),
-      },
+      response: streamedJsonResponse({ id: "task-too-large" }),
       release: vi.fn(async () => {}),
     });
     fetchWithTimeoutMock
+      .mockResolvedValueOnce(
+        streamedJsonResponse({
+          id: "task-too-large",
+          status: "SUCCEEDED",
+          output: ["https://example.com/out.mp4"],
+        }),
+      )
+      .mockResolvedValueOnce(streamedVideoResponse("too-large"));
+
+    const provider = buildRunwayVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "runway",
+        model: "gen4.5",
+        prompt: "short video",
+        cfg: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
+      }),
+    ).rejects.toThrow("Runway generated video download exceeds 1 bytes");
+  });
+
+  it("does not round malformed duration values into create requests", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: streamedJsonResponse({ id: "task-duration" }),
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(
+        streamedJsonResponse({
+          id: "task-duration",
+          status: "SUCCEEDED",
+          output: ["https://example.com/out.mp4"],
+        }),
+      )
       .mockResolvedValueOnce({
-        json: async () => ({
+        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+        headers: new Headers({ "content-type": "video/mp4" }),
+      });
+
+    const provider = buildRunwayVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "runway",
+      model: "gen4.5",
+      prompt: "a tiny lobster DJ under neon lights",
+      cfg: {},
+      durationSeconds: 4.5,
+      aspectRatio: "16:9",
+    });
+
+    expect(postJsonRequestMock).toHaveBeenCalledTimes(1);
+    expect(firstPostJsonRequest().body?.duration).toBe(5);
+  });
+
+  it("accepts local image buffers by converting them into data URIs", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: streamedJsonResponse({ id: "task-2" }),
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(
+        streamedJsonResponse({
           id: "task-2",
           status: "SUCCEEDED",
           output: ["https://example.com/out.mp4"],
         }),
-        headers: new Headers(),
-      })
+      )
       .mockResolvedValueOnce({
         arrayBuffer: async () => Buffer.from("mp4-bytes"),
         headers: new Headers({ "content-type": "video/mp4" }),
@@ -173,11 +256,7 @@ describe("runway video generation provider", () => {
   it("reports malformed create JSON with a provider-owned error", async () => {
     const release = vi.fn(async () => {});
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => {
-          throw new SyntaxError("bad json");
-        },
-      },
+      response: streamedRawResponse("{ not json"),
       release,
     });
 
@@ -195,18 +274,15 @@ describe("runway video generation provider", () => {
 
   it("rejects status responses missing a task status", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({ id: "task-missing-status" }),
-      },
+      response: streamedJsonResponse({ id: "task-missing-status" }),
       release: vi.fn(async () => {}),
     });
-    fetchWithTimeoutMock.mockResolvedValueOnce({
-      json: async () => ({
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      streamedJsonResponse({
         id: "task-missing-status",
         output: ["https://example.com/out.mp4"],
       }),
-      headers: new Headers(),
-    });
+    );
 
     const provider = buildRunwayVideoGenerationProvider();
     await expect(
@@ -221,19 +297,16 @@ describe("runway video generation provider", () => {
 
   it("rejects malformed completed output URLs", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: {
-        json: async () => ({ id: "task-malformed-output" }),
-      },
+      response: streamedJsonResponse({ id: "task-malformed-output" }),
       release: vi.fn(async () => {}),
     });
-    fetchWithTimeoutMock.mockResolvedValueOnce({
-      json: async () => ({
+    fetchWithTimeoutMock.mockResolvedValueOnce(
+      streamedJsonResponse({
         id: "task-malformed-output",
         status: "SUCCEEDED",
         output: "https://example.com/out.mp4",
       }),
-      headers: new Headers(),
-    });
+    );
 
     const provider = buildRunwayVideoGenerationProvider();
     await expect(

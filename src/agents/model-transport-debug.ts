@@ -1,11 +1,19 @@
+/**
+ * Environment-driven debug controls for model transport logging.
+ *
+ * Model adapters share these helpers so payload, SSE, and transport diagnostics
+ * interpret OpenClaw debug environment variables consistently.
+ */
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 type ModelTransportDebugEnv = NodeJS.ProcessEnv;
 
-export type ModelPayloadDebugMode = "off" | "summary" | "tools" | "full-redacted";
-export type ModelSseDebugMode = "off" | "events" | "peek";
+/** Payload debug detail levels accepted by `OPENCLAW_DEBUG_MODEL_PAYLOAD`. */
+type ModelPayloadDebugMode = "off" | "summary" | "tools" | "full-redacted";
+/** SSE debug detail levels accepted by `OPENCLAW_DEBUG_SSE`. */
+type ModelSseDebugMode = "off" | "events" | "peek";
 
 function normalizeEnv(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -22,6 +30,7 @@ function isTruthyEnv(value: unknown): boolean {
   );
 }
 
+/** Resolves model payload debug verbosity from `OPENCLAW_DEBUG_MODEL_PAYLOAD`. */
 export function resolveModelPayloadDebugMode(
   env: ModelTransportDebugEnv = process.env,
 ): ModelPayloadDebugMode {
@@ -35,6 +44,7 @@ export function resolveModelPayloadDebugMode(
   return "off";
 }
 
+/** Resolves SSE stream debug verbosity from `OPENCLAW_DEBUG_SSE`. */
 export function resolveModelSseDebugMode(
   env: ModelTransportDebugEnv = process.env,
 ): ModelSseDebugMode {
@@ -48,7 +58,8 @@ export function resolveModelSseDebugMode(
   return "off";
 }
 
-export function isModelTransportDebugEnabled(env: ModelTransportDebugEnv = process.env): boolean {
+/** Returns whether any model transport debug channel is enabled. */
+function isModelTransportDebugEnabled(env: ModelTransportDebugEnv = process.env): boolean {
   return (
     isTruthyEnv(env.OPENCLAW_DEBUG_MODEL_TRANSPORT) ||
     resolveModelPayloadDebugMode(env) !== "off" ||
@@ -57,12 +68,13 @@ export function isModelTransportDebugEnabled(env: ModelTransportDebugEnv = proce
   );
 }
 
-export function isCodeModeDebugEnabled(env: ModelTransportDebugEnv = process.env): boolean {
-  return isTruthyEnv(env.OPENCLAW_DEBUG_CODE_MODE) || isModelTransportDebugEnabled(env);
+function isModelFetchMetadataMessage(message: string): boolean {
+  return message.startsWith("[model-fetch]");
 }
 
+/** Emits model-fetch metadata at info level by default; other diagnostics require debug env. */
 export function emitModelTransportDebug(log: SubsystemLogger, message: string): void {
-  if (isModelTransportDebugEnabled()) {
+  if (isModelFetchMetadataMessage(message) || isModelTransportDebugEnabled()) {
     log.info(message);
     return;
   }

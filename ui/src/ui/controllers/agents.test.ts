@@ -1,9 +1,18 @@
+// Control UI tests cover agents behavior.
 import { describe, expect, it, vi } from "vitest";
-import { loadAgents, loadToolsCatalog, loadToolsEffective, saveAgentsConfig } from "./agents.ts";
+import {
+  loadAgents,
+  loadToolsCatalog,
+  loadToolsEffective,
+  saveAgentsConfig,
+  setDefaultAgent,
+} from "./agents.ts";
 import type { AgentsConfigSaveState, AgentsState } from "./agents.ts";
 
-function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn> } {
-  const request = vi.fn();
+type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
+
+function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn<TestRequest>> } {
+  const request = vi.fn<TestRequest>();
   const state: AgentsState = {
     client: {
       request,
@@ -46,7 +55,7 @@ function createState(): { state: AgentsState; request: ReturnType<typeof vi.fn> 
 
 function createSaveState(): {
   state: AgentsConfigSaveState;
-  request: ReturnType<typeof vi.fn>;
+  request: ReturnType<typeof vi.fn<TestRequest>>;
 } {
   const { state, request } = createState();
   return {
@@ -74,6 +83,7 @@ function createSaveState(): {
       configActiveSection: null,
       configActiveSubsection: null,
       pendingUpdateExpectedVersion: null,
+      pendingUpdateHandoff: false,
       updateStatusBanner: null,
       lastError: null,
     },
@@ -424,5 +434,74 @@ describe("saveAgentsConfig", () => {
     await saveAgentsConfig(state);
 
     expect(state.agentsSelectedId).toBe("main");
+  });
+});
+
+describe("setDefaultAgent", () => {
+  it("stages the canonical default flag and persists it through config.set", async () => {
+    const { state, request } = createSaveState();
+    state.configForm = { agents: { list: [{ id: "main" }, { id: "kimi" }] } };
+    state.configFormOriginal = { agents: { list: [{ id: "main" }, { id: "kimi" }] } };
+    state.configFormDirty = false;
+    request
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({
+        hash: "hash-2",
+        raw: '{"agents":{"list":[{"id":"main"},{"id":"kimi","default":true}]}}',
+        config: { agents: { list: [{ id: "main" }, { id: "kimi", default: true }] } },
+        valid: true,
+        issues: [],
+      })
+      .mockResolvedValueOnce({
+        defaultId: "kimi",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [
+          { id: "main", name: "main" },
+          { id: "kimi", name: "kimi" },
+        ],
+      });
+
+    await setDefaultAgent(state, "kimi");
+
+    const [method, params] = requireFirstRequestCall(request);
+    const requestParams = requireRecord(params);
+    expect(method).toBe("config.set");
+    expect(JSON.parse(String(requestParams.raw))).toEqual({
+      agents: { list: [{ id: "main" }, { id: "kimi", default: true }] },
+    });
+  });
+
+  it("does not persist when the agent is absent from the config list", async () => {
+    const { state, request } = createSaveState();
+    state.configForm = { agents: { list: [{ id: "main" }] } };
+
+    await setDefaultAgent(state, "ghost");
+
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("does not persist unrelated dirty agent config drafts", async () => {
+    const { state, request } = createSaveState();
+    state.configFormDirty = true;
+    state.configFormOriginal = { agents: { list: [{ id: "main" }, { id: "kimi" }] } };
+    state.configForm = {
+      agents: {
+        list: [{ id: "main", model: "gpt-5.5" }, { id: "kimi" }],
+      },
+    };
+
+    await setDefaultAgent(state, "kimi");
+
+    expect(request).not.toHaveBeenCalled();
+    expect(state.configForm).toEqual({
+      agents: {
+        list: [
+          { id: "main", model: "gpt-5.5" },
+          { id: "kimi", default: true },
+        ],
+      },
+    });
+    expect(state.configFormDirty).toBe(true);
   });
 });

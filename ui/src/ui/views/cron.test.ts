@@ -1,3 +1,4 @@
+// Control UI tests cover cron behavior.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_CRON_FORM } from "../app-defaults.ts";
@@ -207,10 +208,16 @@ describe("cron view", () => {
       'select[data-test-id="cron-jobs-last-status-filter"]',
       HTMLSelectElement,
     );
+    expect(Array.from(lastRunSelect.options).map((option) => option.value)).toContain("unknown");
     lastRunSelect.value = "error";
     lastRunSelect.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsLastStatusFilter: "error" });
+
+    lastRunSelect.value = "unknown";
+    lastRunSelect.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onJobsFiltersChange).toHaveBeenLastCalledWith({ cronJobsLastStatusFilter: "unknown" });
 
     render(
       renderCron(
@@ -892,5 +899,43 @@ describe("cron view", () => {
       "cron-model-suggestions",
       "cron-thinking-suggestions",
     ]);
+  });
+
+  it("scrolls the run history card into view when History is clicked", () => {
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    try {
+      const onLoadRuns = vi.fn();
+      render(
+        renderCron(
+          createProps({
+            jobs: [createJob("job-1")],
+            onLoadRuns,
+          }),
+        ),
+        container,
+      );
+
+      const runHistory = getElement(container, "[data-run-history]", HTMLElement);
+      const scrollIntoView = vi.fn();
+      Object.defineProperty(runHistory, "scrollIntoView", {
+        configurable: true,
+        value: scrollIntoView,
+      });
+
+      getButtonByText(container, "History").dispatchEvent(
+        new MouseEvent("click", { bubbles: true }),
+      );
+
+      expect(onLoadRuns).toHaveBeenCalledWith("job-1");
+      expect(scrollIntoView).toHaveBeenCalledWith({ behavior: "smooth", block: "start" });
+    } finally {
+      container.remove();
+      vi.unstubAllGlobals();
+    }
   });
 });

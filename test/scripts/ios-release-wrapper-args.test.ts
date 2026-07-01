@@ -1,0 +1,73 @@
+// iOS release wrapper tests keep release args fail-closed before Fastlane work.
+import { execFileSync } from "node:child_process";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+
+const BASH_BIN = process.platform === "win32" ? "bash" : "/bin/bash";
+
+type WrapperCase = readonly [scriptPath: string, args: readonly string[], option: string];
+
+function runScript(
+  scriptPath: string,
+  args: readonly string[],
+  extraEnv: NodeJS.ProcessEnv = {},
+): { ok: boolean; stdout: string; stderr: string } {
+  const scriptArgs =
+    process.platform === "win32" ? [scriptPath] : ["--noprofile", "--norc", scriptPath];
+  try {
+    const stdout = execFileSync(BASH_BIN, [...scriptArgs, ...args], {
+      cwd: process.cwd(),
+      env: { ...process.env, ...extraEnv },
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return { ok: true, stdout, stderr: "" };
+  } catch (error) {
+    const e = error as { stdout?: unknown; stderr?: unknown };
+    const stdout = Buffer.isBuffer(e.stdout) ? e.stdout.toString("utf8") : String(e.stdout ?? "");
+    const stderr = Buffer.isBuffer(e.stderr) ? e.stderr.toString("utf8") : String(e.stderr ?? "");
+    return { ok: false, stdout, stderr };
+  }
+}
+
+describe("iOS release shell wrapper arguments", () => {
+  const missingValueCases: readonly WrapperCase[] = [
+    ["scripts/ios-release-upload.sh", ["--build-number", "--bogus"], "--build-number"],
+    ["scripts/ios-release-archive.sh", ["--build-number", "--bogus"], "--build-number"],
+    ["scripts/ios-release-prepare.sh", ["--build-number", "--team-id"], "--build-number"],
+    [
+      "scripts/ios-release-prepare.sh",
+      ["--build-number", "7", "--team-id", "--bogus"],
+      "--team-id",
+    ],
+  ];
+
+  it.each(missingValueCases)(
+    "rejects missing %s option values before release work",
+    (scriptPath, args, option) => {
+      const result = runScript(path.join(process.cwd(), scriptPath), args);
+
+      expect(result.ok).toBe(false);
+      expect(result.stderr).toContain(`Missing value for ${option}.`);
+      expect(result.stderr).not.toContain("No such file or directory");
+      expect(result.stderr).not.toContain("fastlane");
+      expect(result.stdout).toBe("");
+    },
+  );
+
+  it("rejects App Store release relay URL overrides before release work", () => {
+    const result = runScript(
+      path.join(process.cwd(), "scripts/ios-release-prepare.sh"),
+      ["--build-number", "7"],
+      {
+        IOS_DEVELOPMENT_TEAM: "FWJYW4S8P8",
+        OPENCLAW_PUSH_RELAY_BASE_URL: "https://relay.example.com",
+      },
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.stderr).toContain("custom relay URL overrides are not allowed");
+    expect(result.stderr).not.toContain("fastlane");
+    expect(result.stdout).toBe("");
+  });
+});

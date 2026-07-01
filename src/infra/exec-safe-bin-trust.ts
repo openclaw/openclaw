@@ -1,15 +1,15 @@
+// Resolves trusted directories for safe-bin allowlist policy.
 import fs from "node:fs";
 import path from "node:path";
+import {
+  normalizeSortedUniqueStringEntries,
+  sortUniqueStrings,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 
 // Keep defaults to OS-managed immutable bins only.
 // User/package-manager bins must be opted in via tools.exec.safeBinTrustedDirs.
 const DEFAULT_SAFE_BIN_TRUSTED_DIRS = ["/bin", "/usr/bin"];
-
-type TrustedSafeBinDirsParams = {
-  baseDirs?: readonly string[];
-  extraDirs?: readonly string[];
-  safeBins?: readonly string[];
-};
 
 type TrustedSafeBinPathParams = {
   resolvedPath: string;
@@ -84,14 +84,14 @@ export function normalizeTrustedSafeBinDirs(entries?: readonly string[] | null):
     return [];
   }
   const normalized = entries.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
-  return Array.from(new Set(normalized));
+  return uniqueStrings(normalized);
 }
 
 function resolveTrustedSafeBinDirs(entries: readonly string[], forComparison = true): string[] {
   const resolved = entries
     .map((entry) => normalizeTrustedDir(entry, forComparison))
     .filter((entry): entry is string => Boolean(entry));
-  return Array.from(new Set(resolved)).toSorted();
+  return sortUniqueStrings(resolved);
 }
 
 function hasPathSelector(value: string): boolean {
@@ -146,7 +146,7 @@ function resolveTrustedSafeBinTargetDirs(
       }
     }
   }
-  return Array.from(new Set(dirs)).toSorted();
+  return sortUniqueStrings(dirs);
 }
 
 function buildTrustedSafeBinCacheKey(
@@ -155,24 +155,9 @@ function buildTrustedSafeBinCacheKey(
   targetDirs: readonly string[],
 ): string {
   const dirsKey = resolveTrustedSafeBinDirs(normalizeTrustedSafeBinDirs(entries)).join("\u0001");
-  const binsKey = Array.from(new Set(safeBins.map((entry) => entry.trim()).filter(Boolean)))
-    .toSorted()
-    .join("\u0001");
+  const binsKey = normalizeSortedUniqueStringEntries(safeBins).join("\u0001");
   const targetDirsKey = targetDirs.join("\u0001");
   return `${dirsKey}\u0002${binsKey}\u0002${targetDirsKey}`;
-}
-
-export function buildTrustedSafeBinDirs(params: TrustedSafeBinDirsParams = {}): Set<string> {
-  const baseDirs = params.baseDirs ?? DEFAULT_SAFE_BIN_TRUSTED_DIRS;
-  const extraDirs = params.extraDirs ?? [];
-  const safeBins = params.safeBins ?? [];
-  // Trust is explicit only. Do not derive from PATH, which is user/environment controlled.
-  const entries = [
-    ...normalizeTrustedSafeBinDirs(baseDirs),
-    ...normalizeTrustedSafeBinDirs(extraDirs),
-  ];
-  const targetDirs = resolveTrustedSafeBinTargetDirs(entries, safeBins);
-  return new Set([...resolveTrustedSafeBinDirs(entries), ...targetDirs]);
 }
 
 export function getTrustedSafeBinDirs(

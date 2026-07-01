@@ -20,12 +20,18 @@ Status: external CLI integration. Gateway talks to `signal-cli` over HTTP — ei
 ## Quick setup (beginner)
 
 1. Use a **separate Signal number** for the bot (recommended).
-2. Install `signal-cli` (Java required if you use the JVM build).
-3. Choose one setup path:
+2. Install the OpenClaw plugin:
+
+```bash
+openclaw plugins install @openclaw/signal
+```
+
+3. Install `signal-cli` (Java required if you use the JVM build).
+4. Choose one setup path:
    - **Path A (QR link):** `signal-cli link -n "OpenClaw"` and scan with Signal.
    - **Path B (SMS register):** register a dedicated number with captcha + SMS verification.
-4. Configure OpenClaw and restart the gateway.
-5. Send a first DM and approve pairing (`openclaw pairing approve signal <CODE>`).
+5. Configure OpenClaw and restart the gateway.
+6. Send a first DM and approve pairing (`openclaw pairing approve signal <CODE>`).
 
 Minimal config:
 
@@ -45,12 +51,13 @@ Minimal config:
 
 Field reference:
 
-| Field       | Description                                       |
-| ----------- | ------------------------------------------------- |
-| `account`   | Bot phone number in E.164 format (`+15551234567`) |
-| `cliPath`   | Path to `signal-cli` (`signal-cli` if on `PATH`)  |
-| `dmPolicy`  | DM access policy (`pairing` recommended)          |
-| `allowFrom` | Phone numbers or `uuid:<id>` values allowed to DM |
+| Field        | Description                                       |
+| ------------ | ------------------------------------------------- |
+| `account`    | Bot phone number in E.164 format (`+15551234567`) |
+| `cliPath`    | Path to `signal-cli` (`signal-cli` if on `PATH`)  |
+| `configPath` | signal-cli config dir passed as `--config`        |
+| `dmPolicy`   | DM access policy (`pairing` recommended)          |
+| `allowFrom`  | Phone numbers or `uuid:<id>` values allowed to DM |
 
 ## What it is
 
@@ -305,6 +312,21 @@ Config:
   - `minimal`/`extensive` enables agent reactions and sets the guidance level.
 - Per-account overrides: `channels.signal.accounts.<id>.actions.reactions`, `channels.signal.accounts.<id>.reactionLevel`.
 
+## Approval reactions
+
+Signal exec and plugin approval prompts use the top-level `approvals.exec` and
+`approvals.plugin` routing blocks. Signal does not have a
+`channels.signal.execApprovals` block.
+
+- `👍` approves once.
+- `👎` denies.
+- Use `/approve <id> allow-always` when a request offers persistent approval.
+
+Approval reaction resolution requires explicit Signal approvers from
+`channels.signal.allowFrom`, `channels.signal.defaultTo`, or the matching account-level fields.
+Direct same-chat exec approval prompts can still suppress the duplicate local `/approve` fallback
+without explicit approvers; no-approver group approvals keep the local fallback visible.
+
 ## Delivery targets (CLI/cron)
 
 - DMs: `signal:+15551234567` (or plain E.164).
@@ -365,6 +387,7 @@ Provider options:
 - `channels.signal.apiMode`: `auto | native | container` (default: auto). See [Container mode](#container-mode-bbernhardsignal-cli-rest-api).
 - `channels.signal.account`: E.164 for the bot account.
 - `channels.signal.cliPath`: path to `signal-cli`.
+- `channels.signal.configPath`: optional `signal-cli --config` directory.
 - `channels.signal.httpUrl`: full daemon URL (overrides host/port).
 - `channels.signal.httpHost`, `channels.signal.httpPort`: daemon bind (default 127.0.0.1:8080).
 - `channels.signal.autoStart`: auto-spawn daemon (default true if `httpUrl` unset).

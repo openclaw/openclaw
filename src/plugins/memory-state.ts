@@ -1,3 +1,4 @@
+/** Registry state for plugin memory runtimes, prompt supplements, and flush planning. */
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MemorySearchManager } from "../memory-host-sdk/host/types.js";
@@ -101,6 +102,21 @@ export type MemoryPluginRuntime = {
     purpose?: "default" | "status" | "cli";
   }): Promise<{
     manager: RegisteredMemorySearchManager | null;
+    debug?: {
+      backend?: "builtin" | "qmd";
+      purpose?: "default" | "status" | "cli";
+      managerMs?: number;
+      managerCacheState?:
+        | "cached-full-hit"
+        | "cached-full-miss"
+        | "transient-cli"
+        | "transient-status"
+        | "pending-create-wait"
+        | "fallback-builtin"
+        | "recent-failure-cooldown";
+      qmdIdentityHash?: string;
+      failureCode?: "qmd-unavailable";
+    };
     error?: string;
   }>;
   resolveMemoryBackendConfig(params: {
@@ -166,7 +182,21 @@ export function registerMemoryCapability(
   pluginId: string,
   capability: MemoryPluginCapability,
 ): void {
-  memoryPluginState.capability = { pluginId, capability: { ...capability } };
+  const existingCapability = memoryPluginState.capability?.capability;
+  // A selected memory plugin can add bridge artifacts while memory-core owns sidecar runtime hooks.
+  const shouldPreserveExisting =
+    existingCapability &&
+    Boolean(capability.publicArtifacts) &&
+    !capability.promptBuilder &&
+    !capability.flushPlanResolver &&
+    !capability.runtime;
+  memoryPluginState.capability = {
+    pluginId,
+    capability: {
+      ...(shouldPreserveExisting ? existingCapability : {}),
+      ...capability,
+    },
+  };
 }
 
 function patchMemoryCapability(pluginId: string, patch: MemoryPluginCapability): void {
@@ -234,10 +264,6 @@ function normalizeMemoryPromptLines(value: unknown): string[] {
   return value.filter((line): line is string => typeof line === "string");
 }
 
-export function getMemoryPromptSectionBuilder(): MemoryPromptSectionBuilder | undefined {
-  return memoryPluginState.capability?.capability.promptBuilder;
-}
-
 export function listMemoryPromptSupplements(): MemoryPromptSupplementRegistration[] {
   return [...memoryPluginState.promptSupplements];
 }
@@ -259,10 +285,6 @@ export function resolveMemoryFlushPlan(params: {
   nowMs?: number;
 }): MemoryFlushPlan | null {
   return memoryPluginState.capability?.capability.flushPlanResolver?.(params) ?? null;
-}
-
-export function getMemoryFlushPlanResolver(): MemoryFlushPlanResolver | undefined {
-  return memoryPluginState.capability?.capability.flushPlanResolver;
 }
 
 /** @deprecated Use registerMemoryCapability(pluginId, { runtime }) instead. */
@@ -288,9 +310,10 @@ export function hasMemoryRuntime(): boolean {
 function cloneMemoryPublicArtifact(
   artifact: MemoryPluginPublicArtifact,
 ): MemoryPluginPublicArtifact {
+  const agentIds = Array.isArray(artifact.agentIds) ? artifact.agentIds : [];
   return {
     ...artifact,
-    agentIds: [...artifact.agentIds],
+    agentIds: [...agentIds],
   };
 }
 
@@ -340,5 +363,3 @@ export function clearMemoryPluginState(): void {
   memoryPluginState.corpusSupplements = [];
   memoryPluginState.promptSupplements = [];
 }
-
-export const resetMemoryPluginState = clearMemoryPluginState;

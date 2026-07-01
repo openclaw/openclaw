@@ -1,6 +1,12 @@
+// Context engine host compatibility tests cover doctor warnings for host/context mismatches.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { registerContextEngine } from "../../../context-engine/registry.js";
+import {
+  getContextEngineFactory,
+  getContextEngineRegistration,
+  registerContextEngine,
+  registerContextEngineForOwner,
+} from "../../../context-engine/registry.js";
 import type { ContextEngine, ContextEngineHostCapability } from "../../../context-engine/types.js";
 import {
   collectConfiguredContextEngineAgentRunHosts,
@@ -59,14 +65,31 @@ function configWithEngine(engineId: string, cfg: OpenClawConfig = {}): OpenClawC
 }
 
 describe("doctor context-engine host compatibility", () => {
-  it("collects native Codex and Pi as compatible agent-run hosts", () => {
+  it("distinguishes read-only discovery registrations from runtime entries", () => {
+    const id = uniqueEngineId();
+    const factory = () => {
+      throw new Error("discovery-only");
+    };
+    const result = registerContextEngineForOwner(id, factory, `doctor-test-owner-${id}`, {
+      lifecycle: "readOnlyDiscovery",
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(getContextEngineRegistration(id)).toMatchObject({
+      factory,
+      lifecycle: "readOnlyDiscovery",
+    });
+    expect(getContextEngineFactory(id)).toBeUndefined();
+  });
+
+  it("collects native Codex and OpenClaw as compatible agent-run hosts", () => {
     const hosts = collectConfiguredContextEngineAgentRunHosts({
       cfg: {
         agents: {
           defaults: {
             models: {
               "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
-              "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "pi" } },
+              "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "openclaw" } },
             },
           },
         },
@@ -75,7 +98,7 @@ describe("doctor context-engine host compatibility", () => {
 
     expect(hosts.map((host) => host.host.id).toSorted()).toEqual([
       "codex-app-server",
-      "pi-embedded",
+      "openclaw-embedded",
     ]);
   });
 

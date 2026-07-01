@@ -1,3 +1,4 @@
+// Openrouter tests cover media understanding provider plugin behavior.
 import {
   describeImageWithModel,
   describeImagesWithModel,
@@ -23,6 +24,8 @@ const { assertOkOrThrowHttpErrorMock, postJsonRequestMock, resolveProviderHttpRe
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
   postJsonRequest: postJsonRequestMock,
+  // Pass-through: bounded-reader enforcement is tested via bounded-reader unit tests.
+  readProviderJsonResponse: async (response: { json(): Promise<unknown> }) => response.json(),
   requireTranscriptionText: (value: string | undefined, message: string) => {
     const text = value?.trim();
     if (!text) {
@@ -151,6 +154,34 @@ describe("openrouter media understanding provider", () => {
       },
       temperature: 0.2,
     });
+  });
+
+  it("drops malformed temperature query options", async () => {
+    for (const temperature of [Number.NaN, Number.POSITIVE_INFINITY]) {
+      const release = vi.fn(async () => {});
+      postJsonRequestMock.mockResolvedValueOnce({
+        response: new Response(JSON.stringify({ text: "ok" }), { status: 200 }),
+        release,
+      });
+
+      await transcribeOpenRouterAudio({
+        buffer: Buffer.from("audio"),
+        fileName: "voice.webm",
+        apiKey: "sk-openrouter",
+        timeoutMs: 5_000,
+        query: { temperature },
+        fetchFn: fetch,
+      });
+
+      expect(firstPostJsonRequest().body).toEqual({
+        model: "openai/whisper-large-v3-turbo",
+        input_audio: {
+          data: Buffer.from("audio").toString("base64"),
+          format: "webm",
+        },
+      });
+      postJsonRequestMock.mockClear();
+    }
   });
 
   it("falls back to filename extension when mime is missing", async () => {

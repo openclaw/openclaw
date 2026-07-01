@@ -1,3 +1,4 @@
+// Verifies generated models.json preserves source secret markers from runtime snapshots.
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
@@ -16,9 +17,11 @@ vi.mock("../plugins/manifest-registry.js", () => ({
 
 vi.mock("./model-auth-env-vars.js", () => ({
   listKnownProviderEnvApiKeyNames: () => ["OPENAI_API_KEY"],
-  PROVIDER_ENV_API_KEY_CANDIDATES: { openai: ["OPENAI_API_KEY"] },
-  resolveProviderEnvApiKeyCandidates: () => ({ openai: ["OPENAI_API_KEY"] }),
-  resolveProviderEnvAuthEvidence: () => ({}),
+  resolveProviderEnvAuthLookupMaps: () => ({
+    aliasMap: {},
+    envCandidateMap: { openai: ["OPENAI_API_KEY"] },
+    authEvidenceMap: {},
+  }),
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
@@ -86,12 +89,47 @@ function createOpenAiApiKeySourceConfig(): OpenClawConfig {
 }
 
 function createOpenAiApiKeyRuntimeConfig(): OpenClawConfig {
+  // Runtime config simulates already-resolved secrets that must not be persisted.
   return {
     models: {
       providers: {
         openai: {
           baseUrl: "https://api.openai.com/v1",
           apiKey: "sk-runtime-resolved", // pragma: allowlist secret
+          api: "openai-completions" as const,
+          models: [],
+        },
+      },
+    },
+  };
+}
+
+function createCustomProviderApiKeySourceConfig(): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        litellm: {
+          baseUrl: "https://litellm.example/v1",
+          apiKey: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_MODEL_LITELLM_API_KEY", // pragma: allowlist secret
+          },
+          api: "openai-completions" as const,
+          models: [],
+        },
+      },
+    },
+  };
+}
+
+function createCustomProviderApiKeyRuntimeConfig(): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        litellm: {
+          baseUrl: "https://litellm.example/v1",
+          apiKey: "sk-litellm-runtime-secret", // pragma: allowlist secret
           api: "openai-completions" as const,
           models: [],
         },
@@ -186,6 +224,7 @@ async function planGeneratedProviders(params: {
   config: OpenClawConfig;
   sourceConfigForSecrets: OpenClawConfig;
 }) {
+  // Planner assertions avoid filesystem noise for marker-projection cases.
   const plan = await planOpenClawModelsJsonWithDeps(
     {
       cfg: params.config,
@@ -212,6 +251,7 @@ async function planGeneratedProviders(params: {
 function expectOpenAiHeaderMarkers(
   providers: Record<string, { headers?: Record<string, string> }>,
 ) {
+  // Env header refs keep their id; non-env refs collapse to the shared sentinel.
   expect(providers.openai?.headers?.Authorization).toBe(
     "secretref-env:OPENAI_HEADER_TOKEN", // pragma: allowlist secret
   );
@@ -273,6 +313,24 @@ describe("models-config runtime source snapshot", () => {
         setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
         await ensureOpenClawModelsJson(clonedRuntimeConfig, agentDir);
         await expectGeneratedProviderApiKey(agentDir, "openai", "OPENAI_API_KEY"); // pragma: allowlist secret
+      } finally {
+        clearRuntimeConfigSnapshot();
+        clearConfigCache();
+      }
+    });
+  });
+
+  it("preserves source markers for custom-provider api keys after models status secret resolution", async () => {
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    await withTempEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS, async () => {
+      unsetEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS);
+      const sourceConfig = createCustomProviderApiKeySourceConfig();
+      const runtimeConfig = createCustomProviderApiKeyRuntimeConfig();
+
+      try {
+        setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+        await ensureOpenClawModelsJson(runtimeConfig, agentDir);
+        await expectGeneratedProviderApiKey(agentDir, "litellm", "OPENCLAW_MODEL_LITELLM_API_KEY"); // pragma: allowlist secret
       } finally {
         clearRuntimeConfigSnapshot();
         clearConfigCache();

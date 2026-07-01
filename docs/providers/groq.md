@@ -7,18 +7,26 @@ read_when:
   - You are configuring Whisper audio transcription on Groq
 ---
 
-[Groq](https://groq.com) provides ultra-fast inference on open-weight models (Llama, Gemma, Kimi, Qwen, GPT OSS, and more) using custom LPU hardware. OpenClaw includes a bundled Groq plugin that registers both an OpenAI-compatible chat provider and an audio media-understanding provider.
+[Groq](https://groq.com) provides ultra-fast inference on open-weight models (Llama, Gemma, Kimi, Qwen, GPT OSS, and more) using custom LPU hardware. The Groq plugin registers both an OpenAI-compatible chat provider and an audio media-understanding provider.
 
 | Property               | Value                                    |
 | ---------------------- | ---------------------------------------- |
 | Provider id            | `groq`                                   |
-| Plugin                 | bundled, `enabledByDefault: true`        |
+| Plugin                 | official external package                |
 | Auth env var           | `GROQ_API_KEY`                           |
-| Onboarding flag        | `--auth-choice groq-api-key`             |
 | API                    | OpenAI-compatible (`openai-completions`) |
 | Base URL               | `https://api.groq.com/openai/v1`         |
 | Audio transcription    | `whisper-large-v3-turbo` (default)       |
 | Suggested chat default | `groq/llama-3.3-70b-versatile`           |
+
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/groq-provider
+openclaw gateway restart
+```
 
 ## Getting started
 
@@ -27,18 +35,9 @@ read_when:
     Create an API key at [console.groq.com/keys](https://console.groq.com/keys).
   </Step>
   <Step title="Set the API key">
-    <CodeGroup>
-
-```bash Onboarding
-openclaw onboard --auth-choice groq-api-key
-```
-
-```bash Env only
+    ```bash
 export GROQ_API_KEY=gsk_...
 ```
-
-    </CodeGroup>
-
   </Step>
   <Step title="Set a default model">
     ```json5
@@ -73,28 +72,19 @@ export GROQ_API_KEY=gsk_...
 
 ## Built-in catalog
 
-OpenClaw ships a manifest-backed Groq catalog with both reasoning and non-reasoning entries. Run `openclaw models list --provider groq` to see the bundled rows for your installed version, or check [console.groq.com/docs/models](https://console.groq.com/docs/models) for Groq's authoritative list.
+OpenClaw ships a manifest-backed Groq catalog with both reasoning and non-reasoning entries. Run `openclaw models list --provider groq` to see the static rows for your installed version, or check [console.groq.com/docs/models](https://console.groq.com/docs/models) for Groq's authoritative list.
 
-| Model ref                                            | Name                          | Reasoning | Input        | Context |
-| ---------------------------------------------------- | ----------------------------- | --------- | ------------ | ------- |
-| `groq/llama-3.3-70b-versatile`                       | Llama 3.3 70B Versatile       | no        | text         | 131,072 |
-| `groq/llama-3.1-8b-instant`                          | Llama 3.1 8B Instant          | no        | text         | 131,072 |
-| `groq/meta-llama/llama-4-maverick-17b-128e-instruct` | Llama 4 Maverick 17B          | no        | text + image | 131,072 |
-| `groq/meta-llama/llama-4-scout-17b-16e-instruct`     | Llama 4 Scout 17B             | no        | text + image | 131,072 |
-| `groq/llama3-70b-8192`                               | Llama 3 70B                   | no        | text         | 8,192   |
-| `groq/llama3-8b-8192`                                | Llama 3 8B                    | no        | text         | 8,192   |
-| `groq/gemma2-9b-it`                                  | Gemma 2 9B                    | no        | text         | 8,192   |
-| `groq/mistral-saba-24b`                              | Mistral Saba 24B              | no        | text         | 32,768  |
-| `groq/moonshotai/kimi-k2-instruct`                   | Kimi K2 Instruct              | no        | text         | 131,072 |
-| `groq/moonshotai/kimi-k2-instruct-0905`              | Kimi K2 Instruct 0905         | no        | text         | 262,144 |
-| `groq/openai/gpt-oss-120b`                           | GPT OSS 120B                  | yes       | text         | 131,072 |
-| `groq/openai/gpt-oss-20b`                            | GPT OSS 20B                   | yes       | text         | 131,072 |
-| `groq/openai/gpt-oss-safeguard-20b`                  | Safety GPT OSS 20B            | yes       | text         | 131,072 |
-| `groq/qwen-qwq-32b`                                  | Qwen QwQ 32B                  | yes       | text         | 131,072 |
-| `groq/qwen/qwen3-32b`                                | Qwen3 32B                     | yes       | text         | 131,072 |
-| `groq/deepseek-r1-distill-llama-70b`                 | DeepSeek R1 Distill Llama 70B | yes       | text         | 131,072 |
-| `groq/groq/compound`                                 | Compound                      | yes       | text         | 131,072 |
-| `groq/groq/compound-mini`                            | Compound Mini                 | yes       | text         | 131,072 |
+| Model ref                                        | Name                    | Reasoning | Input        | Context |
+| ------------------------------------------------ | ----------------------- | --------- | ------------ | ------- |
+| `groq/llama-3.3-70b-versatile`                   | Llama 3.3 70B Versatile | no        | text         | 131,072 |
+| `groq/llama-3.1-8b-instant`                      | Llama 3.1 8B Instant    | no        | text         | 131,072 |
+| `groq/meta-llama/llama-4-scout-17b-16e-instruct` | Llama 4 Scout 17B       | no        | text + image | 131,072 |
+| `groq/openai/gpt-oss-120b`                       | GPT OSS 120B            | yes       | text         | 131,072 |
+| `groq/openai/gpt-oss-20b`                        | GPT OSS 20B             | yes       | text         | 131,072 |
+| `groq/openai/gpt-oss-safeguard-20b`              | Safety GPT OSS 20B      | yes       | text         | 131,072 |
+| `groq/qwen/qwen3-32b`                            | Qwen3 32B               | yes       | text         | 131,072 |
+| `groq/groq/compound`                             | Compound                | yes       | text         | 131,072 |
+| `groq/groq/compound-mini`                        | Compound Mini           | yes       | text         | 131,072 |
 
 <Tip>
   The catalog evolves with each OpenClaw release. `openclaw models list --provider groq` shows the rows known to your installed version; cross-check with [console.groq.com/docs/models](https://console.groq.com/docs/models) for newly-added or deprecated models.
@@ -112,7 +102,7 @@ See [Thinking modes](/tools/thinking) for the shared `/think` levels and how Ope
 
 ## Audio transcription
 
-Groq's bundled plugin also registers an **audio media-understanding provider** so voice messages can be transcribed through the shared `tools.media.audio` surface.
+Groq's plugin also registers an **audio media-understanding provider** so voice messages can be transcribed through the shared `tools.media.audio` surface.
 
 | Property           | Value                                     |
 | ------------------ | ----------------------------------------- |
@@ -147,7 +137,7 @@ To make Groq the default audio backend:
   </Accordion>
 
   <Accordion title="Custom Groq model ids">
-    OpenClaw accepts any Groq model id at runtime. Use the exact id shown by Groq and prefix it with `groq/`. The bundled catalog covers the common cases; uncatalogued ids fall through to the default OpenAI-compatible template.
+    OpenClaw accepts any Groq model id at runtime. Use the exact id shown by Groq and prefix it with `groq/`. The static catalog covers the common cases; uncatalogued ids fall through to the default OpenAI-compatible template.
 
     ```json5
     {

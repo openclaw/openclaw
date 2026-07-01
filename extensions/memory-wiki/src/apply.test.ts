@@ -1,13 +1,69 @@
+// Memory Wiki tests cover apply plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { applyMemoryWikiMutation } from "./apply.js";
+import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
 import { parseWikiMarkdown, renderWikiMarkdown } from "./markdown.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
 
 describe("applyMemoryWikiMutation", () => {
+  it("normalizes string confidence in wiki mutations", () => {
+    expect(
+      normalizeMemoryWikiMutationInput({
+        op: "create_synthesis",
+        title: "Alpha Synthesis",
+        body: "Alpha summary body.",
+        sourceIds: ["source.alpha"],
+        confidence: "0.7",
+      }),
+    ).toMatchObject({ confidence: 0.7 });
+
+    expect(
+      normalizeMemoryWikiMutationInput({
+        op: "update_metadata",
+        lookup: "entity.alpha",
+        confidence: "0.4",
+      }),
+    ).toMatchObject({ confidence: 0.4 });
+  });
+
+  it("normalizes CLI-style wiki mutation operation aliases", () => {
+    expect(
+      normalizeMemoryWikiMutationInput({
+        op: "synthesis",
+        title: "Alpha Synthesis",
+        body: "Alpha summary body.",
+        sourceIds: ["source.alpha"],
+      }),
+    ).toMatchObject({
+      op: "create_synthesis",
+      title: "Alpha Synthesis",
+    });
+
+    expect(
+      normalizeMemoryWikiMutationInput({
+        op: "metadata",
+        lookup: "entity.alpha",
+        sourceIds: ["source.alpha"],
+      }),
+    ).toMatchObject({
+      op: "update_metadata",
+      lookup: "entity.alpha",
+    });
+  });
+
+  it("rejects out-of-range string confidence in wiki mutations", () => {
+    expect(() =>
+      normalizeMemoryWikiMutationInput({
+        op: "update_metadata",
+        lookup: "entity.alpha",
+        confidence: "1.5",
+      }),
+    ).toThrow("confidence must be a finite number");
+  });
+
   it("creates synthesis pages with managed summary blocks and refreshed indexes", async () => {
     const { rootDir, config } = await createVault({ prefix: "memory-wiki-apply-" });
 
@@ -86,6 +142,93 @@ describe("applyMemoryWikiMutation", () => {
       "[Alpha Synthesis](syntheses/alpha-synthesis.md)",
     );
   });
+
+  it("applies a write when an unrelated vault page has malformed frontmatter (#96125)", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-apply-unrelated-invalid-",
+    });
+    await fs.mkdir(path.join(rootDir, "sources"), { recursive: true });
+    const brokenPath = path.join(rootDir, "sources", "broken.md");
+    const brokenPage = [
+      "---",
+      "pageType: source",
+      "id: source.broken",
+      "sourceIds:",
+      '  - **MEMORY.md line 235**:"some quoted, value"',
+      "---",
+      "",
+      "# Broken",
+    ].join("\n");
+    await fs.writeFile(brokenPath, brokenPage, "utf8");
+
+    const result = await applyMemoryWikiMutation({
+      config,
+      mutation: {
+        op: "create_synthesis",
+        title: "Healthy Synthesis",
+        body: "Healthy summary body.",
+        sourceIds: ["source.healthy"],
+      },
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.compile.pageCounts.source).toBe(0);
+    expect(result.compile.pageCounts.synthesis).toBe(1);
+    expect(result.compile.frontmatterErrors).toEqual([
+      expect.objectContaining({ relativePath: "sources/broken.md" }),
+    ]);
+    await expect(fs.readFile(brokenPath, "utf8")).resolves.toBe(brokenPage);
+  });
+
+  it.each([
+    {
+      name: "syntax-error",
+      frontmatterLines: [
+        "pageType: synthesis",
+        "id: synthesis.conflicted",
+        "sourceIds:",
+        '  - **MEMORY.md line 235**:"some quoted, value"',
+      ],
+      error: "Unexpected scalar",
+    },
+    {
+      name: "sequence-root",
+      frontmatterLines: ["- pageType: synthesis", "  id: synthesis.conflicted"],
+      error: "Wiki frontmatter must be a YAML mapping",
+    },
+  ])(
+    "rejects a malformed write target without replacing its metadata ($name) (#96125)",
+    async ({ frontmatterLines, error }) => {
+      const { rootDir, config } = await createVault({
+        prefix: "memory-wiki-apply-invalid-target-",
+      });
+      await fs.mkdir(path.join(rootDir, "syntheses"), { recursive: true });
+      const targetPath = path.join(rootDir, "syntheses", "conflicted.md");
+      const original = [
+        "---",
+        ...frontmatterLines,
+        "---",
+        "",
+        "# Conflicted",
+        "",
+        "Keep this body.",
+      ].join("\n");
+      await fs.writeFile(targetPath, original, "utf8");
+
+      await expect(
+        applyMemoryWikiMutation({
+          config,
+          mutation: {
+            op: "create_synthesis",
+            title: "Conflicted",
+            body: "Replacement body.",
+            sourceIds: ["source.new"],
+          },
+        }),
+      ).rejects.toThrow(error);
+      await expect(fs.readFile(targetPath, "utf8")).resolves.toBe(original);
+    },
+  );
 
   it("updates page metadata without overwriting existing human notes", async () => {
     const { rootDir, config } = await createVault({
@@ -169,6 +312,6 @@ keep this note
     expect(parsed.body).toContain("<!-- openclaw:human:start -->");
     await expect(
       fs.readFile(path.join(rootDir, "entities", "index.md"), "utf8"),
-    ).resolves.toContain("[Alpha](entities/alpha.md)");
+    ).resolves.toContain("[Alpha](alpha.md)");
   });
 });

@@ -1,10 +1,13 @@
+// Discord tests cover message handler.process plugin behavior.
 import { MessageFlags } from "discord-api-types/v10";
 import { DEFAULT_EMOJIS, DEFAULT_TIMING } from "openclaw/plugin-sdk/channel-feedback";
 import {
   recordChannelBotPairLoopAndCheckSuppression,
   type ChannelBotLoopProtectionFacts,
-} from "openclaw/plugin-sdk/inbound-reply-dispatch";
+} from "openclaw/plugin-sdk/channel-inbound";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
+import * as runtimeEnvModule from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 
@@ -23,6 +26,9 @@ function createMockDraftStream() {
     flush: vi.fn(async () => {}),
     messageId: vi.fn(() => messageId),
     clear: vi.fn(async () => {
+      messageId = undefined;
+    }),
+    deleteCurrentMessage: vi.fn(async () => {
       messageId = undefined;
     }),
     discardPending: vi.fn(async () => {}),
@@ -50,6 +56,16 @@ const editMessageDiscord = deliveryMocks.editMessageDiscord;
 const deliverDiscordReply = deliveryMocks.deliverDiscordReply;
 const createDiscordDraftStream = deliveryMocks.createDiscordDraftStream;
 
+function createNonTerminalToolWarningPayload(): ReplyPayload {
+  return setReplyPayloadMetadata(
+    {
+      text: "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
+      isError: true,
+    },
+    { nonTerminalToolErrorWarning: true },
+  );
+}
+
 vi.mock("../send.js", () => ({
   reactMessageDiscord: async (
     channelId: string,
@@ -69,6 +85,16 @@ vi.mock("../send.js", () => ({
     await sendMocks.removeReactionDiscord(channelId, messageId, emoji, opts);
     return { ok: true };
   },
+}));
+
+const typingMocks = vi.hoisted(() => ({
+  sendTyping: vi.fn<(params: { rest: unknown; channelId: string }) => Promise<void>>(
+    async () => {},
+  ),
+}));
+
+vi.mock("./typing.js", () => ({
+  sendTyping: typingMocks.sendTyping,
 }));
 
 const discordTargetMocks = vi.hoisted(() => ({
@@ -96,13 +122,18 @@ vi.mock("./reply-delivery.js", () => ({
 }));
 
 type DispatchInboundParams = {
+  ctx?: Record<string, unknown>;
   dispatcher: {
     sendBlockReply: (payload: ReplyPayload) => boolean | Promise<boolean>;
     sendFinalReply: (payload: ReplyPayload) => boolean | Promise<boolean>;
     waitForIdle: () => Promise<void>;
   };
   replyOptions?: {
-    onReasoningStream?: (payload?: { text?: string }) => Promise<void> | void;
+    onReasoningStream?: (payload?: {
+      text?: string;
+      isReasoningSnapshot?: boolean;
+      requiresReasoningProgressOptIn?: boolean;
+    }) => Promise<void> | void;
     onReasoningEnd?: () => Promise<void> | void;
     onToolStart?: (payload: {
       name?: string;
@@ -111,12 +142,14 @@ type DispatchInboundParams = {
       detailMode?: "explain" | "raw";
     }) => Promise<void> | void;
     onItemEvent?: (payload: {
+      itemId?: string;
       kind?: string;
       progressText?: string;
       summary?: string;
       title?: string;
       name?: string;
     }) => Promise<void> | void;
+    onVerboseProgressVisibility?: (isActive: () => boolean) => void;
     onPlanUpdate?: (payload: {
       phase?: string;
       explanation?: string;
@@ -140,6 +173,7 @@ type DispatchInboundParams = {
     }) => Promise<void> | void;
     onReplyStart?: () => Promise<void> | void;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+    typingKeepalive?: boolean;
     disableBlockStreaming?: boolean;
     suppressDefaultToolProgressMessages?: boolean;
     queuedDeliveryCorrelations?: Array<{ begin: () => () => void }>;
@@ -149,6 +183,7 @@ type DispatchInboundParams = {
     onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
     onAssistantMessageStart?: () => Promise<void> | void;
     allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
+    onTypingCleanup?: () => Promise<void> | void;
   };
 };
 const dispatchInboundMessage = vi.hoisted(() =>
@@ -167,31 +202,18 @@ const recordInboundSession = vi.hoisted(() =>
   vi.fn<(params?: unknown) => Promise<void>>(async () => {}),
 );
 const configSessionsMocks = vi.hoisted(() => ({
-  loadSessionStore: vi.fn<(storePath: string, opts?: unknown) => Record<string, unknown>>(
-    () => ({}),
-  ),
-  readSessionUpdatedAt: vi.fn<(params?: unknown) => number | undefined>(() => undefined),
-  readLatestAssistantTextFromSessionTranscript: vi.fn<
-    (sessionFile: string) => Promise<{ text: string; timestamp?: number } | undefined>
+  getSessionEntry: vi.fn<(params?: unknown) => unknown>(() => undefined),
+  readLatestAssistantTextByIdentity: vi.fn<
+    (params?: unknown) => Promise<{ text: string; timestamp?: number } | undefined>
   >(async () => undefined),
-  resolveAndPersistSessionFile: vi.fn<(params?: unknown) => Promise<{ sessionFile: string }>>(
-    async () => ({ sessionFile: "/tmp/openclaw-discord-process-test-session.jsonl" }),
-  ),
-  resolveSessionStoreEntry: vi.fn<
-    (params: { store: Record<string, unknown>; sessionKey?: string }) => { existing?: unknown }
-  >((params) => ({
-    existing: params.sessionKey ? params.store[params.sessionKey] : undefined,
-  })),
+  readSessionUpdatedAt: vi.fn<(params?: unknown) => number | undefined>(() => undefined),
   resolveStorePath: vi.fn<(path?: unknown, opts?: unknown) => string>(
     () => "/tmp/openclaw-discord-process-test-sessions.json",
   ),
 }));
-const loadSessionStore = configSessionsMocks.loadSessionStore;
+const getSessionEntry = configSessionsMocks.getSessionEntry;
+const readLatestAssistantTextByIdentity = configSessionsMocks.readLatestAssistantTextByIdentity;
 const readSessionUpdatedAt = configSessionsMocks.readSessionUpdatedAt;
-const readLatestAssistantTextFromSessionTranscript =
-  configSessionsMocks.readLatestAssistantTextFromSessionTranscript;
-const resolveAndPersistSessionFile = configSessionsMocks.resolveAndPersistSessionFile;
-const resolveSessionStoreEntry = configSessionsMocks.resolveSessionStoreEntry;
 const resolveStorePath = configSessionsMocks.resolveStorePath;
 const createDiscordRestClientSpy = vi.hoisted(() =>
   vi.fn<
@@ -211,9 +233,86 @@ let createDiscordDirectMessageContextOverrides: typeof import("./message-handler
 let threadBindingTesting: typeof import("./thread-bindings.js").testing;
 let createThreadBindingManager: typeof import("./thread-bindings.js").createThreadBindingManager;
 let processDiscordMessage: typeof import("./message-handler.process.js").processDiscordMessage;
+let formatDiscordReplySkip: typeof import("./message-handler.process.js").formatDiscordReplySkip;
 let notifyDiscordInboundEventOutboundSuccess: typeof import("../inbound-event-delivery.js").notifyDiscordInboundEventOutboundSuccess;
+let createDiscordReplyTypingFeedback: typeof import("./reply-typing-feedback.js").createDiscordReplyTypingFeedback;
 
 vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
+  dispatchReplyWithBufferedBlockDispatcher: async (params: {
+    dispatcherOptions: {
+      beforeDeliver?: (
+        payload: ReplyPayload,
+        info: { kind: "block" | "final" },
+      ) => Promise<ReplyPayload | null> | ReplyPayload | null;
+      deliver: (payload: unknown, info: { kind: "block" | "final" }) => Promise<void> | void;
+      onError?: (err: unknown, info: { kind: "block" | "final" }) => void;
+      transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
+      typingCallbacks?: {
+        onReplyStart?: () => Promise<void> | void;
+        onIdle?: () => void;
+        onCleanup?: () => void;
+      };
+      onReplyStart?: () => Promise<void> | void;
+      onIdle?: () => void;
+      onCleanup?: () => void;
+      onSettled?: () => unknown;
+      onFreshSettledDelivery?: () => unknown;
+    };
+    ctx?: Record<string, unknown>;
+    replyOptions?: DispatchInboundParams["replyOptions"];
+  }) => {
+    const pendingDeliveries: Promise<void>[] = [];
+    const deliver = async (payload: ReplyPayload, info: { kind: "block" | "final" }) => {
+      const transformed = params.dispatcherOptions.transformReplyPayload
+        ? params.dispatcherOptions.transformReplyPayload(payload)
+        : payload;
+      if (!transformed) {
+        return;
+      }
+      const deliverPayload = params.dispatcherOptions.beforeDeliver
+        ? await params.dispatcherOptions.beforeDeliver(transformed, info)
+        : transformed;
+      if (!deliverPayload) {
+        return;
+      }
+      await params.dispatcherOptions.deliver(deliverPayload, info);
+    };
+    const queueDelivery = (payload: ReplyPayload, info: { kind: "block" | "final" }) => {
+      const delivery = Promise.resolve(deliver(payload, info)).catch((err: unknown) => {
+        params.dispatcherOptions.onError?.(err, info);
+      });
+      pendingDeliveries.push(delivery);
+      return true;
+    };
+    const typingCallbacks = params.dispatcherOptions.typingCallbacks;
+    const replyOptions = {
+      ...params.replyOptions,
+      onReplyStart: params.dispatcherOptions.onReplyStart ?? typingCallbacks?.onReplyStart,
+      onTypingCleanup: params.dispatcherOptions.onCleanup ?? typingCallbacks?.onCleanup,
+    };
+    try {
+      return await dispatchInboundMessage({
+        ctx: params.ctx,
+        replyOptions,
+        dispatcher: {
+          sendBlockReply: vi.fn((payload: ReplyPayload) =>
+            queueDelivery(payload, { kind: "block" }),
+          ),
+          sendFinalReply: vi.fn((payload: ReplyPayload) =>
+            queueDelivery(payload, { kind: "final" }),
+          ),
+          waitForIdle: vi.fn(async () => {
+            await Promise.all(pendingDeliveries);
+          }),
+        },
+      });
+    } finally {
+      await params.dispatcherOptions.onSettled?.();
+      await params.dispatcherOptions.onFreshSettledDelivery?.();
+      params.dispatcherOptions.onIdle?.();
+      typingCallbacks?.onIdle?.();
+    }
+  },
   dispatchInboundMessage: (params: DispatchInboundParams) => dispatchInboundMessage(params),
   settleReplyDispatcher: async (params: {
     dispatcher: { markComplete: () => void; waitForIdle: () => Promise<void> };
@@ -286,17 +385,15 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/session-store-runtime", () => ({
-  loadSessionStore: (storePath: string, opts?: unknown) =>
-    configSessionsMocks.loadSessionStore(storePath, opts),
+  getSessionEntry: (params?: unknown) => configSessionsMocks.getSessionEntry(params),
   readSessionUpdatedAt: (params?: unknown) => configSessionsMocks.readSessionUpdatedAt(params),
-  readLatestAssistantTextFromSessionTranscript: (sessionFile: string) =>
-    configSessionsMocks.readLatestAssistantTextFromSessionTranscript(sessionFile),
-  resolveAndPersistSessionFile: (params?: unknown) =>
-    configSessionsMocks.resolveAndPersistSessionFile(params),
-  resolveSessionStoreEntry: (params: { store: Record<string, unknown>; sessionKey?: string }) =>
-    configSessionsMocks.resolveSessionStoreEntry(params),
   resolveStorePath: (path?: unknown, opts?: unknown) =>
     configSessionsMocks.resolveStorePath(path, opts),
+}));
+
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", () => ({
+  readLatestAssistantTextByIdentity: (params?: unknown) =>
+    configSessionsMocks.readLatestAssistantTextByIdentity(params),
 }));
 
 vi.mock("../client.js", () => ({
@@ -373,38 +470,34 @@ beforeAll(async () => {
     await import("./message-handler.test-harness.js"));
   ({ testing: threadBindingTesting, createThreadBindingManager } =
     await import("./thread-bindings.js"));
-  ({ processDiscordMessage } = await import("./message-handler.process.js"));
+  ({ processDiscordMessage, formatDiscordReplySkip } =
+    await import("./message-handler.process.js"));
   ({ notifyDiscordInboundEventOutboundSuccess } = await import("../inbound-event-delivery.js"));
+  ({ createDiscordReplyTypingFeedback } = await import("./reply-typing-feedback.js"));
 });
 
 beforeEach(() => {
   vi.useRealTimers();
   sendMocks.reactMessageDiscord.mockClear();
   sendMocks.removeReactionDiscord.mockClear();
+  typingMocks.sendTyping.mockClear();
+  typingMocks.sendTyping.mockResolvedValue(undefined);
   discordTargetMocks.resolveDiscordTargetChannelId.mockClear();
   editMessageDiscord.mockClear();
   deliverDiscordReply.mockClear();
   createDiscordDraftStream.mockClear();
   dispatchInboundMessage.mockClear();
   recordInboundSession.mockClear();
-  loadSessionStore.mockClear();
   readSessionUpdatedAt.mockClear();
-  readLatestAssistantTextFromSessionTranscript.mockClear();
-  resolveAndPersistSessionFile.mockClear();
-  resolveSessionStoreEntry.mockClear();
+  getSessionEntry.mockClear();
+  readLatestAssistantTextByIdentity.mockClear();
   resolveStorePath.mockClear();
   createDiscordRestClientSpy.mockClear();
   dispatchInboundMessage.mockResolvedValue(createNoQueuedDispatchResult());
   recordInboundSession.mockResolvedValue(undefined);
-  loadSessionStore.mockReturnValue({});
   readSessionUpdatedAt.mockReturnValue(undefined);
-  readLatestAssistantTextFromSessionTranscript.mockResolvedValue(undefined);
-  resolveAndPersistSessionFile.mockResolvedValue({
-    sessionFile: "/tmp/openclaw-discord-process-test-session.jsonl",
-  });
-  resolveSessionStoreEntry.mockImplementation((params) => ({
-    existing: params.sessionKey ? params.store[params.sessionKey] : undefined,
-  }));
+  getSessionEntry.mockReturnValue(undefined);
+  readLatestAssistantTextByIdentity.mockResolvedValue(undefined);
   resolveStorePath.mockReturnValue("/tmp/openclaw-discord-process-test-sessions.json");
   threadBindingTesting.resetThreadBindingsForTests();
 });
@@ -651,6 +744,27 @@ function expectSinglePreviewEdit() {
   expect(deliverDiscordReply).not.toHaveBeenCalled();
 }
 
+function expectProgressSummaryEdit(...parts: string[]) {
+  const call = firstMockCall(editMessageDiscord, "summary edit");
+  expect(call[0]).toBe("c1");
+  expect(call[1]).toBe("preview-1");
+  const edit = requireRecord(call[2], "summary edit body");
+  const content = String(edit.content);
+  expect(content.startsWith("-# ")).toBe(true);
+  for (const part of parts) {
+    expect(content).toContain(part);
+  }
+}
+
+function expectFreshFinalText(text: string) {
+  const finalParams = deliverDiscordReply.mock.calls
+    .map((call) => requireRecord(call[0], "deliverDiscordReply params"))
+    .find((params) => params.kind === "final");
+  expect(finalParams).toBeDefined();
+  const replies = (finalParams as { replies?: Array<{ text?: string }> }).replies;
+  expect(replies?.[0]?.text).toBe(text);
+}
+
 describe("processDiscordMessage ack reactions", () => {
   it("drops bot-loop-suppressed messages before Discord side effects", async () => {
     const botLoopProtection: ChannelBotLoopProtectionFacts = {
@@ -790,6 +904,98 @@ describe("processDiscordMessage ack reactions", () => {
     );
     expect(deliveryParams.rest).toBe(deliveryRest);
     expect(feedbackRest).not.toBe(deliveryRest);
+  });
+
+  it("reuses accepted typing feedback through reply dispatch", async () => {
+    const replyTypingFeedback = {
+      onReplyStart: vi.fn(async () => {}),
+      onIdle: vi.fn(),
+      onCleanup: vi.fn(),
+      updateChannelId: vi.fn(),
+      getChannelId: vi.fn(() => "c1"),
+      restartForDispatch: vi.fn(),
+    };
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onReplyStart?.();
+      return createNoQueuedDispatchResult();
+    });
+    const ctx = await createAutomaticSourceDeliveryContext({
+      replyTypingFeedback,
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(replyTypingFeedback.updateChannelId).not.toHaveBeenCalled();
+    expect(replyTypingFeedback.restartForDispatch).toHaveBeenCalledWith("c1");
+    expect(replyTypingFeedback.onReplyStart).toHaveBeenCalledTimes(1);
+    expect(replyTypingFeedback.onIdle).toHaveBeenCalledTimes(1);
+    expect(replyTypingFeedback.onCleanup).toHaveBeenCalledTimes(1);
+    expect(getLastDispatchReplyOptions()?.typingKeepalive).toBe(false);
+    expect(typingMocks.sendTyping).not.toHaveBeenCalled();
+  });
+
+  it("restarts stale carried typing feedback before dispatch", async () => {
+    vi.useFakeTimers();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const rest = { kind: "feedback-rest" };
+    try {
+      dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+        await params?.replyOptions?.onReplyStart?.();
+        await vi.advanceTimersByTimeAsync(3_500);
+        return createNoQueuedDispatchResult();
+      });
+      const ctx = await createAutomaticSourceDeliveryContext();
+      ctx.replyTypingFeedback = createDiscordReplyTypingFeedback({
+        cfg: ctx.cfg,
+        token: ctx.token,
+        accountId: ctx.accountId,
+        channelId: "c1",
+        rest: rest as never,
+        log: vi.fn(),
+        maxDurationMs: 5_000,
+      });
+      await ctx.replyTypingFeedback.onReplyStart();
+      await vi.advanceTimersByTimeAsync(5_100);
+      typingMocks.sendTyping.mockClear();
+
+      await runProcessDiscordMessage(ctx);
+
+      expect(typingMocks.sendTyping.mock.calls.length).toBeGreaterThanOrEqual(2);
+      expect(
+        typingMocks.sendTyping.mock.calls.every(
+          ([params]) => params.channelId === "c1" && params.rest === rest,
+        ),
+      ).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("keeps one typing refresh loop for default message-tool replies", async () => {
+    vi.useFakeTimers();
+    try {
+      dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+        await params?.replyOptions?.onReplyStart?.();
+        await vi.advanceTimersByTimeAsync(3_500);
+        return createNoQueuedDispatchResult();
+      });
+      const ctx = await createBaseContext({
+        shouldRequireMention: false,
+        effectiveWasMentioned: false,
+        cfg: {
+          messages: { groupChat: { visibleReplies: "message_tool" } },
+          session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+        },
+        route: BASE_CHANNEL_ROUTE,
+      });
+
+      await runProcessDiscordMessage(ctx);
+
+      expect(getLastDispatchReplyOptions()?.typingKeepalive).toBe(false);
+      expect(typingMocks.sendTyping).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("debounces intermediate phase reactions and jumps to done for short runs", async () => {
@@ -978,9 +1184,13 @@ describe("processDiscordMessage ack reactions", () => {
     vi.useFakeTimers();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onCompactionStart?.();
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1_000);
+      });
       await params?.replyOptions?.onCompactionEnd?.();
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1_000);
+      });
       return createNoQueuedDispatchResult();
     });
 
@@ -1165,6 +1375,64 @@ describe("processDiscordMessage session routing", () => {
     expect(dispatchCtx.MediaPaths).toBeUndefined();
   });
 
+  it("does not inject the bot's previous message body when users reply to it", async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error("self-reply media should not be fetched");
+    });
+    const ctx = await createBaseContext({
+      botUserId: "bot-1",
+      cfg: {
+        channels: { discord: { contextVisibility: "all" } },
+        messages: { ackReaction: "👀" },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+      discordRestFetch: fetchImpl,
+      message: {
+        id: "m-self-reply",
+        channelId: "c1",
+        content: "<@bot> hit that again",
+        timestamp: new Date().toISOString(),
+        attachments: [],
+        messageReference: {
+          type: 0,
+          message_id: "m-bot-previous",
+          channel_id: "c1",
+        },
+        referencedMessage: {
+          id: "m-bot-previous",
+          channelId: "c1",
+          content: "The same stale bot response keeps looping.",
+          timestamp: new Date().toISOString(),
+          attachments: [
+            {
+              id: "att-bot-previous",
+              url: "https://cdn.discordapp.com/attachments/previous.png",
+              content_type: "image/png",
+              filename: "previous.png",
+            },
+          ],
+          author: {
+            id: "bot-1",
+            username: "Spartacus",
+            discriminator: "0",
+            globalName: "Spartacus",
+          },
+        },
+      },
+      baseText: "<@bot> hit that again",
+      messageText: "<@bot> hit that again",
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    const dispatchCtx = requireRecord(getLastDispatchCtx(), "dispatch context");
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(dispatchCtx.ReplyToId).toBe("m-bot-previous");
+    expect(dispatchCtx.ReplyToSender).toBe("Spartacus");
+    expect(dispatchCtx.ReplyToBody).toBeUndefined();
+    expect(JSON.stringify(dispatchCtx)).not.toContain("The same stale bot response keeps looping.");
+  });
+
   it("stores DM lastRoute with user target for direct-session continuity", async () => {
     const ctx = await createBaseContext({
       ...createDirectMessageContextOverrides(),
@@ -1276,6 +1544,7 @@ describe("processDiscordMessage session routing", () => {
 
     expectRecordFields(requireRecord(getLastDispatchReplyOptions(), "dispatch reply options"), {
       sourceReplyDeliveryMode: "message_tool_only",
+      typingKeepalive: false,
       disableBlockStreaming: true,
     });
     expect(createDiscordDraftStream).not.toHaveBeenCalled();
@@ -1311,7 +1580,9 @@ describe("processDiscordMessage session routing", () => {
     vi.useFakeTimers();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onReasoningStream?.();
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1_000);
+      });
       return createNoQueuedDispatchResult();
     });
     const ctx = await createBaseContext({
@@ -1349,7 +1620,9 @@ describe("processDiscordMessage session routing", () => {
     vi.useFakeTimers();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onReasoningStream?.();
-      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 1_000);
+      });
       return createNoQueuedDispatchResult();
     });
     const ctx = await createBaseContext({
@@ -1629,6 +1902,7 @@ describe("processDiscordMessage session routing", () => {
     expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
       SessionKey: "agent:main:discord:channel:thread-1",
       MessageThreadId: "thread-1",
+      ThreadParentId: "parent-1",
       ModelParentSessionKey: "agent:main:discord:channel:parent-1",
     });
     expect(getLastDispatchCtx()?.ParentSessionKey).toBeUndefined();
@@ -1649,6 +1923,9 @@ describe("processDiscordMessage session routing", () => {
       })),
     };
     const ctx = await createBaseContext({
+      cfg: {
+        channels: { discord: { contextVisibility: "allowlist" } },
+      },
       baseSessionKey: threadSessionKey,
       route: BASE_CHANNEL_ROUTE,
       messageChannelId: "thread-1",
@@ -1673,6 +1950,7 @@ describe("processDiscordMessage session routing", () => {
     expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
       SessionKey: threadSessionKey,
       MessageThreadId: "thread-1",
+      ThreadLabel: "Discord thread #parent",
     });
     expect(getLastDispatchCtx()?.ThreadStarterBody).toBeUndefined();
   });
@@ -1714,6 +1992,95 @@ describe("processDiscordMessage draft streaming", () => {
     expectSinglePreviewEdit();
   });
 
+  it("delivers a fresh message instead of a preview edit when the final reply resolves a mention alias", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "On it @Sentinel" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+      cfg: {
+        channels: { discord: { mentionAliases: { Sentinel: "1485891428809707651" } } },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    // Discord only fires mention notifications on create, never on edits, so the
+    // streamed preview must be abandoned and the mention delivered fresh.
+    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers a fresh message instead of a preview edit for a literal user mention in the final reply", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "On it <@1485891428809707651>" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("still finalizes via preview edit when an unaliased handle stays plain text", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "On it @Sentinel" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(editMessageDiscord).toHaveBeenCalledTimes(1);
+    expect(deliverDiscordReply).not.toHaveBeenCalled();
+  });
+
+  it("still finalizes via preview edit for broadcast mentions like @everyone", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "heads up @everyone" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(editMessageDiscord).toHaveBeenCalledTimes(1);
+    expect(deliverDiscordReply).not.toHaveBeenCalled();
+  });
+
+  it("still finalizes via preview edit when a targeted mention is mixed with @everyone", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "heads up @Sentinel @everyone" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+      cfg: {
+        channels: { discord: { mentionAliases: { Sentinel: "1485891428809707651" } } },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    // Mixed targeted + broadcast must not escalate into a create that pings @everyone.
+    expect(editMessageDiscord).toHaveBeenCalledTimes(1);
+    expect(deliverDiscordReply).not.toHaveBeenCalled();
+  });
+
   it("accepts streaming=true alias for partial preview mode", async () => {
     await runSingleChunkFinalScenario({ streaming: true, maxLinesPerMessage: 5 });
     expectSinglePreviewEdit();
@@ -1745,8 +2112,100 @@ describe("processDiscordMessage draft streaming", () => {
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     expect(updates).toEqual(["Pinching\n\n🛠️ Exec\n• exec done"]);
-    expectPreviewEditContent("done");
-    expect(deliverDiscordReply).not.toHaveBeenCalled();
+    expectProgressSummaryEdit("🛠️ 1 tool call");
+    expectFreshFinalText("done");
+  });
+
+  it("counts window thinking bursts closed by a tool call when no end event fires", async () => {
+    // deepseek streams reasoning then a tool call with no thinking_end between
+    // bursts; the tool-start boundary (and the summary flush) must still tally.
+    createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onReasoningStream?.({ text: "Listing the workspace" });
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onReasoningStream?.({ text: "Picking the largest" });
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onReasoningStream?.({ text: "Composing the answer" });
+      await params?.dispatcher.sendFinalReply({ text: "done" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: { mode: "progress", progress: { label: "Shelling", thinking: true } },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    // 2 bursts closed by tool calls + 1 trailing burst flushed at summary.
+    expectProgressSummaryEdit("🧠 3 thoughts", "🛠️ 2 tool calls");
+    expectFreshFinalText("done");
+  });
+
+  it("counts window thinking bursts in the collapse summary", async () => {
+    createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onReasoningStream?.({ text: "Planning the survey" });
+      await params?.replyOptions?.onReasoningEnd?.();
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onReasoningStream?.({ text: "Reading results" });
+      await params?.replyOptions?.onReasoningEnd?.();
+      // A boundary without a preceding burst must not inflate the count.
+      await params?.replyOptions?.onReasoningEnd?.();
+      await params?.dispatcher.sendFinalReply({ text: "done" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: { mode: "progress", progress: { label: "Shelling", thinking: true } },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expectProgressSummaryEdit("🧠 2 thoughts", "🛠️ 1 tool call");
+    expectFreshFinalText("done");
+  });
+
+  it("counts distinct narration notes in the collapse summary", async () => {
+    createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onItemEvent?.({
+        kind: "preamble",
+        itemId: "p1",
+        progressText: "Listing the workspace",
+      });
+      // Re-fire of the same note (delta/snapshot) must not inflate the count.
+      await params?.replyOptions?.onItemEvent?.({
+        kind: "preamble",
+        itemId: "p1",
+        progressText: "Listing the workspace files",
+      });
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.({
+        kind: "preamble",
+        itemId: "p2",
+        progressText: "Composing the answer",
+      });
+      await params?.dispatcher.sendFinalReply({ text: "done" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: { mode: "progress", progress: { label: "Shelling", commentary: true } },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expectProgressSummaryEdit("💬 2 notes", "🛠️ 1 tool call");
+    expectFreshFinalText("done");
   });
 
   it("does not update Discord progress drafts after final answer delivery", async () => {
@@ -1777,8 +2236,8 @@ describe("processDiscordMessage draft streaming", () => {
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     expect(updates).toEqual(["Shelling\n\n🛠️ Exec\n• exec running"]);
-    expectPreviewEditContent("done");
-    expect(deliverDiscordReply).not.toHaveBeenCalled();
+    expectProgressSummaryEdit("🛠️ 1 tool call");
+    expectFreshFinalText("done");
   });
 
   it("does not update Discord progress drafts while final answer delivery is pending", async () => {
@@ -1809,8 +2268,8 @@ describe("processDiscordMessage draft streaming", () => {
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     expect(updates).toEqual(["Shelling\n\n🛠️ Exec\n• exec running"]);
-    expectPreviewEditContent("done");
-    expect(deliverDiscordReply).not.toHaveBeenCalled();
+    expectProgressSummaryEdit("🛠️ 1 tool call");
+    expectFreshFinalText("done");
   });
 
   it("streams Discord tool progress for coding-profile message-tool-only guild replies", async () => {
@@ -1866,10 +2325,8 @@ describe("processDiscordMessage draft streaming", () => {
       (_value, index) => `continuation${index}`,
     ).join(" ")}`;
 
-    loadSessionStore.mockReturnValue({
-      "agent:main:discord:channel:c1": { sessionId: "session-1" },
-    });
-    readLatestAssistantTextFromSessionTranscript.mockResolvedValue({
+    getSessionEntry.mockReturnValue({ sessionId: "session-1" });
+    readLatestAssistantTextByIdentity.mockResolvedValue({
       text: fullAnswer,
       timestamp: Date.now() + 60_000,
     });
@@ -1889,12 +2346,9 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenCalledTimes(1);
-    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expectProgressSummaryEdit("🛠️ 1 tool call");
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
-    const params = firstMockArg(deliverDiscordReply, "deliverDiscordReply");
-    const replies = requireRecord(params, "deliverDiscordReply params").replies;
-    expect(Array.isArray(replies)).toBe(true);
-    expect((replies as Array<{ text?: string }>)[0]?.text).toBe(fullAnswer);
+    expectFreshFinalText(fullAnswer);
   });
 
   it("clears partial drafts when fallback final delivery fails before completion", async () => {
@@ -2126,14 +2580,12 @@ describe("processDiscordMessage draft streaming", () => {
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps finalized previews when later tool warning finals are delivered", async () => {
+  it("drops later tool warning finals after preview final replies", async () => {
     const draftStream = createMockDraftStreamForTest();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply({ text: "delivery survived" });
-      await params?.dispatcher.sendFinalReply({
-        text: "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
-        isError: true,
-      } as never);
+      await params?.dispatcher.waitForIdle();
+      await params?.dispatcher.sendFinalReply(createNonTerminalToolWarningPayload());
       return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
     });
 
@@ -2146,25 +2598,15 @@ describe("processDiscordMessage draft streaming", () => {
     expectPreviewEditContent("delivery survived");
     expect(draftStream.clear).not.toHaveBeenCalled();
     expect(draftStream.messageId()).toBe("preview-1");
-    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
-    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
-      replies: [
-        {
-          text: "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
-          isError: true,
-        },
-      ],
-    });
+    expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
 
-  it("keeps draft previews when tool warning finals arrive before recovered replies", async () => {
+  it("drops earlier tool warning finals when recovered replies arrive", async () => {
     const draftStream = createMockDraftStreamForTest();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.dispatcher.sendFinalReply({
-        text: "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
-        isError: true,
-      } as never);
+      await params?.dispatcher.sendFinalReply(createNonTerminalToolWarningPayload());
       await params?.dispatcher.sendFinalReply({ text: "delivery recovered" });
+      await params?.dispatcher.waitForIdle();
       return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
     });
 
@@ -2177,28 +2619,88 @@ describe("processDiscordMessage draft streaming", () => {
     expectPreviewEditContent("delivery recovered");
     expect(draftStream.clear).not.toHaveBeenCalled();
     expect(draftStream.messageId()).toBe("preview-1");
-    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
-    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
-      replies: [
-        {
-          text: "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
-          isError: true,
-        },
-      ],
-    });
-  });
-
-  it("suppresses reasoning payload delivery to Discord", async () => {
-    mockDispatchSingleBlockReply({ text: "thinking...", isReasoning: true });
-    await processStreamOffDiscordMessage();
-
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
 
-  it("suppresses reasoning-tagged final payload delivery to Discord", async () => {
+  it("suppresses pure tool warning finals when no recovered reply is available", async () => {
+    const draftStream = createMockDraftStreamForTest();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply(createNonTerminalToolWarningPayload());
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    expect(deliverDiscordReply).not.toHaveBeenCalled();
+  });
+
+  it("suppresses tool warning finals when the recovered reply fails to send", async () => {
+    deliverDiscordReply.mockRejectedValueOnce(new Error("send failed"));
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "delivery failed" });
+      await params?.dispatcher.waitForIdle();
+      await params?.dispatcher.sendFinalReply(createNonTerminalToolWarningPayload());
+      return {
+        queuedFinal: true,
+        counts: { final: 2, tool: 0, block: 0 },
+        failedCounts: { final: 1 },
+      };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streamMode: "off" },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
+      replies: [{ text: "delivery failed" }],
+    });
+  });
+
+  it("suppresses mutating tool warning finals after successful-looking replies", async () => {
+    const draftStream = createMockDraftStreamForTest();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "Done." });
+      await params?.dispatcher.sendFinalReply({
+        text: "⚠️ 🛠️ `write file (agent)` failed",
+        isError: true,
+      } as never);
+      return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expectPreviewEditContent("Done.");
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).not.toHaveBeenCalled();
+  });
+
+  it("renders reasoning block payloads as a 🧠 blockquote", async () => {
+    mockDispatchSingleBlockReply({ text: "thinking...", isReasoning: true });
+    await processStreamOffDiscordMessage();
+
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
+      replies: [{ text: "> 🧠 thinking..." }],
+    });
+  });
+
+  it("renders reasoning-tagged final payloads as a 🧠 blockquote, never the final", async () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply({
-        text: "Reasoning:\nthis should stay internal",
+        text: "Reasoning:\nthis renders as a quoted thinking message",
         isReasoning: true,
       });
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
@@ -2210,8 +2712,10 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(deliverDiscordReply).not.toHaveBeenCalled();
-    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
+      replies: [{ text: "> 🧠 this renders as a quoted thinking message" }],
+    });
   });
 
   it("delivers non-reasoning block payloads to Discord", async () => {
@@ -2286,6 +2790,280 @@ describe("processDiscordMessage draft streaming", () => {
     ).toBe(true);
   });
 
+  it.each([
+    // commentary now defaults on; only an explicit false hides it.
+    ["false", false],
+  ])("hides Discord commentary progress when commentary is %s", async (_label, commentary) => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "Checking private context before replying.",
+      });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "tool-1",
+        kind: "tool",
+        name: "exec",
+        progressText: "curl weather api",
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    const progress =
+      commentary === undefined
+        ? {
+            label: false,
+            toolProgress: true,
+          }
+        : {
+            label: false,
+            toolProgress: true,
+            commentary,
+          };
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress,
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    const updates = draftStream.update.mock.calls.map((call) => call[0]).join("\n");
+    expect(updates).toContain("Exec");
+    expect(updates).toContain("curl weather api");
+    expect(updates).not.toContain("Checking private context");
+  });
+
+  it("shows opt-in Discord commentary progress independently from tool progress", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "Checking the current weather source before summarizing.",
+      });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "Checking the current weather source before summarizing clearly.",
+      });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-2",
+        kind: "preamble",
+        progressText: "[[reply_to_current]] Checking route impacts.",
+      });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-2",
+        kind: "preamble",
+        progressText: "NO_REPLY",
+      });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-3",
+        kind: "preamble",
+        progressText: "**NO_REPLY",
+      });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "tool-1",
+        kind: "tool",
+        name: "exec",
+        progressText: "curl weather api",
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: false,
+            toolProgress: false,
+            commentary: true,
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenLastCalledWith(
+      "💬 Checking the current weather source before summarizing clearly.",
+    );
+    const updates = draftStream.update.mock.calls.map((call) => call[0]).join("\n");
+    expect(updates).not.toContain("Exec");
+    expect(updates).not.toContain("curl weather api");
+    expect(updates).not.toContain("reply_to_current");
+    expect(updates).not.toContain("NO_REPLY");
+  });
+
+  it.each([
+    ["active", true],
+    ["inactive", false],
+  ])(
+    "renders Discord commentary in the draft exactly when durable verbose progress is %s",
+    async (_label, durableLaneActive) => {
+      const draftStream = createMockDraftStreamForTest();
+
+      dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+        params?.replyOptions?.onVerboseProgressVisibility?.(() => durableLaneActive);
+        await params?.replyOptions?.onItemEvent?.({
+          itemId: "preamble-1",
+          kind: "preamble",
+          progressText: "Checking the current weather source before summarizing.",
+        });
+        return createNoQueuedDispatchResult();
+      });
+
+      const ctx = await createAutomaticSourceDeliveryContext({
+        discordConfig: {
+          streaming: {
+            mode: "progress",
+            progress: {
+              label: false,
+              toolProgress: false,
+              commentary: true,
+            },
+          },
+        },
+      });
+
+      await runProcessDiscordMessage(ctx);
+
+      const updates = draftStream.update.mock.calls.map((call) => call[0]).join("\n");
+      if (durableLaneActive) {
+        // The durable verbose lane owns commentary: the ephemeral draft must
+        // not render it a second time.
+        expect(updates).toBe("");
+      } else {
+        expect(updates).toContain("Checking the current weather source");
+      }
+    },
+  );
+
+  it.each([
+    ["active", true],
+    ["inactive", false],
+  ])(
+    "renders Discord tool lines in the draft exactly when durable verbose progress is %s",
+    async (_label, durableLaneActive) => {
+      const draftStream = createMockDraftStreamForTest();
+
+      dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+        params?.replyOptions?.onVerboseProgressVisibility?.(() => durableLaneActive);
+        await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await params?.replyOptions?.onItemEvent?.({ progressText: "exec running" });
+        await params?.replyOptions?.onCommandOutput?.({
+          phase: "end",
+          title: "Exec",
+          name: "exec",
+          exitCode: 0,
+        });
+        return createNoQueuedDispatchResult();
+      });
+
+      const ctx = await createAutomaticSourceDeliveryContext({
+        discordConfig: {
+          streaming: { mode: "progress", progress: { label: "Shelling" } },
+        },
+      });
+
+      await runProcessDiscordMessage(ctx);
+
+      const updates = draftStream.update.mock.calls.map((call) => call[0]).join("\n");
+      if (durableLaneActive) {
+        // The durable verbose lane persists tool summaries: the ephemeral
+        // draft must not render the same tool activity a second time.
+        expect(updates).toBe("");
+      } else {
+        expect(updates).toContain("Exec");
+      }
+    },
+  );
+
+  it("keeps Discord progress drafts usable after the last commentary line becomes silent", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "Temporary note.",
+      });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "NO_REPLY",
+      });
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: false,
+            commentary: true,
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.deleteCurrentMessage).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(draftStream.update).toHaveBeenLastCalledWith("🛠️ Exec");
+  });
+
+  it("does not update Discord commentary progress after final answer delivery starts", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "Checking source data.",
+      });
+      void params?.dispatcher.sendFinalReply({ text: "done" });
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "preamble-2",
+        kind: "preamble",
+        progressText: "Late commentary should not edit the draft.",
+      });
+      await params?.dispatcher.waitForIdle();
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: false,
+            commentary: true,
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    const updates = draftStream.update.mock.calls.map((call) => call[0]);
+    expect(updates).toEqual(["💬 Checking source data."]);
+    expectProgressSummaryEdit();
+    expectFreshFinalText("done");
+  });
+
   it("does not start Discord progress drafts for text-only accepted turns", async () => {
     const draftStream = createMockDraftStreamForTest();
 
@@ -2333,21 +3111,19 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🛠️ Exec\n• exec done");
-    expect(deliverDiscordReply).not.toHaveBeenCalled();
-    expectPreviewEditContent("done");
+    expectProgressSummaryEdit("🛠️ 1 tool call");
+    expectFreshFinalText("done");
   });
 
-  it("keeps finalized progress previews when later tool warning finals are delivered", async () => {
+  it("drops later tool warning finals after progress preview final replies", async () => {
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
       await params?.replyOptions?.onItemEvent?.({ progressText: "exec done" });
       await params?.dispatcher.sendFinalReply({ text: "delivery survived" });
-      await params?.dispatcher.sendFinalReply({
-        text: "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
-        isError: true,
-      } as never);
+      await params?.dispatcher.waitForIdle();
+      await params?.dispatcher.sendFinalReply(createNonTerminalToolWarningPayload());
       return { queuedFinal: true, counts: { final: 2, tool: 0, block: 0 } };
     });
 
@@ -2365,18 +3141,11 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenCalledWith("Shelling\n\n🛠️ Exec\n• exec done");
-    expectPreviewEditContent("delivery survived");
+    expectProgressSummaryEdit("🛠️ 1 tool call");
     expect(draftStream.clear).not.toHaveBeenCalled();
     expect(draftStream.messageId()).toBe("preview-1");
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
-    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
-      replies: [
-        {
-          text: "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
-          isError: true,
-        },
-      ],
-    });
+    expectFreshFinalText("delivery survived");
   });
 
   it("uses raw tool-progress detail in Discord progress drafts", async () => {
@@ -2531,22 +3300,23 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n• _Reading the event projector_",
+      "Clawing...\n\n🛠️ Exec\n🧠 _Reading the event projector_",
     );
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     expect(updates.join("\n")).not.toContain("Reasoning");
     expect(updates.join("\n")).not.toContain("Thinking\n");
   });
 
-  it("replaces reasoning snapshots instead of appending duplicates", async () => {
+  it("hides non-stream reasoning progress until Discord thinking progress is enabled", async () => {
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-      await params?.replyOptions?.onReasoningStream?.({ text: "Checking files" });
       await params?.replyOptions?.onReasoningStream?.({
-        text: "Checking files and tests",
+        text: "Private planning",
+        requiresReasoningProgressOptIn: true,
       });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "done" });
       return createNoQueuedDispatchResult();
     });
 
@@ -2563,12 +3333,370 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
+    expect(draftStream.update).toHaveBeenCalledWith("Clawing...\n\n🛠️ Exec\n• done");
+    expect(draftStream.update.mock.calls.map((call) => call[0]).join("\n")).not.toContain(
+      "Private planning",
+    );
+  });
+
+  it("accumulates reasoning deltas in Discord progress drafts", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      for (const text of ["Considering", " plugin", " installation", "!"]) {
+        await params?.replyOptions?.onReasoningStream?.({ text });
+      }
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Clawing...",
+            thinking: true,
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n\n🛠️ Exec\n• _Checking files and tests_",
+      "Clawing...\n\n🛠️ Exec\n🧠 _Considering plugin installation!_",
     );
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
-    expect(updates.join("\n")).not.toContain("_Checking files_Reasoning:");
-    expect(updates.join("\n")).not.toContain("_Checking files_Thinking");
+    expect(updates.join("\n")).not.toContain("• _!_");
+  });
+
+  it("preserves raw reasoning content that starts with Thinking", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onReasoningStream?.({ text: "Thinking" });
+      await params?.replyOptions?.onReasoningStream?.({ text: " through the install plan" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Clawing...",
+            thinking: true,
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Clawing...\n\n🛠️ Exec\n🧠 _Thinking through the install plan_",
+    );
+  });
+
+  it("preserves raw reasoning content that starts with Thinking colon", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onReasoningStream?.({ text: "Thinking: compare install paths" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Clawing...",
+            thinking: true,
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Clawing...\n\n🛠️ Exec\n🧠 _Thinking: compare install paths_",
+    );
+  });
+
+  it("preserves raw reasoning content that starts with Reasoning colon", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onReasoningStream?.({ text: "Reasoning: compare install paths" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Clawing...",
+            thinking: true,
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Clawing...\n\n🛠️ Exec\n🧠 _Reasoning: compare install paths_",
+    );
+  });
+
+  it("strips legacy Reasoning newline wrappers from progress snapshots", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onReasoningStream?.({
+        text: "Reasoning:\ncompare install paths",
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Clawing...",
+            thinking: true,
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Clawing...\n\n🛠️ Exec\n🧠 _compare install paths_",
+    );
+  });
+
+  it("strips legacy Thinking ellipsis display wrappers from progress snapshots", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onReasoningStream?.({
+        text: "Thinking...\n\n_compare install paths_",
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Clawing...",
+            thinking: true,
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Clawing...\n\n🛠️ Exec\n🧠 _compare install paths_",
+    );
+  });
+
+  it("preserves raw reasoning content that starts with a Thinking line", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onReasoningStream?.({ text: "Thinking\nthrough the plan" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Clawing...",
+            thinking: true,
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Clawing...\n\n🛠️ Exec\n🧠 _Thinking through the plan_",
+    );
+  });
+
+  it("appends raw reasoning chunks that start with Thinking", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onReasoningStream?.({ text: "I was " });
+      await params?.replyOptions?.onReasoningStream?.({ text: "Thinking about the plan" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Clawing...",
+            thinking: true,
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Clawing...\n\n🛠️ Exec\n🧠 _I was Thinking about the plan_",
+    );
+  });
+
+  it("appends raw reasoning chunks that start with Thinking ellipsis", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onReasoningStream?.({ text: "I was " });
+      await params?.replyOptions?.onReasoningStream?.({ text: "Thinking... through the plan" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Clawing...",
+            thinking: true,
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Clawing...\n\n🛠️ Exec\n🧠 _I was Thinking... through the plan_",
+    );
+  });
+
+  it("appends raw reasoning chunks that start with Reasoning colon", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onReasoningStream?.({ text: "I was " });
+      await params?.replyOptions?.onReasoningStream?.({ text: "Reasoning: through edge cases" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Clawing...",
+            thinking: true,
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Clawing...\n\n🛠️ Exec\n🧠 _I was Reasoning: through edge cases_",
+    );
+  });
+
+  it("keeps reasoning italics balanced when progress lines truncate", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onReasoningStream?.({
+        text: "Thinking through a very detailed installation plan with many steps",
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Clawing...",
+            maxLineChars: 36,
+            thinking: true,
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    const lastUpdate = draftStream.update.mock.calls.at(-1)?.[0];
+    const reasoningLine = lastUpdate?.split("\n").at(-1);
+
+    expect(reasoningLine).toMatch(/^🧠 _.*…_$/u);
+    expect(reasoningLine?.match(/_/gu)).toHaveLength(2);
+  });
+
+  it("replaces reasoning snapshots instead of appending duplicates", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onReasoningStream?.({
+        text: "Checking ",
+        isReasoningSnapshot: true,
+      });
+      await params?.replyOptions?.onReasoningStream?.({
+        text: "Reading \n\nChecking ",
+        isReasoningSnapshot: true,
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Clawing...",
+            thinking: true,
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update.mock.calls.at(-1)?.[0]).toContain("_Reading Checking_");
+    const updates = draftStream.update.mock.calls.map((call) => call[0]);
+    expect(updates.join("\n")).not.toContain("_Checking Reading");
   });
 
   it("keeps Discord progress lines across assistant boundaries", async () => {
@@ -2685,5 +3813,57 @@ describe("processDiscordMessage draft streaming", () => {
     await runInPartialStreamMode();
 
     expect(draftStream.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("processDiscordMessage deliver-lambda abort logging", () => {
+  it("emits logVerbose with formatDiscordReplySkip when deliver fires on a pre-aborted signal", async () => {
+    // Capture logVerbose calls via the ESM namespace binding. We rely on the
+    // same vi.spyOn pattern used in native-command.model-picker.test.ts so the
+    // production module keeps its real logVerbose import while the test still
+    // sees every invocation that the deliver lambda surfaces.
+    const verboseSpy = vi.spyOn(runtimeEnvModule, "logVerbose").mockImplementation(() => {});
+
+    const abortController = new AbortController();
+    // Drive the dispatcher so deliver actually runs: abort the signal inside
+    // the dispatch mock and then queue a single block reply via the captured
+    // dispatcher. The mocked createReplyDispatcherWithTyping (see line ~229)
+    // routes sendBlockReply straight into the deliver lambda, where the very
+    // first gate is `if (isProcessAborted(abortSignal)) return;` — the line
+    // the PR added the logVerbose call to.
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      abortController.abort();
+      await params?.dispatcher.sendBlockReply({ text: "post-abort block payload" });
+      return { queuedFinal: false, counts: { final: 0, tool: 0, block: 1 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      abortSignal: abortController.signal,
+      cfg: {
+        messages: {
+          ackReaction: "👀",
+        },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    // The base test harness routes through guild g1 / channel c1 (see
+    // createBaseDiscordMessageContext) so the deliver lambda receives the
+    // matching deliver target and session key from ctxPayload.SessionKey.
+    const dispatchedSessionKey = getLastDispatchCtx()?.SessionKey;
+    expect(dispatchedSessionKey).toBeTypeOf("string");
+    const expectedLog = formatDiscordReplySkip({
+      kind: "block",
+      reason: "aborted before delivery",
+      target: "channel:c1",
+      sessionKey: dispatchedSessionKey,
+    });
+    const verboseCalls = verboseSpy.mock.calls.map((call) => call[0]);
+    expect(verboseCalls).toContain(expectedLog);
+    // Restore so other tests sharing this worker (isolate=false) keep the
+    // real logVerbose binding.
+    verboseSpy.mockRestore();
   });
 });

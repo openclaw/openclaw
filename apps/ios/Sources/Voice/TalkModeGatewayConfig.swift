@@ -1,9 +1,196 @@
 import Foundation
 import OpenClawKit
 
-enum TalkModeExecutionMode {
+enum TalkModeExecutionMode: Equatable {
     case native
     case realtimeRelay
+}
+
+struct TalkRuntimeIssue: Equatable {
+    enum Code: String {
+        case realtimeUnavailable = "realtime_unavailable"
+    }
+
+    let code: Code
+    let message: String
+    let provider: String?
+    let model: String?
+    let transport: String?
+    let phase: String?
+    let occurredAt: Date
+
+    init(
+        code: Code,
+        message: String,
+        provider: String? = nil,
+        model: String? = nil,
+        transport: String? = nil,
+        phase: String? = nil,
+        occurredAt: Date = Date())
+    {
+        self.code = code
+        self.message = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.provider = provider?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.model = model?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.transport = transport?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.phase = phase?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.occurredAt = occurredAt
+    }
+
+    var displayMessage: String {
+        if !self.message.isEmpty { return self.message }
+        return "Realtime voice did not start."
+    }
+
+    var fallbackStatusText: String {
+        "Listening (iOS Speech fallback)"
+    }
+
+    var fallbackBannerTitle: String {
+        "Using iOS Speech fallback"
+    }
+
+    var fallbackBannerOwnerLabel: String {
+        "Fallback active"
+    }
+
+    var fallbackBannerMessage: String {
+        "Realtime voice did not start. Talk is running with iOS speech recognition and TTS."
+    }
+
+    var technicalDetails: String {
+        var lines = [
+            "code: \(code.rawValue)",
+            "message: \(self.displayMessage)",
+        ]
+        if let provider, !provider.isEmpty { lines.append("provider: \(provider)") }
+        if let model, !model.isEmpty { lines.append("model: \(model)") }
+        if let transport, !transport.isEmpty { lines.append("transport: \(transport)") }
+        if let phase, !phase.isEmpty { lines.append("phase: \(phase)") }
+        return lines.joined(separator: "\n")
+    }
+
+    var diagnosticSummary: String {
+        var parts = [displayMessage]
+        if let provider, !provider.isEmpty { parts.append("provider: \(provider)") }
+        if let model, !model.isEmpty { parts.append("model: \(model)") }
+        if let transport, !transport.isEmpty { parts.append("transport: \(transport)") }
+        if let phase, !phase.isEmpty { parts.append("phase: \(phase)") }
+        return parts.joined(separator: " • ")
+    }
+
+    static func realtimeUnavailable(
+        message: String,
+        provider: String? = nil,
+        model: String? = nil,
+        transport: String? = nil,
+        phase: String? = nil) -> TalkRuntimeIssue
+    {
+        TalkRuntimeIssue(
+            code: .realtimeUnavailable,
+            message: message,
+            provider: provider,
+            model: model,
+            transport: transport,
+            phase: phase)
+    }
+}
+
+struct TalkVoiceModeDescriptor: Equatable {
+    let title: String
+    let subtitle: String?
+    let providerId: String?
+    let modelId: String?
+    let voiceId: String?
+    let transport: String?
+    let isRealtime: Bool
+
+    var accessibilityValue: String {
+        if let subtitle, !subtitle.isEmpty {
+            return "\(self.title), \(subtitle)"
+        }
+        return self.title
+    }
+}
+
+enum TalkVoiceModeDescriptorBuilder {
+    static func build(
+        providerId: String,
+        providerLabel: String,
+        modelId: String?,
+        voiceId: String?,
+        transport: String?,
+        isRealtime: Bool) -> TalkVoiceModeDescriptor
+    {
+        let normalizedProvider = providerId.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let trimmedModel = Self.trimmed(modelId)
+        let trimmedVoice = Self.trimmed(voiceId)
+        let trimmedTransport = Self.trimmed(transport)
+        let title = if isRealtime, normalizedProvider == "openai", trimmedModel == "gpt-realtime-2" {
+            "GPT Realtime 2.0"
+        } else if isRealtime, normalizedProvider == "openai" {
+            "OpenAI Realtime"
+        } else if isRealtime {
+            providerLabel.isEmpty ? "Realtime Voice" : providerLabel
+        } else if normalizedProvider == "system" {
+            "iOS System Voice"
+        } else {
+            providerLabel.isEmpty ? "Talk Voice" : providerLabel
+        }
+
+        var details: [String] = []
+        if isRealtime, normalizedProvider != "openai", !providerLabel.isEmpty, providerLabel != title {
+            details.append(providerLabel)
+        }
+        if let trimmedTransport {
+            details.append(Self.transportLabel(trimmedTransport))
+        }
+        if let trimmedModel, title != "GPT Realtime 2.0" || trimmedModel != "gpt-realtime-2" {
+            details.append(trimmedModel)
+        }
+        if let trimmedVoice {
+            details.append(Self.voiceLabel(trimmedVoice))
+        }
+
+        return TalkVoiceModeDescriptor(
+            title: title,
+            subtitle: details.isEmpty ? nil : details.joined(separator: " • "),
+            providerId: normalizedProvider.isEmpty ? nil : normalizedProvider,
+            modelId: trimmedModel,
+            voiceId: trimmedVoice,
+            transport: trimmedTransport,
+            isRealtime: isRealtime)
+    }
+
+    private static func trimmed(_ value: String?) -> String? {
+        let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func voiceLabel(_ voice: String) -> String {
+        TalkModeRealtimeVoiceSelection.voices.contains(voice)
+            ? TalkModeRealtimeVoiceSelection.label(for: voice)
+            : voice
+    }
+
+    private static func transportLabel(_ transport: String) -> String {
+        switch transport.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "webrtc":
+            "Native WebRTC"
+        case "gateway-relay":
+            "Gateway Relay"
+        case "provider-websocket":
+            "Provider WebSocket"
+        case "managed-room":
+            "Managed Room"
+        case "native":
+            "Native"
+        case let value where !value.isEmpty:
+            value
+        default:
+            "Native"
+        }
+    }
 }
 
 enum TalkModeProviderSelection: String, CaseIterable, Identifiable {
@@ -14,7 +201,7 @@ enum TalkModeProviderSelection: String, CaseIterable, Identifiable {
     static let storageKey = "talk.providerSelection"
 
     var id: String {
-        self.rawValue
+        rawValue
     }
 
     var label: String {
@@ -31,6 +218,79 @@ enum TalkModeProviderSelection: String, CaseIterable, Identifiable {
     static func resolved(_ raw: String?) -> TalkModeProviderSelection {
         let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return TalkModeProviderSelection(rawValue: trimmed) ?? .gatewayDefault
+    }
+}
+
+enum TalkModeRuntimeRoute: Equatable {
+    case localElevenLabs
+    case gatewayTalkSpeak
+    case realtimeRelay
+
+    var usesRealtime: Bool {
+        self == .realtimeRelay
+    }
+
+    var usesGatewayTalkSpeak: Bool {
+        self == .gatewayTalkSpeak
+    }
+
+    var gatewayOwnsCredentials: Bool {
+        self != .localElevenLabs
+    }
+}
+
+struct TalkModeResolvedRouting: Equatable {
+    let activeProvider: String
+    let executionMode: TalkModeExecutionMode
+    let realtimeProvider: String?
+    let realtimeModelId: String?
+    let route: TalkModeRuntimeRoute
+}
+
+enum TalkModeRoutingResolver {
+    static func resolve(
+        parsed: TalkModeGatewayConfigState,
+        providerSelection: TalkModeProviderSelection,
+        defaultProvider: String,
+        defaultRealtimeModelId: String) -> TalkModeResolvedRouting
+    {
+        var activeProvider = parsed.activeProvider
+        var realtimeProvider = parsed.realtimeProvider
+        var realtimeModelId = parsed.realtimeModelId
+        let route: TalkModeRuntimeRoute
+
+        switch providerSelection {
+        case .gatewayDefault:
+            // Only an explicit realtime config selects the realtime transport. Other Gateway
+            // speech providers stay native and synthesize through talk.speak.
+            if parsed.executionMode == .realtimeRelay {
+                route = .realtimeRelay
+            } else if Self.normalized(activeProvider) == Self.normalized(defaultProvider) {
+                // Preserve the shipped local ElevenLabs path, including its streaming playback.
+                route = .localElevenLabs
+            } else {
+                route = .gatewayTalkSpeak
+            }
+        case .nativeElevenLabs:
+            activeProvider = defaultProvider
+            route = .localElevenLabs
+        case .openAIRealtime:
+            activeProvider = "openai"
+            realtimeProvider = realtimeProvider ?? "openai"
+            realtimeModelId = realtimeModelId ?? defaultRealtimeModelId
+            route = .realtimeRelay
+        }
+
+        return TalkModeResolvedRouting(
+            activeProvider: activeProvider,
+            executionMode: route.usesRealtime ? .realtimeRelay : .native,
+            realtimeProvider: realtimeProvider,
+            realtimeModelId: realtimeModelId,
+            route: route)
+    }
+
+    private static func normalized(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 }
 
@@ -67,6 +327,7 @@ struct TalkModeGatewayConfigState {
     let executionMode: TalkModeExecutionMode
     let defaultVoiceId: String?
     let voiceAliases: [String: String]
+    let configuredModelId: String?
     let defaultModelId: String
     let defaultOutputFormat: String?
     let realtimeProvider: String?
@@ -112,8 +373,9 @@ enum TalkModeGatewayConfigParser {
         let defaultVoiceId = Self.firstString(activeConfig, keys: ["voiceId", "voice"])
         let defaultOutputFormat = Self.firstString(activeConfig, keys: ["outputFormat"])
         let realtime = talk?["realtime"]?.dictionaryValue
-        let realtimeProvider = Self.firstString(realtime, keys: ["provider"])
         let realtimeProviders = realtime?["providers"]?.dictionaryValue
+        let realtimeProvider = Self.firstString(realtime, keys: ["provider"])
+            ?? Self.singleRealtimeProviderId(realtimeProviders)
         let realtimeProviderConfig = Self.realtimeProviderConfig(
             providers: realtimeProviders,
             provider: realtimeProvider)
@@ -137,6 +399,7 @@ enum TalkModeGatewayConfigParser {
             executionMode: executionMode,
             defaultVoiceId: defaultVoiceId,
             voiceAliases: voiceAliases,
+            configuredModelId: model,
             defaultModelId: defaultModelId,
             defaultOutputFormat: defaultOutputFormat,
             realtimeProvider: realtimeProvider,
@@ -164,10 +427,22 @@ enum TalkModeGatewayConfigParser {
         let mode = Self.firstString(realtime, keys: ["mode"])?.lowercased()
         let transport = Self.firstString(realtime, keys: ["transport"])?.lowercased()
         let brain = Self.firstString(realtime, keys: ["brain"])?.lowercased()
-        if mode == "realtime", transport == "gateway-relay", brain == nil || brain == "agent-consult" {
-            return .realtimeRelay
+        guard mode == "realtime" else {
+            return .native
         }
-        return .native
+        if transport == "managed-room" {
+            return .native
+        }
+        if brain != nil, brain != "agent-consult" {
+            return .native
+        }
+        return .realtimeRelay
+    }
+
+    private static func singleRealtimeProviderId(_ providers: [String: AnyCodable]?) -> String? {
+        guard let providers, providers.count == 1 else { return nil }
+        let provider = providers.keys.first?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return provider?.isEmpty == false ? provider : nil
     }
 
     private static func realtimeProviderConfig(

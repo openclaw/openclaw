@@ -1,66 +1,27 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
+// Vllm plugin module implements stream behavior.
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createPayloadPatchStreamWrapper,
   isOpenAICompatibleThinkingEnabled,
+  setQwenChatTemplateThinking,
 } from "openclaw/plugin-sdk/provider-stream-shared";
+import {
+  resolveVllmQwenThinkingFormatFromCompat,
+  type VllmQwenThinkingFormat,
+} from "./thinking-policy.js";
 
 type VllmThinkingLevel = ProviderWrapStreamFnContext["thinkingLevel"];
-type VllmQwenThinkingFormat = "chat-template" | "top-level";
 
 function isVllmProviderId(providerId: string): boolean {
   return normalizeProviderId(providerId) === "vllm";
 }
 
-function normalizeQwenThinkingFormat(value: unknown): VllmQwenThinkingFormat | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim().toLowerCase().replace(/_/g, "-");
-  if (
-    normalized === "chat-template" ||
-    normalized === "chat-template-kwargs" ||
-    normalized === "chat-template-kwarg" ||
-    normalized === "chat-template-arguments"
-  ) {
-    return "chat-template";
-  }
-  if (
-    normalized === "top-level" ||
-    normalized === "enable-thinking" ||
-    normalized === "request-body"
-  ) {
-    return "top-level";
-  }
-  return undefined;
-}
-
 function resolveVllmQwenThinkingFormat(
-  extraParams: ProviderWrapStreamFnContext["extraParams"],
+  ctx: Pick<ProviderWrapStreamFnContext, "model">,
 ): VllmQwenThinkingFormat | undefined {
-  return normalizeQwenThinkingFormat(
-    extraParams?.qwenThinkingFormat ?? extraParams?.qwen_thinking_format,
-  );
-}
-
-function setQwenChatTemplateThinking(payload: Record<string, unknown>, enabled: boolean): void {
-  const existing = payload.chat_template_kwargs;
-  if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-    const next: Record<string, unknown> = {
-      ...(existing as Record<string, unknown>),
-      enable_thinking: enabled,
-    };
-    if (!Object.hasOwn(next, "preserve_thinking")) {
-      next.preserve_thinking = true;
-    }
-    payload.chat_template_kwargs = next;
-    return;
-  }
-  payload.chat_template_kwargs = {
-    enable_thinking: enabled,
-    preserve_thinking: true,
-  };
+  return resolveVllmQwenThinkingFormatFromCompat(ctx.model?.compat);
 }
 
 function isVllmNemotronModel(model: { api?: unknown; provider?: unknown; id?: unknown }): boolean {
@@ -110,7 +71,7 @@ export function createVllmQwenThinkingWrapper(params: {
       delete payloadObj.reasoning;
     },
     {
-      shouldPatch: ({ model }) => model.api === "openai-completions" && model.reasoning,
+      shouldPatch: ({ model }) => model.api === "openai-completions" && (model.reasoning ?? true),
     },
   );
 }
@@ -145,7 +106,7 @@ export function wrapVllmProviderStream(ctx: ProviderWrapStreamFnContext): Stream
   if (!isVllmProviderId(ctx.provider) || (ctx.model && ctx.model.api !== "openai-completions")) {
     return undefined;
   }
-  const qwenFormat = resolveVllmQwenThinkingFormat(ctx.extraParams);
+  const qwenFormat = resolveVllmQwenThinkingFormat(ctx);
   const shouldHandleNemotron =
     ctx.thinkingLevel === "off" &&
     isVllmNemotronModel({

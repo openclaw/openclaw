@@ -1,3 +1,4 @@
+// Discord plugin module implements message media behavior.
 import { StickerFormatType, type APIAttachment, type APIStickerItem } from "discord-api-types/v10";
 import { getFileExtension } from "openclaw/plugin-sdk/media-mime";
 import { saveRemoteMedia, type FetchLike } from "openclaw/plugin-sdk/media-runtime";
@@ -7,6 +8,7 @@ import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
+  uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Message } from "../internal/discord.js";
 import {
@@ -81,7 +83,7 @@ function mergeHostnameList(...lists: Array<string[] | undefined>): string[] | un
   if (merged.length === 0) {
     return undefined;
   }
-  return Array.from(new Set(merged));
+  return uniqueStrings(merged);
 }
 
 function resolveDiscordMediaSsrFPolicy(policy?: SsrFPolicy): SsrFPolicy {
@@ -266,7 +268,7 @@ async function fetchDiscordMedia(params: {
     fallbackContentType: params.fallbackContentType,
     originalFilename: params.originalFilename,
     ...(signal ? { requestInit: { signal } } : {}),
-  }).catch((error) => {
+  }).catch((error: unknown) => {
     if (timedOut) {
       return new Promise<never>(() => {});
     }
@@ -364,8 +366,6 @@ function resolveStickerAssetCandidates(sticker: APIStickerItem): DiscordStickerA
           fileName: `${baseName}.json`,
         },
       ];
-    case StickerFormatType.APNG:
-    case StickerFormatType.PNG:
     default:
       return [
         { url: `${DISCORD_STICKER_ASSET_BASE_URL}/${sticker.id}.png`, fileName: `${baseName}.png` },

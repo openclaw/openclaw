@@ -133,6 +133,9 @@ facts into `MEMORY.md`), and **REM** (reflect and surface themes).
 
 - Enable with `plugins.entries.memory-core.config.dreaming.enabled: true`.
 - Toggle from chat with `/dreaming on|off` (or inspect with `/dreaming status`).
+  Channel callers must be owners to change the setting; Gateway clients need
+  `operator.admin`. Read-only status and help remain available to authorized
+  command senders.
 - Dreaming runs on one managed sweep schedule (`dreaming.frequency`) and executes phases in order: light, REM, deep.
 - Only the deep phase writes durable memory to `MEMORY.md`.
 - Human-readable phase output and diary entries are written to `DREAMS.md` (or existing `dreams.md`), with optional per-phase reports in `memory/dreaming/<phase>/YYYY-MM-DD.md`.
@@ -170,7 +173,7 @@ Notes:
 - `memory status` includes any extra paths configured via `memorySearch.extraPaths`.
 - If effectively active memory remote API key fields are configured as SecretRefs, the command resolves those values from the active gateway snapshot. If gateway is unavailable, the command fails fast.
 - Gateway version skew note: this command path requires a gateway that supports `secrets.resolve`; older gateways return an unknown-method error.
-- Tune scheduled sweep cadence with `dreaming.frequency`. Deep promotion policy is otherwise internal; use CLI flags on `memory promote` when you need one-off manual overrides.
+- Tune scheduled sweep cadence with `dreaming.frequency`. Deep promotion policy is otherwise internal except for `dreaming.phases.deep.maxPromotedSnippetTokens`, which bounds promoted snippet length while keeping provenance visible. Use CLI flags on `memory promote` when you need one-off manual threshold overrides.
 - `memory rem-harness --path <file-or-dir> --grounded` previews grounded `What Happened`, `Reflections`, and `Possible Lasting Updates` from historical daily notes without writing anything.
 - `memory rem-backfill --path <file-or-dir>` writes reversible grounded diary entries into `DREAMS.md` for UI review.
 - `memory rem-backfill --path <file-or-dir> --stage-short-term` also seeds grounded durable candidates into the live short-term promotion store so the normal deep phase can rank them.

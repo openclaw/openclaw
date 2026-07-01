@@ -1,7 +1,8 @@
+// Qa Lab tests cover qa agent workspace plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { seedQaAgentWorkspace } from "./qa-agent-workspace.js";
+import { __testing, seedQaAgentWorkspace } from "./qa-agent-workspace.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const { cleanup, makeTempDir } = createTempDirHarness();
@@ -9,6 +10,12 @@ const { cleanup, makeTempDir } = createTempDirHarness();
 afterEach(cleanup);
 
 describe("seedQaAgentWorkspace", () => {
+  it("uses Windows junctions for the repo link", () => {
+    expect(__testing.resolveQaAgentWorkspaceRepoLinkType("win32")).toBe("junction");
+    expect(__testing.resolveQaAgentWorkspaceRepoLinkType("linux")).toBe("dir");
+    expect(__testing.resolveQaAgentWorkspaceRepoLinkType("darwin")).toBe("dir");
+  });
+
   it("creates a repo symlink when a repo root is provided", async () => {
     const workspaceDir = await makeTempDir("qa-workspace-");
     const repoRoot = await makeTempDir("qa-repo-");

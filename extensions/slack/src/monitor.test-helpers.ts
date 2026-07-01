@@ -1,5 +1,7 @@
+// Slack helper module supports monitor helpers behavior.
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
-import { Mock, vi } from "vitest";
+import { vi } from "vitest";
+import type { Mock } from "vitest";
 import { clearSlackInboundDeliveryStateForTest } from "./monitor/inbound-delivery-state.js";
 
 type SlackHandler = (args: unknown) => Promise<void>;
@@ -14,6 +16,8 @@ type SlackProviderMonitor = (params: {
 
 type SlackTestState = {
   config: Record<string, unknown>;
+  appStartMock: Mock<(...args: unknown[]) => Promise<unknown>>;
+  appStopMock: Mock<(...args: unknown[]) => Promise<unknown>>;
   sendMock: Mock<(...args: unknown[]) => Promise<unknown>>;
   replyMock: Mock<(...args: unknown[]) => unknown>;
   updateLastRouteMock: Mock<(...args: unknown[]) => unknown>;
@@ -29,6 +33,8 @@ type SlackTestState = {
 
 const slackTestState: SlackTestState = vi.hoisted(() => ({
   config: {} as Record<string, unknown>,
+  appStartMock: vi.fn(),
+  appStopMock: vi.fn(),
   sendMock: vi.fn(),
   replyMock: vi.fn(),
   updateLastRouteMock: vi.fn(),
@@ -116,7 +122,10 @@ function ensureSlackTestRuntime(): {
   };
 }
 
-export const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+export const flush = () =>
+  new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
 
 async function waitForSlackEvent(name: string) {
   for (let i = 0; i < 10; i += 1) {
@@ -197,6 +206,8 @@ export const defaultSlackTestConfig = () => ({
 export function resetSlackTestState(config: Record<string, unknown> = defaultSlackTestConfig()) {
   clearSlackInboundDeliveryStateForTest();
   slackTestState.config = config;
+  slackTestState.appStartMock.mockReset().mockResolvedValue(undefined);
+  slackTestState.appStopMock.mockReset().mockResolvedValue(undefined);
   slackTestState.sendMock.mockReset().mockResolvedValue(undefined);
   slackTestState.replyMock.mockReset();
   slackTestState.updateLastRouteMock.mockReset();
@@ -246,6 +257,9 @@ vi.mock("./monitor/reply.runtime.js", async () => {
     "./monitor/reply.runtime.js",
   );
   type DispatchParams = Parameters<typeof actual.dispatchInboundMessage>[0];
+  type BufferedDispatchParams = Parameters<
+    typeof actual.dispatchReplyWithBufferedBlockDispatcher
+  >[0];
   type ReplyResolver = NonNullable<DispatchParams["replyResolver"]>;
   const replyResolver: ReplyResolver = (...args) =>
     slackTestState.replyMock(...args) as ReturnType<ReplyResolver>;
@@ -253,6 +267,11 @@ vi.mock("./monitor/reply.runtime.js", async () => {
     ...actual,
     dispatchInboundMessage: (params: Parameters<typeof actual.dispatchInboundMessage>[0]) =>
       actual.dispatchInboundMessage({
+        ...params,
+        replyResolver,
+      }),
+    dispatchReplyWithBufferedBlockDispatcher: (params: BufferedDispatchParams) =>
+      actual.dispatchReplyWithBufferedBlockDispatcher({
         ...params,
         replyResolver,
       }),
@@ -325,8 +344,8 @@ vi.mock("@slack/bolt", () => {
     command() {
       /* no-op */
     }
-    start = vi.fn().mockResolvedValue(undefined);
-    stop = vi.fn().mockResolvedValue(undefined);
+    start = (...args: unknown[]) => slackTestState.appStartMock(...args);
+    stop = (...args: unknown[]) => slackTestState.appStopMock(...args);
   }
   class HTTPReceiver {
     requestListener = vi.fn();

@@ -232,6 +232,20 @@ Notes:
 - Tool-progress preview updates are enabled by default when Matrix preview streaming is active. Set `streaming.preview.toolProgress: false` to keep preview edits for answer text but leave tool progress on the normal delivery path.
 - Preview edits cost extra Matrix API calls. Leave `streaming: "off"` if you want the most conservative rate-limit profile.
 
+## Voice messages
+
+Inbound Matrix voice notes are transcribed before the room mention gate. This lets a voice note that says the bot name trigger the agent in a `requireMention: true` room, and it gives the agent the transcript instead of only an audio attachment placeholder.
+
+Matrix uses the shared audio media provider configured under `tools.media.audio`, such as OpenAI `gpt-4o-mini-transcribe`. See [Media tools overview](/tools/media-overview) for provider setup and limits.
+
+Behavior details:
+
+- `m.audio` events and `m.file` events with an `audio/*` MIME type are eligible.
+- In encrypted rooms, OpenClaw decrypts the attachment through the existing Matrix media path before transcription.
+- The transcript is marked as machine-generated and untrusted in the agent prompt.
+- The attachment is marked as already transcribed so downstream media tools do not transcribe the same voice note again.
+- Set `tools.media.audio.enabled: false` to disable audio transcription globally.
+
 ## Approval metadata
 
 Matrix native approval prompts are normal `m.room.message` events with OpenClaw-specific custom event content under `com.openclaw.approval`. Matrix permits custom event-content keys, so stock clients still render the text body while OpenClaw-aware clients can read the structured approval id, kind, state, available decisions, and exec/plugin details.
@@ -375,7 +389,7 @@ If the homeserver requires UIA to upload cross-signing keys, OpenClaw tries no-a
 Useful flags:
 
 - `--recovery-key-stdin` (pair with `printf '%s\n' "$MATRIX_RECOVERY_KEY" | …`) or `--recovery-key <key>`
-- `--force-reset-cross-signing` to discard the current cross-signing identity (intentional only)
+- `--force-reset-cross-signing` to discard the current cross-signing identity (intentional only; requires the active recovery key to be stored or supplied with `--recovery-key-stdin`)
 
 ### Room-key backup
 
@@ -484,6 +498,8 @@ openclaw matrix devices prune-stale
     Matrix E2EE uses the official `matrix-js-sdk` Rust crypto path with `fake-indexeddb` as the IndexedDB shim. Crypto state persists to `crypto-idb-snapshot.json` (restrictive file permissions).
 
     Encrypted runtime state lives under `~/.openclaw/matrix/accounts/<account>/<homeserver>__<user>/<token-hash>/` and includes the sync store, crypto store, recovery key, IDB snapshot, thread bindings, and startup verification state. When the token changes but the account identity stays the same, OpenClaw reuses the best existing root so prior state remains visible.
+
+    A single older token-hash root can be a normal token-rotation continuity path. If OpenClaw logs `matrix: multiple populated token-hash storage roots detected`, inspect the account directory and archive stale sibling roots only after confirming the selected active root is healthy. Prefer moving stale roots into an `_archive/` directory over deleting them immediately.
 
   </Accordion>
 </AccordionGroup>

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installs OpenClaw from a prepared package tarball, installs @openclaw/codex
 # from a registry/git/tarball spec, and verifies a live Codex app-server turn.
-set -euo pipefail
+set -Eeuo pipefail
 
 SCRIPT_ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 TRUSTED_HARNESS_DIR="${OPENCLAW_LIVE_DOCKER_TRUSTED_HARNESS_DIR:-$SCRIPT_ROOT_DIR}"
@@ -20,6 +20,38 @@ PROFILE_FILE="${OPENCLAW_CODEX_NPM_PLUGIN_PROFILE_FILE:-${OPENCLAW_TESTBOX_PROFI
 CODEX_PLUGIN_SPEC="${OPENCLAW_CODEX_NPM_PLUGIN_SPEC:-}"
 CODEX_PLUGIN_MOUNT=()
 CODEX_PLUGIN_PACK_DIR=""
+ASSERT_MAX_TEXT_FILE_BYTES="$(
+  docker_e2e_read_positive_int_env OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TEXT_FILE_BYTES 1048576
+)"
+ASSERT_MAX_ERROR_TAIL_BYTES="$(
+  docker_e2e_read_positive_int_env OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_ERROR_TAIL_BYTES 65536
+)"
+ASSERT_MAX_TRANSCRIPT_FILES="$(
+  docker_e2e_read_positive_int_env OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_FILES 64
+)"
+ASSERT_MAX_TRANSCRIPT_WALK_ENTRIES="$(
+  docker_e2e_read_positive_int_env OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_WALK_ENTRIES 4096
+)"
+ASSERT_MAX_TRANSCRIPT_SCAN_BYTES="$(
+  docker_e2e_read_positive_int_env OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_SCAN_BYTES 2097152
+)"
+AGENT_TURN_TIMEOUT_SECONDS="$(
+  docker_e2e_read_positive_int_env OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS 420
+)"
+run_log=""
+
+cleanup() {
+  if [ -n "${CODEX_PLUGIN_PACK_DIR:-}" ]; then
+    rm -rf "$CODEX_PLUGIN_PACK_DIR"
+  fi
+  if [ -n "${PACKAGE_TGZ:-}" ]; then
+    docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
+  fi
+  if [ -n "${run_log:-}" ]; then
+    rm -f "$run_log"
+  fi
+}
+trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" codex-npm-plugin-live "$CANDIDATE_ROOT/scripts/e2e/Dockerfile" "$CANDIDATE_ROOT" "$DOCKER_TARGET"
 
@@ -59,7 +91,7 @@ prepare_codex_plugin_spec() {
     done < <(find "$CODEX_PLUGIN_PACK_DIR" -maxdepth 1 -type f -name '*.tgz' | sort)
     if [ "${#pack_output[@]}" -ne 1 ]; then
       echo "Expected one packed Codex plugin tarball; found ${#pack_output[@]}." >&2
-      cat /tmp/openclaw-codex-plugin-pack.log >&2 || true
+      docker_e2e_print_log /tmp/openclaw-codex-plugin-pack.log >&2
       exit 1
     fi
     source_path="${pack_output[0]}"
@@ -96,6 +128,10 @@ if [ -f "$PROFILE_FILE" ] && [ -r "$PROFILE_FILE" ]; then
   PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/appuser/.profile:ro)
   PROFILE_STATUS="$PROFILE_FILE"
 fi
+AGENT_TURN_TIMEOUT_SECONDS="$(
+  docker_e2e_read_positive_int_env OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS "$AGENT_TURN_TIMEOUT_SECONDS"
+)"
+COMMAND_TIMEOUT="${OPENCLAW_E2E_COMMAND_TIMEOUT:-$((10#$AGENT_TURN_TIMEOUT_SECONDS + 60))s}"
 
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
 run_log="$(docker_e2e_run_log codex-npm-plugin-live)"
@@ -110,6 +146,13 @@ if ! docker_e2e_run_with_harness \
   -e OPENCLAW_CODEX_NPM_PLUGIN_FORCE_UNSAFE_INSTALL="${OPENCLAW_CODEX_NPM_PLUGIN_FORCE_UNSAFE_INSTALL:-1}" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_MODEL="${OPENCLAW_CODEX_NPM_PLUGIN_MODEL:-codex/gpt-5.4}" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_SPEC="$CODEX_PLUGIN_SPEC" \
+  -e "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TEXT_FILE_BYTES=$ASSERT_MAX_TEXT_FILE_BYTES" \
+  -e "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_ERROR_TAIL_BYTES=$ASSERT_MAX_ERROR_TAIL_BYTES" \
+  -e "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_FILES=$ASSERT_MAX_TRANSCRIPT_FILES" \
+  -e "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_WALK_ENTRIES=$ASSERT_MAX_TRANSCRIPT_WALK_ENTRIES" \
+  -e "OPENCLAW_CODEX_NPM_PLUGIN_ASSERT_MAX_TRANSCRIPT_SCAN_BYTES=$ASSERT_MAX_TRANSCRIPT_SCAN_BYTES" \
+  -e "OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS=$AGENT_TURN_TIMEOUT_SECONDS" \
+  -e "OPENCLAW_E2E_COMMAND_TIMEOUT=$COMMAND_TIMEOUT" \
   -e OPENAI_API_KEY \
   -e OPENAI_BASE_URL \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
@@ -117,7 +160,7 @@ if ! docker_e2e_run_with_harness \
   "${CODEX_PLUGIN_MOUNT[@]}" \
   "${PROFILE_MOUNT[@]}" \
   -i "$IMAGE_NAME" bash -s >"$run_log" 2>&1 <<'EOF'; then
-set -euo pipefail
+set -Eeuo pipefail
 
 source scripts/lib/openclaw-e2e-instance.sh
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
@@ -133,7 +176,7 @@ for profile_path in "$HOME/.profile" /home/appuser/.profile; do
   if [ -f "$profile_path" ] && [ -r "$profile_path" ]; then
     set +e +u
     source "$profile_path"
-    set -euo pipefail
+    set -Eeuo pipefail
     break
   fi
 done
@@ -148,8 +191,10 @@ fi
 
 CODEX_PLUGIN_SPEC="${OPENCLAW_CODEX_NPM_PLUGIN_SPEC:?missing OPENCLAW_CODEX_NPM_PLUGIN_SPEC}"
 MODEL_REF="${OPENCLAW_CODEX_NPM_PLUGIN_MODEL:?missing OPENCLAW_CODEX_NPM_PLUGIN_MODEL}"
+POST_UNINSTALL_MODEL_REF="codex/${MODEL_REF#*/}"
 SESSION_ID="codex-npm-plugin-live"
 SUCCESS_MARKER="OPENCLAW-CODEX-NPM-PLUGIN-LIVE-OK"
+AGENT_TURN_TIMEOUT_SECONDS="${OPENCLAW_CODEX_NPM_PLUGIN_AGENT_TIMEOUT_SECONDS:-420}"
 PLUGIN_INSTALL_FLAGS=(--force)
 if [ "${OPENCLAW_CODEX_NPM_PLUGIN_FORCE_UNSAFE_INSTALL:-0}" = "1" ]; then
   PLUGIN_INSTALL_FLAGS+=(--dangerously-force-unsafe-install)
@@ -183,6 +228,7 @@ chmod 700 "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE" || true
 
 openclaw_e2e_install_package /tmp/openclaw-install.log
 command -v openclaw >/dev/null
+openclaw_e2e_enable_openclaw_cli_timeout
 
 echo "Installing Codex plugin: $CODEX_PLUGIN_SPEC"
 openclaw plugins install "$CODEX_PLUGIN_SPEC" "${PLUGIN_INSTALL_FLAGS[@]}" >/tmp/openclaw-codex-plugin-install.log 2>&1
@@ -226,17 +272,30 @@ run_agent_turn() {
   local message="$3"
   local out="$4"
   local err="$5"
+  local status
 
   echo "${label}_prompt: $message"
-  openclaw agent --local \
+  if openclaw agent --local \
     --agent main \
     --session-id "$SESSION_ID" \
     --model "$MODEL_REF" \
     --message "$message" \
     --thinking low \
-    --timeout 420 \
-    --json >"$out" 2>"$err" </dev/null
-  print_agent_reply "$out" "$marker" "${label}_reply"
+    --timeout "$AGENT_TURN_TIMEOUT_SECONDS" \
+    --json >"$out" 2>"$err" </dev/null; then
+    status=0
+  else
+    status=$?
+  fi
+  echo "${label}_agent_status: $status stdout_bytes=$(wc -c <"$out" 2>/dev/null || printf 0) stderr_bytes=$(wc -c <"$err" 2>/dev/null || printf 0)"
+  if [ "$status" -ne 0 ]; then
+    dump_debug_logs "$status"
+    exit "$status"
+  fi
+  if ! print_agent_reply "$out" "$marker" "${label}_reply"; then
+    dump_debug_logs 1
+    exit 1
+  fi
 }
 
 echo "TRANSCRIPT_BEGIN"
@@ -281,7 +340,7 @@ node scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs assert-uninstalled
 if openclaw agent --local \
   --agent main \
   --session-id "${SESSION_ID}-after-uninstall" \
-  --model "$MODEL_REF" \
+  --model "$POST_UNINSTALL_MODEL_REF" \
   --message "Reply exactly: ${SUCCESS_MARKER}-AFTER-UNINSTALL" \
   --thinking low \
   --timeout 120 \
@@ -292,17 +351,15 @@ fi
 if ! grep -Fq 'Requested agent harness "codex" is not registered' /tmp/openclaw-codex-agent-after-uninstall.err &&
   ! grep -Fq 'Unknown model: codex/' /tmp/openclaw-codex-agent-after-uninstall.err; then
   echo "Unexpected post-uninstall agent error:" >&2
-  cat /tmp/openclaw-codex-agent-after-uninstall.err >&2 || true
+  tail -n 120 /tmp/openclaw-codex-agent-after-uninstall.err >&2 || true
   exit 1
 fi
 
 echo "Codex npm plugin live Docker E2E passed"
 EOF
   docker_e2e_print_log "$run_log"
-  rm -f "$run_log"
   exit 1
 fi
 
 awk '/TRANSCRIPT_BEGIN/{printing=1} printing{print} /TRANSCRIPT_END/{printing=0}' "$run_log"
-rm -f "$run_log"
 echo "Codex npm plugin live Docker E2E passed"

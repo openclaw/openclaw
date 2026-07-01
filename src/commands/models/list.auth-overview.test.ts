@@ -1,3 +1,4 @@
+// Model auth overview tests cover provider auth overview rows for model listings.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
@@ -58,7 +59,7 @@ vi.mock("../../agents/model-auth.js", () => {
         provider: string;
       }) => {
         const apiKey = resolveConfigKey(params.cfg, params.provider);
-        if (!apiKey || apiKey === "secretref-managed") {
+        if (!apiKey || apiKey === "secretref-managed" || apiKey.startsWith("oauth:")) {
           return null;
         }
         if (apiKey === "OPENAI_API_KEY") {
@@ -121,18 +122,18 @@ describe("resolveProviderAuthOverview", () => {
   it("reports the selected agent auth store when profiles are effective", () => {
     persistedStores.set("/tmp/openclaw-agent-custom", {
       profiles: {
-        "openai-codex:peter@example.test": {},
+        "openai:peter@example.test": {},
       },
     });
     const overview = resolveProviderAuthOverview({
-      provider: "openai-codex",
+      provider: "openai",
       cfg: {},
       store: {
         version: 1,
         profiles: {
-          "openai-codex:peter@example.test": {
+          "openai:peter@example.test": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: Date.now() + 60_000,
@@ -152,18 +153,18 @@ describe("resolveProviderAuthOverview", () => {
   it("reports the main auth store for inherited profiles", () => {
     persistedStores.set("__main__", {
       profiles: {
-        "openai-codex:peter@example.test": {},
+        "openai:peter@example.test": {},
       },
     });
     const overview = resolveProviderAuthOverview({
-      provider: "openai-codex",
+      provider: "openai",
       cfg: {},
       store: {
         version: 1,
         profiles: {
-          "openai-codex:peter@example.test": {
+          "openai:peter@example.test": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "access-token",
             refresh: "refresh-token",
             expires: Date.now() + 60_000,
@@ -188,6 +189,18 @@ describe("resolveProviderAuthOverview", () => {
     expect(overview.effective.kind).toBe("missing");
     expect(overview.effective.detail).toBe("missing");
     expect(overview.modelsJson?.value).toContain(`marker(${NON_ENV_SECRETREF_MARKER})`);
+  });
+
+  it("treats OAuth delegation markers as effective models.json auth", () => {
+    const overview = withEnv({ OPENAI_API_KEY: undefined }, () =>
+      resolveOpenAiOverview("oauth:openai"),
+    );
+
+    expect(overview.effective).toEqual({
+      kind: "models.json",
+      detail: "marker(oauth:openai)",
+    });
+    expect(overview.modelsJson?.value).toBe("marker(oauth:openai)");
   });
 
   it("keeps env-var-shaped models.json values masked to avoid accidental plaintext exposure", () => {

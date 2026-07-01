@@ -1,3 +1,4 @@
+// Telegram tests cover bot message context.require mention plugin behavior.
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -107,8 +108,12 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
 
   it("keeps room events as context for the next direct group request", async () => {
     const groupHistories = new Map();
+    const cfg = {
+      channels: { telegram: { includeGroupHistoryContext: "recent" } },
+      messages: { groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] } },
+    };
     await buildTelegramMessageContextForTest({
-      cfg: { messages: { groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] } } },
+      cfg,
       message: { ...buildForumMessage(99), text: "side chatter" },
       historyLimit: 10,
       groupHistories,
@@ -121,6 +126,7 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
     });
 
     const ctx = await buildTelegramMessageContextForTest({
+      cfg,
       message: {
         ...buildForumMessage(99),
         message_id: 2,
@@ -144,6 +150,52 @@ describe("buildTelegramMessageContext requireMention precedence", () => {
 
     expect(ctx?.ctxPayload.InboundEventKind).toBe("user_request");
     expect(ctx?.ctxPayload.Body).toContain("side chatter");
+  });
+
+  it("omits pending group room events from default body context", async () => {
+    const groupHistories = new Map();
+    const cfg = {
+      messages: { groupChat: { unmentionedInbound: "room_event", mentionPatterns: [] } },
+    };
+    await buildTelegramMessageContextForTest({
+      cfg,
+      message: { ...buildForumMessage(99), text: "side chatter" },
+      historyLimit: 10,
+      groupHistories,
+      resolveGroupActivation: () => false,
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: false },
+        topicConfig: undefined,
+      }),
+    });
+
+    const ctx = await buildTelegramMessageContextForTest({
+      cfg,
+      message: {
+        ...buildForumMessage(99),
+        message_id: 2,
+        text: "replying directly",
+        reply_to_message: {
+          message_id: 10,
+          chat: { id: -1001234567890, type: "supergroup", title: "Forum", is_forum: true },
+          from: { id: 7, first_name: "Bot", username: "bot", is_bot: true },
+          text: "previous bot message",
+        },
+      },
+      historyLimit: 10,
+      groupHistories,
+      resolveGroupActivation: () => false,
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: false },
+        topicConfig: undefined,
+      }),
+    });
+
+    expect(ctx?.ctxPayload.InboundEventKind).toBe("user_request");
+    expect(ctx?.ctxPayload.Body).not.toContain("side chatter");
+    expect(ctx?.ctxPayload.InboundHistory).toBeUndefined();
   });
 
   it("lets explicit topic requireMention=false override mention activation", async () => {

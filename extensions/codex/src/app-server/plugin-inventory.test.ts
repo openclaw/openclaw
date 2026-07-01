@@ -1,3 +1,4 @@
+// Codex tests cover plugin inventory plugin behavior.
 import { describe, expect, it } from "vitest";
 import { CodexAppInventoryCache } from "./app-inventory-cache.js";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./config.js";
@@ -137,6 +138,75 @@ describe("Codex plugin inventory", () => {
     expect(inventory.diagnostics.map((diagnostic) => diagnostic.code)).not.toContain(
       "plugin_missing",
     );
+  });
+
+  it("accepts the remote curated marketplace wire name", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async () => ({
+        data: [appInfo("google-calendar-app", true)],
+        nextCursor: null,
+      }),
+    });
+    const remoteSummary = pluginSummary("google-calendar@openai-curated-remote", {
+      name: "google-calendar",
+      remotePluginId: "plugin_connector_google_calendar",
+      installed: true,
+      enabled: true,
+    });
+    const localListed = pluginList([pluginSummary("github")]);
+    const listed = {
+      ...localListed,
+      marketplaces: [
+        ...localListed.marketplaces,
+        {
+          name: "openai-curated-remote",
+          path: null,
+          interface: null,
+          plugins: [remoteSummary],
+        },
+      ],
+    } satisfies v2.PluginListResponse;
+
+    const inventory = await readCodexPluginInventory({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            "google-calendar": {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      nowMs: 1,
+      request: async (method, params) => {
+        if (method === "plugin/list") {
+          return listed;
+        }
+        if (method === "plugin/read") {
+          expect(params).toEqual({
+            remoteMarketplaceName: "openai-curated-remote",
+            pluginName: "plugin_connector_google_calendar",
+          });
+          return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expect(inventory.marketplace).toEqual({
+      name: CODEX_PLUGINS_MARKETPLACE_NAME,
+      remoteMarketplaceName: "openai-curated-remote",
+    });
+    expect(inventory.records[0]?.ownedAppIds).toStrictEqual(["google-calendar-app"]);
+    expect(inventory.records[0]?.apps[0]?.accessible).toBe(true);
+    expect(inventory.diagnostics).toStrictEqual([]);
   });
 
   it("fails closed when plugin detail apps are absent from app inventory", async () => {
@@ -282,12 +352,15 @@ describe("Codex plugin inventory", () => {
   });
 });
 
-function pluginList(plugins: v2.PluginSummary[]): v2.PluginListResponse {
+function pluginList(
+  plugins: v2.PluginSummary[],
+  marketplace: { name?: string; path?: string | null } = {},
+): v2.PluginListResponse {
   return {
     marketplaces: [
       {
-        name: CODEX_PLUGINS_MARKETPLACE_NAME,
-        path: "/marketplaces/openai-curated",
+        name: marketplace.name ?? CODEX_PLUGINS_MARKETPLACE_NAME,
+        path: marketplace.path === undefined ? "/marketplaces/openai-curated" : marketplace.path,
         interface: null,
         plugins,
       },

@@ -1,22 +1,20 @@
+// Openai provider module implements model/runtime integration.
+import { resolveExpiresAtMsFromEpochSeconds } from "openclaw/plugin-sdk/number-runtime";
 import {
   createProviderHttpError,
+  readProviderJsonResponse,
   resolveProviderRequestHeaders,
 } from "openclaw/plugin-sdk/provider-http";
 import { captureWsEvent } from "openclaw/plugin-sdk/proxy-capture";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asFiniteNumber,
+  asOptionalRecord as asObjectRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const trimToUndefined = normalizeOptionalString;
-
-export function asFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-export function asObjectRecord(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
+export { asFiniteNumber, asObjectRecord };
 
 export function readRealtimeErrorDetail(error: unknown): string {
   if (typeof error === "string" && error) {
@@ -113,7 +111,7 @@ async function createOpenAIRealtimeSecret(
       if (!response.ok) {
         throw await createProviderHttpError(response, params.errorMessage);
       }
-      return (await response.json()) as unknown;
+      return await readProviderJsonResponse<unknown>(response, "openai.realtime-session");
     } finally {
       await release();
     }
@@ -130,9 +128,10 @@ async function createOpenAIRealtimeSecret(
     payload && typeof payload === "object"
       ? (payload as Record<string, unknown>).expires_at
       : undefined;
+  const expiresAtMs = resolveExpiresAtMsFromEpochSeconds(expiresAt);
   return {
     value: clientSecret,
-    ...(typeof expiresAt === "number" ? { expiresAt } : {}),
+    ...(expiresAtMs === undefined ? {} : { expiresAt: expiresAtMs }),
   };
 }
 

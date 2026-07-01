@@ -1,9 +1,22 @@
-import { describe, expect, it } from "vitest";
-import { buildChannelTurnContext, type BuildChannelTurnContextParams } from "./channel-inbound.js";
+/**
+ * Tests channel inbound context and dispatch helper behavior.
+ */
+import { describe, expect, expectTypeOf, it } from "vitest";
+import {
+  buildChannelInboundEventContext,
+  type BuildChannelInboundEventContextParams,
+  type PluginHookChannelSenderContext,
+} from "./channel-inbound.js";
 
-function createLegacyTurnParams(
-  overrides: Partial<BuildChannelTurnContextParams> = {},
-): BuildChannelTurnContextParams {
+declare module "./channel-inbound.js" {
+  interface PluginHookChannelSenderContext {
+    testUnionId?: string;
+  }
+}
+
+function createInboundParams(
+  overrides: Partial<BuildChannelInboundEventContextParams> = {},
+): BuildChannelInboundEventContextParams {
   return {
     channel: "test",
     messageId: "msg-1",
@@ -12,7 +25,6 @@ function createLegacyTurnParams(
     conversation: {
       kind: "group",
       id: "room-1",
-      routePeer: { kind: "group", id: "room-1" },
     },
     route: {
       agentId: "main",
@@ -20,22 +32,43 @@ function createLegacyTurnParams(
     },
     reply: {
       to: "test:room:room-1",
-      originatingTo: "test:room:room-1",
     },
     message: {
       rawBody: "side chatter",
-      envelopeFrom: "User One",
-      inboundTurnKind: "room_event",
+      inboundEventKind: "room_event",
     },
     ...overrides,
   };
 }
 
-describe("channel-inbound public compatibility helpers", () => {
-  it("maps legacy buildChannelTurnContext inboundTurnKind into inbound event context", () => {
-    const ctx = buildChannelTurnContext(createLegacyTurnParams());
+describe("channel-inbound public helpers", () => {
+  it("builds inbound event kind into message context", async () => {
+    const ctx = buildChannelInboundEventContext(createInboundParams());
 
     expect(ctx.InboundEventKind).toBe("room_event");
-    expect(ctx.InboundTurnKind).toBe("room_event");
+  });
+
+  it("accepts plugin-augmented hook channel sender fields", () => {
+    expectTypeOf<PluginHookChannelSenderContext["testUnionId"]>().toEqualTypeOf<
+      string | undefined
+    >();
+    const sender = {
+      id: "u1",
+      testUnionId: "union-1",
+    } satisfies PluginHookChannelSenderContext;
+    expect(sender.testUnionId).toBe("union-1");
+    const channelContext = {
+      sender: {
+        id: "u1",
+        testUnionId: "union-1",
+      },
+    } satisfies NonNullable<BuildChannelInboundEventContextParams["channelContext"]>;
+    const ctx = buildChannelInboundEventContext(
+      createInboundParams({
+        channelContext,
+      }),
+    );
+
+    expect(ctx.ChannelContext?.sender?.testUnionId).toBe("union-1");
   });
 });

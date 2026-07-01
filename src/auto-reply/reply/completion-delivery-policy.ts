@@ -1,12 +1,13 @@
+// Resolves whether completed replies should send visibly or stay tool-only.
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { deriveSessionChatType } from "../../sessions/session-chat-type.js";
+import { deriveSessionChatTypeFromKey } from "../../sessions/session-chat-type-shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { resolveSourceReplyDeliveryMode } from "./source-reply-delivery-mode.js";
 
-export type CompletionChatType = ChatType | "unknown";
+type CompletionChatType = ChatType | "unknown";
 
-export type CompletionDeliverySessionEntry = {
+type CompletionDeliverySessionEntry = {
   chatType?: string | null;
   origin?: { chatType?: string | null } | null;
 };
@@ -26,7 +27,7 @@ export function resolveCompletionChatType(params: {
   }
 
   for (const key of [params.targetRequesterSessionKey, params.requesterSessionKey]) {
-    const derived = deriveSessionChatType(key);
+    const derived = deriveSessionChatTypeFromKey(key);
     if (derived !== "unknown") {
       return derived;
     }
@@ -60,7 +61,7 @@ export function completionRequiresMessageToolDelivery(params: {
 export function shouldRouteCompletionThroughRequesterSession(
   sessionKey: string | undefined | null,
 ): boolean {
-  const chatType = deriveSessionChatType(sessionKey);
+  const chatType = deriveSessionChatTypeFromKey(sessionKey);
   return chatType === "group" || chatType === "channel";
 }
 

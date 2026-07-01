@@ -1,3 +1,4 @@
+// Memory Core tests cover manager.sync errors do not crash plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runDetachedMemorySync } from "./manager-sync-ops.js";
 
@@ -16,18 +17,21 @@ describe("memory manager sync failures", () => {
       unhandled.push(reason);
     };
     process.on("unhandledRejection", handler);
-    const syncSpy = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("openai embeddings failed: 400 bad request"));
-    setTimeout(() => {
-      runDetachedMemorySync(syncSpy, "watch");
-    }, 1);
+    try {
+      const syncSpy = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("openai embeddings failed: 400 bad request"));
+      setTimeout(() => {
+        runDetachedMemorySync(syncSpy, "watch");
+      }, 1);
 
-    await vi.runOnlyPendingTimersAsync();
-    vi.useRealTimers();
-    await syncSpy.mock.results[0]?.value?.catch(() => undefined);
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+      await syncSpy.mock.results[0]?.value?.catch(() => undefined);
 
-    process.off("unhandledRejection", handler);
-    expect(unhandled).toHaveLength(0);
+      expect(unhandled).toHaveLength(0);
+    } finally {
+      process.off("unhandledRejection", handler);
+    }
   });
 });

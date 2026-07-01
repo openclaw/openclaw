@@ -1,3 +1,4 @@
+// Slack tests cover media plugin behavior.
 import type { WebClient } from "@slack/web-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -290,10 +291,11 @@ describe("fetchWithSlackAuth", () => {
 
   it("strips Authorization header on cross-origin redirects", async () => {
     // First call: redirect response from Slack
-    const redirectResponse = new Response(null, {
+    const redirectResponse = new Response("redirect body", {
       status: 302,
       headers: { location: "https://cdn.slack-edge.com/presigned-url?sig=abc123" },
     });
+    const cancel = vi.spyOn(redirectResponse.body!, "cancel").mockResolvedValue(undefined);
 
     // Second call: actual file content from CDN
     const fileResponse = new Response(Buffer.from("actual image data"), {
@@ -320,13 +322,15 @@ describe("fetchWithSlackAuth", () => {
       "https://cdn.slack-edge.com/presigned-url?sig=abc123",
       { redirect: "follow" },
     );
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("preserves Authorization header on same-origin redirects", async () => {
-    const redirectResponse = new Response(null, {
+    const redirectResponse = new Response("redirect body", {
       status: 302,
       headers: { location: "/files/redirect-target" },
     });
+    const cancel = vi.spyOn(redirectResponse.body!, "cancel").mockResolvedValue(undefined);
 
     const fileResponse = new Response(Buffer.from("image data"), {
       status: 200,
@@ -341,6 +345,7 @@ describe("fetchWithSlackAuth", () => {
       headers: { Authorization: "Bearer xoxb-test-token" },
       redirect: "follow",
     });
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("returns redirect response when no location header is provided", async () => {
@@ -758,7 +763,7 @@ describe("resolveSlackMedia", () => {
   });
 
   it("preserves original MIME for non-voice Slack files", async () => {
-    const saveMediaBufferMock = vi
+    const saveMediaBufferMockResult = vi
       .spyOn(mediaRuntime, "saveMediaBuffer")
       .mockResolvedValue(createSavedMedia("/tmp/video.mp4", "video/mp4"));
 
@@ -782,7 +787,7 @@ describe("resolveSlackMedia", () => {
 
     const media = expectSlackMediaResult(result);
     expect(media).toHaveLength(1);
-    expectSaveMediaBufferCall(saveMediaBufferMock, "video/mp4", 16 * 1024 * 1024);
+    expectSaveMediaBufferCall(saveMediaBufferMockResult, "video/mp4", 16 * 1024 * 1024);
     expect(media[0]?.contentType).toBe("video/mp4");
   });
 
@@ -863,7 +868,7 @@ describe("resolveSlackMedia", () => {
   });
 
   it("caps downloads to 8 files for large multi-attachment messages", async () => {
-    const saveMediaBufferMock = vi
+    const saveMediaBufferMockValue = vi
       .spyOn(mediaRuntime, "saveMediaBuffer")
       .mockResolvedValue(createSavedMedia("/tmp/x.jpg", "image/jpeg"));
 
@@ -888,7 +893,7 @@ describe("resolveSlackMedia", () => {
 
     const media = expectSlackMediaResult(result);
     expect(media).toHaveLength(8);
-    expect(saveMediaBufferMock).toHaveBeenCalledTimes(8);
+    expect(saveMediaBufferMockValue).toHaveBeenCalledTimes(8);
     expect(mockFetch).toHaveBeenCalledTimes(8);
   });
 
@@ -1047,7 +1052,7 @@ describe("resolveSlackAttachmentContent", () => {
   });
 
   it("skips forwarded image URLs on non-Slack hosts", async () => {
-    const saveMediaBufferMock = vi.spyOn(mediaRuntime, "saveMediaBuffer");
+    const saveMediaBufferMockLocal = vi.spyOn(mediaRuntime, "saveMediaBuffer");
 
     const result = await resolveSlackAttachmentContent({
       attachments: [{ is_share: true, image_url: "https://example.com/forwarded.jpg" }],
@@ -1056,7 +1061,7 @@ describe("resolveSlackAttachmentContent", () => {
     });
 
     expect(result).toBeNull();
-    expect(saveMediaBufferMock).not.toHaveBeenCalled();
+    expect(saveMediaBufferMockLocal).not.toHaveBeenCalled();
     expect(mockFetch).not.toHaveBeenCalled();
   });
 

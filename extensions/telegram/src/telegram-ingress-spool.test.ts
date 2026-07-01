@@ -1,8 +1,16 @@
+// Telegram tests cover telegram ingress spool plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
 import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests as createChannelIngressQueue,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { afterEach, describe, expect, it } from "vitest";
+import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
+import type { TelegramRuntime } from "./runtime.types.js";
+import {
+  claimNextTelegramSpooledUpdate,
   claimTelegramSpooledUpdate,
   deleteTelegramSpooledUpdate,
   failTelegramSpooledUpdateClaim,
@@ -10,21 +18,43 @@ import {
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
   recoverStaleTelegramSpooledUpdateClaims,
+  refreshTelegramSpooledUpdateClaim,
   releaseTelegramSpooledUpdateClaim,
   TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS,
   writeTelegramSpooledUpdate,
 } from "./telegram-ingress-spool.js";
 
+function installTelegramIngressQueueRuntime(resolveStateDir: () => string): void {
+  setTelegramRuntime({
+    state: {
+      resolveStateDir,
+      openChannelIngressQueue: (
+        options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
+      ) => createChannelIngressQueue({ ...options, channelId: "telegram" }),
+    },
+  } as TelegramRuntime);
+}
+
 async function withTempSpool<T>(fn: (spoolDir: string) => Promise<T>): Promise<T> {
-  const spoolDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+  const spoolDir = path.join(stateDir, "telegram", "ingress-spool-test");
+  await fs.mkdir(spoolDir, { recursive: true });
+  installTelegramIngressQueueRuntime(() => stateDir);
   try {
     return await fn(spoolDir);
   } finally {
-    await fs.rm(spoolDir, { recursive: true, force: true });
+    clearTelegramRuntime();
+    closeOpenClawStateDatabaseForTest();
+    await fs.rm(stateDir, { recursive: true, force: true });
   }
 }
 
 describe("Telegram ingress spool", () => {
+  afterEach(() => {
+    clearTelegramRuntime();
+    closeOpenClawStateDatabaseForTest();
+  });
+
   it("persists updates durably in update_id order and deletes handled entries", async () => {
     await withTempSpool(async (spoolDir) => {
       await writeTelegramSpooledUpdate({
@@ -84,9 +114,122 @@ describe("Telegram ingress spool", () => {
       if (!claimed) {
         throw new Error("Expected a claimed update");
       }
-      await fs.writeFile(claimed.pendingPath, "duplicate pending race", { mode: 0o600 });
       await deleteTelegramSpooledUpdate(claimed);
-      expect(await fs.readdir(spoolDir)).toEqual([]);
+      expect(await listTelegramSpooledUpdateClaims({ spoolDir })).toEqual([]);
+    });
+  });
+
+  it("claims next update through the native ingress queue in update id order", async () => {
+    await withTempSpool(async (spoolDir) => {
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 101, message: { chat: { id: 1 }, message_id: 1, text: "second" } },
+        now: 1,
+      });
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 100, message: { chat: { id: 1 }, message_id: 2, text: "first" } },
+        now: 2,
+      });
+
+      const claimed = await claimNextTelegramSpooledUpdate({ spoolDir });
+
+      expect(claimed?.updateId).toBe(100);
+      expect(await listTelegramSpooledUpdates({ spoolDir })).toHaveLength(1);
+      expect(
+        (await listTelegramSpooledUpdateClaims({ spoolDir })).map((claim) => claim.updateId),
+      ).toEqual([100]);
+    });
+  });
+
+  it("derives lane keys while claiming legacy rows without stored lane keys", async () => {
+    await withTempSpool(async (spoolDir) => {
+      const stateDir = path.dirname(path.dirname(spoolDir));
+      const queue = createChannelIngressQueue<{
+        version: 1;
+        updateId: number;
+        receivedAt: number;
+        update: unknown;
+      }>({
+        channelId: "telegram",
+        accountId: "test",
+        stateDir,
+      });
+      await queue.enqueue(
+        "0000000000000042",
+        {
+          version: 1,
+          updateId: 42,
+          receivedAt: 1,
+          update: {
+            update_id: 42,
+            message: {
+              chat: { id: 100, type: "supergroup", is_forum: true },
+              is_topic_message: true,
+              message_id: 1,
+              message_thread_id: 10,
+              text: "blocked topic",
+            },
+          },
+        },
+        { receivedAt: 1 },
+      );
+      await queue.enqueue(
+        "0000000000000043",
+        {
+          version: 1,
+          updateId: 43,
+          receivedAt: 2,
+          update: {
+            update_id: 43,
+            message: {
+              chat: { id: 100, type: "supergroup", is_forum: true },
+              is_topic_message: true,
+              message_id: 2,
+              message_thread_id: 11,
+              text: "open topic",
+            },
+          },
+        },
+        { receivedAt: 2 },
+      );
+
+      const claimed = await claimNextTelegramSpooledUpdate({
+        spoolDir,
+        blockedLaneKeys: ["telegram:100:topic:10"],
+      });
+
+      expect(claimed?.updateId).toBe(43);
+      expect(claimed?.claim?.claimToken).toEqual(expect.any(String));
+      expect(
+        (await listTelegramSpooledUpdates({ spoolDir })).map((update) => update.updateId),
+      ).toEqual([42]);
+    });
+  });
+
+  it("does not claim outside the provided candidate update ids", async () => {
+    await withTempSpool(async (spoolDir) => {
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 200, message: { chat: { id: 1 }, message_id: 1, text: "first" } },
+        now: 1,
+      });
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 201, message: { chat: { id: 2 }, message_id: 1, text: "later" } },
+        now: 2,
+      });
+
+      const claimed = await claimNextTelegramSpooledUpdate({
+        spoolDir,
+        blockedLaneKeys: ["telegram:1"],
+        candidateUpdateIds: [200],
+      });
+
+      expect(claimed).toBeNull();
+      expect(
+        (await listTelegramSpooledUpdates({ spoolDir })).map((update) => update.updateId),
+      ).toEqual([200, 201]);
     });
   });
 
@@ -110,6 +253,32 @@ describe("Telegram ingress spool", () => {
       const updates = await listTelegramSpooledUpdates({ spoolDir });
       expect(updates.map((entry) => entry.updateId)).toEqual([30]);
       expect(updates[0]?.path.endsWith(".json")).toBe(true);
+    });
+  });
+
+  it("refreshes active claim timestamps through the Telegram spool queue", async () => {
+    await withTempSpool(async (spoolDir) => {
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 31, message: { text: "refresh me" } },
+      });
+      const update = (await listTelegramSpooledUpdates({ spoolDir }))[0];
+      if (!update) {
+        throw new Error("Expected a spooled update");
+      }
+      const claimed = await claimTelegramSpooledUpdate(update);
+      if (!claimed) {
+        throw new Error("Expected a claimed update");
+      }
+
+      await expect(refreshTelegramSpooledUpdateClaim(claimed, { refreshedAt: 123 })).resolves.toBe(
+        true,
+      );
+
+      const claims = await listTelegramSpooledUpdateClaims({ spoolDir });
+      expect(claims).toHaveLength(1);
+      expect(claims[0]?.updateId).toBe(31);
+      expect(claims[0]?.claim?.claimedAt).toBe(123);
     });
   });
 
@@ -139,48 +308,17 @@ describe("Telegram ingress spool", () => {
 
       expect(await listTelegramSpooledUpdates({ spoolDir })).toEqual([]);
       expect(await listTelegramSpooledUpdateClaims({ spoolDir })).toEqual([]);
-      const entries = await fs.readdir(spoolDir);
-      expect(entries).toEqual(["0000000000000032.json.failed"]);
-      const failed = JSON.parse(
-        await fs.readFile(path.join(spoolDir, "0000000000000032.json.failed"), "utf8"),
-      ) as {
-        update?: unknown;
-        claim?: unknown;
-        failure?: { reason?: string; message?: string; failedAt?: number };
-      };
-      expect(failed.update).toBeUndefined();
-      expect(failed.claim).toBeUndefined();
-      expect(failed.failure).toEqual({
-        reason: "handler-timeout",
-        message: "timed out",
-        failedAt: 123,
-      });
 
       await writeTelegramSpooledUpdate({
         spoolDir,
         update: { update_id: 32, message: { text: "redelivered poison" } },
+        now: 124,
       });
       expect(await listTelegramSpooledUpdates({ spoolDir })).toEqual([]);
-      expect(await fs.readdir(spoolDir)).toEqual(["0000000000000032.json.failed"]);
-
-      const leakedProcessingPath = path.join(spoolDir, "0000000000000032.json.processing");
-      await fs.writeFile(
-        leakedProcessingPath,
-        `${JSON.stringify({
-          version: 1,
-          updateId: 32,
-          receivedAt: 100,
-          update: { update_id: 32, message: { text: "crashed poison claim" } },
-        })}\n`,
-        { mode: 0o600 },
-      );
-      const staleTime = new Date(Date.now() - TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS - 1);
-      await fs.utimes(leakedProcessingPath, staleTime, staleTime);
 
       await expect(recoverStaleTelegramSpooledUpdateClaims({ spoolDir })).resolves.toBe(0);
       expect(await listTelegramSpooledUpdates({ spoolDir })).toEqual([]);
       expect(await listTelegramSpooledUpdateClaims({ spoolDir })).toEqual([]);
-      expect(await fs.readdir(spoolDir)).toEqual(["0000000000000032.json.failed"]);
     });
   });
 
@@ -197,48 +335,68 @@ describe("Telegram ingress spool", () => {
       await deleteTelegramSpooledUpdate(update);
 
       await expect(claimTelegramSpooledUpdate(update)).resolves.toBeNull();
-      expect(await fs.readdir(spoolDir)).toEqual([]);
+      expect(await listTelegramSpooledUpdates({ spoolDir })).toEqual([]);
     });
   });
 
-  it("recovers stale processing claims without replaying fresh claims", async () => {
+  it("recovers stale processing claims selected by the caller", async () => {
     await withTempSpool(async (spoolDir) => {
-      await writeTelegramSpooledUpdate({
-        spoolDir,
-        update: { update_id: 40, message: { text: "fresh" } },
-      });
       await writeTelegramSpooledUpdate({
         spoolDir,
         update: { update_id: 41, message: { text: "stale" } },
       });
       const updates = await listTelegramSpooledUpdates({ spoolDir });
-      const fresh = updates.find((update) => update.updateId === 40);
       const stale = updates.find((update) => update.updateId === 41);
-      if (!fresh || !stale) {
+      if (!stale) {
         throw new Error("Expected spooled updates");
       }
-      const claimedFresh = await claimTelegramSpooledUpdate(fresh);
       const claimedStale = await claimTelegramSpooledUpdate(stale);
-      if (!claimedFresh || !claimedStale) {
+      if (!claimedStale) {
         throw new Error("Expected claimed updates");
       }
       const now = Date.now();
-      const oldClaimTime = new Date(now - TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS - 1);
-      await fs.utimes(claimedStale.path, oldClaimTime, oldClaimTime);
 
       const recovered = await recoverStaleTelegramSpooledUpdateClaims({
         spoolDir,
-        now,
+        now: now + TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS + 1,
       });
 
       expect(recovered).toBe(1);
       expect(
         (await listTelegramSpooledUpdates({ spoolDir })).map((update) => update.updateId),
       ).toEqual([41]);
-      expect((await fs.readdir(spoolDir)).toSorted()).toEqual([
-        "0000000000000040.json.processing",
-        "0000000000000041.json",
-      ]);
+    });
+  });
+
+  it("lets recovery callers keep a claim in processing", async () => {
+    await withTempSpool(async (spoolDir) => {
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 45, message: { text: "busy" } },
+      });
+      const update = (await listTelegramSpooledUpdates({ spoolDir }))[0];
+      if (!update) {
+        throw new Error("Expected a spooled update");
+      }
+      const claimed = await claimTelegramSpooledUpdate(update);
+      if (!claimed) {
+        throw new Error("Expected a claimed update");
+      }
+      let shouldRecoverCalls = 0;
+      const recovered = await recoverStaleTelegramSpooledUpdateClaims({
+        spoolDir,
+        staleMs: 0,
+        shouldRecover: () => {
+          shouldRecoverCalls += 1;
+          return false;
+        },
+      });
+
+      expect(recovered).toBe(0);
+      expect(shouldRecoverCalls).toBe(1);
+      expect(
+        (await listTelegramSpooledUpdateClaims({ spoolDir })).map((claim) => claim.updateId),
+      ).toEqual([45]);
     });
   });
 
@@ -258,5 +416,42 @@ describe("Telegram ingress spool", () => {
         },
       }),
     ).toBe(false);
+  });
+
+  it("does not treat fresh claims with the current pid and a different owner id as foreign", () => {
+    const now = Date.now();
+    expect(
+      isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess({
+        updateId: 50,
+        path: path.join(os.tmpdir(), "50.json.processing"),
+        pendingPath: path.join(os.tmpdir(), "50.json"),
+        update: { update_id: 50 },
+        receivedAt: now,
+        claim: {
+          processId: "other-process",
+          processPid: process.pid,
+          claimedAt: now,
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("treats fresh claims with other live pids as live-owned", () => {
+    const now = Date.now();
+    const liveOwnerPid = process.ppid > 0 ? process.ppid : 1;
+    expect(
+      isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess({
+        updateId: 51,
+        path: path.join(os.tmpdir(), "51.json.processing"),
+        pendingPath: path.join(os.tmpdir(), "51.json"),
+        update: { update_id: 51 },
+        receivedAt: now,
+        claim: {
+          processId: "other-process",
+          processPid: liveOwnerPid,
+          claimedAt: now,
+        },
+      }),
+    ).toBe(true);
   });
 });

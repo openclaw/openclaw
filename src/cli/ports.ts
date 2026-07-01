@@ -1,8 +1,11 @@
+// Port inspection and force-free helpers used by gateway run/install flows.
 import { execFileSync } from "node:child_process";
 import { createServer } from "node:net";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveLsofCommandSync } from "../infra/ports-lsof.js";
-import { tryListenOnPort } from "../infra/ports-probe.js";
+import { probePortUsage } from "../infra/ports-probe.js";
+import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
+import { resolvePositiveTimerTimeoutMs, resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { sleep } from "../utils.js";
 
 export type PortProcess = { pid: number; command?: string };
@@ -61,6 +64,7 @@ function getErrnoCode(err: unknown): string | undefined {
 }
 
 function isRecoverableLsofError(err: unknown): boolean {
+  // Permission or missing-binary failures can fall back to fuser on Linux.
   const code = getErrnoCode(err);
   if (code === "ENOENT" || code === "EACCES" || code === "EPERM") {
     return true;
@@ -127,16 +131,12 @@ function killPortWithFuser(port: number, signal: "SIGTERM" | "SIGKILL"): PortPro
 }
 
 async function isPortBusy(port: number): Promise<boolean> {
-  try {
-    await tryListenOnPort({ port, exclusive: true });
-    return false;
-  } catch (err: unknown) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "EADDRINUSE") {
-      return true;
-    }
-    throw err instanceof Error ? err : new Error(String(err));
-  }
+  // Route through probePortUsage which probes all four endpoints
+  // (127.0.0.1, 0.0.0.0, ::1, ::) instead of a single hostless bind
+  // that defaults to IPv6 wildcard and misses IPv4-only occupants.
+  // Treat "unknown" as busy — inconclusive probe failures must not cause
+  // forceFreePortAndWait to exit early before lsof/fuser can inspect.
+  return (await probePortUsage(port)) !== "free";
 }
 
 export function parseLsofOutput(output: string): PortProcess[] {
@@ -162,7 +162,9 @@ export function parseLsofOutput(output: string): PortProcess[] {
 export function listPortListeners(port: number): PortProcess[] {
   if (process.platform === "win32") {
     try {
-      const out = execFileSync("netstat", ["-ano", "-p", "TCP"], { encoding: "utf-8" });
+      const out = execFileSync(getWindowsSystem32ExePath("netstat.exe"), ["-ano", "-p", "TCP"], {
+        encoding: "utf-8",
+      });
       const lines = out.split(/\r?\n/).filter(Boolean);
       const results: PortProcess[] = [];
       for (const line of lines) {
@@ -259,9 +261,12 @@ export async function forceFreePortAndWait(
     sigtermTimeoutMs?: number;
   } = {},
 ): Promise<ForceFreePortResult> {
-  const timeoutMs = Math.max(opts.timeoutMs ?? 1500, 0);
-  const intervalMs = Math.max(opts.intervalMs ?? 100, 1);
-  const sigtermTimeoutMs = Math.min(Math.max(opts.sigtermTimeoutMs ?? 600, 0), timeoutMs);
+  const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, 1500, 0);
+  const intervalMs = resolvePositiveTimerTimeoutMs(opts.intervalMs, 100);
+  const sigtermTimeoutMs = Math.min(
+    resolveTimerTimeoutMs(opts.sigtermTimeoutMs, 600, 0),
+    timeoutMs,
+  );
 
   let killed: PortProcess[] = [];
   let useFuserFallback = false;
@@ -292,13 +297,13 @@ export async function forceFreePortAndWait(
   }
 
   let waitedMs = 0;
-  const triesSigterm = intervalMs > 0 ? Math.ceil(sigtermTimeoutMs / intervalMs) : 0;
-  for (let i = 0; i < triesSigterm; i++) {
+  while (waitedMs < sigtermTimeoutMs) {
     if (!(await checkBusy())) {
       return { killed, waitedMs, escalatedToSigkill: false };
     }
-    await sleep(intervalMs);
-    waitedMs += intervalMs;
+    const sleepMs = Math.min(intervalMs, sigtermTimeoutMs - waitedMs);
+    await sleep(sleepMs);
+    waitedMs += sleepMs;
   }
 
   if (!(await checkBusy())) {
@@ -312,14 +317,13 @@ export async function forceFreePortAndWait(
     killPids(remaining, "SIGKILL");
   }
 
-  const remainingBudget = Math.max(timeoutMs - waitedMs, 0);
-  const triesSigkill = intervalMs > 0 ? Math.ceil(remainingBudget / intervalMs) : 0;
-  for (let i = 0; i < triesSigkill; i++) {
+  while (waitedMs < timeoutMs) {
     if (!(await checkBusy())) {
       return { killed, waitedMs, escalatedToSigkill: true };
     }
-    await sleep(intervalMs);
-    waitedMs += intervalMs;
+    const sleepMs = Math.min(intervalMs, timeoutMs - waitedMs);
+    await sleep(sleepMs);
+    waitedMs += sleepMs;
   }
 
   if (!(await checkBusy())) {
@@ -377,16 +381,17 @@ export async function waitForPortBindable(
   port: number,
   opts: { timeoutMs?: number; intervalMs?: number; host?: string } = {},
 ): Promise<number> {
-  const timeoutMs = Math.max(opts.timeoutMs ?? 3000, 0);
-  const intervalMs = Math.max(opts.intervalMs ?? 150, 1);
+  const timeoutMs = resolveTimerTimeoutMs(opts.timeoutMs, 3000, 0);
+  const intervalMs = resolvePositiveTimerTimeoutMs(opts.intervalMs, 150);
   const host = opts.host;
   let waited = 0;
   while (waited < timeoutMs) {
     if (await probePortFree(port, host)) {
       return waited;
     }
-    await sleep(intervalMs);
-    waited += intervalMs;
+    const sleepMs = Math.min(intervalMs, timeoutMs - waited);
+    await sleep(sleepMs);
+    waited += sleepMs;
   }
   // Final attempt
   if (await probePortFree(port, host)) {

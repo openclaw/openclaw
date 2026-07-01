@@ -1,17 +1,21 @@
+// Gateway startup logging helpers.
+// Produces the compact ready banner with resolved model and safety state.
+import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import chalk from "chalk";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveDefaultAgentId, resolveAgentConfig } from "../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { resolveFastModeState } from "../agents/fast-mode.js";
+import { formatFastModeValue, resolveFastModeState } from "../agents/fast-mode.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import { legacyModelKey, modelKey } from "../agents/model-selection-normalize.js";
 import {
   buildConfiguredModelCatalog,
   resolveConfiguredModelRef,
-  resolveThinkingDefault,
-  legacyModelKey,
-  modelKey,
-} from "../agents/model-selection.js";
+} from "../agents/model-selection-shared.js";
+import { resolveThinkingDefault } from "../agents/model-thinking-default.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getResolvedLoggerSettings } from "../logging.js";
-import { collectEnabledInsecureOrDangerousFlags } from "../security/dangerous-config-flags.js";
+import { collectEnabledInsecureOrDangerousFlagsFromCurrentSnapshot } from "../security/dangerous-config-flags-current.js";
 
 type StartupThinkLevel =
   | "off"
@@ -23,8 +27,10 @@ type StartupThinkLevel =
   | "adaptive"
   | "max";
 
-export function logGatewayStartup(params: {
+/** Emit startup summary lines after Gateway bind and plugin loading complete. */
+export async function logGatewayStartup(params: {
   cfg: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
   bindHost: string;
   bindHosts?: string[];
   port: number;
@@ -60,7 +66,18 @@ export function logGatewayStartup(params: {
     params.log.info("gateway: running in Nix mode (config managed externally)");
   }
 
-  const enabledDangerousFlags = collectEnabledInsecureOrDangerousFlags(params.cfg);
+  for (const warning of await collectConfiguredChannelStartupWarnings({
+    cfg: params.cfg,
+    activationSourceConfig: params.activationSourceConfig,
+  })) {
+    params.log.warn(warning);
+  }
+
+  const enabledDangerousFlags =
+    collectEnabledInsecureOrDangerousFlagsFromCurrentSnapshot(params.cfg) ??
+    (await import("../security/dangerous-config-flags.js")).collectEnabledInsecureOrDangerousFlags(
+      params.cfg,
+    );
   if (enabledDangerousFlags.length > 0) {
     const warning =
       `security warning: dangerous config flags enabled: ${enabledDangerousFlags.join(", ")}. ` +
@@ -69,6 +86,7 @@ export function logGatewayStartup(params: {
   }
 }
 
+/** Normalize model thinking values that are useful in the compact startup log. */
 function normalizeStartupThinkLevel(value: unknown): StartupThinkLevel | undefined {
   return value === "off" ||
     value === "minimal" ||
@@ -82,6 +100,7 @@ function normalizeStartupThinkLevel(value: unknown): StartupThinkLevel | undefin
     : undefined;
 }
 
+/** Resolve explicit thinking overrides from agent defaults and per-model config. */
 function resolveExplicitStartupThinking(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -99,22 +118,25 @@ function resolveExplicitStartupThinking(params: {
   );
 }
 
+/** True when a configured catalog entry disables reasoning for the startup model. */
 function isConfiguredReasoningDisabled(params: {
-  cfg: OpenClawConfig;
+  catalog: readonly ModelCatalogEntry[];
   provider: string;
   model: string;
 }): boolean {
-  return buildConfiguredModelCatalog({ cfg: params.cfg }).some(
+  return params.catalog.some(
     (entry) =>
       entry.provider === params.provider && entry.id === params.model && entry.reasoning === false,
   );
 }
 
+/** Format model thinking and fast-mode details for the Gateway startup banner. */
 export function formatAgentModelStartupDetails(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
 }): string {
+  const configuredCatalog = buildConfiguredModelCatalog({ cfg: params.cfg });
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
   const defaultAgentConfig = resolveAgentConfig(params.cfg, defaultAgentId);
   const explicitThinking = resolveExplicitStartupThinking({
@@ -129,10 +151,15 @@ export function formatAgentModelStartupDetails(params: {
       cfg: params.cfg,
       provider: params.provider,
       model: params.model,
+      catalog: configuredCatalog,
     });
   const thinking =
     explicitThinking ??
-    (isConfiguredReasoningDisabled(params)
+    (isConfiguredReasoningDisabled({
+      catalog: configuredCatalog,
+      provider: params.provider,
+      model: params.model,
+    })
       ? "off"
       : resolvedThinking === "off"
         ? "medium"
@@ -144,16 +171,62 @@ export function formatAgentModelStartupDetails(params: {
     agentId: defaultAgentId,
   });
 
-  return `thinking=${thinking}, fast=${fast.enabled ? "on" : "off"}`;
+  return `thinking=${thinking}, fast=${formatFastModeValue(fast.mode)}`;
 }
 
+async function collectConfiguredChannelStartupWarnings(params: {
+  cfg: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
+}): Promise<string[]> {
+  const [blockerModule, presencePolicyModule, pluginRegistryModule] = await Promise.all([
+    import("../commands/doctor/shared/channel-plugin-blockers.js"),
+    import("../plugins/channel-presence-policy.js"),
+    import("../plugins/plugin-registry.js"),
+  ]);
+  const manifestRegistry = pluginRegistryModule.loadPluginManifestRegistryForPluginRegistry({
+    config: params.cfg,
+    env: process.env,
+    includeDisabled: true,
+  });
+  const hits = blockerModule.scanConfiguredChannelPluginBlockers(
+    params.cfg,
+    process.env,
+    params.activationSourceConfig,
+  );
+  const blockerWarnings = blockerModule
+    .collectConfiguredChannelPluginBlockerWarnings(hits)
+    .map((warning) => `configured channel warning: ${warning.replace(/^[-]\s*/u, "")}`);
+  const missingOwnerWarnings = presencePolicyModule
+    .resolveConfiguredChannelPresencePolicy({
+      config: params.cfg,
+      activationSourceConfig: params.activationSourceConfig,
+      includePersistedAuthState: false,
+      manifestRecords: manifestRegistry.plugins,
+    })
+    .filter((entry) => !entry.effective && entry.blockedReasons.includes("no-channel-owner"))
+    .map(formatConfiguredChannelMissingOwnerStartupWarning);
+  return [...blockerWarnings, ...missingOwnerWarnings];
+}
+
+function formatConfiguredChannelMissingOwnerStartupWarning(entry: {
+  channelId: string;
+  blockedReasons: readonly string[];
+}): string {
+  const channelId = sanitizeForLog(entry.channelId);
+  const reasons = normalizeSortedUniqueStringEntries(entry.blockedReasons).join(", ");
+  return (
+    `configured channel warning: channels.${channelId} is configured but no channel plugin ` +
+    `is installed or loadable (${reasons}). Run \`openclaw doctor --fix\` or install the ` +
+    "channel plugin before relying on this channel."
+  );
+}
+
+/** Format plugin count/list and optional startup duration for the ready log line. */
 function formatReadyDetails(
   loadedPluginIds: readonly string[],
   startupDurationLabel: string | null,
 ) {
-  const pluginIds = [...new Set(loadedPluginIds.map((id) => id.trim()).filter(Boolean))].toSorted(
-    (a, b) => a.localeCompare(b),
-  );
+  const pluginIds = normalizeSortedUniqueStringEntries(loadedPluginIds);
   const pluginSummary =
     pluginIds.length === 0
       ? "0 plugins"

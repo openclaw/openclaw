@@ -1,8 +1,9 @@
+// Status command tests cover text/JSON output, gateway health, compatibility notices, and update state.
 import type { Mock } from "vitest";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import { createCompatibilityNotice } from "../plugins/status.test-helpers.js";
-import { captureEnv } from "../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 
 let envSnapshot: ReturnType<typeof captureEnv>;
 
@@ -27,7 +28,7 @@ function createDefaultSessionStoreEntry() {
     totalTokens: 5_000,
     totalTokensFresh: true as boolean,
     contextTokens: 10_000,
-    model: "pi:opus",
+    model: "test:opus",
     sessionId: "abc123",
     systemSent: true,
   };
@@ -40,7 +41,7 @@ function createUnknownUsageSessionStore() {
       inputTokens: 2_000,
       outputTokens: 3_000,
       contextTokens: 10_000,
-      model: "pi:opus",
+      model: "test:opus",
     },
   };
 }
@@ -210,6 +211,7 @@ async function createStatusServiceSummary(
     loadedText: service.loadedText,
     runtime,
     runtimeShort: runtime?.pid ? `pid ${runtime.pid}` : null,
+    wrapperPath: command?.environment?.OPENCLAW_WRAPPER?.trim() || undefined,
   };
 }
 
@@ -262,7 +264,7 @@ function createSessionStatusRows() {
     paths: byAgent.map((entry) => entry.path),
     count: recent.length,
     defaults: {
-      model: recent[0]?.model ?? "pi:opus",
+      model: recent[0]?.model ?? "test:opus",
       contextTokens: recent[0]?.contextTokens ?? 10_000,
     },
     recent,
@@ -392,21 +394,32 @@ async function createMockStatusScanResult(params: { includePluginCompatibility?:
 }
 
 async function withEnvVar<T>(key: string, value: string, run: () => Promise<T>): Promise<T> {
+  return await withOptionalEnvVar(key, value, run);
+}
+
+async function withOptionalEnvVar<T>(
+  key: string,
+  value: string | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
   const prevValue = process.env[key];
-  process.env[key] = value;
+  if (value === undefined) {
+    deleteTestEnvValue(key);
+  } else {
+    setTestEnvValue(key, value);
+  }
   try {
     return await run();
   } finally {
     if (prevValue === undefined) {
-      delete process.env[key];
+      deleteTestEnvValue(key);
     } else {
-      process.env[key] = prevValue;
+      setTestEnvValue(key, prevValue);
     }
   }
 }
 
 const mocks = vi.hoisted(() => ({
-  hasPotentialConfiguredChannels: vi.fn(() => true),
   loadConfig: vi.fn().mockReturnValue({ session: {} }),
   loadSessionStore: vi.fn().mockReturnValue({
     "+1000": createDefaultSessionStoreEntry(),
@@ -464,6 +477,7 @@ const mocks = vi.hoisted(() => ({
       inconsistent_timestamps: 0,
     },
   }),
+  getInspectableTaskAuditFindings: vi.fn().mockReturnValue([]),
   resolveGatewayService: vi.fn().mockReturnValue({
     label: "LaunchAgent",
     loadedText: "loaded",
@@ -499,7 +513,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../channels/config-presence.js", () => ({
-  hasPotentialConfiguredChannels: mocks.hasPotentialConfiguredChannels,
   hasMeaningfulChannelConfig: (entry: unknown) =>
     Boolean(
       entry && typeof entry === "object" && Object.keys(entry as Record<string, unknown>).length,
@@ -548,8 +561,12 @@ vi.mock("../config/sessions/main-session.js", () => ({
 vi.mock("../config/sessions/paths.js", () => ({
   resolveStorePath: mocks.resolveStorePath,
 }));
-vi.mock("../config/sessions/store-read.js", () => ({
-  readSessionStoreReadOnly: mocks.loadSessionStore,
+vi.mock("../config/sessions/session-accessor.js", () => ({
+  listSessionEntries: (opts?: { storePath?: string }) =>
+    Object.entries(mocks.loadSessionStore(opts?.storePath)).map(([sessionKey, entry]) => ({
+      sessionKey,
+      entry,
+    })),
 }));
 vi.mock("../config/sessions/types.js", () => ({
   resolveSessionTotalTokens: vi.fn((entry?: { totalTokens?: number }) =>
@@ -716,6 +733,10 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: mocks.loadConfig,
   loadConfig: mocks.loadConfig,
   readBestEffortConfig: vi.fn(async () => mocks.loadConfig()),
+  readBestEffortConfigSnapshot: vi.fn(async () => {
+    const config = mocks.loadConfig();
+    return { config, sourceConfig: config };
+  }),
   resolveGatewayPort: vi.fn(() => 18789),
 }));
 vi.mock("../daemon/service.js", () => ({
@@ -730,6 +751,7 @@ vi.mock("../node-host/config.js", () => ({
 vi.mock("../tasks/task-registry.maintenance.js", () => ({
   getInspectableTaskRegistrySummary: mocks.getInspectableTaskRegistrySummary,
   getInspectableTaskAuditSummary: mocks.getInspectableTaskAuditSummary,
+  getInspectableTaskAuditFindings: mocks.getInspectableTaskAuditFindings,
 }));
 vi.mock("../security/audit.js", () => ({
   runSecurityAudit: mocks.runSecurityAudit,
@@ -841,7 +863,6 @@ vi.mock("../channels/chat-meta.js", () => {
   return {
     CHAT_CHANNEL_ALIASES: {},
     listChatChannels: () => entries,
-    listChatChannelAliases: () => [],
     getChatChannelMeta: (id: (typeof mockChatChannels)[number]) => byId[id],
     normalizeChatChannelId: (raw?: string | null) => {
       const value = raw?.trim().toLowerCase();
@@ -855,39 +876,37 @@ vi.mock("./status.daemon.js", () => ({
   getDaemonStatusSummary: vi.fn(async () => {
     const service = mocks.resolveGatewayService();
     const loaded = await service.isLoaded();
-    const runtime = await service.readRuntime();
+    const runtimeValue = await service.readRuntime();
     const command = await service.readCommand();
     return {
       label: service.label,
-      installed: Boolean(command) || runtime?.status === "running",
+      installed: Boolean(command) || runtimeValue?.status === "running",
       loaded,
       managedByOpenClaw: Boolean(command),
-      externallyManaged: !command && runtime?.status === "running",
+      externallyManaged: !command && runtimeValue?.status === "running",
       loadedText: loaded ? service.loadedText : service.notLoadedText,
-      runtimeShort: runtime?.pid ? `pid ${runtime.pid}` : null,
+      runtimeShort: runtimeValue?.pid ? `pid ${runtimeValue.pid}` : null,
     };
   }),
   getNodeDaemonStatusSummary: vi.fn(async () => {
     const service = mocks.resolveNodeService();
     const loaded = await service.isLoaded();
-    const runtime = await service.readRuntime();
+    const runtimeLocal = await service.readRuntime();
     const command = await service.readCommand();
     return {
       label: service.label,
-      installed: Boolean(command) || runtime?.status === "running",
+      installed: Boolean(command) || runtimeLocal?.status === "running",
       loaded,
       managedByOpenClaw: Boolean(command),
-      externallyManaged: !command && runtime?.status === "running",
+      externallyManaged: !command && runtimeLocal?.status === "running",
       loadedText: loaded ? service.loadedText : service.notLoadedText,
-      runtimeShort: runtime?.pid ? `pid ${runtime.pid}` : null,
+      runtimeShort: runtimeLocal?.pid ? `pid ${runtimeLocal.pid}` : null,
     };
   }),
 }));
 
 describe("statusCommand", () => {
   afterEach(() => {
-    mocks.hasPotentialConfiguredChannels.mockReset();
-    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
     mocks.loadConfig.mockReset();
     mocks.loadConfig.mockReturnValue({ session: {} });
     mocks.loadSessionStore.mockReset();
@@ -949,6 +968,8 @@ describe("statusCommand", () => {
         inconsistent_timestamps: 0,
       },
     });
+    mocks.getInspectableTaskAuditFindings.mockReset();
+    mocks.getInspectableTaskAuditFindings.mockReturnValue([]);
     mocks.runSecurityAudit.mockReset();
     mocks.runSecurityAudit.mockResolvedValue(createDefaultSecurityAuditResult());
     mocks.resolveGatewayService.mockReset();
@@ -990,7 +1011,6 @@ describe("statusCommand", () => {
   });
 
   it("prints JSON and includes security audit only when all is requested", async () => {
-    mocks.hasPotentialConfiguredChannels.mockReturnValue(false);
     mocks.buildPluginCompatibilityNotices.mockReturnValue([
       createCompatibilityNotice({ pluginId: "legacy-plugin", code: "legacy-before-agent-start" }),
     ]);
@@ -1002,7 +1022,7 @@ describe("statusCommand", () => {
     expect(payload.memoryPlugin.slot).toBe("memory-core");
     expect(payload.sessions.count).toBe(1);
     expect(payload.sessions.paths).toContain("/tmp/sessions.json");
-    expect(payload.sessions.defaults.model).toBe("pi:opus");
+    expect(payload.sessions.defaults.model).toBe("test:opus");
     expect(payload.sessions.defaults.contextTokens).toBeGreaterThan(0);
     expect(payload.sessions.recent[0].percentUsed).toBe(50);
     expect(payload.sessions.recent[0].cacheRead).toBe(2_000);
@@ -1102,7 +1122,7 @@ describe("statusCommand", () => {
         totalTokens: 5_000,
         totalTokensFresh: false,
         contextTokens: 10_000,
-        model: "pi:opus",
+        model: "test:opus",
       },
     });
     runtimeLogMock.mockClear();
@@ -1130,7 +1150,7 @@ describe("statusCommand", () => {
       "Plugin compatibility",
       "Channels",
       "WhatsApp",
-      "bootstrap files",
+      "no workspaces bootstrapping",
       "Tasks",
       "Sessions",
       "+1000",
@@ -1148,6 +1168,7 @@ describe("statusCommand", () => {
     expectLogsInclude(logs, "Cache");
     expectLogsInclude(logs, "40% hit");
     expectLogsInclude(logs, "read 2.0k");
+    expect(logs.join("\n")).not.toContain("no bootstrap files");
   });
 
   it("shows a maintenance hint when task audit errors are present", async () => {
@@ -1185,6 +1206,25 @@ describe("statusCommand", () => {
         inconsistent_timestamps: 0,
       },
     });
+    mocks.getInspectableTaskAuditFindings.mockReturnValue([
+      {
+        severity: "error",
+        code: "stale_running",
+        detail: "running task appears stuck",
+        task: {
+          taskId: "stale-running-task",
+          runtime: "acp",
+          ownerKey: "agent:main:main",
+          requesterSessionKey: "agent:main:main",
+          scopeKind: "session",
+          task: "Stale task",
+          status: "running",
+          deliveryStatus: "pending",
+          notifyPolicy: "done_only",
+          createdAt: Date.now() - 60_000,
+        },
+      },
+    ]);
 
     const joined = await runStatusAndGetJoinedLogs();
 
@@ -1292,6 +1332,47 @@ describe("statusCommand", () => {
       ).toBe(true);
     }
     expect(runtime.error).not.toHaveBeenCalled();
+  });
+
+  it("notes when secret diagnostics may come from a CLI process outside the service wrapper context", async () => {
+    const wrapperPath = "/usr/local/bin/openclaw-doppler";
+    const service = mocks.resolveGatewayService();
+    mocks.resolveGatewayService.mockReturnValue({
+      ...service,
+      readCommand: async () => ({
+        programArguments: [wrapperPath, "node", "dist/entry.js", "gateway"],
+        environment: { OPENCLAW_WRAPPER: wrapperPath },
+        sourcePath: "/tmp/Library/LaunchAgents/ai.openclaw.gateway.plist",
+      }),
+    });
+    mocks.loadConfig.mockReturnValue({
+      session: {},
+      gateway: {
+        auth: {
+          mode: "token",
+          token: { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+        },
+      },
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+    });
+
+    await withOptionalEnvVar("OPENCLAW_WRAPPER", undefined, async () => {
+      const logs = await runStatusAndGetLogs();
+      expectLogsInclude(logs, "Secret diagnostics:");
+      expectLogsInclude(logs, "installed gateway service uses OPENCLAW_WRAPPER");
+      expectLogsInclude(logs, "not running with that same wrapper");
+      expectLogsInclude(logs, "current CLI process rather than the installed gateway service");
+    });
+
+    await withEnvVar("OPENCLAW_WRAPPER", wrapperPath, async () => {
+      const logs = await runStatusAndGetLogs();
+      expectLogsInclude(logs, "Secret diagnostics:");
+      expectLogsExclude(logs, "not running with that same wrapper");
+    });
   });
 
   it("surfaces channel runtime errors from the gateway", async () => {
@@ -1442,7 +1523,7 @@ describe("statusCommand", () => {
             outputTokens: 1_000,
             totalTokens: 2_000,
             contextTokens: 10_000,
-            model: "pi:opus",
+            model: "test:opus",
           },
         };
       }

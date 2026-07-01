@@ -1,6 +1,7 @@
+// Happy path prompt snapshot helper reads expected prompt snapshot files.
 import fs from "node:fs";
 import path from "node:path";
-import type { Api, Model } from "@earendil-works/pi-ai";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { resolveHeartbeatPromptForResponseTool } from "../../../src/auto-reply/heartbeat.js";
 import {
   buildDirectChatContext,
@@ -14,6 +15,7 @@ import {
 import { buildReplyPromptBodies } from "../../../src/auto-reply/reply/prompt-prelude.js";
 import type { TemplateContext } from "../../../src/auto-reply/templating.js";
 import { SILENT_REPLY_TOKEN } from "../../../src/auto-reply/tokens.js";
+import { normalizeChatType } from "../../../src/channels/chat-type.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import type {
   AnyAgentTool,
@@ -21,11 +23,13 @@ import type {
 } from "../../../src/plugin-sdk/agent-harness-runtime.js";
 import { normalizeAgentRuntimeTools } from "../../../src/plugin-sdk/agent-harness-runtime.js";
 import { createOpenClawCodingTools } from "../../../src/plugin-sdk/agent-harness.js";
-import { loadBundledPluginPublicSurfaceSourceSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
+import { resolveRelativeBundledPluginPublicModuleId } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
   CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
 } from "./prompt-snapshot-paths.js";
+
+// Builds Codex happy-path prompt snapshot fixtures for agent prompt regression tests.
 
 export { CODEX_MODEL_PROMPT_FIXTURE_DIR, CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR };
 
@@ -65,6 +69,27 @@ const HAPPY_PATH_TOOL_NAMES = new Set([
   "web_fetch",
 ]);
 
+type CodexDynamicToolFunctionSpec = {
+  type?: "function";
+  name: string;
+  description?: string;
+  inputSchema?: unknown;
+};
+
+type CodexDynamicToolNamespaceSpec = {
+  type: "namespace";
+  name: string;
+  tools: CodexDynamicToolFunctionSpec[];
+};
+
+type CodexDynamicToolSpec = CodexDynamicToolFunctionSpec | CodexDynamicToolNamespaceSpec;
+
+function flattenCodexDynamicToolSpecs(
+  specs: readonly CodexDynamicToolSpec[],
+): CodexDynamicToolFunctionSpec[] {
+  return specs.flatMap((spec) => (spec.type === "namespace" ? spec.tools : [spec]));
+}
+
 type CodexPromptSnapshotApi = {
   resolveCodexPromptSnapshotAppServerOptions: (pluginConfig?: unknown) => unknown;
   buildCodexHarnessPromptSnapshot: (params: {
@@ -76,6 +101,7 @@ type CodexPromptSnapshotApi = {
     config?: Record<string, unknown>;
     promptText?: string;
     developerInstructionAdditions?: string;
+    turnScopedDeveloperInstructions?: string;
     heartbeatCollaborationInstructions?: string;
   }) => {
     developerInstructions: string;
@@ -91,12 +117,6 @@ type CodexPromptSnapshotApi = {
     };
     directToolNames?: string[];
   }) => CodexDynamicToolSpec[];
-};
-
-type CodexDynamicToolSpec = {
-  name: string;
-  description?: string;
-  inputSchema?: unknown;
 };
 
 type PromptSnapshotFile = {
@@ -116,10 +136,16 @@ type PromptScenario = {
   toolSnapshotFile: string;
 };
 
-const codexApi = loadBundledPluginPublicSurfaceSourceSync({
+const CODEX_TEST_API_MODULE_ID = resolveRelativeBundledPluginPublicModuleId({
+  fromModuleUrl: import.meta.url,
   pluginId: "codex",
   artifactBasename: "test-api.js",
-}) as CodexPromptSnapshotApi;
+});
+
+/** Load the Codex public test API without hardcoding plugin-private paths. */
+async function loadCodexPromptSnapshotApi(): Promise<CodexPromptSnapshotApi> {
+  return (await import(CODEX_TEST_API_MODULE_ID)) as CodexPromptSnapshotApi;
+}
 
 const CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES = [
   {
@@ -128,7 +154,14 @@ const CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES = [
   },
 ] as const;
 
-const CODEX_WORKSPACE_DEVELOPER_CONTEXT_FILES = [
+const CODEX_WORKSPACE_THREAD_DEVELOPER_CONTEXT_FILES = [
+  {
+    path: path.join(WORKSPACE_DIR, "TOOLS.md"),
+    content: "<TOOLS.md contents will be here>",
+  },
+] as const;
+
+const CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_CONTEXT_FILES = [
   {
     path: path.join(WORKSPACE_DIR, "IDENTITY.md"),
     content: "<IDENTITY.md contents will be here>",
@@ -136,10 +169,6 @@ const CODEX_WORKSPACE_DEVELOPER_CONTEXT_FILES = [
   {
     path: path.join(WORKSPACE_DIR, "SOUL.md"),
     content: "<SOUL.md contents will be here>",
-  },
-  {
-    path: path.join(WORKSPACE_DIR, "TOOLS.md"),
-    content: "<TOOLS.md contents will be here>",
   },
   {
     path: path.join(WORKSPACE_DIR, "USER.md"),
@@ -153,7 +182,7 @@ const CODEX_HEARTBEAT_CONTEXT_FILE = {
 } as const;
 
 const CODEX_WORKSPACE_BOOTSTRAP_PROMPT_CONTEXT = [
-  "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. SOUL.md, IDENTITY.md, TOOLS.md, and USER.md are provided separately as Codex developer instructions. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.",
+  "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. TOOLS.md is provided as inherited Codex developer instructions. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. HEARTBEAT.md is handled by heartbeat collaboration-mode guidance. Those files are not repeated here.",
   "",
   "# Project Context",
   "",
@@ -169,12 +198,27 @@ const CODEX_WORKSPACE_BOOTSTRAP_PROMPT_CONTEXT = [
   .join("\n")
   .trim();
 
-const CODEX_WORKSPACE_DEVELOPER_INSTRUCTIONS = [
+const CODEX_WORKSPACE_THREAD_DEVELOPER_INSTRUCTIONS = [
+  "## OpenClaw Workspace Instructions",
+  "",
+  "OpenClaw loaded these workspace instruction files from the active agent workspace. Internalize and follow them accordingly.",
+  "",
+  ...CODEX_WORKSPACE_THREAD_DEVELOPER_CONTEXT_FILES.flatMap((file) => [
+    `### ${file.path}`,
+    "",
+    file.content,
+    "",
+  ]),
+]
+  .join("\n")
+  .trim();
+
+const CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_INSTRUCTIONS = [
   "## OpenClaw Agent Soul",
   "",
-  "OpenClaw loaded these workspace instruction files from the active agent workspace. They define who you are, how you work, what tools are available, and the human you work alongside. Internalize and follow them accordingly.",
+  "OpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly.",
   "",
-  ...CODEX_WORKSPACE_DEVELOPER_CONTEXT_FILES.flatMap((file) => [
+  ...CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_CONTEXT_FILES.flatMap((file) => [
     `### ${file.path}`,
     "",
     file.content,
@@ -245,7 +289,7 @@ const happyPathModel = {
   api: "responses",
   input: ["text"],
   contextWindow: 272_000,
-} as unknown as Model<Api>;
+} as unknown as Model;
 
 function stableJsonValue(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -339,6 +383,7 @@ function createAttempt(params: {
     trigger: params.scenario.trigger,
     messageProvider: params.scenario.ctx.Provider,
     messageChannel: params.scenario.ctx.OriginatingChannel,
+    chatType: normalizeChatType(params.scenario.ctx.ChatType),
     agentAccountId: params.scenario.ctx.AccountId,
     messageTo: params.scenario.ctx.OriginatingTo,
     messageThreadId: params.scenario.ctx.MessageThreadId,
@@ -359,6 +404,7 @@ function createAttempt(params: {
 }
 
 function createDynamicTools(params: {
+  codexApi: CodexPromptSnapshotApi;
   ctx: TemplateContext;
   trigger: "user" | "heartbeat";
 }): CodexDynamicToolSpec[] {
@@ -410,13 +456,13 @@ function createDynamicTools(params: {
     modelApi: "responses",
     model: happyPathModel,
   });
-  return codexApi.createCodexDynamicToolSpecsForPromptSnapshot({
+  return params.codexApi.createCodexDynamicToolSpecsForPromptSnapshot({
     tools: normalized.filter((tool) => HAPPY_PATH_TOOL_NAMES.has(tool.name)),
     directToolNames: ["message"],
   });
 }
 
-function createScenarios(): PromptScenario[] {
+function createScenarios(codexApi: CodexPromptSnapshotApi): PromptScenario[] {
   const telegramDirectCtx: TemplateContext = {
     Provider: "telegram",
     Surface: "telegram",
@@ -469,9 +515,17 @@ function createScenarios(): PromptScenario[] {
     Body: resolveHeartbeatPromptForResponseTool(),
     BodyStripped: resolveHeartbeatPromptForResponseTool(),
   };
-  const telegramDirectTools = createDynamicTools({ ctx: telegramDirectCtx, trigger: "user" });
-  const discordGroupTools = createDynamicTools({ ctx: discordGroupCtx, trigger: "user" });
-  const heartbeatTools = createDynamicTools({ ctx: heartbeatCtx, trigger: "heartbeat" });
+  const telegramDirectTools = createDynamicTools({
+    codexApi,
+    ctx: telegramDirectCtx,
+    trigger: "user",
+  });
+  const discordGroupTools = createDynamicTools({
+    codexApi,
+    ctx: discordGroupCtx,
+    trigger: "user",
+  });
+  const heartbeatTools = createDynamicTools({ codexApi, ctx: heartbeatCtx, trigger: "heartbeat" });
 
   return [
     {
@@ -557,10 +611,8 @@ function selectedThreadStartParams(value: Record<string, unknown>): Record<strin
     ...value,
     developerInstructions: "<see Reconstructed Model-Bound Prompt Layers>",
     dynamicTools: Array.isArray(value.dynamicTools)
-      ? value.dynamicTools.map((tool) =>
-          tool && typeof tool === "object" && "name" in tool
-            ? (tool as { name?: unknown }).name
-            : tool,
+      ? flattenCodexDynamicToolSpecs(value.dynamicTools as CodexDynamicToolSpec[]).map(
+          (tool) => tool.name,
         )
       : value.dynamicTools,
   };
@@ -741,7 +793,10 @@ function prependCodexOpenClawRuntimeContext(prompt: string): string {
   return [buildCodexOpenClawRuntimeContext(), "", "Current user request:", prompt].join("\n");
 }
 
-function renderScenarioSnapshot(scenario: PromptScenario): string {
+function renderScenarioSnapshot(
+  codexApi: CodexPromptSnapshotApi,
+  scenario: PromptScenario,
+): string {
   const attempt = createAttempt({
     scenario,
     sessionKey: scenario.ctx.SessionKey ?? `agent:main:${scenario.id}`,
@@ -756,11 +811,13 @@ function renderScenarioSnapshot(scenario: PromptScenario): string {
     appServer,
     config: CODEX_PROMPT_SNAPSHOT_THREAD_CONFIG,
     promptText: codexTurnPromptText,
-    developerInstructionAdditions: CODEX_WORKSPACE_DEVELOPER_INSTRUCTIONS,
+    developerInstructionAdditions: CODEX_WORKSPACE_THREAD_DEVELOPER_INSTRUCTIONS,
+    turnScopedDeveloperInstructions: CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_INSTRUCTIONS,
     heartbeatCollaborationInstructions:
       scenario.trigger === "heartbeat" ? CODEX_HEARTBEAT_COLLABORATION_INSTRUCTIONS : undefined,
   });
-  const criticalToolSpecs = scenario.dynamicTools.filter((tool) =>
+  const dynamicToolFunctions = flattenCodexDynamicToolSpecs(scenario.dynamicTools);
+  const criticalToolSpecs = dynamicToolFunctions.filter((tool) =>
     ["message", "heartbeat_respond"].includes(tool.name),
   );
   const dynamicToolsJson = stableJson(scenario.dynamicTools);
@@ -773,7 +830,7 @@ function renderScenarioSnapshot(scenario: PromptScenario): string {
     "",
     ...scenario.notes.map((note) => `- ${note}`),
     "- This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.",
-    "- This also simulates Codex workspace bootstrap routing: `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and `USER.md` as developer instructions, `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.",
+    "- This also simulates Codex workspace bootstrap routing: `TOOLS.md` as inherited developer instructions, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, `MEMORY.md` in turn input, and `HEARTBEAT.md` as a heartbeat-only file pointer.",
     "",
     "## Scenario Metadata",
     "",
@@ -793,9 +850,10 @@ function renderScenarioSnapshot(scenario: PromptScenario): string {
         simulatedWorkspaceBootstrapFiles: CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES.map(
           (file) => file.path,
         ),
-        simulatedWorkspaceDeveloperInstructionFiles: CODEX_WORKSPACE_DEVELOPER_CONTEXT_FILES.map(
-          (file) => file.path,
-        ),
+        simulatedWorkspaceDeveloperInstructionFiles:
+          CODEX_WORKSPACE_THREAD_DEVELOPER_CONTEXT_FILES.map((file) => file.path),
+        simulatedWorkspaceTurnScopedDeveloperInstructionFiles:
+          CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_CONTEXT_FILES.map((file) => file.path),
         simulatedHeartbeatWorkspaceFile: CODEX_HEARTBEAT_CONTEXT_FILE.path,
       }),
     ),
@@ -819,7 +877,7 @@ function renderScenarioSnapshot(scenario: PromptScenario): string {
     ...renderModelBoundPromptLayers({ scenario, codexSnapshot, dynamicToolsJson }),
     "## Dynamic Tool Names",
     "",
-    markdownFence("json", stableJson(scenario.dynamicTools.map((tool) => tool.name))),
+    markdownFence("json", stableJson(dynamicToolFunctions.map((tool) => tool.name))),
     "",
     "## Critical Visible-Reply Tool Specs",
     "",
@@ -879,8 +937,10 @@ function renderReadme(scenarios: PromptScenario[]): string {
   ].join("\n");
 }
 
-export function createHappyPathPromptSnapshotFiles(): PromptSnapshotFile[] {
-  const scenarios = createScenarios();
+/** Build all Codex happy-path prompt snapshot files without writing them. */
+export async function createHappyPathPromptSnapshotFiles(): Promise<PromptSnapshotFile[]> {
+  const codexApi = await loadCodexPromptSnapshotApi();
+  const scenarios = createScenarios(codexApi);
   const files = [
     {
       path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, "README.md"),
@@ -888,7 +948,7 @@ export function createHappyPathPromptSnapshotFiles(): PromptSnapshotFile[] {
     },
     ...scenarios.map((scenario) => ({
       path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, `${scenario.id}.md`),
-      content: renderScenarioSnapshot(scenario),
+      content: renderScenarioSnapshot(codexApi, scenario),
     })),
     ...scenarios.map((scenario) => ({
       path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, scenario.toolSnapshotFile),

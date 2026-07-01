@@ -1,3 +1,4 @@
+// Msteams tests cover graph plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -89,6 +90,33 @@ function mockJsonFetchResponse(body: unknown, init?: ResponseInit) {
 
 function mockTextFetchResponse(body: string, init?: ResponseInit) {
   mockFetch(async () => textResponse(body, init));
+}
+
+function graphStreamResponse(body: unknown): {
+  response: Response;
+  arrayBuffer: ReturnType<typeof vi.fn>;
+} {
+  const encoded = new TextEncoder().encode(JSON.stringify(body));
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoded);
+      controller.close();
+    },
+  });
+  const arrayBuffer = vi.fn(async () => {
+    throw new Error("Graph response must stay streaming");
+  });
+  return {
+    response: {
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: new Headers({ "content-type": "application/json" }),
+      body: stream,
+      arrayBuffer,
+    } as unknown as Response,
+    arrayBuffer,
+  };
 }
 
 function graphCollection<T>(...items: T[]) {
@@ -228,6 +256,20 @@ describe("msteams graph helpers", () => {
     );
   });
 
+  it("keeps successful Graph responses streaming for bounded JSON parsing", async () => {
+    const { response, arrayBuffer } = graphStreamResponse(graphCollection(groupOne));
+    mockFetch(async () => response);
+
+    await expect(
+      fetchGraphJson<{ value: Array<{ id: string }> }>({
+        token: graphToken,
+        path: "/groups?$select=id",
+      }),
+    ).resolves.toEqual(graphCollection(groupOne));
+
+    expect(arrayBuffer).not.toHaveBeenCalled();
+  });
+
   it("posts Graph JSON to v1 and beta roots and treats empty mutation responses as undefined", async () => {
     mockFetch(async (input) => {
       if (requestUrl(input).startsWith("https://graph.microsoft.com/beta")) {
@@ -298,6 +340,17 @@ describe("msteams graph helpers", () => {
 
     expect(createMSTeamsTokenProviderMock).toHaveBeenCalledWith(mockApp);
     expect(getAccessToken).toHaveBeenCalledWith("https://graph.microsoft.com");
+  });
+
+  it("fails closed for China cloud Graph token resolution", async () => {
+    mockGraphTokenResolution();
+
+    await expectRejectsToThrow(
+      resolveGraphToken({ channels: { msteams: { cloud: "China" } } }),
+      "Microsoft Teams Graph operations are not supported for channels.msteams.cloud=China",
+    );
+
+    expect(loadMSTeamsSdkWithAuthMock).not.toHaveBeenCalled();
   });
 
   it("fails when credentials or access tokens are unavailable", async () => {

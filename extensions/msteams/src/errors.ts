@@ -1,6 +1,8 @@
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
+// Msteams plugin module implements errors behavior.
+import { asFiniteNumberInRange, parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+
+const MAX_SAFE_RETRY_AFTER_SECONDS = Number.MAX_SAFE_INTEGER / 1000;
 
 export function formatUnknownError(err: unknown): string {
   if (err instanceof Error) {
@@ -35,28 +37,31 @@ function extractStatusCode(err: unknown): number | null {
   if (!isRecord(err)) {
     return null;
   }
-  const direct = err.statusCode ?? err.status;
-  if (typeof direct === "number" && Number.isFinite(direct)) {
-    return direct;
-  }
-  if (typeof direct === "string") {
-    const parsed = Number.parseInt(direct, 10);
-    if (Number.isFinite(parsed)) {
-      return parsed;
+  const parseStatusCode = (value: unknown): number | null => {
+    if (typeof value === "number") {
+      return Number.isInteger(value) && value >= 100 && value <= 599 ? value : null;
     }
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (!/^\d{3}$/.test(trimmed)) {
+        return null;
+      }
+      const parsed = Number(trimmed);
+      return parsed >= 100 && parsed <= 599 ? parsed : null;
+    }
+    return null;
+  };
+  const direct = err.statusCode ?? err.status;
+  const directStatus = parseStatusCode(direct);
+  if (directStatus !== null) {
+    return directStatus;
   }
 
   const response = err.response;
   if (isRecord(response)) {
-    const status = response.status;
-    if (typeof status === "number" && Number.isFinite(status)) {
-      return status;
-    }
-    if (typeof status === "string") {
-      const parsed = Number.parseInt(status, 10);
-      if (Number.isFinite(parsed)) {
-        return parsed;
-      }
+    const responseStatus = parseStatusCode(response.status);
+    if (responseStatus !== null) {
+      return responseStatus;
     }
   }
 
@@ -95,17 +100,25 @@ function extractRetryAfterMs(err: unknown): number | null {
   }
 
   const direct = err.retryAfterMs ?? err.retry_after_ms;
-  if (typeof direct === "number" && Number.isFinite(direct) && direct >= 0) {
-    return direct;
+  const directMs = asFiniteNumberInRange(direct, {
+    min: 0,
+    max: Number.MAX_SAFE_INTEGER,
+  });
+  if (directMs !== undefined) {
+    return directMs;
   }
 
   const retryAfter = err.retryAfter ?? err.retry_after;
-  if (typeof retryAfter === "number" && Number.isFinite(retryAfter)) {
-    return retryAfter >= 0 ? retryAfter * 1000 : null;
+  const retryAfterSeconds = asFiniteNumberInRange(retryAfter, {
+    min: 0,
+    max: MAX_SAFE_RETRY_AFTER_SECONDS,
+  });
+  if (retryAfterSeconds !== undefined) {
+    return retryAfterSeconds * 1000;
   }
   if (typeof retryAfter === "string") {
-    const parsed = Number.parseFloat(retryAfter);
-    if (Number.isFinite(parsed) && parsed >= 0) {
+    const parsed = parseNonNegativeRetryAfterSeconds(retryAfter);
+    if (parsed !== undefined) {
       return parsed * 1000;
     }
   }
@@ -123,8 +136,8 @@ function extractRetryAfterMs(err: unknown): number | null {
   if (isRecord(headers)) {
     const raw = headers["retry-after"] ?? headers["Retry-After"];
     if (typeof raw === "string") {
-      const parsed = Number.parseFloat(raw);
-      if (Number.isFinite(parsed) && parsed >= 0) {
+      const parsed = parseNonNegativeRetryAfterSeconds(raw);
+      if (parsed !== undefined) {
         return parsed * 1000;
       }
     }
@@ -139,14 +152,25 @@ function extractRetryAfterMs(err: unknown): number | null {
   ) {
     const raw = (headers as { get: (name: string) => string | null }).get("retry-after");
     if (raw) {
-      const parsed = Number.parseFloat(raw);
-      if (Number.isFinite(parsed) && parsed >= 0) {
+      const parsed = parseNonNegativeRetryAfterSeconds(raw);
+      if (parsed !== undefined) {
         return parsed * 1000;
       }
     }
   }
 
   return null;
+}
+
+function parseNonNegativeRetryAfterSeconds(raw: string): number | undefined {
+  const trimmed = raw.trim();
+  if (!/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    return undefined;
+  }
+  return asFiniteNumberInRange(parseStrictFiniteNumber(trimmed), {
+    min: 0,
+    max: MAX_SAFE_RETRY_AFTER_SECONDS,
+  });
 }
 
 type MSTeamsSendErrorKind =

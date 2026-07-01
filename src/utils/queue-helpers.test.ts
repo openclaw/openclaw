@@ -1,9 +1,11 @@
+// Queue helper tests cover queue ordering and dedupe utility behavior.
 import { describe, expect, it } from "vitest";
 import {
+  applyQueueDropPolicy,
   applyQueueRuntimeSettings,
-  buildQueueSummaryPrompt,
   clearQueueSummaryState,
-  drainCollectItemIfNeeded,
+  drainCollectQueueStep,
+  drainNextQueueItem,
   hasCrossChannelItems,
   previewQueueSummaryPrompt,
 } from "./queue-helpers.js";
@@ -82,26 +84,6 @@ describe("queue summary helpers", () => {
     });
   });
 
-  it("buildQueueSummaryPrompt clears state after rendering", () => {
-    const state = {
-      dropPolicy: "summarize" as const,
-      droppedCount: 1,
-      summaryLines: ["line"],
-    };
-
-    const prompt = buildQueueSummaryPrompt({
-      state,
-      noun: "announce",
-    });
-
-    expect(prompt).toContain("[Queue overflow] Dropped 1 announce due to cap.");
-    expect(state).toEqual({
-      dropPolicy: "summarize",
-      droppedCount: 0,
-      summaryLines: [],
-    });
-  });
-
   it("clearQueueSummaryState resets summary counters", () => {
     const state = {
       dropPolicy: "summarize" as const,
@@ -114,13 +96,14 @@ describe("queue summary helpers", () => {
   });
 });
 
-describe("drainCollectItemIfNeeded", () => {
+describe("drainCollectQueueStep", () => {
   it("skips when neither force mode nor cross-channel routing is active", async () => {
     const seen: number[] = [];
     const items = [1];
+    const collectState = { forceIndividualCollect: false };
 
-    const result = await drainCollectItemIfNeeded({
-      forceIndividualCollect: false,
+    const result = await drainCollectQueueStep({
+      collectState,
       isCrossChannel: false,
       items,
       run: async (item) => {
@@ -136,9 +119,10 @@ describe("drainCollectItemIfNeeded", () => {
   it("drains one item in force mode", async () => {
     const seen: number[] = [];
     const items = [1, 2];
+    const collectState = { forceIndividualCollect: true };
 
-    const result = await drainCollectItemIfNeeded({
-      forceIndividualCollect: true,
+    const result = await drainCollectQueueStep({
+      collectState,
       isCrossChannel: false,
       items,
       run: async (item) => {
@@ -152,20 +136,68 @@ describe("drainCollectItemIfNeeded", () => {
   });
 
   it("switches to force mode and returns empty when cross-channel with no queued item", async () => {
-    let forced = false;
+    const collectState = { forceIndividualCollect: false };
 
-    const result = await drainCollectItemIfNeeded({
-      forceIndividualCollect: false,
+    const result = await drainCollectQueueStep({
+      collectState,
       isCrossChannel: true,
-      setForceIndividualCollect: (next) => {
-        forced = next;
-      },
       items: [],
       run: async () => {},
     });
 
     expect(result).toBe("empty");
-    expect(forced).toBe(true);
+    expect(collectState.forceIndividualCollect).toBe(true);
+  });
+});
+
+describe("drainNextQueueItem", () => {
+  it("keeps overflow survivors when the queue mutates during an awaited drain", async () => {
+    type Item = { id: string };
+    const queue = {
+      items: [{ id: "m1" }],
+      cap: 3,
+      dropPolicy: "summarize" as const,
+      droppedCount: 0,
+      summaryLines: [],
+    };
+    const delivered: string[] = [];
+    const dropped: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const firstDrain = drainNextQueueItem(queue.items, async (item: Item) => {
+      delivered.push(item.id);
+      await gate;
+    });
+    await Promise.resolve();
+
+    for (let index = 2; index <= 8; index += 1) {
+      const item = { id: `m${index}` };
+      const shouldEnqueue = applyQueueDropPolicy({
+        queue,
+        summarize: (queued) => queued.id,
+        onDrop: (items) => {
+          dropped.push(...items.map((queued) => queued.id));
+        },
+      });
+      if (shouldEnqueue) {
+        queue.items.push(item);
+      }
+    }
+
+    release();
+    await firstDrain;
+    while (
+      await drainNextQueueItem(queue.items, async (item) => {
+        delivered.push(item.id);
+      })
+    ) {}
+
+    expect(delivered).toEqual(["m1", "m6", "m7", "m8"]);
+    expect(dropped).toEqual(["m1", "m2", "m3", "m4", "m5"]);
+    expect(queue.items).toEqual([]);
   });
 });
 

@@ -1,3 +1,4 @@
+// Whatsapp API module exposes the plugin public contract.
 import type {
   AnyMessageContent,
   MiscMessageGenerationOptions,
@@ -6,6 +7,7 @@ import type {
 } from "baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { resolveWhatsAppDocumentFileName } from "../document-filename.js";
+import { addWhatsAppImagePreviewFields } from "../image-preview.js";
 import { isWhatsAppNewsletterJid } from "../normalize.js";
 import { buildQuotedMessageOptions } from "../quoted-message.js";
 import { toWhatsappJid, toWhatsappJidWithLid } from "../text-runtime.js";
@@ -16,9 +18,26 @@ import {
 import {
   combineWhatsAppSendResults,
   normalizeWhatsAppSendResult,
+  type WhatsAppSendKind,
   type WhatsAppSendResult,
 } from "./send-result.js";
 import type { ActiveWebSendOptions } from "./types.js";
+
+type StructuredContactSend = {
+  displayName: string;
+  vcard: string;
+};
+
+type StructuredLocationSend = {
+  address?: string;
+  degreesLatitude: number;
+  degreesLongitude: number;
+  name?: string;
+};
+
+type StructuredStickerSendOptions = {
+  mimetype?: string;
+};
 
 function recordWhatsAppOutbound(accountId: string) {
   recordChannelActivity({
@@ -63,15 +82,26 @@ export function createWebSendApi(params: {
     params.resolveOutboundMentions
       ? await params.resolveOutboundMentions({ jid, text })
       : { text, mentionedJids: [] };
+  const sendStructuredMessage = async (
+    to: string,
+    content: AnyMessageContent,
+    kind: WhatsAppSendKind,
+  ): Promise<WhatsAppSendResult> => {
+    const jid = resolveOutboundJid(to);
+    const result = await params.sock.sendMessage(jid, content);
+    recordWhatsAppOutbound(params.defaultAccountId);
+    return normalizeWhatsAppSendResult(result, kind);
+  };
 
   return {
     sendMessage: async (
       to: string,
       text: string,
       mediaBuffer?: Buffer,
-      mediaType?: string,
+      mediaTypeInput?: string,
       sendOptions?: ActiveWebSendOptions,
     ): Promise<WhatsAppSendResult> => {
+      let mediaType = mediaTypeInput;
       const jid = resolveOutboundJid(to);
       let payload: AnyMessageContent;
       if (mediaBuffer) {
@@ -96,11 +126,11 @@ export function createWebSendApi(params: {
             mimetype: mediaType,
           };
         } else if (mediaType.startsWith("image/")) {
-          payload = {
+          payload = await addWhatsAppImagePreviewFields({
             image: mediaBuffer,
             caption: resolvedPayloadText.text || undefined,
             mimetype: mediaType,
-          };
+          });
         } else if (mediaType.startsWith("audio/")) {
           payload = { audio: mediaBuffer, ptt: true, mimetype: mediaType };
         } else if (mediaType.startsWith("video/")) {
@@ -157,16 +187,68 @@ export function createWebSendApi(params: {
       to: string,
       poll: { question: string; options: string[]; maxSelections?: number },
     ): Promise<WhatsAppSendResult> => {
-      const jid = resolveOutboundJid(to);
-      const result = await params.sock.sendMessage(jid, {
-        poll: {
-          name: poll.question,
-          values: poll.options,
-          selectableCount: poll.maxSelections ?? 1,
-        },
-      } as AnyMessageContent);
-      recordWhatsAppOutbound(params.defaultAccountId);
-      return normalizeWhatsAppSendResult(result, "poll");
+      return await sendStructuredMessage(
+        to,
+        {
+          poll: {
+            name: poll.question,
+            values: poll.options,
+            selectableCount: poll.maxSelections ?? 1,
+          },
+        } as AnyMessageContent,
+        "poll",
+      );
+    },
+    sendContact: async (
+      to: string,
+      contact: StructuredContactSend,
+    ): Promise<WhatsAppSendResult> => {
+      return await sendStructuredMessage(
+        to,
+        {
+          contacts: {
+            displayName: contact.displayName,
+            contacts: [
+              {
+                displayName: contact.displayName,
+                vcard: contact.vcard,
+              },
+            ],
+          },
+        } as AnyMessageContent,
+        "contact",
+      );
+    },
+    sendLocation: async (
+      to: string,
+      location: StructuredLocationSend,
+    ): Promise<WhatsAppSendResult> => {
+      return await sendStructuredMessage(
+        to,
+        {
+          location: {
+            degreesLatitude: location.degreesLatitude,
+            degreesLongitude: location.degreesLongitude,
+            name: location.name,
+            address: location.address,
+          },
+        } as AnyMessageContent,
+        "location",
+      );
+    },
+    sendSticker: async (
+      to: string,
+      stickerBuffer: Buffer,
+      options?: StructuredStickerSendOptions,
+    ): Promise<WhatsAppSendResult> => {
+      return await sendStructuredMessage(
+        to,
+        {
+          sticker: stickerBuffer,
+          mimetype: options?.mimetype ?? "image/webp",
+        } as AnyMessageContent,
+        "sticker",
+      );
     },
     sendReaction: async (
       chatJid: string,
@@ -175,10 +257,9 @@ export function createWebSendApi(params: {
       fromMe: boolean,
       participant?: string,
     ): Promise<WhatsAppSendResult> => {
-      // chatJid is typically already a JID (group or DM); pass through
-      // unchanged. The participant is a sender id and stays PN-shaped to match
-      // how the existing inbound flow stores it.
-      const jid = toWhatsappJid(chatJid);
+      // Resolve DM targets through the same LID-aware path as normal sends so
+      // reactions land on the delivered WhatsApp message key.
+      const jid = resolveOutboundJid(chatJid);
       const result = await params.sock.sendMessage(jid, {
         react: {
           text: emoji,

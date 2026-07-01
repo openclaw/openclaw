@@ -1,6 +1,11 @@
+/**
+ * HTTP handler for the Admin RPC endpoint. It validates JSON requests, enforces
+ * the method allowlist, dispatches gateway methods, and maps errors to HTTP.
+ */
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isAdminHttpRpcAllowedMethod, listAdminHttpRpcAllowedMethods } from "./methods.js";
 
 const DEFAULT_RPC_BODY_BYTES = 1024 * 1024;
@@ -37,10 +42,6 @@ type ParsedRequest = {
   method: string;
   params?: unknown;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function createError(code: string, message: string): RpcError {
   return { code, message };
@@ -130,9 +131,7 @@ function readRpcRequestBody(body: unknown):
     request: {
       id,
       method: rpcBody.method.trim(),
-      ...(Object.prototype.hasOwnProperty.call(rpcBody, "params")
-        ? { params: rpcBody.params }
-        : {}),
+      ...(Object.hasOwn(rpcBody, "params") ? { params: rpcBody.params } : {}),
     },
   };
 }
@@ -189,6 +188,7 @@ async function dispatchAdminRpc(request: ParsedRequest): Promise<RpcResponse> {
   }
 }
 
+/** Handle one gateway-authenticated Admin HTTP RPC request. */
 export async function handleAdminHttpRpcRequest(
   req: IncomingMessage,
   res: ServerResponse,

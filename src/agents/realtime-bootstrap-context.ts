@@ -1,28 +1,36 @@
+/**
+ * Realtime bootstrap context loader.
+ *
+ * Voice/realtime sessions use this to inject selected profile files into model
+ * instructions with deterministic ordering and a hard character budget.
+ */
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath, truncateUtf16Safe } from "../utils.js";
 import { resolveAgentWorkspaceDir } from "./agent-scope.js";
 import { resolveBootstrapFilesForRun } from "./bootstrap-files.js";
-import { buildBootstrapContextFiles } from "./pi-embedded-helpers.js";
+import { buildBootstrapContextFiles } from "./embedded-agent-helpers.js";
 import {
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_SOUL_FILENAME,
   DEFAULT_USER_FILENAME,
 } from "./workspace.js";
 
+/** Default ordered profile files included in realtime bootstrap context. */
 export const REALTIME_BOOTSTRAP_CONTEXT_FILE_NAMES = [
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_USER_FILENAME,
   DEFAULT_SOUL_FILENAME,
 ] as const;
 
+/** Profile file names allowed in realtime bootstrap context. */
 export type RealtimeBootstrapContextFileName =
   (typeof REALTIME_BOOTSTRAP_CONTEXT_FILE_NAMES)[number];
 
 const REALTIME_BOOTSTRAP_CONTEXT_FILE_NAME_SET: ReadonlySet<string> = new Set(
   REALTIME_BOOTSTRAP_CONTEXT_FILE_NAMES,
 );
-const DEFAULT_REALTIME_BOOTSTRAP_CONTEXT_MAX_CHARS = 4_000;
+const DEFAULT_REALTIME_BOOTSTRAP_CONTEXT_MAX_CHARS = 12_000;
 const REALTIME_BOOTSTRAP_CONTEXT_TITLE = "OpenClaw realtime voice profile context:";
 const REALTIME_BOOTSTRAP_CONTEXT_GUIDANCE =
   "Use these profile files for identity, persona, and user grounding; do not mention them unless asked.";
@@ -65,6 +73,7 @@ function normalizeRealtimeBootstrapContextFileNames(
   return normalized;
 }
 
+/** Builds bounded realtime instructions from selected profile bootstrap files. */
 export async function resolveRealtimeBootstrapContextInstructions(params: {
   agentId: string;
   config: OpenClawConfig;
@@ -96,6 +105,7 @@ export async function resolveRealtimeBootstrapContextInstructions(params: {
         requestedOrder.has(file.name),
     )
     .toSorted((left, right) => {
+      // Preserve requested profile-file order, then path-sort duplicate sources.
       const leftOrder = isRealtimeBootstrapContextFileName(left.name)
         ? (requestedOrder.get(left.name) ?? 0)
         : 0;
@@ -127,6 +137,8 @@ export async function resolveRealtimeBootstrapContextInstructions(params: {
     );
     return undefined;
   }
+  // Divide the remaining budget evenly; buildBootstrapContextFiles enforces
+  // both per-file and aggregate UTF-16-safe truncation.
   const perFileMaxChars = Math.max(1, Math.floor(contentBudget / selectedFiles.length));
   const contextFiles = buildBootstrapContextFiles(selectedFiles, {
     maxChars: perFileMaxChars,

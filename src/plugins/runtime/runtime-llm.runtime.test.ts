@@ -1,5 +1,6 @@
+// Runtime LLM tests cover plugin provider hooks inside the model runtime adapter.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveContextEngineCapabilities } from "../../agents/pi-embedded-runner/context-engine-capabilities.js";
+import { resolveContextEngineCapabilities } from "../../agents/embedded-agent-runner/context-engine-capabilities.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withPluginRuntimePluginIdScope } from "./gateway-request-scope.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
@@ -162,13 +163,37 @@ describe("runtime.llm.complete", () => {
     expectSingleCallFirstArg(hoisted.prepareSimpleCompletionModelForAgent, {
       cfg,
       agentId: "ada",
+      allowBundledStaticCatalogFallback: true,
       allowMissingApiKeyModes: ["aws-sdk"],
+      skipAgentDiscovery: true,
     });
     expect(result.agentId).toBe("ada");
     expectFields(requireRecord(result.audit, "audit"), {
       caller: { kind: "context-engine", id: "context-engine.after-turn" },
       purpose: "memory-maintenance",
       sessionKey: "agent:ada:session:abc",
+    });
+  });
+
+  it("passes the active auth profile to context-engine completions", async () => {
+    const runtimeContext = resolveContextEngineCapabilities({
+      config: cfg,
+      sessionKey: "agent:ada:session:abc",
+      authProfileId: "openai:claude@martian.engineering",
+      purpose: "context-engine.compaction",
+    });
+
+    await runtimeContext.llm!.complete({
+      messages: [{ role: "user", content: "summarize" }],
+    });
+
+    expectSingleCallFirstArg(hoisted.prepareSimpleCompletionModelForAgent, {
+      cfg,
+      agentId: "ada",
+      preferredProfile: "openai:claude@martian.engineering",
+      allowBundledStaticCatalogFallback: true,
+      allowMissingApiKeyModes: ["aws-sdk"],
+      skipAgentDiscovery: true,
     });
   });
 
@@ -232,7 +257,7 @@ describe("runtime.llm.complete", () => {
 
     await expect(
       runtimeContext.llm!.complete({
-        model: "openai-codex/gpt-5.4-mini",
+        model: "openai/gpt-5.4-mini",
         messages: [{ role: "user", content: "summarize" }],
       }),
     ).rejects.toThrow("cannot override the target model");
@@ -248,7 +273,7 @@ describe("runtime.llm.complete", () => {
             "lossless-claw": {
               llm: {
                 allowModelOverride: true,
-                allowedModels: ["openai-codex/gpt-5.4-mini", "minimax/MiniMax-M2.7"],
+                allowedModels: ["openai/gpt-5.4-mini", "minimax/MiniMax-M2.7"],
               },
             },
           },
@@ -261,13 +286,13 @@ describe("runtime.llm.complete", () => {
 
     const result = await runtimeContext.llm!.complete({
       agentId: "main",
-      model: "openai-codex/gpt-5.4-mini",
+      model: "openai/gpt-5.4-mini",
       messages: [{ role: "user", content: "summarize" }],
     });
 
     expectSingleCallFirstArg(hoisted.prepareSimpleCompletionModelForAgent, {
       agentId: "main",
-      modelRef: "openai-codex/gpt-5.4-mini",
+      modelRef: "openai/gpt-5.4-mini",
     });
     expectFields(requireRecord(result.audit, "audit"), {
       caller: { kind: "context-engine", id: "context-engine.compaction" },
@@ -284,7 +309,7 @@ describe("runtime.llm.complete", () => {
             "lossless-claw": {
               llm: {
                 allowModelOverride: true,
-                allowedModels: ["openai-codex/gpt-5.4-mini"],
+                allowedModels: ["openai/gpt-5.4-mini"],
               },
             },
           },
@@ -297,11 +322,11 @@ describe("runtime.llm.complete", () => {
 
     await expect(
       runtimeContext.llm!.complete({
-        model: "openai-codex/gpt-5.5",
+        model: "openai/gpt-5.5",
         messages: [{ role: "user", content: "summarize" }],
       }),
     ).rejects.toThrow(
-      'model override "openai-codex/gpt-5.5" is not allowlisted for plugin "lossless-claw"',
+      'model override "openai/gpt-5.5" is not allowlisted for plugin "lossless-claw"',
     );
     expect(hoisted.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
   });
@@ -401,7 +426,7 @@ describe("runtime.llm.complete", () => {
             "lossless-claw": {
               llm: {
                 allowModelOverride: true,
-                allowedModels: ["openai-codex/gpt-5.4-mini"],
+                allowedModels: ["openai/gpt-5.4-mini"],
               },
             },
           },
@@ -414,7 +439,7 @@ describe("runtime.llm.complete", () => {
 
     const result = await withPluginRuntimePluginIdScope("spoofed-plugin", () =>
       runtimeContext.llm!.complete({
-        model: "openai-codex/gpt-5.4-mini",
+        model: "openai/gpt-5.4-mini",
         messages: [{ role: "user", content: "summarize" }],
         caller: { kind: "plugin", id: "spoofed-plugin" },
       } as Parameters<NonNullable<typeof runtimeContext.llm>["complete"]>[0] & {
@@ -427,7 +452,7 @@ describe("runtime.llm.complete", () => {
       id: "context-engine.compaction",
     });
     expectSingleCallFirstArg(hoisted.prepareSimpleCompletionModelForAgent, {
-      modelRef: "openai-codex/gpt-5.4-mini",
+      modelRef: "openai/gpt-5.4-mini",
     });
   });
 
@@ -475,6 +500,26 @@ describe("runtime.llm.complete", () => {
       cfg,
       agentId: "worker",
     });
+  });
+
+  it("ignores request auth profile preferences without a trusted authority binding", async () => {
+    const llm = createRuntimeLlm({
+      getConfig: () => cfg,
+      authority: {
+        allowComplete: true,
+      },
+    });
+
+    await llm.complete({
+      authProfileId: "openai:work",
+      messages: [{ role: "user", content: "draft" }],
+    } as Parameters<typeof llm.complete>[0] & { authProfileId: string });
+
+    const call = expectSingleCallFirstArg(hoisted.prepareSimpleCompletionModelForAgent, {
+      cfg,
+      agentId: "main",
+    });
+    expect(call.preferredProfile).toBeUndefined();
   });
 
   it("allows host model overrides only when explicit authority allowlists the model", async () => {

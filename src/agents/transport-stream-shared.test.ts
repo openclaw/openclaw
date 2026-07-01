@@ -1,5 +1,8 @@
+// Transport stream shared tests cover payload sanitization, header merging, and
+// final/error stream termination helpers used by provider transports.
 import { describe, expect, it, vi } from "vitest";
 import {
+  assignTransportErrorDetails,
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
@@ -15,6 +18,14 @@ describe("transport stream shared helpers", () => {
     expect(sanitizeTransportPayloadText(`left${high}right`)).toBe("leftright");
     expect(sanitizeTransportPayloadText(`left${low}right`)).toBe("leftright");
     expect(sanitizeTransportPayloadText("emoji 🙈 ok")).toBe("emoji 🙈 ok");
+  });
+
+  it("returns empty string for nullish payloads instead of throwing", () => {
+    expect(sanitizeTransportPayloadText(undefined as unknown as string)).toBe("");
+    expect(sanitizeTransportPayloadText(null as unknown as string)).toBe("");
+    expect(sanitizeNonEmptyTransportPayloadText(undefined as unknown as string)).toBe(
+      "(no output)",
+    );
   });
 
   it.each([
@@ -66,6 +77,8 @@ describe("transport stream shared helpers", () => {
   });
 
   it("marks transport stream failures and runs cleanup", () => {
+    // Failure finalization mutates the output message before emitting it so
+    // downstream transcript consumers see the same error state as the stream.
     const push = vi.fn();
     const end = vi.fn();
     const cleanup = vi.fn();
@@ -87,5 +100,18 @@ describe("transport stream shared helpers", () => {
       error: output,
     });
     expect(end).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not throw while recording non-JSON transport rejections", () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    for (const error of [1n, circular]) {
+      const output: { stopReason: string; errorMessage?: string } = { stopReason: "stop" };
+
+      expect(() => assignTransportErrorDetails(output, error)).not.toThrow();
+      expect(output.stopReason).toBe("error");
+      expect(output.errorMessage).toBeTruthy();
+    }
   });
 });

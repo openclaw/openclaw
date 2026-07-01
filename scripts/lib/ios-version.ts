@@ -1,13 +1,12 @@
+// Ios Version script supports OpenClaw repository automation.
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { parseReleaseVersion } from "./npm-publish-plan.mjs";
 
 const IOS_VERSION_FILE = "apps/ios/version.json";
 const IOS_CHANGELOG_FILE = "apps/ios/CHANGELOG.md";
 const IOS_VERSION_XCCONFIG_FILE = "apps/ios/Config/Version.xcconfig";
 const IOS_RELEASE_NOTES_FILE = "apps/ios/fastlane/metadata/en-US/release_notes.txt";
-
-const PINNED_IOS_VERSION_PATTERN = /^(\d{4}\.\d{1,2}\.\d{1,2})$/u;
-const GATEWAY_VERSION_PATTERN = /^(\d{4}\.\d{1,2}\.\d{1,2})(?:-(?:alpha\.\d+|beta\.\d+|\d+))?$/u;
 
 type IosVersionManifest = {
   version: string;
@@ -29,18 +28,28 @@ function normalizeTrailingNewline(value: string): string {
   return value.endsWith("\n") ? value : `${value}\n`;
 }
 
+function parsePinnedReleaseVersion(rawVersion: string): string | null {
+  const parsed = parseReleaseVersion(rawVersion.trim());
+  if (!parsed || parsed.version !== parsed.baseVersion) {
+    return null;
+  }
+  return parsed.baseVersion;
+}
+
 export function normalizePinnedIosVersion(rawVersion: string): string {
   const trimmed = rawVersion.trim();
   if (!trimmed) {
     throw new Error(`Missing iOS version in ${IOS_VERSION_FILE}.`);
   }
 
-  const match = PINNED_IOS_VERSION_PATTERN.exec(trimmed);
-  if (!match) {
-    throw new Error(`Invalid iOS version '${rawVersion}'. Expected pinned CalVer like 2026.4.6.`);
+  const pinnedVersion = parsePinnedReleaseVersion(trimmed);
+  if (!pinnedVersion) {
+    throw new Error(
+      `Invalid iOS version '${rawVersion}'. Expected pinned release version like 2026.6.5.`,
+    );
   }
 
-  return match[1] ?? trimmed;
+  return pinnedVersion;
 }
 
 export function normalizeGatewayVersionToPinnedIosVersion(rawVersion: string): string {
@@ -49,14 +58,14 @@ export function normalizeGatewayVersionToPinnedIosVersion(rawVersion: string): s
     throw new Error("Missing root package.json version.");
   }
 
-  const match = GATEWAY_VERSION_PATTERN.exec(trimmed);
-  if (!match) {
+  const parsed = parseReleaseVersion(trimmed);
+  if (!parsed) {
     throw new Error(
-      `Invalid gateway version '${rawVersion}'. Expected YYYY.M.D, YYYY.M.D-alpha.N, YYYY.M.D-beta.N, or YYYY.M.D-N.`,
+      `Invalid gateway version '${rawVersion}'. Expected YYYY.M.PATCH, YYYY.M.PATCH-alpha.N, YYYY.M.PATCH-beta.N, or YYYY.M.PATCH-N.`,
     );
   }
 
-  return match[1] ?? trimmed;
+  return parsed.baseVersion;
 }
 
 function readRootPackageVersion(rootDir = path.resolve(".")): string {

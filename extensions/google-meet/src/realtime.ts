@@ -1,3 +1,4 @@
+// Google Meet plugin module implements realtime behavior.
 import { spawn } from "node:child_process";
 import type { Writable } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -13,6 +14,7 @@ import {
 import {
   createRealtimeVoiceAgentTalkbackQueue,
   createRealtimeVoiceBridgeSession,
+  createRealtimeVoiceOutputActivityTracker,
   createTalkSessionController,
   convertPcmToMulaw8k,
   extendRealtimeVoiceOutputEchoSuppression,
@@ -30,6 +32,7 @@ import {
   type RealtimeVoiceAgentTalkbackQueue,
   type RealtimeVoiceBridgeEventLogEntry,
   type RealtimeVoiceBridgeSession,
+  type RealtimeVoiceOutputActivityTracker,
   type RealtimeVoiceProviderConfig,
   type RealtimeVoiceProviderPlugin,
   type RealtimeVoiceTranscriptEntry,
@@ -64,6 +67,34 @@ type SpawnFn = (
   args: string[],
   options: { stdio: ["pipe" | "ignore", "pipe" | "ignore", "pipe" | "ignore"] },
 ) => BridgeProcess;
+
+function terminateBridgeProcess(proc: BridgeProcess, signal: NodeJS.Signals = "SIGTERM"): void {
+  if (proc.killed && signal !== "SIGKILL") {
+    return;
+  }
+  let exited = false;
+  proc.on("exit", () => {
+    exited = true;
+  });
+  try {
+    proc.kill(signal);
+  } catch {
+    return;
+  }
+  if (signal === "SIGKILL") {
+    return;
+  }
+  const timer = setTimeout(() => {
+    if (!exited) {
+      try {
+        proc.kill("SIGKILL");
+      } catch {
+        // Process may have exited after the grace check.
+      }
+    }
+  }, 1000);
+  timer.unref?.();
+}
 
 export type ChromeRealtimeAudioBridgeHandle = {
   providerId: string;
@@ -163,6 +194,24 @@ export function extendGoogleMeetOutputEchoSuppression(params: {
   });
 }
 
+export function recordGoogleMeetOutputActivity(params: {
+  tracker: RealtimeVoiceOutputActivityTracker;
+  audio: Buffer;
+  audioFormat: GoogleMeetConfig["chrome"]["audioFormat"];
+  nowMs: number;
+  lastOutputPlayableUntilMs: number;
+  suppressInputUntilMs: number;
+}): { lastOutputPlayableUntilMs: number; suppressInputUntilMs: number; durationMs: number } {
+  const suppression = extendGoogleMeetOutputEchoSuppression(params);
+  params.tracker.markPlaybackStarted();
+  params.tracker.markAudio({
+    audioMs: suppression.durationMs,
+    sourceAudioBytes: params.audio.byteLength,
+    sinkAudioBytes: params.audio.byteLength,
+  });
+  return suppression;
+}
+
 export function resolveGoogleMeetRealtimeAudioFormat(config: GoogleMeetConfig) {
   return config.chrome.audioFormat === "g711-ulaw-8khz"
     ? REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ
@@ -259,7 +308,7 @@ function alawByteToLinear(value: number): number {
   const sign = aLaw & 0x80;
   const exponent = (aLaw & 0x70) >> 4;
   const mantissa = aLaw & 0x0f;
-  let sample = exponent === 0 ? (mantissa << 4) + 8 : ((mantissa << 4) + 0x108) << (exponent - 1);
+  const sample = exponent === 0 ? (mantissa << 4) + 8 : ((mantissa << 4) + 0x108) << (exponent - 1);
   return sign ? sample : -sample;
 }
 
@@ -477,12 +526,11 @@ export async function startCommandAgentAudioBridge(params: {
   let lastInputAt: string | undefined;
   let lastOutputAt: string | undefined;
   let lastInputBytes = 0;
-  let lastOutputBytes = 0;
+  const outputActivity = createRealtimeVoiceOutputActivityTracker();
   let suppressedInputBytes = 0;
   let lastSuppressedInputAt: string | undefined;
   let suppressInputUntil = 0;
   let lastOutputPlayableUntilMs = 0;
-  let agentTalkback: RealtimeVoiceAgentTalkbackQueue | undefined;
   let ttsQueue = Promise.resolve();
   const transcript: GoogleMeetRealtimeTranscriptEntry[] = [];
   const resolved = resolveGoogleMeetRealtimeTranscriptionProvider({
@@ -502,8 +550,8 @@ export async function startCommandAgentAudioBridge(params: {
     { onEvent: recordTalkObservabilityEvent },
   );
   const recentTalkEvents: TalkEvent[] = [];
-  const emitTalkEvent = (input: TalkEventInput) =>
-    pushGoogleMeetTalkEvent(recentTalkEvents, talk.emit(input));
+  const emitTalkEvent = (inputResult: TalkEventInput) =>
+    pushGoogleMeetTalkEvent(recentTalkEvents, talk.emit(inputResult));
   const ensureTalkTurn = () => {
     const turn = talk.ensureTurn({
       payload: { meetingSessionId: params.meetingSessionId },
@@ -529,34 +577,6 @@ export async function startCommandAgentAudioBridge(params: {
     }),
   );
 
-  const terminateProcess = (proc: BridgeProcess, signal: NodeJS.Signals = "SIGTERM") => {
-    if (proc.killed && signal !== "SIGKILL") {
-      return;
-    }
-    let exited = false;
-    proc.on("exit", () => {
-      exited = true;
-    });
-    try {
-      proc.kill(signal);
-    } catch {
-      return;
-    }
-    if (signal === "SIGKILL") {
-      return;
-    }
-    const timer = setTimeout(() => {
-      if (!exited) {
-        try {
-          proc.kill("SIGKILL");
-        } catch {
-          // Process may have exited after the grace check.
-        }
-      }
-    }, 1000);
-    timer.unref?.();
-  };
-
   const stop = async () => {
     if (stopped) {
       return;
@@ -575,8 +595,8 @@ export async function startCommandAgentAudioBridge(params: {
       final: true,
       payload: { meetingSessionId: params.meetingSessionId },
     });
-    terminateProcess(inputProcess);
-    terminateProcess(outputProcess);
+    terminateBridgeProcess(inputProcess);
+    terminateBridgeProcess(outputProcess);
   };
 
   const fail = (label: string) => (error: Error) => {
@@ -606,7 +626,8 @@ export async function startCommandAgentAudioBridge(params: {
   });
 
   const writeOutputAudio = (audio: Buffer) => {
-    const suppression = extendGoogleMeetOutputEchoSuppression({
+    const suppression = recordGoogleMeetOutputActivity({
+      tracker: outputActivity,
       audio,
       audioFormat: params.config.chrome.audioFormat,
       nowMs: Date.now(),
@@ -616,7 +637,6 @@ export async function startCommandAgentAudioBridge(params: {
     suppressInputUntil = suppression.suppressInputUntilMs;
     lastOutputPlayableUntilMs = suppression.lastOutputPlayableUntilMs;
     lastOutputAt = new Date().toISOString();
-    lastOutputBytes += audio.byteLength;
     emitTalkEvent({
       type: "output.audio.delta",
       turnId: ensureTalkTurn(),
@@ -677,31 +697,32 @@ export async function startCommandAgentAudioBridge(params: {
         });
         endTalkTurn();
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         params.logger.warn(`[google-meet] agent TTS failed: ${formatErrorMessage(error)}`);
       });
   };
 
-  agentTalkback = createRealtimeVoiceAgentTalkbackQueue({
-    debounceMs: GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS,
-    isStopped: () => stopped,
-    logger: params.logger,
-    logPrefix: "[google-meet] agent",
-    responseStyle: "Brief, natural spoken answer for a live meeting.",
-    fallbackText: "I hit an error while checking that. Please try again.",
-    consult: ({ question, responseStyle }) =>
-      consultOpenClawAgentForGoogleMeet({
-        config: params.config,
-        fullConfig: params.fullConfig,
-        runtime: params.runtime,
-        logger: params.logger,
-        meetingSessionId: params.meetingSessionId,
-        requesterSessionKey: params.requesterSessionKey,
-        args: { question, responseStyle },
-        transcript,
-      }),
-    deliver: enqueueSpeakText,
-  });
+  const agentTalkback: RealtimeVoiceAgentTalkbackQueue | undefined =
+    createRealtimeVoiceAgentTalkbackQueue({
+      debounceMs: GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS,
+      isStopped: () => stopped,
+      logger: params.logger,
+      logPrefix: "[google-meet] agent",
+      responseStyle: "Brief, natural spoken answer for a live meeting.",
+      fallbackText: "I hit an error while checking that. Please try again.",
+      consult: ({ question, responseStyle }) =>
+        consultOpenClawAgentForGoogleMeet({
+          config: params.config,
+          fullConfig: params.fullConfig,
+          runtime: params.runtime,
+          logger: params.logger,
+          meetingSessionId: params.meetingSessionId,
+          requesterSessionKey: params.requesterSessionKey,
+          args: { question, responseStyle },
+          transcript,
+        }),
+      deliver: enqueueSpeakText,
+    });
 
   sttSession = resolved.provider.createSession({
     cfg: params.fullConfig,
@@ -787,12 +808,12 @@ export async function startCommandAgentAudioBridge(params: {
       providerConnected: sttSession?.isConnected() ?? false,
       realtimeReady,
       audioInputActive: lastInputBytes > 0,
-      audioOutputActive: lastOutputBytes > 0,
+      audioOutputActive: outputActivity.isActive(),
       lastInputAt,
       lastOutputAt,
       lastSuppressedInputAt,
       lastInputBytes,
-      lastOutputBytes,
+      lastOutputBytes: outputActivity.snapshot().sinkAudioBytes,
       suppressedInputBytes,
       ...getGoogleMeetRealtimeTranscriptHealth(transcript),
       recentTalkEvents: summarizeGoogleMeetTalkEvents(recentTalkEvents),
@@ -833,19 +854,18 @@ export async function startCommandRealtimeAudioBridge(params: {
   let lastInputAt: string | undefined;
   let lastOutputAt: string | undefined;
   let lastInputBytes = 0;
-  let lastOutputBytes = 0;
+  const outputActivity = createRealtimeVoiceOutputActivityTracker();
   let lastClearAt: string | undefined;
   let clearCount = 0;
   let suppressedInputBytes = 0;
   let lastSuppressedInputAt: string | undefined;
   let suppressInputUntil = 0;
-  let lastOutputAtMs = 0;
   let lastOutputPlayableUntilMs = 0;
   let bargeInInputProcess: BridgeProcess | undefined;
-  let agentTalkback: RealtimeVoiceAgentTalkbackQueue | undefined;
 
   const suppressInputForOutput = (audio: Buffer) => {
-    const suppression = extendGoogleMeetOutputEchoSuppression({
+    const suppression = recordGoogleMeetOutputActivity({
+      tracker: outputActivity,
       audio,
       audioFormat: params.config.chrome.audioFormat,
       nowMs: Date.now(),
@@ -854,34 +874,6 @@ export async function startCommandRealtimeAudioBridge(params: {
     });
     suppressInputUntil = suppression.suppressInputUntilMs;
     lastOutputPlayableUntilMs = suppression.lastOutputPlayableUntilMs;
-  };
-
-  const terminateProcess = (proc: BridgeProcess, signal: NodeJS.Signals = "SIGTERM") => {
-    if (proc.killed && signal !== "SIGKILL") {
-      return;
-    }
-    let exited = false;
-    proc.on("exit", () => {
-      exited = true;
-    });
-    try {
-      proc.kill(signal);
-    } catch {
-      return;
-    }
-    if (signal === "SIGKILL") {
-      return;
-    }
-    const timer = setTimeout(() => {
-      if (!exited) {
-        try {
-          proc.kill("SIGKILL");
-        } catch {
-          // Process may have exited after the grace check.
-        }
-      }
-    }, 1000);
-    timer.unref?.();
   };
 
   const stop = async () => {
@@ -897,10 +889,10 @@ export async function startCommandRealtimeAudioBridge(params: {
         `[google-meet] realtime voice bridge close ignored: ${formatErrorMessage(error)}`,
       );
     }
-    terminateProcess(inputProcess);
-    terminateProcess(outputProcess);
+    terminateBridgeProcess(inputProcess);
+    terminateBridgeProcess(outputProcess);
     if (bargeInInputProcess) {
-      terminateProcess(bargeInInputProcess);
+      terminateBridgeProcess(bargeInInputProcess);
     }
   };
 
@@ -950,7 +942,7 @@ export async function startCommandRealtimeAudioBridge(params: {
     params.logger.debug?.(
       `[google-meet] cleared realtime audio output buffer by restarting playback command`,
     );
-    terminateProcess(previousOutput, "SIGKILL");
+    terminateBridgeProcess(previousOutput, "SIGKILL");
   };
   const writeOutputAudio = (audio: Buffer) => {
     try {
@@ -970,12 +962,13 @@ export async function startCommandRealtimeAudioBridge(params: {
       stdio: ["ignore", "pipe", "pipe"],
     });
     bargeInInputProcess.stdout?.on("data", (chunk) => {
-      if (stopped || lastOutputAtMs === 0) {
+      if (stopped || !outputActivity.isInterruptible()) {
         return;
       }
       const now = Date.now();
       const playbackActive = now <= Math.max(lastOutputPlayableUntilMs, suppressInputUntil);
-      if (!playbackActive && now - lastOutputAtMs > 1000) {
+      const lastOutputAudioAt = outputActivity.snapshot().lastAudioAt;
+      if (!playbackActive && (lastOutputAudioAt === undefined || now - lastOutputAudioAt > 1_000)) {
         return;
       }
       if (now - lastBargeInAt < params.config.chrome.bargeInCooldownMs) {
@@ -1061,8 +1054,8 @@ export async function startCommandRealtimeAudioBridge(params: {
       pushGoogleMeetTalkEvent(recentTalkEvents, event);
     }
   };
-  const emitTalkEvent = (input: TalkEventInput): void => {
-    rememberTalkEvent(talk.emit(input));
+  const emitTalkEvent = (inputValue: TalkEventInput): void => {
+    rememberTalkEvent(talk.emit(inputValue));
   };
   const ensureTalkTurn = (): string => {
     const turn = talk.ensureTurn({
@@ -1092,28 +1085,29 @@ export async function startCommandRealtimeAudioBridge(params: {
     type: "session.started",
     payload: { meetingSessionId: params.meetingSessionId },
   });
-  agentTalkback = createRealtimeVoiceAgentTalkbackQueue({
-    debounceMs: GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS,
-    isStopped: () => stopped,
-    logger: params.logger,
-    logPrefix: "[google-meet] realtime agent",
-    responseStyle: "Brief, natural spoken answer for a live meeting.",
-    fallbackText: "I hit an error while checking that. Please try again.",
-    consult: ({ question, responseStyle }) =>
-      consultOpenClawAgentForGoogleMeet({
-        config: params.config,
-        fullConfig: params.fullConfig,
-        runtime: params.runtime,
-        logger: params.logger,
-        meetingSessionId: params.meetingSessionId,
-        requesterSessionKey: params.requesterSessionKey,
-        args: { question, responseStyle },
-        transcript,
-      }),
-    deliver: (text) => {
-      bridge?.sendUserMessage(buildGoogleMeetSpeakExactUserMessage(text));
-    },
-  });
+  const agentTalkback: RealtimeVoiceAgentTalkbackQueue | undefined =
+    createRealtimeVoiceAgentTalkbackQueue({
+      debounceMs: GOOGLE_MEET_AGENT_TRANSCRIPT_DEBOUNCE_MS,
+      isStopped: () => stopped,
+      logger: params.logger,
+      logPrefix: "[google-meet] realtime agent",
+      responseStyle: "Brief, natural spoken answer for a live meeting.",
+      fallbackText: "I hit an error while checking that. Please try again.",
+      consult: ({ question, responseStyle }) =>
+        consultOpenClawAgentForGoogleMeet({
+          config: params.config,
+          fullConfig: params.fullConfig,
+          runtime: params.runtime,
+          logger: params.logger,
+          meetingSessionId: params.meetingSessionId,
+          requesterSessionKey: params.requesterSessionKey,
+          args: { question, responseStyle },
+          transcript,
+        }),
+      deliver: (text) => {
+        bridge?.sendUserMessage(buildGoogleMeetSpeakExactUserMessage(text));
+      },
+    });
   bridge = createRealtimeVoiceBridgeSession({
     provider: resolved.provider,
     cfg: params.fullConfig,
@@ -1141,9 +1135,7 @@ export async function startCommandRealtimeAudioBridge(params: {
           turnId,
           payload: { byteLength: audio.byteLength },
         });
-        lastOutputAtMs = Date.now();
         lastOutputAt = new Date().toISOString();
-        lastOutputBytes += audio.byteLength;
         suppressInputForOutput(audio);
         writeOutputAudio(audio);
       },
@@ -1251,7 +1243,8 @@ export async function startCommandRealtimeAudioBridge(params: {
         meetingSessionId: params.meetingSessionId,
         requesterSessionKey: params.requesterSessionKey,
         transcript,
-        onTalkEvent: (input) => emitTalkEvent({ ...input, turnId: input.turnId ?? turnId }),
+        onTalkEvent: (inputLocal) =>
+          emitTalkEvent({ ...inputLocal, turnId: inputLocal.turnId ?? turnId }),
       });
     },
     onError: (error) => {
@@ -1315,12 +1308,12 @@ export async function startCommandRealtimeAudioBridge(params: {
       providerConnected: bridge?.bridge.isConnected() ?? false,
       realtimeReady,
       audioInputActive: lastInputBytes > 0,
-      audioOutputActive: lastOutputBytes > 0,
+      audioOutputActive: outputActivity.isActive(),
       lastInputAt,
       lastOutputAt,
       lastSuppressedInputAt,
       lastInputBytes,
-      lastOutputBytes,
+      lastOutputBytes: outputActivity.snapshot().sinkAudioBytes,
       suppressedInputBytes,
       ...getGoogleMeetRealtimeTranscriptHealth(transcript),
       ...getGoogleMeetRealtimeEventHealth(realtimeEvents),

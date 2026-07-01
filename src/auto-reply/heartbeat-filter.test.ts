@@ -1,3 +1,4 @@
+/** Tests heartbeat filtering and skip behavior for empty heartbeat context. */
 import { describe, expect, it } from "vitest";
 import {
   filterHeartbeatTranscriptArtifacts,
@@ -10,6 +11,7 @@ import {
   HEARTBEAT_TRANSCRIPT_PROMPT,
   resolveHeartbeatPromptForResponseTool,
 } from "./heartbeat.js";
+import { MESSAGE_TOOL_DELIVERY_HINTS } from "./reply/delivery-hints.js";
 
 describe("isHeartbeatUserMessage", () => {
   it("matches heartbeat prompts", () => {
@@ -157,32 +159,34 @@ describe("filterHeartbeatTranscriptArtifacts", () => {
   });
 
   it("removes OpenAI Responses input/output text heartbeat pairs", () => {
-    const messages = [
-      {
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text: `Delivery: to send a message, use the \`message\` tool. ${HEARTBEAT_TRANSCRIPT_PROMPT}`,
-          },
-        ],
-      },
-      {
-        role: "assistant",
-        content: [{ type: "output_text", text: "HEARTBEAT_OK" }],
-      },
-      {
-        role: "user",
-        content: [{ type: "input_text", text: "what model are you" }],
-      },
-    ];
+    for (const deliveryHint of MESSAGE_TOOL_DELIVERY_HINTS) {
+      const messages = [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: `${deliveryHint} ${HEARTBEAT_TRANSCRIPT_PROMPT}`,
+            },
+          ],
+        },
+        {
+          role: "assistant",
+          content: [{ type: "output_text", text: "HEARTBEAT_OK" }],
+        },
+        {
+          role: "user",
+          content: [{ type: "input_text", text: "what model are you" }],
+        },
+      ];
 
-    expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
-      {
-        role: "user",
-        content: [{ type: "input_text", text: "what model are you" }],
-      },
-    ]);
+      expect(filterHeartbeatTranscriptArtifacts(messages, undefined, HEARTBEAT_PROMPT)).toEqual([
+        {
+          role: "user",
+          content: [{ type: "input_text", text: "what model are you" }],
+        },
+      ]);
+    }
   });
 
   it("removes prompt-only interrupted heartbeat spans", () => {

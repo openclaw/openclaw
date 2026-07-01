@@ -1,5 +1,6 @@
+// Qa Lab tests cover bus server plugin behavior.
 import { Agent, createServer, request } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeQaHttpServer, handleQaBusRequest, startQaBusServer } from "./bus-server.js";
 import { createQaBusState } from "./bus-state.js";
 import type { QaBusPollResult } from "./runtime-api.js";
@@ -59,6 +60,20 @@ async function pollQaBus(params: {
   return (await response.json()) as QaBusPollResult;
 }
 
+async function postQaBusJson(baseUrl: string, path: string, body: unknown) {
+  return await postQaBusRawJson(baseUrl, path, JSON.stringify(body));
+}
+
+async function postQaBusRawJson(baseUrl: string, path: string, body: string) {
+  return await fetch(`${baseUrl}${path}`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body,
+  });
+}
+
 describe("closeQaHttpServer", () => {
   it("closes idle keep-alive sockets so suite processes can exit", async () => {
     const server = createServer((_req, res) => {
@@ -86,6 +101,10 @@ describe("closeQaHttpServer", () => {
 describe("qa-bus server", () => {
   const stops: Array<() => Promise<void>> = [];
 
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
   afterEach(async () => {
     await Promise.all(stops.splice(0).map((stop) => stop()));
   });
@@ -93,7 +112,7 @@ describe("qa-bus server", () => {
   it("wakes stale-cursor long polls as soon as matching account traffic arrives", async () => {
     const state = createQaBusState();
     const bus = await startQaBusServer({ state });
-    stops.push(bus.stop);
+    stops.push(bus["stop"]);
 
     const pending = pollQaBus({
       baseUrl: bus.baseUrl,
@@ -102,31 +121,98 @@ describe("qa-bus server", () => {
       timeoutMs: 500,
     });
 
-    setTimeout(() => {
-      state.addInboundMessage({
-        accountId: "acct-a",
-        conversation: { id: "target", kind: "direct" },
-        senderId: "acct-a-user",
-        text: "fresh event",
-      });
-    }, 20);
+    state.addInboundMessage({
+      accountId: "acct-a",
+      conversation: { id: "target", kind: "direct" },
+      senderId: "acct-a-user",
+      text: "fresh event",
+    });
 
-    const result = await Promise.race([
-      pending,
-      new Promise<"timed-out">((resolve) => {
-        setTimeout(() => resolve("timed-out"), 150);
-      }),
-    ]);
-
-    expect(result).not.toBe("timed-out");
-    if (result === "timed-out") {
-      throw new Error("stale-cursor long poll did not wake before timeout window");
-    }
+    const result = await pending;
     expect(result.events).toHaveLength(1);
     expect(result.events[0]).toMatchObject({
       accountId: "acct-a",
       cursor: 1,
       kind: "inbound-message",
+    });
+  });
+
+  it("rejects malformed poll numeric fields before long-polling", async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    stops.push(bus["stop"]);
+
+    const startedAt = Date.now();
+    const response = await postQaBusJson(bus.baseUrl, "/v1/poll", {
+      accountId: "acct-a",
+      cursor: "999",
+      timeoutMs: 500,
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(300);
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "poll cursor must be an integer at least 0.",
+    });
+  });
+
+  it("rejects malformed search limits before querying state", async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    stops.push(bus["stop"]);
+
+    const response = await postQaBusJson(bus.baseUrl, "/v1/actions/search", {
+      limit: "all",
+      query: "anything",
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "search limit must be an integer at least 1.",
+    });
+  });
+
+  it("keeps oversized numeric poll and search fields bounded", async () => {
+    const state = createQaBusState();
+    const bus = await startQaBusServer({ state });
+    stops.push(bus["stop"]);
+
+    const message = state.addInboundMessage({
+      accountId: "acct-a",
+      conversation: { id: "target", kind: "direct" },
+      senderId: "acct-a-user",
+      text: "bounded numeric fields",
+    });
+
+    const pollResponse = await postQaBusJson(bus.baseUrl, "/v1/poll", {
+      accountId: "acct-a",
+      cursor: 0,
+      limit: 10_000,
+      timeoutMs: 60_000,
+    });
+    expect(pollResponse.status).toBe(200);
+    await expect(pollResponse.json()).resolves.toMatchObject({
+      events: [{ message: { id: message.id } }],
+    });
+
+    const searchResponse = await postQaBusJson(bus.baseUrl, "/v1/actions/search", {
+      accountId: "acct-a",
+      limit: 10_000,
+      query: "bounded",
+    });
+    expect(searchResponse.status).toBe(200);
+    await expect(searchResponse.json()).resolves.toMatchObject({
+      messages: [{ id: message.id }],
+    });
+
+    const extremeSearchResponse = await postQaBusRawJson(
+      bus.baseUrl,
+      "/v1/actions/search",
+      `{"accountId":"acct-a","limit":1e309,"query":"bounded"}`,
+    );
+    expect(extremeSearchResponse.status).toBe(200);
+    await expect(extremeSearchResponse.json()).resolves.toMatchObject({
+      messages: [{ id: message.id }],
     });
   });
 });

@@ -1,8 +1,10 @@
 {
   "id": "opencode-go",
+  "icon": "https://cdn.simpleicons.org/opencode",
   "activation": {
     "onStartup": false
   },
+  "providerCatalogEntry": "./provider-discovery.ts",
   "enabledByDefault": true,
   "providers": ["opencode-go"],
   "providerEndpoints": [
@@ -66,11 +68,16 @@
       }
     },
     "discovery": {
-      "opencode-go": "refreshable"
+      "opencode-go": "runtime"
     }
   },
-  "providerAuthEnvVars": {
-    "opencode-go": ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "opencode-go",
+        "envVars": ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

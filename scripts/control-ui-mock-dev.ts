@@ -1,3 +1,4 @@
+// Control Ui Mock Dev script supports OpenClaw repository automation.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer, type Plugin, type ViteDevServer } from "vite";
@@ -7,8 +8,13 @@ import {
   createControlUiMockGatewayInitScript,
   type ControlUiMockGatewayScenario,
 } from "../ui/src/test-helpers/control-ui-e2e.ts";
+import {
+  resolveSourcePackageAliasesForVite,
+  resolveTsconfigPathAliasesForVite,
+} from "../ui/vite.config.ts";
 
 type CliOptions = {
+  allowedHosts: string[];
   host: string;
   port: number;
 };
@@ -20,14 +26,28 @@ type SessionListOptions = {
   totalCount: number;
 };
 
+const SESSION_PAGE_SIZE = 50;
+const TOTAL_MOCK_SESSIONS = 650;
+const TOTAL_TELEGRAM_SESSIONS = 180;
+
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const uiRoot = path.join(repoRoot, "ui");
 
 function parseArgs(args: string[]): CliOptions {
-  const options: CliOptions = { host: "127.0.0.1", port: 5187 };
+  const options: CliOptions = { allowedHosts: [], host: "127.0.0.1", port: 5187 };
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
-    if (arg === "--host") {
+    if (arg === "--allowed-host") {
+      const allowedHost = args[++i]?.trim();
+      if (allowedHost) {
+        options.allowedHosts.push(allowedHost);
+      }
+    } else if (arg.startsWith("--allowed-host=")) {
+      const allowedHost = arg.slice("--allowed-host=".length).trim();
+      if (allowedHost) {
+        options.allowedHosts.push(allowedHost);
+      }
+    } else if (arg === "--host") {
       options.host = args[++i] ?? options.host;
     } else if (arg.startsWith("--host=")) {
       options.host = arg.slice("--host=".length) || options.host;
@@ -45,7 +65,12 @@ function parsePort(value: string | undefined, fallback: number): number {
   return Number.isInteger(parsed) && parsed > 0 && parsed < 65_536 ? parsed : fallback;
 }
 
-function sessionRow(key: string, label: string, updatedAt: number) {
+function sessionRow(
+  key: string,
+  label: string,
+  updatedAt: number,
+  options: { model?: string; modelProvider?: string } = {},
+) {
   return {
     contextTokens: null,
     displayName: label,
@@ -53,8 +78,8 @@ function sessionRow(key: string, label: string, updatedAt: number) {
     key,
     kind: "direct",
     label,
-    model: "gpt-5.5",
-    modelProvider: "openai",
+    model: options.model ?? "gpt-5.5",
+    modelProvider: options.modelProvider ?? "openai",
     status: "done",
     totalTokens: 0,
     updatedAt,
@@ -80,61 +105,441 @@ function sessionsListResponse(sessions: unknown[], options: SessionListOptions) 
   };
 }
 
+function pagedSessionsListResponse(sessions: unknown[], offset: number) {
+  const normalizedOffset = Math.max(0, Math.floor(offset));
+  const page = sessions.slice(normalizedOffset, normalizedOffset + SESSION_PAGE_SIZE);
+  const nextOffset = normalizedOffset + SESSION_PAGE_SIZE;
+  return sessionsListResponse(page, {
+    hasMore: nextOffset < sessions.length,
+    nextOffset: nextOffset < sessions.length ? nextOffset : null,
+    offset: normalizedOffset,
+    totalCount: sessions.length,
+  });
+}
+
+function buildSessionRows(params: {
+  baseTime: number;
+  count: number;
+  keyPrefix: string;
+  labelPrefix: string;
+  model?: string;
+  modelProvider?: string;
+}) {
+  return Array.from({ length: params.count }, (_value, index) => {
+    const ordinal = index + 1;
+    const padded = String(ordinal).padStart(3, "0");
+    return sessionRow(
+      `agent:${params.keyPrefix}-${padded}`,
+      `${params.labelPrefix} ${padded}`,
+      params.baseTime - ordinal * 60_000,
+      { model: params.model, modelProvider: params.modelProvider },
+    );
+  });
+}
+
+function buildSessionListCases(
+  sessions: unknown[],
+  matchBase: Record<string, unknown> = {},
+): Array<{ match: Record<string, unknown>; response: unknown }> {
+  const cases: Array<{ match: Record<string, unknown>; response: unknown }> = [];
+  for (let offset = SESSION_PAGE_SIZE; offset < sessions.length; offset += SESSION_PAGE_SIZE) {
+    cases.push({
+      match: { ...matchBase, offset },
+      response: pagedSessionsListResponse(sessions, offset),
+    });
+  }
+  cases.push({
+    match: matchBase,
+    response: pagedSessionsListResponse(sessions, 0),
+  });
+  return cases;
+}
+
+function buildSearchSessionListCases(
+  sessions: unknown[],
+  searchTerms: string[],
+): Array<{ match: Record<string, unknown>; response: unknown }> {
+  return searchTerms.flatMap((search) => buildSessionListCases(sessions, { search }));
+}
+
+function chatHistoryMessage(role: "assistant" | "user", text: string, timestamp: number) {
+  return {
+    content: [{ text, type: "text" }],
+    role,
+    timestamp,
+  };
+}
+
+function buildScrollableChatHistory(baseTime: number): unknown[] {
+  const messages: unknown[] = [
+    chatHistoryMessage(
+      "assistant",
+      `Mock Control UI is running with ${TOTAL_MOCK_SESSIONS} sessions. Open the chat picker, search for "telegram" or "claude", then use Load more repeatedly.`,
+      baseTime,
+    ),
+  ];
+
+  for (let index = 1; index <= 36; index += 1) {
+    const timestamp = baseTime + index * 60_000;
+    messages.push(
+      chatHistoryMessage(
+        "user",
+        `Mock scroll request ${index}: add enough transcript content to exercise the chat scroll container in focused mode.`,
+        timestamp,
+      ),
+      chatHistoryMessage(
+        "assistant",
+        `Mock scroll response ${index}: this deterministic history keeps the mock chat long enough to scroll while testing focus mode, header collapse, and composer anchoring. `.repeat(
+          2,
+        ),
+        timestamp + 30_000,
+      ),
+    );
+  }
+
+  return messages;
+}
+
+function searchPrefixes(term: string): string[] {
+  return Array.from({ length: term.length }, (_value, index) => term.slice(0, index + 1));
+}
+
 function createChatPickerScenario(): ControlUiMockGatewayScenario {
   const baseTime = Date.parse("2026-05-22T09:00:00.000Z");
+  const workspaceFiles = [
+    {
+      missing: false,
+      name: "AGENTS.md",
+      path: "/mock/workspace/AGENTS.md",
+      size: 2148,
+      updatedAtMs: baseTime - 120_000,
+    },
+    {
+      missing: false,
+      name: "plan.md",
+      path: "/mock/workspace/plan.md",
+      size: 912,
+      updatedAtMs: baseTime - 90_000,
+    },
+    {
+      missing: false,
+      name: "notes/context.md",
+      path: "/mock/workspace/notes/context.md",
+      size: 1620,
+      updatedAtMs: baseTime - 30_000,
+    },
+  ];
+  const workspaceListCases = ["main", "alpha", "openclaw-mock"].map((agentId) => ({
+    match: { agentId },
+    response: {
+      agentId,
+      files: workspaceFiles,
+      workspace: "/mock/workspace",
+    },
+  }));
+  const workspaceFileContentByName = new Map([
+    [
+      "AGENTS.md",
+      "# AGENTS.md\n\nMock workspace instructions for the composer rail.\n\n- Keep tool output compact.\n- Prefer right-rail context over modal previews.\n",
+    ],
+    [
+      "plan.md",
+      "# Composer polish plan\n\n1. Keep the composer controls calm.\n2. Move session selection into the sidebar.\n3. Keep model, reasoning, and speed choices discoverable without taking over the page.\n",
+    ],
+    [
+      "notes/context.md",
+      "# Context notes\n\nThe right rail should feel like workspace context, not a modal pasted beside the chat.\n\n## Current focus\n\n- Markdown previews need readable dark-mode chrome.\n- Empty or unavailable content should show a quiet state instead of an empty card.\n- File previews should load from the same mock scenario as the file list.\n",
+    ],
+  ]);
+  const workspaceFileCases = ["main", "alpha", "openclaw-mock"].flatMap((agentId) =>
+    workspaceFiles.map((file) => ({
+      match: { agentId, name: file.name },
+      response: {
+        agentId,
+        file: {
+          ...file,
+          content: workspaceFileContentByName.get(file.name) ?? "",
+        },
+        workspace: "/mock/workspace",
+      },
+    })),
+  );
+  const sessionFiles = [
+    {
+      kind: "modified",
+      missing: false,
+      name: "chat.ts",
+      path: "ui/src/ui/views/chat.ts",
+      size: 48320,
+      updatedAtMs: baseTime - 20_000,
+    },
+    {
+      kind: "modified",
+      missing: false,
+      name: "sidebar.css",
+      path: "ui/src/styles/chat/sidebar.css",
+      size: 18840,
+      updatedAtMs: baseTime - 18_000,
+    },
+    {
+      kind: "read",
+      missing: false,
+      name: "artifacts.ts",
+      path: "src/gateway/server-methods/artifacts.ts",
+      size: 21876,
+      updatedAtMs: baseTime - 300_000,
+    },
+    {
+      kind: "read",
+      missing: false,
+      name: "sessions.ts",
+      path: "packages/gateway-protocol/src/schema/sessions.ts",
+      size: 16542,
+      updatedAtMs: baseTime - 420_000,
+    },
+  ];
+  const sessionWorkspaceRoot = repoRoot;
+  const sessionFileContentByPath = new Map([
+    [
+      "ui/src/ui/views/chat.ts",
+      'function renderSessionWorkspaceRail() {\n  return html`<aside class="chat-workspace-rail">...</aside>`;\n}\n',
+    ],
+    [
+      "ui/src/styles/chat/sidebar.css",
+      ".chat-workspace-rail__section-title {\n  color: var(--muted);\n  text-transform: uppercase;\n}\n",
+    ],
+    [
+      "src/gateway/server-methods/artifacts.ts",
+      "// Artifact gateway methods collect generated artifacts from session transcripts.\n",
+    ],
+    [
+      "packages/gateway-protocol/src/schema/sessions.ts",
+      "export const SessionsFilesListParamsSchema = Type.Object({ sessionKey: NonEmptyString });\n",
+    ],
+    [
+      "package.json",
+      '{\n  "name": "openclaw",\n  "scripts": { "dev:ui:mock": "tsx scripts/control-ui-mock-dev.ts" }\n}\n',
+    ],
+    [
+      "ui/vite.config.ts",
+      "export default function controlUiViteConfig() {\n  return { server: { strictPort: true } };\n}\n",
+    ],
+    [
+      "ui/src/ui/e2e/chat-flow.e2e.test.ts",
+      "it('keeps the session workspace useful while browsing files', async () => {\n  await page.getByText('Project files').waitFor();\n});\n",
+    ],
+  ]);
+  const sessionFileCases = [
+    {
+      match: { sessionKey: "agent:alpha" },
+      response: {
+        browser: {
+          entries: [
+            {
+              kind: "directory",
+              name: "packages",
+              path: "packages",
+              sessionKind: "read",
+              updatedAtMs: baseTime - 420_000,
+            },
+            {
+              kind: "directory",
+              name: "src",
+              path: "src",
+              sessionKind: "read",
+              updatedAtMs: baseTime - 300_000,
+            },
+            {
+              kind: "directory",
+              name: "ui",
+              path: "ui",
+              sessionKind: "modified",
+              updatedAtMs: baseTime - 20_000,
+            },
+            {
+              kind: "file",
+              name: "package.json",
+              path: "package.json",
+              size: 92750,
+              updatedAtMs: baseTime - 800_000,
+            },
+          ],
+          path: "",
+        },
+        files: sessionFiles,
+        root: sessionWorkspaceRoot,
+        sessionKey: "agent:alpha",
+      },
+    },
+  ];
+  const sessionFileGetCases = sessionFiles.map((file) => ({
+    match: { sessionKey: "agent:alpha", path: file.path },
+    response: {
+      file: {
+        ...file,
+        content: sessionFileContentByPath.get(file.path) ?? "",
+      },
+      root: sessionWorkspaceRoot,
+      sessionKey: "agent:alpha",
+    },
+  }));
+  const lobsterSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
+  <rect width="640" height="360" fill="#10151d"/>
+  <circle cx="320" cy="185" r="76" fill="#e23f3f"/>
+  <ellipse cx="250" cy="178" rx="54" ry="38" fill="#f05a52"/>
+  <ellipse cx="390" cy="178" rx="54" ry="38" fill="#f05a52"/>
+  <circle cx="292" cy="145" r="10" fill="#0b0f14"/>
+  <circle cx="348" cy="145" r="10" fill="#0b0f14"/>
+  <path d="M232 114c-72-44-135-22-146 35 52 9 91-4 125-39" fill="none" stroke="#f06b5f" stroke-width="28" stroke-linecap="round"/>
+  <path d="M408 114c72-44 135-22 146 35-52 9-91-4-125-39" fill="none" stroke="#f06b5f" stroke-width="28" stroke-linecap="round"/>
+  <path d="M232 246c-45 28-91 35-142 23M408 246c45 28 91 35 142 23" fill="none" stroke="#e14b47" stroke-width="16" stroke-linecap="round"/>
+  <text x="320" y="326" text-anchor="middle" font-family="ui-sans-serif, system-ui" font-size="24" fill="#f6f7f9">openclaw session artifact</text>
+</svg>`;
+  const lobsterArtifact = {
+    id: "artifact-openclaw-lobster",
+    type: "image",
+    title: "openclaw-lobster-preview.svg",
+    mimeType: "image/svg+xml",
+    sizeBytes: Buffer.byteLength(lobsterSvg, "utf8"),
+    source: "session-transcript",
+    download: { mode: "bytes" },
+  };
+  const sessions = [
+    sessionRow("agent:alpha", "Alpha planning", baseTime - 1_000),
+    ...buildSessionRows({
+      baseTime: baseTime - 60_000,
+      count: TOTAL_MOCK_SESSIONS - 1,
+      keyPrefix: "history",
+      labelPrefix: "Long running session",
+    }),
+  ];
+  const telegramSessions = buildSessionRows({
+    baseTime: baseTime - 30_000,
+    count: TOTAL_TELEGRAM_SESSIONS,
+    keyPrefix: "telegram",
+    labelPrefix: "Telegram investigation",
+  });
+  const claudeSessions = buildSessionRows({
+    baseTime: baseTime - 45_000,
+    count: 75,
+    keyPrefix: "model-claude",
+    labelPrefix: "Model search result",
+    model: "claude-sonnet-4-6",
+    modelProvider: "anthropic",
+  });
   return {
     assistantAgentId: "openclaw-mock",
     assistantName: "OpenClaw mock",
     defaultAgentId: "openclaw-mock",
-    historyMessages: [
-      {
-        content: [
-          {
-            text: 'Mock Control UI is running. Open the chat picker, search for "telegram", then use Load more.',
-            type: "text",
-          },
-        ],
-        role: "assistant",
-        timestamp: baseTime,
-      },
-    ],
+    historyMessages: buildScrollableChatHistory(baseTime),
     methodResponses: {
-      "sessions.list": {
+      "agents.files.get": {
+        cases: workspaceFileCases,
+      },
+      "agents.files.list": {
+        cases: workspaceListCases,
+      },
+      "sessions.files.get": {
+        cases: sessionFileGetCases,
+      },
+      "sessions.files.list": {
         cases: [
           {
-            match: { offset: 50, search: "telegram" },
-            response: sessionsListResponse(
-              [
-                sessionRow("agent:telegram-51", "Telegram archive page 51", baseTime - 180_000),
-                sessionRow("agent:telegram-52", "Telegram archive page 52", baseTime - 240_000),
-              ],
-              { hasMore: false, nextOffset: null, offset: 50, totalCount: 4 },
-            ),
+            match: { sessionKey: "agent:alpha", path: "ui" },
+            response: {
+              browser: {
+                entries: [
+                  {
+                    kind: "directory",
+                    name: "src",
+                    path: "ui/src",
+                    sessionKind: "modified",
+                    updatedAtMs: baseTime - 20_000,
+                  },
+                  {
+                    kind: "file",
+                    name: "vite.config.ts",
+                    path: "ui/vite.config.ts",
+                    size: 9860,
+                    updatedAtMs: baseTime - 900_000,
+                  },
+                ],
+                parentPath: "",
+                path: "ui",
+              },
+              files: sessionFiles,
+              root: sessionWorkspaceRoot,
+              sessionKey: "agent:alpha",
+            },
           },
           {
-            match: { search: "telegram" },
-            response: sessionsListResponse(
-              [
-                sessionRow("agent:telegram", "Telegram follow-up", baseTime - 60_000),
-                sessionRow("agent:telegram-mobile", "Telegram mobile handoff", baseTime - 120_000),
-              ],
-              { hasMore: true, nextOffset: 50, totalCount: 4 },
-            ),
+            match: { sessionKey: "agent:alpha", search: "chat" },
+            response: {
+              browser: {
+                entries: [
+                  {
+                    kind: "file",
+                    name: "chat.ts",
+                    path: "ui/src/ui/views/chat.ts",
+                    sessionKind: "modified",
+                    size: 48320,
+                    updatedAtMs: baseTime - 20_000,
+                  },
+                  {
+                    kind: "file",
+                    name: "chat-flow.e2e.test.ts",
+                    path: "ui/src/ui/e2e/chat-flow.e2e.test.ts",
+                    size: 24950,
+                    updatedAtMs: baseTime - 25_000,
+                  },
+                ],
+                path: "",
+                search: "chat",
+              },
+              files: sessionFiles,
+              root: sessionWorkspaceRoot,
+              sessionKey: "agent:alpha",
+            },
           },
+          ...sessionFileCases,
+        ],
+      },
+      "artifacts.list": {
+        cases: [
           {
-            match: {},
-            response: sessionsListResponse(
-              [
-                sessionRow("agent:alpha", "Alpha planning", baseTime - 1_000),
-                sessionRow("agent:design", "Design review", baseTime - 30_000),
-              ],
-              { hasMore: true, nextOffset: 50, totalCount: 125 },
-            ),
+            match: { sessionKey: "agent:alpha" },
+            response: { artifacts: [lobsterArtifact] },
           },
+        ],
+      },
+      "artifacts.download": {
+        cases: [
+          {
+            match: { sessionKey: "agent:alpha", artifactId: lobsterArtifact.id },
+            response: {
+              artifact: lobsterArtifact,
+              data: Buffer.from(lobsterSvg, "utf8").toString("base64"),
+              encoding: "base64",
+            },
+          },
+        ],
+      },
+      "sessions.list": {
+        cases: [
+          ...buildSearchSessionListCases(telegramSessions, searchPrefixes("telegram")),
+          ...buildSearchSessionListCases(claudeSessions, [
+            ...searchPrefixes("claude"),
+            ...searchPrefixes("claude-sonnet-4-6"),
+            ...searchPrefixes("anthropic"),
+          ]),
+          ...buildSessionListCases(sessions),
         ],
       },
     },
-    models: [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
+    models: [
+      { id: "gpt-5.5", name: "gpt-5.5", provider: "openai" },
+      { id: "claude-sonnet-4-6", name: "claude-sonnet-4-6", provider: "anthropic" },
+    ],
     sessionKey: "agent:alpha",
   };
 }
@@ -191,7 +596,7 @@ const server = await createServer({
   base: "/",
   cacheDir: path.join(repoRoot, ".artifacts", "control-ui-mock-vite"),
   clearScreen: false,
-  configFile: false,
+  configFile: path.join(uiRoot, "vite.config.ts"),
   define: {
     OPENCLAW_CONTROL_UI_BUILD_ID: JSON.stringify("mock"),
   },
@@ -201,11 +606,15 @@ const server = await createServer({
   },
   plugins: [createMockGatewayPlugin(scenario)],
   publicDir: path.join(uiRoot, "public"),
+  resolve: {
+    alias: [...resolveSourcePackageAliasesForVite(), ...resolveTsconfigPathAliasesForVite()],
+  },
   root: uiRoot,
   server: {
+    allowedHosts: options.allowedHosts,
     host: options.host,
     port: options.port,
-    strictPort: false,
+    strictPort: true,
   },
 });
 

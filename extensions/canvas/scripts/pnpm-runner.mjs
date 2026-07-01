@@ -1,4 +1,8 @@
-import { closeSync, openSync, readSync } from "node:fs";
+/**
+ * Cross-platform pnpm command resolver used by Canvas build scripts.
+ */
+import { accessSync, closeSync, constants, openSync, readSync, statSync } from "node:fs";
+import path from "node:path";
 
 const WINDOWS_UNSAFE_CMD_CHARS_RE = /[&|<>%\r\n]/;
 const PNPM_EXECUTABLE_RE = /^pnpm(?:-cli)?(?:\.(?:[cm]?js|cmd|exe))?$/;
@@ -33,13 +37,68 @@ function hasScriptShebang(value) {
   }
 }
 
+function isExecutableFile(value) {
+  try {
+    if (!statSync(value).isFile()) {
+      return false;
+    }
+    accessSync(value, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isFile(value) {
+  try {
+    return statSync(value).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function resolvePathEnvKey(env) {
+  return Object.keys(env).find((key) => key.toLowerCase() === "path") ?? "PATH";
+}
+
+function findExecutableOnPath(command, envPath, platform, env, cwd) {
+  if (typeof envPath !== "string" || envPath.length === 0) {
+    return undefined;
+  }
+  const extensions =
+    platform === "win32"
+      ? (env[Object.keys(env).find((key) => key.toLowerCase() === "pathext") ?? "PATHEXT"] ??
+          ".COM;.EXE;.BAT;.CMD")
+          .split(";")
+          .filter(Boolean)
+          .map((extension) => extension.toLowerCase())
+      : [""];
+  const pathImpl = platform === "win32" ? path.win32 : path;
+  const pathDelimiter = platform === "win32" ? ";" : path.delimiter;
+  for (const directory of envPath.split(pathDelimiter)) {
+    if (!directory) {
+      continue;
+    }
+    const resolvedDirectory = pathImpl.isAbsolute(directory)
+      ? directory
+      : pathImpl.resolve(cwd, directory);
+    for (const extension of extensions) {
+      const candidate = pathImpl.join(resolvedDirectory, `${command}${extension}`);
+      if ((platform === "win32" ? isFile(candidate) : isExecutableFile(candidate))) {
+        return candidate;
+      }
+    }
+  }
+  return undefined;
+}
+
 function isNodeRunnablePnpmExecPath(value) {
   if (!isPnpmExecPath(value)) {
     return false;
   }
   const { extension } = inspectExecutablePath(value);
   if (NODE_RUNNABLE_EXTENSIONS.has(extension)) {
-    return true;
+    return isFile(value);
   }
   if (extension.length > 0) {
     return false;
@@ -85,11 +144,13 @@ function resolveConfiguredPnpmExec(params) {
     };
   }
 
+  const { extension } = inspectExecutablePath(npmExecPath);
   if ((params.platform ?? process.platform) !== "win32") {
-    return undefined;
+    return extension.length === 0 && isExecutableFile(npmExecPath)
+      ? { args: params.pnpmArgs ?? [], command: npmExecPath, shell: false }
+      : undefined;
   }
 
-  const { extension } = inspectExecutablePath(npmExecPath);
   if (extension === ".exe") {
     return { args: params.pnpmArgs ?? [], command: npmExecPath, shell: false };
   }
@@ -103,6 +164,7 @@ function resolveConfiguredPnpmExec(params) {
   return undefined;
 }
 
+/** Resolves a safe pnpm command spec for Unix, Windows, and npm_execpath launches. */
 export function resolvePnpmRunner(params = {}) {
   const configured = resolveConfiguredPnpmExec(params);
   if (configured) {
@@ -111,6 +173,22 @@ export function resolvePnpmRunner(params = {}) {
 
   const pnpmArgs = params.pnpmArgs ?? [];
   const platform = params.platform ?? process.platform;
+  const env = params.env ?? process.env;
+  const envPath = env[platform === "win32" ? resolvePathEnvKey(env) : "PATH"];
+  const cwd = params.cwd ?? process.cwd();
+  const pnpmPath = findExecutableOnPath("pnpm", envPath, platform, env, cwd);
+  if (pnpmPath) {
+    return platform === "win32"
+      ? windowsCmdSpec(pnpmPath, pnpmArgs, params.comSpec ?? process.env.ComSpec ?? "cmd.exe")
+      : { args: pnpmArgs, command: pnpmPath, shell: false };
+  }
+  const corepackPath = findExecutableOnPath("corepack", envPath, platform, env, cwd);
+  if (corepackPath) {
+    const args = ["pnpm", ...pnpmArgs];
+    return platform === "win32"
+      ? windowsCmdSpec(corepackPath, args, params.comSpec ?? process.env.ComSpec ?? "cmd.exe")
+      : { args, command: corepackPath, shell: false };
+  }
   if (platform === "win32") {
     return windowsCmdSpec("pnpm.cmd", pnpmArgs, params.comSpec ?? process.env.ComSpec ?? "cmd.exe");
   }

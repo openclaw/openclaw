@@ -1,3 +1,4 @@
+// Lmstudio plugin module implements models behavior.
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
@@ -7,6 +8,7 @@ import {
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
+import { asPositiveSafeInteger, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { LMSTUDIO_DEFAULT_BASE_URL, LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 
 export type LmstudioModelWire = {
@@ -15,6 +17,8 @@ export type LmstudioModelWire = {
   display_name?: string;
   max_context_length?: number;
   format?: "gguf" | "mlx" | null;
+  variants?: unknown;
+  selected_variant?: unknown;
   capabilities?: {
     vision?: boolean;
     trained_for_tool_use?: boolean;
@@ -76,13 +80,7 @@ function normalizeReasoningOptions(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return [
-    ...new Set(
-      value
-        .map((option) => normalizeReasoningOption(option))
-        .filter((option): option is string => option !== null),
-    ),
-  ];
+  return uniqueStrings(value.flatMap((option) => normalizeReasoningOption(option) ?? []));
 }
 
 function isLmstudioBinaryReasoningOptions(allowedOptions: readonly string[]): boolean {
@@ -98,13 +96,11 @@ function resolveLmstudioTransportReasoningEfforts(allowedOptions: readonly strin
       ? [...LMSTUDIO_OPENAI_COMPAT_REASONING_EFFORTS]
       : [...LMSTUDIO_OPENAI_COMPAT_ENABLED_REASONING_EFFORTS];
   }
-  return [
-    ...new Set(
-      allowedOptions
-        .map((option) => (option === "off" ? "none" : option))
-        .filter((option) => option !== "on"),
-    ),
-  ];
+  return uniqueStrings(
+    allowedOptions
+      .map((option) => (option === "off" ? "none" : option))
+      .filter((option) => option !== "on"),
+  );
 }
 
 function resolveLmstudioEnabledTransportReasoningOption(
@@ -216,14 +212,63 @@ export function resolveLoadedContextWindow(
   let contextWindow: number | null = null;
   for (const instance of loadedInstances) {
     // Discovery payload is external JSON, so tolerate malformed entries.
-    const length = instance?.config?.context_length;
-    if (length === undefined || !Number.isFinite(length) || length <= 0) {
+    const normalized = asPositiveSafeInteger(instance?.config?.context_length);
+    if (normalized === undefined) {
       continue;
     }
-    const normalized = Math.floor(length);
     contextWindow = contextWindow === null ? normalized : Math.max(contextWindow, normalized);
   }
   return contextWindow;
+}
+
+function normalizeLmstudioVariantIds(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return uniqueStrings(
+    value.flatMap((variant) =>
+      typeof variant === "string" && variant.trim().length > 0 ? variant.trim() : [],
+    ),
+  );
+}
+
+/**
+ * Resolves LM Studio variant ids back to their loadable model key.
+ *
+ * LM Studio exposes quantized variants separately from the canonical `key`, but
+ * `/api/v1/models/load` expects the key. Exact key matches still win so unusual
+ * servers that expose a suffix as the real key are preserved.
+ */
+export function resolveLmstudioCanonicalModelKey(params: {
+  modelKey: string;
+  models: LmstudioModelWire[];
+}): string {
+  const modelKey = params.modelKey.trim();
+  if (!modelKey) {
+    return modelKey;
+  }
+  const normalizedModelKey = modelKey.toLowerCase();
+  for (const entry of params.models) {
+    if (entry.key?.trim() === modelKey) {
+      return modelKey;
+    }
+  }
+  for (const entry of params.models) {
+    const key = entry.key?.trim();
+    if (!key) {
+      continue;
+    }
+    const selectedVariant =
+      typeof entry.selected_variant === "string" ? entry.selected_variant.trim() : "";
+    const variants = normalizeLmstudioVariantIds(entry.variants);
+    if (
+      selectedVariant.toLowerCase() === normalizedModelKey ||
+      variants.some((variant) => variant.toLowerCase() === normalizedModelKey)
+    ) {
+      return key;
+    }
+  }
+  return modelKey;
 }
 
 /**
@@ -372,14 +417,8 @@ export function normalizeLmstudioConfiguredCatalogEntry(
   }
   const id = record.id.trim();
   const name = typeof record.name === "string" && record.name.trim().length > 0 ? record.name : id;
-  const contextWindow =
-    typeof record.contextWindow === "number" && record.contextWindow > 0
-      ? record.contextWindow
-      : undefined;
-  const contextTokens =
-    typeof record.contextTokens === "number" && record.contextTokens > 0
-      ? record.contextTokens
-      : undefined;
+  const contextWindow = asPositiveSafeInteger(record.contextWindow);
+  const contextTokens = asPositiveSafeInteger(record.contextTokens);
   const reasoning = typeof record.reasoning === "boolean" ? record.reasoning : undefined;
   const input = Array.isArray(record.input)
     ? record.input.filter(
@@ -476,12 +515,7 @@ export function mapLmstudioWireEntry(entry: LmstudioModelWire): LmstudioModelBas
     return null;
   }
   const loadedContextWindow = resolveLoadedContextWindow(entry);
-  const advertisedContextWindow =
-    entry.max_context_length !== undefined &&
-    Number.isFinite(entry.max_context_length) &&
-    entry.max_context_length > 0
-      ? Math.floor(entry.max_context_length)
-      : null;
+  const advertisedContextWindow = asPositiveSafeInteger(entry.max_context_length) ?? null;
   const contextWindow = advertisedContextWindow ?? SELF_HOSTED_DEFAULT_CONTEXT_WINDOW;
   // Keep native/advertised context window metadata in catalog, but use a practical
   // default target for model loading unless callers explicitly override it.

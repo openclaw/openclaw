@@ -1,3 +1,4 @@
+// Irc plugin module implements client behavior.
 import net from "node:net";
 import tls from "node:tls";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
@@ -65,11 +66,14 @@ function toError(err: unknown): Error {
   return new Error(typeof err === "string" ? err : JSON.stringify(err));
 }
 
-function buildFallbackNick(nick: string): string {
+let nickCollisionFallbackSeq = 0;
+
+export function buildFallbackNick(nick: string): string {
   const normalized = nick.replace(/\s+/g, "");
   const safe = normalized.replace(/[^A-Za-z0-9_\-[\]\\`^{}|]/g, "");
   const base = safe || "openclaw";
-  const suffix = "_";
+  const seq = ++nickCollisionFallbackSeq;
+  const suffix = seq === 1 ? "_" : `_${seq}`;
   const maxNickLen = 30;
   if (base.length >= maxNickLen) {
     return `${base.slice(0, maxNickLen - suffix.length)}${suffix}`;
@@ -119,6 +123,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
   let closed = false;
   let nickServRecoverAttempted = false;
   let fallbackNickAttempted = false;
+  let removeAbortListener: (() => void) | null = null;
 
   const socket = options.tls
     ? tls.connect({
@@ -147,6 +152,11 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
       rejectReady = null;
       resolveReady = null;
     }
+  };
+
+  const failAndClose = (err: unknown) => {
+    fail(err);
+    close();
   };
 
   const sendRaw = (line: string) => {
@@ -225,6 +235,8 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
       return;
     }
     closed = true;
+    removeAbortListener?.();
+    removeAbortListener = null;
     const safeReason = sanitizeIrcOutboundText(reason != null ? reason : "bye");
     try {
       if (safeReason) {
@@ -243,6 +255,8 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
       return;
     }
     closed = true;
+    removeAbortListener?.();
+    removeAbortListener = null;
     socket.destroy();
   };
 
@@ -366,7 +380,7 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
               text,
               rawLine,
             }),
-          ).catch((error) => {
+          ).catch((error: unknown) => {
             fail(error);
           });
         }
@@ -402,12 +416,17 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
 
   if (options.abortSignal) {
     const abort = () => {
+      if (!ready) {
+        failAndClose(new Error("IRC connect aborted"));
+        return;
+      }
       quit("shutdown");
     };
     if (options.abortSignal.aborted) {
       abort();
     } else {
       options.abortSignal.addEventListener("abort", abort, { once: true });
+      removeAbortListener = () => options.abortSignal?.removeEventListener("abort", abort);
     }
   }
 

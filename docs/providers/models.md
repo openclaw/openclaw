@@ -27,12 +27,12 @@ model as `provider/model`.
 - [Anthropic (API + Claude CLI)](/providers/anthropic)
 - [BytePlus (International)](/concepts/model-providers#byteplus-international)
 - [Chutes](/providers/chutes)
+- [Cohere](/providers/cohere)
 - [ComfyUI](/providers/comfy)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [DeepInfra](/providers/deepinfra)
 - [fal](/providers/fal)
 - [Fireworks](/providers/fireworks)
-- [GLM models](/providers/glm)
 - [MiniMax](/providers/minimax)
 - [Mistral](/providers/mistral)
 - [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
@@ -47,7 +47,7 @@ model as `provider/model`.
 - [Vercel AI Gateway](/providers/vercel-ai-gateway)
 - [Venice (Venice AI)](/providers/venice)
 - [xAI](/providers/xai)
-- [Z.AI](/providers/zai)
+- [Z.AI (GLM)](/providers/zai)
 
 ## Additional provider variants
 

@@ -1,3 +1,4 @@
+// Deepinfra provider module implements model/runtime integration.
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
@@ -5,9 +6,14 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
+  readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asFiniteNumber,
+  asSafeIntegerInRange,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
@@ -17,11 +23,12 @@ import {
   DEEPINFRA_NATIVE_BASE_URL,
   DEEPINFRA_VIDEO_ASPECT_RATIOS,
   DEEPINFRA_VIDEO_DURATIONS,
-  DEEPINFRA_VIDEO_MODELS,
-  DEFAULT_DEEPINFRA_VIDEO_MODEL,
+  DEEPINFRA_VIDEO_FALLBACK_MODELS,
   normalizeDeepInfraBaseUrl,
   normalizeDeepInfraModelRef,
 } from "./media-models.js";
+import type { DeepInfraSurfaceModel } from "./provider-models.js";
+import { resolveDeepInfraVideoModelCapabilities } from "./surface-model-catalogs.js";
 
 type DeepInfraVideoStatus = {
   status?: string;
@@ -30,6 +37,9 @@ type DeepInfraVideoStatus = {
 
 type DeepInfraVideoResponse = {
   video_url?: string;
+  video?: string;
+  videos?: Array<string | { url?: string; video_url?: string }>;
+  status?: string;
   seed?: number;
   request_id?: string;
   inference_status?: DeepInfraVideoStatus;
@@ -79,19 +89,15 @@ function parseVideoDataUrl(url: string): GeneratedVideoAsset | undefined {
   };
 }
 
-function coerceProviderNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function coerceProviderString(value: unknown): string | undefined {
-  return normalizeOptionalString(value);
-}
-
 function resolveDurationSeconds(value: number | undefined): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
   }
   return value <= 6.5 ? 5 : 8;
+}
+
+function resolveSeed(value: unknown): number | undefined {
+  return asSafeIntegerInRange(value, { min: 0, max: 4_294_967_295 });
 }
 
 function buildDeepInfraVideoBody(
@@ -110,31 +116,50 @@ function buildDeepInfraVideoBody(
   if (duration) {
     body.duration = duration;
   }
-  const seed = coerceProviderNumber(options.seed);
+  const seed = resolveSeed(options.seed);
   if (seed != null) {
     body.seed = seed;
   }
   const negativePrompt =
-    coerceProviderString(options.negative_prompt) ?? coerceProviderString(options.negativePrompt);
+    normalizeOptionalString(options.negative_prompt) ??
+    normalizeOptionalString(options.negativePrompt);
   if (negativePrompt) {
     body.negative_prompt = negativePrompt;
   }
-  const style = coerceProviderString(options.style);
+  const style = normalizeOptionalString(options.style);
   if (style) {
     body.style = style;
   }
   const guidanceScale =
-    coerceProviderNumber(options.guidance_scale) ?? coerceProviderNumber(options.guidanceScale);
+    asFiniteNumber(options.guidance_scale) ?? asFiniteNumber(options.guidanceScale);
   if (guidanceScale != null && model.startsWith("Wan-AI/")) {
     body.guidance_scale = guidanceScale;
   }
   return body;
 }
 
+function firstDeepInfraVideoUrl(payload: DeepInfraVideoResponse): string | undefined {
+  const direct =
+    normalizeOptionalString(payload.video_url) ?? normalizeOptionalString(payload.video);
+  if (direct) {
+    return direct;
+  }
+  for (const entry of payload.videos ?? []) {
+    const videoUrl =
+      typeof entry === "string"
+        ? normalizeOptionalString(entry)
+        : (normalizeOptionalString(entry.url) ?? normalizeOptionalString(entry.video_url));
+    if (videoUrl) {
+      return videoUrl;
+    }
+  }
+  return undefined;
+}
+
 function extractDeepInfraVideoAsset(payload: DeepInfraVideoResponse): GeneratedVideoAsset {
-  const videoUrl = normalizeOptionalString(payload.video_url);
+  const videoUrl = firstDeepInfraVideoUrl(payload);
   if (!videoUrl) {
-    throw new Error("DeepInfra video response missing video_url");
+    throw new Error("DeepInfra video response missing video URL");
   }
   const normalizedUrl = normalizeDeepInfraVideoUrl(videoUrl);
   const dataAsset = parseVideoDataUrl(normalizedUrl);
@@ -149,19 +174,31 @@ function extractDeepInfraVideoAsset(payload: DeepInfraVideoResponse): GeneratedV
 }
 
 function failureMessage(payload: DeepInfraVideoResponse): string | undefined {
-  const status = normalizeOptionalString(payload.inference_status?.status)?.toLowerCase();
+  const status = (
+    normalizeOptionalString(payload.inference_status?.status) ??
+    normalizeOptionalString(payload.status)
+  )?.toLowerCase();
   if (status === "failed" || status === "error") {
     return "DeepInfra video generation failed";
   }
   return undefined;
 }
 
-export function buildDeepInfraVideoGenerationProvider(): VideoGenerationProvider {
+// First entry of videoGenModels is the default; rest fill the allowlist.
+export function buildDeepInfraVideoGenerationProvider(options?: {
+  videoGenModels?: readonly DeepInfraSurfaceModel[];
+}): VideoGenerationProvider {
+  const ids =
+    options?.videoGenModels && options.videoGenModels.length > 0
+      ? options.videoGenModels.map((model) => model.id)
+      : [...DEEPINFRA_VIDEO_FALLBACK_MODELS];
+  const defaultModel = ids[0] ?? DEEPINFRA_VIDEO_FALLBACK_MODELS[0];
   return {
     id: "deepinfra",
     label: "DeepInfra",
-    defaultModel: DEFAULT_DEEPINFRA_VIDEO_MODEL,
-    models: [...DEEPINFRA_VIDEO_MODELS],
+    defaultModel,
+    models: ids,
+    resolveModelCapabilities: resolveDeepInfraVideoModelCapabilities,
     isConfigured: ({ agentDir }) =>
       isProviderApiKeyConfigured({
         provider: "deepinfra",
@@ -207,7 +244,7 @@ export function buildDeepInfraVideoGenerationProvider(): VideoGenerationProvider
         throw new Error("DeepInfra API key missing");
       }
 
-      const model = normalizeDeepInfraModelRef(req.model, DEFAULT_DEEPINFRA_VIDEO_MODEL);
+      const model = normalizeDeepInfraModelRef(req.model, defaultModel);
       const resolvedBaseUrl = resolveDeepInfraNativeBaseUrl(req);
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
@@ -234,12 +271,10 @@ export function buildDeepInfraVideoGenerationProvider(): VideoGenerationProvider
       });
       try {
         await assertOkOrThrowHttpError(response, "DeepInfra video generation failed");
-        let payload: DeepInfraVideoResponse;
-        try {
-          payload = (await response.json()) as DeepInfraVideoResponse;
-        } catch (cause) {
-          throw new Error("DeepInfra video generation failed: malformed JSON response", { cause });
-        }
+        const payload = await readProviderJsonResponse<DeepInfraVideoResponse>(
+          response,
+          "DeepInfra video generation failed",
+        );
         const failed = failureMessage(payload);
         if (failed) {
           throw new Error(failed);
@@ -250,8 +285,8 @@ export function buildDeepInfraVideoGenerationProvider(): VideoGenerationProvider
           model,
           metadata: {
             requestId: normalizeOptionalString(payload.request_id),
-            seed: payload.seed,
-            status: payload.inference_status?.status,
+            seed: resolveSeed(payload.seed),
+            status: payload.inference_status?.status ?? payload.status,
           },
         };
       } finally {

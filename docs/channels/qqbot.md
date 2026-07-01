@@ -151,13 +151,15 @@ to a group, then mention it or configure the group to run without a mention.
       groups: {
         "*": {
           requireMention: true,
+          commandLevel: "all",
           historyLimit: 50,
-          toolPolicy: "restricted",
+          tools: { deny: ["exec", "read", "write"] },
         },
         GROUP_OPENID: {
           name: "Release room",
           requireMention: false,
           ignoreOtherMentions: true,
+          commandLevel: "safety",
           historyLimit: 20,
           prompt: "Keep replies short and operational.",
         },
@@ -172,11 +174,28 @@ to a group, then mention it or configure the group to run without a mention.
 settings include:
 
 - `requireMention`: require an @mention before the bot replies. Default: `true`.
+- `commandLevel`: control which built-in slash commands can run in groups.
+  Default: `all`, which preserves the pre-existing QQBot group behavior when the
+  setting is omitted.
 - `ignoreOtherMentions`: drop messages that mention someone else but not the bot.
 - `historyLimit`: keep recent non-mention group messages as context for the next mentioned turn. Set `0` to disable.
-- `toolPolicy`: `full`, `restricted`, or `none` for group-scoped tools.
+- `tools`: allow/deny tools for the whole group.
+- `toolsBySender`: per-sender group tool overrides; see [Groups](/channels/groups#groupchannel-tool-restrictions-optional).
 - `name`: friendly label used in logs and group context.
 - `prompt`: per-group behavior prompt appended to the agent context.
+
+`commandLevel` accepts:
+
+- `all`: keep recognized built-in commands available as before. Some commands may
+  stay hidden from menus, but authorized users can still run them in the group.
+- `safety`: allow common collaboration commands such as `/help`, `/btw`, and
+  `/stop`; ask users to run sensitive commands such as `/config`, `/tools`, and
+  `/bash` in private chat.
+- `strict`: only allow the group-session controls needed for strict group
+  operation. `/stop` still stays urgent so an authorized sender can interrupt an
+  active run.
+
+Old QQBot `toolPolicy` entries are retired. Run `openclaw doctor --fix` to migrate them to `tools`.
 
 Activation modes are `mention` and `always`. `requireMention: true` maps to
 `mention`; `requireMention: false` maps to `always`. A session-level activation
@@ -266,6 +285,11 @@ Built-in commands intercepted before the AI queue:
 Append `?` to any command for usage help (for example `/bot-upgrade ?`).
 
 Admin commands (`/bot-me`, `/bot-upgrade`, `/bot-logs`, `/bot-clear-storage`, `/bot-streaming`, `/bot-approve`) are direct-message-only and require the sender's openid in an explicit non-wildcard `allowFrom` list. A wildcard `allowFrom: ["*"]` permits chat but does not grant admin command access. Group messages match against `groupAllowFrom` first and fall back to `allowFrom`. Running an admin command in a group returns a hint rather than silently dropping.
+
+When QQ Bot exec approvals use the default same-chat fallback, native approval
+button clicks follow the same explicit non-wildcard command allowlist. To grant
+approval-only access without broader command access, configure
+`channels.qqbot.execApprovals.approvers`.
 
 ## Engine architecture
 

@@ -1,8 +1,10 @@
+// Restart helper tests cover update restart helper process selection and error handling.
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { getWindowsCmdExePath } from "../../infra/windows-install-roots.js";
 import { prepareRestartScript, runRestartScript } from "./restart-helper.js";
 
 vi.mock("node:child_process", async () => {
@@ -593,7 +595,7 @@ exit 0
     it("spawns the script as a detached process on Linux", async () => {
       Object.defineProperty(process, "platform", { value: "linux" });
       const scriptPath = "/tmp/fake-script.sh";
-      const mockChild = { unref: vi.fn() };
+      const mockChild = { on: vi.fn(), unref: vi.fn() };
       vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
 
       await runRestartScript(scriptPath);
@@ -603,38 +605,72 @@ exit 0
         stdio: "ignore",
         windowsHide: true,
       });
+      expect(mockChild.on).toHaveBeenCalledWith("error", expect.any(Function));
       expect(mockChild.unref).toHaveBeenCalledTimes(1);
     });
 
     it("uses cmd.exe on Windows", async () => {
       Object.defineProperty(process, "platform", { value: "win32" });
       const scriptPath = "C:\\Temp\\fake-script.bat";
-      const mockChild = { unref: vi.fn() };
+      const mockChild = { on: vi.fn(), unref: vi.fn() };
       vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
 
       await runRestartScript(scriptPath);
 
-      expect(spawn).toHaveBeenCalledWith("cmd.exe", ["/d", "/s", "/c", scriptPath], {
+      expect(spawn).toHaveBeenCalledWith(getWindowsCmdExePath(), ["/d", "/s", "/c", scriptPath], {
         detached: true,
         stdio: "ignore",
         windowsHide: true,
       });
+      expect(mockChild.on).toHaveBeenCalledWith("error", expect.any(Function));
       expect(mockChild.unref).toHaveBeenCalledTimes(1);
     });
 
     it("quotes cmd.exe /c paths with metacharacters on Windows", async () => {
       Object.defineProperty(process, "platform", { value: "win32" });
       const scriptPath = "C:\\Temp\\me&(ow)\\fake-script.bat";
-      const mockChild = { unref: vi.fn() };
+      const mockChild = { on: vi.fn(), unref: vi.fn() };
       vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
 
       await runRestartScript(scriptPath);
 
-      expect(spawn).toHaveBeenCalledWith("cmd.exe", ["/d", "/s", "/c", `"${scriptPath}"`], {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true,
+      expect(spawn).toHaveBeenCalledWith(
+        getWindowsCmdExePath(),
+        ["/d", "/s", "/c", `"${scriptPath}"`],
+        {
+          detached: true,
+          stdio: "ignore",
+          windowsHide: true,
+        },
+      );
+    });
+
+    it("does not throw when spawn fails synchronously", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      vi.mocked(spawn).mockImplementation(() => {
+        throw Object.assign(new Error("spawn /bin/sh ENOENT"), { code: "ENOENT" });
       });
+
+      await expect(runRestartScript("/tmp/fake-script.sh")).resolves.toBeUndefined();
+    });
+
+    it("handles child process spawn errors after the detached handoff", async () => {
+      Object.defineProperty(process, "platform", { value: "linux" });
+      let errorHandler: ((error: Error) => void) | undefined;
+      const mockChild = {
+        on: vi.fn((event: string, handler: (error: Error) => void) => {
+          if (event === "error") {
+            errorHandler = handler;
+          }
+          return mockChild;
+        }),
+        unref: vi.fn(),
+      };
+      vi.mocked(spawn).mockReturnValue(mockChild as unknown as ChildProcess);
+
+      await runRestartScript("/tmp/fake-script.sh");
+      expect(errorHandler).toBeDefined();
+      expect(() => errorHandler?.(new Error("spawn /bin/sh ENOENT"))).not.toThrow();
     });
   });
 });

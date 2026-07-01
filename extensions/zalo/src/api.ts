@@ -3,6 +3,8 @@
  * @see https://bot.zaloplatforms.com/docs
  */
 
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { resolvePinnedHostnameWithPolicy, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 
 const ZALO_API_BASE = "https://bot-api.zaloplatforms.com";
@@ -112,9 +114,12 @@ export async function callZaloApi<T = unknown>(
 ): Promise<ZaloApiResponse<T>> {
   const url = `${ZALO_API_BASE}/bot${token}/${method}`;
   const controller = new AbortController();
-  const timeoutId = options?.timeoutMs
-    ? setTimeout(() => controller.abort(), options.timeoutMs)
-    : undefined;
+  const requestTimeoutMs =
+    options?.timeoutMs === undefined ? undefined : resolveTimerTimeoutMs(options.timeoutMs, 1);
+  const timeoutId =
+    requestTimeoutMs === undefined
+      ? undefined
+      : setTimeout(() => controller.abort(), requestTimeoutMs);
   const fetcher = options?.fetch ?? fetch;
 
   try {
@@ -127,7 +132,7 @@ export async function callZaloApi<T = unknown>(
       signal: controller.signal,
     });
 
-    const data = (await response.json()) as ZaloApiResponse<T>;
+    const data = await readProviderJsonResponse<ZaloApiResponse<T>>(response, `zalo.${method}`);
 
     if (!data.ok) {
       throw new ZaloApiError(

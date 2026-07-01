@@ -1,3 +1,4 @@
+// Message access tests cover channel message visibility and permission helpers.
 import { describe, expect, it } from "vitest";
 import {
   decideChannelIngress,
@@ -25,8 +26,8 @@ const adapter: InternalChannelIngressAdapter = {
       disabled: [],
     };
   },
-  matchSubject({ subject, entries }) {
-    const values = new Set(subject.identifiers.map((identifier) => identifier.value));
+  matchSubject({ subject: subjectValue, entries }) {
+    const values = new Set(subjectValue.identifiers.map((identifier) => identifier.value));
     const matchedEntryIds = entries
       .filter((entry) => entry.value === "*" || values.has(entry.value))
       .map((entry) => entry.opaqueEntryId);
@@ -46,8 +47,10 @@ const lowerCaseAdapter: InternalChannelIngressAdapter = {
       disabled: [],
     };
   },
-  matchSubject({ subject, entries }) {
-    const values = new Set(subject.identifiers.map((identifier) => identifier.value.toLowerCase()));
+  matchSubject({ subject: subjectLocal, entries }) {
+    const values = new Set(
+      subjectLocal.identifiers.map((identifier) => identifier.value.toLowerCase()),
+    );
     const matchedEntryIds = entries
       .filter((entry) => entry.kind === "stable-id" && values.has(entry.value))
       .map((entry) => entry.opaqueEntryId);
@@ -92,7 +95,7 @@ describe("channel message access ingress", () => {
         subject: subject("paired-sender"),
         allowlists: { pairingStore: ["paired-sender"] },
       }),
-      policy: { ...policy, dmPolicy: "open" as const },
+      policyLocal: { ...policy, dmPolicy: "open" as const },
       expected: { admission: "drop", reasonCode: "dm_policy_not_allowlisted" },
       secondPolicy: { ...policy, dmPolicy: "pairing" as const },
       secondExpected: { admission: "dispatch", decision: "allow" },
@@ -103,7 +106,7 @@ describe("channel message access ingress", () => {
         conversation: { kind: "group", id: "room-1" },
         allowlists: { dm: ["sender-1"] },
       }),
-      policy,
+      policyLocal: policy,
       expected: { admission: "drop", reasonCode: "group_policy_empty_allowlist" },
       secondPolicy: { ...policy, groupAllowFromFallbackToAllowFrom: true },
       secondExpected: { admission: "dispatch", decision: "allow" },
@@ -114,7 +117,7 @@ describe("channel message access ingress", () => {
         subject: subject("display:sender-1"),
         allowlists: { dm: ["display:sender-1"] },
       }),
-      policy: { ...policy, dmPolicy: "allowlist" as const },
+      policyLocal: { ...policy, dmPolicy: "allowlist" as const },
       expected: { admission: "drop", reasonCode: "dm_policy_not_allowlisted" },
       secondPolicy: {
         ...policy,
@@ -123,9 +126,9 @@ describe("channel message access ingress", () => {
       },
       secondExpected: { admission: "dispatch", decision: "allow" },
     },
-  ])("$name", async ({ input, policy, expected, secondPolicy, secondExpected }) => {
+  ])("$name", async ({ input, policyLocal, expected, secondPolicy, secondExpected }) => {
     const state = await resolveChannelIngressState(input);
-    expectRecordFields(decideChannelIngress(state, policy), expected);
+    expectRecordFields(decideChannelIngress(state, policyLocal), expected);
     expectRecordFields(decideChannelIngress(state, secondPolicy), secondExpected);
   });
 
@@ -230,7 +233,7 @@ describe("channel message access ingress", () => {
     expectRecordFields(decision, entry.expected);
     if (entry.matched) {
       const gate = decision.graph.gates.find(
-        (gate) => gate.phase === "sender" && gate.kind === "dmSender",
+        (gateLocal) => gateLocal.phase === "sender" && gateLocal.kind === "dmSender",
       );
       expectRecordFields(gate, {
         effect: "ignore",

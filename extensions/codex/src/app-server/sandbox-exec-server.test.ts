@@ -1,5 +1,7 @@
+// Codex tests cover sandbox exec server plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES,
   closeCodexSandboxExecServersForTests,
   ensureCodexSandboxExecServerEnvironment,
   releaseCodexSandboxExecServerEnvironment,
@@ -19,6 +21,26 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   await closeCodexSandboxExecServersForTests();
 });
+
+function testExecEnv(): NodeJS.ProcessEnv {
+  return {
+    PATH: process.env.PATH,
+  };
+}
+
+function echoFirstInputLineScript(prefix: string): string {
+  return [
+    "let data = '';",
+    "process.stdin.setEncoding('utf8');",
+    "process.stdin.on('data', (chunk) => {",
+    "data += chunk;",
+    "if (data.includes('\\n')) {",
+    `process.stdout.write(${JSON.stringify(prefix)} + data);`,
+    "process.exit(0);",
+    "}",
+    "});",
+  ].join(" ");
+}
 
 describe("OpenClaw Codex sandbox exec-server", () => {
   it("reports unavailable app-server remote environment support without exposing an environment", async () => {
@@ -95,8 +117,8 @@ describe("OpenClaw Codex sandbox exec-server", () => {
 
   it("registers a sandbox-backed Codex environment and routes process execution through it", async () => {
     const buildExecSpec = vi.fn(async () => ({
-      argv: ["/bin/sh", "-lc", "printf 'sandbox-process-ok\\n'"],
-      env: process.env,
+      argv: [process.execPath, "-e", "process.stdout.write('sandbox-process-ok\\n')"],
+      env: testExecEnv(),
       stdinMode: "pipe-closed" as const,
     }));
     const sandbox = createSandboxContext({ buildExecSpec });
@@ -170,10 +192,26 @@ describe("OpenClaw Codex sandbox exec-server", () => {
     socket.close();
   });
 
+  it("closes oversized sandbox exec-server frames before JSON-RPC parsing", async () => {
+    const sandbox = createSandboxContext({});
+    const client = createClient();
+
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+    });
+    const socket = await openSocket(execServerUrlFromClient(client));
+    const closed = waitForSocketClose(socket);
+
+    socket.send(Buffer.alloc(CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES + 1));
+
+    await expect(closed).resolves.toEqual({ code: 1009 });
+  });
+
   it("rejects unsupported arg0 overrides instead of dropping them", async () => {
     const buildExecSpec = vi.fn(async () => ({
-      argv: ["/bin/sh", "-lc", "true"],
-      env: process.env,
+      argv: [process.execPath, "-e", ""],
+      env: testExecEnv(),
       stdinMode: "pipe-closed" as const,
     }));
     const sandbox = createSandboxContext({ buildExecSpec });
@@ -204,8 +242,8 @@ describe("OpenClaw Codex sandbox exec-server", () => {
   it("accepts stdin writes for pipe-backed processes", async () => {
     const sandbox = createSandboxContext({
       buildExecSpec: async () => ({
-        argv: ["/bin/sh", "-lc", 'read line; printf "echo:%s\\n" "$line"'],
-        env: process.env,
+        argv: [process.execPath, "-e", echoFirstInputLineScript("echo:")],
+        env: testExecEnv(),
         stdinMode: "pipe-open",
       }),
     });
@@ -242,8 +280,8 @@ describe("OpenClaw Codex sandbox exec-server", () => {
 
   it("keeps tty process starts pipe-backed for sandbox backends", async () => {
     const buildExecSpec = vi.fn(async () => ({
-      argv: ["/bin/sh", "-lc", 'read line; printf "tty:%s\\n" "$line"'],
-      env: process.env,
+      argv: [process.execPath, "-e", echoFirstInputLineScript("tty:")],
+      env: testExecEnv(),
       stdinMode: "pipe-open" as const,
     }));
     const sandbox = createSandboxContext({ buildExecSpec });
@@ -289,7 +327,7 @@ describe("OpenClaw Codex sandbox exec-server", () => {
     vi.stubEnv("OPENCLAW_TEST_DATABASE_PASSWORD", "host-password");
     vi.stubEnv("OPENCLAW_TEST_PRIVATE_KEY", "host-private-key");
     const buildExecSpec = vi.fn(async () => ({
-      argv: ["/bin/sh", "-lc", "true"],
+      argv: [process.execPath, "-e", ""],
       env: {},
       stdinMode: "pipe-closed" as const,
     }));
@@ -336,7 +374,7 @@ describe("OpenClaw Codex sandbox exec-server", () => {
           "-e",
           "process.stdout.write('aaaa'); process.stderr.write('bbbb');",
         ],
-        env: process.env,
+        env: testExecEnv(),
         stdinMode: "pipe-closed",
       }),
     });
@@ -418,6 +456,26 @@ describe("OpenClaw Codex sandbox exec-server", () => {
     const socket = await openSocket(unauthorizedUrl);
 
     await expect(waitForSocketClose(socket)).resolves.toEqual({ code: 1008 });
+  });
+
+  it("handles oversized frames from unauthorized WebSocket clients", async () => {
+    const sandbox = createSandboxContext({});
+    const client = createClient();
+    await ensureCodexSandboxExecServerEnvironment({
+      client: client as never,
+      sandbox,
+    });
+    const unauthorizedUrl = execServerUrlFromClient(client).replace(
+      /\/openclaw-[^/?#]+/u,
+      "/wrong",
+    );
+    const socket = await openSocket(unauthorizedUrl);
+    const closed = waitForSocketClose(socket);
+
+    socket.send(Buffer.alloc(CODEX_SANDBOX_EXEC_SERVER_MAX_INBOUND_MESSAGE_BYTES + 1));
+
+    const closeResult = await closed;
+    expect([1008, 1009]).toContain(closeResult.code);
   });
 
   it("closes the exec-server when its sandbox environment is released", async () => {

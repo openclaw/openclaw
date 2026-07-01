@@ -71,7 +71,7 @@ If the work is vendor-only and no shared contract exists yet, stop and define th
 
 Use **provider hooks** when the behavior belongs to the model provider contract rather than the generic agent loop. Examples include provider-specific request params after transport selection, auth-profile preference, prompt overlays, and follow-up fallback routing after model/profile failover.
 
-Use **agent harness hooks** when the behavior belongs to the runtime that is executing a turn. Harnesses can classify successful-but-unusable attempt results such as empty, reasoning-only, or planning-only responses so the outer model fallback policy can make the retry decision.
+Use **agent harness hooks** when the behavior belongs to the runtime that is executing a turn. Harnesses can classify explicit protocol outcomes such as empty output, reasoning without visible output, or a structured plan without a final answer so the outer model fallback policy can make the retry decision.
 
 Keep both seams narrow:
 
@@ -121,11 +121,10 @@ is intentionally broader than memory: tools, search, retrieval, importers, or
 future feature plugins can consume embeddings without depending on the memory
 engine.
 
-For memory-engine-specific adapters, keep using `memoryEmbeddingProviders`.
-Those adapters own memory indexing details such as query/document split,
-runtime metadata, and local memory engine setup. Do not make a generic
-embedding provider depend on memory-owned modules unless the provider is only
-usable by memory.
+Memory search can consume generic `embeddingProviders`. The older
+`memoryEmbeddingProviders` contract is deprecated compatibility while existing
+memory-specific providers migrate; new reusable embedding providers should use
+`embeddingProviders`.
 
 ## Review checklist
 

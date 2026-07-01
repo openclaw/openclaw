@@ -1,16 +1,19 @@
-import fs from "node:fs/promises";
+// Telegram plugin module implements bot info cache behavior.
 import os from "node:os";
 import path from "node:path";
-import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeTelegramBotInfo, type TelegramBotInfo } from "./bot-info.js";
+import { getTelegramRuntime } from "./runtime.js";
+import { normalizeTelegramStateAccountId } from "./state-account-id.js";
 import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
 
-const STORE_VERSION = 1;
+const LEGACY_STORE_VERSION = 1;
+export const TELEGRAM_BOT_INFO_CACHE_NAMESPACE = "telegram.bot-info-cache";
+export const TELEGRAM_BOT_INFO_CACHE_MAX_ENTRIES = 128;
 export const TELEGRAM_BOT_INFO_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 type TelegramBotInfoCacheState = {
-  version: number;
   tokenFingerprint: string;
   fetchedAt: string;
   botInfo: TelegramBotInfo;
@@ -21,13 +24,13 @@ export type CachedTelegramBotInfo = {
   fetchedAt: string;
 };
 
-function normalizeAccountId(accountId?: string) {
-  const trimmed = accountId?.trim();
-  if (!trimmed) {
-    return "default";
-  }
-  return trimmed.replace(/[^a-z0-9._-]+/gi, "_");
-}
+type TelegramBotInfoCacheStore = {
+  register(key: string, value: TelegramBotInfoCacheState): Promise<void>;
+  lookup(key: string): Promise<TelegramBotInfoCacheState | undefined>;
+  delete(key: string): Promise<boolean>;
+};
+
+let botInfoCacheStoreForTest: TelegramBotInfoCacheStore | undefined;
 
 function fingerprintFromToken(botToken?: string): string | null {
   const trimmed = botToken?.trim();
@@ -42,21 +45,30 @@ export function resolveTelegramBotInfoCachePath(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   const stateDir = resolveStateDir(env, os.homedir);
-  return path.join(stateDir, "telegram", `bot-info-${normalizeAccountId(accountId)}.json`);
+  return path.join(
+    stateDir,
+    "telegram",
+    `bot-info-${normalizeTelegramStateAccountId(accountId)}.json`,
+  );
 }
 
-function parseCachedTelegramBotInfo(value: unknown): TelegramBotInfoCacheState | null {
+function openBotInfoCacheStore(): TelegramBotInfoCacheStore {
+  return (
+    botInfoCacheStoreForTest ??
+    getTelegramRuntime().state.openKeyedStore<TelegramBotInfoCacheState>({
+      namespace: TELEGRAM_BOT_INFO_CACHE_NAMESPACE,
+      maxEntries: TELEGRAM_BOT_INFO_CACHE_MAX_ENTRIES,
+      defaultTtlMs: TELEGRAM_BOT_INFO_CACHE_MAX_AGE_MS,
+    })
+  );
+}
+
+function parseCachedTelegramBotInfo(value: unknown) {
   if (!value || typeof value !== "object") {
     return null;
   }
-  const state = value as {
-    version?: unknown;
-    tokenFingerprint?: unknown;
-    fetchedAt?: unknown;
-    botInfo?: unknown;
-  };
+  const state = value as Partial<TelegramBotInfoCacheState>;
   if (
-    state.version !== STORE_VERSION ||
     typeof state.tokenFingerprint !== "string" ||
     typeof state.fetchedAt !== "string" ||
     Number.isNaN(Date.parse(state.fetchedAt))
@@ -68,26 +80,35 @@ function parseCachedTelegramBotInfo(value: unknown): TelegramBotInfoCacheState |
     return null;
   }
   return {
-    version: STORE_VERSION,
     tokenFingerprint: state.tokenFingerprint,
     fetchedAt: state.fetchedAt,
     botInfo,
   };
 }
 
+function parseLegacyCachedTelegramBotInfo(value: unknown) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const state = value as { version?: unknown };
+  if (state.version !== LEGACY_STORE_VERSION) {
+    return null;
+  }
+  return parseCachedTelegramBotInfo(value);
+}
+
 export async function readCachedTelegramBotInfo(params: {
   accountId?: string;
   botToken?: string;
-  env?: NodeJS.ProcessEnv;
   now?: Date;
 }): Promise<CachedTelegramBotInfo | null> {
   const tokenFingerprint = fingerprintFromToken(params.botToken);
   if (!tokenFingerprint) {
     return null;
   }
-  const filePath = resolveTelegramBotInfoCachePath(params.accountId, params.env);
-  const { value } = await readJsonFileWithFallback<unknown>(filePath, null);
-  const parsed = parseCachedTelegramBotInfo(value);
+  const parsed = parseCachedTelegramBotInfo(
+    await openBotInfoCacheStore().lookup(normalizeTelegramStateAccountId(params.accountId)),
+  );
   if (!parsed || parsed.tokenFingerprint !== tokenFingerprint) {
     return null;
   }
@@ -103,33 +124,40 @@ export async function writeCachedTelegramBotInfo(params: {
   accountId?: string;
   botToken: string;
   botInfo: TelegramBotInfo;
-  env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   const tokenFingerprint = fingerprintFromToken(params.botToken);
   if (!tokenFingerprint) {
     return;
   }
-  const filePath = resolveTelegramBotInfoCachePath(params.accountId, params.env);
-  const payload: TelegramBotInfoCacheState = {
-    version: STORE_VERSION,
+  const botInfo = normalizeTelegramBotInfo(params.botInfo);
+  if (!botInfo) {
+    return;
+  }
+  await openBotInfoCacheStore().register(normalizeTelegramStateAccountId(params.accountId), {
     tokenFingerprint,
     fetchedAt: new Date().toISOString(),
-    botInfo: params.botInfo,
-  };
-  await writeJsonFileAtomically(filePath, payload);
+    botInfo,
+  });
 }
 
-export async function deleteCachedTelegramBotInfo(params: {
+export async function deleteCachedTelegramBotInfo(params: { accountId?: string }): Promise<void> {
+  await openBotInfoCacheStore().delete(normalizeTelegramStateAccountId(params.accountId));
+}
+
+export function setTelegramBotInfoCacheStoreForTest(
+  store: TelegramBotInfoCacheStore | undefined,
+): void {
+  botInfoCacheStoreForTest = store;
+}
+
+export async function listTelegramLegacyBotInfoCacheEntries(params: {
   accountId?: string;
-  env?: NodeJS.ProcessEnv;
-}): Promise<void> {
-  const filePath = resolveTelegramBotInfoCachePath(params.accountId, params.env);
-  try {
-    await fs.unlink(filePath);
-  } catch (err) {
-    if ((err as { code?: string }).code === "ENOENT") {
-      return;
-    }
-    throw err;
+  persistedPath: string;
+}): Promise<Array<{ key: string; value: TelegramBotInfoCacheState }>> {
+  const { value } = await readJsonFileWithFallback<unknown>(params.persistedPath, null);
+  const parsed = parseLegacyCachedTelegramBotInfo(value);
+  if (!parsed) {
+    return [];
   }
+  return [{ key: normalizeTelegramStateAccountId(params.accountId), value: parsed }];
 }

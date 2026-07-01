@@ -1,19 +1,15 @@
+// Program smoke tests cover core CLI command registration and startup behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildProgram } from "./program.js";
 import {
   configureCommand,
   ensureConfigReady,
-  installBaseProgramMocks,
-  installSmokeProgramMocks,
   runCrestodian,
   runTui,
   runtime,
   setupCommand,
   setupWizardCommand,
 } from "./program.test-mocks.js";
-
-installBaseProgramMocks();
-installSmokeProgramMocks();
 
 vi.mock("./config-cli.js", () => ({
   registerConfigCli: (program: {
@@ -85,6 +81,14 @@ describe("cli program (smoke)", () => {
     expect(runtime.error).toHaveBeenCalledWith('warning: invalid --timeout-ms "nope"; ignoring');
     const options = firstMockArg(runTui) as { timeoutMs?: number };
     expect(options?.timeoutMs).toBeUndefined();
+  });
+
+  it("rejects partial tui history limits", async () => {
+    await expect(runProgram(["tui", "--history-limit", "10x"])).rejects.toThrow("exit");
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Error: --history-limit must be a positive integer.",
+    );
+    expect(runTui).not.toHaveBeenCalled();
   });
 
   it("runs setup wizard when wizard flags are present", async () => {

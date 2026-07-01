@@ -1,3 +1,4 @@
+/** One quota window reported by a provider usage endpoint. */
 export type UsageWindow = {
   label: string;
   usedPercent: number;
@@ -8,6 +9,7 @@ export type ProviderUsageSnapshot = {
   provider: UsageProviderId;
   displayName: string;
   windows: UsageWindow[];
+  summary?: string;
   plan?: string;
   error?: string;
 };
@@ -19,9 +21,11 @@ export type UsageSummary = {
 
 export type UsageProviderId =
   | "anthropic"
+  | "deepseek"
   | "github-copilot"
   | "google-gemini-cli"
   | "minimax"
-  | "openai-codex"
+  | "openai"
   | "xiaomi"
+  | "xiaomi-token-plan"
   | "zai";

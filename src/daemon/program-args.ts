@@ -1,7 +1,9 @@
+/** Builds runtime command arguments for gateway and node service installs. */
 import { execFileSync } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { getWindowsSystem32ExePath } from "../infra/windows-install-roots.js";
 import {
   buildGatewayDistEntrypointCandidates,
   findFirstAccessibleGatewayEntrypoint,
@@ -28,6 +30,8 @@ async function resolveCliEntrypointPathForService(): Promise<string> {
   const resolvedPath = await resolveRealpathSafe(normalized);
   const looksLikeDist = isGatewayDistEntrypointPath(resolvedPath);
   if (looksLikeDist) {
+    // Existing installed command lines may point at versioned pnpm realpaths.
+    // Repair prefers stable package symlink paths when they still exist.
     const preferredDistEntrypoint = await findFirstAccessibleGatewayEntrypoint(
       buildGatewayDistEntrypointCandidates(normalized, resolvedPath),
       async (candidate) => {
@@ -130,6 +134,7 @@ function appendNodeModulesBinCandidates(
   if (parts[binIndex - 1] !== "node_modules") {
     return;
   }
+  // openclaw from node_modules/.bin points at the package root sibling.
   const binName = path.basename(inputPath);
   const nodeModulesDir = parts.slice(0, binIndex).join(path.sep);
   const packageRoot = path.join(nodeModulesDir, binName);
@@ -161,7 +166,7 @@ async function resolveNodePath(): Promise<string> {
 }
 
 async function resolveBinaryPath(binary: string): Promise<string> {
-  const cmd = process.platform === "win32" ? "where" : "which";
+  const cmd = process.platform === "win32" ? getWindowsSystem32ExePath("where.exe") : "which";
   try {
     const output = execFileSync(cmd, [binary], { encoding: "utf8" }).trim();
     const resolved = output.split(/\r?\n/)[0]?.trim();
@@ -193,6 +198,8 @@ export async function resolveOpenClawWrapperPath(
     if (!stat.isFile()) {
       throw new Error("not a regular file");
     }
+    // Wrappers replace the runtime executable, so require execute permission up
+    // front rather than generating a service that fails at boot.
     await fs.access(resolved, fsConstants.X_OK);
   } catch (error) {
     const detail = error instanceof Error ? ` (${error.message})` : "";
@@ -254,7 +261,8 @@ async function resolveCliProgramArguments(params: {
         programArguments: [execPath, cliEntrypointPath, ...params.args],
       };
     } catch (error) {
-      // If running under bun or another runtime that can execute TS directly
+      // Non-Node runtimes may execute the CLI wrapper directly; Node needs the
+      // built dist entrypoint so service restarts survive package layout.
       if (!isNodeRuntime(execPath)) {
         return { programArguments: [execPath, ...params.args] };
       }
@@ -262,12 +270,12 @@ async function resolveCliProgramArguments(params: {
     }
   }
 
-  // Dev mode: use bun to run TypeScript directly
+  // Dev mode: use bun to run TypeScript directly.
   const repoRoot = resolveRepoRootForDev();
   const devCliPath = path.join(repoRoot, "src", "entry.ts");
   await fs.access(devCliPath);
 
-  // If already running under bun, use current execPath
+  // If already running under bun, use current execPath.
   if (isBunRuntime(execPath)) {
     return {
       programArguments: [execPath, devCliPath, ...params.args],
@@ -275,7 +283,7 @@ async function resolveCliProgramArguments(params: {
     };
   }
 
-  // Otherwise resolve bun from PATH
+  // Otherwise resolve bun from PATH.
   const bunPath = await resolveBunPath();
   return {
     programArguments: [bunPath, devCliPath, ...params.args],

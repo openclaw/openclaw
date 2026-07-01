@@ -1,10 +1,18 @@
+// Slack plugin module implements interactions.block actions behavior.
 import type { SlackActionMiddlewareArgs } from "@slack/bolt";
 import type { Block, KnownBlock } from "@slack/web-api";
 import { resolveApprovalOverGateway } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
 import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  parseStrictFiniteNumber,
+  timestampMsToIsoString,
+} from "openclaw/plugin-sdk/number-runtime";
+import {
+  normalizeOptionalString,
+  normalizeUniqueTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { isSlackApprovalAuthorizedSender } from "../../approval-auth.js";
 import { isSlackExecApprovalAuthorizedSender } from "../../exec-approvals.js";
@@ -13,6 +21,7 @@ import {
   SLACK_REPLY_BUTTON_ACTION_ID,
   SLACK_REPLY_SELECT_ACTION_ID,
 } from "../../reply-action-ids.js";
+import { truncateSlackText } from "../../truncate.js";
 import {
   authorizeSlackSystemEventSender,
   resolveSlackCommandIngress,
@@ -136,20 +145,7 @@ function readOptionLabels(options: unknown): string[] | undefined {
 }
 
 function uniqueNonEmptyStrings(values: string[]): string[] {
-  const unique: string[] = [];
-  const seen = new Set<string>();
-  for (const entry of values) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const trimmed = entry.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      continue;
-    }
-    seen.add(trimmed);
-    unique.push(trimmed);
-  }
-  return unique;
+  return normalizeUniqueTrimmedStringList(values);
 }
 
 function collectRichTextFragments(value: unknown, out: string[]): void {
@@ -178,7 +174,7 @@ function summarizeRichTextPreview(value: unknown): string | undefined {
     return undefined;
   }
   const max = 120;
-  return joined.length <= max ? joined : `${joined.slice(0, max - 1)}…`;
+  return joined.length <= max ? joined : truncateSlackText(joined, max);
 }
 
 function readInteractionAction(raw: unknown) {
@@ -235,7 +231,9 @@ export function summarizeAction(action: Record<string, unknown>): SlackActionSum
   ]);
   const inputValue = typeof typed.value === "string" ? typed.value : undefined;
   const inputNumber =
-    actionType === "number_input" && inputValue != null ? Number.parseFloat(inputValue) : undefined;
+    actionType === "number_input" && inputValue != null
+      ? parseStrictFiniteNumber(inputValue)
+      : undefined;
   const parsedNumber = Number.isFinite(inputNumber) ? inputNumber : undefined;
   const inputEmail =
     actionType === "email_text_input" && inputValue?.includes("@") ? inputValue : undefined;
@@ -326,7 +324,10 @@ function formatInteractionSelectionLabel(params: {
     return params.summary.selectedTime;
   }
   if (typeof params.summary.selectedDateTime === "number") {
-    return new Date(params.summary.selectedDateTime * 1000).toISOString();
+    const selectedDateTime = timestampMsToIsoString(params.summary.selectedDateTime * 1000);
+    if (selectedDateTime) {
+      return selectedDateTime;
+    }
   }
   if (params.summary.richTextPreview) {
     return params.summary.richTextPreview;

@@ -1,19 +1,27 @@
+// Manages APNs registration state and direct/relay push sending.
 import { createHash, createPrivateKey, sign as signJwt } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveStateDir } from "../config/paths.js";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveStateDir } from "../config/paths.js";
 import type { DeviceIdentity } from "./device-identity.js";
-import { formatErrorMessage } from "./errors.js";
+import { formatErrorMessage, toErrorObject } from "./errors.js";
 import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
-import { APNS_HTTP2_CANCEL_CODE, connectApnsHttp2Session } from "./push-apns-http2.js";
+import {
+  APNS_HTTP2_CANCEL_CODE,
+  appendApnsResponseBodyCapture,
+  connectApnsHttp2Session,
+  createApnsResponseBodyCapture,
+} from "./push-apns-http2.js";
 import {
   type ApnsRelayConfig,
   type ApnsRelayPushResponse,
   type ApnsRelayRequestSender,
+  normalizeApnsRelayBaseUrl,
   resolveApnsRelayConfigFromEnv,
   sendApnsRelayPush,
 } from "./push-apns.relay.js";
@@ -37,14 +45,17 @@ type RelayApnsRegistration = {
   sendGrant: string;
   installationId: string;
   topic: string;
-  environment: "production";
+  environment: ApnsEnvironment;
   distribution: "official";
   updatedAtMs: number;
+  relayOrigin?: string;
   tokenDebugSuffix?: string;
 };
 
+/** Stored APNs registration for either direct device tokens or official relay handles. */
 export type ApnsRegistration = DirectApnsRegistration | RelayApnsRegistration;
 
+/** Direct APNs provider authentication used to mint ES256 bearer tokens. */
 export type ApnsAuthConfig = {
   teamId: string;
   keyId: string;
@@ -53,6 +64,7 @@ export type ApnsAuthConfig = {
 
 type ApnsAuthConfigResolution = { ok: true; value: ApnsAuthConfig } | { ok: false; error: string };
 
+/** Normalized APNs push result returned to gateway push/nodes methods. */
 export type ApnsPushResult = {
   ok: boolean;
   status: number;
@@ -109,6 +121,7 @@ type RegisterRelayApnsParams = {
   topic: string;
   environment?: unknown;
   distribution?: unknown;
+  relayOrigin?: unknown;
   tokenDebugSuffix?: unknown;
   baseDir?: string;
 };
@@ -227,6 +240,8 @@ function getApnsBearerToken(auth: ApnsAuthConfig, nowMs: number = Date.now()): s
     return cachedJwt.token;
   }
 
+  // APNs provider tokens are valid for one hour. Cache for slightly less so
+  // bursty wake/approval pushes avoid repeated ECDSA signing.
   const iat = Math.floor(nowMs / 1000);
   const header = toBase64UrlJson({ alg: "ES256", kid: auth.keyId, typ: "JWT" });
   const payload = toBase64UrlJson({ iss: auth.teamId, iat });
@@ -261,6 +276,18 @@ function normalizeDistribution(value: unknown): "official" | null {
     ? normalizeLowercaseStringOrEmpty(value)
     : undefined;
   return normalized === "official" ? "official" : null;
+}
+
+function normalizeRelayOrigin(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) {
+    return undefined;
+  }
+  const normalized = normalizeApnsRelayBaseUrl(trimmed, process.env);
+  return normalized.ok ? normalized.value : undefined;
 }
 
 function normalizeDirectRegistration(
@@ -312,6 +339,7 @@ function normalizeRelayRegistration(
   const topic = normalizeTopic(typeof record.topic === "string" ? record.topic : "");
   const environment = normalizeApnsEnvironment(record.environment);
   const distribution = normalizeDistribution(record.distribution);
+  const relayOrigin = normalizeRelayOrigin(record.relayOrigin);
   const updatedAtMs =
     typeof record.updatedAtMs === "number" && Number.isFinite(record.updatedAtMs)
       ? Math.trunc(record.updatedAtMs)
@@ -322,7 +350,7 @@ function normalizeRelayRegistration(
     !sendGrant ||
     !installationId ||
     !isValidTopic(topic) ||
-    environment !== "production" ||
+    !environment ||
     distribution !== "official"
   ) {
     return null;
@@ -337,6 +365,7 @@ function normalizeRelayRegistration(
     environment,
     distribution,
     updatedAtMs,
+    ...(relayOrigin ? { relayOrigin } : {}),
     tokenDebugSuffix: normalizeTokenDebugSuffix(record.tokenDebugSuffix),
   };
 }
@@ -389,6 +418,7 @@ async function persistRegistrationsState(
   });
 }
 
+/** Normalizes the APNs environment string accepted by registration inputs. */
 export function normalizeApnsEnvironment(value: unknown): ApnsEnvironment | null {
   if (typeof value !== "string") {
     return null;
@@ -400,6 +430,7 @@ export function normalizeApnsEnvironment(value: unknown): ApnsEnvironment | null
   return null;
 }
 
+/** Persists a validated direct or relay APNs registration for one node id. */
 export async function registerApnsRegistration(
   params: RegisterApnsParams,
 ): Promise<ApnsRegistration> {
@@ -433,8 +464,9 @@ export async function registerApnsRegistration(
       );
       const environment = normalizeApnsEnvironment(params.environment);
       const distribution = normalizeDistribution(params.distribution);
-      if (environment !== "production") {
-        throw new Error("relay registrations must use production environment");
+      const relayOrigin = normalizeRelayOrigin(params.relayOrigin);
+      if (!environment) {
+        throw new Error("relay registrations must use valid APNs environment");
       }
       if (distribution !== "official") {
         throw new Error("relay registrations must use official distribution");
@@ -449,6 +481,7 @@ export async function registerApnsRegistration(
         environment,
         distribution,
         updatedAtMs,
+        ...(relayOrigin ? { relayOrigin } : {}),
         tokenDebugSuffix: normalizeTokenDebugSuffix(params.tokenDebugSuffix),
       };
     } else {
@@ -473,19 +506,7 @@ export async function registerApnsRegistration(
   });
 }
 
-export async function registerApnsToken(params: {
-  nodeId: string;
-  token: string;
-  topic: string;
-  environment?: unknown;
-  baseDir?: string;
-}): Promise<DirectApnsRegistration> {
-  return (await registerApnsRegistration({
-    ...params,
-    transport: "direct",
-  })) as DirectApnsRegistration;
-}
-
+/** Loads one normalized APNs registration by node id. */
 export async function loadApnsRegistration(
   nodeId: string,
   baseDir?: string,
@@ -498,20 +519,24 @@ export async function loadApnsRegistration(
   return state.registrationsByNodeId[normalizedNodeId] ?? null;
 }
 
-export async function clearApnsRegistration(nodeId: string, baseDir?: string): Promise<boolean> {
-  const normalizedNodeId = normalizeNodeId(nodeId);
-  if (!normalizedNodeId) {
-    return false;
-  }
-  return await withLock(async () => {
-    const state = await loadRegistrationsState(baseDir);
-    if (!(normalizedNodeId in state.registrationsByNodeId)) {
-      return false;
+/** Loads normalized APNs registrations for the requested node ids, preserving request order. */
+export async function loadApnsRegistrations(
+  nodeIds: readonly string[],
+  baseDir?: string,
+): Promise<Array<{ nodeId: string; registration: ApnsRegistration }>> {
+  const state = await loadRegistrationsState(baseDir);
+  const registrations: Array<{ nodeId: string; registration: ApnsRegistration }> = [];
+  for (const nodeId of nodeIds) {
+    const normalizedNodeId = normalizeNodeId(nodeId);
+    if (!normalizedNodeId) {
+      continue;
     }
-    delete state.registrationsByNodeId[normalizedNodeId];
-    await persistRegistrationsState(state, baseDir);
-    return true;
-  });
+    const registration = state.registrationsByNodeId[normalizedNodeId];
+    if (registration) {
+      registrations.push({ nodeId, registration });
+    }
+  }
+  return registrations;
 }
 
 function isSameApnsRegistration(a: ApnsRegistration, b: ApnsRegistration): boolean {
@@ -533,12 +558,14 @@ function isSameApnsRegistration(a: ApnsRegistration, b: ApnsRegistration): boole
       a.sendGrant === b.sendGrant &&
       a.installationId === b.installationId &&
       a.distribution === b.distribution &&
+      a.relayOrigin === b.relayOrigin &&
       a.tokenDebugSuffix === b.tokenDebugSuffix
     );
   }
   return false;
 }
 
+/** Clears a registration only if storage still contains the caller's observed value. */
 export async function clearApnsRegistrationIfCurrent(params: {
   nodeId: string;
   registration: ApnsRegistration;
@@ -560,6 +587,7 @@ export async function clearApnsRegistrationIfCurrent(params: {
   });
 }
 
+/** Returns true for APNs responses that mean the direct device token is no longer usable. */
 export function shouldInvalidateApnsRegistration(result: {
   status: number;
   reason?: string;
@@ -570,6 +598,7 @@ export function shouldInvalidateApnsRegistration(result: {
   return result.status === 400 && result.reason?.trim() === "BadDeviceToken";
 }
 
+/** Decides whether a failed direct push should clear the persisted registration. */
 export function shouldClearStoredApnsRegistration(params: {
   registration: ApnsRegistration;
   result: { status: number; reason?: string };
@@ -587,6 +616,7 @@ export function shouldClearStoredApnsRegistration(params: {
   return shouldInvalidateApnsRegistration(params.result);
 }
 
+/** Resolves direct APNs provider auth from env, accepting inline or file-backed keys. */
 export async function resolveApnsAuthConfigFromEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<ApnsAuthConfigResolution> {
@@ -671,7 +701,7 @@ async function sendApnsRequest(params: {
       }
       settled = true;
       client.destroy();
-      reject(err);
+      reject(toErrorObject(err, "Non-Error rejection"));
     };
     const finish = (result: { status: number; apnsId?: string; body: string }) => {
       if (settled) {
@@ -698,7 +728,7 @@ async function sendApnsRequest(params: {
 
     let statusCode = 0;
     let apnsId: string | undefined;
-    let responseBody = "";
+    const responseBody = createApnsResponseBodyCapture();
 
     req.setEncoding("utf8");
     req.setTimeout(params.timeoutMs, () => {
@@ -715,11 +745,11 @@ async function sendApnsRequest(params: {
     });
     req.on("data", (chunk) => {
       if (typeof chunk === "string") {
-        responseBody += chunk;
+        appendApnsResponseBodyCapture(responseBody, chunk);
       }
     });
     req.on("end", () => {
-      finish({ status: statusCode, apnsId, body: responseBody });
+      finish({ status: statusCode, apnsId, body: responseBody.text });
     });
     req.on("error", (err) => fail(err));
 
@@ -728,9 +758,7 @@ async function sendApnsRequest(params: {
 }
 
 function resolveApnsTimeoutMs(timeoutMs: number | undefined): number {
-  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-    ? Math.max(1000, Math.trunc(timeoutMs))
-    : DEFAULT_APNS_TIMEOUT_MS;
+  return resolveTimerTimeoutMs(timeoutMs, DEFAULT_APNS_TIMEOUT_MS, 1000);
 }
 
 function resolveDirectSendContext(params: {
@@ -811,7 +839,7 @@ function toPushResult(params: {
         "tokenSuffix" in response ? response : undefined,
       ),
     topic: params.registration.topic,
-    environment: params.registration.transport === "relay" ? "production" : response.environment,
+    environment: response.environment ?? params.registration.environment,
     transport: params.registration.transport,
   };
 }
@@ -1027,6 +1055,7 @@ type RelayApnsExecApprovalResolvedParams = ApnsExecApprovalResolvedCommonParams 
   requestSender?: never;
 };
 
+/** Sends a visible APNs alert via direct APNs token or relay registration. */
 export async function sendApnsAlert(
   params: DirectApnsAlertParams | RelayApnsAlertParams,
 ): Promise<ApnsPushAlertResult> {
@@ -1060,6 +1089,7 @@ export async function sendApnsAlert(
   });
 }
 
+/** Sends a silent background wake via direct APNs token or relay registration. */
 export async function sendApnsBackgroundWake(
   params: DirectApnsBackgroundWakeParams | RelayApnsBackgroundWakeParams,
 ): Promise<ApnsPushWakeResult> {
@@ -1092,6 +1122,7 @@ export async function sendApnsBackgroundWake(
   });
 }
 
+/** Sends an exec-approval alert notification via direct APNs or relay. */
 export async function sendApnsExecApprovalAlert(
   params: DirectApnsExecApprovalAlertParams | RelayApnsExecApprovalAlertParams,
 ): Promise<ApnsPushAlertResult> {
@@ -1124,6 +1155,7 @@ export async function sendApnsExecApprovalAlert(
   });
 }
 
+/** Sends a silent wake telling the app an exec approval changed state. */
 export async function sendApnsExecApprovalResolvedWake(
   params: DirectApnsExecApprovalResolvedParams | RelayApnsExecApprovalResolvedParams,
 ): Promise<ApnsPushWakeResult> {

@@ -37,7 +37,7 @@ that agent; if you copy credentials manually, copy only portable static
 `api_key` or `token` profiles.
 </Warning>
 
-Skills are loaded from each agent workspace plus shared roots such as `~/.openclaw/skills`, then filtered by the effective agent skill allowlist when configured. Use `agents.defaults.skills` for a shared baseline and `agents.list[].skills` for per-agent replacement. See [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills) and [Skills: agent skill allowlists](/tools/skills#agent-skill-allowlists).
+Skills are loaded from each agent workspace plus shared roots such as `~/.openclaw/skills`, then filtered by the effective agent skill allowlist when configured. Use `agents.defaults.skills` for a shared baseline and `agents.list[].skills` for per-agent replacement. See [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills) and [Skills: agent skill allowlists](/tools/skills#agent-allowlists).
 
 The Gateway can host **one agent** (default) or **many agents** side-by-side.
 
@@ -357,6 +357,11 @@ Common channels supporting this pattern include:
 
     - Create one bot per agent with BotFather and copy each token.
     - Tokens live in `channels.telegram.accounts.<id>.botToken` (default account can use `TELEGRAM_BOT_TOKEN`).
+    - For multiple bots in the same Telegram group, invite each bot and mention the bot that should answer.
+    - Disable BotFather Privacy Mode for each group bot, then re-add the bot so Telegram applies the setting.
+    - Allow groups with `channels.telegram.groups`, or use `groupPolicy: "open"` only for trusted group deployments.
+    - Put sender user IDs in `groupAllowFrom`. Group and supergroup IDs belong in `channels.telegram.groups`, not `groupAllowFrom`.
+    - Bind by `accountId` so each bot routes to its own agent.
 
   </Accordion>
   <Accordion title="WhatsApp numbers per agent">

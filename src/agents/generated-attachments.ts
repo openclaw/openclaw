@@ -1,6 +1,12 @@
-import { basenameFromAnyPath } from "../media/file-name.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+/**
+ * Formats generated attachment references for agent-visible output.
+ */
+import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 
+// Shared helpers for generated media/file attachments returned by tools or
+// subagents. They normalize paths/URLs for prompt text and delivery routing.
 export type AgentGeneratedAttachment = {
   type?: "image" | "audio" | "video" | "file";
   path?: string;
@@ -11,42 +17,29 @@ export type AgentGeneratedAttachment = {
   name?: string;
 };
 
-export function generatedAttachmentReference(
-  attachment: AgentGeneratedAttachment,
-): string | undefined {
+function generatedAttachmentReference(attachment: AgentGeneratedAttachment): string | undefined {
   return normalizeOptionalString(
     attachment.path ?? attachment.url ?? attachment.mediaUrl ?? attachment.filePath,
   );
 }
 
+/** Return unique media URLs/paths from generated attachments. */
 export function mediaUrlsFromGeneratedAttachments(
   attachments: readonly AgentGeneratedAttachment[] | undefined,
 ): string[] {
-  if (!attachments?.length) {
-    return [];
-  }
-  const urls: string[] = [];
-  const seen = new Set<string>();
-  for (const attachment of attachments) {
-    const url = generatedAttachmentReference(attachment);
-    if (!url || seen.has(url)) {
-      continue;
-    }
-    seen.add(url);
-    urls.push(url);
-  }
-  return urls;
+  return uniqueStrings(
+    attachments?.flatMap((attachment) => generatedAttachmentReference(attachment) ?? []) ?? [],
+  );
 }
 
-export function nameFromGeneratedAttachment(
-  attachment: AgentGeneratedAttachment,
-): string | undefined {
+function nameFromGeneratedAttachment(attachment: AgentGeneratedAttachment): string | undefined {
   return (
     normalizeOptionalString(attachment.name) ??
     basenameFromAnyPath(generatedAttachmentReference(attachment) ?? "")
   );
 }
 
+/** Format generated attachment metadata as prompt-safe text lines. */
 export function formatGeneratedAttachmentLines(
   attachments: readonly AgentGeneratedAttachment[] | undefined,
 ): string[] {

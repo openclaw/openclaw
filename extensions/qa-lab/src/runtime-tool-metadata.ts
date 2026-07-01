@@ -1,3 +1,9 @@
+// Qa Lab plugin module implements runtime tool metadata behavior.
+import {
+  asBoolean as readBoolean,
+  isRecord,
+  normalizeOptionalString as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaRuntimeParityTier, QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
 export type QaRuntimeToolBucket =
@@ -16,8 +22,6 @@ export type QaRuntimeCapabilityLayer =
   | "openclaw-dynamic-searchable"
   | "optional-profile-or-plugin"
   | "structural-text";
-
-export type QaCodexToolLoading = "direct" | "searchable";
 
 export type RuntimeParityComparisonMode = "default" | "codex-native-workspace" | "outcome-only";
 
@@ -53,11 +57,6 @@ export const QA_RUNTIME_CAPABILITY_LAYERS: readonly QaRuntimeCapabilityLayer[] =
   "structural-text",
 ] as const;
 
-export const QA_CODEX_TOOL_LOADING_MODES: readonly QaCodexToolLoading[] = [
-  "direct",
-  "searchable",
-] as const;
-
 const DEFAULT_LAYER_BY_BUCKET: Record<QaRuntimeToolBucket, QaRuntimeToolExpectedLayer> = {
   "codex-native-workspace": "codex-native-workspace",
   "openclaw-dynamic-integration": "openclaw-dynamic",
@@ -69,18 +68,6 @@ const DEFAULT_CAPABILITY_LAYER_BY_BUCKET: Record<QaRuntimeToolBucket, QaRuntimeC
   "openclaw-dynamic-integration": "openclaw-dynamic-searchable",
   "optional-profile-or-plugin": "optional-profile-or-plugin",
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function readBoolean(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
 
 function isQaRuntimeToolBucket(value: string): value is QaRuntimeToolBucket {
   return QA_RUNTIME_TOOL_BUCKETS.includes(value as QaRuntimeToolBucket);
@@ -178,26 +165,4 @@ export function readScenarioRuntimeToolCoverageMetadata(
     config: scenario.execution.config,
     runtimeParityTier: scenario.runtimeParityTier,
   });
-}
-
-export function runtimeToolComparisonModeForScenario(
-  scenario: QaSeedScenarioWithSource,
-): RuntimeParityComparisonMode {
-  const explicit = readString(scenario.execution.config?.runtimeParityComparison);
-  if (explicit) {
-    if (
-      explicit !== "default" &&
-      explicit !== "codex-native-workspace" &&
-      explicit !== "outcome-only"
-    ) {
-      throw new Error(
-        `unknown runtime parity comparison mode: ${explicit}; expected default, codex-native-workspace, outcome-only`,
-      );
-    }
-    return explicit;
-  }
-  return readScenarioRuntimeToolCoverageMetadata(scenario).expectedLayer ===
-    "codex-native-workspace"
-    ? "codex-native-workspace"
-    : "default";
 }

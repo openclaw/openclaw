@@ -17,6 +17,7 @@
 set -euo pipefail
 
 REPO_PATH="${OPENCLAW_REPO_PATH:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+source "$REPO_PATH/scripts/lib/host-timeout.sh"
 RUN_SCRIPT_SRC="$REPO_PATH/scripts/run-openclaw-podman.sh"
 QUADLET_TEMPLATE="$REPO_PATH/scripts/podman/openclaw.container.in"
 OPENCLAW_USER="$(id -un)"
@@ -28,6 +29,8 @@ OPENCLAW_CONTAINER_NAME="${OPENCLAW_PODMAN_CONTAINER:-openclaw}"
 PLATFORM_NAME="$(uname -s 2>/dev/null || echo unknown)"
 HOST_GATEWAY_PORT="${OPENCLAW_PODMAN_GATEWAY_HOST_PORT:-${OPENCLAW_GATEWAY_PORT:-18789}}"
 QUADLET_GATEWAY_PORT="18789"
+PODMAN_PULL_TIMEOUT="${OPENCLAW_PODMAN_SETUP_PULL_TIMEOUT:-600s}"
+PODMAN_BUILD_TIMEOUT="${OPENCLAW_PODMAN_SETUP_BUILD_TIMEOUT:-1800s}"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -41,6 +44,15 @@ is_root() { [[ "$(id -u)" -eq 0 ]]; }
 fail() {
   echo "$*" >&2
   exit 1
+}
+
+run_podman_pull() {
+  local image="$1"
+  openclaw_host_timeout_cmd "$PODMAN_PULL_TIMEOUT" podman pull "$image"
+}
+
+run_podman_build() {
+  openclaw_host_timeout_cmd "$PODMAN_BUILD_TIMEOUT" podman build "$@"
 }
 
 validate_single_line_value() {
@@ -376,13 +388,13 @@ fi
 
 if [[ "$OPENCLAW_IMAGE" == "openclaw:local" ]]; then
   echo "Building image $OPENCLAW_IMAGE ..."
-  podman build -t "$OPENCLAW_IMAGE" -f "$REPO_PATH/Dockerfile" "${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}" "$REPO_PATH"
+  run_podman_build -t "$OPENCLAW_IMAGE" -f "$REPO_PATH/Dockerfile" "${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}" "$REPO_PATH"
 else
   if podman image exists "$OPENCLAW_IMAGE" >/dev/null 2>&1; then
     echo "Using existing image $OPENCLAW_IMAGE"
   else
     echo "Pulling image $OPENCLAW_IMAGE ..."
-    podman pull "$OPENCLAW_IMAGE"
+    run_podman_pull "$OPENCLAW_IMAGE"
   fi
 fi
 

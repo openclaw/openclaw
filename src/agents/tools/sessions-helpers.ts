@@ -1,3 +1,8 @@
+/**
+ * Shared session-tool data shapes and classification helpers.
+ *
+ * Keeps list/send/status tools aligned on rows, visibility context, and compact kind/channel labels.
+ */
 export {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
@@ -15,26 +20,26 @@ export {
   resolveVisibleSessionReference,
   shouldResolveSessionIdInput,
 } from "./sessions-resolution.js";
-export {
-  extractAssistantText,
-  sanitizeTextContent,
-  stripToolMessages,
-} from "./chat-history-text.js";
+import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import type { FastModeSource } from "../../shared/fast-mode.js";
 
-export type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
+/** Coarse session category used by session list/status tools. */
+type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
 
-export type SessionListDeliveryContext = {
+/** Delivery target metadata attached to session rows. */
+type SessionListDeliveryContext = {
   channel?: string;
   to?: string;
   accountId?: string;
   threadId?: string | number;
 };
 
+/** Compact run status shown by session tools. */
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
 
+/** Normalized session row returned by session list-style tools. */
 export type SessionListRow = {
   key: string;
   agentId?: string;
@@ -63,7 +68,10 @@ export type SessionListRow = {
   runtimeMs?: number;
   childSessions?: string[];
   thinkingLevel?: string;
-  fastMode?: boolean;
+  fastMode?: FastMode;
+  effectiveFastMode?: FastMode;
+  effectiveFastModeSource?: FastModeSource;
+  fastAutoOnSeconds?: number;
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
@@ -79,6 +87,7 @@ export type SessionListRow = {
   messages?: unknown[];
 };
 
+/** Resolves config plus sandbox visibility context for a session tool call. */
 export function resolveSessionToolContext(opts?: {
   agentSessionKey?: string;
   sandboxed?: boolean;
@@ -95,6 +104,7 @@ export function resolveSessionToolContext(opts?: {
   };
 }
 
+/** Classifies a session key/gateway kind into the row category used by tools. */
 export function classifySessionKind(params: {
   key: string;
   gatewayKind?: string | null;
@@ -118,11 +128,13 @@ export function classifySessionKind(params: {
     return "group";
   }
   if (key.includes(":group:") || key.includes(":channel:")) {
+    // Gateway-less archived rows still encode group/channel shape in the session key.
     return "group";
   }
   return "other";
 }
 
+/** Derives the best channel label for a session row. */
 export function deriveChannel(params: {
   key: string;
   kind: SessionKind;

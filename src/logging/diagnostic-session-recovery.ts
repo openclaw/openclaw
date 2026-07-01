@@ -1,16 +1,10 @@
+// Diagnostic session recovery types describe session recovery diagnostic payloads.
 import type {
   DiagnosticSessionActiveWorkKind,
   DiagnosticSessionState,
 } from "../infra/diagnostic-events.js";
 
-export type DiagnosticSessionRecoveryStatus =
-  | "aborted"
-  | "released"
-  | "skipped"
-  | "noop"
-  | "failed";
-
-export type DiagnosticSessionRecoverySkipReason =
+type DiagnosticSessionRecoverySkipReason =
   | "active_embedded_run"
   | "active_reply_work"
   | "active_lane_task"
@@ -18,17 +12,32 @@ export type DiagnosticSessionRecoverySkipReason =
   | "missing_session_ref"
   | "stale_session_state";
 
-export type DiagnosticSessionRecoveryNoopReason = "no_active_work";
+type DiagnosticSessionRecoveryNoopReason = "no_active_work";
 
 export type StuckSessionRecoveryRequest = {
   sessionId?: string;
   sessionKey?: string;
+  sessionFile?: string;
   ageMs: number;
   queueDepth?: number;
   allowActiveAbort?: boolean;
   expectedState?: DiagnosticSessionState;
   stateGeneration?: number;
+  /**
+   * Resolved no-forward-progress age (from `diagnostics.stuckSessionAbortMs`) after
+   * which an "active" run with queued work is treated as a leaked/dead handle and
+   * reclaimed. Honors an operator-raised threshold; falls back to a safe floor.
+   */
+  staleActiveProgressAbortMs?: number;
 };
+
+export function resolveStuckSessionRecoveryRef(
+  params: Pick<StuckSessionRecoveryRequest, "sessionId" | "sessionKey">,
+): string | undefined {
+  // In-flight recovery gates must key by logical session only; generation is
+  // stale-state evidence, not concurrency identity.
+  return params.sessionKey?.trim() || params.sessionId?.trim() || undefined;
+}
 
 type DiagnosticSessionRecoveryBaseOutcome = {
   sessionId?: string;

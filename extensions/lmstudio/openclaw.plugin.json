@@ -1,5 +1,6 @@
 {
   "id": "lmstudio",
+  "icon": "https://cdn.simpleicons.org/lmstudio",
   "activation": {
     "onStartup": false
   },
@@ -23,8 +24,14 @@
     }
   },
   "nonSecretAuthMarkers": ["lmstudio-local"],
-  "providerAuthEnvVars": {
-    "lmstudio": ["LM_API_TOKEN"]
+  "syntheticAuthRefs": ["lmstudio"],
+  "setup": {
+    "providers": [
+      {
+        "id": "lmstudio",
+        "envVars": ["LM_API_TOKEN"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

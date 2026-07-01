@@ -41,6 +41,8 @@ If a file is missing, OpenClaw injects a single "missing file" marker line (and 
 
 `BOOTSTRAP.md` is only created for a **brand new workspace** (no other bootstrap files present). While it is pending, OpenClaw keeps it in Project Context and adds system-prompt bootstrap guidance for the initial ritual instead of copying it into the user message. If you delete it after completing the ritual, it should not be recreated on later restarts.
 
+After a workspace has been observed, OpenClaw also keeps a state-dir attestation marker for the workspace path. If a recently attested workspace disappears or is wiped, startup refuses to silently re-seed `BOOTSTRAP.md`; restore the workspace or use a full onboard reset so the workspace and marker are cleared together.
+
 To disable bootstrap file creation entirely (for pre-seeded workspaces), set:
 
 ```json5
@@ -65,13 +67,17 @@ OpenClaw loads skills from these locations (highest precedence first):
 - Bundled (shipped with the install)
 - Extra skill folders: `skills.load.extraDirs`
 
+Skill roots can contain grouped folders such as
+`<workspace>/skills/personal/foo/SKILL.md`; the skill is still exposed by its
+flat frontmatter name, for example `foo`.
+
 Skills can be gated by config/env (see `skills` in [Gateway configuration](/gateway/configuration)).
 
 ## Runtime boundaries
 
-The embedded agent runtime is built on the Pi agent core (models, tools, and
-prompt pipeline). Session management, discovery, tool wiring, and channel
-delivery are OpenClaw-owned layers on top of that core.
+The embedded agent runtime is OpenClaw-owned: model discovery, tool wiring,
+prompt assembly, session management, and channel delivery share one integrated
+runtime surface.
 
 ## Sessions
 

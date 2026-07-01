@@ -1,3 +1,4 @@
+// Qqbot plugin module implements remind behavior.
 import { callGatewayTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   AnyAgentTool,
@@ -51,12 +52,13 @@ export function createRemindTool(
     label: "QQBot Reminder",
     description:
       "Create, list, and remove QQ reminders. " +
+      "Use only for explicit user requests, and ask when reminder content, schedule, or timezone is ambiguous. " +
       "This tool schedules Gateway cron jobs directly; do not call the cron tool after it succeeds.\n" +
       "Create: action=add, content=message, time=schedule (to is optional, " +
       "resolved automatically from the current conversation)\n" +
       "List: action=list\n" +
       "Remove: action=remove, jobId=job id from list\n" +
-      'Time examples: "5m", "1h", "0 8 * * *"',
+      'Time examples: "5m", "1h", "0 8 * * *"; include timezone for recurring cron reminders when known.',
     parameters: RemindSchema,
     async execute(_toolCallId, params) {
       const ctx = getRequestContext();

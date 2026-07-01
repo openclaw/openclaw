@@ -1,3 +1,4 @@
+// Wraps fs-safe JSON reads and atomic writes with OpenClaw defaults.
 import "./fs-safe-defaults.js";
 import {
   JsonFileReadError,
@@ -5,6 +6,11 @@ import {
   readJsonIfExists as readJsonIfExistsImpl,
 } from "@openclaw/fs-safe/json";
 import { replaceFileAtomic } from "./replace-file.js";
+
+type WriteTextAtomicBeforeRename = (params: {
+  filePath: string;
+  tempPath: string;
+}) => Promise<void>;
 
 export {
   JsonFileReadError,
@@ -19,61 +25,24 @@ export {
   writeJsonSync,
 } from "@openclaw/fs-safe/json";
 
-const RETRY_MAX_ATTEMPTS = 3;
-const RETRY_BASE_DELAY_MS = 50;
-
-/**
- * Recursively walks the error cause chain to detect
- * "File changed during read" errors wrapped inside
- * JsonFileReadError by @openclaw/fs-safe.
- */
-function isFileChangedDuringRead(err: unknown): boolean {
-  let current: unknown = err;
-  while (current) {
-    if (current instanceof Error) {
-      if (
-        typeof current.message === "string" &&
-        current.message.includes("File changed during read")
-      ) {
-        return true;
-      }
-      current = (current as Error & { cause?: unknown }).cause;
-    } else {
-      break;
-    }
-  }
-  return false;
-}
-
-async function withRetryOnFileChanged<T>(fn: () => Promise<T>): Promise<T> {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      if (isFileChangedDuringRead(err) && attempt < RETRY_MAX_ATTEMPTS - 1) {
-        await new Promise((r) => setTimeout(r, RETRY_BASE_DELAY_MS * 2 ** attempt));
-        continue;
-      }
-      throw err;
-    }
-  }
-}
-
+/** Reads and parses JSON, wrapping unexpected read failures in JsonFileReadError. */
 export async function readJson<T>(filePath: string): Promise<T> {
   try {
-    return await withRetryOnFileChanged(() => readJsonImpl<T>(filePath));
+    return await readJsonImpl<T>(filePath);
   } catch (err) {
     throw err instanceof JsonFileReadError ? err : new JsonFileReadError(filePath, "read", err);
   }
 }
 
+/** Strict JSON read alias for callers that must fail on missing or invalid files. */
 export async function readJsonFileStrict<T>(filePath: string): Promise<T> {
   return readJson<T>(filePath);
 }
 
+/** Reads JSON when the file exists, returning null only for a missing path. */
 export async function readJsonIfExists<T>(filePath: string): Promise<T | null> {
   try {
-    return await withRetryOnFileChanged(() => readJsonIfExistsImpl<T>(filePath));
+    return await readJsonIfExistsImpl<T>(filePath);
   } catch (err) {
     if (err instanceof JsonFileReadError) {
       throw err;
@@ -82,21 +51,16 @@ export async function readJsonIfExists<T>(filePath: string): Promise<T | null> {
   }
 }
 
+/** Durable JSON read alias that keeps parse/read errors visible to callers. */
 export async function readDurableJsonFile<T>(filePath: string): Promise<T | null> {
   return readJsonIfExists<T>(filePath);
 }
 
 /**
  * tryReadJson delegates to readJsonIfExists instead of the internal
- * tryReadJsonImpl from @openclaw/fs-safe. The fs-safe implementation
- * swallows all errors internally and returns null, which prevents
- * the retry wrapper from detecting transient "File changed during read"
- * race conditions.
- *
- * By routing through readJsonIfExists, fs-safe propagates errors on
- * race conditions, our retry wrapper intercepts and retries them,
- * and the outer try-catch still handles parse errors / file-not-found
- * gracefully.
+ * tryReadJsonImpl from @openclaw/fs-safe. The fs-safe implementation retries
+ * race conditions before propagating errors; this wrapper keeps the historical
+ * null-on-error contract for callers that intentionally treat reads as optional.
  */
 export async function tryReadJson<T>(filePath: string): Promise<T | null> {
   try {
@@ -106,6 +70,7 @@ export async function tryReadJson<T>(filePath: string): Promise<T | null> {
   }
 }
 
+/** Optional JSON read that returns null for missing, invalid, or racing files. */
 export async function readJsonFile<T>(filePath: string): Promise<T | null> {
   return tryReadJson<T>(filePath);
 }
@@ -117,8 +82,16 @@ export type WriteTextAtomicOptions = {
   dirMode?: number;
   trailingNewline?: boolean;
   durable?: boolean;
+  beforeRename?: WriteTextAtomicBeforeRename;
+  /**
+   * Prefix for the staged `<prefix>.<pid>.<uuid>.tmp` file. Defaults to the
+   * generic `.fs-safe-replace`; pass a target-specific prefix so an orphaned
+   * temp (from a crash between write and rename) is identifiable and reclaimable.
+   */
+  tempPrefix?: string;
 };
 
+/** Writes text through the repo atomic replace helper with durable fsync by default. */
 export async function writeTextAtomic(
   filePath: string,
   content: string,
@@ -133,5 +106,7 @@ export async function writeTextAtomic(
     copyFallbackOnPermissionError: true,
     syncTempFile: options?.durable !== false,
     syncParentDir: options?.durable !== false,
+    ...(options?.beforeRename ? { beforeRename: options.beforeRename } : {}),
+    ...(options?.tempPrefix ? { tempPrefix: options.tempPrefix } : {}),
   });
 }

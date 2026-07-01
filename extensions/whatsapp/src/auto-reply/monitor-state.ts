@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements monitor state behavior.
 import {
   createConnectedChannelStatusPatch,
   createTransportActivityStatusPatch,
@@ -27,6 +28,8 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
     lastMessageAt: null,
     lastEventAt: null,
     lastError: null,
+    busy: false,
+    lastRunActivityAt: null,
     healthState: "starting",
   };
 
@@ -64,6 +67,17 @@ export function createWebChannelStatusController(statusSink?: (status: WebChanne
         return;
       }
       Object.assign(status, createTransportActivityStatusPatch(at));
+      emit();
+    },
+    noteBusy(busy: boolean, at = Date.now()) {
+      if (status.busy === busy && status.lastRunActivityAt === at) {
+        return;
+      }
+      status.busy = busy;
+      status.lastRunActivityAt = at;
+      if (status.connected && busy) {
+        status.healthState = "healthy";
+      }
       emit();
     },
     noteWatchdogStale(at = Date.now()) {

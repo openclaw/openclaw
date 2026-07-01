@@ -1,3 +1,4 @@
+// Device Pair plugin entrypoint registers its OpenClaw integration.
 import { rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildDevicePairPairingQrChannelData } from "./pairing-qr-channel-data.js";
 
 type DevicePairApiModule = typeof import("./api.js");
 type NotifyModule = typeof import("./notify.js");
@@ -672,8 +674,11 @@ export default definePluginEntry({
         const gatewayClientScopes = Array.isArray(ctx.gatewayClientScopes)
           ? ctx.gatewayClientScopes
           : undefined;
-        const { buildMissingPairingScopeReply, resolvePairingCommandAuthState } =
-          await loadPairCommandAuthModule();
+        const {
+          buildMissingPairingScopeReply,
+          buildMissingSetupHandoffScopeReply,
+          resolvePairingCommandAuthState,
+        } = await loadPairCommandAuthModule();
         const authState = resolvePairingCommandAuthState({
           channel: ctx.channel,
           gatewayClientScopes,
@@ -740,6 +745,10 @@ export default definePluginEntry({
                 ? `Invalidated ${cleared.removed} unused setup code${cleared.removed === 1 ? "" : "s"}.`
                 : "No unused setup codes were active.",
           };
+        }
+
+        if (authState.isMissingSetupHandoffPrivilege) {
+          return buildMissingSetupHandoffScopeReply();
         }
 
         const authLabelResult = resolveAuthLabel(api.config);
@@ -826,10 +835,9 @@ export default definePluginEntry({
 
           api.logger.info?.(`device-pair: QR fallback channel=${channel} target=${target}`);
           if (channel === "webchat") {
-            let qrDataUrl: string;
             try {
               const { renderQrPngDataUrl } = await loadDevicePairApiModule();
-              qrDataUrl = await renderQrPngDataUrl(setupCode);
+              await renderQrPngDataUrl(setupCode);
             } catch (err) {
               const { revokeDeviceBootstrapToken } = await loadDevicePairApiModule();
               api.logger.warn?.(
@@ -854,7 +862,10 @@ export default definePluginEntry({
                   expiresAtMs: payload.expiresAtMs,
                 }),
               ].join("\n"),
-              mediaUrl: qrDataUrl,
+              channelData: buildDevicePairPairingQrChannelData({
+                setupCode,
+                expiresAtMs: payload.expiresAtMs,
+              }),
               sensitiveMedia: true,
             };
           }

@@ -1,8 +1,11 @@
+// ClickClack fixture server for release user-journey E2E scenarios.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
+import { readPositiveIntEnv, readTcpPortEnv } from "../env-limits.mjs";
 
-const port = Number(process.env.CLICKCLACK_FIXTURE_PORT ?? 44181);
+const port = readTcpPortEnv("CLICKCLACK_FIXTURE_PORT", 44181);
+const requestMaxBytes = readPositiveIntEnv("CLICKCLACK_FIXTURE_REQUEST_MAX_BYTES", 4 * 1024 * 1024);
 const token = process.env.CLICKCLACK_FIXTURE_TOKEN ?? "clickclack-release-token";
 const statePath = process.env.CLICKCLACK_FIXTURE_STATE ?? "/tmp/openclaw-clickclack-fixture.json";
 const workspace = {
@@ -85,19 +88,66 @@ function checkAuth(req, res) {
 function readBody(req) {
   return new Promise((resolve, reject) => {
     let body = "";
+    let bytes = 0;
+    let settled = false;
     req.setEncoding("utf8");
     req.on("data", (chunk) => {
+      if (settled) {
+        return;
+      }
+      bytes += Buffer.byteLength(chunk, "utf8");
+      if (bytes > requestMaxBytes) {
+        settled = true;
+        body = "";
+        req.resume();
+        reject(requestBodyTooLargeError());
+        return;
+      }
       body += chunk;
     });
     req.on("end", () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       try {
         resolve(body ? JSON.parse(body) : {});
       } catch {
         resolve({});
       }
     });
-    req.on("error", reject);
+    req.on("error", (error) => {
+      if (!settled) {
+        settled = true;
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
   });
+}
+
+function requestBodyTooLargeError() {
+  return Object.assign(
+    new Error(`ClickClack fixture request body exceeded ${requestMaxBytes} bytes`),
+    {
+      code: "ETOOBIG",
+    },
+  );
+}
+
+function isRequestBodyTooLargeError(error) {
+  return error instanceof Error && error.code === "ETOOBIG";
+}
+
+function handleRequestError(res, error) {
+  if (res.headersSent) {
+    res.destroy();
+    return;
+  }
+  if (isRequestBodyTooLargeError(error)) {
+    json(res, 413, { error: error.message });
+    return;
+  }
+  json(res, 500, { error: String(error instanceof Error ? error.message : error) });
 }
 
 function createMessage({ body, author = humanUser, parentMessageId }) {
@@ -170,78 +220,86 @@ function broadcast(event) {
   }
 }
 
-const server = http.createServer(async (req, res) => {
-  const url = new URL(req.url ?? "/", "http://127.0.0.1");
-  if (!checkAuth(req, res)) {
-    return;
+async function handleRequest(req, res) {
+  try {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    if (!checkAuth(req, res)) {
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/health") {
+      json(res, 200, { ok: true });
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/me") {
+      json(res, 200, { user: botUser });
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/workspaces") {
+      json(res, 200, { workspaces: [workspace] });
+      return;
+    }
+    if (req.method === "GET" && url.pathname === `/api/workspaces/${workspace.id}/channels`) {
+      json(res, 200, { channels: [channel] });
+      return;
+    }
+    if (req.method === "GET" && url.pathname === `/api/channels/${channel.id}/messages`) {
+      const afterSeq = Number(url.searchParams.get("after_seq") ?? 0);
+      json(res, 200, {
+        messages: messages.filter((message) => (message.channel_seq ?? 0) > afterSeq),
+      });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === `/api/channels/${channel.id}/messages`) {
+      const body = await readBody(req);
+      const message = createMessage({ body: String(body.body ?? ""), author: botUser });
+      outboundMessages.push(message);
+      persist();
+      json(res, 200, { message });
+      return;
+    }
+    const threadReplyMatch = url.pathname.match(/^\/api\/messages\/([^/]+)\/thread\/replies$/u);
+    if (req.method === "POST" && threadReplyMatch) {
+      const body = await readBody(req);
+      const message = createMessage({
+        body: String(body.body ?? ""),
+        author: botUser,
+        parentMessageId: decodeURIComponent(threadReplyMatch[1]),
+      });
+      json(res, 200, { message });
+      return;
+    }
+    const threadMatch = url.pathname.match(/^\/api\/messages\/([^/]+)\/thread$/u);
+    if (req.method === "GET" && threadMatch) {
+      const rootId = decodeURIComponent(threadMatch[1]);
+      json(res, 200, {
+        root: messages.find((message) => message.id === rootId) ?? null,
+        replies: threadReplies.filter((message) => message.thread_root_id === rootId),
+      });
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/api/realtime/events") {
+      json(res, 200, { events: [] });
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/fixture/inbound") {
+      const body = await readBody(req);
+      const message = createMessage({ body: String(body.body ?? ""), author: humanUser });
+      broadcast(eventFor(message));
+      json(res, 200, { message });
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/fixture/state") {
+      json(res, 200, { messages, threadReplies, outboundMessages, socketCount: sockets.size });
+      return;
+    }
+    json(res, 404, { error: `unhandled ${req.method} ${url.pathname}` });
+  } catch (error) {
+    handleRequestError(res, error);
   }
-  if (req.method === "GET" && url.pathname === "/health") {
-    json(res, 200, { ok: true });
-    return;
-  }
-  if (req.method === "GET" && url.pathname === "/api/me") {
-    json(res, 200, { user: botUser });
-    return;
-  }
-  if (req.method === "GET" && url.pathname === "/api/workspaces") {
-    json(res, 200, { workspaces: [workspace] });
-    return;
-  }
-  if (req.method === "GET" && url.pathname === `/api/workspaces/${workspace.id}/channels`) {
-    json(res, 200, { channels: [channel] });
-    return;
-  }
-  if (req.method === "GET" && url.pathname === `/api/channels/${channel.id}/messages`) {
-    const afterSeq = Number(url.searchParams.get("after_seq") ?? 0);
-    json(res, 200, {
-      messages: messages.filter((message) => (message.channel_seq ?? 0) > afterSeq),
-    });
-    return;
-  }
-  if (req.method === "POST" && url.pathname === `/api/channels/${channel.id}/messages`) {
-    const body = await readBody(req);
-    const message = createMessage({ body: String(body.body ?? ""), author: botUser });
-    outboundMessages.push(message);
-    persist();
-    json(res, 200, { message });
-    return;
-  }
-  const threadReplyMatch = url.pathname.match(/^\/api\/messages\/([^/]+)\/thread\/replies$/u);
-  if (req.method === "POST" && threadReplyMatch) {
-    const body = await readBody(req);
-    const message = createMessage({
-      body: String(body.body ?? ""),
-      author: botUser,
-      parentMessageId: decodeURIComponent(threadReplyMatch[1]),
-    });
-    json(res, 200, { message });
-    return;
-  }
-  const threadMatch = url.pathname.match(/^\/api\/messages\/([^/]+)\/thread$/u);
-  if (req.method === "GET" && threadMatch) {
-    const rootId = decodeURIComponent(threadMatch[1]);
-    json(res, 200, {
-      root: messages.find((message) => message.id === rootId) ?? null,
-      replies: threadReplies.filter((message) => message.thread_root_id === rootId),
-    });
-    return;
-  }
-  if (req.method === "GET" && url.pathname === "/api/realtime/events") {
-    json(res, 200, { events: [] });
-    return;
-  }
-  if (req.method === "POST" && url.pathname === "/fixture/inbound") {
-    const body = await readBody(req);
-    const message = createMessage({ body: String(body.body ?? ""), author: humanUser });
-    broadcast(eventFor(message));
-    json(res, 200, { message });
-    return;
-  }
-  if (req.method === "GET" && url.pathname === "/fixture/state") {
-    json(res, 200, { messages, threadReplies, outboundMessages, socketCount: sockets.size });
-    return;
-  }
-  json(res, 404, { error: `unhandled ${req.method} ${url.pathname}` });
+}
+
+const server = http.createServer((req, res) => {
+  void handleRequest(req, res);
 });
 
 server.on("upgrade", (req, socket) => {

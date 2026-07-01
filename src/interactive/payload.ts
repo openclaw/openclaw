@@ -1,7 +1,9 @@
+// Interactive payload helpers normalize structured interactive UI payloads.
+import { asOptionalRecord as toRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 
 export type InteractiveButtonStyle = "primary" | "secondary" | "success" | "danger";
 
@@ -11,11 +13,29 @@ export type MessagePresentationTone = "info" | "success" | "warning" | "danger" 
 /** Button style hint for renderers that support styled actions. */
 export type MessagePresentationButtonStyle = InteractiveButtonStyle;
 
+/** Portable typed action behind a button or select option. */
+export type MessagePresentationAction =
+  | {
+      /** Run a core/plugin slash command through the target channel's native command path. */
+      type: "command";
+      command: string;
+    }
+  | {
+      /** Opaque callback value interpreted by the target channel/plugin. */
+      type: "callback";
+      value: string;
+    };
+
 /** Portable action control rendered as a button or link by channel adapters. */
 export type MessagePresentationButton = {
   /** User-visible button label. */
   label: string;
-  /** Callback command or opaque value sent when the button is pressed. */
+  /** Typed action sent when the button is pressed. */
+  action?: MessagePresentationAction;
+  /**
+   * Legacy opaque callback value sent when the button is pressed.
+   * Prefer action for new presentation controls.
+   */
   value?: string;
   /** External URL opened by the button instead of sending a callback value. */
   url?: string;
@@ -43,9 +63,30 @@ export type MessagePresentationButton = {
 export type MessagePresentationOption = {
   /** User-visible option label. */
   label: string;
-  /** Callback command or opaque value sent when the option is selected. */
-  value: string;
+  /** Typed action sent when the option is selected. */
+  action?: MessagePresentationAction;
+  /** Legacy opaque callback value sent when the option is selected. */
+  value?: string;
 };
+
+export function resolveMessagePresentationActionValue(
+  action: MessagePresentationAction | undefined,
+): string | undefined {
+  if (action?.type === "command") {
+    return action.command;
+  }
+  if (action?.type === "callback") {
+    return action.value;
+  }
+  return undefined;
+}
+
+export function resolveMessagePresentationControlValue(control: {
+  action?: MessagePresentationAction;
+  value?: string;
+}): string | undefined {
+  return resolveMessagePresentationActionValue(control.action) ?? control.value;
+}
 
 /**
  * @deprecated Use MessagePresentationButton.
@@ -175,11 +216,21 @@ function normalizePresentationTone(value: unknown): MessagePresentationTone | un
     : undefined;
 }
 
-function toRecord(raw: unknown): Record<string, unknown> | undefined {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+function normalizePresentationAction(raw: unknown): MessagePresentationAction | undefined {
+  const record = toRecord(raw);
+  if (!record) {
     return undefined;
   }
-  return raw as Record<string, unknown>;
+  const type = normalizeOptionalLowercaseString(record.type);
+  if (type === "command") {
+    const command = normalizeOptionalString(record.command);
+    return command ? { type: "command", command } : undefined;
+  }
+  if (type === "callback") {
+    const value = normalizeOptionalString(record.value);
+    return value ? { type: "callback", value } : undefined;
+  }
+  return undefined;
 }
 
 function normalizeButton(raw: unknown): InteractiveReplyButton | undefined {
@@ -192,10 +243,11 @@ function normalizeButton(raw: unknown): InteractiveReplyButton | undefined {
     normalizeOptionalString(record.value) ??
     normalizeOptionalString(record.callbackData) ??
     normalizeOptionalString(record.callback_data);
+  const action = normalizePresentationAction(record.action);
   const url = normalizeOptionalString(record.url);
   const webAppRecord = toRecord(record.webApp) ?? toRecord(record.web_app);
   const webAppUrl = normalizeOptionalString(webAppRecord?.url);
-  if (!label || (!value && !url && !webAppUrl)) {
+  if (!label || (!action && !value && !url && !webAppUrl)) {
     return undefined;
   }
   const priority =
@@ -204,6 +256,7 @@ function normalizeButton(raw: unknown): InteractiveReplyButton | undefined {
       : undefined;
   return {
     label,
+    ...(action ? { action } : {}),
     ...(value ? { value } : {}),
     ...(url ? { url } : {}),
     ...(webAppUrl ? { webApp: { url: webAppUrl } } : {}),
@@ -220,11 +273,13 @@ function normalizeOption(raw: unknown): InteractiveReplyOption | undefined {
     return undefined;
   }
   const label = normalizeOptionalString(record.label) ?? normalizeOptionalString(record.text);
-  const value = normalizeOptionalString(record.value);
+  const action = normalizePresentationAction(record.action);
+  const value =
+    normalizeOptionalString(record.value) ?? resolveMessagePresentationActionValue(action);
   if (!label || !value) {
     return undefined;
   }
-  return { label, value };
+  return { label, ...(action ? { action } : {}), value };
 }
 
 function normalizeList<T>(value: unknown, normalizeEntry: (entry: unknown) => T | undefined): T[] {
@@ -347,14 +402,24 @@ export function presentationToInteractiveReply(
     }
     if (block.type === "buttons") {
       const buttons = block.buttons
-        .filter((button) => button.value || button.url || button.webApp || button.web_app)
+        .filter(
+          (button) =>
+            button.action || button.value || button.url || button.webApp || button.web_app,
+        )
         .map((button) => {
           const interactiveButton: InteractiveReplyButton = {
             label: button.label,
             style: button.style,
           };
+          if (button.action) {
+            interactiveButton.action = button.action;
+          }
           if (button.value) {
             interactiveButton.value = button.value;
+          } else if (button.action?.type === "command") {
+            interactiveButton.value = button.action.command;
+          } else if (button.action?.type === "callback") {
+            interactiveButton.value = button.action.value;
           }
           if (button.url) {
             interactiveButton.url = button.url;
@@ -383,7 +448,16 @@ export function presentationToInteractiveReply(
       blocks.push({
         type: "select",
         placeholder: block.placeholder,
-        options: block.options,
+        options: block.options.map((option) => {
+          const interactiveOption: InteractiveReplyOption = {
+            label: option.label,
+            value: resolveMessagePresentationControlValue(option) ?? option.value,
+          };
+          if (option.action) {
+            interactiveOption.action = option.action;
+          }
+          return interactiveOption;
+        }),
       });
     }
   }

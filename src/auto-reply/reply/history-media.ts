@@ -1,10 +1,12 @@
-import { mimeTypeFromFilePath } from "../../media/mime.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+// Extracts media attachment references from reply history entries.
+import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../templating.js";
 import type { HistoryEntry, HistoryMediaEntry } from "./history.types.js";
 
-export const RECENT_HISTORY_IMAGE_TTL_MS = 30 * 60_000;
-export const RECENT_HISTORY_IMAGE_LIMIT = 4;
+const RECENT_HISTORY_IMAGE_TTL_MS = 30 * 60_000;
+const RECENT_HISTORY_IMAGE_LIMIT = 4;
 
 export type RecentInboundHistoryImage = {
   path: string;
@@ -41,7 +43,7 @@ function isHistoryImageMedia(media: HistoryMediaEntry): boolean {
 }
 
 function resolveTimestamp(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return asFiniteNumber(value);
 }
 
 function resolveHistoryEntries(ctx: MsgContext): HistoryEntry[] {

@@ -1,17 +1,30 @@
-import os from "node:os";
-import path from "node:path";
+/**
+ * Resolves memory-search source, sync, and ranking configuration.
+ */
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
+import {
+  MAX_TIMER_TIMEOUT_MS,
+  resolvePositiveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig, MemorySearchConfig } from "../config/config.js";
-import { resolveStateDir } from "../config/paths.js";
 import type { SecretInput } from "../config/types.secrets.js";
 import {
   isMemoryMultimodalEnabled,
   normalizeMemoryMultimodalSettings,
   type MemoryMultimodalSettings,
 } from "../memory-host-sdk/multimodal.js";
+import { getEmbeddingProvider } from "../plugins/embedding-provider-runtime.js";
 import { getMemoryEmbeddingProvider } from "../plugins/memory-embedding-providers.js";
-import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { clampInt, clampNumber } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "./provider-id.js";
 
 export type ResolvedMemorySearchConfig = {
   enabled: boolean;
@@ -48,7 +61,7 @@ export type ResolvedMemorySearchConfig = {
   };
   store: {
     driver: "sqlite";
-    path: string;
+    databasePath: string;
     fts: {
       tokenizer: "unicode61" | "trigram";
     };
@@ -117,6 +130,30 @@ const DEFAULT_TEMPORAL_DECAY_ENABLED = false;
 const DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS = 30;
 const DEFAULT_CACHE_ENABLED = true;
 const DEFAULT_SOURCES: Array<"memory" | "sessions"> = ["memory"];
+const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
+const DEFAULT_REMOTE_BATCH_POLL_INTERVAL_MS = 2_000;
+const DEFAULT_REMOTE_BATCH_TIMEOUT_MINUTES = 60;
+const MAX_REMOTE_BATCH_TIMEOUT_MINUTES = Math.floor(MAX_TIMER_TIMEOUT_MS / 60_000);
+
+function resolveRemoteBatchPollIntervalMs(
+  overrideValue: number | undefined,
+  defaultValue: number | undefined,
+): number {
+  return resolvePositiveTimerTimeoutMs(
+    overrideValue ?? defaultValue,
+    DEFAULT_REMOTE_BATCH_POLL_INTERVAL_MS,
+  );
+}
+
+function resolveRemoteBatchTimeoutMinutes(
+  overrideValue: number | undefined,
+  defaultValue: number | undefined,
+): number {
+  const value = overrideValue ?? defaultValue;
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? clampInt(value, 1, MAX_REMOTE_BATCH_TIMEOUT_MINUTES)
+    : DEFAULT_REMOTE_BATCH_TIMEOUT_MINUTES;
+}
 
 function normalizeSources(
   sources: Array<"memory" | "sessions"> | undefined,
@@ -136,16 +173,6 @@ function normalizeSources(
     normalized.add("memory");
   }
   return Array.from(normalized);
-}
-
-function resolveStorePath(agentId: string, raw?: string): string {
-  const stateDir = resolveStateDir(process.env, os.homedir);
-  const fallback = path.join(stateDir, "memory", `${agentId}.sqlite`);
-  if (!raw) {
-    return fallback;
-  }
-  const withToken = raw.includes("{agentId}") ? raw.replaceAll("{agentId}", agentId) : raw;
-  return resolveUserPath(withToken);
 }
 
 function getConfiguredMemoryEmbeddingProvider(
@@ -178,9 +205,12 @@ function mergeConfig(
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
   const sessionMemory =
     overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
-  const provider = overrides?.provider ?? defaults?.provider ?? "auto";
-  const primaryAdapter =
-    provider === "auto" ? undefined : getConfiguredMemoryEmbeddingProvider(provider, cfg);
+  const rawProvider = overrides?.provider ?? defaults?.provider;
+  const provider =
+    rawProvider?.trim() === "auto"
+      ? DEFAULT_MEMORY_EMBEDDING_PROVIDER
+      : rawProvider?.trim() || DEFAULT_MEMORY_EMBEDDING_PROVIDER;
+  const primaryAdapter = getConfiguredMemoryEmbeddingProvider(provider, cfg);
   const defaultRemote = defaults?.remote;
   const overrideRemote = overrides?.remote;
   const fallback = overrides?.fallback ?? defaults?.fallback ?? "none";
@@ -200,7 +230,6 @@ function mergeConfig(
   );
   const includeRemote =
     hasRemoteConfig ||
-    provider === "auto" ||
     primaryAdapter?.transport !== "local" ||
     fallbackAdapter?.transport === "remote";
   const batch = {
@@ -210,10 +239,14 @@ function mergeConfig(
       1,
       overrideRemote?.batch?.concurrency ?? defaultRemote?.batch?.concurrency ?? 2,
     ),
-    pollIntervalMs:
-      overrideRemote?.batch?.pollIntervalMs ?? defaultRemote?.batch?.pollIntervalMs ?? 2000,
-    timeoutMinutes:
-      overrideRemote?.batch?.timeoutMinutes ?? defaultRemote?.batch?.timeoutMinutes ?? 60,
+    pollIntervalMs: resolveRemoteBatchPollIntervalMs(
+      overrideRemote?.batch?.pollIntervalMs,
+      defaultRemote?.batch?.pollIntervalMs,
+    ),
+    timeoutMinutes: resolveRemoteBatchTimeoutMinutes(
+      overrideRemote?.batch?.timeoutMinutes,
+      defaultRemote?.batch?.timeoutMinutes,
+    ),
   };
   const remote = includeRemote
     ? {
@@ -225,7 +258,7 @@ function mergeConfig(
         batch,
       }
     : undefined;
-  const modelDefault = provider === "auto" ? undefined : primaryAdapter?.defaultModel;
+  const modelDefault = primaryAdapter?.defaultModel;
   const model = overrides?.model ?? defaults?.model ?? modelDefault ?? "";
   const inputType = overrides?.inputType?.trim() || defaults?.inputType?.trim() || undefined;
   const queryInputType =
@@ -239,10 +272,11 @@ function mergeConfig(
     contextSize: overrides?.local?.contextSize ?? defaults?.local?.contextSize,
   };
   const sources = normalizeSources(overrides?.sources ?? defaults?.sources, sessionMemory);
-  const rawPaths = [...(defaults?.extraPaths ?? []), ...(overrides?.extraPaths ?? [])]
-    .map((value) => value.trim())
-    .filter(Boolean);
-  const extraPaths = Array.from(new Set(rawPaths));
+  const rawPaths = normalizeStringEntries([
+    ...(defaults?.extraPaths ?? []),
+    ...(overrides?.extraPaths ?? []),
+  ]);
+  const extraPaths = uniqueStrings(rawPaths);
   const multimodal = normalizeMemoryMultimodalSettings({
     enabled: overrides?.multimodal?.enabled ?? defaults?.multimodal?.enabled,
     modalities: overrides?.multimodal?.modalities ?? defaults?.multimodal?.modalities,
@@ -258,7 +292,7 @@ function mergeConfig(
   };
   const store = {
     driver: overrides?.store?.driver ?? defaults?.store?.driver ?? "sqlite",
-    path: resolveStorePath(agentId, overrides?.store?.path ?? defaults?.store?.path),
+    databasePath: resolveOpenClawAgentSqlitePath({ agentId, env: process.env }),
     fts,
     vector,
   };
@@ -433,16 +467,14 @@ export function resolveMemorySearchConfig(
     return null;
   }
   const multimodalActive = isMemoryMultimodalEnabled(resolved.multimodal);
-  const multimodalProvider =
-    resolved.provider === "auto"
-      ? undefined
-      : getConfiguredMemoryEmbeddingProvider(resolved.provider, cfg);
+  const multimodalProvider = getConfiguredMemoryEmbeddingProvider(resolved.provider, cfg);
   // Custom provider ids can map to a memory adapter through models.providers.<id>.api.
   // Keep multimodal validation on that config-aware adapter, not the raw id.
   if (
     multimodalActive &&
-    multimodalProvider &&
-    !(multimodalProvider.supportsMultimodalEmbeddings?.({ model: resolved.model }) ?? false)
+    ((multimodalProvider &&
+      !(multimodalProvider.supportsMultimodalEmbeddings?.({ model: resolved.model }) ?? false)) ||
+      (!multimodalProvider && getEmbeddingProvider(resolved.provider, cfg)))
   ) {
     throw new Error(
       "agents.*.memorySearch.multimodal requires a provider adapter that supports multimodal embeddings for the configured model.",

@@ -1,22 +1,32 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { UserMessage } from "@earendil-works/pi-ai";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+// Covers final fallback behavior when model-backed summarization fails.
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
+import type { UserMessage } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { summarizeWithFallback } from "./compaction.js";
 
-const piCodingAgentMocks = vi.hoisted(() => ({
+const agentSessionMocks = vi.hoisted(() => ({
   generateSummary: vi.fn(),
   estimateTokens: vi.fn((_message: unknown) => 100),
 }));
 
-vi.mock("@earendil-works/pi-coding-agent", async () => {
-  const actual = await vi.importActual<typeof import("@earendil-works/pi-coding-agent")>(
-    "@earendil-works/pi-coding-agent",
+vi.mock("openclaw/plugin-sdk/agent-sessions", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/agent-sessions")>(
+    "openclaw/plugin-sdk/agent-sessions",
   );
   return {
     ...actual,
-    generateSummary: piCodingAgentMocks.generateSummary,
-    estimateTokens: piCodingAgentMocks.estimateTokens,
+    generateSummary: agentSessionMocks.generateSummary,
+    estimateTokens: agentSessionMocks.estimateTokens,
+  };
+});
+
+vi.mock("./sessions/index.js", async () => {
+  const actual = await vi.importActual<typeof import("./sessions/index.js")>("./sessions/index.js");
+  return {
+    ...actual,
+    generateSummary: agentSessionMocks.generateSummary,
+    estimateTokens: agentSessionMocks.estimateTokens,
   };
 });
 
@@ -30,12 +40,12 @@ const testModel = {
 
 describe("summarizeWithFallback", () => {
   beforeEach(() => {
-    piCodingAgentMocks.generateSummary.mockReset();
-    piCodingAgentMocks.generateSummary.mockRejectedValue(
+    agentSessionMocks.generateSummary.mockReset();
+    agentSessionMocks.generateSummary.mockRejectedValue(
       new Error("Summarization failed: fetch failed"),
     );
-    piCodingAgentMocks.estimateTokens.mockReset();
-    piCodingAgentMocks.estimateTokens.mockImplementation(() => 100);
+    agentSessionMocks.estimateTokens.mockReset();
+    agentSessionMocks.estimateTokens.mockImplementation(() => 100);
   });
 
   it("does not duplicate summarization when no messages were oversized", async () => {
@@ -60,11 +70,78 @@ describe("summarizeWithFallback", () => {
     expect(result).toContain("Context contained 1 messages");
     expect(result).toContain("0 oversized");
     // "fetch failed" is timeout-classed now, so summarizeChunks does not retry it.
-    expect(piCodingAgentMocks.generateSummary).toHaveBeenCalledTimes(1);
+    expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries provider-side AbortError and returns a real summary when caller signal is not aborted", async () => {
+    // Reproduce the undici AbortError("This operation was aborted") shape thrown
+    // when the LLM API closes the connection mid-stream without the caller signal
+    // being fired. Before the fix, isAbortError() + isTimeoutError() both matched
+    // this error shape, so shouldRetry returned false and no retry was attempted —
+    // the compaction fell back to the "Summary unavailable" placeholder instead.
+    const providerAbortErr = Object.assign(new Error("This operation was aborted"), {
+      name: "AbortError",
+    });
+    agentSessionMocks.generateSummary
+      .mockRejectedValueOnce(providerAbortErr)
+      .mockResolvedValueOnce("recovered summary after provider disconnect");
+
+    const result = await summarizeWithFallback({
+      messages: [
+        {
+          role: "user",
+          content: "hello",
+          timestamp: 1,
+        } satisfies UserMessage,
+      ],
+      model: testModel,
+      apiKey: "test-key", // pragma: allowlist secret
+      signal: new AbortController().signal, // not aborted
+      reserveTokens: 1000,
+      maxChunkTokens: 50_000,
+      contextWindow: 200_000,
+    });
+
+    expect(result).toBe("recovered summary after provider disconnect");
+    // Two calls: first fails with provider-side AbortError, second succeeds.
+    expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry and propagates AbortError immediately when caller signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    const providerAbortErr = Object.assign(new Error("This operation was aborted"), {
+      name: "AbortError",
+    });
+    agentSessionMocks.generateSummary.mockRejectedValueOnce(providerAbortErr);
+
+    await expect(
+      summarizeWithFallback({
+        messages: [
+          {
+            role: "user",
+            content: "hello",
+            timestamp: 1,
+          } satisfies UserMessage,
+        ],
+        model: testModel,
+        apiKey: "test-key", // pragma: allowlist secret
+        signal: controller.signal, // already aborted
+        reserveTokens: 1000,
+        maxChunkTokens: 50_000,
+        contextWindow: 200_000,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    // Caller abort is terminal — no retry, no fallback to placeholder.
+    expect(agentSessionMocks.generateSummary).toHaveBeenCalledTimes(1);
   });
 
   it("still attempts partial summarization when oversized messages were excluded", async () => {
-    piCodingAgentMocks.estimateTokens.mockImplementation((message: unknown) => {
+    // Oversized-message fallback tries the safe subset so a huge attachment or
+    // tool output does not prevent summarizing the rest of the transcript.
+    agentSessionMocks.estimateTokens.mockImplementation((message: unknown) => {
       const content =
         typeof (message as { content?: unknown }).content === "string"
           ? (message as { content: string }).content
@@ -97,6 +174,6 @@ describe("summarizeWithFallback", () => {
 
     expect(result).toContain("2 messages (1 oversized)");
     // Full attempt plus distinct partial transcript; timeout-classed failures do not retry.
-    expect(piCodingAgentMocks.generateSummary.mock.calls.length).toBe(2);
+    expect(agentSessionMocks.generateSummary.mock.calls.length).toBe(2);
   });
 });

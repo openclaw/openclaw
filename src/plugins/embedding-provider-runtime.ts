@@ -1,8 +1,11 @@
+/** Runtime resolver for plugin-contributed embedding providers. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveConfiguredGenericEmbeddingProviderId } from "./embedding-provider-config.js";
 import {
-  resolvePluginCapabilityProvider,
-  resolvePluginCapabilityProviders,
-} from "./capability-provider-runtime.js";
+  getRuntimeEmbeddingProviderAdapter,
+  listRuntimeEmbeddingProviderAdapters,
+  resolveRuntimeEmbeddingProviderLookupIds,
+} from "./embedding-provider-runtime-shared.js";
 import {
   getRegisteredEmbeddingProvider,
   listRegisteredEmbeddingProviders,
@@ -11,36 +14,45 @@ import {
 
 export { listRegisteredEmbeddingProviders };
 
+/** Lists embedding provider adapters registered directly with the process registry. */
 export function listRegisteredEmbeddingProviderAdapters(): EmbeddingProviderAdapter[] {
   return listRegisteredEmbeddingProviders().map((entry) => entry.adapter);
 }
 
+/** Lists embedding providers from registered adapters and plugin capabilities. */
 export function listEmbeddingProviders(cfg?: OpenClawConfig): EmbeddingProviderAdapter[] {
-  const registered = listRegisteredEmbeddingProviderAdapters();
-  const merged = new Map(registered.map((adapter) => [adapter.id, adapter]));
-  for (const adapter of resolvePluginCapabilityProviders({
+  return listRuntimeEmbeddingProviderAdapters({
     key: "embeddingProviders",
     cfg,
-  })) {
-    if (!merged.has(adapter.id)) {
-      merged.set(adapter.id, adapter);
-    }
-  }
-  return [...merged.values()];
+    registered: listRegisteredEmbeddingProviderAdapters(),
+  });
 }
 
+export function resolveConfiguredEmbeddingProviderId(
+  providerId: string,
+  cfg?: OpenClawConfig,
+): string | undefined {
+  return resolveConfiguredGenericEmbeddingProviderId(providerId, cfg);
+}
+
+function resolveEmbeddingProviderLookupIds(id: string, cfg?: OpenClawConfig): string[] {
+  return resolveRuntimeEmbeddingProviderLookupIds({
+    id,
+    cfg,
+    resolveConfiguredProviderId: resolveConfiguredEmbeddingProviderId,
+  });
+}
+
+/** Resolves one embedding provider adapter by id, including configured API aliases. */
 export function getEmbeddingProvider(
   id: string,
   cfg?: OpenClawConfig,
 ): EmbeddingProviderAdapter | undefined {
-  const registered = getRegisteredEmbeddingProvider(id);
-  if (registered) {
-    return registered.adapter;
-  }
-  return resolvePluginCapabilityProvider({
+  return getRuntimeEmbeddingProviderAdapter({
     key: "embeddingProviders",
-    providerId: id,
     cfg,
+    lookupIds: resolveEmbeddingProviderLookupIds(id, cfg),
+    getRegisteredProvider: getRegisteredEmbeddingProvider,
   });
 }
 

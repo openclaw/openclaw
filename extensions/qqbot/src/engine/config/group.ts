@@ -1,18 +1,23 @@
+// Qqbot plugin module implements group behavior.
+import { asBoolean } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { asOptionalObjectRecord as asRecord } from "../utils/string-normalize.js";
 import { resolveAccountBase } from "./resolve.js";
-
-type GroupToolPolicy = "full" | "restricted" | "none";
 
 interface GroupConfig {
   requireMention: boolean;
   ignoreOtherMentions: boolean;
-  toolPolicy: GroupToolPolicy;
+  commandLevel: QQBotGroupCommandLevel;
   name: string;
   prompt?: string;
   historyLimit: number;
 }
 
+export type QQBotGroupCommandLevel = "all" | "safety" | "strict";
+
 export const DEFAULT_GROUP_HISTORY_LIMIT = 50;
+// Omitted commandLevel preserves shipped QQBot group behavior. Operators opt in to
+// the fail-closed safety/strict modes per group or wildcard group config.
+export const DEFAULT_GROUP_COMMAND_LEVEL: QQBotGroupCommandLevel = "all";
 
 export const DEFAULT_GROUP_PROMPT =
   "If the sender is a bot, respond only when they explicitly @mention you to ask a question or request assistance with a specific task; keep your replies concise and clear, avoiding the urge to race other bots to answer or engage in lengthy, unproductive exchanges. In group chats, prioritize responding to messages from human users; bots should maintain a collaborative rather than competitive dynamic to ensure the conversation remains orderly and does not result in message flooding.";
@@ -20,7 +25,7 @@ export const DEFAULT_GROUP_PROMPT =
 const DEFAULT_GROUP_CONFIG: Readonly<Omit<GroupConfig, "prompt">> = {
   requireMention: true,
   ignoreOtherMentions: false,
-  toolPolicy: "restricted",
+  commandLevel: DEFAULT_GROUP_COMMAND_LEVEL,
   name: "",
   historyLimit: DEFAULT_GROUP_HISTORY_LIMIT,
 };
@@ -45,8 +50,7 @@ function readGroupsMap(
 }
 
 function readBoolean(obj: Record<string, unknown>, key: string): boolean | undefined {
-  const v = obj[key];
-  return typeof v === "boolean" ? v : undefined;
+  return asBoolean(obj[key]);
 }
 
 function readString(obj: Record<string, unknown>, key: string): string | undefined {
@@ -54,9 +58,12 @@ function readString(obj: Record<string, unknown>, key: string): string | undefin
   return typeof v === "string" && v.length > 0 ? v : undefined;
 }
 
-function readToolPolicy(obj: Record<string, unknown>, key: string): GroupToolPolicy | undefined {
-  const v = obj[key];
-  return v === "full" || v === "restricted" || v === "none" ? v : undefined;
+function readCommandLevel(
+  obj: Record<string, unknown>,
+  key: string,
+): QQBotGroupCommandLevel | undefined {
+  const v = readString(obj, key);
+  return v === "all" || v === "safety" || v === "strict" ? v : undefined;
 }
 
 function readHistoryLimit(obj: Record<string, unknown>, key: string): number | undefined {
@@ -72,23 +79,28 @@ export function resolveGroupConfig(
   groupOpenid?: string | null,
   accountId?: string | null,
 ): GroupConfig {
+  const account = resolveAccountBase(cfg, accountId);
   const groups = readGroupsMap(cfg, accountId);
   const wildcard = groups["*"] ?? {};
   const specific = groupOpenid ? (groups[groupOpenid] ?? {}) : {};
+
+  // 账户级默认值：defaultRequireMention 配置 > 默认 true
+  const accountDefaultRequireMention =
+    asBoolean(account.config.defaultRequireMention) ?? DEFAULT_GROUP_CONFIG.requireMention;
 
   return {
     requireMention:
       readBoolean(specific, "requireMention") ??
       readBoolean(wildcard, "requireMention") ??
-      DEFAULT_GROUP_CONFIG.requireMention,
+      accountDefaultRequireMention,
     ignoreOtherMentions:
       readBoolean(specific, "ignoreOtherMentions") ??
       readBoolean(wildcard, "ignoreOtherMentions") ??
       DEFAULT_GROUP_CONFIG.ignoreOtherMentions,
-    toolPolicy:
-      readToolPolicy(specific, "toolPolicy") ??
-      readToolPolicy(wildcard, "toolPolicy") ??
-      DEFAULT_GROUP_CONFIG.toolPolicy,
+    commandLevel:
+      readCommandLevel(specific, "commandLevel") ??
+      readCommandLevel(wildcard, "commandLevel") ??
+      DEFAULT_GROUP_CONFIG.commandLevel,
     name: readString(specific, "name") ?? readString(wildcard, "name") ?? DEFAULT_GROUP_CONFIG.name,
     prompt: readString(specific, "prompt") ?? readString(wildcard, "prompt"),
     historyLimit:
@@ -96,6 +108,20 @@ export function resolveGroupConfig(
       readHistoryLimit(wildcard, "historyLimit") ??
       DEFAULT_GROUP_CONFIG.historyLimit,
   };
+}
+
+export function resolveGroupCommandLevelFromAccountConfig(
+  accountConfig: Record<string, unknown> | undefined,
+  groupOpenid?: string | null,
+): QQBotGroupCommandLevel {
+  const groups = asRecord(accountConfig?.groups);
+  const wildcard = asRecord(groups?.["*"]) ?? {};
+  const specific = groupOpenid ? (asRecord(groups?.[groupOpenid]) ?? {}) : {};
+  return (
+    readCommandLevel(specific, "commandLevel") ??
+    readCommandLevel(wildcard, "commandLevel") ??
+    DEFAULT_GROUP_CONFIG.commandLevel
+  );
 }
 
 export function resolveHistoryLimit(
@@ -120,15 +146,6 @@ export function resolveIgnoreOtherMentions(
   accountId?: string | null,
 ): boolean {
   return resolveGroupConfig(cfg, groupOpenid, accountId).ignoreOtherMentions;
-}
-
-/** Resolve tool policy for a given group. */
-export function resolveGroupToolPolicy(
-  cfg: Record<string, unknown>,
-  groupOpenid?: string | null,
-  accountId?: string | null,
-): GroupToolPolicy {
-  return resolveGroupConfig(cfg, groupOpenid, accountId).toolPolicy;
 }
 
 /**

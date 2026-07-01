@@ -1,8 +1,11 @@
+// Qa Matrix plugin module implements client behavior.
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { uniqueStrings, uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MatrixQaObservedEvent } from "./events.js";
-import { requestMatrixJson, type MatrixQaFetchLike } from "./request.js";
+import { MATRIX_QA_JSON_MAX_BYTES, requestMatrixJson, type MatrixQaFetchLike } from "./request.js";
 import {
   createMatrixQaRoomObserver,
   primeMatrixQaRoom,
@@ -203,7 +206,7 @@ export function buildMatrixQaMessageContent(params: {
   threadRootEventId?: string;
 }): MatrixQaSendMessageContent {
   const body = params.body;
-  const uniqueMentionUserIds = [...new Set(params.mentionUserIds?.filter(Boolean) ?? [])];
+  const uniqueMentionUserIds = uniqueStrings(params.mentionUserIds?.filter(Boolean) ?? []);
   const formattedParts: string[] = [];
   let cursor = 0;
   let usedFormattedMention = false;
@@ -337,10 +340,22 @@ async function uploadMatrixQaContent(params: {
     body: uploadBody,
     signal: AbortSignal.timeout(20_000),
   });
-  const body = (await response.json().catch(() => ({}))) as {
-    content_uri?: string;
-    error?: string;
-  };
+  // Bound the media-upload response body before parsing, mirroring
+  // `requestMatrixJson`. The overflow error is read *outside* the parse
+  // try/catch so it fails closed (propagates) instead of being swallowed into
+  // `{}`; malformed-but-in-bounds JSON still falls back to `{}` as before.
+  const uploadBytes = await readResponseWithLimit(response, MATRIX_QA_JSON_MAX_BYTES, {
+    onOverflow: ({ maxBytes }) => new Error(`Matrix homeserver response exceeds ${maxBytes} bytes`),
+  });
+  let body: { content_uri?: string; error?: string };
+  try {
+    body = JSON.parse(new TextDecoder().decode(uploadBytes)) as {
+      content_uri?: string;
+      error?: string;
+    };
+  } catch {
+    body = {};
+  }
   if (response.status !== 200) {
     throw new Error(body.error ?? `Matrix media upload failed with status ${response.status}`);
   }
@@ -764,7 +779,7 @@ function resolveTopologyMemberAccounts(
   accounts: Record<MatrixQaParticipantRole, MatrixQaRegisteredAccount>,
   memberRoles: MatrixQaParticipantRole[],
 ) {
-  const uniqueRoles = [...new Set(memberRoles)];
+  const uniqueRoles = uniqueValues(memberRoles);
   if (uniqueRoles.length === 0) {
     throw new Error("Matrix QA room provisioning requires at least one member");
   }

@@ -4,13 +4,20 @@ export { extractKeywords, isQueryStopWordToken } from "./host/query-expansion.js
 export {
   buildSessionEntry,
   listSessionFilesForAgent,
+  listSessionTranscriptCorpusEntriesForAgent,
   loadDreamingNarrativeTranscriptPathSetForAgent,
   loadSessionTranscriptClassificationForAgent,
   normalizeSessionTranscriptPathForComparison,
+  parseCanonicalSessionSyncTargetFromPath,
+  resolveSessionIdentityForTranscriptFile,
+  resolveSessionFileForSyncTarget,
   sessionPathForFile,
   type BuildSessionEntryOptions,
+  type ResolvedMemorySessionSyncTarget,
+  type ResolvedSessionTranscriptIdentity,
   type SessionFileEntry,
   type SessionTranscriptClassification,
+  type SessionTranscriptCorpusEntry,
 } from "./host/session-files.js";
 export {
   isSessionArchiveArtifactName,
@@ -26,5 +33,9 @@ export {
 export {
   checkQmdBinaryAvailability,
   resolveCliSpawnInvocation,
+  resolveQmdBinaryUnavailableReason,
   runCliCommand,
+  type QmdBinaryAvailability,
+  type QmdBinaryUnavailable,
+  type QmdBinaryUnavailableReason,
 } from "./host/qmd-process.js";

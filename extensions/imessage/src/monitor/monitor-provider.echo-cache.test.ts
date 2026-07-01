@@ -1,19 +1,29 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+// Imessage tests cover monitor provider.echo cache plugin behavior.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createIMessagePluginStateSyncStoreForTest,
+  installIMessageFailingStateRuntimeForTest,
+  installIMessageStateRuntimeForTest,
+} from "../test-support/runtime.js";
 import { createSentMessageCache } from "./echo-cache.js";
-import { rememberPersistedIMessageEcho } from "./persisted-echo-cache.js";
+import {
+  IMESSAGE_SENT_ECHOES_MAX_ENTRIES,
+  IMESSAGE_SENT_ECHOES_NAMESPACE,
+  IMESSAGE_SENT_ECHOES_TTL_MS,
+  hasPersistedIMessageEcho,
+  rememberPersistedIMessageEcho,
+  resetPersistedIMessageEchoCacheForTest,
+  resolveIMessageSentEchoEntryKey,
+} from "./persisted-echo-cache.js";
 
 describe("iMessage sent-message echo cache", () => {
-  const tempDirs: string[] = [];
+  beforeEach(() => {
+    installIMessageStateRuntimeForTest();
+    resetPersistedIMessageEchoCacheForTest();
+  });
 
   afterEach(() => {
     vi.useRealTimers();
-    vi.unstubAllEnvs();
-    for (const dir of tempDirs.splice(0)) {
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
   });
 
   it("matches recent text within the same scope", () => {
@@ -41,6 +51,20 @@ describe("iMessage sent-message echo cache", () => {
     ).toBe(true);
   });
 
+  it("matches delayed reflected echoes with leading NUL corruption markers", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
+    const cache = createSentMessageCache();
+
+    cache.remember("acct:imessage:+1555", { text: "Delayed echo reply" });
+
+    expect(
+      cache.has("acct:imessage:+1555", {
+        text: "\u0000\u0000Delayed echo reply",
+      }),
+    ).toBe(true);
+  });
+
   it("keeps attributedBody corruption cleanup leading-only", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
@@ -55,6 +79,31 @@ describe("iMessage sent-message echo cache", () => {
     ).toBe(false);
     expect(cache.has("acct:imessage:+1555", { text: "Delayed\techo reply" })).toBe(false);
     expect(cache.has("acct:imessage:+1555", { text: "Delayed\necho reply" })).toBe(false);
+  });
+
+  it("keeps NUL corruption cleanup leading-only", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
+    const cache = createSentMessageCache();
+
+    cache.remember("acct:imessage:+1555", { text: "Delayed echo reply" });
+
+    expect(cache.has("acct:imessage:+1555", { text: "Delayed\u0000echo reply" })).toBe(false);
+  });
+
+  it("matches a delayed reflected echo with leading corruption markers via the persisted cache", () => {
+    // The persisted 12h cache is the only matcher once the 4s in-memory text TTL expires, so it
+    // must strip leading attributedBody corruption markers exactly like the in-memory key (#93511).
+    const scope = "acct:imessage:+1555";
+    const markers = String.fromCharCode(0x0000, 0xfffd, 0xfffe, 0xffff, 0xfeff);
+    rememberPersistedIMessageEcho({ scope, text: "Delayed echo reply" });
+
+    expect(hasPersistedIMessageEcho({ scope, text: "Delayed echo reply" })).toBe(true);
+    expect(hasPersistedIMessageEcho({ scope, text: `${markers}Delayed echo reply` })).toBe(true);
+    // Leading-only: a mid-string marker stays distinct.
+    expect(
+      hasPersistedIMessageEcho({ scope, text: `Delayed${String.fromCharCode(0x0000)}echo reply` }),
+    ).toBe(false);
   });
 
   it("matches by outbound message id and ignores placeholder ids", () => {
@@ -82,60 +131,83 @@ describe("iMessage sent-message echo cache", () => {
     expect(cache.has("acct:imessage:+1555", { messageId: "m-1" })).toBe(true);
   });
 
-  it("matches persisted echoes written by another process", () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-echo-"));
-    tempDirs.push(stateDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const cache = createSentMessageCache();
-
+  it("matches persisted echoes written before the monitor cache is created", () => {
     rememberPersistedIMessageEcho({
       scope: "acct:imessage:+1555",
       text: "OpenClaw imsg live test",
       messageId: "guid-1",
     });
+    const cache = createSentMessageCache();
 
     expect(cache.has("acct:imessage:+1555", { text: "OpenClaw imsg live test" })).toBe(true);
     expect(cache.has("acct:imessage:+1666", { text: "OpenClaw imsg live test" })).toBe(false);
     expect(cache.has("acct:imessage:+1555", { messageId: "guid-1" })).toBe(true);
   });
 
-  it("writes sent-echoes.jsonl 0600 and parent dir 0700", () => {
-    // sent-echoes.jsonl carries scope keys + outbound message text + messageIds.
-    // Same threat model as reply-cache.jsonl: a same-UID hostile process could
-    // enumerate active conversations or inject lines so a future inbound dedupe
-    // call wrongly suppresses a legitimate inbound. Owner-only mode is the
-    // mitigation.
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-echo-perm-"));
-    tempDirs.push(stateDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  it("persists text-only and id-only echoes without undefined fields", () => {
+    const scope = "acct:imessage:+1555";
+    rememberPersistedIMessageEcho({ scope, text: "text-only" });
+    rememberPersistedIMessageEcho({ scope, messageId: "id-only" });
 
-    rememberPersistedIMessageEcho({
-      scope: "acct:imessage:+1555",
-      text: "perm-test",
-      messageId: "guid-perm",
-    });
+    resetPersistedIMessageEchoCacheForTest({ clearPersistent: false });
+    const cache = createSentMessageCache();
 
-    const echoFile = path.join(stateDir, "imessage", "sent-echoes.jsonl");
-    const echoDir = path.dirname(echoFile);
-    expect(fs.existsSync(echoFile)).toBe(true);
-
-    const fileMode = fs.statSync(echoFile).mode & 0o777;
-    const dirMode = fs.statSync(echoDir).mode & 0o777;
-    expect(fileMode).toBe(0o600);
-    expect(dirMode).toBe(0o700);
+    expect(cache.has(scope, { text: "text-only" })).toBe(true);
+    expect(cache.has(scope, { messageId: "id-only" })).toBe(true);
   });
 
-  it("retains entries written hours earlier so catchup replay sees own outbound rows", () => {
-    // Catchup's default maxAgeMinutes is 120 (2h). The persisted-echo TTL must
-    // be >= that window, otherwise the agent's own outbound rows from before
-    // a gateway gap fall out of dedupe before catchup re-feeds the inbound
-    // rows around them — and the agent's replies to itself land back in the
-    // inbound pipeline as if they were external sends. Regression guard for
-    // the echo-cache retention extension that ships with #78649.
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-echo-ttl-"));
-    tempDirs.push(stateDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  it("keeps short-lived pending persisted echoes out of generic text matching", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
+    const scope = "acct:imessage:+1555";
 
+    rememberPersistedIMessageEcho({ scope, text: "pending-send", ttlMs: 1_000, pending: true });
+    expect(hasPersistedIMessageEcho({ scope, text: "pending-send" })).toBe(false);
+    expect(
+      hasPersistedIMessageEcho({ scope, text: "pending-send", includePendingText: true }),
+    ).toBe(true);
+
+    vi.advanceTimersByTime(1_001);
+    expect(
+      hasPersistedIMessageEcho({ scope, text: "pending-send", includePendingText: true }),
+    ).toBe(false);
+  });
+
+  it("refreshes persisted echoes written after an earlier empty lookup", () => {
+    const cache = createSentMessageCache();
+    const scope = "acct:imessage:+1555";
+    expect(cache.has(scope, { messageId: "guid-late" })).toBe(false);
+
+    const entry = { scope, messageId: "guid-late", timestamp: Date.now() };
+    createIMessagePluginStateSyncStoreForTest({
+      namespace: IMESSAGE_SENT_ECHOES_NAMESPACE,
+      maxEntries: IMESSAGE_SENT_ECHOES_MAX_ENTRIES,
+    }).register(resolveIMessageSentEchoEntryKey(entry), entry, {
+      ttlMs: IMESSAGE_SENT_ECHOES_TTL_MS,
+    });
+
+    expect(cache.has(scope, { messageId: "guid-late" })).toBe(true);
+  });
+
+  it("drops the in-memory mirror on persisted read failure so expired echoes do not match", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
+    const scope = "acct:imessage:+1555";
+
+    rememberPersistedIMessageEcho({ scope, text: "stale echo" });
+    expect(hasPersistedIMessageEcho({ scope, text: "stale echo" })).toBe(true);
+
+    vi.advanceTimersByTime(IMESSAGE_SENT_ECHOES_TTL_MS + 1);
+    installIMessageFailingStateRuntimeForTest();
+
+    expect(hasPersistedIMessageEcho({ scope, text: "stale echo" })).toBe(false);
+  });
+
+  it("retains entries written hours earlier so a reconnect re-emit still sees own outbound rows", () => {
+    // The persisted-echo TTL must outlive the inbound replay guard window so
+    // an own-outbound row that imsg re-emits after a bridge reconnect is still
+    // recognized as the agent's echo, not re-ingested as an external send.
+    // Regression guard for the echo-cache retention window.
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-08T12:00:00Z"));
     rememberPersistedIMessageEcho({
@@ -152,31 +224,5 @@ describe("iMessage sent-message echo cache", () => {
       true,
     );
     expect(cache.has("acct:imessage:+1555", { messageId: "guid-pre-gap" })).toBe(true);
-  });
-
-  it("clamps pre-existing sent-echoes.jsonl from older 0644/0755 to 0600/0700", () => {
-    // Older gateway versions wrote with default modes. After upgrade, the next
-    // remember must clamp the existing file/dir back to owner-only.
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-echo-clamp-"));
-    tempDirs.push(stateDir);
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-
-    const imsgDir = path.join(stateDir, "imessage");
-    fs.mkdirSync(imsgDir, { recursive: true, mode: 0o755 });
-    const echoFile = path.join(imsgDir, "sent-echoes.jsonl");
-    fs.writeFileSync(echoFile, "", { mode: 0o644 });
-    fs.chmodSync(imsgDir, 0o755);
-    fs.chmodSync(echoFile, 0o644);
-
-    rememberPersistedIMessageEcho({
-      scope: "acct:imessage:+1555",
-      text: "clamp-test",
-      messageId: "guid-clamp",
-    });
-
-    const fileMode = fs.statSync(echoFile).mode & 0o777;
-    const dirMode = fs.statSync(imsgDir).mode & 0o777;
-    expect(fileMode).toBe(0o600);
-    expect(dirMode).toBe(0o700);
   });
 });

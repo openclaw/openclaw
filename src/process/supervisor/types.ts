@@ -1,3 +1,4 @@
+// Process supervisor types describe supervised runs, states, and termination reasons.
 export type RunState = "starting" | "running" | "exiting" | "exited";
 
 export type TerminationReason =
@@ -81,6 +82,11 @@ type SpawnBaseInput = {
    * When false, stdout/stderr are streamed via callbacks only and not retained in RunExit payload.
    */
   captureOutput?: boolean;
+  /**
+   * Maximum retained stdout/stderr characters per stream when captureOutput is enabled.
+   * Streaming callbacks still receive full chunks.
+   */
+  maxCapturedOutputChars?: number;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
 };
@@ -104,6 +110,5 @@ export interface ProcessSupervisor {
   spawn(input: SpawnInput): Promise<ManagedRun>;
   cancel(runId: string, reason?: TerminationReason): void;
   cancelScope(scopeKey: string, reason?: TerminationReason): void;
-  reconcileOrphans(): Promise<void>;
   getRecord(runId: string): RunRecord | undefined;
 }

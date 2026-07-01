@@ -1,3 +1,4 @@
+// Mattermost plugin module implements monitor slash behavior.
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import {
@@ -7,7 +8,7 @@ import {
 } from "./client.js";
 import {
   listSkillCommandsForAgents,
-  parseStrictPositiveInteger,
+  parseTcpPort,
   type OpenClawConfig,
   type RuntimeEnv,
 } from "./runtime-api.js";
@@ -149,7 +150,7 @@ export async function registerMattermostMonitorSlashCommands(params: {
 
   try {
     const teams = await fetchMattermostUserTeams(params.client, params.botUserId);
-    const envPort = parseStrictPositiveInteger(process.env.OPENCLAW_GATEWAY_PORT?.trim());
+    const envPort = parseTcpPort(process.env.OPENCLAW_GATEWAY_PORT);
     const slashGatewayPort = envPort ?? params.cfg.gateway?.port ?? 18789;
     const slashCallbackUrl = resolveCallbackUrl({
       config: slashConfig,

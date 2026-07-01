@@ -1,3 +1,9 @@
+// Implements `openclaw channels resolve` for provider-specific user/group target resolution.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type {
   ChannelResolveKind,
@@ -7,21 +13,12 @@ import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolu
 import { formatCliCommand } from "../../cli/command-format.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { formatUnsupportedChannelActionMessage } from "../../cli/error-format.js";
-import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
-import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
-import {
-  getRuntimeConfig,
-  readConfigFileSnapshot,
-  replaceConfigFile,
-} from "../../config/config.js";
+import { getRuntimeConfig, readConfigFileSnapshot } from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../../shared/string-coerce.js";
 import { resolveInstallableChannelPlugin } from "../channel-setup/channel-plugin-resolution.js";
+import { persistResolvedChannelPluginConfig } from "./plugin-config-persistence.js";
 
 export type ChannelsResolveOptions = {
   channel?: string;
@@ -119,6 +116,7 @@ function formatResolveResult(result: ResolveResult): string {
   return `${result.input} -> ${result.id}${name}${note}`;
 }
 
+/** Resolve user/group/channel labels into plugin-specific stable target ids. */
 export async function channelsResolveCommand(opts: ChannelsResolveOptions, runtime: RuntimeEnv) {
   const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
   const loadedRaw = getRuntimeConfig();
@@ -130,7 +128,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
     runtime,
     autoEnable: true,
   });
-  const entries = (opts.entries ?? []).map((entry) => entry.trim()).filter(Boolean);
+  const entries = normalizeStringEntries(opts.entries);
   if (entries.length === 0) {
     throw new Error(
       `At least one entry is required. Example: ${formatCliCommand("openclaw channels resolve --channel discord <name-or-id>")}.`,
@@ -153,35 +151,11 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
     );
   }
   if (resolvedExplicit?.configChanged) {
-    cfg = resolvedExplicit.cfg;
-    const shouldMovePluginInstalls = Boolean(
-      cfg.plugins?.installs && Object.keys(cfg.plugins.installs).length > 0,
-    );
-    if (shouldMovePluginInstalls) {
-      const committed = await commitConfigWithPendingPluginInstalls({
-        nextConfig: cfg,
-        baseHash: (await sourceSnapshotPromise)?.hash,
-      });
-      cfg = committed.config;
-      await refreshPluginRegistryAfterConfigMutation({
-        config: cfg,
-        reason: "source-changed",
-        installRecords: committed.installRecords,
-        logger: { warn: (message) => runtime.log(message) },
-      });
-    } else {
-      await replaceConfigFile({
-        nextConfig: cfg,
-        baseHash: (await sourceSnapshotPromise)?.hash,
-      });
-      if (resolvedExplicit.pluginInstalled) {
-        await refreshPluginRegistryAfterConfigMutation({
-          config: cfg,
-          reason: "source-changed",
-          logger: { warn: (message) => runtime.log(message) },
-        });
-      }
-    }
+    cfg = await persistResolvedChannelPluginConfig({
+      resolved: resolvedExplicit,
+      baseHash: (await sourceSnapshotPromise)?.hash,
+      runtime,
+    });
   }
 
   const selection = explicitChannel
@@ -206,7 +180,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
   }
   const preferredKind = resolvePreferredKind(opts.kind);
 
-  let results: ResolveResult[] = [];
+  let results: ResolveResult[];
   if (preferredKind) {
     const resolved = await plugin.resolver.resolveTargets({
       cfg,
