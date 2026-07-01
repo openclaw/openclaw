@@ -7,7 +7,7 @@ export const GOOGLECHAT_APPROVAL_ACTION = "openclaw.approval";
 const GOOGLECHAT_APPROVAL_ACTION_PARAM = "openclaw_action";
 const GOOGLECHAT_APPROVAL_TOKEN_PARAM = "token";
 const GOOGLECHAT_APPROVAL_ACTION_VALUE = "approval";
-const MANUAL_EXEC_APPROVAL_COMMAND_RE =
+const MANUAL_APPROVAL_COMMAND_RE =
   /(?:^|[\s`])\/approve[ \t]+([^ \t\r\n`|]+)[ \t]+(allow-once|allow-always|deny)(?=$|[\s`|.,;:!?])/giu;
 
 export type GoogleChatApprovalCardBinding = {
@@ -193,7 +193,7 @@ function pruneExpiredGoogleChatApprovalCardBindings(nowMs: number): void {
   }
 }
 
-function hasActiveGoogleChatExecApprovalCardForManualCommand(params: {
+function hasActiveGoogleChatApprovalCardForManualCommand(params: {
   approvalRef: string;
   decision: ExecApprovalDecision;
   nowMs: number;
@@ -201,7 +201,6 @@ function hasActiveGoogleChatExecApprovalCardForManualCommand(params: {
   pruneExpiredGoogleChatApprovalCardBindings(params.nowMs);
   for (const binding of approvalCardBindings.values()) {
     if (
-      binding.approvalKind === "exec" &&
       binding.allowedDecisions.includes(params.decision) &&
       approvalRefMatches(binding.approvalId, params.approvalRef)
     ) {
@@ -210,7 +209,6 @@ function hasActiveGoogleChatExecApprovalCardForManualCommand(params: {
   }
   for (const suppression of manualApprovalFollowupSuppressions.values()) {
     if (
-      suppression.approvalKind === "exec" &&
       suppression.allowedDecisions.includes(params.decision) &&
       approvalRefMatches(suppression.approvalId, params.approvalRef)
     ) {
@@ -224,13 +222,13 @@ export function shouldSuppressGoogleChatManualExecApprovalFollowupText(
   text: string,
   nowMs = Date.now(),
 ): boolean {
-  for (const match of text.matchAll(MANUAL_EXEC_APPROVAL_COMMAND_RE)) {
+  for (const match of text.matchAll(MANUAL_APPROVAL_COMMAND_RE)) {
     const approvalRef = match[1];
     const decision = match[2]?.toLowerCase() as ExecApprovalDecision | undefined;
     if (
       approvalRef &&
       decision &&
-      hasActiveGoogleChatExecApprovalCardForManualCommand({ approvalRef, decision, nowMs })
+      hasActiveGoogleChatApprovalCardForManualCommand({ approvalRef, decision, nowMs })
     ) {
       return true;
     }
