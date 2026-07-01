@@ -88,6 +88,13 @@ const ChannelHeartbeatVisibilitySchema = z
   .strict()
   .optional();
 
+const SendRateLimitSchema = z
+  .object({
+    minIntervalMs: z.number().int().min(0).optional(),
+  })
+  .strict()
+  .optional();
+
 /**
  * Dynamic agent creation configuration.
  * When enabled, a new agent is created for each unique DM user.
@@ -197,6 +204,7 @@ const FeishuSharedConfigShape = {
   mediaMaxMb: z.number().positive().optional(),
   httpTimeoutMs: z.number().int().positive().max(300_000).optional(),
   heartbeat: ChannelHeartbeatVisibilitySchema,
+  sendRateLimit: SendRateLimitSchema,
   renderMode: RenderModeSchema,
   streaming: StreamingModeSchema,
   tools: FeishuToolsConfigSchema,

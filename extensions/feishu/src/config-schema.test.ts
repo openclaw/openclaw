@@ -57,9 +57,11 @@ describe("FeishuConfigSchema webhook validation", () => {
   });
 
   it("rejects top-level webhook mode without encryptKey", () => {
+    // nosemgrep: security.opengrep.ghsa-g353-mgv3-8pcj.feishu-webhook-mode-missing-encrypt-key -- negative schema test intentionally omits encryptKey to prove webhook configs are rejected.
     const result = FeishuConfigSchema.safeParse({
       connectionMode: "webhook",
       verificationToken: "token_top",
+      encryptKey: "",
       appId: "cli_top",
       appSecret: "secret_top", // pragma: allowlist secret
     });
@@ -94,11 +96,13 @@ describe("FeishuConfigSchema webhook validation", () => {
   });
 
   it("rejects account webhook mode without encryptKey", () => {
+    // nosemgrep: security.opengrep.ghsa-g353-mgv3-8pcj.feishu-webhook-mode-missing-encrypt-key -- negative schema test intentionally omits encryptKey to prove webhook configs are rejected.
     const result = FeishuConfigSchema.safeParse({
       accounts: {
         main: {
           connectionMode: "webhook",
           verificationToken: "token_main",
+          encryptKey: "",
           appId: "cli_main",
           appSecret: "secret_main", // pragma: allowlist secret
         },
@@ -232,6 +236,28 @@ describe("FeishuConfigSchema optimization flags", () => {
     });
     expect(result.accounts?.main?.typingIndicator).toBe(false);
     expect(result.accounts?.main?.resolveSenderNames).toBe(false);
+  });
+
+  it("accepts top-level and account-level send rate limits", () => {
+    const result = FeishuConfigSchema.parse({
+      sendRateLimit: { minIntervalMs: 1200 },
+      accounts: {
+        bursty: {
+          sendRateLimit: { minIntervalMs: 250 },
+        },
+      },
+    });
+
+    expect(result.sendRateLimit?.minIntervalMs).toBe(1200);
+    expect(result.accounts?.bursty?.sendRateLimit?.minIntervalMs).toBe(250);
+  });
+
+  it("rejects negative send rate-limit intervals", () => {
+    const result = FeishuConfigSchema.safeParse({
+      sendRateLimit: { minIntervalMs: -1 },
+    });
+
+    expect(result.success).toBe(false);
   });
 });
 

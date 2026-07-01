@@ -286,3 +286,75 @@ describe("Concurrent Feishu sends — timing and ordering", () => {
     expect(mockClientCreate).toHaveBeenCalledTimes(targets.length);
   });
 });
+
+describe("Concurrent Feishu sends - configured outbound pacing", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("paces same-target sends when sendRateLimit.minIntervalMs is configured", async () => {
+    vi.useFakeTimers();
+    mockResolveFeishuAccount.mockReturnValue({
+      accountId: "default",
+      configured: true,
+      config: { sendRateLimit: { minIntervalMs: 50 } },
+    });
+    const callTimes: number[] = [];
+    let n = 0;
+    mockClientCreate.mockImplementation(() => {
+      callTimes.push(Date.now());
+      return Promise.resolve(okResponse(`om_paced_${n++}`));
+    });
+
+    const sends = Promise.all([
+      sendMessageFeishu({ cfg: MOCK_CFG, to: "oc_paced", text: "first" }),
+      sendMessageFeishu({ cfg: MOCK_CFG, to: "oc_paced", text: "second" }),
+      sendMessageFeishu({ cfg: MOCK_CFG, to: "oc_paced", text: "third" }),
+    ]);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockClientCreate).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(49);
+    expect(mockClientCreate).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mockClientCreate).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(50);
+    const results = await sends;
+
+    expect(results).toHaveLength(3);
+    expect(mockClientCreate).toHaveBeenCalledTimes(3);
+    expect(callTimes[1] - callTimes[0]).toBeGreaterThanOrEqual(50);
+    expect(callTimes[2] - callTimes[1]).toBeGreaterThanOrEqual(50);
+  });
+
+  it("keeps distinct targets independent under a configured send interval", async () => {
+    vi.useFakeTimers();
+    mockResolveFeishuAccount.mockReturnValue({
+      accountId: "default",
+      configured: true,
+      config: { sendRateLimit: { minIntervalMs: 50 } },
+    });
+    const calls: Array<{ at: number; receiveId: string }> = [];
+    let n = 0;
+    mockClientCreate.mockImplementation((params: { data?: { receive_id?: string } }) => {
+      calls.push({ at: Date.now(), receiveId: params.data?.receive_id ?? "" });
+      return Promise.resolve(okResponse(`om_distinct_${n++}`));
+    });
+
+    const sends = Promise.all([
+      sendMessageFeishu({ cfg: MOCK_CFG, to: "oc_paced_a", text: "first" }),
+      sendMessageFeishu({ cfg: MOCK_CFG, to: "oc_paced_b", text: "second" }),
+    ]);
+
+    await vi.advanceTimersByTimeAsync(0);
+    const results = await sends;
+
+    expect(results).toHaveLength(2);
+    expect(mockClientCreate).toHaveBeenCalledTimes(2);
+    expect(calls.map((call) => call.receiveId).toSorted()).toEqual(["oc_paced_a", "oc_paced_b"]);
+    expect(calls[1].at - calls[0].at).toBe(0);
+  });
+});
