@@ -186,6 +186,32 @@ function makeResolvedDelivery(
   };
 }
 
+function mockTelegramProviderProofDelivery(params: {
+  chatId: string;
+  threadId: number | string;
+  messageId?: string;
+}) {
+  const messageId = params.messageId ?? "tg-1";
+  vi.mocked(deliverOutboundPayloads).mockResolvedValueOnce([
+    {
+      channel: "telegram",
+      messageId,
+      chatId: params.chatId,
+      meta: {
+        telegram: {
+          messages: [
+            {
+              messageId,
+              chatId: params.chatId,
+              messageThreadId: params.threadId,
+            },
+          ],
+        },
+      },
+    },
+  ] as never);
+}
+
 function makeWithRunSession() {
   return (
     result: Omit<RunCronAgentTurnResult, "sessionId" | "sessionKey">,
@@ -2104,6 +2130,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   });
 
   it("passes threaded telegram delivery through to the outbound adapter", async () => {
+    mockTelegramProviderProofDelivery({ chatId: "123456", threadId: 42 });
     const params = makeBaseParams({ synthesizedText: "Final weather summary" });
     params.resolvedDelivery = makeResolvedDelivery({
       mode: "implicit",
@@ -2123,6 +2150,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   });
 
   it("cleans up the direct cron session after threaded direct delivery when deleteAfterRun is enabled", async () => {
+    mockTelegramProviderProofDelivery({ chatId: "123456", threadId: 42 });
     const params = makeBaseParams({ synthesizedText: "Final weather summary" });
     params.agentSessionKey = "agent:main:cron:test-job";
     params.resolvedDelivery = makeResolvedDelivery({

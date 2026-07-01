@@ -173,4 +173,31 @@ describe("channel plugin loader", () => {
         await expectOutboundAdapterMissingCase(testCase.registry);
     }
   });
+
+  it("preserves outbound post-send validation hooks from registered plugins", async () => {
+    const validateDeliveryResults: NonNullable<
+      ChannelOutboundAdapter["validateDeliveryResults"]
+    > = async () => undefined;
+    const outbound: ChannelOutboundAdapter = {
+      deliveryMode: "direct",
+      sendText: async () => ({ channel: "demo-loader", messageId: "m-proof" }),
+      validateDeliveryResults,
+    };
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "demo-loader",
+          plugin: createOutboundTestPlugin({
+            id: "demo-loader",
+            outbound,
+          }),
+          source: "test-validator",
+        },
+      ]),
+    );
+
+    expect((await loadChannelOutboundAdapter("demo-loader"))?.validateDeliveryResults).toBe(
+      validateDeliveryResults,
+    );
+  });
 });

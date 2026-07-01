@@ -1134,7 +1134,12 @@ export async function dispatchCronDelivery(
           }
           hadPartialFailure = true;
         }
-        return send.status === "sent" || send.status === "partial_failed" ? send.results : [];
+        const results =
+          send.status === "sent" || send.status === "partial_failed" ? send.results : [];
+        if (results.length > 0) {
+          partialDeliverySucceededBeforeFailure = true;
+        }
+        return results;
       };
       let deliveryResults: OutboundDeliveryResult[];
       try {

@@ -2070,6 +2070,52 @@ describe("deliverOutboundPayloads", () => {
     ]);
   });
 
+  it("fails payload delivery when an adapter delivery-result validator rejects", async () => {
+    const validateDeliveryResults = vi.fn(() => {
+      throw new Error("provider proof mismatch");
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              sendText: async ({ text }) => ({
+                channel: "matrix" as const,
+                messageId: text,
+              }),
+              validateDeliveryResults,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room",
+        payloads: [{ text: "hello" }],
+        queuePolicy: "required",
+      }),
+    ).rejects.toMatchObject({
+      sentBeforeError: true,
+      results: [{ channel: "matrix", messageId: "hello" }],
+    });
+
+    expect(validateDeliveryResults).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { channel: "matrix", to: "!room", accountId: undefined, threadId: undefined },
+        payload: expect.objectContaining({ text: "hello" }),
+        results: [{ channel: "matrix", messageId: "hello" }],
+      }),
+    );
+  });
+
   it("uses adapter-provided formatted senders and scoped media roots when available", async () => {
     const sendText = vi.fn(async ({ text }: { text: string }) => ({
       channel: "line" as const,

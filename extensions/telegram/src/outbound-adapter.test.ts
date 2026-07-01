@@ -98,6 +98,437 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "tg-media" });
   });
 
+  it("preserves Telegram provider delivery proof metadata", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-thread",
+      chatId: "-1001234567890",
+      meta: {
+        telegram: {
+          chatId: "-1001234567890",
+          messageThreadId: 8590,
+          requestedMessageThreadId: 8590,
+          messages: [
+            {
+              messageId: "tg-thread",
+              chatId: "-1001234567890",
+              messageThreadId: 8590,
+              requestedMessageThreadId: 8590,
+            },
+          ],
+        },
+      },
+    });
+
+    const result = await telegramOutbound.sendText!({
+      cfg: {} as never,
+      to: "-1001234567890",
+      text: "threaded",
+      threadId: "8590",
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-thread",
+      chatId: "-1001234567890",
+      meta: {
+        telegram: {
+          chatId: "-1001234567890",
+          messageThreadId: 8590,
+          requestedMessageThreadId: 8590,
+          messages: [
+            {
+              messageId: "tg-thread",
+              chatId: "-1001234567890",
+              messageThreadId: 8590,
+              requestedMessageThreadId: 8590,
+            },
+          ],
+        },
+      },
+    });
+  });
+
+  it("aggregates Telegram provider delivery proof metadata for payload media sequences", async () => {
+    sendMessageTelegramMock
+      .mockResolvedValueOnce({
+        messageId: "tg-1",
+        chatId: "-1001234567890",
+        meta: {
+          telegram: {
+            chatId: "-1001234567890",
+            messageThreadId: 8590,
+            requestedMessageThreadId: 8590,
+            messages: [
+              {
+                messageId: "tg-1",
+                chatId: "-1001234567890",
+                messageThreadId: 8590,
+                requestedMessageThreadId: 8590,
+              },
+            ],
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        messageId: "tg-2",
+        chatId: "-1001234567890",
+        meta: {
+          telegram: {
+            chatId: "-1001234567890",
+            messageThreadId: 8590,
+            requestedMessageThreadId: 8590,
+            messages: [
+              {
+                messageId: "tg-2",
+                chatId: "-1001234567890",
+                messageThreadId: 8590,
+                requestedMessageThreadId: 8590,
+              },
+            ],
+          },
+        },
+      });
+
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "-1001234567890",
+      text: "",
+      threadId: "8590",
+      payload: {
+        text: "Approval required",
+        mediaUrls: ["https://example.com/1.jpg", "https://example.com/2.jpg"],
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-2",
+      chatId: "-1001234567890",
+      meta: {
+        telegram: {
+          chatId: "-1001234567890",
+          messageThreadId: 8590,
+          requestedMessageThreadId: 8590,
+          messages: [
+            {
+              messageId: "tg-1",
+              chatId: "-1001234567890",
+              messageThreadId: 8590,
+              requestedMessageThreadId: 8590,
+            },
+            {
+              messageId: "tg-2",
+              chatId: "-1001234567890",
+              messageThreadId: 8590,
+              requestedMessageThreadId: 8590,
+            },
+          ],
+        },
+      },
+    });
+  });
+
+  it("keeps payload media sequence entries without provider proof visible to cron validation", async () => {
+    sendMessageTelegramMock
+      .mockResolvedValueOnce({
+        messageId: "tg-1",
+        chatId: "-1001234567890",
+      })
+      .mockResolvedValueOnce({
+        messageId: "tg-2",
+        chatId: "-1001234567890",
+        meta: {
+          telegram: {
+            messages: [
+              {
+                messageId: "tg-2",
+                chatId: "-1001234567890",
+                messageThreadId: 8590,
+                requestedMessageThreadId: 8590,
+              },
+            ],
+          },
+        },
+      });
+
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "-1001234567890",
+      text: "",
+      threadId: "8590",
+      payload: {
+        text: "Approval required",
+        mediaUrls: ["https://example.com/1.jpg", "https://example.com/2.jpg"],
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(result.meta).toMatchObject({
+      telegram: {
+        messages: [
+          { messageId: "tg-1" },
+          {
+            messageId: "tg-2",
+            chatId: "-1001234567890",
+            messageThreadId: 8590,
+            requestedMessageThreadId: 8590,
+          },
+        ],
+      },
+    });
+  });
+
+  it("validates provider topic proof for numeric Telegram targets", async () => {
+    await telegramOutbound.validateDeliveryResults?.({
+      cfg: {} as never,
+      target: {
+        channel: "telegram",
+        to: "-1001234567890",
+        threadId: "8590",
+      },
+      payload: { text: "threaded" },
+      results: [
+        {
+          channel: "telegram",
+          messageId: "tg-thread",
+          chatId: "-1001234567890",
+          meta: {
+            telegram: {
+              messages: [
+                {
+                  messageId: "tg-thread",
+                  chatId: "-1001234567890",
+                  messageThreadId: 8590,
+                  requestedMessageThreadId: 8590,
+                },
+              ],
+            },
+          },
+        },
+      ],
+    });
+  });
+
+  it("accepts provider topic proof for username targets with separate thread IDs", async () => {
+    await telegramOutbound.validateDeliveryResults?.({
+      cfg: {} as never,
+      target: {
+        channel: "telegram",
+        to: "@openclaw_ops",
+        threadId: "8590",
+      },
+      payload: { text: "threaded" },
+      results: [
+        {
+          channel: "telegram",
+          messageId: "tg-thread",
+          chatId: "-1001234567890",
+          meta: {
+            telegram: {
+              messages: [
+                {
+                  messageId: "tg-thread",
+                  chatId: "-1001234567890",
+                  messageThreadId: 8590,
+                  requestedMessageThreadId: 8590,
+                },
+              ],
+            },
+          },
+        },
+      ],
+    });
+  });
+
+  it("validates topic proof when the topic is encoded only in the target", async () => {
+    await telegramOutbound.validateDeliveryResults?.({
+      cfg: {} as never,
+      target: {
+        channel: "telegram",
+        to: "telegram:group:-1001234567890:topic:8590",
+      },
+      payload: { text: "threaded" },
+      results: [
+        {
+          channel: "telegram",
+          messageId: "tg-thread",
+          chatId: "-1001234567890",
+          meta: {
+            telegram: {
+              messages: [
+                {
+                  messageId: "tg-thread",
+                  chatId: "-1001234567890",
+                  messageThreadId: 8590,
+                },
+              ],
+            },
+          },
+        },
+      ],
+    });
+  });
+
+  it("rejects Telegram topic delivery when provider proof is missing", async () => {
+    await expect(
+      telegramOutbound.validateDeliveryResults?.({
+        cfg: {} as never,
+        target: {
+          channel: "telegram",
+          to: "-1001234567890",
+          threadId: "8590",
+        },
+        payload: { text: "threaded" },
+        results: [
+          {
+            channel: "telegram",
+            messageId: "tg-thread",
+            chatId: "-1001234567890",
+          },
+        ],
+      }),
+    ).rejects.toThrow("missing Telegram provider proof");
+  });
+
+  it("does not require message topic proof for reaction-only Telegram topic payloads", async () => {
+    await telegramOutbound.validateDeliveryResults?.({
+      cfg: {} as never,
+      target: {
+        channel: "telegram",
+        to: "-1001234567890",
+        threadId: "8590",
+      },
+      payload: {
+        channelData: {
+          telegram: {
+            reaction: { emoji: "🔥" },
+          },
+        },
+      },
+      results: [
+        {
+          channel: "telegram",
+          messageId: "777",
+          chatId: "-1001234567890",
+        },
+      ],
+    });
+  });
+
+  it("rejects numeric Telegram topic delivery when provider proof is mismatched", async () => {
+    await expect(
+      telegramOutbound.validateDeliveryResults?.({
+        cfg: {} as never,
+        target: {
+          channel: "telegram",
+          to: "-1001234567890",
+          threadId: "8590",
+        },
+        payload: { text: "threaded" },
+        results: [
+          {
+            channel: "telegram",
+            messageId: "tg-thread",
+            chatId: "-1001234567890",
+            meta: {
+              telegram: {
+                messages: [
+                  {
+                    messageId: "tg-thread",
+                    chatId: "-1009999999999",
+                    messageThreadId: 1234,
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      }),
+    ).rejects.toThrow("chatId=-1009999999999 expected -1001234567890");
+  });
+
+  it("rejects Telegram topic delivery when the result message id is not provider-proven", async () => {
+    await expect(
+      telegramOutbound.validateDeliveryResults?.({
+        cfg: {} as never,
+        target: {
+          channel: "telegram",
+          to: "-1001234567890",
+          threadId: "8590",
+        },
+        payload: { text: "threaded" },
+        results: [
+          {
+            channel: "telegram",
+            messageId: "tg-thread",
+            chatId: "-1001234567890",
+            meta: {
+              telegram: {
+                messages: [
+                  {
+                    messageId: "tg-other",
+                    chatId: "-1001234567890",
+                    messageThreadId: 8590,
+                  },
+                ],
+              },
+            },
+          },
+        ],
+      }),
+    ).rejects.toThrow("missing provider proof for result messageId tg-thread");
+  });
+
+  it("requires every provider message to prove the Telegram topic", async () => {
+    await expect(
+      telegramOutbound.validateDeliveryResults?.({
+        cfg: {} as never,
+        target: {
+          channel: "telegram",
+          to: "-1001234567890",
+          threadId: "8590",
+        },
+        payload: { text: "threaded" },
+        results: [
+          {
+            channel: "telegram",
+            messageId: "tg-2",
+            chatId: "-1001234567890",
+            meta: {
+              telegram: {
+                messages: [
+                  { messageId: "tg-1", chatId: "-1001234567890" },
+                  { messageId: "tg-2", chatId: "-1001234567890", messageThreadId: 8590 },
+                ],
+              },
+            },
+          },
+        ],
+      }),
+    ).rejects.toThrow("provider message 1 message_thread_id=missing expected 8590");
+  });
+
+  it("does not require provider topic proof for Telegram General topic id", async () => {
+    await telegramOutbound.validateDeliveryResults?.({
+      cfg: {} as never,
+      target: {
+        channel: "telegram",
+        to: "-1001234567890",
+        threadId: "1",
+      },
+      payload: { text: "general" },
+      results: [
+        {
+          channel: "telegram",
+          messageId: "tg-general",
+          chatId: "-1001234567890",
+        },
+      ],
+    });
+  });
+
   it("sends payload media in sequence and keeps buttons on the first message only", async () => {
     sendMessageTelegramMock
       .mockResolvedValueOnce({ messageId: "tg-1", chatId: "12345" })
