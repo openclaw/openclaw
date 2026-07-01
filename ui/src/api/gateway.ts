@@ -67,15 +67,16 @@ export class GatewayRequestError extends Error {
   readonly retryAfterMs?: number;
 
   constructor(error: GatewayErrorInfo) {
+    const details = enrichProtocolMismatchDetails(error.message, error.details);
     super(
       formatConnectErrorMessage({
         message: error.message,
-        details: enrichProtocolMismatchDetails(error.message, error.details),
+        details,
       }),
     );
     this.name = "GatewayRequestError";
     this.gatewayCode = error.code;
-    this.details = error.details;
+    this.details = details;
     this.retryable = error.retryable === true;
     this.retryAfterMs = error.retryAfterMs;
   }
@@ -137,6 +138,7 @@ export function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): 
     code === ConnectErrorDetailCodes.AUTH_RATE_LIMITED ||
     code === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH ||
     code === ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH ||
+    code === ConnectErrorDetailCodes.PROTOCOL_MISMATCH ||
     code === ConnectErrorDetailCodes.PAIRING_REQUIRED ||
     code === ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED ||
     code === ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED
