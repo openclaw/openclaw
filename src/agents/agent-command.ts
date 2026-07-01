@@ -88,6 +88,7 @@ import {
 import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
+import { isStaleAutoFallbackOriginOverride } from "./auto-fallback-stale-origin.js";
 import { isHeartbeatLifecycleRunKind } from "./bootstrap-mode.js";
 import {
   createAgentAttemptLifecycleCallbacks,
@@ -408,6 +409,61 @@ const OVERRIDE_FIELDS_CLEARED_BY_DELETE: OverrideFieldClearedByDelete[] = [
 ];
 
 const OVERRIDE_VALUE_MAX_LENGTH = 256;
+
+type StaleAutoFallbackOriginCleanupGuard = Pick<
+  SessionEntry,
+  | "providerOverride"
+  | "modelOverride"
+  | "modelOverrideSource"
+  | "modelOverrideFallbackOriginProvider"
+  | "modelOverrideFallbackOriginModel"
+  | "authProfileOverride"
+  | "authProfileOverrideSource"
+  | "authProfileOverrideCompactionCount"
+  | "fallbackNoticeSelectedModel"
+  | "fallbackNoticeActiveModel"
+  | "fallbackNoticeReason"
+>;
+
+function captureStaleAutoFallbackOriginCleanupGuard(
+  entry: SessionEntry,
+): StaleAutoFallbackOriginCleanupGuard {
+  return {
+    providerOverride: entry.providerOverride,
+    modelOverride: entry.modelOverride,
+    modelOverrideSource: entry.modelOverrideSource,
+    modelOverrideFallbackOriginProvider: entry.modelOverrideFallbackOriginProvider,
+    modelOverrideFallbackOriginModel: entry.modelOverrideFallbackOriginModel,
+    authProfileOverride: entry.authProfileOverride,
+    authProfileOverrideSource: entry.authProfileOverrideSource,
+    authProfileOverrideCompactionCount: entry.authProfileOverrideCompactionCount,
+    fallbackNoticeSelectedModel: entry.fallbackNoticeSelectedModel,
+    fallbackNoticeActiveModel: entry.fallbackNoticeActiveModel,
+    fallbackNoticeReason: entry.fallbackNoticeReason,
+  };
+}
+
+function entryMatchesStaleAutoFallbackOriginCleanupGuard(
+  entry: SessionEntry | undefined,
+  guard: StaleAutoFallbackOriginCleanupGuard | undefined,
+): boolean {
+  if (!entry || !guard) {
+    return false;
+  }
+  return (
+    entry.providerOverride === guard.providerOverride &&
+    entry.modelOverride === guard.modelOverride &&
+    entry.modelOverrideSource === guard.modelOverrideSource &&
+    entry.modelOverrideFallbackOriginProvider === guard.modelOverrideFallbackOriginProvider &&
+    entry.modelOverrideFallbackOriginModel === guard.modelOverrideFallbackOriginModel &&
+    entry.authProfileOverride === guard.authProfileOverride &&
+    entry.authProfileOverrideSource === guard.authProfileOverrideSource &&
+    entry.authProfileOverrideCompactionCount === guard.authProfileOverrideCompactionCount &&
+    entry.fallbackNoticeSelectedModel === guard.fallbackNoticeSelectedModel &&
+    entry.fallbackNoticeActiveModel === guard.fallbackNoticeActiveModel &&
+    entry.fallbackNoticeReason === guard.fallbackNoticeReason
+  );
+}
 
 async function persistSessionEntry(
   params: PersistSessionEntryParams & {
@@ -1402,7 +1458,7 @@ async function agentCommandInternal(
       }
     }
 
-    const storedProviderOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
+    let storedProviderOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
       ? undefined
       : sessionEntry?.providerOverride?.trim();
     let storedModelOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
@@ -1449,6 +1505,21 @@ async function agentCommandInternal(
       : null;
     const primaryProvider = normalizedChannelOverride?.provider ?? defaultProvider;
     const primaryModel = normalizedChannelOverride?.model ?? defaultModel;
+    const hasStaleAutoFallbackOriginOverride =
+      hasStoredOverride &&
+      !hasExplicitRunOverride &&
+      isStaleAutoFallbackOriginOverride({
+        entry: sessionEntry,
+        defaultProvider,
+        defaultModel,
+        primaryProvider,
+        primaryModel,
+      });
+    if (hasStaleAutoFallbackOriginOverride) {
+      storedProviderOverride = undefined;
+      storedModelOverride = undefined;
+      storedModelOverrideSource = undefined;
+    }
     const hasEffectiveStoredOverride = Boolean(storedProviderOverride || storedModelOverride);
     if (normalizedChannelOverride && !hasEffectiveStoredOverride) {
       provider = normalizedChannelOverride.provider;
@@ -1482,6 +1553,14 @@ async function agentCommandInternal(
       model = autoFallbackPrimaryProbe.model;
       autoFallbackPrimaryProbeSessionEntry = { ...sessionEntry };
       clearAutoFallbackPrimaryProbeSelection(autoFallbackPrimaryProbeSessionEntry);
+    }
+    let staleAutoFallbackOriginAttemptSessionEntry: SessionEntry | undefined;
+    let staleAutoFallbackOriginCleanupGuard: StaleAutoFallbackOriginCleanupGuard | undefined;
+    if (hasStaleAutoFallbackOriginOverride && sessionEntry) {
+      staleAutoFallbackOriginCleanupGuard =
+        captureStaleAutoFallbackOriginCleanupGuard(sessionEntry);
+      staleAutoFallbackOriginAttemptSessionEntry = { ...sessionEntry };
+      clearAutoFallbackPrimaryProbeSelection(staleAutoFallbackOriginAttemptSessionEntry);
     }
     let providerForAuthProfileValidation = provider;
     if (hasExplicitRunOverride) {
@@ -1536,7 +1615,10 @@ async function agentCommandInternal(
       workspaceDir,
     });
 
-    let sessionEntryForAttempt = autoFallbackPrimaryProbeSessionEntry ?? sessionEntry;
+    let sessionEntryForAttempt =
+      autoFallbackPrimaryProbeSessionEntry ??
+      staleAutoFallbackOriginAttemptSessionEntry ??
+      sessionEntry;
     if (sessionEntryForAttempt) {
       const authProfileId = sessionEntryForAttempt.authProfileOverride;
       if (authProfileId) {
@@ -1585,7 +1667,11 @@ async function agentCommandInternal(
             }),
           );
         if (!profileMatchesRuntime) {
-          if (hasExplicitRunOverride || autoFallbackPrimaryProbe) {
+          if (
+            hasExplicitRunOverride ||
+            autoFallbackPrimaryProbe ||
+            staleAutoFallbackOriginAttemptSessionEntry
+          ) {
             sessionEntryForAttempt = {
               ...entry,
               authProfileOverride: undefined,
@@ -2020,6 +2106,36 @@ async function agentCommandInternal(
               ),
           });
           sessionEntry = persistedEntry ?? sessionEntry;
+        }
+        if (
+          !fallbackExhausted &&
+          hasStaleAutoFallbackOriginOverride &&
+          sessionEntry &&
+          sessionStore &&
+          sessionKey &&
+          !suppressVisibleSessionEffects &&
+          !preserveUserFacingSessionModelState
+        ) {
+          const staleCleanupSourceEntry = sessionStore[sessionKey] ?? sessionEntry;
+          const nextSessionEntry = { ...staleCleanupSourceEntry };
+          const { updated } = applyModelOverrideToSessionEntry({
+            entry: nextSessionEntry,
+            selection: { provider: primaryProvider, model: primaryModel, isDefault: true },
+          });
+          if (updated) {
+            const persistedEntry = await persistSessionEntry({
+              sessionStore,
+              sessionKey,
+              storePath,
+              entry: nextSessionEntry,
+              shouldPersist: (current) =>
+                entryMatchesStaleAutoFallbackOriginCleanupGuard(
+                  current,
+                  staleAutoFallbackOriginCleanupGuard,
+                ),
+            });
+            sessionEntry = persistedEntry ?? sessionEntry;
+          }
         }
         if (fallbackResult.attempts.length > 0 && result.meta.agentMeta) {
           result = {

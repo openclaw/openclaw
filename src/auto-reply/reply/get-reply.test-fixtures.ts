@@ -128,6 +128,7 @@ export function createGetReplyContinueDirectivesResult(params: {
       provider: params.provider ?? "openai",
       model: params.model ?? "gpt-4o-mini",
       modelState: {
+        persistModelOverrideReset: async () => false,
         resolveDefaultThinkingLevel: async () => undefined,
         resolveThinkingCatalog: async () => [],
       },

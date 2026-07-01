@@ -261,7 +261,7 @@ vi.mock("../config/sessions.js", () => ({
 vi.mock("../config/sessions/transcript-resolve.runtime.js", () => ({
   resolveSessionTranscriptFile: async () => ({
     sessionFile: "/tmp/session.jsonl",
-    sessionEntry: { sessionId: "session-1", updatedAt: Date.now() },
+    sessionEntry: state.sessionEntryMock ?? { sessionId: "session-1", updatedAt: Date.now() },
   }),
 }));
 
@@ -344,7 +344,64 @@ vi.mock("../sessions/level-overrides.js", () => ({
 }));
 
 vi.mock("../sessions/model-overrides.js", () => ({
-  applyModelOverrideToSessionEntry: () => ({ updated: false }),
+  applyModelOverrideToSessionEntry: ({
+    entry,
+    selection,
+    profileOverride,
+    preserveAuthProfileOverride,
+  }: {
+    entry: SessionEntry;
+    selection: { provider: string; model: string; isDefault?: boolean };
+    profileOverride?: string;
+    preserveAuthProfileOverride?: boolean;
+  }) => {
+    let updated = false;
+    if (selection.isDefault) {
+      for (const key of [
+        "providerOverride",
+        "modelOverride",
+        "modelOverrideSource",
+        "modelOverrideFallbackOriginProvider",
+        "modelOverrideFallbackOriginModel",
+      ] as const) {
+        if (entry[key] !== undefined) {
+          delete entry[key];
+          updated = true;
+        }
+      }
+    } else {
+      if (entry.providerOverride !== selection.provider) {
+        entry.providerOverride = selection.provider;
+        updated = true;
+      }
+      if (entry.modelOverride !== selection.model) {
+        entry.modelOverride = selection.model;
+        updated = true;
+      }
+    }
+    if (profileOverride) {
+      if (entry.authProfileOverride !== profileOverride) {
+        entry.authProfileOverride = profileOverride;
+        updated = true;
+      }
+      if (entry.authProfileOverrideSource !== "user") {
+        entry.authProfileOverrideSource = "user";
+        updated = true;
+      }
+    } else if (!preserveAuthProfileOverride) {
+      for (const key of [
+        "authProfileOverride",
+        "authProfileOverrideSource",
+        "authProfileOverrideCompactionCount",
+      ] as const) {
+        if (entry[key] !== undefined) {
+          delete entry[key];
+          updated = true;
+        }
+      }
+    }
+    return { updated };
+  },
   repairProviderWrappedModelOverride: () => ({ updated: false }),
 }));
 
@@ -377,7 +434,25 @@ vi.mock("../utils/message-channel.js", () => ({
 }));
 
 vi.mock("./agent-scope.js", () => ({
-  clearAutoFallbackPrimaryProbeSelection: vi.fn(),
+  clearAutoFallbackPrimaryProbeSelection: vi.fn((entry: SessionEntry) => {
+    delete entry.providerOverride;
+    delete entry.modelOverride;
+    delete entry.modelOverrideSource;
+    delete entry.modelOverrideFallbackOriginProvider;
+    delete entry.modelOverrideFallbackOriginModel;
+    if (
+      entry.authProfileOverrideSource === "auto" ||
+      (entry.authProfileOverrideSource === undefined &&
+        entry.authProfileOverrideCompactionCount !== undefined)
+    ) {
+      delete entry.authProfileOverride;
+      delete entry.authProfileOverrideSource;
+      delete entry.authProfileOverrideCompactionCount;
+    }
+    delete entry.fallbackNoticeSelectedModel;
+    delete entry.fallbackNoticeActiveModel;
+    delete entry.fallbackNoticeReason;
+  }),
   entryMatchesAutoFallbackPrimaryProbe: () => true,
   hasLegacyAutoFallbackWithoutOrigin: (entry: unknown) =>
     state.hasLegacyAutoFallbackWithoutOriginMock(entry),
@@ -641,6 +716,28 @@ vi.mock("./model-selection.js", () => {
             ? { provider: raw.slice(0, slash), model: raw.slice(slash + 1) }
             : { provider: defaultProvider, model: raw },
       };
+    },
+    resolvePersistedOverrideModelRef: ({
+      defaultProvider,
+      overrideProvider,
+      overrideModel,
+    }: {
+      defaultProvider: string;
+      overrideProvider?: string;
+      overrideModel?: string;
+    }) => {
+      const model = overrideModel?.trim();
+      if (!model) {
+        return null;
+      }
+      const provider = overrideProvider?.trim();
+      if (provider) {
+        return { provider, model };
+      }
+      const slash = model.indexOf("/");
+      return slash > 0
+        ? { provider: model.slice(0, slash), model: model.slice(slash + 1) }
+        : { provider: defaultProvider, model };
     },
     resolveConfiguredModelRef: ({ cfg }: { cfg?: unknown }) => {
       const raw = (cfg as { agents?: { defaults?: { model?: string | { primary?: string } } } })
@@ -1675,6 +1772,336 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
     expect(fallbackParams.provider).toBe("openai");
     expect(fallbackParams.model).toBe("channel-model");
+  });
+
+  it("prepares stale auto-fallback origin pins as primary attempts without fallback auth", async () => {
+    setupSingleAttemptFallback();
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: "anthropic/default-model",
+          models: {
+            "anthropic/default-model": {},
+            "anthropic/fallback-model": {},
+            "openai/channel-model": {},
+          },
+        },
+      },
+      channels: {
+        modelByChannel: {
+          discord: {
+            "channel-123": "openai/channel-model",
+          },
+        },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      channel: "discord",
+      groupId: "channel-123",
+      providerOverride: "anthropic",
+      modelOverride: "fallback-model",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "old-channel-model",
+      authProfileOverride: "anthropic:fallback",
+      authProfileOverrideSource: "auto",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    state.storePathMock = "/tmp/openclaw-sessions.json";
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "channel-model"));
+
+    await runBasicAgentCommand();
+
+    const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
+    expect(fallbackParams.provider).toBe("openai");
+    expect(fallbackParams.model).toBe("channel-model");
+    expectRecordFields(mockCallArg(state.resolveEffectiveModelFallbacksMock), {
+      hasSessionModelOverride: false,
+      hasAutoFallbackProvenance: false,
+    });
+    const attemptParams = requireRecord(mockCallArg(state.runAgentAttemptMock), "attempt params");
+    const attemptEntry = requireRecord(attemptParams.sessionEntry, "attempt session entry");
+    expect(attemptEntry.providerOverride).toBeUndefined();
+    expect(attemptEntry.modelOverride).toBeUndefined();
+    expect(attemptEntry.modelOverrideSource).toBeUndefined();
+    expect(attemptEntry.authProfileOverride).toBeUndefined();
+    expect(attemptEntry.authProfileOverrideSource).toBeUndefined();
+    const cleanupWrite = state.persistSessionEntryMock.mock.calls
+      .map((call) => call[0] as { entry?: SessionEntry; shouldPersist?: unknown })
+      .find(
+        (params) =>
+          params.shouldPersist &&
+          params.entry?.providerOverride === undefined &&
+          params.entry?.modelOverride === undefined &&
+          params.entry?.authProfileOverride === undefined,
+      );
+    expect(cleanupWrite).toBeDefined();
+  });
+
+  it("does not persist stale auto-fallback origin cleanup after exhausted fallback runs", async () => {
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: "openai/primary-model",
+          models: {
+            "openai/primary-model": {},
+            "anthropic/fallback-model": {},
+          },
+        },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      providerOverride: "anthropic",
+      modelOverride: "fallback-model",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "old-primary-model",
+      authProfileOverride: "anthropic:fallback",
+      authProfileOverrideSource: "auto",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    const sessionStore: Record<string, SessionEntry> = { "agent:main:main": sessionEntry };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = sessionStore;
+    state.storePathMock = "/tmp/openclaw-sessions.json";
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "primary-model"));
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      outcome: "exhausted",
+      result: await params.run(params.provider, params.model),
+      provider: params.provider,
+      model: params.model,
+      attempts: [
+        {
+          provider: params.provider,
+          model: params.model,
+          error: "all fallback candidates failed",
+          reason: "network",
+        },
+      ],
+    }));
+
+    await runBasicAgentCommand();
+
+    const attemptParams = requireRecord(mockCallArg(state.runAgentAttemptMock), "attempt params");
+    expectRecordFields(attemptParams, {
+      providerOverride: "openai",
+      modelOverride: "primary-model",
+    });
+    const cleanupWrite = state.persistSessionEntryMock.mock.calls
+      .map((call) => call[0] as { entry?: SessionEntry; shouldPersist?: unknown })
+      .find(
+        (params) =>
+          params.shouldPersist &&
+          params.entry?.providerOverride === undefined &&
+          params.entry?.modelOverride === undefined &&
+          params.entry?.authProfileOverride === undefined,
+      );
+    expect(cleanupWrite).toBeUndefined();
+    expectRecordFields(sessionStore["agent:main:main"], {
+      providerOverride: "anthropic",
+      modelOverride: "fallback-model",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "old-primary-model",
+      authProfileOverride: "anthropic:fallback",
+      authProfileOverrideSource: "auto",
+    });
+  });
+
+  it("preserves a direct stale auto-fallback pin that changes before cleanup persists", async () => {
+    setupSingleAttemptFallback();
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: "anthropic/default-model",
+          models: {
+            "anthropic/default-model": {},
+            "anthropic/fallback-model": {},
+            "openai/channel-model": {},
+          },
+        },
+      },
+      channels: {
+        modelByChannel: {
+          discord: {
+            "channel-123": "openai/channel-model",
+          },
+        },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      channel: "discord",
+      groupId: "channel-123",
+      providerOverride: "anthropic",
+      modelOverride: "fallback-model",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "old-channel-model",
+      authProfileOverride: "anthropic:fallback",
+      authProfileOverrideSource: "auto",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    state.storePathMock = "/tmp/openclaw-sessions.json";
+    state.runAgentAttemptMock.mockImplementation(async () => {
+      const store = state.sessionStoreMock as Record<string, SessionEntry>;
+      store["agent:main:main"] = {
+        ...store["agent:main:main"],
+        providerOverride: "anthropic",
+        modelOverride: "newer-fallback-model",
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "openai",
+        modelOverrideFallbackOriginModel: "older-channel-model",
+        authProfileOverride: "anthropic:newer-fallback",
+        authProfileOverrideSource: "auto",
+        updatedAt: 2,
+      };
+      return makeSuccessResult("openai", "channel-model");
+    });
+
+    await runBasicAgentCommand();
+
+    const cleanupWrite = state.persistSessionEntryMock.mock.calls
+      .map((call) => call[0] as { entry?: SessionEntry; shouldPersist?: unknown })
+      .find(
+        (params) =>
+          params.shouldPersist &&
+          params.entry?.providerOverride === undefined &&
+          params.entry?.modelOverride === undefined &&
+          params.entry?.authProfileOverride === undefined,
+      );
+    expect(cleanupWrite).toBeDefined();
+    const stored = (state.sessionStoreMock as Record<string, SessionEntry>)["agent:main:main"];
+    expect(stored?.providerOverride).toBe("anthropic");
+    expect(stored?.modelOverride).toBe("newer-fallback-model");
+    expect(stored?.modelOverrideSource).toBe("auto");
+    expect(stored?.modelOverrideFallbackOriginProvider).toBe("openai");
+    expect(stored?.modelOverrideFallbackOriginModel).toBe("older-channel-model");
+    expect(stored?.authProfileOverride).toBe("anthropic:newer-fallback");
+    expect(stored?.authProfileOverrideSource).toBe("auto");
+  });
+
+  it("does not persist stale auto-fallback origin cleanup when preserving session model state", async () => {
+    setupSingleAttemptFallback();
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: "openai/primary-model",
+          models: {
+            "openai/primary-model": {},
+            "anthropic/fallback-model": {},
+          },
+        },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      providerOverride: "anthropic",
+      modelOverride: "fallback-model",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "old-primary-model",
+      authProfileOverride: "anthropic:fallback",
+      authProfileOverrideSource: "auto",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    state.storePathMock = "/tmp/openclaw-sessions.json";
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "primary-model"));
+
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      preserveUserFacingSessionModelState: true,
+      skipInitialSessionTouch: true,
+    });
+
+    const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
+    expect(fallbackParams.provider).toBe("openai");
+    expect(fallbackParams.model).toBe("primary-model");
+    const attemptParams = requireRecord(mockCallArg(state.runAgentAttemptMock), "attempt params");
+    const attemptEntry = requireRecord(attemptParams.sessionEntry, "attempt session entry");
+    expect(attemptEntry.authProfileOverride).toBeUndefined();
+    const stored = (state.sessionStoreMock as Record<string, SessionEntry>)["agent:main:main"];
+    expect(stored?.providerOverride).toBe("anthropic");
+    expect(stored?.modelOverride).toBe("fallback-model");
+    expect(stored?.modelOverrideSource).toBe("auto");
+    expect(stored?.authProfileOverride).toBe("anthropic:fallback");
+  });
+
+  it("strips user-sourced incompatible stale-origin auth only from preserved direct attempts", async () => {
+    setupSingleAttemptFallback();
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: "openai/primary-model",
+          models: {
+            "openai/primary-model": {},
+            "anthropic/fallback-model": {},
+          },
+        },
+      },
+    };
+    state.authProfileStoreMock = {
+      profiles: {
+        "anthropic:fallback": {
+          type: "api_key",
+          provider: "anthropic",
+          key: "sk-test",
+        },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      providerOverride: "anthropic",
+      modelOverride: "fallback-model",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "openai",
+      modelOverrideFallbackOriginModel: "old-primary-model",
+      authProfileOverride: "anthropic:fallback",
+      authProfileOverrideSource: "user",
+      skillsSnapshot: { prompt: "", skills: [], version: 0 },
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main:main": sessionEntry };
+    state.storePathMock = "/tmp/openclaw-sessions.json";
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("openai", "primary-model"));
+
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      preserveUserFacingSessionModelState: true,
+      skipInitialSessionTouch: true,
+    });
+
+    const fallbackParams = mockCallArg(state.runWithModelFallbackMock) as FallbackRunnerParams;
+    expect(fallbackParams.provider).toBe("openai");
+    expect(fallbackParams.model).toBe("primary-model");
+    const attemptParams = requireRecord(mockCallArg(state.runAgentAttemptMock), "attempt params");
+    const attemptEntry = requireRecord(attemptParams.sessionEntry, "attempt session entry");
+    expect(attemptEntry.providerOverride).toBeUndefined();
+    expect(attemptEntry.modelOverride).toBeUndefined();
+    expect(attemptEntry.authProfileOverride).toBeUndefined();
+    expect(attemptEntry.authProfileOverrideSource).toBeUndefined();
+    expect(state.clearSessionAuthProfileOverrideMock).not.toHaveBeenCalled();
+    const stored = (state.sessionStoreMock as Record<string, SessionEntry>)["agent:main:main"];
+    expect(stored?.providerOverride).toBe("anthropic");
+    expect(stored?.modelOverride).toBe("fallback-model");
+    expect(stored?.modelOverrideSource).toBe("auto");
+    expect(stored?.authProfileOverride).toBe("anthropic:fallback");
+    expect(stored?.authProfileOverrideSource).toBe("user");
   });
 
   it("uses current threaded session key for parent channel model overrides", async () => {
