@@ -200,72 +200,220 @@ describe.runIf(process.platform !== "win32")("cleanStaleGatewayProcessesSync", (
 });
 
 describe("triggerOpenClawRestart", () => {
-  it("does not kickstart after bootstrap registers an unloaded LaunchAgent", () => {
+  it("kickstarts an already loaded LaunchAgent without bootstrapping a duplicate", () => {
     setPlatform("darwin");
     withEnv(
-      { VITEST: undefined, NODE_ENV: undefined, HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
+      {
+        VITEST: undefined,
+        NODE_ENV: undefined,
+        HOME: "/Users/test",
+        OPENCLAW_LAUNCHD_DOMAIN: "gui/501",
+        OPENCLAW_PROFILE: "default",
+      },
       () => {
-        const uid = typeof process.getuid === "function" ? process.getuid() : 501;
+        const gatewayPid = process.pid + 1000;
         spawnSyncMock.mockImplementation((command: string, args: string[]) => {
+          if (command === "stat") {
+            return { error: undefined, status: 0, stdout: "501\n" };
+          }
           if (command === "/usr/sbin/lsof") {
-            return { error: undefined, status: 1, stdout: "" };
+            const callCount = spawnSyncMock.mock.calls.filter((call) => call[0] === command).length;
+            return callCount === 1
+              ? { error: undefined, status: 1, stdout: "" }
+              : { error: undefined, status: 0, stdout: [`p${gatewayPid}`, "copenclaw"].join("\n") };
+          }
+          if (command === "launchctl" && args[0] === "print") {
+            return { error: undefined, status: 0, stdout: "state = running" };
           }
           if (command === "launchctl" && args[0] === "kickstart" && args[1] === "-k") {
+            return { error: undefined, status: 0, stdout: "" };
+          }
+          return { error: undefined, status: 1, stderr: "unexpected" };
+        });
+
+        const result = triggerOpenClawRestart();
+
+        expect(result).toEqual({
+          ok: true,
+          method: "launchctl",
+          tried: [
+            "launchctl print gui/501/ai.openclaw.gateway",
+            "launchctl kickstart -k gui/501/ai.openclaw.gateway",
+          ],
+        });
+        expect(
+          spawnSyncMock.mock.calls.some(
+            ([command, args]) =>
+              command === "launchctl" && Array.isArray(args) && args[0] === "bootstrap",
+          ),
+        ).toBe(false);
+      },
+    );
+  });
+
+  it("bootstraps only after launchctl print reports the LaunchAgent is not loaded", () => {
+    setPlatform("darwin");
+    withEnv(
+      {
+        VITEST: undefined,
+        NODE_ENV: undefined,
+        HOME: "/Users/test",
+        OPENCLAW_LAUNCHD_DOMAIN: "gui/501",
+        OPENCLAW_PROFILE: "default",
+      },
+      () => {
+        const gatewayPid = process.pid + 1000;
+        spawnSyncMock.mockImplementation((command: string, args: string[]) => {
+          if (command === "stat") {
+            return { error: undefined, status: 0, stdout: "501\n" };
+          }
+          if (command === "/usr/sbin/lsof") {
+            const callCount = spawnSyncMock.mock.calls.filter((call) => call[0] === command).length;
+            return callCount === 1
+              ? { error: undefined, status: 1, stdout: "" }
+              : { error: undefined, status: 0, stdout: [`p${gatewayPid}`, "copenclaw"].join("\n") };
+          }
+          if (command === "launchctl" && args[0] === "print") {
             return { error: undefined, status: 113, stderr: "service not loaded" };
           }
           if (command === "launchctl" && args[0] === "bootstrap") {
             return { error: undefined, status: 0, stderr: "" };
           }
-          return { error: undefined, status: 1, stdout: "" };
+          return { error: undefined, status: 1, stderr: "unexpected" };
         });
 
         const result = triggerOpenClawRestart();
 
-        expect(result).toEqual({
-          ok: true,
-          method: "launchctl",
-          tried: [
-            `launchctl kickstart -k gui/${uid}/ai.openclaw.gateway`,
-            `launchctl bootstrap gui/${uid} /Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist`,
-          ],
-        });
+        expect(result.ok).toBe(true);
+        expect(result.method).toBe("launchctl");
+        expect(result.tried).toContain("launchctl print gui/501/ai.openclaw.gateway");
+        expect(result.tried).toContain(
+          "launchctl bootstrap gui/501 /Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist",
+        );
+        expect(
+          spawnSyncMock.mock.calls.some(
+            ([command, args]) =>
+              command === "launchctl" &&
+              Array.isArray(args) &&
+              args[0] === "kickstart" &&
+              args[1] === "-k",
+          ),
+        ).toBe(false);
       },
     );
   });
 
-  it("continues when launchctl bootstrap reports the service is already loaded", () => {
+  it("retries an already-loaded bootstrap race with kickstart -k instead of bootstrapping again", () => {
     setPlatform("darwin");
     withEnv(
-      { VITEST: undefined, NODE_ENV: undefined, HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
+      {
+        VITEST: undefined,
+        NODE_ENV: undefined,
+        HOME: "/Users/test",
+        OPENCLAW_LAUNCHD_DOMAIN: "gui/501",
+        OPENCLAW_PROFILE: "default",
+      },
       () => {
-        const uid = typeof process.getuid === "function" ? process.getuid() : 501;
+        const gatewayPid = process.pid + 1000;
         spawnSyncMock.mockImplementation((command: string, args: string[]) => {
-          if (command === "/usr/sbin/lsof") {
-            return { error: undefined, status: 1, stdout: "" };
+          if (command === "stat") {
+            return { error: undefined, status: 0, stdout: "501\n" };
           }
-          if (command === "launchctl" && args[0] === "kickstart" && args[1] === "-k") {
+          if (command === "/usr/sbin/lsof") {
+            const callCount = spawnSyncMock.mock.calls.filter((call) => call[0] === command).length;
+            return callCount === 1
+              ? { error: undefined, status: 1, stdout: "" }
+              : { error: undefined, status: 0, stdout: [`p${gatewayPid}`, "copenclaw"].join("\n") };
+          }
+          if (command === "launchctl" && args[0] === "print") {
             return { error: undefined, status: 113, stderr: "service not loaded" };
           }
           if (command === "launchctl" && args[0] === "bootstrap") {
             return { error: undefined, status: 37, stderr: "Operation already in progress" };
           }
-          if (command === "launchctl" && args[0] === "kickstart") {
+          if (command === "launchctl" && args[0] === "kickstart" && args[1] === "-k") {
             return { error: undefined, status: 0, stdout: "" };
           }
-          return { error: undefined, status: 1, stdout: "" };
+          return { error: undefined, status: 1, stderr: "unexpected" };
+        });
+
+        const result = triggerOpenClawRestart();
+
+        expect(result.ok).toBe(true);
+        expect(result.method).toBe("launchctl");
+        expect(result.tried).toContain("launchctl print gui/501/ai.openclaw.gateway");
+        expect(result.tried).toContain(
+          "launchctl bootstrap gui/501 /Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist",
+        );
+        expect(result.tried).toContain("launchctl kickstart -k gui/501/ai.openclaw.gateway");
+        expect(
+          spawnSyncMock.mock.calls.filter(
+            ([command, args]) =>
+              command === "launchctl" && Array.isArray(args) && args[0] === "bootstrap",
+          ),
+        ).toHaveLength(1);
+      },
+    );
+  });
+
+  it("reports duplicate gateway listeners after a launchd restart instead of falling back", () => {
+    setPlatform("darwin");
+    withEnv(
+      {
+        VITEST: undefined,
+        NODE_ENV: undefined,
+        HOME: "/Users/test",
+        OPENCLAW_LAUNCHD_DOMAIN: "gui/501",
+        OPENCLAW_PROFILE: "default",
+      },
+      () => {
+        const gatewayPidA = process.pid + 1000;
+        const gatewayPidB = process.pid + 2000;
+        spawnSyncMock.mockImplementation((command: string, args: string[]) => {
+          if (command === "stat") {
+            return { error: undefined, status: 0, stdout: "501\n" };
+          }
+          if (command === "/usr/sbin/lsof") {
+            const callCount = spawnSyncMock.mock.calls.filter((call) => call[0] === command).length;
+            return callCount === 1
+              ? { error: undefined, status: 1, stdout: "" }
+              : {
+                  error: undefined,
+                  status: 0,
+                  stdout: [
+                    `p${gatewayPidA}`,
+                    "copenclaw",
+                    `p${gatewayPidB}`,
+                    "copenclaw-gateway",
+                  ].join("\n"),
+                };
+          }
+          if (command === "launchctl" && args[0] === "print") {
+            return { error: undefined, status: 0, stdout: "state = running" };
+          }
+          if (command === "launchctl" && args[0] === "kickstart" && args[1] === "-k") {
+            return { error: undefined, status: 0, stdout: "" };
+          }
+          return { error: undefined, status: 1, stderr: "unexpected" };
         });
 
         const result = triggerOpenClawRestart();
 
         expect(result).toEqual({
-          ok: true,
+          ok: false,
           method: "launchctl",
+          detail: `multiple gateway listeners visible after restart: ${gatewayPidA}, ${gatewayPidB}`,
           tried: [
-            `launchctl kickstart -k gui/${uid}/ai.openclaw.gateway`,
-            `launchctl bootstrap gui/${uid} /Users/test/Library/LaunchAgents/ai.openclaw.gateway.plist`,
-            `launchctl kickstart gui/${uid}/ai.openclaw.gateway`,
+            "launchctl print gui/501/ai.openclaw.gateway",
+            "launchctl kickstart -k gui/501/ai.openclaw.gateway",
           ],
         });
+        expect(
+          spawnSyncMock.mock.calls.some(
+            ([command, args]) =>
+              command === "launchctl" && Array.isArray(args) && args[0] === "bootstrap",
+          ),
+        ).toBe(false);
       },
     );
   });

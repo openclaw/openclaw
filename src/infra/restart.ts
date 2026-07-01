@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { getRuntimeConfig } from "../config/config.js";
+import { resolveGatewayPort } from "../config/paths.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
@@ -684,6 +685,118 @@ function normalizeSystemdUnit(raw?: string, profile?: string): string {
   return unit.endsWith(".service") ? unit : `${unit}.service`;
 }
 
+function parsePositiveInteger(raw: string | undefined): number | null {
+  const trimmed = raw?.trim();
+  if (!trimmed || !/^\d+$/.test(trimmed)) {
+    return null;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function readMacConsoleUidSync(): number | null {
+  const stat = spawnSync("stat", ["-f", "%u", "/dev/console"], {
+    encoding: "utf8",
+    timeout: SPAWN_TIMEOUT_MS,
+  });
+  if (stat.error || stat.status !== 0) {
+    return null;
+  }
+  const uid = parsePositiveInteger(stat.stdout);
+  return uid && uid !== 0 ? uid : null;
+}
+
+function resolveLaunchdDomainCandidates(env: NodeJS.ProcessEnv): string[] {
+  const domains: string[] = [];
+  const explicitDomain = env.OPENCLAW_LAUNCHD_DOMAIN?.trim();
+  if (explicitDomain) {
+    domains.push(explicitDomain);
+  }
+  const explicitUid = parsePositiveInteger(env.OPENCLAW_LAUNCHD_UID);
+  if (explicitUid) {
+    domains.push(`gui/${explicitUid}`);
+  }
+  const consoleUid = readMacConsoleUidSync();
+  if (consoleUid) {
+    domains.push(`gui/${consoleUid}`);
+  }
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  if (uid !== undefined && uid > 0) {
+    domains.push(`gui/${uid}`);
+  }
+  domains.push("gui/501");
+  return Array.from(new Set(domains));
+}
+
+function isLaunchctlPrintNotLoaded(result: {
+  error?: unknown;
+  status?: number | null;
+  stdout?: string | Buffer | null;
+  stderr?: string | Buffer | null;
+}): boolean {
+  if (result.error || result.status === 0 || result.status === null) {
+    return false;
+  }
+  const detail = `${result.stdout ?? ""}\n${result.stderr ?? ""}`.toLowerCase();
+  return (
+    detail.includes("could not find service") ||
+    detail.includes("service not loaded") ||
+    detail.includes("not found") ||
+    detail.includes("does not exist")
+  );
+}
+
+function inspectLaunchdTarget(
+  label: string,
+  tried: string[],
+): {
+  loaded: boolean;
+  domain?: string;
+  target?: string;
+  detail?: string;
+} {
+  const domains = resolveLaunchdDomainCandidates(process.env);
+  for (const domain of domains) {
+    const target = `${domain}/${label}`;
+    const printArgs = ["print", target];
+    tried.push(`launchctl ${printArgs.join(" ")}`);
+    const printed = spawnSync("launchctl", printArgs, {
+      encoding: "utf8",
+      timeout: SPAWN_TIMEOUT_MS,
+    });
+    if (!printed.error && printed.status === 0) {
+      return { loaded: true, domain, target };
+    }
+    if (!isLaunchctlPrintNotLoaded(printed)) {
+      return {
+        loaded: false,
+        detail: `launchctl print ${target}: ${formatSpawnDetail(printed)}`,
+      };
+    }
+  }
+  const domain = domains[0] ?? "gui/501";
+  return { loaded: false, domain, target: `${domain}/${label}` };
+}
+
+function formatUnexpectedGatewayProcessCount(pids: number[]): string | null {
+  if (pids.length === 1) {
+    return null;
+  }
+  if (pids.length === 0) {
+    return "no gateway listener was visible after restart; launchd may still be starting it";
+  }
+  return `multiple gateway listeners visible after restart: ${pids.join(", ")}`;
+}
+
+function inspectPostLaunchdRestartProcessCount(): string | null {
+  const pids = findGatewayPidsOnPortSync(resolveGatewayPort(undefined, process.env));
+  const detail = formatUnexpectedGatewayProcessCount(pids);
+  if (detail) {
+    restartLog.warn(detail);
+  }
+  return pids.length > 1 ? detail : null;
+}
+
 export function triggerOpenClawRestart(): RestartAttempt {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return { ok: true, method: "supervisor", detail: "test mode" };
@@ -737,21 +850,44 @@ export function triggerOpenClawRestart(): RestartAttempt {
   const label =
     process.env.OPENCLAW_LAUNCHD_LABEL ||
     resolveGatewayLaunchAgentLabel(process.env.OPENCLAW_PROFILE);
-  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-  const domain = uid !== undefined ? `gui/${uid}` : "gui/501";
-  const target = `${domain}/${label}`;
-  const args = ["kickstart", "-k", target];
-  tried.push(`launchctl ${args.join(" ")}`);
-  const res = spawnSync("launchctl", args, {
-    encoding: "utf8",
-    timeout: SPAWN_TIMEOUT_MS,
-  });
-  if (!res.error && res.status === 0) {
-    return { ok: true, method: "launchctl", tried };
+
+  const inspected = inspectLaunchdTarget(label, tried);
+  if (inspected.detail || !inspected.domain || !inspected.target) {
+    return {
+      ok: false,
+      method: "launchctl",
+      detail: inspected.detail ?? "could not resolve launchd target",
+      tried,
+    };
   }
 
-  // kickstart fails when the service was previously booted out (deregistered from launchd).
-  // Fall back to bootstrap, which loads RunAtLoad agents without a follow-up kickstart.
+  const { domain, target } = inspected;
+  if (inspected.loaded) {
+    const args = ["kickstart", "-k", target];
+    tried.push(`launchctl ${args.join(" ")}`);
+    const res = spawnSync("launchctl", args, {
+      encoding: "utf8",
+      timeout: SPAWN_TIMEOUT_MS,
+    });
+    if (!res.error && res.status === 0) {
+      const duplicateDetail = inspectPostLaunchdRestartProcessCount();
+      if (duplicateDetail) {
+        return { ok: false, method: "launchctl", detail: duplicateDetail, tried };
+      }
+      return { ok: true, method: "launchctl", tried };
+    }
+    return {
+      ok: false,
+      method: "launchctl",
+      detail: formatSpawnDetail(res),
+      tried,
+    };
+  }
+
+  const args = ["kickstart", "-k", target];
+  // launchctl print showed the job is not loaded. Bootstrap the RunAtLoad
+  // LaunchAgent; if it races with another loader, restart the now-loaded job in
+  // place instead of attempting a second bootstrap.
   // Use env HOME to match how launchd.ts resolves the plist install path.
   const home = process.env.HOME?.trim() || os.homedir();
   const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
@@ -775,15 +911,23 @@ export function triggerOpenClawRestart(): RestartAttempt {
     };
   }
   if (boot.status === 0) {
+    const duplicateDetail = inspectPostLaunchdRestartProcessCount();
+    if (duplicateDetail) {
+      return { ok: false, method: "launchctl", detail: duplicateDetail, tried };
+    }
     return { ok: true, method: "launchctl", tried };
   }
-  const retryArgs = ["kickstart", target];
+  const retryArgs = args;
   tried.push(`launchctl ${retryArgs.join(" ")}`);
   const retry = spawnSync("launchctl", retryArgs, {
     encoding: "utf8",
     timeout: SPAWN_TIMEOUT_MS,
   });
   if (!retry.error && retry.status === 0) {
+    const duplicateDetail = inspectPostLaunchdRestartProcessCount();
+    if (duplicateDetail) {
+      return { ok: false, method: "launchctl", detail: duplicateDetail, tried };
+    }
     return { ok: true, method: "launchctl", tried };
   }
   return {
