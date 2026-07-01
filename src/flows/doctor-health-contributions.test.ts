@@ -1905,5 +1905,96 @@ describe("doctor health contributions", () => {
         }),
       );
     });
+
+    it("skips the doctor --fix trailer when no pending config changes were recorded", async () => {
+      const cfg = {};
+      const log = vi.fn();
+      const ctx = {
+        runtime: { log },
+        options: {},
+        prompter: buildDoctorPrompter(false),
+        configResult: { cfg, shouldWriteConfig: false },
+        cfg,
+        cfgForPersistence: cfg,
+        sourceConfigValid: true,
+        configPath: "/tmp/openclaw-doctor-trailer.json",
+        env: {},
+      } as unknown as Parameters<(typeof writeConfigContribution)["run"]>[0];
+
+      await writeConfigContribution.run(ctx);
+
+      expect(log).not.toHaveBeenCalled();
+    });
+
+    it("skips the doctor --fix trailer when no pending config changes remain", async () => {
+      const cfg = {};
+      const log = vi.fn();
+      const ctx = {
+        runtime: { log },
+        options: {},
+        prompter: buildDoctorPrompter(false),
+        configResult: { cfg, shouldWriteConfig: false, pendingChanges: false },
+        cfg,
+        cfgForPersistence: cfg,
+        sourceConfigValid: true,
+        configPath: "/tmp/openclaw-doctor-trailer.json",
+        env: {},
+      } as unknown as Parameters<(typeof writeConfigContribution)["run"]>[0];
+
+      await writeConfigContribution.run(ctx);
+
+      expect(log).not.toHaveBeenCalled();
+    });
+
+    it("writes health-phase config drift without printing the doctor --fix trailer", async () => {
+      const log = vi.fn();
+      const nextConfig = { gateway: { mode: "remote" } };
+      const ctx = {
+        runtime: { log, error: vi.fn(), exit: vi.fn() },
+        options: {},
+        prompter: buildDoctorPrompter(false),
+        configResult: {
+          cfg: { gateway: { mode: "local" } },
+          shouldWriteConfig: false,
+          pendingChanges: false,
+        },
+        cfg: nextConfig,
+        cfgForPersistence: { gateway: { mode: "local" } },
+        sourceConfigValid: true,
+        configPath: "/tmp/openclaw-doctor-trailer.json",
+        env: {},
+      } as unknown as Parameters<(typeof writeConfigContribution)["run"]>[0];
+
+      await writeConfigContribution.run(ctx);
+
+      expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          nextConfig,
+        }),
+      );
+      expect(log).not.toHaveBeenCalled();
+    });
+
+    it("prints the doctor --fix trailer when pending config changes await --fix", async () => {
+      const cfg = {};
+      const log = vi.fn();
+      const ctx = {
+        runtime: { log },
+        options: {},
+        prompter: buildDoctorPrompter(false),
+        configResult: { cfg, shouldWriteConfig: false, pendingChanges: true },
+        cfg,
+        cfgForPersistence: cfg,
+        sourceConfigValid: true,
+        configPath: "/tmp/openclaw-doctor-trailer.json",
+        env: {},
+      } as unknown as Parameters<(typeof writeConfigContribution)["run"]>[0];
+
+      await writeConfigContribution.run(ctx);
+
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("to apply changes."));
+    });
   });
 });

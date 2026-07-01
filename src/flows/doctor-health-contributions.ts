@@ -23,6 +23,7 @@ type DoctorConfigResult = {
   cfg: OpenClawConfig;
   path?: string;
   shouldWriteConfig?: boolean;
+  pendingChanges?: boolean;
   sourceConfigValid?: boolean;
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;
@@ -1133,9 +1134,8 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
   const { replaceConfigFile } = await loadConfigModule();
   const { logConfigUpdated } = await import("../config/logging.js");
   const { shortenHomePath } = await import("../utils.js");
-  const shouldWriteConfig =
-    ctx.configResult.shouldWriteConfig ||
-    JSON.stringify(ctx.cfg) !== JSON.stringify(ctx.cfgForPersistence);
+  const changedDuringHealth = JSON.stringify(ctx.cfg) !== JSON.stringify(ctx.cfgForPersistence);
+  const shouldWriteConfig = ctx.configResult.shouldWriteConfig === true || changedDuringHealth;
   if (shouldWriteConfig) {
     const updateDoctorRun = isUpdateDoctorRun(ctx.env ?? process.env);
     ctx.cfg = applyWizardMetadata(ctx.cfg, {
@@ -1177,7 +1177,7 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
     }
     return;
   }
-  if (!ctx.prompter.shouldRepair) {
+  if (!ctx.prompter.shouldRepair && ctx.configResult.pendingChanges === true) {
     ctx.runtime.log(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply changes.`);
   }
 }
