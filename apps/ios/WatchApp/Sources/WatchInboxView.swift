@@ -760,7 +760,7 @@ private struct WatchCompactMetric: View {
 }
 
 private struct WatchPrimaryLabel: View {
-    let title: String
+    let title: LocalizedStringKey
 
     var body: some View {
         HStack(spacing: 7) {
@@ -809,7 +809,7 @@ private struct WatchPageRail: View {
 }
 
 private struct WatchSecondaryLabel: View {
-    let title: String
+    let title: LocalizedStringKey
 
     var body: some View {
         Text(self.title)
@@ -829,7 +829,7 @@ private struct WatchSecondaryLabel: View {
 }
 
 private struct WatchSecondaryButton: View {
-    let title: String
+    let title: LocalizedStringKey
     let action: () -> Void
 
     var body: some View {
@@ -911,7 +911,7 @@ private struct WatchActionCard: View {
 }
 
 private struct WatchDecisionButton: View {
-    let title: String
+    let title: LocalizedStringKey
     let color: Color
     let action: () -> Void
 
