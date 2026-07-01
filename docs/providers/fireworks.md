@@ -7,12 +7,12 @@ read_when:
   - You are debugging Kimi thinking-off behavior on Fireworks
 ---
 
-[Fireworks](https://fireworks.ai) exposes open-weight and routed models through an OpenAI-compatible API. OpenClaw includes a bundled Fireworks provider plugin that ships with two pre-cataloged Kimi models and accepts any Fireworks model or router id at runtime.
+[Fireworks](https://fireworks.ai) exposes open-weight and routed models through an OpenAI-compatible API. Install the official Fireworks provider plugin to use two pre-cataloged Kimi models and any Fireworks model or router id at runtime.
 
 | Property        | Value                                                  |
 | --------------- | ------------------------------------------------------ |
 | Provider id     | `fireworks` (alias: `fireworks-ai`)                    |
-| Plugin          | bundled, `enabledByDefault: true`                      |
+| Package         | `@openclaw/fireworks-provider`                         |
 | Auth env var    | `FIREWORKS_API_KEY`                                    |
 | Onboarding flag | `--auth-choice fireworks-api-key`                      |
 | Direct CLI flag | `--fireworks-api-key <key>`                            |
@@ -24,6 +24,11 @@ read_when:
 ## Getting started
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install @openclaw/fireworks-provider
+    ```
+  </Step>
   <Step title="Set the Fireworks API key">
     <CodeGroup>
 
@@ -108,7 +113,7 @@ OpenClaw accepts any Fireworks model or router id at runtime. Use the exact id s
   </Accordion>
 
   <Accordion title="Why thinking is forced off for Kimi">
-    Fireworks K2.6 returns a 400 if the request carries `reasoning_*` parameters even though Kimi supports thinking through Moonshot's own API. The bundled policy (`extensions/fireworks/thinking-policy.ts`) advertises only the `off` thinking level for Kimi model ids, so manual `/think` switches and provider-policy surfaces stay aligned with the runtime contract.
+    Fireworks K2.6 returns a 400 if the request carries `reasoning_*` parameters even though Kimi supports thinking through Moonshot's own API. The provider policy (`extensions/fireworks/thinking-policy.ts`) advertises only the `off` thinking level for Kimi model ids, so manual `/think` switches and provider-policy surfaces stay aligned with the runtime contract.
 
     To use Kimi reasoning end-to-end, configure the [Moonshot provider](/providers/moonshot) and route the same model through it.
 

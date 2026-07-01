@@ -63,10 +63,6 @@ export function generateNoVncPassword() {
   return out;
 }
 
-export function buildNoVncDirectUrl(port: number) {
-  return `http://127.0.0.1:${port}/vnc.html`;
-}
-
 export function issueNoVncObserverToken(params: {
   noVncPort: number;
   password?: string;

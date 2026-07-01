@@ -10,6 +10,7 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 
 const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
@@ -117,9 +118,9 @@ afterEach(() => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
   }
   if (originalConfigPath === undefined) {
-    delete process.env.OPENCLAW_CONFIG_PATH;
+    deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
   } else {
-    process.env.OPENCLAW_CONFIG_PATH = originalConfigPath;
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", originalConfigPath);
   }
   for (const dir of tempDirs) {
     fs.rmSync(dir, { force: true, recursive: true });
@@ -259,9 +260,10 @@ describe("tool_result_persist hook", () => {
   it("keeps sensitive parent keys when custom value patterns match the key probe", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-redact-config-"));
     tempDirs.push(tempDir);
-    process.env.OPENCLAW_CONFIG_PATH = path.join(tempDir, "openclaw.json");
+    const configPath = path.join(tempDir, "openclaw.json");
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
     fs.writeFileSync(
-      process.env.OPENCLAW_CONFIG_PATH,
+      configPath,
       JSON.stringify({ logging: { redactPatterns: ["/[a-z0-9]{30,}/g"] } }),
       "utf-8",
     );

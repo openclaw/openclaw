@@ -46,8 +46,10 @@ function resolveWindowsExecutableExtensions(
     "",
     ...(
       env?.PATHEXT ??
+      env?.PathExt ??
       env?.Pathext ??
       process.env.PATHEXT ??
+      process.env.PathExt ??
       process.env.Pathext ??
       ".EXE;.CMD;.BAT;.COM"
     )
@@ -60,8 +62,10 @@ function resolveWindowsExecutableExtSet(env: NodeJS.ProcessEnv | undefined): Set
   return new Set(
     (
       env?.PATHEXT ??
+      env?.PathExt ??
       env?.Pathext ??
       process.env.PATHEXT ??
+      process.env.PathExt ??
       process.env.Pathext ??
       ".EXE;.CMD;.BAT;.COM"
     )
@@ -71,7 +75,7 @@ function resolveWindowsExecutableExtSet(env: NodeJS.ProcessEnv | undefined): Set
   );
 }
 
-export function isExecutableFile(filePath: string): boolean {
+export function isExecutableFile(filePath: string, options?: { env?: NodeJS.ProcessEnv }): boolean {
   try {
     const stat = fs.statSync(filePath);
     if (!stat.isFile()) {
@@ -82,7 +86,7 @@ export function isExecutableFile(filePath: string): boolean {
       if (!ext) {
         return true;
       }
-      return resolveWindowsExecutableExtSet(undefined).has(ext);
+      return resolveWindowsExecutableExtSet(options?.env).has(ext);
     }
     fs.accessSync(filePath, fs.constants.X_OK);
     return true;
@@ -102,7 +106,7 @@ export function resolveExecutableFromPathEnv(
   for (const entry of entries) {
     for (const ext of extensions) {
       const candidate = path.join(entry, executable + ext);
-      if (isExecutableFile(candidate)) {
+      if (isExecutableFile(candidate, { env })) {
         return candidate;
       }
     }
@@ -119,7 +123,7 @@ export function resolveExecutablePath(
     return undefined;
   }
   if (candidate.includes("/") || candidate.includes("\\")) {
-    return isExecutableFile(candidate) ? candidate : undefined;
+    return isExecutableFile(candidate, options) ? candidate : undefined;
   }
   const envPath =
     options?.env?.PATH ?? options?.env?.Path ?? process.env.PATH ?? process.env.Path ?? "";
@@ -148,7 +152,7 @@ export function resolveExecutable(cmd: string): string {
   for (const entry of entries) {
     for (const ext of extensions) {
       const candidate = path.join(entry, cmd + ext);
-      if (isExecutableFile(candidate)) {
+      if (isExecutableFile(candidate, { env: process.env })) {
         matches.push(candidate);
       }
     }

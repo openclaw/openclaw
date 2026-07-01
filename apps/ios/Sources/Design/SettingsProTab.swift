@@ -53,8 +53,9 @@ struct SettingsProTab: View {
     @State var suppressCredentialPersist = false
     @State var locationStatusText: String?
     @State var previousLocationModeRaw: String = OpenClawLocationMode.off.rawValue
-    @State var notificationStatusText = "Checking"
-    @State var notificationActionText = "Request Access"
+    @State var notificationStatus: SettingsNotificationStatus = .checking
+    @State var isRequestingNotificationAuthorization = false
+    @State var showNotificationRelayDisclosure = false
     @State var diagnosticsLastRunText = "Not run"
     @State var diagnosticsIssueCount: Int?
     @State var showTalkIssueDetails = false
@@ -62,15 +63,24 @@ struct SettingsProTab: View {
     let initialRoute: SettingsRoute?
     let directRoute: SettingsRoute?
     let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let ownsNavigationStack: Bool
+    let navigateToRoute: ((SettingsRoute) -> Void)?
+    let onRouteChange: ((SettingsRoute?) -> Void)?
 
     init(
         initialRoute: SettingsRoute? = nil,
         directRoute: SettingsRoute? = nil,
-        headerLeadingAction: OpenClawSidebarHeaderAction? = nil)
+        headerLeadingAction: OpenClawSidebarHeaderAction? = nil,
+        ownsNavigationStack: Bool = true,
+        navigateToRoute: ((SettingsRoute) -> Void)? = nil,
+        onRouteChange: ((SettingsRoute?) -> Void)? = nil)
     {
         self.initialRoute = initialRoute
         self.directRoute = directRoute
         self.headerLeadingAction = headerLeadingAction
+        self.ownsNavigationStack = ownsNavigationStack
+        self.navigateToRoute = navigateToRoute
+        self.onRouteChange = onRouteChange
     }
 
     var body: some View {
@@ -79,34 +89,46 @@ struct SettingsProTab: View {
                 self.settingsContent))
     }
 
+    var appearancePreference: AppAppearancePreference {
+        AppAppearancePreference(rawValue: self.appearancePreferenceRaw) ?? .system
+    }
+
     @ViewBuilder
     private var settingsContent: some View {
         if let directRoute {
             self.destination(for: directRoute)
         } else {
-            self.settingsNavigationStack
+            if self.ownsNavigationStack {
+                self.settingsNavigationStack
+            } else {
+                self.settingsNavigationContent
+            }
         }
     }
 
     private var settingsNavigationStack: some View {
         NavigationStack(path: self.$navigationPath) {
-            ZStack {
-                OpenClawProBackground()
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 18) {
-                        self.settingsHeader
-                        self.appearanceSection
-                        self.gatewaySection
-                        self.settingsListSection
-                    }
-                    .padding(.top, 18)
-                    .padding(.bottom, 18)
+            self.settingsNavigationContent
+        }
+    }
+
+    private var settingsNavigationContent: some View {
+        ZStack {
+            OpenClawProBackground()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    self.settingsHeader
+                    self.appearanceSection
+                    self.gatewaySection
+                    self.settingsListSection
                 }
+                .padding(.top, 18)
+                .padding(.bottom, 18)
             }
-            .navigationBarHidden(true)
-            .navigationDestination(for: SettingsRoute.self) { route in
-                self.destination(for: route)
-            }
+        }
+        .navigationBarHidden(true)
+        .navigationDestination(for: SettingsRoute.self) { route in
+            self.destination(for: route)
         }
     }
 
@@ -118,6 +140,7 @@ struct SettingsProTab: View {
                 self.refreshNotificationSettings()
                 self.applyPendingGatewaySetupLinkIfNeeded()
                 self.applyInitialRouteIfNeeded()
+                self.notifyRouteChange()
             }
             .onChange(of: self.scenePhase) { _, phase in
                 if phase == .active {
@@ -153,6 +176,9 @@ struct SettingsProTab: View {
             }
             .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
                 self.applyPendingGatewaySetupLinkIfNeeded()
+            }
+            .onChange(of: self.navigationPath) { _, _ in
+                self.notifyRouteChange()
             }
     }
 
@@ -200,6 +226,11 @@ struct SettingsProTab: View {
                         }
                 }
             }
+            .sheet(isPresented: self.$showNotificationRelayDisclosure) {
+                HostedPushRelayDisclosureSheet(
+                    message: self.notificationRelayDisclosureMessage,
+                    onContinue: self.requestNotificationAuthorizationFromSettings)
+            }
             .alert("Reset Onboarding?", isPresented: self.$showResetOnboardingAlert) {
                 Button("Reset", role: .destructive) {
                     self.resetOnboarding()
@@ -220,10 +251,69 @@ struct SettingsProTab: View {
             }
     }
 
+    func openNotificationsRouteFromApprovals() {
+        guard self.directRoute == nil else { return }
+        if !self.ownsNavigationStack, let navigateToRoute {
+            navigateToRoute(.notifications)
+            return
+        }
+        self.navigationPath = [.notifications]
+    }
+
     private func applyInitialRouteIfNeeded() {
         guard self.directRoute == nil else { return }
         guard let initialRoute else { return }
         guard self.navigationPath != [initialRoute] else { return }
         self.navigationPath = [initialRoute]
+    }
+
+    private func notifyRouteChange() {
+        if let directRoute {
+            self.onRouteChange?(directRoute)
+            return
+        }
+        self.onRouteChange?(self.navigationPath.last)
+    }
+}
+
+struct HostedPushRelayDisclosureSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    let message: String
+    let onContinue: () -> Void
+
+    var body: some View {
+        VStack(spacing: 18) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    Image(systemName: "network")
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(Color(uiColor: .systemBlue))
+                    Text("Enable OpenClaw Hosted Push Relay?")
+                        .font(.title3.weight(.semibold))
+                    Text(self.message)
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            VStack(spacing: 10) {
+                Button {
+                    self.dismiss()
+                    self.onContinue()
+                } label: {
+                    Text("Continue").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                Button("Not Now", role: .cancel) {
+                    self.dismiss()
+                }
+                .buttonStyle(.bordered)
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .tint(Color(uiColor: .systemBlue))
+        .padding(24)
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
     }
 }

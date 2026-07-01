@@ -11,6 +11,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import {
   configureSqliteConnectionPragmas,
   type SqliteWalMaintenance,
@@ -57,11 +58,6 @@ export type OpenClawStateDatabaseSchemaMigration = {
 const cachedDatabases = new Map<string, OpenClawStateDatabase>();
 
 type OpenClawStateMetadataDatabase = Pick<OpenClawStateKyselyDatabase, "schema_meta">;
-
-function readSqliteUserVersion(db: DatabaseSync): number {
-  const row = db.prepare("PRAGMA user_version").get() as { user_version?: unknown } | undefined;
-  return Number(row?.user_version ?? 0);
-}
 
 function assertSupportedSchemaVersion(db: DatabaseSync, pathname: string): void {
   const userVersion = readSqliteUserVersion(db);
@@ -716,6 +712,7 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "cron_jobs", "payload_external_content_source_json TEXT");
   ensureColumn(db, "cron_jobs", "payload_light_context INTEGER");
   ensureColumn(db, "cron_jobs", "payload_tools_allow_json TEXT");
+  ensureColumn(db, "cron_jobs", "payload_tools_allow_is_default INTEGER");
   ensureColumn(db, "cron_jobs", "delivery_mode TEXT");
   ensureColumn(db, "cron_jobs", "delivery_channel TEXT");
   ensureColumn(db, "cron_jobs", "delivery_to TEXT");

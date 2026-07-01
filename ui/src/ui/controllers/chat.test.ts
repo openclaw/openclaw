@@ -12,6 +12,8 @@ import {
   requestChatSend,
   requestSkillWorkshopRevisionChatSend,
   sendChatMessage,
+  sendDetachedChatMessage,
+  sendSteerChatMessage,
   type ChatEventPayload,
   type ChatState,
 } from "./chat.ts";
@@ -29,6 +31,7 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatStream: null,
     chatStreamStartedAt: null,
     chatThinkingLevel: null,
+    chatVerboseLevel: null,
     client: null,
     connected: true,
     lastError: null,
@@ -67,6 +70,15 @@ function requireFirstRequestCall(request: ReturnType<typeof vi.fn>): unknown[] {
     throw new Error("Expected client request call");
   }
   return call;
+}
+
+function createStartedChatSendAck(params: unknown) {
+  const requestParams = requireRecord(params);
+  const runId = requestParams.idempotencyKey;
+  if (typeof runId !== "string") {
+    throw new Error("Expected chat.send idempotencyKey");
+  }
+  return { runId, status: "started" as const };
 }
 
 function expectTextChatMessage(message: unknown, role: string, text: string): void {
@@ -571,6 +583,68 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(null);
   });
 
+  it("clears keyed commentary with the final answer by default", () => {
+    const user = { role: "user", content: [{ type: "text", text: "Ask" }], timestamp: 1 };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [user],
+      chatStream: null,
+      chatStreamStartedAt: null,
+    }) as ChatState & {
+      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
+    };
+    state.chatStreamSegments = [{ text: "Looking into it.", ts: 2, itemId: "preamble-1" }];
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer." }],
+        timestamp: 5,
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toHaveLength(2);
+    expectTextChatMessage(state.chatMessages[0], "user", "Ask");
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Final answer.");
+    expect(state.chatStreamSegments).toEqual([]);
+  });
+
+  it("persists keyed commentary alongside the final answer when chatPersistCommentary is true", () => {
+    const user = { role: "user", content: [{ type: "text", text: "Ask" }], timestamp: 1 };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [user],
+      chatStream: null,
+      chatStreamStartedAt: null,
+      settings: { chatPersistCommentary: true },
+    }) as ChatState & {
+      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
+    };
+    state.chatStreamSegments = [{ text: "Looking into it.", ts: 2, itemId: "preamble-1" }];
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer." }],
+        timestamp: 5,
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toHaveLength(3);
+    expectTextChatMessage(state.chatMessages[0], "user", "Ask");
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Looking into it.");
+    expectTextChatMessage(state.chatMessages[2], "assistant", "Final answer.");
+    expect(state.chatStreamSegments).toEqual([]);
+  });
+
   it("reconciles cached run and indicator state on terminal events", () => {
     vi.useFakeTimers();
     try {
@@ -1055,7 +1129,7 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(null);
   });
 
-  it("does not materialize stream segments when final payload is renderable", () => {
+  it("keeps pre-final stream segments when final payload is renderable", () => {
     const state = createState({
       sessionKey: "main",
       chatRunId: "run-1",
@@ -1075,10 +1149,12 @@ describe("handleChatEvent", () => {
     };
 
     expect(handleChatEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toEqual([payload.message]);
+    expect(state.chatMessages).toHaveLength(2);
+    expectTextChatMessage(state.chatMessages[0], "assistant", "before tool");
+    expect(state.chatMessages[1]).toEqual(payload.message);
     expect(state.chatRunId).toBe(null);
     expect(state.chatStream).toBe(null);
-    expect(state.chatStreamSegments).toEqual([{ text: "before tool", ts: 1 }]);
+    expect(state.chatStreamSegments).toEqual([]);
   });
 
   it("processes aborted from own run and keeps partial assistant message", () => {
@@ -1592,7 +1668,7 @@ describe("loadChatHistory filtering", () => {
       { role: "assistant", text: "  NO_REPLY  " },
     ];
     const mockClient = {
-      request: vi.fn().mockResolvedValue({ messages, thinkingLevel: "low" }),
+      request: vi.fn().mockResolvedValue({ messages, thinkingLevel: "low", verboseLevel: "full" }),
     };
     const state = createState({
       client: mockClient as unknown as ChatState["client"],
@@ -1608,6 +1684,7 @@ describe("loadChatHistory filtering", () => {
     expect(state.chatMessages[3]).toEqual(messages[4]);
     expect(state.chatMessages[4]).toEqual(messages[5]);
     expect(state.chatThinkingLevel).toBe("low");
+    expect(state.chatVerboseLevel).toBe("full");
     expect(state.chatLoading).toBe(false);
   });
 
@@ -1868,14 +1945,16 @@ describe("sendChatMessage", () => {
     expect(state.chatMessages).toHaveLength(1);
   });
 
-  it("passes the backing session id from history when sending after reconnect", async () => {
+  it("passes the backing session id from history without resume for ordinary sends", async () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({
         sessionId: "session-before-reconnect",
         messages: [],
       })
-      .mockResolvedValueOnce({ runId: "run-1", status: "started" });
+      .mockImplementationOnce((_method: string, params?: unknown) =>
+        createStartedChatSendAck(params),
+      );
     const state = createState({
       connected: true,
       client: { request } as unknown as ChatState["client"],
@@ -1891,7 +1970,36 @@ describe("sendChatMessage", () => {
     const sendParams = requireRecord(sendRequest?.[1]);
     expect(sendParams.sessionKey).toBe("main");
     expect(sendParams.sessionId).toBe("session-before-reconnect");
+    expect(sendParams.resumeSession).toBeUndefined();
+    expect(sendParams).not.toHaveProperty("__controlUiReconnectResume");
     expect(sendParams.message).toBe("continue");
+  });
+
+  it("sends reconnect resume once when the current session matches the reconnect marker", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      currentSessionId: "session-before-reconnect",
+      reconnectResumeSessionId: "session-before-reconnect",
+    });
+
+    await requestChatSend(state, {
+      message: "continue",
+      runId: "run-1",
+    });
+
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "main",
+        sessionId: "session-before-reconnect",
+        __controlUiReconnectResume: true,
+        message: "continue",
+        idempotencyKey: "run-1",
+      }),
+    );
+    expect(state.reconnectResumeSessionId).toBeNull();
   });
 
   it("does not reuse another global agent's visible session id for queued sends", async () => {
@@ -2060,8 +2168,88 @@ describe("sendChatMessage", () => {
     });
   });
 
+  it("clears the local run and rejects acceptance when the send acks a terminal timeout", async () => {
+    const request = vi.fn((_method: string, params: { idempotencyKey: string }) =>
+      Promise.resolve({ runId: params.idempotencyKey, status: "timeout" }),
+    );
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await sendChatMessage(state, "aborted before dispatch");
+
+    expect(result).toBeNull();
+    expect(state.chatMessages).toStrictEqual([]);
+    expect(state.lastError).toBe("The run ended before the message was accepted.");
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBeNull();
+    const runState = state as ChatState & {
+      chatRunStatus?: unknown;
+      lastLocalTerminalReconcile?: unknown;
+    };
+    expect(runState.chatRunStatus).toMatchObject({
+      phase: "interrupted",
+      runId: expect.stringMatching(UUID_V4_RE),
+      sessionKey: "main",
+    });
+    expect(runState.lastLocalTerminalReconcile).toMatchObject({
+      phase: "interrupted",
+      runId: expect.stringMatching(UUID_V4_RE),
+      sessionKey: "main",
+      sessionStatus: "killed",
+    });
+  });
+
+  it("preserves terminal timeout acks from Skill Workshop revision sends", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-revision", status: "timeout" });
+    const state = createState({
+      sessionKey: "global",
+      currentSessionId: "session-visible",
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await requestSkillWorkshopRevisionChatSend(state, {
+      proposalId: "support-file-sampler-20260531-68207b7b7f",
+      instructions: "Make the support files 5",
+      runId: "run-revision",
+    });
+
+    expect(result).toEqual({ runId: "run-revision", status: "timeout" });
+  });
+
+  it("preserves terminal failure acks from generated-run sends", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-detached", status: "error" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await expect(sendDetachedChatMessage(state, "/btw summarize this")).resolves.toEqual({
+      runId: "run-detached",
+      status: "error",
+    });
+  });
+
+  it("preserves terminal ok acks from generated-run steer sends", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-steer-ok", status: "ok" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await expect(sendSteerChatMessage(state, "tighten the plan")).resolves.toEqual({
+      runId: "run-steer-ok",
+      status: "ok",
+    });
+  });
+
   it("serializes non-image chat attachments as files", async () => {
-    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+    const request = vi.fn((_method: string, params?: unknown) =>
+      Promise.resolve(createStartedChatSendAck(params)),
+    );
     const state = createState({
       connected: true,
       client: { request } as unknown as ChatState["client"],
@@ -2106,7 +2294,9 @@ describe("sendChatMessage", () => {
   });
 
   it("serializes attachments from the side payload store without copying data URLs into chat state", async () => {
-    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+    const request = vi.fn((_method: string, params?: unknown) =>
+      Promise.resolve(createStartedChatSendAck(params)),
+    );
     const state = createState({
       connected: true,
       client: { request } as unknown as ChatState["client"],
@@ -2160,7 +2350,9 @@ describe("sendChatMessage", () => {
   });
 
   it("sends inline image payloads without copying data URLs into optimistic chat state", async () => {
-    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+    const request = vi.fn((_method: string, params?: unknown) =>
+      Promise.resolve(createStartedChatSendAck(params)),
+    );
     const state = createState({
       connected: true,
       client: { request } as unknown as ChatState["client"],
@@ -2200,7 +2392,9 @@ describe("sendChatMessage", () => {
     ]);
     expect(JSON.stringify(state.chatMessages)).not.toContain("data:image/png;base64");
 
-    const captionedRequest = vi.fn().mockResolvedValue({ runId: "run-2", status: "started" });
+    const captionedRequest = vi.fn((_method: string, params?: unknown) =>
+      Promise.resolve(createStartedChatSendAck(params)),
+    );
     const captionedState = createState({
       connected: true,
       client: { request: captionedRequest } as unknown as ChatState["client"],
@@ -3251,12 +3445,14 @@ describe("loadChatHistory retry handling", () => {
       client: { request } as unknown as ChatState["client"],
       chatMessages: [{ role: "assistant", content: [{ type: "text", text: "old" }] }],
       chatThinkingLevel: "high",
+      chatVerboseLevel: "full",
     });
 
     await loadChatHistory(state);
 
     expect(state.chatMessages).toStrictEqual([]);
     expect(state.chatThinkingLevel).toBeNull();
+    expect(state.chatVerboseLevel).toBeNull();
     expect(state.lastError).toBe(
       "This connection is missing operator.read, so existing chat history cannot be loaded yet.",
     );
@@ -3429,8 +3625,16 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it("ignores stale history responses after switching sessions", async () => {
-    const mainRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
-    const otherRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const mainRequest = createDeferred<{
+      messages: Array<unknown>;
+      thinkingLevel?: string;
+      verboseLevel?: string;
+    }>();
+    const otherRequest = createDeferred<{
+      messages: Array<unknown>;
+      thinkingLevel?: string;
+      verboseLevel?: string;
+    }>();
     const request = vi.fn((_method: string, params?: { sessionKey?: string }) => {
       if (params?.sessionKey === "main") {
         return mainRequest.promise;
@@ -3453,6 +3657,7 @@ describe("loadChatHistory retry handling", () => {
     mainRequest.resolve({
       messages: [{ role: "assistant", content: [{ type: "text", text: "main history" }] }],
       thinkingLevel: "high",
+      verboseLevel: "full",
     });
     await firstLoad;
 
@@ -3461,10 +3666,12 @@ describe("loadChatHistory retry handling", () => {
       { role: "assistant", content: [{ type: "text", text: "visible old" }] },
     ]);
     expect(state.chatThinkingLevel).toBeNull();
+    expect(state.chatVerboseLevel).toBeNull();
 
     otherRequest.resolve({
       messages: [{ role: "assistant", content: [{ type: "text", text: "other history" }] }],
       thinkingLevel: "low",
+      verboseLevel: "full",
     });
     await secondLoad;
 
@@ -3473,6 +3680,7 @@ describe("loadChatHistory retry handling", () => {
       { role: "assistant", content: [{ type: "text", text: "other history" }] },
     ]);
     expect(state.chatThinkingLevel).toBe("low");
+    expect(state.chatVerboseLevel).toBe("full");
   });
 
   it("ignores stale global history responses after switching selected agents", async () => {

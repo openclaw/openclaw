@@ -202,4 +202,46 @@ describe("createGatewaySubagentRuntime.run subagent_ended tracking (#59164)", ()
       }),
     ).rejects.toThrow(/not found/);
   });
+
+  test("normalizes completed agent.wait envelopes for plugin subagents", async () => {
+    const serverPlugins = await loadServerPlugins();
+    const runtime = serverPlugins.createGatewaySubagentRuntime();
+    serverPlugins.setFallbackGatewayContext(createTestContext("plugin-wait", createTestCfg()));
+
+    handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
+      switch (opts.req.method) {
+        case "agent.wait":
+          opts.respond(true, { status: "completed" });
+          return;
+        default:
+          opts.respond(true, {});
+      }
+    });
+
+    await expect(runtime.waitForRun({ runId: "plugin-run-completed" })).resolves.toEqual({
+      status: "ok",
+    });
+  });
+
+  test("normalizes malformed completed wait errors for plugin subagents", async () => {
+    const serverPlugins = await loadServerPlugins();
+    const runtime = serverPlugins.createGatewaySubagentRuntime();
+    serverPlugins.setFallbackGatewayContext(
+      createTestContext("plugin-wait-error", createTestCfg()),
+    );
+
+    handleGatewayRequest.mockImplementation(async (opts: HandleGatewayRequestOptions) => {
+      switch (opts.req.method) {
+        case "agent.wait":
+          opts.respond(true, { status: "error", error: "completed" });
+          return;
+        default:
+          opts.respond(true, {});
+      }
+    });
+
+    await expect(runtime.waitForRun({ runId: "plugin-run-error-completed" })).resolves.toEqual({
+      status: "ok",
+    });
+  });
 });

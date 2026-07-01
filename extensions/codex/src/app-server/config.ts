@@ -13,6 +13,11 @@ import {
 } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import {
+  buildSecretInputSchema,
+  normalizeResolvedSecretInputString,
+  type SecretInput,
+} from "openclaw/plugin-sdk/secret-input";
 import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
 import { z } from "zod";
@@ -69,8 +74,8 @@ export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "dange
 type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
 type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
 export type CodexDynamicToolsLoading = "searchable" | "direct";
-export type CodexPluginDestructivePolicy = boolean | "auto";
-export type CodexPluginDestructiveApprovalMode = "allow" | "deny" | "auto";
+export type CodexPluginDestructivePolicy = boolean | "auto" | "always";
+export type CodexPluginDestructiveApprovalMode = "allow" | "deny" | "auto" | "always";
 
 export const CODEX_PLUGINS_MARKETPLACE_NAME = "openai-curated";
 
@@ -162,6 +167,7 @@ export type CodexAppServerStartOptions = {
   transport: CodexAppServerTransportMode;
   command: string;
   commandSource?: CodexAppServerCommandSource;
+  managedFallbackCommandPaths?: string[];
   args: string[];
   url?: string;
   authToken?: string;
@@ -183,7 +189,7 @@ export type CodexAppServerRuntimeOptions = {
   approvalPolicySource?: CodexAppServerApprovalPolicySource;
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
-  serviceTier?: CodexServiceTier;
+  serviceTier?: CodexServiceTier | null;
   networkProxy?: ResolvedCodexAppServerNetworkProxyConfig;
 };
 
@@ -211,8 +217,8 @@ export type CodexPluginConfig = {
     command?: string;
     args?: string[] | string;
     url?: string;
-    authToken?: string;
-    headers?: Record<string, string>;
+    authToken?: SecretInput;
+    headers?: Record<string, SecretInput>;
     clearEnv?: string[];
     remoteWorkspaceRoot?: string;
     codeModeOnly?: boolean;
@@ -294,6 +300,7 @@ const DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS = 60_000;
 const DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX = "openclaw-network";
 
 const codexAppServerTransportSchema = z.enum(["stdio", "websocket"]);
+const SecretInputSchema = buildSecretInputSchema();
 const codexAppServerPolicyModeSchema = z.enum(["yolo", "guardian"]);
 const codexAppServerApprovalPolicySchema = z.enum([
   "never",
@@ -304,7 +311,11 @@ const codexAppServerApprovalPolicySchema = z.enum([
 const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 const codexAppServerApprovalsReviewerSchema = z.enum(["user", "auto_review", "guardian_subagent"]);
 const codexDynamicToolsLoadingSchema = z.enum(["searchable", "direct"]);
-const codexPluginDestructivePolicySchema = z.union([z.boolean(), z.literal("auto")]);
+const codexPluginDestructivePolicySchema = z.union([
+  z.boolean(),
+  z.literal("auto"),
+  z.literal("always"),
+]);
 const codexAppServerServiceTierSchema = z
   .preprocess(
     (value) => (value === null ? null : normalizeCodexServiceTier(value)),
@@ -326,7 +337,9 @@ const codexAppServerNetworkProxySchema = z
     baseProfile: z.enum(["read-only", "workspace"]).optional(),
     mode: z.enum(["limited", "full"]).optional(),
     domains: z.record(z.string(), codexAppServerNetworkProxyDomainPermissionSchema).optional(),
-    unixSockets: z.record(z.string(), codexAppServerNetworkProxyUnixSocketPermissionSchema).optional(),
+    unixSockets: z
+      .record(z.string(), codexAppServerNetworkProxyUnixSocketPermissionSchema)
+      .optional(),
     proxyUrl: z.string().trim().min(1).optional(),
     socksUrl: z.string().trim().min(1).optional(),
     enableSocks5: z.boolean().optional(),
@@ -387,8 +400,8 @@ const codexPluginConfigSchema = z
         command: z.string().optional(),
         args: z.union([z.array(z.string()), z.string()]).optional(),
         url: z.string().optional(),
-        authToken: z.string().optional(),
-        headers: z.record(z.string(), z.string()).optional(),
+        authToken: SecretInputSchema.optional(),
+        headers: z.record(z.string(), SecretInputSchema).optional(),
         clearEnv: z.array(z.string()).optional(),
         remoteWorkspaceRoot: codexAppServerRemoteWorkspaceRootSchema.optional(),
         codeModeOnly: z.boolean().optional(),
@@ -486,8 +499,8 @@ function resolveCodexPluginDestructivePolicy(policy: CodexPluginDestructivePolic
   allowDestructiveActions: boolean;
   destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
 } {
-  if (policy === "auto") {
-    return { allowDestructiveActions: true, destructiveApprovalMode: "auto" };
+  if (policy === "auto" || policy === "always") {
+    return { allowDestructiveActions: true, destructiveApprovalMode: policy };
   }
   return {
     allowDestructiveActions: policy,
@@ -531,7 +544,10 @@ export function resolveCodexAppServerRuntimeOptions(
   const args = resolveArgs(config.args, env.OPENCLAW_CODEX_APP_SERVER_ARGS);
   const headers = normalizeHeaders(config.headers);
   const clearEnv = normalizeStringList(config.clearEnv);
-  const authToken = readNonEmptyString(config.authToken);
+  const authToken = normalizeCodexAppServerSecretInput({
+    value: config.authToken,
+    path: "plugins.entries.codex.config.appServer.authToken",
+  });
   const url = readNonEmptyString(config.url);
   const connectionClass = inferCodexAppServerConnectionClass({ transport, url });
   const remoteAppsSubstrate: CodexAppServerRemoteAppsSubstrate = "preconfigured";
@@ -865,12 +881,13 @@ export function codexAppServerStartOptionsKey(
     transport: options.transport,
     command: options.command,
     commandSource: options.commandSource ?? null,
+    managedFallbackCommandPaths: [...(options.managedFallbackCommandPaths ?? [])],
     args: options.args,
     url: options.url ?? null,
     authToken: hashSecretForKey(options.authToken, "authToken"),
-    headers: Object.entries(options.headers).toSorted(([left], [right]) =>
-      left.localeCompare(right),
-    ),
+    headers: Object.entries(options.headers)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => [key, hashSecretForKey(value, `header:${key}`)]),
     env: Object.entries(options.env ?? {})
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([key, value]) => [key, hashSecretForKey(value, `env:${key}`)]),
@@ -2037,9 +2054,25 @@ function normalizeHeaders(value: unknown): Record<string, string> {
   }
   return Object.fromEntries(
     Object.entries(value)
-      .map(([key, child]) => [key.trim(), readNonEmptyString(child)] as const)
+      .map(
+        ([key, child]) =>
+          [
+            key.trim(),
+            normalizeCodexAppServerSecretInput({
+              value: child,
+              path: `plugins.entries.codex.config.appServer.headers.${key}`,
+            }),
+          ] as const,
+      )
       .filter((entry): entry is readonly [string, string] => Boolean(entry[0] && entry[1])),
   );
+}
+
+function normalizeCodexAppServerSecretInput(params: {
+  value: unknown;
+  path: string;
+}): string | undefined {
+  return normalizeResolvedSecretInputString(params);
 }
 
 function normalizeStringList(value: unknown): string[] {

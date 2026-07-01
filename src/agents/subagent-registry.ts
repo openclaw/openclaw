@@ -50,7 +50,6 @@ import {
   reconcileOrphanedRestoredRuns,
   reconcileOrphanedRun,
   resolveAnnounceRetryDelayMs,
-  resolveSubagentRunOrphanReason,
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
@@ -85,6 +84,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   loadSubagentSessionEntry,
   resolveCompletionFromSessionEntry,
+  resolveSubagentRunOrphanReason,
   resolveSubagentSessionCompletion,
   resolveSubagentSessionStartedAt,
   type SubagentSessionStoreCache,
@@ -626,7 +626,9 @@ function resumeSubagentRun(runId: string) {
   if (typeof entry.endedAt === "number" && isDeliverySuspended(entry)) {
     return;
   }
-  if (entry.pauseReason === "sessions_yield") {
+  // Yielded runs stay paused until explicitly steered, except orchestrators
+  // waiting on descendants: their settle retry must reach the wake path.
+  if (entry.pauseReason === "sessions_yield" && entry.wakeOnDescendantSettle !== true) {
     return;
   }
   // Skip entries that have exhausted their retry budget or expired (#18264).
@@ -912,7 +914,6 @@ async function sweepSubagentRuns() {
         if (!hasLiveRunContext && activeAgeMs >= STALE_ACTIVE_SUBAGENT_GRACE_MS) {
           const orphanReason = resolveSubagentRunOrphanReason({
             entry,
-            storeCache,
           });
           if (orphanReason) {
             if (
@@ -1240,6 +1241,7 @@ export function replaceSubagentRunAfterSteer(params: {
   runTimeoutSeconds?: number;
   preserveFrozenResultFallback?: boolean;
   transcriptFile?: string;
+  task?: string;
 }) {
   return subagentRunManager.replaceSubagentRunAfterSteer(params);
 }

@@ -1,5 +1,5 @@
 // Covers DeepSeek provider usage fetch parsing.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import { fetchDeepSeekUsage } from "./provider-usage.fetch.deepseek.js";
 
@@ -57,12 +57,13 @@ describe("fetchDeepSeekUsage", () => {
   });
 
   it("returns HTTP errors for failed balance requests", async () => {
-    const mockFetch = createProviderUsageFetch(async () =>
-      makeResponse(401, { error: "invalid api key" }),
-    );
+    const response = makeResponse(401, { error: "invalid api key" });
+    const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
+    const mockFetch = createProviderUsageFetch(async () => response);
 
     const result = await fetchDeepSeekUsage("deepseek-key", 5000, mockFetch);
 
+    expect(cancel).toHaveBeenCalledOnce();
     expect(result.error).toBe("HTTP 401");
     expect(result.windows).toHaveLength(0);
     expect(result.summary).toBeUndefined();

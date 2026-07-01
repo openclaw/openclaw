@@ -1,4 +1,5 @@
 /** Coverage tests for secrets runtime collector breadth and target surfaces. */
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
@@ -233,6 +234,10 @@ function loadCoverageRegistryEntries(): SecretRegistryEntry[] {
 const COVERAGE_REGISTRY_ENTRIES = loadCoverageRegistryEntries();
 const DEBUG_COVERAGE_BATCHES = process.env.OPENCLAW_DEBUG_RUNTIME_COVERAGE === "1";
 const RUNTIME_COVERAGE_TEST_TIMEOUT_MS = 240_000;
+const COVERAGE_CONFIG_PLUGIN_SOURCE_DIRS = new Map([
+  ["google-meet", path.join(process.cwd(), "extensions", "google-meet")],
+  ["voice-call", path.join(process.cwd(), "extensions", "voice-call")],
+]);
 const COVERAGE_LOADABLE_PLUGIN_ORIGINS =
   buildCoverageLoadablePluginOrigins(COVERAGE_REGISTRY_ENTRIES);
 const PLUGIN_OWNED_OPENCLAW_COVERAGE_EXCLUSIONS = new Set([
@@ -312,6 +317,18 @@ function resolveCoverageEnvId(entry: SecretRegistryEntry, fallbackEnvId: string)
     : fallbackEnvId;
 }
 
+function toCoverageEnvRefId(prefix: string, id: string): string {
+  const normalized = id
+    .toUpperCase()
+    .replace(/[^A-Z0-9_]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  const name = normalized || "TARGET";
+  const hash = createHash("sha256").update(id).digest("hex").slice(0, 12).toUpperCase();
+  const maxNameLength = 128 - prefix.length - hash.length - 2;
+  return `${prefix}_${name.slice(0, Math.max(1, maxNameLength))}_${hash}`;
+}
+
 function resolveCoverageResolvedPath(entry: SecretRegistryEntry): string {
   return canonicalizeSecretTargetCoverageId(entry.id);
 }
@@ -334,10 +351,26 @@ function buildCoverageLoadablePluginOrigins(
   for (const entry of entries) {
     const [scope, entriesKey, pluginId] = entry.id.split(".");
     if (scope === "plugins" && entriesKey === "entries" && pluginId) {
-      origins.set(pluginId, "bundled");
+      origins.set(
+        pluginId,
+        COVERAGE_CONFIG_PLUGIN_SOURCE_DIRS.has(pluginId) ? "config" : "bundled",
+      );
     }
   }
   return origins;
+}
+
+function addCoveragePluginLoadPath(config: OpenClawConfig, pluginId: string): void {
+  const loadPath = COVERAGE_CONFIG_PLUGIN_SOURCE_DIRS.get(pluginId);
+  if (!loadPath) {
+    return;
+  }
+  const existing = getPath(config, ["plugins", "load", "paths"]);
+  if (Array.isArray(existing) && existing.includes(loadPath)) {
+    return;
+  }
+  const nextIndex = Array.isArray(existing) ? existing.length : 0;
+  setPathCreateStrict(config, ["plugins", "load", "paths", String(nextIndex)], loadPath);
 }
 
 function resolveCoverageLoadablePluginOrigins(
@@ -495,6 +528,7 @@ function applyConfigForOpenClawTarget(
     const pluginId = entry.id.split(".")[2];
     if (pluginId) {
       setPathCreateStrict(config, ["plugins", "entries", pluginId, "enabled"], true);
+      addCoveragePluginLoadPath(config, pluginId);
     }
   }
   if (entry.id === "agents.defaults.memorySearch.remote.apiKey") {
@@ -522,6 +556,12 @@ function applyConfigForOpenClawTarget(
   }
   if (entry.id === "channels.slack.accounts.*.signingSecret") {
     setPathCreateStrict(config, ["channels", "slack", "accounts", wildcardToken, "mode"], "http");
+  }
+  if (entry.id === "channels.slack.relay.authToken") {
+    setPathCreateStrict(config, ["channels", "slack", "mode"], "relay");
+  }
+  if (entry.id === "channels.slack.accounts.*.relay.authToken") {
+    setPathCreateStrict(config, ["channels", "slack", "accounts", wildcardToken, "mode"], "relay");
   }
   if (entry.id === "channels.zalo.webhookSecret") {
     setPathCreateStrict(config, ["channels", "zalo", "webhookUrl"], "https://example.com/hook");
@@ -756,7 +796,7 @@ async function expectOpenClawCoverageBatchResolved(
   const config = {} as OpenClawConfig;
   const env: Record<string, string> = {};
   for (const [index, entry] of batch.entries()) {
-    const envId = `OPENCLAW_SECRET_TARGET_${entry.id}`;
+    const envId = toCoverageEnvRefId("OPENCLAW_SECRET_TARGET", entry.id);
     const runtimeEnvId = resolveCoverageEnvId(entry, envId);
     const expectedValue = `resolved-${entry.id}`;
     const wildcardToken = resolveCoverageWildcardToken(index);
@@ -857,7 +897,7 @@ describe("secrets runtime target coverage", () => {
           profiles: {},
         };
         for (const [index, entry] of batch.entries()) {
-          const envId = `OPENCLAW_AUTH_SECRET_TARGET_${entry.id}`;
+          const envId = toCoverageEnvRefId("OPENCLAW_AUTH_SECRET_TARGET", entry.id);
           env[envId] = `resolved-${entry.id}`;
           applyAuthStoreTarget(authStore, entry, envId, resolveCoverageWildcardToken(index));
         }

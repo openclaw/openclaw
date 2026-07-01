@@ -3,6 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 
@@ -129,6 +130,12 @@ function isProcessAlive(pid: number | undefined): boolean {
 
 function launcherEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const env = { ...process.env, ...extra };
+  delete env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  delete env.OPENCLAW_CONFIG_PATH;
+  delete env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+  delete env.OPENCLAW_HOME;
+  delete env.OPENCLAW_STATE_DIR;
+  delete env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
   delete env.NODE_COMPILE_CACHE;
   delete env.NODE_DISABLE_COMPILE_CACHE;
   for (const [key, value] of Object.entries(extra)) {
@@ -208,7 +215,12 @@ describe("openclaw launcher", () => {
 
     const result = spawnSync(
       process.execPath,
-      ["--import", mockNodeVersionPath, path.join(fixtureRoot, "openclaw.mjs"), "--help"],
+      [
+        "--import",
+        pathToFileURL(mockNodeVersionPath).href,
+        path.join(fixtureRoot, "openclaw.mjs"),
+        "--help",
+      ],
       {
         cwd: fixtureRoot,
         env: launcherEnv(),
@@ -475,6 +487,125 @@ describe("openclaw launcher", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toBe(`PRECOMPUTED ${params.command} help\n`);
+  });
+
+  it.each(["doctor", "gateway", "models", "plugins", "sessions", "tasks"])(
+    "uses precomputed %s help before loading the runtime entry",
+    async (command) => {
+      const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+      await fs.writeFile(
+        path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+        JSON.stringify({ subcommandHelpText: { [command]: `PRECOMPUTED ${command} help\n` } }),
+        "utf8",
+      );
+
+      const result = spawnSync(
+        process.execPath,
+        [path.join(fixtureRoot, "openclaw.mjs"), command, "--help"],
+        {
+          cwd: fixtureRoot,
+          env: launcherEnv(),
+          encoding: "utf8",
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toBe(`PRECOMPUTED ${command} help\n`);
+    },
+  );
+
+  it("uses precomputed subcommand help with leading root options", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+      JSON.stringify({ subcommandHelpText: { models: "PRECOMPUTED models help\n" } }),
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [path.join(fixtureRoot, "openclaw.mjs"), "--profile", "work", "--no-color", "models", "-h"],
+      {
+        cwd: fixtureRoot,
+        env: launcherEnv(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("PRECOMPUTED models help\n");
+  });
+
+  it("defers precomputed subcommand help to the runtime entry when container env is set", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+      JSON.stringify({ subcommandHelpText: { models: "PRECOMPUTED models help\n" } }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      "process.stdout.write('RUNTIME ENTRY\\n');\n",
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [path.join(fixtureRoot, "openclaw.mjs"), "models", "--help"],
+      {
+        cwd: fixtureRoot,
+        env: launcherEnv({ OPENCLAW_CONTAINER: "demo" }),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("RUNTIME ENTRY\n");
+    expect(result.stdout).not.toContain("PRECOMPUTED");
+  });
+
+  it.each([
+    {
+      name: "container env",
+      args: ["browser", "--help"],
+      env: { OPENCLAW_CONTAINER: "demo" },
+    },
+    {
+      name: "root --container flag",
+      args: ["--container", "demo", "browser", "--help"],
+      env: {},
+    },
+    {
+      name: "root --container=value flag",
+      args: ["--container=demo", "browser", "--help"],
+      env: {},
+    },
+  ])("defers precomputed command help to the runtime entry with $name", async (params) => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+      JSON.stringify({ browserHelpText: "PRECOMPUTED browser help\n" }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      "process.stdout.write('RUNTIME ENTRY\\n');\n",
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [path.join(fixtureRoot, "openclaw.mjs"), ...params.args],
+      {
+        cwd: fixtureRoot,
+        env: launcherEnv(params.env),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("RUNTIME ENTRY\n");
+    expect(result.stdout).not.toContain("PRECOMPUTED");
   });
 
   it("defers root help to the runtime entry when plugin config can change help", async () => {
@@ -888,7 +1019,7 @@ describe("openclaw launcher", () => {
 
       const result = spawnSync(
         process.execPath,
-        ["--import", mockRuntime, path.join(fixtureRoot, "openclaw.mjs")],
+        ["--import", pathToFileURL(mockRuntime).href, path.join(fixtureRoot, "openclaw.mjs")],
         {
           cwd: fixtureRoot,
           env: launcherEnv({
@@ -917,7 +1048,7 @@ describe("openclaw launcher", () => {
 
       const result = spawnSync(
         process.execPath,
-        ["--import", mockRuntime, path.join(fixtureRoot, "openclaw.mjs")],
+        ["--import", pathToFileURL(mockRuntime).href, path.join(fixtureRoot, "openclaw.mjs")],
         {
           cwd: fixtureRoot,
           env: launcherEnv({
@@ -950,7 +1081,7 @@ describe("openclaw launcher", () => {
 
       const result = spawnSync(
         process.execPath,
-        ["--import", mockRuntime, path.join(fixtureRoot, "openclaw.mjs")],
+        ["--import", pathToFileURL(mockRuntime).href, path.join(fixtureRoot, "openclaw.mjs")],
         {
           cwd: fixtureRoot,
           env: launcherEnv({

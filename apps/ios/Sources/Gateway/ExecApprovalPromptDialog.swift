@@ -2,11 +2,14 @@ import SwiftUI
 
 private struct ExecApprovalPromptDialogModifier: ViewModifier {
     @Environment(NodeAppModel.self) private var appModel: NodeAppModel
+    let suppressedApprovalID: String?
 
     func body(content: Content) -> some View {
         content
             .overlay {
-                if let prompt = self.appModel.pendingExecApprovalPrompt {
+                if let prompt = self.appModel.pendingExecApprovalPrompt,
+                   prompt.id != self.suppressedApprovalID
+                {
                     ZStack {
                         Color.black.opacity(0.38)
                             .ignoresSafeArea()
@@ -58,7 +61,7 @@ private struct ExecApprovalPromptCard: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("Exec approval required")
                     .font(.headline)
-                Text("OpenClaw opened from a notification. Review this exec request before continuing.")
+                Text("Review this exec request before continuing. Your decision will be sent back to the gateway.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
@@ -87,7 +90,7 @@ private struct ExecApprovalPromptCard: View {
             if let errorText = self.normalized(self.errorText) {
                 Text(errorText)
                     .font(.footnote)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(OpenClawBrand.danger)
             }
 
             if self.isResolving {
@@ -188,7 +191,7 @@ private struct ExecApprovalPromptMetadataRow: View {
 }
 
 extension View {
-    func execApprovalPromptDialog() -> some View {
-        self.modifier(ExecApprovalPromptDialogModifier())
+    func execApprovalPromptDialog(suppressedApprovalID: String? = nil) -> some View {
+        self.modifier(ExecApprovalPromptDialogModifier(suppressedApprovalID: suppressedApprovalID))
     }
 }

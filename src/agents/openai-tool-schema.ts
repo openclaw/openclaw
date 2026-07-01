@@ -310,20 +310,6 @@ function findStrictOpenAIJsonSchemaViolations(schema: unknown, path: string): st
   return violations;
 }
 
-/** Resolves the strict flag without reserializing an existing OpenAI tool projection. */
-export function resolveOpenAIStrictToolFlagForProjection(
-  projection: OpenAIToolProjection,
-  strict: boolean | null | undefined,
-): boolean | undefined {
-  if (strict !== true) {
-    return strict === false ? false : undefined;
-  }
-  if (projection.diagnostics.length > 0) {
-    return false;
-  }
-  return projection.tools.every((tool) => isStrictOpenAIJsonSchemaCompatible(tool.parameters));
-}
-
 /** Resolves strict mode for the projected tools that will be emitted in the request payload. */
 export function resolveOpenAIProjectedToolsStrictToolFlag(
   projection: OpenAIToolProjection,

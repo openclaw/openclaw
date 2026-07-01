@@ -1,7 +1,7 @@
 // Qa Lab API module exposes the plugin public contract.
 import type * as NodeFs from "node:fs/promises";
 import type * as NodePath from "node:path";
-import type { QaTransportState } from "./qa-transport.js";
+import type { QaTransportCapabilities, QaTransportState } from "./qa-transport.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
 type QaScenarioRuntimeFunction = (...args: never[]) => unknown;
@@ -13,14 +13,7 @@ export type QaScenarioRuntimeEnv<
   lab: TLab;
   transport: {
     state: TTransportState;
-    capabilities: {
-      waitForCondition: QaScenarioRuntimeFunction;
-      getNormalizedMessageState: () => ReturnType<TTransportState["getSnapshot"]>;
-      resetNormalizedMessageState: () => Promise<void>;
-      sendInboundMessage: TTransportState["addInboundMessage"];
-      injectOutboundMessage: TTransportState["addOutboundMessage"];
-      readNormalizedMessage: TTransportState["readMessage"];
-    };
+    capabilities: QaTransportCapabilities;
   };
 };
 
@@ -71,6 +64,7 @@ export type QaScenarioRuntimeDeps = {
   resolveGeneratedImagePath: QaScenarioRuntimeFunction;
   startAgentRun: QaScenarioRuntimeFunction;
   waitForAgentRun: QaScenarioRuntimeFunction;
+  waitForAgentHistoryReply: QaScenarioRuntimeFunction;
   listCronJobs: QaScenarioRuntimeFunction;
   findManagedDreamingCronJob: QaScenarioRuntimeFunction;
   waitForCronRunCompletion: QaScenarioRuntimeFunction;
@@ -86,6 +80,8 @@ export type QaScenarioRuntimeDeps = {
   extractQaToolPayload: QaScenarioRuntimeFunction;
   formatMemoryDreamingDay: QaScenarioRuntimeFunction;
   resolveSessionTranscriptsDirForAgent: QaScenarioRuntimeFunction;
+  activeMemoryToggleKey: QaScenarioRuntimeFunction;
+  setActiveMemorySessionDisabled: QaScenarioRuntimeFunction;
   buildAgentSessionKey: QaScenarioRuntimeFunction;
   normalizeLowercaseStringOrEmpty: QaScenarioRuntimeFunction;
   formatErrorMessage: QaScenarioRuntimeFunction;
@@ -162,6 +158,7 @@ type QaScenarioRuntimeApi<
   resolveGeneratedImagePath: TDeps["resolveGeneratedImagePath"];
   startAgentRun: TDeps["startAgentRun"];
   waitForAgentRun: TDeps["waitForAgentRun"];
+  waitForAgentHistoryReply: TDeps["waitForAgentHistoryReply"];
   listCronJobs: TDeps["listCronJobs"];
   findManagedDreamingCronJob: TDeps["findManagedDreamingCronJob"];
   waitForCronRunCompletion: TDeps["waitForCronRunCompletion"];
@@ -177,6 +174,8 @@ type QaScenarioRuntimeApi<
   extractQaToolPayload: TDeps["extractQaToolPayload"];
   formatMemoryDreamingDay: TDeps["formatMemoryDreamingDay"];
   resolveSessionTranscriptsDirForAgent: TDeps["resolveSessionTranscriptsDirForAgent"];
+  activeMemoryToggleKey: TDeps["activeMemoryToggleKey"];
+  setActiveMemorySessionDisabled: TDeps["setActiveMemorySessionDisabled"];
   buildAgentSessionKey: TDeps["buildAgentSessionKey"];
   normalizeLowercaseStringOrEmpty: TDeps["normalizeLowercaseStringOrEmpty"];
   formatErrorMessage: TDeps["formatErrorMessage"];
@@ -268,6 +267,7 @@ export function createQaScenarioRuntimeApi<
     resolveGeneratedImagePath: params.deps.resolveGeneratedImagePath,
     startAgentRun: params.deps.startAgentRun,
     waitForAgentRun: params.deps.waitForAgentRun,
+    waitForAgentHistoryReply: params.deps.waitForAgentHistoryReply,
     listCronJobs: params.deps.listCronJobs,
     findManagedDreamingCronJob: params.deps.findManagedDreamingCronJob,
     waitForCronRunCompletion: params.deps.waitForCronRunCompletion,
@@ -283,6 +283,8 @@ export function createQaScenarioRuntimeApi<
     extractQaToolPayload: params.deps.extractQaToolPayload,
     formatMemoryDreamingDay: params.deps.formatMemoryDreamingDay,
     resolveSessionTranscriptsDirForAgent: params.deps.resolveSessionTranscriptsDirForAgent,
+    activeMemoryToggleKey: params.deps.activeMemoryToggleKey,
+    setActiveMemorySessionDisabled: params.deps.setActiveMemorySessionDisabled,
     buildAgentSessionKey: params.deps.buildAgentSessionKey,
     normalizeLowercaseStringOrEmpty: params.deps.normalizeLowercaseStringOrEmpty,
     formatErrorMessage: params.deps.formatErrorMessage,

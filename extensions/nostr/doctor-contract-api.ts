@@ -3,6 +3,7 @@ import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import { normalizeNostrStateAccountId } from "./src/state-account-id.js";
 
 type NostrBusState = {
   version: 2;
@@ -21,14 +22,6 @@ type NostrProfileState = {
 const BUS_STATE_NAMESPACE = "bus-state";
 const PROFILE_STATE_NAMESPACE = "profile-state";
 const MAX_NOSTR_STATE_ENTRIES = 256;
-
-function normalizeAccountId(accountId?: string): string {
-  const trimmed = accountId?.trim();
-  if (!trimmed) {
-    return "default";
-  }
-  return trimmed.replace(/[^a-z0-9._-]+/gi, "_");
-}
 
 function finiteNumberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -114,7 +107,7 @@ async function listLegacyFiles(params: {
       continue;
     }
     const rawAccountId = entry.name.slice(params.prefix.length, -suffix.length);
-    const accountId = normalizeAccountId(rawAccountId);
+    const accountId = normalizeNostrStateAccountId(rawAccountId);
     const filePath = path.join(dir, entry.name);
     try {
       const value = params.parse(await readJsonFile(filePath));

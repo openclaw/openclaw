@@ -1,6 +1,8 @@
 // Discord API module exposes the plugin public contract.
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   resolveRetryConfig,
   retryAsync,
@@ -17,6 +19,8 @@ const DISCORD_API_RETRY_DEFAULTS = {
   jitter: 0.1,
 };
 const DISCORD_API_429_FALLBACK_RETRY_AFTER_SECONDS = 60;
+const DISCORD_API_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const DISCORD_API_RESPONSE_BODY_LIMIT_BYTES = 4 * 1024 * 1024;
 
 type DiscordApiErrorPayload = {
   message?: string;
@@ -173,8 +177,10 @@ export async function requestDiscord<T>(
         body,
         signal: resolveDiscordRequestSignal(options ?? {}),
       });
-      const text = await res.text().catch(() => "");
       if (!res.ok) {
+        const text = await readResponseTextLimited(res, DISCORD_API_ERROR_BODY_LIMIT_BYTES).catch(
+          () => "",
+        );
         const detail = formatDiscordApiErrorText(text, res);
         const suffix = detail ? `: ${detail}` : "";
         const retryAfter =
@@ -187,6 +193,13 @@ export async function requestDiscord<T>(
           retryAfter,
         );
       }
+      const responseBody = await readResponseWithLimit(res, DISCORD_API_RESPONSE_BODY_LIMIT_BYTES, {
+        onOverflow: ({ size, maxBytes }) =>
+          new Error(
+            `Discord API ${path} response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+          ),
+      });
+      const text = new TextDecoder().decode(responseBody);
       if (!text.trim()) {
         return undefined as T;
       }

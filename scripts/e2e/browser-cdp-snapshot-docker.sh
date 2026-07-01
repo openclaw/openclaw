@@ -22,6 +22,7 @@ FIXTURE_PORT="18080"
 TOKEN="browser-cdp-e2e-token"
 CONTAINER_NAME="openclaw-browser-cdp-e2e-$$"
 DOCKER_COMMAND_TIMEOUT="${OPENCLAW_BROWSER_CDP_SNAPSHOT_DOCKER_COMMAND_TIMEOUT:-900s}"
+SNAPSHOT_MAX_BYTES="$(docker_e2e_read_positive_int_env OPENCLAW_BROWSER_CDP_SNAPSHOT_MAX_BYTES 524288)"
 
 cleanup() {
   docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
@@ -63,6 +64,7 @@ docker_e2e_docker_cmd run -d \
   -e OPENCLAW_SKIP_GMAIL_WATCHER=1 \
   -e OPENCLAW_SKIP_CRON=1 \
   -e OPENCLAW_SKIP_CANVAS_HOST=1 \
+  -e "OPENCLAW_BROWSER_CDP_SNAPSHOT_MAX_BYTES=$SNAPSHOT_MAX_BYTES" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "$IMAGE_NAME" \
   bash -lc "set -euo pipefail

@@ -3,7 +3,7 @@
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../infra/exec-approvals.js";
-import { createDeferred } from "./test-helpers.deferred.js";
+import { createDeferred } from "../test-utils/deferred.js";
 
 const listDevicePairingMock = vi.fn();
 const loadApnsRegistrationMock = vi.fn();

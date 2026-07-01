@@ -53,6 +53,7 @@ import {
   resetToolsEffectiveState,
   refreshVisibleToolsEffectiveForCurrentSession,
   saveAgentsConfig,
+  setDefaultAgent,
 } from "./controllers/agents.ts";
 import { setAssistantAvatarOverride } from "./controllers/assistant-identity.ts";
 import { loadChannels } from "./controllers/channels.ts";
@@ -66,7 +67,6 @@ import {
   resetConfigPendingChanges,
   runUpdate,
   saveConfig,
-  stageDefaultAgentConfigEntry,
   stageConfigPreset,
   updateConfigRawValue,
   updateConfigFormValue,
@@ -1824,10 +1824,12 @@ export function renderApp(state: AppViewState) {
               : typeof agentsDefaults.thinkingLevel === "string"
                 ? agentsDefaults.thinkingLevel
                 : "off";
+          const resolvedFastMode =
+            activeSession?.effectiveFastMode ?? activeSession?.fastMode ?? agentsDefaults.fastMode;
           const fastMode =
-            typeof activeSession?.fastMode === "boolean"
-              ? activeSession.fastMode
-              : agentsDefaults.fastMode === true;
+            resolvedFastMode === "auto" || typeof resolvedFastMode === "boolean"
+              ? resolvedFastMode
+              : false;
           return renderQuickSettings({
             currentModel,
             thinkingLevel,
@@ -1842,8 +1844,8 @@ export function renderApp(state: AppViewState) {
                 requestHostUpdate?.(),
               );
             },
-            onFastModeToggle: () => {
-              void patchSession(state, state.sessionKey, { fastMode: !fastMode }).then(() =>
+            onFastModeChange: (mode) => {
+              void patchSession(state, state.sessionKey, { fastMode: mode }).then(() =>
                 requestHostUpdate?.(),
               );
             },
@@ -3478,7 +3480,7 @@ export function renderApp(state: AppViewState) {
                   updateConfigFormValue(state, basePathResult, { primary, fallbacks: normalized });
                 },
                 onSetDefault: (agentId) => {
-                  stageDefaultAgentConfigEntry(state, agentId);
+                  void setDefaultAgent(state, agentId);
                 },
               }),
             )
@@ -3555,7 +3557,8 @@ export function renderApp(state: AppViewState) {
                 },
                 onClawHubDetailOpen: (slug) => void loadClawHubDetail(state, slug),
                 onClawHubDetailClose: () => closeClawHubDetail(state),
-                onClawHubInstall: (slug) => void installFromClawHub(state, slug),
+                onClawHubInstall: (slug, acknowledgeClawHubRisk, version) =>
+                  void installFromClawHub(state, slug, acknowledgeClawHubRisk, version),
               }),
             )
           : nothing}
@@ -3808,7 +3811,7 @@ export function renderApp(state: AppViewState) {
                     onSearch: searchChatWorkspaceFiles,
                     onOpenArtifact: openChatWorkspaceArtifact,
                   },
-                  autoExpandToolCalls: false,
+                  autoExpandToolCalls: state.chatVerboseLevel === "full",
                   onRefresh: () => {
                     state.chatSideResult = null;
                     state.resetToolStream();
@@ -3848,6 +3851,15 @@ export function renderApp(state: AppViewState) {
                   onDismissSideResult: () => {
                     state.chatSideResult = null;
                   },
+                  replyTarget: state.chatReplyTarget ?? null,
+                  onClearReply: () => {
+                    state.chatReplyTarget = null;
+                    requestHostUpdate?.();
+                  },
+                  onSetReply: (target) => {
+                    state.chatReplyTarget = target;
+                    requestHostUpdate?.();
+                  },
                   onNewSession: () => void createChatSession(state, { source: "user" }),
                   onClearHistory: runUiTask(async () => {
                     if (!state.client || !state.connected) {
@@ -3864,6 +3876,7 @@ export function renderApp(state: AppViewState) {
                         sessionKey: state.sessionKey,
                       });
                       state.chatSideResult = null;
+                      state.chatReplyTarget = null;
                       reconcileChatRunLifecycle(
                         state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
                         {
@@ -3899,6 +3912,7 @@ export function renderApp(state: AppViewState) {
                   },
                   showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
                   onScrollToBottom: () => state.scrollToBottom(),
+                  onAssistantAttachmentLoaded: () => state.scheduleChatScroll(),
                   // Sidebar props for tool output viewing
                   sidebarOpen: state.sidebarOpen,
                   sidebarContent: state.sidebarContent,

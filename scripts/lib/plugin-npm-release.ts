@@ -186,23 +186,23 @@ export function parsePluginReleaseArgs(argv: string[]): ParsedPluginReleaseArgs 
       continue;
     }
     if (arg === "--plugins") {
-      selection = parsePluginReleaseSelection(argv[index + 1]);
+      selection = parsePluginReleaseSelection(readRequiredArgValue(argv, index, arg, true));
       pluginsFlagProvided = true;
       index += 1;
       continue;
     }
     if (arg === "--selection-mode") {
-      selectionMode = parsePluginReleaseSelectionMode(argv[index + 1]);
+      selectionMode = parsePluginReleaseSelectionMode(readRequiredArgValue(argv, index, arg));
       index += 1;
       continue;
     }
     if (arg === "--base-ref") {
-      baseRef = argv[index + 1];
+      baseRef = readRequiredArgValue(argv, index, arg);
       index += 1;
       continue;
     }
     if (arg === "--head-ref") {
-      headRef = argv[index + 1];
+      headRef = readRequiredArgValue(argv, index, arg);
       index += 1;
       continue;
     }
@@ -229,6 +229,21 @@ export function parsePluginReleaseArgs(argv: string[]): ParsedPluginReleaseArgs 
   }
 
   return { selection, selectionMode, pluginsFlagProvided, baseRef, headRef };
+}
+
+function readRequiredArgValue(
+  argv: string[],
+  index: number,
+  flag: string,
+  allowBlank = false,
+): string {
+  const value = argv[index + 1];
+  const missingValue =
+    value === undefined || value.startsWith("--") || (!allowBlank && value.trim() === "");
+  if (missingValue) {
+    throw new Error(`${flag} requires a value.`);
+  }
+  return value;
 }
 
 export function collectPublishablePluginPackageErrors(

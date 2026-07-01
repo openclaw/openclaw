@@ -20,10 +20,10 @@ vi.mock("node:fs/promises", async () => {
   };
 });
 
+import { resolveStableNodePath } from "../infra/stable-node-path.js";
 import {
   renderSystemNodeWarning,
   resolvePreferredNodePath,
-  resolveStableNodePath,
   resolveSystemNodeInfo,
 } from "./runtime-paths.js";
 

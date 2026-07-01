@@ -91,8 +91,8 @@ Supported `appServer` fields:
 | `command`                                     | managed Codex binary                                   | Executable for stdio transport. Leave unset to use the managed binary.                                                                                                                                                                                                                                                                                                                          |
 | `args`                                        | `["app-server", "--listen", "stdio://"]`               | Arguments for stdio transport.                                                                                                                                                                                                                                                                                                                                                                  |
 | `url`                                         | unset                                                  | WebSocket app-server URL.                                                                                                                                                                                                                                                                                                                                                                       |
-| `authToken`                                   | unset                                                  | Bearer token for WebSocket transport.                                                                                                                                                                                                                                                                                                                                                           |
-| `headers`                                     | `{}`                                                   | Extra WebSocket headers.                                                                                                                                                                                                                                                                                                                                                                        |
+| `authToken`                                   | unset                                                  | Bearer token for WebSocket transport. Accepts a literal string or SecretInput such as `${CODEX_APP_SERVER_TOKEN}`.                                                                                                                                                                                                                                                                              |
+| `headers`                                     | `{}`                                                   | Extra WebSocket headers. Header values accept literal strings or SecretInput values, for example `x-codex-client-session-token: "${CODEX_CLIENT_SESSION_TOKEN}"`.                                                                                                                                                                                                                               |
 | `clearEnv`                                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment.                                                                                                                                                                                                                                                             |
 | `remoteWorkspaceRoot`                         | unset                                                  | Remote Codex app-server workspace root. When set, OpenClaw infers the local workspace root from the resolved OpenClaw workspace, preserves the current cwd suffix under this remote root, and sends only the final app-server cwd to Codex. If the cwd is outside the resolved OpenClaw workspace root, OpenClaw fails closed instead of sending a gateway-local path to the remote app-server. |
 | `requestTimeoutMs`                            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                                                                                                                                     |
@@ -149,11 +149,19 @@ must report stable version `0.125.0` or newer.
 
 OpenClaw treats non-loopback WebSocket app-server URLs as remote and requires
 identity-bearing WebSocket auth through `appServer.authToken` or an
-`Authorization` header. When native Codex plugins are configured, OpenClaw uses
-the connected app-server's plugin control plane to install or refresh those
-plugins and then refreshes app inventory so plugin-owned apps are visible to the
-Codex thread. Only connect OpenClaw to remote app-servers that are trusted to
-accept OpenClaw-managed plugin installs and app inventory refreshes.
+`Authorization` header. `appServer.authToken` and each `appServer.headers.*`
+value can be a SecretInput; the secrets runtime resolves SecretRefs and env
+shorthand before OpenClaw builds app-server start options, and unresolved
+structured SecretRefs fail before any token or header is sent. When native Codex
+plugins are configured, OpenClaw uses the connected app-server's plugin control
+plane to install or refresh those plugins and then refreshes app inventory so
+plugin-owned apps are visible to the Codex thread. `app/list` is still the
+authoritative inventory and metadata source, but OpenClaw policy decides whether
+`thread/start` sends `config.apps[appId].enabled = true` for a listed accessible
+app even if Codex currently marks it disabled. Unknown or missing app ids remain
+fail-closed; this path only activates marketplace plugins via `plugin/install`
+and refreshes inventory. Only connect OpenClaw to remote app-servers that are
+trusted to accept OpenClaw-managed plugin installs and app inventory refreshes.
 
 ## Approval and sandbox modes
 
@@ -422,18 +430,25 @@ If discovery fails or times out, OpenClaw uses a bundled fallback catalog for:
 
 - GPT-5.5
 - GPT-5.4 mini
-- GPT-5.2
 
-The current bundled harness is `@openai/codex` `0.139.0`. A `model/list` probe
-against that bundled app-server returned:
+The current bundled harness is `@openai/codex` `0.142.4`. A `model/list` probe
+against that bundled app-server in a GPT-5.6-enabled workspace returned these
+public picker rows:
 
-| Model id        | Default | Hidden | Input modalities | Reasoning efforts        |
-| --------------- | ------- | ------ | ---------------- | ------------------------ |
-| `gpt-5.5`       | Yes     | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.4`       | No      | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.4-mini`  | No      | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.3-codex` | No      | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.2`       | No      | No     | text, image      | low, medium, high, xhigh |
+| Model id              | Input modalities | Reasoning efforts                    |
+| --------------------- | ---------------- | ------------------------------------ |
+| `gpt-5.6-sol`         | text, image      | low, medium, high, xhigh, max, ultra |
+| `gpt-5.6-terra`       | text, image      | low, medium, high, xhigh, max, ultra |
+| `gpt-5.6-luna`        | text, image      | low, medium, high, xhigh, max        |
+| `gpt-5.5`             | text, image      | low, medium, high, xhigh             |
+| `gpt-5.4`             | text, image      | low, medium, high, xhigh             |
+| `gpt-5.4-mini`        | text, image      | low, medium, high, xhigh             |
+| `gpt-5.4-pro`         | text, image      | medium, high, xhigh                  |
+| `gpt-5.3-codex-spark` | text             | low, medium, high, xhigh             |
+
+GPT-5.6 access is account-scoped during the limited preview. `max` is a model
+reasoning effort. `ultra` is separate Codex multi-agent orchestration metadata,
+not a standard OpenAI reasoning effort.
 
 Hidden models can be returned by the app-server catalog for internal or
 specialized flows, but they are not normal model-picker choices.

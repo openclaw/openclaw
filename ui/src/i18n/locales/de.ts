@@ -63,7 +63,6 @@ export const de: TranslationMap = {
     docs: "Dokumentation",
     theme: "Design",
     colorMode: "Farbmodus",
-    colorModeOption: "Farbmodus: {mode}",
     resources: "Ressourcen",
     search: "Suchen",
     save: "Speichern",
@@ -204,6 +203,7 @@ export const de: TranslationMap = {
     inherit: "Übernehmen",
     defaultOption: "Standard ({value})",
     offExplicit: "Aus (explizit)",
+    auto: "auto",
     on: "Ein",
     off: "aus",
     full: "Vollständig",
@@ -1340,6 +1340,8 @@ export const de: TranslationMap = {
     settings: "Chat-Einstellungen",
     thinkingToggle: "Ausgabe des Assistenten ein-/ausblenden",
     toolCallsToggle: "Tool-Aufrufe und Tool-Ergebnisse umschalten",
+    commentaryToggle: "Kommentar nach der endgültigen Antwort behalten",
+    commentaryLabel: "Kommentar",
     autoScrollMode: "Automatischer Scrollmodus",
     autoScrollAlways: "Immer",
     autoScrollNearBottom: "Nahe am unteren Rand",
@@ -1384,6 +1386,11 @@ export const de: TranslationMap = {
       retry: "Wiederholen",
       retrySend: "Senden wiederholen",
       retryQueuedMessage: "Nachricht in der Warteschlange erneut senden",
+    },
+    pairingQrExpired: {
+      title: "Kopplungs-QR-Code abgelaufen",
+      reason: "Führen Sie /pair qr erneut aus, um einen neuen Einrichtungscode zu generieren.",
+      badge: "Abgelaufen",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",
@@ -1452,6 +1459,7 @@ export const de: TranslationMap = {
     jaJP: "日本語 (Japanisch)",
     ko: "한국어 (Koreanisch)",
     fr: "Français (Französisch)",
+    hi: "हिन्दी (Hindi)",
     ar: "العربية (Arabisch)",
     it: "Italiano (Italienisch)",
     tr: "Türkçe (Türkisch)",
@@ -1462,6 +1470,7 @@ export const de: TranslationMap = {
     vi: "Tiếng Việt (Vietnamesisch)",
     nl: "Nederlands (Niederländisch)",
     fa: "فارسی (Persisch)",
+    ru: "Русский (Russisch)",
   },
   cron: {
     quickCreate: {
@@ -1636,6 +1645,7 @@ export const de: TranslationMap = {
       wakeModeHelp:
         "Jetzt wird sofort ausgelöst. Nächster Heartbeat wartet auf den nächsten Zyklus.",
       payloadKind: "Was soll ausgeführt werden?",
+      command: "Command",
       systemEvent: "Nachricht in der Main-Zeitachse posten",
       agentTurn: "Assistentenaufgabe ausführen (isoliert)",
       systemEventHelp:

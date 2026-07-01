@@ -88,8 +88,9 @@ still returns one synthesized answer with citations rather than an N-result
 list.
 
 `freshness` accepts `day`, `week`, `month`, `year`, and the shared shortcuts
-`pd`, `pw`, `pm`, and `py`. OpenClaw converts these values, or an explicit
-`date_after`/`date_before` range, into Gemini Google Search grounding's
+`pd`, `pw`, `pm`, and `py`. `day`/`pd` adds a recency instruction to the Gemini
+query instead of a hard 24-hour range. `week`, `month`, `year`, and explicit
+`date_after`/`date_before` ranges set Gemini Google Search grounding's
 `timeRangeFilter`. `country`, `language`, and `domain_filter` are not supported.
 
 ## Model selection

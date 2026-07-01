@@ -1,11 +1,11 @@
 ---
-summary: "Slack setup and runtime behavior (Socket Mode + HTTP Request URLs)"
+summary: "Slack setup and runtime behavior (Socket Mode, HTTP Request URLs, and relay mode)"
 read_when:
-  - Setting up Slack or debugging Slack socket/HTTP mode
+  - Setting up Slack or debugging Slack socket, HTTP, or relay mode
 title: "Slack"
 ---
 
-Production-ready for DMs and channels via Slack app integrations. Default mode is Socket Mode; HTTP Request URLs are also supported.
+Production-ready for DMs and channels via Slack app integrations. Default mode is Socket Mode; HTTP Request URLs are also supported. Relay mode is intended for managed deployments where a trusted router owns Slack ingress.
 
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
@@ -40,6 +40,37 @@ Both transports are production-ready and reach feature parity for messaging, sla
 
 **Pick HTTP Request URLs** when running multiple Gateway replicas behind a load balancer, when outbound WSS is blocked but inbound HTTPS is allowed, or when you already terminate Slack webhooks at a reverse proxy.
 </Note>
+
+### Relay mode
+
+Relay mode separates Slack ingress from the OpenClaw gateway. A trusted router owns the
+single Slack Socket Mode connection, chooses a destination gateway, and forwards a typed
+event over an authenticated websocket. The gateway continues to use its bot token for
+outbound Slack Web API calls.
+
+```json5
+{
+  channels: {
+    slack: {
+      mode: "relay",
+      botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+      relay: {
+        url: "wss://router.example.com/gateway/ws",
+        authToken: { source: "env", provider: "default", id: "SLACK_RELAY_AUTH_TOKEN" },
+        gatewayId: "team-gateway",
+      },
+    },
+  },
+}
+```
+
+The relay URL must use `wss://` unless it targets localhost. Treat the bearer token and
+router route table as part of the Slack authorization boundary: routed events enter the
+normal Slack message handler as authorized activations. A router-provided `slack_identity`
+in the websocket `hello` frame can set the default outbound username and icon; an explicit
+identity supplied by the caller still wins. The relay connection reconnects with the same
+bounded backoff timing used by Socket Mode and clears the router-provided identity whenever
+it disconnects.
 
 ## Install
 
@@ -863,7 +894,8 @@ The default manifest enables the Slack App Home **Home** tab and subscribes to `
 
 - `botToken` + `appToken` are required for Socket Mode.
 - HTTP mode requires `botToken` + `signingSecret`.
-- `botToken`, `appToken`, `signingSecret`, and `userToken` accept plaintext
+- Relay mode requires `botToken` plus `relay.url`, `relay.authToken`, and `relay.gatewayId`; it does not use an app token or signing secret.
+- `botToken`, `appToken`, `signingSecret`, `relay.authToken`, and `userToken` accept plaintext
   strings or SecretRef objects.
 - Config tokens override env fallback.
 - `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` env fallback applies only to the default account.
@@ -1409,9 +1441,13 @@ Same-chat `/approve` also works in Slack channels and DMs that already support c
 - `channel_id_changed` can migrate channel config keys when `configWrites` is enabled.
 - Channel topic/purpose metadata is treated as untrusted context and can be injected into routing context.
 - Thread starter and initial thread-history context seeding are filtered by configured sender allowlists when applicable.
-- Block actions and modal interactions emit structured `Slack interaction: ...` system events with rich payload fields:
+- Block actions, shortcuts, and modal interactions emit structured `Slack interaction: ...` system events with rich payload fields:
   - block actions: selected values, labels, picker values, and `workflow_*` metadata
+  - global shortcuts: callback and actor metadata, routed to the actor's direct session
+  - message shortcuts: callback, actor, channel, thread, and selected-message context
   - modal `view_submission` and `view_closed` events with routed channel metadata and form inputs
+
+Define global or message shortcuts in your Slack app configuration and use any non-empty callback ID. OpenClaw acknowledges matching shortcut payloads, applies the same DM/channel sender policy as other Slack interactions, and queues the sanitized event for the routed agent session. Trigger IDs and response URLs are redacted from agent context.
 
 ## Configuration reference
 

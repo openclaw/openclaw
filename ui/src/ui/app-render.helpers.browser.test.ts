@@ -119,7 +119,7 @@ describe("chat header controls (browser)", () => {
       ),
     );
 
-    expect(buttons).toHaveLength(5);
+    expect(buttons).toHaveLength(6);
 
     const labels = buttons.map((button) => button.getAttribute("data-tooltip"));
     expect(labels).toEqual([
@@ -127,6 +127,7 @@ describe("chat header controls (browser)", () => {
       `${t("chat.autoScrollMode")}: ${t("chat.autoScrollNearBottom")}`,
       t("chat.thinkingToggle"),
       t("chat.toolCallsToggle"),
+      t("chat.commentaryToggle"),
       t("chat.showCronSessions"),
     ]);
 
@@ -190,11 +191,7 @@ describe("chat header controls (browser)", () => {
     expect(buttons).toHaveLength(3);
 
     const labels = buttons.map((button) => button.getAttribute("data-tooltip"));
-    expect(labels).toEqual([
-      t("common.colorModeOption", { mode: t("common.system") }),
-      t("common.colorModeOption", { mode: t("common.light") }),
-      t("common.colorModeOption", { mode: t("common.dark") }),
-    ]);
+    expect(labels).toEqual([t("common.system"), t("common.light"), t("common.dark")]);
 
     for (const button of buttons) {
       expect(button.getAttribute("title")).toBe(button.getAttribute("data-tooltip"));
@@ -235,7 +232,7 @@ describe("chat header controls (browser)", () => {
       container.querySelectorAll<HTMLButtonElement>(".chat-controls__thinking .btn--icon"),
     );
 
-    expect(buttons).toHaveLength(4);
+    expect(buttons).toHaveLength(5);
     const autoScrollButton = requireButton(buttons.at(0), "auto-scroll mode");
     expect(autoScrollButton.dataset.chatAutoScrollMode).toBe("near-bottom");
     const cronButton = requireButton(buttons.at(-1), "cron sessions");

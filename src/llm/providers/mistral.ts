@@ -1,5 +1,5 @@
 // Mistral provider adapts Mistral streams and tool calls to the runtime.
-import { Mistral } from "@mistralai/mistralai";
+import { HTTPClient, Mistral, type Fetcher } from "@mistralai/mistralai";
 import type {
   ChatCompletionStreamRequest,
   ChatCompletionStreamRequestMessage,
@@ -7,6 +7,8 @@ import type {
   ContentChunk,
   FunctionTool,
 } from "@mistralai/mistralai/models/components";
+import { createSseByteGuard } from "../../agents/streaming-byte-guard.js";
+import { stripSystemPromptCacheBoundary } from "../../agents/system-prompt-cache-boundary.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
@@ -28,10 +30,68 @@ import { shortHash } from "../utils/hash.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { buildBaseOptions } from "./simple-options.js";
+import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 const MISTRAL_TOOL_CALL_ID_LENGTH = 9;
 const MAX_MISTRAL_ERROR_BODY_CHARS = 4000;
+
+// 16 MiB cap on Mistral streaming success bodies, matching the
+// `PROVIDER_TEXT_RESPONSE_MAX_BYTES` / `PROVIDER_JSON_RESPONSE_MAX_BYTES`
+// 16 MiB cap used elsewhere. A hostile or malfunctioning Mistral-compatible
+// endpoint cannot exhaust memory by streaming an unbounded SSE body;
+// `createSseByteGuard` cancels the upstream reader and throws once the
+// accumulated byte count exceeds this cap.
+const MISTRAL_STREAM_BODY_MAX_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Builds a `Fetcher` that wraps the default `fetch` with a 16 MiB byte cap
+ * on streamed response bodies. The wrapped `Response.body` exposes a
+ * `ReadableStream` whose chunks flow through `createSseByteGuard`, so the
+ * SDK's internal SSE parser (`EventStream` in
+ * `@mistralai/mistralai/lib/event-streams.ts`) reads exactly as it would on
+ * an unbounded body — but bounded.
+ *
+ * Bodyless responses (no `body` or no `getReader`) are returned unchanged so
+ * the SDK's error-path `res.arrayBuffer()` call still works.
+ */
+export function createBoundedMistralFetcher(
+  maxBytes: number = MISTRAL_STREAM_BODY_MAX_BYTES,
+): Fetcher {
+  return async (input, init) => {
+    const response = init == null ? await fetch(input) : await fetch(input, init);
+    if (!response.body || typeof response.body.getReader !== "function") {
+      return response;
+    }
+    const reader = response.body.getReader();
+    const guard = createSseByteGuard(reader, {
+      maxBytes,
+      onOverflow: ({ size, maxBytes: cap }) =>
+        new Error(`mistral: stream body exceeds ${cap} bytes (got ${size})`),
+    });
+    // Re-shape the response body so the SDK's `responseBody.getReader()`
+    // call inside `EventStream` resolves to a stream whose `read()` is
+    // routed through `guard.read()`. Cancellation is also forwarded.
+    const guardedStream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        const { done, value } = await guard.read();
+        if (done) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(value);
+      },
+      async cancel(reason) {
+        await guard.cancel(reason);
+      },
+    });
+    return new Response(guardedStream, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  };
+}
 
 /**
  * Provider-specific options for the Mistral API.
@@ -72,6 +132,14 @@ export const streamMistral: StreamFunction<"mistral-conversations", MistralOptio
       const mistral = new Mistral({
         apiKey,
         serverURL: model.baseUrl,
+        // Bound the streamed Mistral response body at 16 MiB so a hostile or
+        // malfunctioning endpoint cannot exhaust memory. The fetcher is
+        // injected via the SDK's `HTTPClient` (see
+        // `@mistralai/mistralai/lib/sdks.ts` `ClientSDK` constructor: when
+        // `httpClient` is passed, `ClientSDK.#httpClient` is set from it and
+        // every `chat.stream` / `complete` call routes through
+        // `HTTPClient.request` → `this.fetcher(req)`).
+        httpClient: new HTTPClient({ fetcher: createBoundedMistralFetcher() }),
       });
 
       const normalizeMistralToolCallId = createMistralToolCallIdNormalizer();
@@ -309,7 +377,7 @@ function buildChatPayload(
   if (context.systemPrompt) {
     payload.messages.unshift({
       role: "system",
-      content: sanitizeSurrogates(context.systemPrompt),
+      content: sanitizeSurrogates(stripSystemPromptCacheBoundary(context.systemPrompt)),
     });
   }
 
@@ -624,12 +692,16 @@ function toChatMessages(
     }
 
     const toolContent: ContentChunk[] = [];
-    const textResult = msg.content
-      .filter((part) => part.type === "text")
-      .map((part) => (part.type === "text" ? sanitizeSurrogates(part.text) : ""))
-      .join("\n");
+    const textResult = extractToolResultText(msg.content);
+    const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
     const hasImages = msg.content.some((part) => part.type === "image");
-    const toolText = buildToolResultText(textResult, hasImages, supportsImages, msg.isError);
+    const toolText = buildToolResultText(
+      textResult,
+      mediaPlaceholder,
+      hasImages,
+      supportsImages,
+      msg.isError,
+    );
     toolContent.push({ type: "text", text: toolText });
     for (const part of msg.content) {
       if (!supportsImages) {
@@ -656,6 +728,7 @@ function toChatMessages(
 
 function buildToolResultText(
   text: string,
+  mediaPlaceholder: string | undefined,
   hasImages: boolean,
   supportsImages: boolean,
   isError: boolean,
@@ -669,13 +742,15 @@ function buildToolResultText(
     return `${errorPrefix}${trimmed}${imageSuffix}`;
   }
 
-  if (hasImages) {
-    if (supportsImages) {
-      return isError ? "[tool error] (see attached image)" : "(see attached image)";
+  if (mediaPlaceholder) {
+    if (!hasImages || supportsImages) {
+      return `${errorPrefix}${mediaPlaceholder}`;
     }
-    return isError
-      ? "[tool error] (image omitted: model does not support images)"
-      : "(image omitted: model does not support images)";
+    const omitted =
+      mediaPlaceholder === "(see attached media)"
+        ? "(media omitted: model does not support images)"
+        : "(image omitted: model does not support images)";
+    return `${errorPrefix}${omitted}`;
   }
 
   return isError ? "[tool error] (no tool output)" : "(no tool output)";

@@ -40,7 +40,7 @@ vi.mock("./model-auth.js", () => ({
   applyLocalNoAuthHeaderOverride: hoisted.applyLocalNoAuthHeaderOverrideMock,
 }));
 
-vi.mock("./github-copilot-token.js", () => ({
+vi.mock("../plugin-sdk/provider-auth.js", () => ({
   resolveCopilotApiToken: hoisted.resolveCopilotApiTokenMock,
 }));
 
@@ -681,6 +681,48 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
       },
       {
         reasoning: "xhigh",
+        apiKey: "sk-test",
+      },
+    );
+  });
+
+  it("preserves max for GPT-5.6 simple completions", async () => {
+    const model = {
+      provider: "openai",
+      id: "gpt-5.6-terra",
+      name: "gpt-5.6-terra",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 372_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    } satisfies Model<"openai-responses">;
+
+    await completeWithPreparedSimpleCompletionModel({
+      model,
+      auth: {
+        apiKey: "sk-test",
+        source: "env:OPENAI_API_KEY",
+        mode: "api-key",
+      },
+      context: {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      options: {
+        reasoning: "max",
+      },
+    });
+
+    expect(hoisted.completeMock).toHaveBeenCalledWith(
+      model,
+      {
+        messages: [{ role: "user", content: "pong", timestamp: 1 }],
+      },
+      {
+        reasoning: "max",
         apiKey: "sk-test",
       },
     );

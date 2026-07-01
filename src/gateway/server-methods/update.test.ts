@@ -5,6 +5,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.open
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import type { UpdateInstallSurface, UpdateRunResult } from "../../infra/update-runner.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 
 // Capture the sentinel payload written during update.run
 let capturedPayload: RestartSentinelPayload | undefined;
@@ -48,7 +49,7 @@ type UpdateRunPayload = {
   ok: boolean;
   result?: { status?: string; reason?: string; mode?: string };
   handoff?: { status?: string; command?: string; message?: string };
-  sentinel?: { path?: string | null };
+  sentinel?: { persisted?: boolean };
   restart?: unknown;
 };
 
@@ -96,7 +97,6 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
     ...(actual as Record<string, unknown>),
     writeRestartSentinel: async (payload: RestartSentinelPayload) => {
       capturedPayload = payload;
-      return "/tmp/sentinel.json";
     },
   };
 });
@@ -273,27 +273,7 @@ async function withProcessEnv<T>(
   updates: Record<string, string | undefined>,
   run: () => Promise<T>,
 ): Promise<T> {
-  const previous = new Map<string, string | undefined>();
-  for (const key of Object.keys(updates)) {
-    previous.set(key, process.env[key]);
-    const value = updates[key];
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-  try {
-    return await run();
-  } finally {
-    for (const [key, value] of previous) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  }
+  return await withEnvAsync(updates, run);
 }
 
 function mockGlobalInstallSurface() {
@@ -481,7 +461,7 @@ describe("update.run restart scheduling", () => {
       pid: 12345,
       command: "openclaw update --yes --timeout 1800",
     });
-    expect(payload?.sentinel?.path).toBe("/tmp/sentinel.json");
+    expect(payload?.sentinel?.persisted).toBe(true);
     const sentinel = readCapturedPayload();
     expect(sentinel.kind).toBe("update");
     expect(sentinel.status).toBe("skipped");
