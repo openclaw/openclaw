@@ -45,6 +45,7 @@ type BundleMcpSession = {
   requestTimeoutMs: number;
   supportsParallelToolCalls: boolean;
   connected: boolean;
+  disconnectReason?: string;
   retiring: boolean;
   catalogUseCount: number;
   sharedAcrossCatalogGenerations: boolean;
@@ -542,6 +543,17 @@ export function createSessionMcpRuntime(params: {
       throw createDisposedError(params.sessionId);
     }
   };
+  const requireConnectedSession = (serverName: string): BundleMcpSession => {
+    const session = sessions.get(serverName);
+    if (!session || !session.connected) {
+      throw new Error(
+        session?.disconnectReason
+          ? `bundle-mcp server "${serverName}" is disconnected: ${session.disconnectReason}`
+          : `bundle-mcp server "${serverName}" is not connected`,
+      );
+    }
+    return session;
+  };
   const ensureSessionConnected = async (
     session: BundleMcpSession,
     connectionTimeoutMs: number,
@@ -642,6 +654,12 @@ export function createSessionMcpRuntime(params: {
               let session = sessions.get(serverName);
               if (session?.retiring) {
                 session = undefined;
+              } else if (session && !session.connected && !session.connectPromise) {
+                // Transport closed/errored out-of-band (e.g. child process crash);
+                // the SDK client can't cleanly reconnect on the same instance
+                // (stale read buffer, chained onclose/onerror), so rebuild fresh.
+                await retireSessionIfCurrent(serverName, session);
+                session = undefined;
               }
               const reusedSession = Boolean(session);
               if (!session) {
@@ -670,7 +688,7 @@ export function createSessionMcpRuntime(params: {
                     },
                   },
                 );
-                session = {
+                const createdSession: BundleMcpSession = {
                   serverName,
                   client,
                   transport: resolved.transport,
@@ -683,6 +701,23 @@ export function createSessionMcpRuntime(params: {
                   sharedAcrossCatalogGenerations: false,
                   detachStderr: resolved.detachStderr,
                 };
+                // The SDK chains any transport-level onclose/onerror set before
+                // connect() runs; client.onclose is the authoritative "the
+                // transport is gone" signal (fires for every transport kind).
+                // onerror also fires for non-fatal protocol issues, so it only
+                // logs and must not flip `connected`.
+                // oxlint-disable-next-line unicorn/prefer-add-event-listener -- MCP SDK Client exposes onclose/onerror as plain settable callback properties, not an EventTarget.
+                client.onclose = () => {
+                  createdSession.connected = false;
+                  createdSession.disconnectReason = "mcp transport closed";
+                };
+                // oxlint-disable-next-line unicorn/prefer-add-event-listener -- see onclose above.
+                client.onerror = (error) => {
+                  logWarn(
+                    `bundle-mcp: transport error for server "${serverName}": ${redactErrorUrls(error)}`,
+                  );
+                };
+                session = createdSession;
                 sessions.set(serverName, session);
               }
 
@@ -894,10 +929,7 @@ export function createSessionMcpRuntime(params: {
     async callTool(serverName, toolName, input) {
       failIfDisposed();
       await getCatalog();
-      const session = sessions.get(serverName);
-      if (!session) {
-        throw new Error(`bundle-mcp server "${serverName}" is not connected`);
-      }
+      const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(
         serverName,
         async () =>
@@ -914,10 +946,7 @@ export function createSessionMcpRuntime(params: {
     async listResources(serverName) {
       failIfDisposed();
       await getCatalog();
-      const session = sessions.get(serverName);
-      if (!session) {
-        throw new Error(`bundle-mcp server "${serverName}" is not connected`);
-      }
+      const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(serverName, async () =>
         listAllResources(session.client, session.requestTimeoutMs),
       );
@@ -925,10 +954,7 @@ export function createSessionMcpRuntime(params: {
     async readResource(serverName, uri) {
       failIfDisposed();
       await getCatalog();
-      const session = sessions.get(serverName);
-      if (!session) {
-        throw new Error(`bundle-mcp server "${serverName}" is not connected`);
-      }
+      const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(
         serverName,
         async () =>
@@ -938,10 +964,7 @@ export function createSessionMcpRuntime(params: {
     async listPrompts(serverName) {
       failIfDisposed();
       await getCatalog();
-      const session = sessions.get(serverName);
-      if (!session) {
-        throw new Error(`bundle-mcp server "${serverName}" is not connected`);
-      }
+      const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(serverName, async () =>
         listAllPrompts(session.client, session.requestTimeoutMs),
       );
@@ -949,10 +972,7 @@ export function createSessionMcpRuntime(params: {
     async getPrompt(serverName, name, args) {
       failIfDisposed();
       await getCatalog();
-      const session = sessions.get(serverName);
-      if (!session) {
-        throw new Error(`bundle-mcp server "${serverName}" is not connected`);
-      }
+      const session = requireConnectedSession(serverName);
       return await runGuardedServerRequest(
         serverName,
         async () =>
