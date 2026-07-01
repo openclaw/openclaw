@@ -779,7 +779,12 @@ describe("buildSessionEntry", () => {
     expect(checkpointEntry.lineMap).toStrictEqual([]);
   });
 
-  it("keeps cron-run deleted archives opaque when the live session store entry is gone", async () => {
+  it("indexes metadata-less cron archives when no session store or record-level provenance exists", async () => {
+    // When a cron session has no session store entry and no record-level
+    // session key, the message-level text heuristic is too broad to safely
+    // distinguish genuine cron prompts from human [cron:] text.
+    // Trusted provenance (session store + record session key) is required.
+    // See https://github.com/openclaw/openclaw/issues/98241.
     const archivePath = path.join(tmpDir, "cron-run.jsonl.deleted.2026-02-16T22-27-33.000Z");
     const jsonlLines = [
       JSON.stringify({
@@ -791,16 +796,18 @@ describe("buildSessionEntry", () => {
       }),
       JSON.stringify({
         type: "message",
-        message: { role: "assistant", content: "Internal cron output that must stay out." },
+        message: { role: "assistant", content: "Internal cron output." },
       }),
     ];
     fsSync.writeFileSync(archivePath, jsonlLines.join("\n"));
 
     const entry = requireSessionEntry(await buildSessionEntry(archivePath));
 
-    expect(entry.content).toBe("");
-    expect(entry.lineMap).toStrictEqual([]);
-    expect(entry.generatedByCronRun).toBe(true);
+    // Without trusted provenance, the archive is indexed so memory_search
+    // can surface its content. The [cron: text is stripped by
+    // sanitizeSessionText but the assistant reply is kept.
+    expect(entry.content).toContain("Internal cron output");
+    expect(entry.generatedByCronRun).toBeFalsy();
   });
 
   it("keeps cron-run reset archives opaque when session metadata preserves the cron key", async () => {
@@ -822,6 +829,104 @@ describe("buildSessionEntry", () => {
     expect(entry.content).toBe("");
     expect(entry.lineMap).toStrictEqual([]);
     expect(entry.generatedByCronRun).toBe(true);
+  });
+
+  it("indexes human-typed [cron: content when it follows prior user messages in a reset archive", async () => {
+    // A normal (non-cron) session where the user typed a message starting
+    // with [cron:...] after prior conversation. The archive should stay
+    // indexed so memory_search can surface the unrelated remembered facts.
+    // See https://github.com/openclaw/openclaw/issues/98241.
+    const archivePath = path.join(tmpDir, "human-session.jsonl.reset.2026-06-30T10-00-00.000Z");
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "Hello, I need help with something." },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "Sure, what do you need?" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "[cron:daily-digest] why did my digest job fail last night?",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "The digest job timed out at 3 AM." },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "Please remember: my preferred vendor is Acme Robotics and budget is 5000 USD",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "Noted. I'll remember Acme Robotics, budget 5000 USD.",
+        },
+      }),
+    ];
+    fsSync.writeFileSync(archivePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(await buildSessionEntry(archivePath));
+
+    // The [cron: user message is stripped by sanitizeSessionText, but the
+    // surrounding conversation and the remembered facts stay indexed because
+    // the [cron: message is NOT the first user message.
+    expect(entry.content).toContain("Acme Robotics");
+    expect(entry.content).toContain("digest job timed out");
+    expect(entry.generatedByCronRun).toBeFalsy();
+  });
+
+  it("indexes first-turn human [cron:] text in reset archives without misclassifying as cron", async () => {
+    // A reset archive where the very first user message starts with [cron:...]
+    // should NOT be classified as cron-generated. Without trusted provenance
+    // (session store or record-level session key), text pattern matching
+    // cannot distinguish human [cron:] text from genuine cron prompts.
+    // See https://github.com/openclaw/openclaw/issues/98241.
+    const archivePath = path.join(
+      tmpDir,
+      "human-first-turn-cron.jsonl.reset.2026-06-30T10-00-00.000Z",
+    );
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "[cron:daily-digest] why did my digest job fail last night?",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "The digest job timed out at 3 AM." },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "Please remember: my preferred vendor is Acme Robotics.",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "Noted. Acme Robotics saved." },
+      }),
+    ];
+    fsSync.writeFileSync(archivePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(await buildSessionEntry(archivePath));
+
+    // The archive should be indexed — the [cron: text is stripped by
+    // sanitizeSessionText but surrounding content is preserved.
+    expect(entry.content).toContain("Acme Robotics");
+    expect(entry.content).toContain("digest job timed out");
+    expect(entry.generatedByCronRun).toBeFalsy();
   });
 
   it("skips blank lines and invalid JSON without breaking lineMap", async () => {
