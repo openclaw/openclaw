@@ -14,6 +14,8 @@ describe("normalizeNodePresenceAliveReason", () => {
     expect(normalizeNodePresenceAliveReason("silent_push")).toBe("silent_push");
     expect(normalizeNodePresenceAliveReason("manual")).toBe("manual");
     expect(normalizeNodePresenceAliveReason("connect")).toBe("connect");
+    expect(normalizeNodePresenceAliveReason("bg_app_refresh")).toBe("bg_app_refresh");
+    expect(normalizeNodePresenceAliveReason("significant_location")).toBe("significant_location");
   });
 
   it("is case-insensitive", () => {
