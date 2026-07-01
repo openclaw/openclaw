@@ -20,7 +20,35 @@ import {
   type EmbedSandboxMode,
 } from "../../lib/chat/tool-display.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
-import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
+
+const TOOL_PREVIEW_MAX_LINES = 2;
+const TOOL_PREVIEW_MAX_CHARS = 100;
+
+function formatToolOutputForSidebar(text: string): string {
+  if (isMarkdownBlockArtText(text)) {
+    return "```\n" + text + "\n```";
+  }
+
+  const trimmed = text.trim();
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    try {
+      return "```json\n" + JSON.stringify(JSON.parse(trimmed), null, 2) + "\n```";
+    } catch {
+      return text;
+    }
+  }
+  return text;
+}
+
+function getTruncatedPreview(text: string): string {
+  const allLines = text.split("\n");
+  const lines = allLines.slice(0, TOOL_PREVIEW_MAX_LINES);
+  const preview = lines.join("\n");
+  if (preview.length > TOOL_PREVIEW_MAX_CHARS) {
+    return `${preview.slice(0, TOOL_PREVIEW_MAX_CHARS)}…`;
+  }
+  return lines.length < allLines.length ? `${preview}…` : preview;
+}
 
 type FullMessageRequest = NonNullable<SidebarContent["fullMessageRequest"]>;
 
