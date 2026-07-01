@@ -1,5 +1,5 @@
 // Verifies the configured retry.backoffMs floor for a recurring job survives a
-// real cron service run and is persisted to the SQLite-backed store, not just
+// real scheduled cron tick and is persisted to the SQLite-backed store, not just
 // computed in memory by applyJobResult.
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -8,8 +8,8 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
-import { run } from "./ops.js";
 import { createCronServiceState } from "./state.js";
+import { onTimer } from "./timer.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-backoff-config-readback",
@@ -27,6 +27,7 @@ function createDueRecurringJob(now: number): CronJob {
     wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "ping" },
     sessionKey: "agent:main:main",
+    // Past-due nextRunAtMs makes the job eligible for the scheduled timer tick.
     state: { nextRunAtMs: now - 1 },
   };
 }
@@ -59,10 +60,10 @@ describe("recurring error backoff floor persistence", () => {
           cronConfig: { retry: { backoffMs: [300_000] } },
         });
 
-        // mode "due" (not "force") keeps preserveSchedule false, so the error
-        // path computes the safety-net backoff floor rather than preserving the
-        // recurring anchor.
-        await expect(run(state, job.id, "due")).resolves.toEqual({ ok: true, ran: true });
+        // Drive the scheduled timer path (not a manual run): only scheduled
+        // ticks participate in recurring error backoff, so this is where the
+        // safety-net floor is computed rather than the recurring anchor.
+        await onTimer(state);
 
         const persisted = (await loadCronStore(storePath)) as { jobs: CronJob[] };
         persistedJob = persisted.jobs.find((entry) => entry.id === job.id);
