@@ -628,6 +628,64 @@ describe("cron store", () => {
     });
   });
 
+  it("round-trips a numeric delivery thread id through SQLite delivery columns", async () => {
+    const { storePath } = await makeStorePath();
+    const job = makeStore("sqlite-numeric-thread-id-job", true).jobs[0];
+    job.delivery = {
+      mode: "announce",
+      channel: "telegram",
+      to: "telegram:chat-1",
+      threadId: 1008013,
+    };
+
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+
+    const loadedThreadId = (await loadCronStore(storePath)).jobs[0]?.delivery?.threadId;
+    expect(loadedThreadId).toBe(1008013);
+    expect(typeof loadedThreadId).toBe("number");
+  });
+
+  it.each(["42", "1737500000.123456", "007"])(
+    "keeps a numeric-looking delivery thread id %s as a string through SQLite delivery columns",
+    async (threadId) => {
+      const { storePath } = await makeStorePath();
+      const job = makeStore(`sqlite-string-thread-id-job-${threadId}`, true).jobs[0];
+      job.delivery = {
+        mode: "announce",
+        channel: "telegram",
+        to: "telegram:chat-1",
+        threadId,
+      };
+
+      await saveCronStore(storePath, { version: 1, jobs: [job] });
+
+      const loadedThreadId = (await loadCronStore(storePath)).jobs[0]?.delivery?.threadId;
+      expect(loadedThreadId).toBe(threadId);
+      expect(typeof loadedThreadId).toBe("string");
+    },
+  );
+
+  it("disambiguates identical thread id text into number and string by stored config", async () => {
+    const { storePath } = await makeStorePath();
+    const numberJob = makeStore("sqlite-thread-id-number", true).jobs[0];
+    numberJob.delivery = { mode: "announce", channel: "telegram", to: "telegram:a", threadId: 42 };
+    const stringJob = makeStore("sqlite-thread-id-string", true).jobs[0];
+    stringJob.delivery = {
+      mode: "announce",
+      channel: "telegram",
+      to: "telegram:b",
+      threadId: "42",
+    };
+
+    await saveCronStore(storePath, { version: 1, jobs: [numberJob, stringJob] });
+
+    const jobs = (await loadCronStore(storePath)).jobs;
+    expect(jobs[0]?.delivery?.threadId).toBe(42);
+    expect(typeof jobs[0]?.delivery?.threadId).toBe("number");
+    expect(jobs[1]?.delivery?.threadId).toBe("42");
+    expect(typeof jobs[1]?.delivery?.threadId).toBe("string");
+  });
+
   it("round-trips explicit failure destination field clears through SQLite delivery columns", async () => {
     const { storePath } = await makeStorePath();
     const job = makeStore("sqlite-failure-destination-clear-job", true).jobs[0];
