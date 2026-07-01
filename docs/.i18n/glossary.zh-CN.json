@@ -1040,6 +1040,26 @@
     "target": "子智能体"
   },
   {
+    "source": "Local text workers",
+    "target": "本地文本工作模型"
+  },
+  {
+    "source": "Local models",
+    "target": "本地模型"
+  },
+  {
+    "source": "CLI backends",
+    "target": "CLI 后端"
+  },
+  {
+    "source": "LLM task",
+    "target": "LLM 任务"
+  },
+  {
+    "source": "Model failover",
+    "target": "模型故障转移"
+  },
+  {
     "source": "ACP agents",
     "target": "ACP 智能体"
   },
