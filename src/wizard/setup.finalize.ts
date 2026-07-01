@@ -347,8 +347,8 @@ export async function finalizeSetupWizard(
             t("wizard.finalize.gatewayInstallFixAuth"),
           ].join(" ");
         } else {
-          const { programArguments, workingDirectory, environment } = await buildGatewayInstallPlan(
-            {
+          const { programArguments, workingDirectory, environment, environmentValueSources } =
+            await buildGatewayInstallPlan({
               env: process.env,
               port: settings.port,
               runtime: daemonRuntime,
@@ -356,8 +356,7 @@ export async function finalizeSetupWizard(
                 void prompter.note(message, title);
               },
               config: nextConfig,
-            },
-          );
+            });
 
           progress.update(t("wizard.finalize.gatewayServiceInstalling"));
           await service.install({
@@ -366,6 +365,7 @@ export async function finalizeSetupWizard(
             programArguments,
             workingDirectory,
             environment,
+            environmentValueSources,
           });
         }
       } catch (err) {

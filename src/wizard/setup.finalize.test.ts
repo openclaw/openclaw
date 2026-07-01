@@ -33,6 +33,7 @@ const buildGatewayInstallPlan = vi.hoisted(() =>
     programArguments: [],
     workingDirectory: "/tmp",
     environment: {},
+    environmentValueSources: {},
   })),
 );
 const gatewayServiceInstall = vi.hoisted(() => vi.fn(async () => {}));
@@ -739,6 +740,16 @@ describe("finalizeSetupWizard", () => {
       confirm: vi.fn(async () => false),
     });
     const runtime = createRuntime();
+    buildGatewayInstallPlan.mockResolvedValueOnce({
+      programArguments: [],
+      workingDirectory: "/tmp",
+      environment: {
+        DISCORD_BOT_TOKEN: "discord-test-token",
+      },
+      environmentValueSources: {
+        DISCORD_BOT_TOKEN: "file",
+      },
+    });
 
     await finalizeSetupWizard({
       flow: "advanced",
@@ -778,7 +789,13 @@ describe("finalizeSetupWizard", () => {
     expect(resolveGatewayInstallToken).toHaveBeenCalledTimes(1);
     expect(buildGatewayInstallPlan).toHaveBeenCalledTimes(1);
     expectFirstOnboardingInstallPlanCallOmitsToken();
-    expect(gatewayServiceInstall).toHaveBeenCalledTimes(1);
+    expect(gatewayServiceInstall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        environmentValueSources: {
+          DISCORD_BOT_TOKEN: "file",
+        },
+      }),
+    );
   });
 
   it("suppresses token-bearing onboarding output when requested", async () => {

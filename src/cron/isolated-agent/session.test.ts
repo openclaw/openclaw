@@ -39,13 +39,15 @@ type MockSessionStoreEntry = Partial<SessionStoreEntry>;
 
 function resolveWithStoredEntry(params?: {
   sessionKey?: string;
+  sourceSessionKey?: string;
   entry?: MockSessionStoreEntry;
   forceNew?: boolean;
   fresh?: boolean;
 }) {
   const sessionKey = params?.sessionKey ?? "webhook:stable-key";
+  const sourceSessionKey = params?.sourceSessionKey;
   const store: SessionStore = params?.entry
-    ? ({ [sessionKey]: params.entry as SessionStoreEntry } as SessionStore)
+    ? ({ [sourceSessionKey ?? sessionKey]: params.entry as SessionStoreEntry } as SessionStore)
     : {};
   vi.mocked(loadSessionStore).mockReturnValue(store);
   vi.mocked(evaluateSessionFreshness).mockReturnValue({ fresh: params?.fresh ?? true });
@@ -53,6 +55,7 @@ function resolveWithStoredEntry(params?: {
   return resolveCronSession({
     cfg: {} as OpenClawConfig,
     sessionKey,
+    sourceSessionKey,
     agentId: "main",
     nowMs: NOW_MS,
     forceNew: params?.forceNew,
@@ -174,6 +177,33 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.modelOverride).toBe("sonnet-4");
       expect(result.sessionEntry.providerOverride).toBe("anthropic");
       expect(clearBootstrapSnapshot).toHaveBeenCalledWith("webhook:stable-key");
+    });
+
+    it("seeds fresh cron run sessions from a source session without rolling that source", () => {
+      const result = resolveWithStoredEntry({
+        sessionKey: "agent:main:cron:daily-repost",
+        sourceSessionKey: "agent:main:telegram:direct:42",
+        entry: {
+          sessionId: "live-chat-session",
+          updatedAt: NOW_MS - 1000,
+          systemSent: true,
+          modelOverride: "sonnet-4",
+          providerOverride: "anthropic",
+          thinkingLevel: "high",
+          sendPolicy: "allow",
+        },
+        fresh: true,
+        forceNew: true,
+      });
+
+      expect(result.sessionEntry.sessionId).not.toBe("live-chat-session");
+      expect(result.isNewSession).toBe(true);
+      expect(result.previousSessionId).toBeUndefined();
+      expect(result.sessionEntry.modelOverride).toBe("sonnet-4");
+      expect(result.sessionEntry.providerOverride).toBe("anthropic");
+      expect(result.sessionEntry.thinkingLevel).toBe("high");
+      expect(result.sessionEntry.sendPolicy).toBeUndefined();
+      expect(clearBootstrapSnapshot).not.toHaveBeenCalled();
     });
 
     it("clears stale sessionFile when forceNew rolls to a fresh session", () => {

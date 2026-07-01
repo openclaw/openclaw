@@ -144,26 +144,26 @@ describe("createPersistCronSessionEntry", () => {
     });
   });
 
-  it("persists explicit session-bound cron state under the requested session key", async () => {
+  it("persists cron state under the supplied execution session key", async () => {
     const cronSession = makeCronSession();
     const updateSessionStore = vi.fn(
       async (_storePath, update: (store: Record<string, SessionEntry>) => void) => {
         const store: Record<string, SessionEntry> = {};
         update(store);
-        expect(store["agent:main:session"]).toBe(cronSession.sessionEntry);
+        expect(store["agent:main:cron:job"]).toBe(cronSession.sessionEntry);
       },
     );
 
     const persist = createPersistCronSessionEntry({
       isFastTestEnv: false,
       cronSession,
-      agentSessionKey: "agent:main:session",
+      agentSessionKey: "agent:main:cron:job",
       updateSessionStore,
     });
 
     await persist();
 
-    expect(cronSession.store["agent:main:session"]).toBe(cronSession.sessionEntry);
+    expect(cronSession.store["agent:main:cron:job"]).toBe(cronSession.sessionEntry);
   });
 
   it("adopts rotated run transcript metadata before persisting session-bound cron state", async () => {
