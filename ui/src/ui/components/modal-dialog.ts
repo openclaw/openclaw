@@ -91,6 +91,10 @@ export class OpenClawModalDialog extends LitElement {
     this.openDialog();
   }
 
+  override updated() {
+    this.openDialog();
+  }
+
   override disconnectedCallback() {
     this.closeDialog();
     this.restoreFocus();
@@ -122,11 +126,11 @@ export class OpenClawModalDialog extends LitElement {
   }
 
   private openDialog() {
-    if (this.opened) {
-      return;
-    }
     const dialog = this.dialogElement;
     if (!dialog) {
+      return;
+    }
+    if (this.opened && dialog.open) {
       return;
     }
     this.opened = true;

@@ -63,6 +63,7 @@ import {
   parseExecApprovalResolved,
   parsePluginApprovalRequested,
   pruneExecApprovalQueue,
+  refreshPendingApprovalQueue,
 } from "./controllers/exec-approval.ts";
 import { loadHealthState, type HealthState } from "./controllers/health.ts";
 import {
@@ -889,6 +890,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         host as unknown as SessionsState & { sessionKey: string },
         { force: true },
       );
+      void refreshPendingApprovalQueue(host);
       void loadAgentsThenRefreshActiveTabForClient(host, client);
       scheduleDeferredStartupWork(() => {
         if (host.client !== client) {
