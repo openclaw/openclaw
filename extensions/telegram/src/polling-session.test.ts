@@ -24,7 +24,7 @@ const computeBackoffMock = vi.hoisted(() =>
   vi.fn((_policy: { initialMs: number }, _attempt: number) => 0),
 );
 const sleepWithAbortMock = vi.hoisted(() => vi.fn(async () => undefined));
-const drainPendingDeliveriesWithResultMock = vi.hoisted(() =>
+const drainPendingDeliveriesMock = vi.hoisted(() =>
   vi.fn(async (_opts: unknown) => ({
     matched: 0,
     drained: 0,
@@ -46,7 +46,7 @@ vi.mock("./network-errors.js", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/delivery-queue-runtime", () => ({
-  drainPendingDeliveriesWithResult: drainPendingDeliveriesWithResultMock,
+  drainPendingDeliveries: drainPendingDeliveriesMock,
 }));
 
 vi.mock("./api-logging.js", () => ({
@@ -299,7 +299,7 @@ function expectTelegramBotTransportSequence(firstTransport: unknown, secondTrans
 }
 
 function expectDrainPendingDeliveriesCall(index = 0): DrainPendingDeliveriesCall {
-  const call = drainPendingDeliveriesWithResultMock.mock.calls[index]?.[0];
+  const call = drainPendingDeliveriesMock.mock.calls[index]?.[0];
   if (!call || typeof call !== "object") {
     throw new Error(`Expected drainPendingDeliveries call ${index}`);
   }
@@ -713,7 +713,7 @@ describe("TelegramPollingSession", () => {
     isRecoverableTelegramNetworkErrorMock.mockReset().mockReturnValue(true);
     computeBackoffMock.mockReset().mockReturnValue(0);
     sleepWithAbortMock.mockReset().mockResolvedValue(undefined);
-    drainPendingDeliveriesWithResultMock
+    drainPendingDeliveriesMock
       .mockReset()
       .mockResolvedValue({ matched: 0, drained: 0, skippedInProgress: 0, skippedEntryIds: [] });
 
@@ -1299,7 +1299,7 @@ describe("TelegramPollingSession", () => {
     await vi.waitFor(() => expect(init).toHaveBeenCalledTimes(1));
     onMessage?.({ type: "poll-success", finishedAt: Date.now(), count: 0 });
 
-    await vi.waitFor(() => expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(1));
 
     abort.abort();
     await runPromise;
@@ -4487,7 +4487,7 @@ describe("TelegramPollingSession", () => {
       { offset: 1 },
     );
 
-    await vi.waitFor(() => expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(1));
     const drain = expectDrainPendingDeliveriesCall();
     expect(drain.drainKey).toBe("telegram:default");
     expect(drain.logLabel).toBe("Telegram reconnect drain");
@@ -4542,7 +4542,7 @@ describe("TelegramPollingSession", () => {
       { offset: 2 },
     );
 
-    await vi.waitFor(() => expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(2));
 
     abort.abort();
     resolveFirstTask();
@@ -4557,7 +4557,7 @@ describe("TelegramPollingSession", () => {
     const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
 
     // Simulate all entries already claimed by an in-flight live send.
-    drainPendingDeliveriesWithResultMock.mockResolvedValue({
+    drainPendingDeliveriesMock.mockResolvedValue({
       matched: 1,
       drained: 0,
       skippedInProgress: 1,
@@ -4577,7 +4577,7 @@ describe("TelegramPollingSession", () => {
       "getUpdates",
       { offset: 1 },
     );
-    await vi.waitFor(() => expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(1));
 
     // Second poll-success should NOT trigger a new drain (one-shot suppression active).
     await apiMiddleware(
@@ -4592,7 +4592,7 @@ describe("TelegramPollingSession", () => {
     });
 
     // Drain should still have been called only once.
-    expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(1);
+    expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(1);
 
     abort.abort();
     resolveFirstTask();
@@ -4609,7 +4609,7 @@ describe("TelegramPollingSession", () => {
       const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
 
       // All entries already claimed by an in-flight live send.
-      drainPendingDeliveriesWithResultMock.mockResolvedValue({
+      drainPendingDeliveriesMock.mockResolvedValue({
         matched: 1,
         drained: 0,
         skippedInProgress: 1,
@@ -4629,7 +4629,7 @@ describe("TelegramPollingSession", () => {
         "getUpdates",
         { offset: 1 },
       );
-      await vi.waitFor(() => expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(1));
 
       // Advance past one normal Telegram long-poll interval (30s).
       // One-shot suppression active so drain stays suppressed on this cycle.
@@ -4646,7 +4646,7 @@ describe("TelegramPollingSession", () => {
       await vi.advanceTimersByTimeAsync(100);
 
       // Drain must still be suppressed (one-shot active).
-      expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(1);
+      expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(1);
 
       abort.abort();
       resolveFirstTask();
@@ -4663,7 +4663,7 @@ describe("TelegramPollingSession", () => {
     const getApiMiddleware = mockBotCapturingApiMiddleware(botStop);
     const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
 
-    drainPendingDeliveriesWithResultMock
+    drainPendingDeliveriesMock
       .mockResolvedValueOnce({
         matched: 1,
         drained: 0,
@@ -4685,7 +4685,7 @@ describe("TelegramPollingSession", () => {
       "getUpdates",
       { offset: 1 },
     );
-    await vi.waitFor(() => expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(1));
 
     // Second poll: drain suppressed (one-shot active, then cleared).
     await apiMiddleware(
@@ -4696,7 +4696,7 @@ describe("TelegramPollingSession", () => {
     await new Promise<void>((r) => {
       setTimeout(r, 10);
     });
-    expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(1);
+    expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(1);
 
     // Third poll: one-shot cleared, drain fires again.
     await apiMiddleware(
@@ -4704,7 +4704,7 @@ describe("TelegramPollingSession", () => {
       "getUpdates",
       { offset: 3 },
     );
-    await vi.waitFor(() => expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(2));
 
     abort.abort();
     resolveFirstTask();
@@ -4719,7 +4719,7 @@ describe("TelegramPollingSession", () => {
     const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
 
     // Simulate a successful drain (entry recovered, no in-progress skips).
-    drainPendingDeliveriesWithResultMock.mockResolvedValue({
+    drainPendingDeliveriesMock.mockResolvedValue({
       matched: 1,
       drained: 1,
       skippedInProgress: 0,
@@ -4738,14 +4738,14 @@ describe("TelegramPollingSession", () => {
       "getUpdates",
       { offset: 1 },
     );
-    await vi.waitFor(() => expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(1));
 
     await apiMiddleware(
       vi.fn(async () => []),
       "getUpdates",
       { offset: 2 },
     );
-    await vi.waitFor(() => expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(2));
 
     abort.abort();
     resolveFirstTask();
@@ -4761,7 +4761,7 @@ describe("TelegramPollingSession", () => {
 
     // Mixed result: 3 matched, 1 in-progress, 1 drained.
     // Suppression should NOT activate because at least one entry was drained.
-    drainPendingDeliveriesWithResultMock.mockResolvedValue({
+    drainPendingDeliveriesMock.mockResolvedValue({
       matched: 3,
       drained: 1,
       skippedInProgress: 1,
@@ -4780,7 +4780,7 @@ describe("TelegramPollingSession", () => {
       "getUpdates",
       { offset: 1 },
     );
-    await vi.waitFor(() => expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(1));
 
     // Let the drain promise .then()/.finally() chain settle so the
     // in-flight flag clears before the next poll-success.
@@ -4793,7 +4793,7 @@ describe("TelegramPollingSession", () => {
       "getUpdates",
       { offset: 2 },
     );
-    await vi.waitFor(() => expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(2));
 
     abort.abort();
     resolveFirstTask();

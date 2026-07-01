@@ -25,18 +25,11 @@ async function loadOutboundDeliverRuntime(): Promise<OutboundDeliverRuntimeModul
  * Drain queued outbound payloads after a channel reconnect or transport recovery.
  * When no deliver function is provided, the heavy outbound delivery runtime is
  * loaded lazily so importing this SDK subpath does not eagerly bind send internals.
- */
-export async function drainPendingDeliveries(opts: DrainPendingDeliveriesOptions): Promise<void> {
-  await drainPendingDeliveriesWithResult(opts);
-}
-
-/**
- * Same as {@link drainPendingDeliveries} but returns the drain result so callers
- * can inspect matched/drained/skippedInProgress counts for cooldown or diagnostics.
  *
- * Additive export; the existing {@link drainPendingDeliveries} void contract is unchanged.
+ * Returns drain result metadata so callers can inspect matched/drained/skippedInProgress
+ * counts for cooldown or diagnostics.
  */
-export async function drainPendingDeliveriesWithResult(
+export async function drainPendingDeliveries(
   opts: DrainPendingDeliveriesOptions,
 ): Promise<ReconnectDrainResult> {
   const deliver =

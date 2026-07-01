@@ -2,7 +2,7 @@
 import { type RunOptions, run } from "@grammyjs/runner";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
-import { drainPendingDeliveriesWithResult } from "openclaw/plugin-sdk/delivery-queue-runtime";
+import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import {
   collectErrorGraphCandidates,
   formatErrorMessage,
@@ -510,7 +510,7 @@ export class TelegramPollingSession {
     this.#deliveryDrainInFlight = true;
     const accountId = normalizeTelegramAccountId(this.opts.accountId);
     const cfg = this.opts.config;
-    void drainPendingDeliveriesWithResult({
+    void drainPendingDeliveries({
       drainKey: `telegram:${accountId}`,
       logLabel: "Telegram reconnect drain",
       cfg,
