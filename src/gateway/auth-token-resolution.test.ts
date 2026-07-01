@@ -4,6 +4,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import { resolveGatewayAuthToken } from "./auth-token-resolution.js";
 
+type GatewayAuthTokenInput = NonNullable<NonNullable<OpenClawConfig["gateway"]>["auth"]>["token"];
+
 function envSecretRef(id: string): SecretRef {
   return {
     source: "env",
@@ -12,7 +14,7 @@ function envSecretRef(id: string): SecretRef {
   };
 }
 
-function makeConfig(token?: OpenClawConfig["gateway"]["auth"]["token"]): OpenClawConfig {
+function makeConfig(token?: GatewayAuthTokenInput): OpenClawConfig {
   return {
     gateway: {
       auth: token === undefined ? {} : { token },
