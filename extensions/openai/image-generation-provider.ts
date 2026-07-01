@@ -27,6 +27,7 @@ import {
   postJsonRequest,
   postMultipartRequest,
   readProviderJsonResponse,
+  readResponseTextLimited,
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
@@ -502,7 +503,7 @@ function inferImageUploadFileName(params: {
 
 async function readResponseBodyText(response: Response): Promise<string> {
   if (!response.body) {
-    const text = await response.text();
+    const text = await readResponseTextLimited(response, MAX_CODEX_IMAGE_SSE_BYTES);
     if (Buffer.byteLength(text, "utf8") > MAX_CODEX_IMAGE_SSE_BYTES) {
       throw new Error("OpenAI Codex image generation response exceeded size limit");
     }

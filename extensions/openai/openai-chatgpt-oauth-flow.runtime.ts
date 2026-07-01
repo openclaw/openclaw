@@ -10,6 +10,7 @@ import {
   resolveOAuthTokenExpiresAt,
   resolveOAuthTokenLifetimeMs,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
 import {
@@ -216,7 +217,7 @@ async function exchangeAuthorizationCode(
   }
 
   if (!response.ok) {
-    const text = await response.text().catch(() => "");
+    const text = await readResponseTextLimited(response, 16 * 1024).catch(() => "");
     return {
       type: "failed",
       status: response.status,
@@ -258,7 +259,7 @@ async function refreshAccessToken(
     );
 
     if (!response.ok) {
-      const text = await response.text().catch(() => "");
+      const text = await readResponseTextLimited(response, 16 * 1024).catch(() => "");
       return {
         type: "failed",
         status: response.status,
