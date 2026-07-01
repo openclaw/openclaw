@@ -999,7 +999,7 @@ describe("browser chrome helpers", () => {
         ),
       );
       await expect(readChromeVersion("http://127.0.0.1:12345", 50)).rejects.toThrow(
-        "CDP /json/version body exceeds 16 MiB",
+        "CDP /json/version response too large",
       );
     });
 

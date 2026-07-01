@@ -61,6 +61,9 @@ export type ChromeVersion = {
   "User-Agent"?: string;
 };
 
+/** Maximum bytes allowed when reading CDP /json/version response body. */
+const CDP_VERSION_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+
 function elapsedSince(startedAt: number): number {
   return Math.max(0, Date.now() - startedAt);
 }
@@ -117,8 +120,11 @@ export async function readChromeVersion(
       let data: ChromeVersion;
       const useBodyRead = typeof response.body?.getReader === "function";
       if (useBodyRead) {
-        const bytes = await readResponseWithLimit(response, 16 * 1024 * 1024, {
-          onOverflow: () => new Error("CDP /json/version body exceeds 16 MiB"),
+        const bytes = await readResponseWithLimit(response, CDP_VERSION_RESPONSE_MAX_BYTES, {
+          onOverflow: ({ size, maxBytes }) =>
+            new Error(
+              `CDP /json/version response too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+            ),
         });
         data = JSON.parse(new TextDecoder().decode(bytes)) as ChromeVersion;
       } else {
