@@ -130,11 +130,11 @@ export function isSettingsTab(tab: Tab): boolean {
   return (SETTINGS_TABS as readonly Tab[]).includes(tab);
 }
 
-export function isTabInGroup(group: (typeof TAB_GROUPS)[number], tab: Tab): boolean {
+export function isTabInGroup(group: { label: string; tabs: readonly Tab[] }, tab: Tab): boolean {
   if (group.label === "settings") {
     return isSettingsTab(tab);
   }
-  return (group.tabs as readonly Tab[]).includes(tab);
+  return group.tabs.includes(tab);
 }
 
 export function tabFromPath(pathname: string, basePath = ""): Tab | null {

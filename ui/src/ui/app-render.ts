@@ -166,11 +166,16 @@ import {
   normalizeBasePath,
   pathForTab,
   SETTINGS_TABS,
-  TAB_GROUPS,
   subtitleForTab,
   titleForTab,
   type Tab,
 } from "./navigation.ts";
+import {
+  canAccessTab,
+  firstPermittedTab,
+  permittedSettingsTabs,
+  permittedTabGroups,
+} from "./navigation-permissions.ts";
 import { isPluginEnabledInConfigSnapshot } from "./plugin-activation.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "./session-display.ts";
 import {
@@ -443,9 +448,13 @@ function renderSettingsSectionNav(state: AppViewState) {
   if (!isSettingsTab(state.tab)) {
     return nothing;
   }
+  const tabs = permittedSettingsTabs(state.hello?.auth ?? null);
+  if (tabs.length <= 1) {
+    return nothing;
+  }
   return html`
     <nav class="settings-section-nav" aria-label=${t("common.settingsSections")}>
-      ${SETTINGS_TABS.map((tab) => {
+      ${tabs.map((tab) => {
         const active = state.tab === tab;
         const href = pathForTab(tab, state.basePath);
         return html`
@@ -549,6 +558,9 @@ function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] 
 }
 
 function renderSidebarSessions(state: AppViewState) {
+  if (!canAccessTab("chat", state.hello?.auth ?? null)) {
+    return nothing;
+  }
   const collapsed = state.settings.navCollapsed;
   const busy = isSidebarSessionBusy(state);
   const recent = collapsed ? [] : resolveSidebarRecentSessions(state);
@@ -1392,6 +1404,23 @@ export function renderApp(state: AppViewState) {
     return html` ${renderLoginGate(state)} ${renderGatewayUrlConfirmation(state)} `;
   }
 
+  const authContext = state.hello?.auth ?? null;
+  if (!canAccessTab(state.tab, authContext)) {
+    const fallbackTab = firstPermittedTab(authContext);
+    if (fallbackTab) {
+      queueMicrotask(() => state.setTab(fallbackTab));
+      return html` ${renderGatewayUrlConfirmation(state)} `;
+    }
+    return html`
+      ${renderGatewayUrlConfirmation(state)}
+      <main class="content">
+        <div class="callout danger" role="alert">
+          This Control UI account does not have permission to access any dashboard sections.
+        </div>
+      </main>
+    `;
+  }
+
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
@@ -1402,6 +1431,7 @@ export function renderApp(state: AppViewState) {
   const chatHeaderHidden = isChat && (state.onboarding || state.chatHeaderControlsHidden);
   const navDrawerOpen = state.navDrawerOpen && !state.onboarding;
   const navCollapsed = state.settings.navCollapsed && !navDrawerOpen;
+  const visibleTabGroups = permittedTabGroups(authContext);
   const dashboardHeaderContext = resolveDashboardHeaderContext(state);
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
@@ -2460,7 +2490,10 @@ export function renderApp(state: AppViewState) {
         state.paletteActiveIndex = i;
       },
       onNavigate: (tab) => {
-        state.setTab(tab as import("./navigation.ts").Tab);
+        const nextTab = tab as import("./navigation.ts").Tab;
+        if (canAccessTab(nextTab, authContext)) {
+          state.setTab(nextTab);
+        }
       },
       onSlashCommand: (cmd) => {
         state.setTab("chat" as import("./navigation.ts").Tab);
@@ -2572,7 +2605,7 @@ export function renderApp(state: AppViewState) {
             <div class="sidebar-shell__body">
               ${renderSidebarSessions(state)}
               <nav class="sidebar-nav">
-                ${TAB_GROUPS.map((group) => {
+                ${visibleTabGroups.map((group) => {
                   const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
                   const showItems = navCollapsed || !isGroupCollapsed;
 
