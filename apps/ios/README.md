@@ -18,7 +18,7 @@ This iOS app is super-alpha and internal-use only. The first public App Store re
 ## Exact Xcode Manual Deploy Flow
 
 1. Prereqs:
-   - Xcode 16+
+   - Xcode 26.x
    - `pnpm`
    - `xcodegen`
    - Apple Development signing set up in Xcode
@@ -51,7 +51,7 @@ pnpm ios:open
 
 Prereqs:
 
-- Xcode 16+
+- Xcode 26.x
 - `pnpm`
 - `xcodegen`
 - `fastlane`
