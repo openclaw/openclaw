@@ -146,6 +146,66 @@ describe("fetchHttpJson error body boundary", () => {
     expect(message).toContain("x");
   });
 
+  it("parses a small JSON success response correctly", async () => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ ok: true, targetId: "abc" }));
+    });
+    let p: number;
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    p = (server.address() as { port: number }).port;
+
+    try {
+      const result = await fetchBrowserJson<{ ok: boolean; targetId: string }>(
+        `http://127.0.0.1:${p}/ok`,
+        { timeoutMs: 5000 },
+      );
+      expect(result).toEqual({ ok: true, targetId: "abc" });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("throws on a success response body exceeding 16 MiB", async () => {
+    // Stream a JSON body that exceeds 16 MiB.  readResponseWithLimit
+    // must cancel the stream at the cap instead of buffering the whole
+    // payload.
+    const bodySize = 17 * 1024 * 1024; // just over 16 MiB
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      // Emit a JSON array prefix so the stream is valid JSON-shaped,
+      // then pad with whitespace to hit the byte cap.
+      res.write('{"items":[');
+      let written = 2 + 8; // '{"items":[' bytes
+      const chunk = Buffer.alloc(64 * 1024, 0x20); // space padding
+      while (written < bodySize) {
+        const toWrite = Math.min(chunk.length, bodySize - written);
+        res.write(toWrite === chunk.length ? chunk : chunk.subarray(0, toWrite));
+        written += toWrite;
+      }
+      res.end("]}");
+    });
+    let p: number;
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    p = (server.address() as { port: number }).port;
+
+    try {
+      const err = await fetchBrowserJson(`http://127.0.0.1:${p}/large`, {
+        timeoutMs: 10000,
+      }).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toContain("exceeds");
+      expect((err as Error).message).toContain("16777216"); // 16 MiB
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
   it("preserves the full error body when it fits under the cap", async () => {
     // Small error body: the server returns a short text/plain message.
     const snippetServer = http.createServer((_req, res) => {

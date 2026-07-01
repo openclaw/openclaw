@@ -7,6 +7,7 @@
 import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-config";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -109,6 +110,10 @@ const BROWSER_TOOL_MODEL_HINT =
  *  Kept small to avoid OOM on malformed upstream error pages while preserving a
  *  useful diagnostic snippet. */
 const BROWSER_ERROR_BODY_LIMIT_BYTES = 16 * 1024;
+
+/** Max bytes for a successful browser-control JSON response body.
+ *  Matches the shared provider cap (PROVIDER_JSON_RESPONSE_MAX_BYTES). */
+const BROWSER_CONTROL_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
 function isRateLimitStatus(status: number): boolean {
   return status === 429;
@@ -278,7 +283,13 @@ async function fetchHttpJson<T>(
       );
       throw new BrowserServiceError(text || `HTTP ${res.status}`);
     }
-    return (await res.json()) as T;
+    const bytes = await readResponseWithLimit(res, BROWSER_CONTROL_RESPONSE_MAX_BYTES, {
+      onOverflow: ({ size, maxBytes }) =>
+        new Error(
+          `Browser control response exceeds ${maxBytes} bytes ` + `(got ${size}) for ${url}`,
+        ),
+    });
+    return JSON.parse(new TextDecoder().decode(bytes)) as T;
   } finally {
     clearTimeout(t);
     await release?.();
