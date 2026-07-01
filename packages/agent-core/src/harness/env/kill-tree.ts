@@ -1,5 +1,5 @@
 // Agent Core module implements kill tree behavior.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 const DEFAULT_GRACE_MS = 3000;
 const MAX_GRACE_MS = 60_000;
@@ -16,9 +16,14 @@ export type KillProcessTreeOptions = {
  *   first (without /F), then force-kills if process survives.
  * - Unix: send SIGTERM to process group first, wait grace period, then SIGKILL.
  *
- * When the child was spawned with `detached: false`, pass `detached: false` to
- * skip the Unix `process.kill(-pid, ...)` group-kill. That avoids signaling the
- * gateway's own process group.
+ * Group kill (`process.kill(-pid, ...)`) is only used when the PID is verified
+ * as its own process group leader, unless `detached: true` is explicitly passed.
+ * This prevents accidentally signaling the gateway's process group when the
+ * child shares its parent's group.
+ *
+ * - `detached: false`: skip group kill unconditionally.
+ * - `detached: true`: use group kill unconditionally (trust caller).
+ * - `detached` omitted: use group kill only when PID is the group leader.
  */
 export function killProcessTree(pid: number, opts?: KillProcessTreeOptions): void {
   if (!Number.isFinite(pid) || pid <= 0) {
@@ -35,7 +40,8 @@ export function killProcessTree(pid: number, opts?: KillProcessTreeOptions): voi
     return;
   }
 
-  const useGroupKill = opts?.detached !== false;
+  const useGroupKill =
+    opts?.detached === true || (opts?.detached !== false && isProcessGroupLeader(pid));
   if (opts?.force === true) {
     signalProcessTreeUnix(pid, "SIGKILL", useGroupKill);
     return;
@@ -68,7 +74,9 @@ export function signalProcessTree(
     return;
   }
 
-  signalProcessTreeUnix(pid, signal, opts?.detached !== false);
+  const useGroupKill =
+    opts?.detached === true || (opts?.detached !== false && isProcessGroupLeader(pid));
+  signalProcessTreeUnix(pid, signal, useGroupKill);
 }
 
 function normalizeGraceMs(value?: number): number {
@@ -82,6 +90,26 @@ function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check whether a PID is its own process group leader.
+ * Uses `ps -p <pid> -o pgid=` to read the process group ID and compares it
+ * to the PID. Falls back to `false` on any error, which safely skips group
+ * kill in environments where `ps` is unavailable.
+ */
+function isProcessGroupLeader(pid: number): boolean {
+  try {
+    const res = spawnSync("ps", ["-p", String(pid), "-o", "pgid="], {
+      encoding: "utf8",
+      timeout: 500,
+    });
+    if (res.error || res.status !== 0) return false;
+    const pgid = Number.parseInt(res.stdout.trim(), 10);
+    return Number.isFinite(pgid) && pgid === pid;
   } catch {
     return false;
   }

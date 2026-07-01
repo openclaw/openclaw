@@ -119,7 +119,7 @@ describe("bundle LSP runtime", () => {
 
     await runtime.dispose();
 
-    expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { graceMs: 1000 });
+    expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { graceMs: 1000, detached: true });
   });
 
   it("keeps LSP framing aligned after multibyte messages in the same chunk", async () => {
@@ -150,7 +150,7 @@ describe("bundle LSP runtime", () => {
 
     await disposeAllBundleLspRuntimes();
 
-    expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { graceMs: 1000 });
+    expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { graceMs: 1000, detached: true });
 
     killProcessTreeMock.mockClear();
     await runtime.dispose();

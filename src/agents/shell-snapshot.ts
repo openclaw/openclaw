@@ -457,12 +457,12 @@ async function runShell(opts: {
       }
       settled = true;
       clearTimeout(timeout);
-      killProcessTree(child.pid ?? 0, { graceMs: 0 });
+      killProcessTree(child.pid ?? 0, { graceMs: 0, detached: true });
       child.stdout.destroy();
       resolve({ status, stdout });
     };
     const timeout = setTimeout(() => {
-      killProcessTree(child.pid ?? 0, { graceMs: 250 });
+      killProcessTree(child.pid ?? 0, { graceMs: 250, detached: true });
       finish(null);
     }, opts.timeoutMs);
     child.stdout.setEncoding("utf8");
