@@ -198,12 +198,115 @@ function getNoChangeError(path: string, totalEdits: number): EditNoChangeError {
 }
 
 /**
+ * Map a character offset within a single line from its position in the
+ * fuzzy-normalized form back to the corresponding position in the original
+ * line. NFKC normalization can expand compatibility characters (e.g.,
+ * U+FB03 "ﬃ" becomes "ffi") and compose adjacent code points (e.g.,
+ * e + U+0301 combining acute → é), shifting subsequent positions on that
+ * line. The other fuzzy normalizations (trimEnd, smart quotes, dashes,
+ * special spaces) are same-length replacements that do not shift positions.
+ *
+ * This function groups code points into composition blocks by checking
+ * whether adjacent code points interact under NFKC (combining marks,
+ * Hangul Jamo L+V+T composition, and any other cross-code-point merges).
+ */
+function mapLineOffsetThroughNfkc(origLine: string, normOffset: number, snapToEnd = false): number {
+  const nfkcLine = origLine.normalize("NFKC");
+  // Fast path: NFKC did not change the line at all, so positions map 1:1.
+  // We compare the full strings, not just lengths, because NFKC can shift
+  // character positions while preserving total length (e.g., "ﬁ X é" and
+  // "fi X é" are both length 6, but "X" moves from offset 2 to offset 3).
+  if (nfkcLine === origLine) {
+    return Math.min(normOffset, origLine.length);
+  }
+
+  // Walk through original code points, grouping each base character with
+  // all following code points that participate in NFKC composition with it.
+  // This handles combining marks, Hangul Jamo (L+V+T → syllable), and any
+  // other cross-code-point compositions that NFKC performs.
+  let origPos = 0;
+  let nfkcPos = 0;
+  const codePoints = Array.from(origLine);
+  let i = 0;
+
+  while (i < codePoints.length) {
+    if (nfkcPos >= normOffset) {
+      return origPos;
+    }
+
+    // Greedily extend the segment as long as the next code point
+    // participates in NFKC composition with the current segment.
+    let segment = codePoints[i];
+    let segOrigLen = codePoints[i].length;
+    i++;
+    while (i < codePoints.length) {
+      const extended = segment + codePoints[i];
+      const extNfkc = extended.normalize("NFKC");
+      const separateNfkc = segment.normalize("NFKC") + codePoints[i].normalize("NFKC");
+      if (extNfkc === separateNfkc) {
+        break; // next code point does not compose with segment
+      }
+      segment = extended;
+      segOrigLen += codePoints[i].length;
+      i++;
+    }
+
+    const segNfkc = segment.normalize("NFKC");
+    // Target falls inside this segment.
+    // When mapping end-of-match offsets (snapToEnd), snap to the segment end
+    // so partial matches inside NFKC-expanded characters produce a nonzero
+    // original range instead of a zero-length splice.
+    if (nfkcPos + segNfkc.length > normOffset) {
+      return snapToEnd ? origPos + segOrigLen : origPos;
+    }
+
+    origPos += segOrigLen;
+    nfkcPos += segNfkc.length;
+  }
+
+  return origPos;
+}
+
+/**
+ * Map a character offset in fuzzy-normalized content back to the corresponding
+ * offset in the original (LF-normalized only) content. Both contents have the
+ * same number of lines because normalizeForFuzzyMatch only performs per-line
+ * trimEnd and same-length character replacements. Within each line, NFKC
+ * normalization may change character counts for compatibility characters, so
+ * the per-line mapping delegates to mapLineOffsetThroughNfkc.
+ */
+function mapNormalizedOffsetToOriginal(
+  origLines: string[],
+  normLines: string[],
+  normalizedOffset: number,
+  snapToEnd = false,
+): number {
+  let normPos = 0;
+  let origPos = 0;
+
+  for (let i = 0; i < normLines.length; i++) {
+    const normLineLen = normLines[i].length;
+    const origLineLen = origLines[i].length;
+
+    if (normalizedOffset <= normPos + normLineLen) {
+      const offsetInNormLine = normalizedOffset - normPos;
+      return origPos + mapLineOffsetThroughNfkc(origLines[i], offsetInNormLine, snapToEnd);
+    }
+
+    normPos += normLineLen + 1;
+    origPos += origLineLen + 1;
+  }
+
+  return origPos;
+}
+
+/**
  * Apply one or more exact-text replacements to LF-normalized content.
  *
  * All edits are matched against the same original content. Replacements are
- * then applied in reverse order so offsets remain stable. If any edit needs
- * fuzzy matching, the operation runs in fuzzy-normalized content space to
- * preserve current single-edit behavior.
+ * then applied in reverse order so offsets remain stable. When fuzzy matching
+ * is needed, match positions are mapped back to the original content so that
+ * only the matched region is affected — unrelated lines are never normalized.
  */
 export function applyEditsToNormalizedContent(
   normalizedContent: string,
@@ -221,32 +324,52 @@ export function applyEditsToNormalizedContent(
     }
   }
 
-  const initialMatches = normalizedEdits.map((edit) =>
-    fuzzyFindText(normalizedContent, edit.oldText),
-  );
-  const baseContent = initialMatches.some((match) => match.usedFuzzyMatch)
-    ? normalizeForFuzzyMatch(normalizedContent)
-    : normalizedContent;
+  const baseContent = normalizedContent;
+
+  // Lazily computed for position mapping when fuzzy matches are used
+  let origLines: string[] | undefined;
+  let normLines: string[] | undefined;
 
   const matchedEdits: MatchedEdit[] = [];
   for (let i = 0; i < normalizedEdits.length; i++) {
     const edit = normalizedEdits[i];
-    const matchResult = fuzzyFindText(baseContent, edit.oldText);
+    const matchResult = fuzzyFindText(normalizedContent, edit.oldText);
     if (!matchResult.found) {
       throw getNotFoundError(path, i, normalizedEdits.length);
     }
 
-    const occurrences = countOccurrences(baseContent, edit.oldText);
+    const occurrences = countOccurrences(normalizedContent, edit.oldText);
     if (occurrences > 1) {
       throw getDuplicateError(path, i, normalizedEdits.length, occurrences);
     }
 
-    matchedEdits.push({
-      editIndex: i,
-      matchIndex: matchResult.index,
-      matchLength: matchResult.matchLength,
-      newText: edit.newText,
-    });
+    if (matchResult.usedFuzzyMatch) {
+      // Map the fuzzy match position back to the original content
+      if (!origLines || !normLines) {
+        origLines = normalizedContent.split("\n");
+        normLines = normalizeForFuzzyMatch(normalizedContent).split("\n");
+      }
+      const origStart = mapNormalizedOffsetToOriginal(origLines, normLines, matchResult.index);
+      const origEnd = mapNormalizedOffsetToOriginal(
+        origLines,
+        normLines,
+        matchResult.index + matchResult.matchLength,
+        true,
+      );
+      matchedEdits.push({
+        editIndex: i,
+        matchIndex: origStart,
+        matchLength: origEnd - origStart,
+        newText: edit.newText,
+      });
+    } else {
+      matchedEdits.push({
+        editIndex: i,
+        matchIndex: matchResult.index,
+        matchLength: matchResult.matchLength,
+        newText: edit.newText,
+      });
+    }
   }
 
   matchedEdits.sort((a, b) => a.matchIndex - b.matchIndex);
