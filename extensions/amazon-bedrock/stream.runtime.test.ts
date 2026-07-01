@@ -166,6 +166,87 @@ describe("Bedrock profile endpoint resolution", () => {
   });
 });
 
+describe("Bedrock inferenceConfig stop sequences", () => {
+  function stopContext() {
+    return {
+      messages: [{ role: "user", content: "Reply briefly.", timestamp: 0 }],
+    } as never;
+  }
+
+  function adaptiveFableModel() {
+    return bedrockModel({
+      id: "production-fable",
+      name: "Production deployment",
+      reasoning: false,
+      params: { canonicalModelId: "claude-fable-5" },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    });
+  }
+
+  // Capture the real pre-send Converse command payload (mock SDK send) to prove
+  // stop forwarding through the actual request-build path, not a helper in isolation.
+  async function captureInferenceConfig(
+    model: ReturnType<typeof bedrockModel>,
+    options: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: streamEvents([
+        { messageStart: { role: ConversationRole.ASSISTANT } },
+        { messageStop: { stopReason: "end_turn" } },
+      ]),
+    } as never);
+    const stream = streamBedrock(model, stopContext(), options as never);
+    await stream.result();
+    const command = send.mock.calls[0]?.[0] as {
+      input?: { inferenceConfig?: Record<string, unknown> };
+    };
+    return command.input?.inferenceConfig ?? {};
+  }
+
+  it("forwards stop sequences to the native stopSequences field", async () => {
+    const inferenceConfig = await captureInferenceConfig(bedrockModel({ reasoning: false }), {
+      maxTokens: 1024,
+      temperature: 0.4,
+      stop: ["</tool>", "\n\nObservation:"],
+    });
+    expect(inferenceConfig).toMatchObject({
+      maxTokens: 1024,
+      temperature: 0.4,
+      stopSequences: ["</tool>", "\n\nObservation:"],
+    });
+  });
+
+  it("keeps stopSequences without reintroducing temperature under adaptive thinking", async () => {
+    const inferenceConfig = await captureInferenceConfig(adaptiveFableModel(), {
+      reasoning: "high",
+      temperature: 0.2,
+      stop: ["STOP"],
+    });
+    // Adaptive-thinking requests omit temperature; stop forwarding must not
+    // reintroduce it (this is the compatibility guard the rebase preserves).
+    expect(inferenceConfig.stopSequences).toEqual(["STOP"]);
+    expect(Object.hasOwn(inferenceConfig, "temperature")).toBe(false);
+  });
+
+  it("omits stopSequences when stop is undefined", async () => {
+    const inferenceConfig = await captureInferenceConfig(bedrockModel({ reasoning: false }), {
+      maxTokens: 1024,
+      temperature: 0.7,
+    });
+    expect(Object.hasOwn(inferenceConfig, "stopSequences")).toBe(false);
+  });
+
+  it("omits stopSequences for an empty stop array", async () => {
+    const inferenceConfig = await captureInferenceConfig(bedrockModel({ reasoning: false }), {
+      maxTokens: 1024,
+      stop: [],
+    });
+    expect(Object.hasOwn(inferenceConfig, "stopSequences")).toBe(false);
+  });
+});
+
 describe("Bedrock thinking effort mapping", () => {
   it("does not force adaptive thinking for optional Claude models when callers omit reasoning", () => {
     const model = bedrockModel({
