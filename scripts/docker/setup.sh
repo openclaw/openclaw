@@ -144,7 +144,10 @@ sync_gateway_config() {
   local current_allowed_origins=""
   local batch_json=""
 
-  if [[ "${OPENCLAW_GATEWAY_BIND}" != "loopback" ]]; then
+  if [[ -n "${OPENCLAW_GATEWAY_CONTROL_UI_ALLOWED_ORIGINS:-}" ]]; then
+    validate_allowed_origins_value "$OPENCLAW_GATEWAY_CONTROL_UI_ALLOWED_ORIGINS"
+    allowed_origin_json="$OPENCLAW_GATEWAY_CONTROL_UI_ALLOWED_ORIGINS"
+  elif [[ "${OPENCLAW_GATEWAY_BIND}" != "loopback" ]]; then
     allowed_origin_json="$(printf '["http://localhost:%s","http://127.0.0.1:%s"]' "$OPENCLAW_GATEWAY_PORT" "$OPENCLAW_GATEWAY_PORT")"
     current_allowed_origins="$(
       run_prestart_cli config get gateway.controlUi.allowedOrigins 2>/dev/null || true
@@ -441,6 +444,28 @@ validate_mount_spec() {
   if [[ ! "$mount" =~ ^[^,:]+:[^,:]+(:[^,:]+)?$ ]]; then
     fail "Invalid mount format '$mount'. Expected source:target[:options] without commas or control characters."
   fi
+}
+
+validate_allowed_origins_value() {
+  local value="$1"
+  if contains_disallowed_chars "$value"; then
+    fail "OPENCLAW_GATEWAY_CONTROL_UI_ALLOWED_ORIGINS contains unsupported control characters."
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c "
+import json, sys
+try:
+    parsed = json.loads(sys.argv[1])
+except json.JSONDecodeError:
+    sys.exit(1)
+if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
+    sys.exit(1)
+" "$value" 2>/dev/null || fail "OPENCLAW_GATEWAY_CONTROL_UI_ALLOWED_ORIGINS must be a valid JSON array of strings"
+    return
+  fi
+
+  fail "OPENCLAW_GATEWAY_CONTROL_UI_ALLOWED_ORIGINS requires python3 for strict validation"
 }
 
 quote_yaml_string() {
