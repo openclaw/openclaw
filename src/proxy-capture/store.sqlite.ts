@@ -50,8 +50,7 @@ function isInMemoryDatabasePath(dbPath: string): boolean {
   const fragmentIndex = dbPath.indexOf("#");
   const uriWithoutFragment = fragmentIndex === -1 ? dbPath : dbPath.slice(0, fragmentIndex);
   const queryIndex = uriWithoutFragment.indexOf("?");
-  const uriPath =
-    queryIndex === -1 ? uriWithoutFragment : uriWithoutFragment.slice(0, queryIndex);
+  const uriPath = queryIndex === -1 ? uriWithoutFragment : uriWithoutFragment.slice(0, queryIndex);
   try {
     if (decodeURIComponent(uriPath.slice("file:".length)) === ":memory:") {
       return true;
@@ -462,7 +461,7 @@ class DebugProxyCaptureStoreImpl {
         // debugging why cloud-provider labels are absent.
         if (
           host === "127.0.0.1:11434" ||
-          host.startsWith("127.0.0.1:") ||
+          host.startsWith("127.") ||
           host.startsWith("localhost:")
         ) {
           localPeers.set(host, (localPeers.get(host) ?? 0) + 1);
@@ -743,10 +742,12 @@ class DebugProxyCaptureStoreImpl {
           )
           .get(...sessionIds) as { count: number }
       ).count ?? 0;
-    this.db.prepare(`DELETE FROM capture_events WHERE session_id IN (${placeholders})`).run(
-      ...sessionIds,
-    );
-    this.db.prepare(`DELETE FROM capture_sessions WHERE id IN (${placeholders})`).run(...sessionIds);
+    this.db
+      .prepare(`DELETE FROM capture_events WHERE session_id IN (${placeholders})`)
+      .run(...sessionIds);
+    this.db
+      .prepare(`DELETE FROM capture_sessions WHERE id IN (${placeholders})`)
+      .run(...sessionIds);
     const candidateBlobIds = blobRows
       .map((row) => row.blobId?.trim())
       .filter((blobId): blobId is string => Boolean(blobId));
@@ -783,10 +784,7 @@ class DebugProxyCaptureStoreImpl {
 }
 
 export type DebugProxyCaptureStore = Omit<DebugProxyCaptureStoreImpl, "persistPayload"> & {
-  persistPayload(
-    data: Buffer,
-    contentType?: string,
-  ): CaptureBlobRecord | SharedCaptureBlobRecord;
+  persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord | SharedCaptureBlobRecord;
 };
 
 export type LegacyDebugProxyCaptureStore = Omit<DebugProxyCaptureStoreImpl, "persistPayload"> & {
@@ -860,7 +858,10 @@ export function closeDebugProxyCaptureStore(): void {
 
 // Lease API keeps one cached capture-store wrapper alive across related
 // operations, then releases it without closing the shared state database.
-export function acquireDebugProxyCaptureStore(dbPath: string, blobDir: string): {
+export function acquireDebugProxyCaptureStore(
+  dbPath: string,
+  blobDir: string,
+): {
   store: LegacyDebugProxyCaptureStore;
   release: () => void;
 };
@@ -905,10 +906,7 @@ export function acquireDebugProxyCaptureStore(
 
 export function persistEventPayload(
   store: {
-    persistPayload(
-      data: Buffer,
-      contentType?: string,
-    ): CaptureBlobRecord | SharedCaptureBlobRecord;
+    persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord | SharedCaptureBlobRecord;
   },
   params: { data?: Buffer | string | null; contentType?: string; previewLimit?: number },
 ): { dataText?: string; dataBlobId?: string; dataSha256?: string } {
