@@ -149,6 +149,49 @@ describe("normalizeReplyPayload", () => {
     expect(reply.channelData).toEqual(payload.channelData);
   });
 
+  it("records empty-tool-output for bare no-output placeholders", () => {
+    const reasons: string[] = [];
+    const normalized = normalizeReplyPayload(
+      { text: "  (no output)\n" },
+      { onSkip: (reason) => reasons.push(reason) },
+    );
+
+    expect(normalized).toBeNull();
+    expect(reasons).toEqual(["empty-tool-output"]);
+  });
+
+  it("preserves non-text payloads when clearing bare no-output text", () => {
+    const reasons: string[] = [];
+    const mediaPayload = {
+      text: "  (no output)\n",
+      mediaUrl: "https://example.com/photo.jpg",
+    };
+
+    const normalizedMedia = normalizeReplyPayload(mediaPayload, {
+      onSkip: (reason) => reasons.push(reason),
+    });
+
+    const mediaReply = expectNormalizedReply(normalizedMedia);
+    expect(mediaReply.mediaUrl).toBe("https://example.com/photo.jpg");
+    expect(mediaReply.text ?? "").toBe("");
+    expect(reasons).toEqual([]);
+
+    const channelDataPayload = {
+      text: "(no output)",
+      channelData: {
+        line: {
+          flexMessage: { type: "bubble" },
+        },
+      },
+    };
+
+    const normalizedChannelData = normalizeReplyPayload(channelDataPayload);
+
+    const channelDataReply = expectNormalizedReply(normalizedChannelData);
+    expect(channelDataReply.channelData).toEqual(channelDataPayload.channelData);
+    expect(channelDataReply.text ?? "").toBe("");
+  });
+
   it("records skip reasons for silent, empty, and internal artifact payloads", () => {
     const cases = [
       { name: "silent", payload: { text: SILENT_REPLY_TOKEN }, reason: "silent" },
