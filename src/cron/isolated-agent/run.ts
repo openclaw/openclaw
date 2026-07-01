@@ -38,6 +38,7 @@ import {
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
+import { isCronSessionKey } from "../../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveNonNegativeNumber } from "../../shared/number-coercion.js";
 import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
@@ -55,7 +56,7 @@ import {
   toolsAllowRequestsWebSearch,
 } from "../run-diagnostics.js";
 import { resolveCronAbortReasonText } from "../service/execution-errors.js";
-import { resolveCronDeliverySessionKey } from "../session-target.js";
+import { isDetachedCronSessionTarget, resolveCronDeliverySessionKey } from "../session-target.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -616,12 +617,27 @@ async function prepareCronRunContext(params: {
   };
 
   const baseSessionKey = (input.sessionKey?.trim() || `cron:${input.job.id}`).trim();
+  const usesDetachedRunSession = isDetachedCronSessionTarget(input.job.sessionTarget);
+  const baseSessionKeyIsCron =
+    baseSessionKey.startsWith("cron:") || isCronSessionKey(baseSessionKey);
+  const cronExecutionSessionKey =
+    usesDetachedRunSession && !baseSessionKeyIsCron ? `cron:${input.job.id}` : baseSessionKey;
   const agentSessionKey = resolveCronAgentSessionKey({
+    sessionKey: cronExecutionSessionKey,
+    agentId,
+    mainKey: input.cfg.session?.mainKey,
+    cfg: input.cfg,
+  });
+  const resolvedBaseSessionKey = resolveCronAgentSessionKey({
     sessionKey: baseSessionKey,
     agentId,
     mainKey: input.cfg.session?.mainKey,
     cfg: input.cfg,
   });
+  const sourceSessionKey =
+    usesDetachedRunSession && resolvedBaseSessionKey !== agentSessionKey
+      ? resolvedBaseSessionKey
+      : undefined;
   const payloadHookExternalContentSource =
     input.job.payload.kind === "agentTurn" ? input.job.payload.externalContentSource : undefined;
   const hookExternalContentSource =
@@ -648,16 +664,17 @@ async function prepareCronRunContext(params: {
   const cronSession = resolveCronSession({
     cfg: input.cfg,
     sessionKey: agentSessionKey,
+    sourceSessionKey,
     agentId,
     nowMs: now,
-    forceNew: input.job.sessionTarget === "isolated",
+    forceNew: usesDetachedRunSession,
   });
   const runSessionId = cronSession.sessionEntry.sessionId;
   const currentRunSessionId = () => cronSession.sessionEntry.sessionId ?? runSessionId;
   if (!cronSession.sessionEntry.sessionFile?.trim()) {
     cronSession.sessionEntry.sessionFile = resolveSessionTranscriptPath(runSessionId, agentId);
   }
-  const runSessionKey = baseSessionKey.startsWith("cron:")
+  const runSessionKey = usesDetachedRunSession
     ? `${agentSessionKey}:run:${runSessionId}`
     : agentSessionKey;
   const persistSessionEntry = createPersistCronSessionEntry({
@@ -674,7 +691,7 @@ async function prepareCronRunContext(params: {
     sessionId: currentRunSessionId(),
     sessionKey: runSessionKey,
   });
-  if (!cronSession.sessionEntry.label?.trim() && baseSessionKey.startsWith("cron:")) {
+  if (!cronSession.sessionEntry.label?.trim() && usesDetachedRunSession) {
     const labelSuffix =
       typeof input.job.name === "string" && input.job.name.trim()
         ? input.job.name.trim()
@@ -1385,7 +1402,7 @@ async function finalizeCronRun(params: {
 }
 
 /**
- * Release runtime references held by a completed isolated cron run.
+ * Release runtime references held by a completed detached cron run.
  *
  * After the final durable write and delivery complete, the cron session store
  * and run context are no longer needed in memory.  This shallow disposal prevents
@@ -1405,10 +1422,10 @@ async function disposeCronRunContext(params: {
   if (params.ownsRunContext) {
     await retireSessionMcpRuntime({
       sessionId: params.sessionId,
-      reason: "isolated-cron-dispose",
+      reason: "detached-cron-dispose",
       onError: (error, sid) => {
         logWarn(
-          `[cron] Failed to retire MCP runtime during isolated cron dispose ${sid}: ${String(error)}`,
+          `[cron] Failed to retire MCP runtime during detached cron dispose ${sid}: ${String(error)}`,
         );
       },
     }).catch(() => {});
@@ -1443,7 +1460,7 @@ export async function runCronIsolatedAgentTurn(params: {
   }
   // Capture the stable run id before execution can rotate its persisted session.
   const initialSessionId = prepared.context.cronSession.sessionEntry.sessionId;
-  const ownsRunContext = params.job.sessionTarget === "isolated";
+  const ownsRunContext = isDetachedCronSessionTarget(params.job.sessionTarget);
   let runContextOwnerToken: string | undefined;
   let runLifecycleGeneration = admittedLifecycleGeneration;
   const notifyExecutionStarted = (info?: { lifecycleGeneration?: string }) => {

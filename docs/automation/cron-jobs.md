@@ -87,16 +87,16 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
 
 ## Execution styles
 
-| Style           | `--session` value   | Runs in                  | Best for                        |
-| --------------- | ------------------- | ------------------------ | ------------------------------- |
-| Main session    | `main`              | Dedicated cron wake lane | Reminders, system events        |
-| Isolated        | `isolated`          | Dedicated `cron:<jobId>` | Reports, background chores      |
-| Current session | `current`           | Bound at creation time   | Context-aware recurring work    |
-| Custom session  | `session:custom-id` | Persistent named session | Workflows that build on history |
+| Style           | `--session` value   | Runs in                  | Best for                       |
+| --------------- | ------------------- | ------------------------ | ------------------------------ |
+| Main session    | `main`              | Dedicated cron wake lane | Reminders, system events       |
+| Isolated        | `isolated`          | Dedicated `cron:<jobId>` | Reports, background chores     |
+| Current session | `current`           | Detached cron run        | Context-aware recurring work   |
+| Custom session  | `session:custom-id` | Detached cron run        | Targeting a known chat/session |
 
 <AccordionGroup>
   <Accordion title="Main session vs isolated vs custom">
-    **Main session** jobs enqueue a system event into a cron-owned run lane and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). They can use the target main session's last delivery context for replies, but they do not append routine cron turns to the human chat lane and do not extend daily/idle reset freshness for the target session. **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
+    **Main session** jobs enqueue a system event into a cron-owned run lane and optionally wake the heartbeat (`--wake now` or `--wake next-heartbeat`). They can use the target main session's last delivery context for replies, but they do not append routine cron turns to the human chat lane and do not extend daily/idle reset freshness for the target session. **Isolated** jobs run a dedicated agent turn with a fresh session. **Current** and **custom** session jobs (`current`, `session:xxx`) can use the selected chat/session for delivery context and safe preference seeding, but each run still executes in a detached cron session so scheduled work does not block or pollute the live conversation transcript.
 
     Main-session cron events are self-contained system-event reminders. They do
     not automatically include the default heartbeat prompt's "Read
@@ -105,8 +105,8 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
     agent's own instructions.
 
   </Accordion>
-  <Accordion title="What 'fresh session' means for isolated jobs">
-    For isolated jobs, "fresh session" means a new transcript/session id for each run. OpenClaw may carry safe preferences such as thinking/fast/verbose settings, labels, and explicit user-selected model/auth overrides, but it does not inherit ambient conversation context from an older cron row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Use `current` or `session:<id>` when a recurring job should deliberately build on the same conversation context.
+  <Accordion title="What 'fresh session' means for detached jobs">
+    For isolated, current-session, and custom-session jobs, "fresh session" means a new transcript/session id for each run. OpenClaw may carry safe preferences such as thinking/fast/verbose settings, labels, and explicit user-selected model/auth overrides. Detached runs do not inherit ambient conversation context from an older cron row: channel/group routing, send or queue policy, elevation, origin, or ACP runtime binding. Put durable recurring-work state in the prompt, workspace files, tools, or the system the job operates on rather than relying on a live chat transcript as cron memory.
   </Accordion>
   <Accordion title="Runtime cleanup">
     For isolated jobs, runtime teardown now includes best-effort browser cleanup for that cron session. Cleanup failures are ignored so the actual cron result still wins.
