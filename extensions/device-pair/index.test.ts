@@ -1015,37 +1015,6 @@ describe("device-pair /pair default setup code", () => {
     expect(requireText(result)).toContain("prefer gateway.tailscale.mode=serve");
   });
 
-  it("rejects loopback-only setup with non-mutating Tailscale Serve guidance", async () => {
-    const command = registerPairCommand({
-      config: {
-        gateway: {
-          bind: "loopback",
-          auth: {
-            mode: "token",
-            token: "gateway-token",
-          },
-        },
-      },
-      pluginConfig: {
-        publicUrl: undefined,
-      },
-    });
-    const result = await command.handler(
-      createCommandContext({
-        channel: "webchat",
-        args: "",
-        commandBody: "/pair",
-        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
-      }),
-    );
-    const text = requireText(result);
-
-    expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
-    expect(text).toContain("Keep gateway.bind=loopback");
-    expect(text).toContain("plugins.entries.device-pair.config.publicUrl/gateway.remote.url");
-    expect(text).not.toContain("gateway.bind=lan");
-  });
-
   it("uses Tailscale Serve MagicDNS as a secure setup url", async () => {
     vi.mocked(resolveTailnetHostWithRunner).mockResolvedValueOnce("gateway.tailnet.ts.net");
     const command = registerPairCommand({

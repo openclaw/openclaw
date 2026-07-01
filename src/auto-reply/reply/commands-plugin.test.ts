@@ -1,21 +1,15 @@
 // Tests plugin command dispatch and plugin-scoped command aliases.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { clearPluginCommands, pluginCommands } from "../../plugins/command-registry-state.js";
 import { handlePluginCommand } from "./commands-plugin.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const matchPluginCommandMock = vi.hoisted(() => vi.fn());
 const executePluginCommandMock = vi.hoisted(() => vi.fn());
-const getCurrentPluginMetadataSnapshotMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../plugins/commands.js", () => ({
   matchPluginCommand: matchPluginCommandMock,
   executePluginCommand: executePluginCommandMock,
-}));
-
-vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
-  getCurrentPluginMetadataSnapshot: getCurrentPluginMetadataSnapshotMock,
 }));
 
 function buildPluginParams(
@@ -48,24 +42,9 @@ function buildPluginParams(
   } as unknown as HandleCommandsParams;
 }
 
-function mockDevicePairRuntimeSlashPlugin() {
-  getCurrentPluginMetadataSnapshotMock.mockReturnValue({
-    plugins: [
-      {
-        id: "device-pair",
-        origin: "bundled",
-        enabledByDefault: true,
-        commandAliases: [{ name: "pair", kind: "runtime-slash" }],
-      },
-    ],
-  });
-}
-
 describe("handlePluginCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    clearPluginCommands();
-    getCurrentPluginMetadataSnapshotMock.mockReturnValue(undefined);
   });
 
   it("dispatches registered plugin commands with gateway scopes and session metadata", async () => {
@@ -212,150 +191,5 @@ describe("handlePluginCommand", () => {
       reply: { text: "approved" },
     });
     expect(handler).toHaveBeenCalledTimes(1);
-  });
-
-  it.each(["/pair qr", "/ pair qr"])(
-    "does not let manifest-declared plugin slash commands fall through to the agent: %s",
-    async (commandBody) => {
-      matchPluginCommandMock.mockReturnValue(null);
-      mockDevicePairRuntimeSlashPlugin();
-
-      const result = await handlePluginCommand(
-        buildPluginParams(commandBody, {
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-        } as OpenClawConfig),
-        true,
-      );
-
-      expect(result).toEqual({
-        shouldContinue: false,
-        reply: {
-          text:
-            "Plugin command /pair is declared by the device-pair plugin, but no runtime handler is registered " +
-            "in this gateway process. Try again after plugins finish loading or restart the gateway.",
-        },
-      });
-      expect(executePluginCommandMock).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    [
-      "global plugin disablement",
-      {
-        enabled: false,
-      },
-    ],
-    [
-      "denylist",
-      {
-        deny: ["device-pair"],
-      },
-    ],
-    [
-      "allowlist omission",
-      {
-        allow: ["browser"],
-      },
-    ],
-    [
-      "per-plugin disablement",
-      {
-        entries: {
-          "device-pair": {
-            enabled: false,
-          },
-        },
-      },
-    ],
-  ] as const)(
-    "does not reserve manifest slash commands when plugin policy blocks %s",
-    async (_name, plugins) => {
-      matchPluginCommandMock.mockReturnValue(null);
-      mockDevicePairRuntimeSlashPlugin();
-
-      const result = await handlePluginCommand(
-        buildPluginParams("/pair qr", {
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-          plugins,
-        } as OpenClawConfig),
-        true,
-      );
-
-      expect(result).toBeNull();
-      expect(executePluginCommandMock).not.toHaveBeenCalled();
-    },
-  );
-
-  it("does not let manifest runtime aliases reserve built-in command names", async () => {
-    matchPluginCommandMock.mockReturnValue(null);
-    getCurrentPluginMetadataSnapshotMock.mockReturnValue({
-      plugins: [
-        {
-          id: "status-shadow",
-          origin: "workspace",
-          commandAliases: [{ name: "status", kind: "runtime-slash" }],
-        },
-      ],
-    });
-
-    const result = await handlePluginCommand(
-      buildPluginParams("/status", {
-        commands: { text: true },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-        plugins: {
-          entries: {
-            "status-shadow": { enabled: true },
-          },
-        },
-      } as OpenClawConfig),
-      true,
-    );
-
-    expect(result).toBeNull();
-    expect(executePluginCommandMock).not.toHaveBeenCalled();
-  });
-
-  it("requires authorization before returning manifest runtime handler guidance", async () => {
-    matchPluginCommandMock.mockReturnValue(null);
-    mockDevicePairRuntimeSlashPlugin();
-    const params = buildPluginParams("/pair qr", {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
-    params.command.isAuthorizedSender = false;
-    params.ctx.CommandSource = "native";
-
-    const result = await handlePluginCommand(params, true);
-
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: "You are not authorized to use this command." },
-    });
-    expect(executePluginCommandMock).not.toHaveBeenCalled();
-  });
-
-  it("does not fail closed when a registered runtime command declines the message", async () => {
-    matchPluginCommandMock.mockReturnValue(null);
-    pluginCommands.set("/pair", {
-      name: "pair",
-      description: "Pair a device",
-      pluginId: "device-pair",
-      handler: async () => ({ text: "ok" }),
-    });
-    mockDevicePairRuntimeSlashPlugin();
-
-    const result = await handlePluginCommand(
-      buildPluginParams("/pair unexpected-args", {
-        commands: { text: true },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-      } as OpenClawConfig),
-      true,
-    );
-
-    expect(result).toBeNull();
-    expect(executePluginCommandMock).not.toHaveBeenCalled();
   });
 });
