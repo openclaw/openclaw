@@ -1760,12 +1760,20 @@ export async function commitReplySessionInitialization(params: {
         storePath: params.storePath,
       });
       if (revision !== params.expectedRevision) {
-        return {
-          ok: false,
-          ...(currentEntry ? { currentEntry } : {}),
-          reason: "stale-snapshot",
-          revision,
-        };
+        if (
+          currentEntry?.status === "done" &&
+          params.sessionEntry.sessionId === currentEntry.sessionId
+        ) {
+          // Reusing a completed session with the same sessionId — the revision
+          // mismatch is likely a cache/normalization artifact, not a real conflict.
+        } else {
+          return {
+            ok: false,
+            ...(currentEntry ? { currentEntry } : {}),
+            reason: "stale-snapshot",
+            revision,
+          };
+        }
       }
 
       const readEntry = (sessionKey: string) => {
