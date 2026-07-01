@@ -5,6 +5,7 @@ import {
   clearMemoryEmbeddingProviders,
   registerMemoryEmbeddingProvider,
 } from "../plugins/memory-embedding-providers.js";
+import { clearEmbeddingProviders, registerEmbeddingProvider } from "../plugins/embedding-providers.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { resolveMemorySearchConfig, resolveMemorySearchSyncConfig } from "./memory-search.js";
@@ -73,6 +74,7 @@ describe("memory search config", () => {
 
   afterEach(() => {
     clearMemoryEmbeddingProviders();
+    clearEmbeddingProviders();
   });
 
   function configWithDefaultProvider(provider: string): OpenClawConfig {
@@ -225,6 +227,28 @@ describe("memory search config", () => {
     const resolved = resolveMemorySearchConfig(configWithDefaultProvider("local"), "main");
 
     expect(resolved?.provider).toBe("local");
+  });
+
+  it("resolves providers from the generic embedding provider registry", () => {
+    // Providers registered via api.registerEmbeddingProvider() (e.g., the
+    // llama-cpp plugin) go into the generic embedding-provider registry.
+    // getConfiguredMemoryEmbeddingProvider must fall back to that registry
+    // when the legacy memory-embedding-provider registry has no match.
+    clearMemoryEmbeddingProviders();
+    clearEmbeddingProviders();
+    registerEmbeddingProvider({
+      id: "local",
+      defaultModel: "local-gguf-default",
+      transport: "local",
+      create: async () => ({ provider: null }),
+    });
+
+    const resolved = resolveMemorySearchConfig(configWithDefaultProvider("local"), "main");
+
+    expect(resolved?.provider).toBe("local");
+    expect(resolved?.model).toBe("local-gguf-default");
+    // Transport "local" must NOT trigger remote config
+    expect(resolved?.remote).toBeUndefined();
   });
 
   it("resolves explicit provider-none", () => {
