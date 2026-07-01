@@ -247,11 +247,18 @@ function hasReplayableThinkingSignature(block: AssistantContentBlock): boolean {
  * absent, empty, or blank. They are also the authority for opaque signature
  * validity, so this intentionally avoids local length or shape heuristics.
  *
- * By default, the latest assistant turn is exempt: providers reject modified
- * latest thinking blocks, so corrupted latest turns must flow through recovery
- * rather than being rewritten before the request. Callers that append a new
- * user turn before provider replay can disable that exemption because the
- * stored assistant turn is no longer latest in the outbound request.
+ * Non-replayable thinking blocks are dropped from every assistant turn,
+ * including the latest one: shipping an unsigned/blank latest thinking block
+ * makes providers reject the request ("signature headers are missing" /
+ * "cannot be modified") and wedges the session in a retry loop. Validly-signed
+ * thinking blocks are preserved byte-identical (the original message reference
+ * is reused when nothing in that turn changed), so healthy signed turns are
+ * never rewritten.
+ *
+ * The preserveLatestAssistant option is retained for callers that distinguish
+ * the latest assistant turn (e.g. when a new user turn is appended before
+ * replay so the stored assistant turn is no longer latest); it no longer
+ * exempts that turn from stripping.
  */
 export function stripInvalidThinkingSignatures(
   messages: AgentMessage[],
@@ -278,7 +285,30 @@ export function stripInvalidThinkingSignatures(
       continue;
     }
     if (i === latestAssistantIndex) {
-      out.push(message);
+      // The latest assistant turn must not ship thinking blocks that lack a
+      // replayable signature: providers reject an unsigned/invalid latest
+      // thinking block ("signature headers are missing" / "cannot be
+      // modified"), which wedges the session in a retry loop. Drop only the
+      // non-replayable thinking blocks here; validly-signed blocks are kept
+      // byte-identical (original message reference is reused when unchanged).
+      const latestContent: AssistantContentBlock[] = [];
+      let latestChanged = false;
+      for (const block of message.content) {
+        if (!isThinkingBlock(block) || hasReplayableThinkingSignature(block)) {
+          latestContent.push(block);
+          continue;
+        }
+        latestChanged = true;
+        touched = true;
+      }
+      if (!latestChanged) {
+        out.push(message);
+        continue;
+      }
+      out.push({
+        ...message,
+        content: latestContent.length > 0 ? latestContent : buildOmittedAssistantReasoningContent(),
+      });
       continue;
     }
 
