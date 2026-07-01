@@ -60,16 +60,16 @@ import {
 import { applyModelCatalogResult, loadModels } from "../../ui/controllers/models.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
-import { refreshCurrentChatSessionList } from "./chat-session.ts";
-import { renderChatQuotaPill, renderChatModelSelect } from "./components/chat-model-controls.ts";
-import type { SidebarContent } from "./components/chat-sidebar.ts";
 import {
-  CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS,
-  persistChatComposerState,
-  restoreChatComposerState,
-} from "./composer-persistence.ts";
+  handleChatGatewayEvent,
+  handleChatSideResultGatewayEvent,
+  loadChatHistory,
+  syncSelectedSessionMessageSubscription,
+  type ChatEventPayload,
+  type ChatMetadataResult,
+  type ChatState,
+} from "./chat-gateway.ts";
 import {
-  clearChatHistory,
   flushChatQueueAfterIdleSessionReconciliation,
   handleAbortChat,
   handleSendChat,
@@ -82,16 +82,15 @@ import {
   retryQueuedChatMessage,
   steerQueuedChatMessage,
   type ChatHost,
-} from "./data.ts";
+} from "./chat-send.ts";
+import { clearChatHistory, refreshCurrentChatSessionList } from "./chat-session.ts";
+import { renderChatQuotaPill, renderChatModelSelect } from "./components/chat-model-controls.ts";
+import type { SidebarContent } from "./components/chat-sidebar.ts";
 import {
-  handleChatGatewayEvent,
-  handleChatSideResultGatewayEvent,
-  loadChatHistory,
-  syncSelectedSessionMessageSubscription,
-  type ChatEventPayload,
-  type ChatMetadataResult,
-  type ChatState,
-} from "./gateway.ts";
+  CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS,
+  persistChatComposerState,
+  restoreChatComposerState,
+} from "./composer-persistence.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,

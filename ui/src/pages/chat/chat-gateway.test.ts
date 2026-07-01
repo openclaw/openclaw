@@ -6,21 +6,20 @@ import {
   resetChatAttachmentPayloadStoreForTest,
 } from "./attachment-payload-store.ts";
 import {
-  abortChatRun,
   handleChatEvent,
   handleChatGatewayEvent,
   handleChatSideResultGatewayEvent,
   loadChatHistory,
-  requestChatSend,
-  requestSkillWorkshopRevisionChatSend,
-  sendChatMessage,
-  sendDetachedChatMessage,
-  sendSteerChatMessage,
   type ChatEventPayload,
   type ChatState,
-} from "./gateway.ts";
-
-const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+} from "./chat-gateway.ts";
+import {
+  abortChatRun,
+  requestChatSend,
+  requestSkillWorkshopRevisionChatSend,
+  sendDetachedChatMessage,
+  sendSteerChatMessage,
+} from "./chat-send.ts";
 
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
@@ -2030,29 +2029,7 @@ describe("loadChatHistory filtering", () => {
   });
 });
 
-describe("sendChatMessage", () => {
-  it("does not start a second chat.send while the first send is awaiting ack", async () => {
-    const sent = createDeferred<unknown>();
-    const request = vi.fn(() => sent.promise);
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
-    });
-
-    const first = sendChatMessage(state, "hello");
-    const activeRunId = state.chatRunId;
-    const second = sendChatMessage(state, "hello");
-
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(state.chatMessages).toHaveLength(1);
-    await expect(second).resolves.toBe(activeRunId);
-
-    sent.resolve({ runId: activeRunId, status: "started" });
-    await expect(first).resolves.toBe(activeRunId);
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(state.chatMessages).toHaveLength(1);
-  });
-
+describe("chat send Gateway requests", () => {
   it("passes the backing session id from history without resume for ordinary sends", async () => {
     const request = vi
       .fn()
@@ -2069,9 +2046,12 @@ describe("sendChatMessage", () => {
     });
 
     await loadChatHistory(state);
-    const result = await sendChatMessage(state, "continue");
+    const result = await requestChatSend(state, {
+      message: "continue",
+      runId: "run-continue",
+    });
 
-    expect(result).toMatch(UUID_V4_RE);
+    expect(result).toEqual({ runId: "run-continue", status: "started" });
     expect(state.currentSessionId).toBe("session-before-reconnect");
     const sendRequest = request.mock.calls[request.mock.calls.length - 1];
     expect(sendRequest?.[0]).toBe("chat.send");
@@ -2264,69 +2244,6 @@ describe("sendChatMessage", () => {
     });
   });
 
-  it("adopts the run id and terminal status from the chat.send ack", async () => {
-    const request = vi.fn().mockResolvedValue({ runId: "gateway-complete-run", status: "ok" });
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
-    });
-
-    const result = await sendChatMessage(state, "already handled");
-
-    expect(result).toBe("gateway-complete-run");
-    expect(state.chatRunId).toBeNull();
-    expect(state.chatStream).toBeNull();
-    expect(state.chatStreamStartedAt).toBeNull();
-    const runState = state as ChatState & {
-      chatRunStatus?: unknown;
-      lastLocalTerminalReconcile?: unknown;
-    };
-    expect(runState.chatRunStatus).toMatchObject({
-      phase: "done",
-      runId: "gateway-complete-run",
-      sessionKey: "main",
-    });
-    expect(runState.lastLocalTerminalReconcile).toMatchObject({
-      phase: "done",
-      runId: "gateway-complete-run",
-      sessionKey: "main",
-    });
-  });
-
-  it("clears the local run and rejects acceptance when the send acks a terminal timeout", async () => {
-    const request = vi.fn((_method: string, params: { idempotencyKey: string }) =>
-      Promise.resolve({ runId: params.idempotencyKey, status: "timeout" }),
-    );
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
-    });
-
-    const result = await sendChatMessage(state, "aborted before dispatch");
-
-    expect(result).toBeNull();
-    expect(state.chatMessages).toStrictEqual([]);
-    expect(state.lastError).toBe("The run ended before the message was accepted.");
-    expect(state.chatRunId).toBeNull();
-    expect(state.chatStream).toBeNull();
-    expect(state.chatStreamStartedAt).toBeNull();
-    const runState = state as ChatState & {
-      chatRunStatus?: unknown;
-      lastLocalTerminalReconcile?: unknown;
-    };
-    expect(runState.chatRunStatus).toMatchObject({
-      phase: "interrupted",
-      runId: expect.stringMatching(UUID_V4_RE),
-      sessionKey: "main",
-    });
-    expect(runState.lastLocalTerminalReconcile).toMatchObject({
-      phase: "interrupted",
-      runId: expect.stringMatching(UUID_V4_RE),
-      sessionKey: "main",
-      sessionStatus: "killed",
-    });
-  });
-
   it("preserves terminal timeout acks from Skill Workshop revision sends", async () => {
     const request = vi.fn().mockResolvedValue({ runId: "run-revision", status: "timeout" });
     const state = createState({
@@ -2380,16 +2297,20 @@ describe("sendChatMessage", () => {
       client: { request } as unknown as ChatState["client"],
     });
 
-    const result = await sendChatMessage(state, "summarize", [
-      {
-        id: "att-1",
-        dataUrl: `data:application/pdf;base64,${Buffer.from("%PDF-1.4\n").toString("base64")}`,
-        mimeType: "application/pdf",
-        fileName: "brief.pdf",
-      },
-    ]);
+    const result = await requestChatSend(state, {
+      message: "summarize",
+      runId: "run-file",
+      attachments: [
+        {
+          id: "att-1",
+          dataUrl: `data:application/pdf;base64,${Buffer.from("%PDF-1.4\n").toString("base64")}`,
+          mimeType: "application/pdf",
+          fileName: "brief.pdf",
+        },
+      ],
+    });
 
-    expect(result).toMatch(UUID_V4_RE);
+    expect(result).toEqual({ runId: "run-file", status: "started" });
     expect(request).toHaveBeenCalledTimes(1);
     const [requestMethod, requestParams] = requireFirstRequestCall(request);
     expect(requestMethod).toBe("chat.send");
@@ -2403,19 +2324,6 @@ describe("sendChatMessage", () => {
         content: Buffer.from("%PDF-1.4\n").toString("base64"),
       },
     ]);
-    const userMessage = requireRecord(state.chatMessages[0]);
-    expect(userMessage.role).toBe("user");
-    const content = userMessage.content;
-    expect(Array.isArray(content)).toBe(true);
-    const contentParts = content as unknown[];
-    expect(contentParts).toHaveLength(2);
-    expect(contentParts[0]).toEqual({ type: "text", text: "summarize" });
-    const attachmentPart = requireRecord(contentParts[1]);
-    expect(attachmentPart.type).toBe("attachment");
-    const attachmentPreview = requireRecord(attachmentPart.attachment);
-    expect(attachmentPreview.kind).toBe("document");
-    expect(attachmentPreview.label).toBe("brief.pdf");
-    expect(attachmentPreview.mimeType).toBe("application/pdf");
   });
 
   it("serializes attachments from the side payload store without copying data URLs into chat state", async () => {
@@ -2441,9 +2349,13 @@ describe("sendChatMessage", () => {
     const previewUrl = attachment.previewUrl;
     expect(previewUrl).toMatch(/^blob:nodedata:/u);
 
-    const result = await sendChatMessage(state, "summarize", [attachment]);
+    const result = await requestChatSend(state, {
+      message: "summarize",
+      runId: "run-side-store",
+      attachments: [attachment],
+    });
 
-    expect(result).toMatch(UUID_V4_RE);
+    expect(result).toEqual({ runId: "run-side-store", status: "started" });
     expect(request).toHaveBeenCalledTimes(1);
     const [requestMethod, requestParams] = requireFirstRequestCall(request);
     expect(requestMethod).toBe("chat.send");
@@ -2454,27 +2366,10 @@ describe("sendChatMessage", () => {
     const attachmentRecord = requireRecord(attachmentParam);
     expect(attachmentRecord.type).toBe("file");
     expect(attachmentRecord.content).toBe(Buffer.from(pdfBytes).toString("base64"));
-    expect(state.chatMessages).toStrictEqual([
-      {
-        role: "user",
-        content: [
-          { type: "text", text: "summarize" },
-          {
-            type: "attachment",
-            attachment: {
-              url: previewUrl,
-              kind: "document",
-              label: "brief.pdf",
-              mimeType: "application/pdf",
-            },
-          },
-        ],
-        timestamp: expect.any(Number),
-      },
-    ]);
+    expect(JSON.stringify(state.chatMessages)).not.toContain(previewUrl);
   });
 
-  it("sends inline image payloads without copying data URLs into optimistic chat state", async () => {
+  it("sends inline image payloads without copying data URLs into chat state", async () => {
     const request = vi.fn((_method: string, params?: unknown) =>
       Promise.resolve(createStartedChatSendAck(params)),
     );
@@ -2485,16 +2380,20 @@ describe("sendChatMessage", () => {
     const imageBase64 = "A".repeat(1024 * 1024);
     const imageDataUrl = `data:image/png;base64,${imageBase64}`;
 
-    const result = await sendChatMessage(state, "", [
-      {
-        id: "att-image",
-        dataUrl: imageDataUrl,
-        mimeType: "image/png",
-        fileName: "photo.png",
-      },
-    ]);
+    const result = await requestChatSend(state, {
+      message: "",
+      runId: "run-image",
+      attachments: [
+        {
+          id: "att-image",
+          dataUrl: imageDataUrl,
+          mimeType: "image/png",
+          fileName: "photo.png",
+        },
+      ],
+    });
 
-    expect(result).toMatch(UUID_V4_RE);
+    expect(result).toEqual({ runId: "run-image", status: "started" });
     expect(request).toHaveBeenCalledTimes(1);
     const [requestMethod, requestParams] = requireFirstRequestCall(request);
     expect(requestMethod).toBe("chat.send");
@@ -2508,13 +2407,6 @@ describe("sendChatMessage", () => {
         content: imageBase64,
       },
     ]);
-    expect(state.chatMessages).toStrictEqual([
-      {
-        role: "user",
-        content: [{ type: "text", text: "Attached image: photo.png" }],
-        timestamp: expect.any(Number),
-      },
-    ]);
     expect(JSON.stringify(state.chatMessages)).not.toContain("data:image/png;base64");
 
     const captionedRequest = vi.fn((_method: string, params?: unknown) =>
@@ -2526,55 +2418,20 @@ describe("sendChatMessage", () => {
     });
 
     await expect(
-      sendChatMessage(captionedState, "describe", [
-        {
-          id: "att-captioned-image",
-          dataUrl: imageDataUrl,
-          mimeType: "image/png",
-          fileName: "photo.png",
-        },
-      ]),
-    ).resolves.toMatch(UUID_V4_RE);
-    expect(captionedState.chatMessages).toStrictEqual([
-      {
-        role: "user",
-        content: [
-          { type: "text", text: "describe" },
-          { type: "text", text: "Attached image: photo.png" },
+      requestChatSend(captionedState, {
+        message: "describe",
+        runId: "run-captioned-image",
+        attachments: [
+          {
+            id: "att-captioned-image",
+            dataUrl: imageDataUrl,
+            mimeType: "image/png",
+            fileName: "photo.png",
+          },
         ],
-        timestamp: expect.any(Number),
-      },
-    ]);
-    expect(JSON.stringify(captionedState.chatMessages)).not.toContain("data:image/png;base64");
-  });
-
-  it("formats structured non-auth connect failures for chat send", async () => {
-    const request = vi.fn().mockRejectedValue(
-      new GatewayRequestError({
-        code: "INVALID_REQUEST",
-        message: "Fetch failed",
-        details: { code: "CONTROL_UI_ORIGIN_NOT_ALLOWED" },
       }),
-    );
-    const state = createState({
-      connected: true,
-      client: { request } as unknown as ChatState["client"],
-    });
-
-    const result = await sendChatMessage(state, "hello");
-
-    const expectedError =
-      "origin not allowed (open the Control UI from the gateway host or allow it in gateway.controlUi.allowedOrigins)";
-    expect(result).toBeNull();
-    expect(state.lastError).toBe(expectedError);
-    const assistantMessage = requireRecord(state.chatMessages.at(-1));
-    expect(assistantMessage.role).toBe("assistant");
-    const content = assistantMessage.content;
-    expect(Array.isArray(content)).toBe(true);
-    const [textPart] = content as unknown[];
-    const textRecord = requireRecord(textPart);
-    expect(textRecord.type).toBe("text");
-    expect(textRecord.text).toBe(`Error: ${expectedError}`);
+    ).resolves.toEqual({ runId: "run-captioned-image", status: "started" });
+    expect(JSON.stringify(captionedState.chatMessages)).not.toContain("data:image/png;base64");
   });
 });
 

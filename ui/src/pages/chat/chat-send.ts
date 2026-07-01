@@ -17,7 +17,6 @@ import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   scopedAgentIdForSession,
-  scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
   visibleSessionMatches,
   type SessionCapability,
@@ -29,12 +28,8 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiGlobalAliasAgentId,
-  resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../lib/string-coerce.ts";
+import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { resetToolStream } from "../../ui/app-tool-stream.ts";
 import { formatConnectError } from "../../ui/connect-error.ts";
@@ -52,26 +47,19 @@ import {
 } from "./attachment-payload-store.ts";
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import { executeSlashCommand } from "./chat-command-executor.ts";
-import { refreshChatSessionListForTarget } from "./chat-session.ts";
+import {
+  loadChatHistory,
+  type ChatEventPayload,
+  type ChatHistoryResult,
+  type ChatMetadataResult,
+  type ChatState,
+} from "./chat-gateway.ts";
+import { clearChatHistory, refreshChatSessionListForTarget } from "./chat-session.ts";
 import {
   INTERRUPTED_MODEL_WAIT_ERROR,
   persistStoredChatComposerQueue,
   removeStoredChatComposerQueueItem,
 } from "./composer-persistence.ts";
-import {
-  abortChatRun,
-  appendUserChatMessage,
-  loadChatHistory,
-  requestChatSend,
-  requestSkillWorkshopRevisionChatSend,
-  sendDetachedChatMessage,
-  sendSteerChatMessage,
-  type ChatEventPayload,
-  type ChatHistoryResult,
-  type ChatMetadataResult,
-  type ChatSendAck,
-  type ChatState,
-} from "./gateway.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -84,8 +72,9 @@ import {
 } from "./input-history.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { scheduleChatScroll, resetChatScroll } from "./scroll.ts";
-import { clearChatMessagesFromCache, type ChatMessageCache } from "./session-message-cache.ts";
+import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { ChatSideResult } from "./side-result.ts";
+import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 export type ChatHost = ChatInputHistoryState & {
   sessions: SessionCapability;
@@ -145,7 +134,10 @@ export type ChatStartupMetadataHandler = (params: {
   metadata: ChatMetadataResult | undefined;
 }) => void | Promise<void>;
 
-function setChatError(host: ChatHost, error: string | null) {
+function setChatError(
+  host: { lastError?: string | null; chatError?: string | null },
+  error: string | null,
+) {
   host.lastError = error;
   host.chatError = error;
 }
@@ -189,6 +181,290 @@ export type ChatSendOptions = {
 export type ChatAbortOptions = {
   preserveDraft?: boolean;
 };
+
+function isGlobalSessionKey(sessionKey: string | undefined | null): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
+  return normalized === "global";
+}
+
+function resolveSelectedAgentId(state: ChatState): string | undefined {
+  const parsed = parseAgentSessionKey(state.sessionKey);
+  if (parsed?.agentId) {
+    return normalizeAgentId(parsed.agentId);
+  }
+  const snapshot = state.hello?.snapshot as
+    | { sessionDefaults?: { defaultAgentId?: string } }
+    | undefined;
+  const assistantAgentId =
+    typeof state.assistantAgentId === "string" && state.assistantAgentId.trim()
+      ? state.assistantAgentId
+      : undefined;
+  const defaultAgentId =
+    typeof state.agentsList?.defaultId === "string" && state.agentsList.defaultId.trim()
+      ? state.agentsList.defaultId
+      : undefined;
+  const helloDefaultAgentId =
+    typeof snapshot?.sessionDefaults?.defaultAgentId === "string" &&
+    snapshot.sessionDefaults.defaultAgentId.trim()
+      ? snapshot.sessionDefaults.defaultAgentId
+      : undefined;
+  const selectedAgentId = assistantAgentId ?? defaultAgentId ?? helloDefaultAgentId;
+  return selectedAgentId ? normalizeAgentId(selectedAgentId) : undefined;
+}
+
+function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
+  const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl);
+  if (!match) {
+    return null;
+  }
+  return { mimeType: match[1], content: match[2] };
+}
+
+function buildApiAttachments(attachments?: ChatAttachment[]) {
+  const hasAttachments = attachments && attachments.length > 0;
+  return hasAttachments
+    ? attachments
+        .map((att) => {
+          const dataUrl = getChatAttachmentDataUrl(att);
+          const parsed = dataUrl ? dataUrlToBase64(dataUrl) : null;
+          if (!parsed) {
+            return null;
+          }
+          return {
+            type: parsed.mimeType.startsWith("image/") ? "image" : "file",
+            mimeType: parsed.mimeType,
+            fileName: att.fileName,
+            content: parsed.content,
+          };
+        })
+        .filter((a): a is NonNullable<typeof a> => a !== null)
+    : undefined;
+}
+
+export type ChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
+
+export type ChatSendAckServerTiming = {
+  receivedToAckMs?: number;
+  loadSessionMs?: number;
+  prepareAttachmentsMs?: number;
+};
+
+export type ChatSendAck = {
+  runId: string;
+  status: ChatSendAckStatus;
+  serverTiming?: ChatSendAckServerTiming;
+};
+
+function normalizeAckTimingValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function normalizeChatSendAckServerTiming(value: unknown): ChatSendAckServerTiming | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const receivedToAckMs = normalizeAckTimingValue(record.receivedToAckMs);
+  const loadSessionMs = normalizeAckTimingValue(record.loadSessionMs);
+  const prepareAttachmentsMs = normalizeAckTimingValue(record.prepareAttachmentsMs);
+  const timing: ChatSendAckServerTiming = {
+    ...(receivedToAckMs !== undefined ? { receivedToAckMs } : {}),
+    ...(loadSessionMs !== undefined ? { loadSessionMs } : {}),
+    ...(prepareAttachmentsMs !== undefined ? { prepareAttachmentsMs } : {}),
+  };
+  return Object.keys(timing).length > 0 ? timing : undefined;
+}
+
+function normalizeChatSendAck(payload: unknown, fallbackRunId: string): ChatSendAck {
+  if (!payload || typeof payload !== "object") {
+    return { runId: fallbackRunId, status: "started" };
+  }
+  const record = payload as Record<string, unknown>;
+  const runId =
+    typeof record.runId === "string" && record.runId.trim() ? record.runId.trim() : fallbackRunId;
+  const status = record.status;
+  const serverTiming = normalizeChatSendAckServerTiming(record.serverTiming);
+  return {
+    runId,
+    status:
+      status === "in_flight" || status === "ok" || status === "timeout" || status === "error"
+        ? status
+        : "started",
+    ...(serverTiming ? { serverTiming } : {}),
+  };
+}
+
+export async function requestChatSend(
+  state: ChatState,
+  params: {
+    message: string;
+    attachments?: ChatAttachment[];
+    runId: string;
+    sessionKey?: string;
+    agentId?: string;
+  },
+): Promise<ChatSendAck> {
+  const routing = resolveChatSendRouting(state, params);
+  const controlUiReconnectResume = Boolean(
+    routing.sessionId && state.reconnectResumeSessionId === routing.sessionId,
+  );
+  const payload = await state.client!.request("chat.send", {
+    sessionKey: routing.sessionKey,
+    ...(isGlobalSessionKey(routing.sessionKey) && routing.selectedAgentId
+      ? { agentId: routing.selectedAgentId }
+      : {}),
+    ...(routing.sessionId ? { sessionId: routing.sessionId } : {}),
+    ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
+    message: params.message,
+    deliver: false,
+    idempotencyKey: params.runId,
+    attachments: buildApiAttachments(params.attachments),
+  });
+  if (controlUiReconnectResume) {
+    state.reconnectResumeSessionId = null;
+  }
+  return normalizeChatSendAck(payload, params.runId);
+}
+
+function resolveChatSendRouting(
+  state: ChatState,
+  params: {
+    sessionKey?: string;
+    agentId?: string;
+  },
+): { selectedAgentId?: string; sessionId?: string; sessionKey: string } {
+  const sessionKey = params.sessionKey ?? state.sessionKey;
+  const selectedAgentId = params.agentId
+    ? normalizeAgentId(params.agentId)
+    : resolveSelectedAgentId(state);
+  const currentSessionId = state.currentSessionId;
+  const canReuseCurrentSessionId =
+    sessionKey === state.sessionKey &&
+    (!isGlobalSessionKey(sessionKey) ||
+      (selectedAgentId !== undefined && selectedAgentId === resolveSelectedAgentId(state)));
+  const sessionId =
+    canReuseCurrentSessionId && typeof currentSessionId === "string" && currentSessionId.trim()
+      ? currentSessionId.trim()
+      : undefined;
+  return {
+    sessionKey,
+    ...(selectedAgentId ? { selectedAgentId } : {}),
+    ...(sessionId ? { sessionId } : {}),
+  };
+}
+
+export async function requestSkillWorkshopRevisionChatSend(
+  state: ChatState,
+  params: {
+    proposalId: string;
+    instructions: string;
+    runId: string;
+    sessionKey?: string;
+    agentId?: string;
+    targetAgentId?: string;
+  },
+): Promise<ChatSendAck> {
+  const routing = resolveChatSendRouting(state, {
+    sessionKey: params.sessionKey,
+    agentId: params.targetAgentId,
+  });
+  const payload = await state.client!.request("skills.proposals.requestRevision", {
+    ...(params.agentId ? { agentId: normalizeAgentId(params.agentId) } : {}),
+    ...(routing.selectedAgentId ? { targetAgentId: routing.selectedAgentId } : {}),
+    proposalId: params.proposalId,
+    instructions: params.instructions,
+    sessionKey: routing.sessionKey,
+    ...(routing.sessionId ? { sessionId: routing.sessionId } : {}),
+    idempotencyKey: params.runId,
+  });
+  return normalizeChatSendAck(payload, params.runId);
+}
+
+export function appendUserChatMessage(
+  state: ChatState,
+  message: string,
+  attachments?: ChatAttachment[],
+  timestamp = Date.now(),
+) {
+  const entry = {
+    role: "user" as const,
+    content: buildUserChatMessageContentBlocks(message, attachments),
+    timestamp,
+  };
+  state.chatMessages = [...state.chatMessages, entry];
+  return entry;
+}
+
+async function sendChatMessageWithGeneratedRunId(
+  state: ChatState,
+  message: string,
+  attachments?: ChatAttachment[],
+): Promise<ChatSendAck | null> {
+  if (!state.client || !state.connected) {
+    return null;
+  }
+  const msg = message.trim();
+  const hasAttachments = attachments && attachments.length > 0;
+  if (!msg && !hasAttachments) {
+    return null;
+  }
+  setChatError(state, null);
+  const runId = generateUUID();
+  try {
+    return await requestChatSend(state, { message: msg, attachments, runId });
+  } catch (err) {
+    setChatError(state, formatConnectError(err));
+    return null;
+  }
+}
+
+export async function sendDetachedChatMessage(
+  state: ChatState,
+  message: string,
+  attachments?: ChatAttachment[],
+): Promise<ChatSendAck | null> {
+  return sendChatMessageWithGeneratedRunId(state, message, attachments);
+}
+
+export async function sendSteerChatMessage(
+  state: ChatState,
+  message: string,
+  attachments?: ChatAttachment[],
+): Promise<ChatSendAck | null> {
+  return sendChatMessageWithGeneratedRunId(state, message, attachments);
+}
+
+export async function abortChatRun(state: ChatState): Promise<boolean> {
+  if (!state.client || !state.connected) {
+    return false;
+  }
+  const runId = state.chatRunId;
+  try {
+    await state.client.request(
+      "chat.abort",
+      runId
+        ? {
+            sessionKey: state.sessionKey,
+            ...(() => {
+              const agentId = resolveSelectedAgentId(state);
+              return isGlobalSessionKey(state.sessionKey) && agentId ? { agentId } : {};
+            })(),
+            runId,
+          }
+        : {
+            sessionKey: state.sessionKey,
+            ...(() => {
+              const agentId = resolveSelectedAgentId(state);
+              return isGlobalSessionKey(state.sessionKey) && agentId ? { agentId } : {};
+            })(),
+          },
+    );
+    return true;
+  } catch (err) {
+    setChatError(state, formatConnectError(err));
+    return false;
+  }
+}
 
 export {
   handleChatDraftChange,
@@ -1961,44 +2237,6 @@ async function dispatchSlashCommand(
     await refreshChat(host);
   }
 
-  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
-}
-
-function clearCachedChatMessagesForSession(host: ChatHost, sessionKey: string) {
-  if (!host.chatMessagesBySession) {
-    return;
-  }
-  clearChatMessagesFromCache(host.chatMessagesBySession, host, { sessionKey });
-}
-
-export async function clearChatHistory(host: ChatHost) {
-  if (!host.client || !host.connected) {
-    return;
-  }
-  const hadActiveRun = hasAbortableSessionRun(host);
-  try {
-    await host.sessions.reset(host.sessionKey, {
-      agentId: scopedAgentParamsForSession(host, host.sessionKey).agentId,
-    });
-    host.chatMessages = [];
-    clearCachedChatMessagesForSession(host, host.sessionKey);
-    host.chatSideResult = null;
-    host.chatReplyTarget = null;
-    reconcileChatRunLifecycle(host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
-      outcome: hadActiveRun ? "interrupted" : undefined,
-      sessionStatus: "killed",
-      runId: host.chatRunId,
-      sessionKey: host.sessionKey,
-      clearLocalRun: true,
-      clearChatStream: true,
-      clearToolStream: true,
-      clearSideResultTerminalRuns: true,
-      clearRunStatus: !hadActiveRun,
-    });
-    await loadChatHistory(host as unknown as ChatState);
-  } catch (err) {
-    setChatError(host, String(err));
-  }
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
 }
 

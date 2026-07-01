@@ -295,7 +295,7 @@ function extractImages(message: unknown): ImageBlock[] {
       const b = block as Record<string, unknown>;
 
       if (b.type === "image") {
-        // Handle source object format (from sendChatMessage)
+        // Handle source object format from optimistic user sends.
         const source = b.source as Record<string, unknown> | undefined;
         const imageMeta = {
           alt: typeof b.alt === "string" ? b.alt : undefined,

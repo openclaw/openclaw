@@ -12,8 +12,8 @@ import {
 } from "./attachment-payload-store.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
 import type { executeSlashCommand } from "./chat-command-executor.ts";
-import type { ChatHost } from "./data.ts";
-import { createChatSessionsLoadOverrides } from "./session-scope.ts";
+import type { ChatHost } from "./chat-send.ts";
+import { buildChatSessionListOptions } from "./chat-session.ts";
 
 type ExecuteSlashCommand = typeof executeSlashCommand;
 
@@ -25,6 +25,8 @@ const { executeSlashCommandMock, setLastActiveSessionKeyMock } = vi.hoisted(() =
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 vi.mock("../../app/settings.ts", () => ({
+  normalizeChatAutoScrollMode: (value: unknown) =>
+    value === "always" || value === "off" ? value : "near-bottom",
   setLastActiveSessionKey: (...args: unknown[]) => setLastActiveSessionKeyMock(...args),
 }));
 
@@ -43,18 +45,18 @@ vi.mock("./chat-command-executor.ts", async (importOriginal) => {
   };
 });
 
-let handleSendChat: typeof import("./data.ts").handleSendChat;
-let steerQueuedChatMessage: typeof import("./data.ts").steerQueuedChatMessage;
-let navigateChatInputHistory: typeof import("./data.ts").navigateChatInputHistory;
-let handleAbortChat: typeof import("./data.ts").handleAbortChat;
-let hasAbortableSessionRun: typeof import("./data.ts").hasAbortableSessionRun;
-let refreshChat: typeof import("./data.ts").refreshChat;
-let clearPendingQueueItemsForRun: typeof import("./data.ts").clearPendingQueueItemsForRun;
-let removeQueuedMessage: typeof import("./data.ts").removeQueuedMessage;
-let markQueuedChatSendsWaitingForReconnect: typeof import("./data.ts").markQueuedChatSendsWaitingForReconnect;
-let retryReconnectableQueuedChatSends: typeof import("./data.ts").retryReconnectableQueuedChatSends;
-let recordChatSendServerTiming: typeof import("./data.ts").recordChatSendServerTiming;
-let recordFirstAssistantChatTiming: typeof import("./data.ts").recordFirstAssistantChatTiming;
+let handleSendChat: typeof import("./chat-send.ts").handleSendChat;
+let steerQueuedChatMessage: typeof import("./chat-send.ts").steerQueuedChatMessage;
+let navigateChatInputHistory: typeof import("./chat-send.ts").navigateChatInputHistory;
+let handleAbortChat: typeof import("./chat-send.ts").handleAbortChat;
+let hasAbortableSessionRun: typeof import("./chat-send.ts").hasAbortableSessionRun;
+let refreshChat: typeof import("./chat-send.ts").refreshChat;
+let clearPendingQueueItemsForRun: typeof import("./chat-send.ts").clearPendingQueueItemsForRun;
+let removeQueuedMessage: typeof import("./chat-send.ts").removeQueuedMessage;
+let markQueuedChatSendsWaitingForReconnect: typeof import("./chat-send.ts").markQueuedChatSendsWaitingForReconnect;
+let retryReconnectableQueuedChatSends: typeof import("./chat-send.ts").retryReconnectableQueuedChatSends;
+let recordChatSendServerTiming: typeof import("./chat-send.ts").recordChatSendServerTiming;
+let recordFirstAssistantChatTiming: typeof import("./chat-send.ts").recordFirstAssistantChatTiming;
 
 async function loadChatHelpers(): Promise<void> {
   ({
@@ -70,7 +72,7 @@ async function loadChatHelpers(): Promise<void> {
     retryReconnectableQueuedChatSends,
     recordChatSendServerTiming,
     recordFirstAssistantChatTiming,
-  } = await import("./data.ts"));
+  } = await import("./chat-send.ts"));
 }
 
 function requestUrl(input: string | URL | Request): string {
@@ -263,11 +265,10 @@ describe("refreshChat", () => {
   });
 
   it("keeps Chat session refreshes active-only when Sessions shows archived rows", () => {
-    expect(createChatSessionsLoadOverrides({ sessionsShowArchived: true })).toMatchObject({
+    expect(buildChatSessionListOptions({ sessionsShowArchived: true })).toMatchObject({
       activeMinutes: 0,
       limit: 50,
       showArchived: false,
-      preserveSessionsViewResult: true,
     });
   });
 
