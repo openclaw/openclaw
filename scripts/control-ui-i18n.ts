@@ -282,6 +282,8 @@ function prettyLanguageLabel(locale: string): string {
       return "Persian";
     case "ru":
       return "Russian";
+    case "sv":
+      return "Swedish";
     case "de":
       return "German";
     case "es":
