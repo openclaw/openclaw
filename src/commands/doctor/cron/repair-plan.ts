@@ -167,6 +167,9 @@ function legacyRetryShape(
   if (!hadDeleteAfterRun) {
     delete persisted.deleteAfterRun;
   }
+  // job_json crosses a JSON boundary before later doctor runs read it back.
+  const serializedPersisted = JSON.stringify(persisted);
+  const canonicalPersisted = JSON.parse(serializedPersisted) as Record<string, unknown>;
   const {
     id: _id,
     jobId: _jobId,
@@ -175,7 +178,7 @@ function legacyRetryShape(
     updatedAtMs: _updatedAtMs,
     notify: _notify,
     ...shape
-  } = persisted;
+  } = canonicalPersisted;
   if (ignoreNotifyDestination) {
     delete shape.delivery;
   }

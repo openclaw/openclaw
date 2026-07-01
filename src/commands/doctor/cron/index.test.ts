@@ -759,6 +759,8 @@ describe("maybeRepairLegacyCronStore", () => {
     const legacyJob = createLegacyCronJob({
       id: undefined,
       jobId: undefined,
+      description: "",
+      sessionKey: "",
       createdAtMs: undefined,
       updatedAtMs: undefined,
       schedule: { kind: "every", everyMs: 60_000 },
