@@ -29,6 +29,12 @@ const state = vi.hoisted(() => ({
   emitContinuationCompactionReleasedSpanMock: vi.fn(),
   logVerboseMock: vi.fn(),
   resolveSessionStoreEntryMock: vi.fn(),
+  stagePostCompactionDelegateMock: vi.fn(),
+}));
+
+vi.mock("../continuation-delegate-store.js", () => ({
+  stagePostCompactionDelegate: (sessionKey: string, delegate: unknown) =>
+    state.stagePostCompactionDelegateMock(sessionKey, delegate),
 }));
 
 vi.mock("../../globals.js", () => ({
@@ -109,6 +115,7 @@ beforeEach(() => {
   state.emitContinuationCompactionReleasedSpanMock.mockReset();
   state.logVerboseMock.mockReset();
   state.resolveSessionStoreEntryMock.mockReset();
+  state.stagePostCompactionDelegateMock.mockReset();
 });
 
 describe("releaseQueuedCompactionCompletion: early-return guards", () => {
@@ -418,6 +425,92 @@ describe("releaseQueuedCompactionCompletion: happy-path dispatch (branch 4)", ()
     // resolved.existing was undefined, so refreshedSessionEntry falls back to
     // the original (pre-resolve) sessionEntry. This guards the `??` chain.
     expect(dispatchArg.sessionEntry).toBe(initialSessionEntry);
+  });
+});
+
+/**
+ * I2: the volitional request_compaction release path must recover delegates
+ * that dispatchPostCompactionDelegates could neither enqueue nor re-persist
+ * (double persistence failure). It leaves survivors in the preserve array;
+ * the caller must re-stage them so recovery work is not silently dropped —
+ * matching the auto-compaction path's finally in agent-runner.ts.
+ */
+describe("releaseQueuedCompactionCompletion: preserves delegates on double persistence failure (I2)", () => {
+  const COMPACTION_RESULT = {
+    ok: true as const,
+    compacted: true as const,
+    result: {
+      summary: "compacted",
+      firstKeptEntryId: "entry-0",
+      tokensBefore: 100_000,
+      tokensAfter: 5_000,
+      sessionId: "new-session-id",
+      sessionFile: "/tmp/new-session.jsonl",
+    },
+  };
+
+  it("re-stages delegates that dispatch could not enqueue or re-persist", async () => {
+    const release = await getReleaseQueuedCompactionCompletion();
+    const sessionEntry = makeSessionEntry({ sessionId: "session-i2" });
+    const activeSessionStore: Record<string, SessionEntry> = { [SESSION_KEY]: sessionEntry };
+    const preservedDelegate = { task: "survive double failure", createdAt: 1, firstArmedAt: 1 };
+
+    state.incrementRunCompactionCountMock.mockResolvedValue(9);
+    state.resolveSessionStoreEntryMock.mockReturnValue({
+      existing: sessionEntry,
+      legacyKeys: [],
+      normalizedKey: SESSION_KEY,
+    });
+    // Simulate an enqueue failure AND a re-persist failure inside dispatch: the
+    // survivor is left on the preserve array (real dispatch behavior).
+    state.dispatchPostCompactionDelegatesMock.mockImplementation(
+      async (params: { postCompactionDelegatesToPreserve: unknown[] }) => {
+        params.postCompactionDelegatesToPreserve.push(preservedDelegate);
+        return { queuedDelegates: 0 };
+      },
+    );
+
+    await release({
+      activeSessionStore,
+      compactionResult: COMPACTION_RESULT,
+      followupRun: makeFollowupRun(),
+      getActiveSessionEntry: () => sessionEntry,
+      sessionKey: SESSION_KEY,
+      storePath: STORE_PATH,
+      traceparent: TRACEPARENT,
+    });
+
+    expect(state.stagePostCompactionDelegateMock).toHaveBeenCalledTimes(1);
+    expect(state.stagePostCompactionDelegateMock).toHaveBeenCalledWith(
+      SESSION_KEY,
+      preservedDelegate,
+    );
+  });
+
+  it("does not re-stage when dispatch preserves nothing", async () => {
+    const release = await getReleaseQueuedCompactionCompletion();
+    const sessionEntry = makeSessionEntry({ sessionId: "session-i2-clean" });
+    const activeSessionStore: Record<string, SessionEntry> = { [SESSION_KEY]: sessionEntry };
+
+    state.incrementRunCompactionCountMock.mockResolvedValue(9);
+    state.resolveSessionStoreEntryMock.mockReturnValue({
+      existing: sessionEntry,
+      legacyKeys: [],
+      normalizedKey: SESSION_KEY,
+    });
+    state.dispatchPostCompactionDelegatesMock.mockResolvedValue({ queuedDelegates: 2 });
+
+    await release({
+      activeSessionStore,
+      compactionResult: COMPACTION_RESULT,
+      followupRun: makeFollowupRun(),
+      getActiveSessionEntry: () => sessionEntry,
+      sessionKey: SESSION_KEY,
+      storePath: STORE_PATH,
+      traceparent: TRACEPARENT,
+    });
+
+    expect(state.stagePostCompactionDelegateMock).not.toHaveBeenCalled();
   });
 });
 
