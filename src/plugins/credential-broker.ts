@@ -90,6 +90,10 @@ function replacePath(root: unknown, path: readonly string[], value: unknown): un
   return copy;
 }
 
+function cloneCredentialInput(value: unknown): unknown {
+  return isSecretRef(value) ? { ...value } : value;
+}
+
 function omitBrokeredSecrets(
   config: OpenClawConfig | undefined,
   pluginId: string,
@@ -193,7 +197,7 @@ export function projectConfiguredBrokeredSecretInputs(params: {
       safeConfig = replacePath(
         safeConfig,
         ["plugins", "entries", plugin.id, "config", ...operation.secretInputPath.split(".")],
-        sourceValue,
+        cloneCredentialInput(sourceValue),
       );
     }
   }
@@ -224,7 +228,7 @@ export function createCredentialBrokerSafeConfigGetter(params: {
         safeConfig =
           preparedValue === undefined
             ? omitPath(safeConfig, path)
-            : replacePath(safeConfig, path, preparedValue);
+            : replacePath(safeConfig, path, cloneCredentialInput(preparedValue));
       }
     }
     return safeConfig as OpenClawConfig;

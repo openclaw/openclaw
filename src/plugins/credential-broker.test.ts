@@ -4,6 +4,7 @@ import type { withTrustedWebToolsEndpoint } from "../agents/tools/web-guarded-fe
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import {
+  createCredentialBrokerSafeConfigGetter,
   createCredentialBrokerClient,
   hasConfiguredBrokeredSecretInputs,
   omitConfiguredBrokeredSecretInputs,
@@ -182,13 +183,37 @@ describe("credential broker", () => {
       sourceConfig,
       plugins: [plugin],
     });
+    const projectedCredential = (
+      projected.plugins?.entries?.tavily?.config as {
+        accounts: Array<{ apiKey?: unknown }>;
+      }
+    ).accounts[0]?.apiKey as SecretRef;
+    expect(projectedCredential).toEqual(SECRET_REF);
+    expect(projectedCredential).not.toBe(SECRET_REF);
+    projectedCredential.id = "PLUGIN_MUTATED_TOKEN";
+    expect(hasConfiguredBrokeredSecretInputs({ sourceConfig, plugins: [plugin] })).toBe(true);
+
+    const getSafeConfig = createCredentialBrokerSafeConfigGetter({
+      getRuntimeConfig: () => runtimeConfig,
+      preparedConfig: sourceConfig,
+      plugins: [plugin],
+    });
+    const safeCredential = (
+      getSafeConfig().plugins?.entries?.tavily?.config as {
+        accounts: Array<{ apiKey?: unknown }>;
+      }
+    ).accounts[0]?.apiKey as SecretRef;
+    expect(safeCredential).toEqual(SECRET_REF);
+    expect(safeCredential).not.toBe(SECRET_REF);
+    safeCredential.id = "PLUGIN_MUTATED_AGAIN";
     expect(
       (
-        projected.plugins?.entries?.tavily?.config as {
+        getSafeConfig().plugins?.entries?.tavily?.config as {
           accounts: Array<{ apiKey?: unknown }>;
         }
       ).accounts[0]?.apiKey,
     ).toEqual(SECRET_REF);
+    expect(hasConfiguredBrokeredSecretInputs({ sourceConfig, plugins: [plugin] })).toBe(true);
   });
 
   it("keeps credentials inside a scoped, single-use request", async () => {
