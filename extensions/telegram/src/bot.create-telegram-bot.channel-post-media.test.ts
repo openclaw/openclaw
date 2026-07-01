@@ -124,6 +124,53 @@ function resolveFlushTimerForDelay(setTimeoutSpy: ReturnType<typeof vi.spyOn>, d
   return flushTimer;
 }
 
+type ScheduledTimer = {
+  callback: () => unknown;
+  handle: ReturnType<typeof setTimeout>;
+};
+
+function resolveActiveScheduledTimersForDelay(
+  setTimeoutSpy: ReturnType<typeof vi.spyOn>,
+  clearTimeoutSpy: ReturnType<typeof vi.spyOn>,
+  delayMs: number,
+): ScheduledTimer[] {
+  const clearedHandles = new Set(
+    (clearTimeoutSpy.mock.calls as Array<Parameters<typeof clearTimeout>>).map(
+      ([handle]) => handle,
+    ),
+  );
+  return (setTimeoutSpy.mock.calls as Array<Parameters<typeof setTimeout>>).flatMap(
+    (call, index) => {
+      if (call[1] !== delayMs) {
+        return [];
+      }
+      const handle = setTimeoutSpy.mock.results[index]?.value as ReturnType<typeof setTimeout>;
+      if (clearedHandles.has(handle) || typeof call[0] !== "function") {
+        return [];
+      }
+      return [{ callback: call[0] as () => unknown, handle }];
+    },
+  );
+}
+
+async function flushActiveScheduledTimersForDelay(params: {
+  setTimeoutSpy: ReturnType<typeof vi.spyOn>;
+  clearTimeoutSpy: ReturnType<typeof vi.spyOn>;
+  delayMs: number;
+  expectedCount: number;
+}) {
+  const timers = resolveActiveScheduledTimersForDelay(
+    params.setTimeoutSpy,
+    params.clearTimeoutSpy,
+    params.delayMs,
+  );
+  expect(timers).toHaveLength(params.expectedCount);
+  for (const timer of timers) {
+    clearTimeout(timer.handle);
+    await timer.callback();
+  }
+}
+
 function createImageFetchSpy(params?: { body?: Uint8Array; contentType?: string }) {
   return vi.spyOn(globalThis, "fetch").mockImplementation(
     async () =>
@@ -139,12 +186,13 @@ async function waitForBufferedProcessing() {
 }
 
 async function waitForMockCalls(mock: { mock: { calls: unknown[] } }, count: number) {
-  for (let index = 0; index < 80; index++) {
+  for (let index = 0; index < 400; index++) {
     if (mock.mock.calls.length >= count) {
       return;
     }
     await delay(25);
   }
+  throw new Error(`Timed out waiting for ${count} mock call(s); got ${mock.mock.calls.length}`);
 }
 
 function createChannelPostContext(params: {
@@ -271,8 +319,13 @@ describe("createTelegramBot channel_post media", () => {
     setOpenChannelPostConfig();
 
     const fetchSpy = createImageFetchSpy();
-
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    let nextTimerHandle = 1;
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(() => {
+      const handle = nextTimerHandle;
+      nextTimerHandle += 1;
+      return handle as unknown as ReturnType<typeof setTimeout>;
+    });
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
     try {
       const handler = getChannelPostHandler();
       await queueChannelPostAlbum(handler, {
@@ -282,7 +335,12 @@ describe("createTelegramBot channel_post media", () => {
         secondMessageId: 202,
       });
       expect(replySpy).not.toHaveBeenCalled();
-      await flushChannelPostMediaGroup(setTimeoutSpy);
+      await flushActiveScheduledTimersForDelay({
+        setTimeoutSpy,
+        clearTimeoutSpy,
+        delayMs: TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs,
+        expectedCount: 1,
+      });
       await waitForMockCalls(replySpy, 1);
 
       await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
@@ -290,6 +348,7 @@ describe("createTelegramBot channel_post media", () => {
       expect(payload.Body).toContain("album caption");
     } finally {
       setTimeoutSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
       fetchSpy.mockRestore();
     }
   });
@@ -311,7 +370,13 @@ describe("createTelegramBot channel_post media", () => {
     });
 
     const fetchSpy = createImageFetchSpy();
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    let nextTimerHandle = 1;
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(() => {
+      const handle = nextTimerHandle;
+      nextTimerHandle += 1;
+      return handle as unknown as ReturnType<typeof setTimeout>;
+    });
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
     try {
       const handler = getChannelPostHandlerWithRuntimeTimings();
       await queueChannelPostAlbum(handler, {
@@ -321,7 +386,12 @@ describe("createTelegramBot channel_post media", () => {
         secondMessageId: 212,
       });
       expect(replySpy).not.toHaveBeenCalled();
-      await flushChannelPostMediaGroupForDelay(setTimeoutSpy, 75);
+      await flushActiveScheduledTimersForDelay({
+        setTimeoutSpy,
+        clearTimeoutSpy,
+        delayMs: 75,
+        expectedCount: 1,
+      });
       await waitForMockCalls(replySpy, 1);
 
       await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
@@ -329,6 +399,7 @@ describe("createTelegramBot channel_post media", () => {
       expect(payload.Body).toContain("configured album");
     } finally {
       setTimeoutSpy.mockRestore();
+      clearTimeoutSpy.mockRestore();
       fetchSpy.mockRestore();
     }
   });
