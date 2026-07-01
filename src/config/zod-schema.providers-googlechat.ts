@@ -86,6 +86,7 @@ export const GoogleChatAccountSchema = z
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     mediaMaxMb: z.number().positive().optional(),
     replyToMode: ReplyToModeSchema.optional(),
+    dmThreadMode: z.enum(["none", "thread"]).optional(),
     actions: z
       .object({
         reactions: z.boolean().optional(),
