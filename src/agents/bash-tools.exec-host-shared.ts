@@ -504,6 +504,7 @@ export function buildExecApprovalPendingToolResult(params: {
   unavailableReason: ExecApprovalUnavailableReason | null;
   allowedDecisions?: readonly ExecApprovalDecision[];
   nodeId?: string;
+  ask?: ExecAsk;
 }): AgentToolResult<ExecToolDetails> {
   const allowedDecisions = params.allowedDecisions ?? resolveExecApprovalAllowedDecisions();
   return {
@@ -529,6 +530,7 @@ export function buildExecApprovalPendingToolResult(params: {
                 cwd: params.cwd,
                 host: params.host,
                 nodeId: params.nodeId,
+                ask: params.ask,
               }),
       },
     ],
@@ -558,6 +560,7 @@ export function buildExecApprovalPendingToolResult(params: {
             cwd: params.cwd,
             nodeId: params.nodeId,
             warningText: params.warningText,
+            ask: params.ask,
           } satisfies ExecToolDetails),
   };
 }

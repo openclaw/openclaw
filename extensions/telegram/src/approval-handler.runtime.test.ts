@@ -119,4 +119,96 @@ describe("telegramApprovalNativeRuntime", () => {
       messageId: "m1",
     });
   });
+
+  it("shows policy reason when ask=always and allow-always is excluded", async () => {
+    const payload = (await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
+      cfg: {} as never,
+      accountId: "default",
+      context: {
+        token: "tg-token",
+      },
+      request: {
+        id: "req-always",
+        request: {
+          command: "echo ok",
+          ask: "always",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      approvalKind: "exec",
+      nowMs: 0,
+      view: {
+        approvalKind: "exec",
+        approvalId: "req-always",
+        commandText: "echo ok",
+        ask: "always",
+        actions: [
+          {
+            decision: "allow-once",
+            label: "Allow Once",
+            command: "/approve req-always allow-once",
+            style: "success",
+          },
+          {
+            decision: "deny",
+            label: "Deny",
+            command: "/approve req-always deny",
+            style: "danger",
+          },
+        ],
+      } as never,
+    })) as TelegramPayload;
+
+    expect(payload.text).toContain(
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+    );
+    expect(payload.text).not.toContain("cannot be persisted");
+  });
+
+  it("shows non-persistable reason when ask=on-miss and allow-always is excluded", async () => {
+    const payload = (await telegramApprovalNativeRuntime.presentation.buildPendingPayload({
+      cfg: {} as never,
+      accountId: "default",
+      context: {
+        token: "tg-token",
+      },
+      request: {
+        id: "req-oneshot",
+        request: {
+          command: "openclaw --version 2>&1",
+          ask: "on-miss",
+        },
+        createdAtMs: 0,
+        expiresAtMs: 60_000,
+      },
+      approvalKind: "exec",
+      nowMs: 0,
+      view: {
+        approvalKind: "exec",
+        approvalId: "req-oneshot",
+        commandText: "openclaw --version 2>&1",
+        ask: "on-miss",
+        actions: [
+          {
+            decision: "allow-once",
+            label: "Allow Once",
+            command: "/approve req-oneshot allow-once",
+            style: "success",
+          },
+          {
+            decision: "deny",
+            label: "Deny",
+            command: "/approve req-oneshot deny",
+            style: "danger",
+          },
+        ],
+      } as never,
+    })) as TelegramPayload;
+
+    expect(payload.text).toContain(
+      "Allow Always is unavailable because this command cannot be persisted (e.g., shell redirection or dynamic content).",
+    );
+    expect(payload.text).not.toContain("requires approval every time");
+  });
 });

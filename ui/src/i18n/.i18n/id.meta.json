@@ -1,11 +1,13 @@
 {
-  "fallbackKeys": [],
-  "generatedAt": "2026-06-26T22:08:00.729Z",
+  "fallbackKeys": [
+    "execApproval.allowAlwaysUnavailableNonPersistable"
+  ],
+  "generatedAt": "2026-06-27T13:23:21.778Z",
   "locale": "id",
   "model": "claude-opus-4-8",
   "provider": "anthropic",
-  "sourceHash": "08e6ec5c2e8416d0049d2452906c20d096e17e384299af89cde872f0cfbb5015",
-  "totalKeys": 1416,
+  "sourceHash": "8f20b937475ffd72056a83828c40a72eb52aa2a5b1a768b07f8b94b9f702e6e6",
+  "totalKeys": 1417,
   "translatedKeys": 1416,
   "workflow": 1
 }

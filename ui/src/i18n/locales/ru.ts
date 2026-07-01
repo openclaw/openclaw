@@ -373,6 +373,8 @@ export const ru: TranslationMap = {
     alwaysAllow: "Всегда разрешать",
     allowAlwaysUnavailable:
       "Действующая политика подтверждений требует подтверждения каждый раз, поэтому «Всегда разрешать» недоступно.",
+    allowAlwaysUnavailableNonPersistable:
+      "Allow Always is unavailable because this command cannot be persisted (e.g., shell redirection or dynamic content).",
     deny: "Запретить",
     labels: {
       host: "Хост",

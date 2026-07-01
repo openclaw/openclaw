@@ -368,6 +368,58 @@ describe("exec approval reply helpers", () => {
     expect(payload.interactive).toBeUndefined();
   });
 
+  it("shows policy-required reason when allow-always is unavailable and ask is omitted", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-omitted",
+      approvalSlug: "slug-omitted",
+      allowedDecisions: ["allow-once", "deny"],
+      command: "echo hello",
+      host: "gateway",
+    });
+
+    expect(payload.text).not.toContain("allow-always");
+    expect(payload.text).toContain(
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+    );
+    expect(payload.text).not.toContain("cannot be persisted");
+  });
+
+  it("shows policy-required reason when allow-always is unavailable and ask is null", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-null-ask",
+      approvalSlug: "slug-null-ask",
+      ask: null,
+      allowedDecisions: ["allow-once", "deny"],
+      command: "echo hello",
+      host: "gateway",
+    });
+
+    expect(payload.text).not.toContain("allow-always");
+    expect(payload.text).toContain(
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+    );
+    expect(payload.text).not.toContain("cannot be persisted");
+  });
+
+  it("shows non-persistable reason when allow-always is unavailable without ask=always", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-oneshot",
+      approvalSlug: "slug-oneshot",
+      ask: "on-miss",
+      allowedDecisions: ["allow-once", "deny"],
+      command: "openclaw --version 2>&1",
+      host: "gateway",
+    });
+
+    expect(payload.text).not.toContain("allow-always");
+    expect(payload.text).toContain(
+      "Allow Always is unavailable because this command cannot be persisted (e.g., shell redirection or dynamic content).",
+    );
+    expect(payload.text).not.toContain(
+      "The effective approval policy requires approval every time",
+    );
+  });
+
   it("stores agent and session metadata for downstream suppression checks", () => {
     const payload = buildExecApprovalPendingReplyPayload({
       approvalId: "req-meta",

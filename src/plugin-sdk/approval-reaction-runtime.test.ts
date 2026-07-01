@@ -2,6 +2,7 @@
  * Tests approval reaction runtime helper behavior.
  */
 import { describe, expect, it } from "vitest";
+import type { PendingApprovalView } from "../infra/approval-view-model.types.js";
 import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import {
@@ -328,5 +329,89 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     expect(buildApprovalReactionHint({ allowedDecisions: ["deny"] })).toBe(
       "React with:\n\n👎 Deny",
     );
+  });
+});
+
+describe("ask-aware approval prompt copy", () => {
+  function createViewWithoutAllowAlways(ask?: string | null): PendingApprovalView {
+    return {
+      approvalKind: "exec",
+      approvalId: "test-approval",
+      phase: "pending",
+      title: "Exec approval needed",
+      commandText: "echo hello 2>&1",
+      ...(ask !== undefined ? { ask } : {}),
+      metadata: [],
+      actions: [
+        {
+          decision: "allow-once",
+          label: "Allow once",
+          style: "success",
+          command: "/approve test-approval allow-once",
+        },
+        {
+          decision: "deny",
+          label: "Deny",
+          style: "danger",
+          command: "/approve test-approval deny",
+        },
+      ],
+      expiresAtMs: 60_000,
+    };
+  }
+
+  it("shows policy reason when ask=always and allow-always is excluded", () => {
+    const request: ExecApprovalRequest = {
+      id: "test-always",
+      createdAtMs: 0,
+      expiresAtMs: 60_000,
+      request: { command: "echo hello 2>&1", ask: "always" },
+    };
+    const view = createViewWithoutAllowAlways("always");
+    const payload = buildApprovalPendingPromptPayload({
+      request,
+      view,
+      nowMs: 0,
+    });
+    expect(payload.text).toContain(
+      "Allow Always is unavailable because the effective policy requires approval every time.",
+    );
+    expect(payload.text).not.toContain("cannot be persisted");
+  });
+
+  it("shows non-persistable reason when ask=on-miss and allow-always is excluded", () => {
+    const request: ExecApprovalRequest = {
+      id: "test-on-miss",
+      createdAtMs: 0,
+      expiresAtMs: 60_000,
+      request: { command: "openclaw --version 2>&1", ask: "on-miss" },
+    };
+    const view = createViewWithoutAllowAlways("on-miss");
+    const payload = buildApprovalPendingPromptPayload({
+      request,
+      view,
+      nowMs: 0,
+    });
+    expect(payload.text).toContain("cannot be persisted");
+    expect(payload.text).not.toContain("effective policy requires approval every time");
+  });
+
+  it("shows policy reason when ask is omitted", () => {
+    const request: ExecApprovalRequest = {
+      id: "test-omitted",
+      createdAtMs: 0,
+      expiresAtMs: 60_000,
+      request: { command: "echo hello" },
+    };
+    const view = createViewWithoutAllowAlways();
+    const payload = buildApprovalPendingPromptPayload({
+      request,
+      view,
+      nowMs: 0,
+    });
+    expect(payload.text).toContain(
+      "Allow Always is unavailable because the effective policy requires approval every time.",
+    );
+    expect(payload.text).not.toContain("cannot be persisted");
   });
 });

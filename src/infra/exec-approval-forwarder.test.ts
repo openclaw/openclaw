@@ -645,6 +645,74 @@ describe("exec approval forwarder", () => {
     expect(text).toContain("Allow Always is unavailable");
   });
 
+  it("shows policy-required reason when allow-always is unavailable and ask is omitted", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        request: {
+          ...baseRequest.request,
+          unavailableDecisions: ["allow-always"],
+        },
+      }),
+    ).resolves.toBe(true);
+    await Promise.resolve();
+    const text = getFirstDeliveryText(deliver);
+    expect(text).toContain("Reply with: /approve req-1 allow-once|deny");
+    expect(text).not.toContain("allow-once|allow-always|deny");
+    expect(text).toContain(
+      "Allow Always is unavailable because the effective policy requires approval every time.",
+    );
+    expect(text).not.toContain("cannot be persisted");
+  });
+
+  it("shows policy-required reason when allow-always is unavailable and ask is null", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        request: {
+          ...baseRequest.request,
+          ask: null,
+          unavailableDecisions: ["allow-always"],
+        },
+      }),
+    ).resolves.toBe(true);
+    await Promise.resolve();
+    const text = getFirstDeliveryText(deliver);
+    expect(text).toContain("Reply with: /approve req-1 allow-once|deny");
+    expect(text).not.toContain("allow-once|allow-always|deny");
+    expect(text).toContain(
+      "Allow Always is unavailable because the effective policy requires approval every time.",
+    );
+    expect(text).not.toContain("cannot be persisted");
+  });
+
+  it("shows non-persistable reason when allow-always is unavailable without ask=always", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        request: {
+          ...baseRequest.request,
+          ask: "on-miss",
+          unavailableDecisions: ["allow-always"],
+        },
+      }),
+    ).resolves.toBe(true);
+    await Promise.resolve();
+    const text = getFirstDeliveryText(deliver);
+    expect(text).toContain("Reply with: /approve req-1 allow-once|deny");
+    expect(text).not.toContain("allow-once|allow-always|deny");
+    expect(text).toContain(
+      "Allow Always is unavailable because this command cannot be persisted (e.g., shell redirection or dynamic content).",
+    );
+    expect(text).not.toContain("the effective policy requires approval every time");
+  });
+
   it.each([
     {
       command: "bash safe\u200B.sh",

@@ -208,11 +208,16 @@ function buildDecisionText(allowedDecisions: readonly ExecApprovalReplyDecision[
 function buildManualInstructionSection(params: {
   approvalId: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
+  ask?: string | null;
 }): string[] {
   const lines: string[] = [];
   if (!params.allowedDecisions.includes("allow-always")) {
+    const isNonPersistable =
+      params.ask !== undefined && params.ask !== null && params.ask !== "always";
     lines.push(
-      "Allow Always is unavailable because the effective policy requires approval every time.",
+      isNonPersistable
+        ? "Allow Always is unavailable because this command cannot be persisted (e.g., shell redirection or dynamic content)."
+        : "Allow Always is unavailable because the effective policy requires approval every time.",
     );
   }
   if (params.allowedDecisions.length > 0) {
@@ -307,6 +312,7 @@ function buildApprovalReactionPromptText(params: {
   const manualInstructions = buildManualInstructionSection({
     approvalId: view.approvalId,
     allowedDecisions,
+    ask: view.approvalKind === "exec" ? view.ask : undefined,
   });
   if (manualInstructions.length > 0) {
     sections.push(manualInstructions.join("\n"));

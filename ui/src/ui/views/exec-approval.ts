@@ -153,9 +153,14 @@ function renderUnavailableDecisionWarning(
   active: ExecApprovalRequest,
   decisions: readonly ExecApprovalDecision[],
 ) {
-  return active.kind !== "exec" || decisions.includes("allow-always")
-    ? nothing
-    : html`<div class="exec-approval-warning">${t("execApproval.allowAlwaysUnavailable")}</div>`;
+  if (active.kind !== "exec" || decisions.includes("allow-always")) {
+    return nothing;
+  }
+  const isNonPersistable = active.request.ask != null && active.request.ask !== "always";
+  const key = isNonPersistable
+    ? "execApproval.allowAlwaysUnavailableNonPersistable"
+    : "execApproval.allowAlwaysUnavailable";
+  return html`<div class="exec-approval-warning">${t(key)}</div>`;
 }
 
 export function renderExecApprovalPrompt(state: AppViewState) {
