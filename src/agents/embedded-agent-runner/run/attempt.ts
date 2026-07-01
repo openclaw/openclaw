@@ -287,6 +287,7 @@ import {
   collectPromptCacheToolNames,
   beginPromptCacheObservation,
   completePromptCacheObservation,
+  describeSystemPromptDigestDrift,
   type PromptCacheBreak,
   type PromptCacheChange,
 } from "../prompt-cache-observability.js";
@@ -4057,6 +4058,15 @@ export async function runEmbeddedAttempt(
             toolNames: promptCacheToolNames,
           });
           promptCacheChangesForTurn = cacheObservation.changes;
+          const systemPromptDriftWarning = describeSystemPromptDigestDrift({
+            changes: cacheObservation.changes,
+            provider: params.provider,
+            modelId: params.modelId,
+            streamStrategy,
+          });
+          if (systemPromptDriftWarning) {
+            log.warn(systemPromptDriftWarning);
+          }
           cacheTrace?.recordStage("cache:state", {
             options: {
               snapshot: cacheObservation.snapshot,
