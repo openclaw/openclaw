@@ -954,6 +954,126 @@ module.exports = {
     ]);
   });
 
+  it("skips unreadable plugin CLI descriptor rows without dropping healthy commands", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "poisoned-cli-descriptors",
+      filename: "poisoned-cli-descriptors.cjs",
+      body: `module.exports = {
+  id: "poisoned-cli-descriptors",
+  register(api) {
+    const descriptors = [
+      {
+        name: "unreadable-row",
+        description: "Unreadable row",
+        hasSubcommands: false,
+      },
+      {
+        get name() {
+          throw new Error("cli descriptor name exploded");
+        },
+        description: "Bad descriptor name",
+        hasSubcommands: false,
+      },
+      {
+        name: "bad-description",
+        get description() {
+          throw new Error("cli descriptor description exploded");
+        },
+        hasSubcommands: false,
+      },
+      {
+        name: "healthy-cli",
+        description: "Healthy CLI metadata",
+        hasSubcommands: true,
+      },
+    ];
+    Object.defineProperty(descriptors, "0", {
+      get() {
+        throw new Error("cli descriptor row exploded");
+      },
+    });
+    api.registerCli(() => {}, { descriptors });
+  },
+};`,
+    });
+
+    const registry = await loadOpenClawPluginCliRegistry({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [plugin.dir] },
+          allow: ["poisoned-cli-descriptors"],
+        },
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "poisoned-cli-descriptors")?.status).toBe(
+      "loaded",
+    );
+    expect(registry.cliRegistrars).toHaveLength(1);
+    expect(registry.cliRegistrars[0]?.commands).toEqual(["healthy-cli"]);
+    expect(registry.cliRegistrars[0]?.descriptors).toEqual([
+      {
+        name: "healthy-cli",
+        description: "Healthy CLI metadata",
+        hasSubcommands: true,
+      },
+    ]);
+    expect(registry.diagnostics.map((diag) => diag.message)).toEqual([
+      "invalid cli descriptor metadata: cli descriptor row exploded",
+      "invalid cli descriptor metadata: cli descriptor name exploded",
+      "invalid cli descriptor metadata: cli descriptor description exploded",
+    ]);
+  });
+
+  it("rejects unreadable plugin CLI parent paths instead of shortening command roots", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "poisoned-cli-parent-path",
+      filename: "poisoned-cli-parent-path.cjs",
+      body: `module.exports = {
+  id: "poisoned-cli-parent-path",
+  register(api) {
+    const parentPath = ["nodes"];
+    Object.defineProperty(parentPath, "0", {
+      get() {
+        throw new Error("cli parent path exploded");
+      },
+    });
+    api.registerCli(() => {}, {
+      parentPath,
+      descriptors: [
+        {
+          name: "healthy-node",
+          description: "Healthy node CLI metadata",
+          hasSubcommands: true,
+        },
+      ],
+    });
+  },
+};`,
+    });
+
+    const registry = await loadOpenClawPluginCliRegistry({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [plugin.dir] },
+          allow: ["poisoned-cli-parent-path"],
+        },
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "poisoned-cli-parent-path")?.status).toBe(
+      "loaded",
+    );
+    expect(registry.cliRegistrars).toEqual([]);
+    expect(registry.diagnostics.map((diag) => diag.message)).toEqual([
+      "invalid cli command metadata: cli parent path exploded",
+    ]);
+  });
+
   it("rejects async plugin registration when collecting CLI metadata", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
