@@ -341,6 +341,7 @@ function createChannelPlugin(params: {
   capabilities?: readonly ChannelMessageCapability[];
   toolSchema?: MessageToolSchema | ((params: MessageToolDiscoveryContext) => MessageToolSchema);
   describeMessageTool?: DescribeMessageTool;
+  messageActionTargetAliases?: NonNullable<ChannelPlugin["actions"]>["messageActionTargetAliases"];
   message?: ChannelMessageAdapterShape;
   messaging?: ChannelPlugin["messaging"];
 }): ChannelPlugin {
@@ -373,6 +374,7 @@ function createChannelPlugin(params: {
             ...(schema ? { schema } : {}),
           };
         }),
+      messageActionTargetAliases: params.messageActionTargetAliases,
     },
   };
 }
@@ -474,6 +476,144 @@ describe("message tool gateway timeout", () => {
   });
 });
 
+describe("poll vote echo guard", () => {
+  const currentChat = "iMessage;-;+15550001111";
+
+  function createPollVoteTool() {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "imessage",
+          source: "test",
+          plugin: createChannelPlugin({
+            id: "imessage",
+            label: "iMessage",
+            docsPath: "/channels/imessage",
+            blurb: "iMessage test plugin",
+            actions: ["poll-vote"],
+            messageActionTargetAliases: {
+              "poll-vote": {
+                aliases: ["chatGuid"],
+                deliveryTargetAliases: ["chatGuid"],
+              },
+            },
+          }),
+        },
+      ]),
+    );
+    mocks.runMessageAction.mockImplementation(async ({ action }: { action: string }) =>
+      action === "poll-vote"
+        ? ({
+            kind: "action",
+            channel: "imessage",
+            action: "poll-vote",
+            handledBy: "plugin",
+            payload: {},
+            toolResult: {
+              content: [{ type: "text", text: "vote cast" }],
+              details: { pollVotedOption: "Blue" },
+            },
+            dryRun: false,
+          } as MessageActionRunResult)
+        : ({
+            kind: "send",
+            channel: "imessage",
+            action: "send",
+            to: currentChat,
+            handledBy: "plugin",
+            payload: {},
+            dryRun: false,
+          } as MessageActionRunResult),
+    );
+    return createMessageTool({
+      currentChannelProvider: "imessage",
+      currentChannelId: currentChat,
+      agentAccountId: "primary",
+      sourceReplyDeliveryMode: "message_tool_only",
+      runMessageAction: mocks.runMessageAction as never,
+    });
+  }
+
+  async function castBlueVote(
+    tool: ReturnType<CreateMessageTool>,
+    overrides: Record<string, unknown> = {},
+  ) {
+    await tool.execute("vote", {
+      action: "poll-vote",
+      channel: "imessage",
+      pollId: "poll-guid",
+      pollOptionIndex: 2,
+      ...overrides,
+    });
+  }
+
+  it("suppresses the first same-route restatement", async () => {
+    const tool = createPollVoteTool();
+    await castBlueVote(tool);
+
+    const result = await tool.execute("send", {
+      action: "send",
+      channel: "imessage",
+      message: "🦞 Blue.",
+    });
+
+    expect(result.details).toMatchObject({ status: "suppressed", reason: "poll_vote_echo" });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cross accounts, delivery targets, or conflicting target fields", async () => {
+    const accountTool = createPollVoteTool();
+    await castBlueVote(accountTool);
+    await accountTool.execute("send", {
+      action: "send",
+      channel: "imessage",
+      accountId: "secondary",
+      message: "Blue",
+    });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(2);
+
+    const targetTool = createPollVoteTool();
+    await castBlueVote(targetTool, { chatGuid: "iMessage;-;+15559998888" });
+    await targetTool.execute("send", {
+      action: "send",
+      channel: "imessage",
+      message: "Blue",
+    });
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(4);
+
+    const conflictingTool = createPollVoteTool();
+    await castBlueVote(conflictingTool, {
+      target: currentChat,
+      chatGuid: "iMessage;-;+15559998888",
+    });
+    await conflictingTool.execute("send", {
+      action: "send",
+      channel: "imessage",
+      target: currentChat,
+      message: "Blue",
+    });
+
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(6);
+  });
+
+  it("consumes the guard on the first same-route visible send", async () => {
+    const tool = createPollVoteTool();
+    await castBlueVote(tool);
+    await tool.execute("send-1", {
+      action: "send",
+      channel: "imessage",
+      message: "Blue, because it matches our theme",
+    });
+    await tool.execute("send-2", {
+      action: "send",
+      channel: "imessage",
+      message: "Blue",
+    });
+
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe("message tool secret scoping", () => {
   it("marks message-tool-only source replies in the tool description", () => {
     const scopedTool = createMessageTool({
@@ -524,6 +664,44 @@ describe("message tool secret scoping", () => {
 
     expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
+  });
+
+  it("defaults internal WebChat message tool sends to the source-reply sink", async () => {
+    mockSendResult();
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        currentChannelProvider: "webchat",
+        agentSessionKey: "agent:main:webchat:dm:dashboard",
+      },
+    });
+
+    expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
+    expect(input?.params).toMatchObject({ action: "send", message: "hi" });
+  });
+
+  it("keeps automatic WebChat final-answer guidance while selecting the tool-local sink", async () => {
+    mockSendResult();
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        currentChannelProvider: "webchat",
+        sourceReplyDeliveryMode: "automatic",
+        agentSessionKey: "agent:main:webchat:dm:dashboard",
+      },
+    });
+
+    expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
+    const tool = createMessageTool({
+      currentChannelProvider: "webchat",
+      sourceReplyDeliveryMode: "automatic",
+      agentSessionKey: "agent:main:webchat:dm:dashboard",
+    });
+    expect(tool.description).not.toContain("Normal final answers stay private");
   });
 
   it("passes current inbound audio to the outbound runner", async () => {
@@ -733,6 +911,69 @@ describe("message tool secret scoping", () => {
 
     const secretResolveCall = latestSecretResolveCall();
     expect(Array.from(secretResolveCall.targetIds ?? [])).toEqual(["channels.telegram.botToken"]);
+  });
+
+  it("preserves empty opaque target segments in inferred session delivery", async () => {
+    mockSendResult();
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        config: {
+          channels: {
+            telegram: {
+              botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+            },
+          },
+        } as never,
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "webchat",
+        agentSessionKey: "agent:main:telegram:group:room::part",
+      },
+    });
+
+    expect(input?.toolContext?.currentChannelProvider).toBe("telegram");
+    expect(input?.toolContext?.currentChannelId).toBe("room::part");
+  });
+
+  it("does not infer delivery from empty structural session segments", async () => {
+    mockSendResult();
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        config: {
+          channels: {
+            telegram: {
+              botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+            },
+          },
+        } as never,
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "webchat",
+        agentSessionKey: "agent:main:telegram::group:room",
+      },
+    });
+
+    expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
+    expect(input?.toolContext?.currentChannelId).toBeUndefined();
+  });
+
+  it("does not infer delivery from a nested opaque agent identity", async () => {
+    mockSendResult();
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        config: {} as never,
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "webchat",
+        agentSessionKey: "agent:voice:agent:channel:room",
+      },
+    });
+
+    expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
+    expect(input?.toolContext?.currentChannelId).toBeUndefined();
   });
 
   it("preserves direct session keys as explicit user targets when ambient channel drifted to webchat", async () => {

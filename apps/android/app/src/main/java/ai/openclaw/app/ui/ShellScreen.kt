@@ -96,6 +96,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -325,24 +326,34 @@ private fun GatewayTrustDialog(
 ) {
   val message =
     if (prompt.previousFingerprintSha256.isNullOrBlank()) {
-      "Verify the certificate fingerprint before trusting this gateway.\n\n${prompt.fingerprintSha256}"
+      stringResource(R.string.gateway_trust_first_seen, prompt.fingerprintSha256)
     } else {
-      "The gateway certificate changed. Continue only if you expected this.\n\nOld SHA-256:\n${prompt.previousFingerprintSha256}\n\nNew SHA-256:\n${prompt.fingerprintSha256}"
+      stringResource(
+        R.string.gateway_trust_changed,
+        prompt.previousFingerprintSha256,
+        prompt.fingerprintSha256,
+      )
     }
 
   AlertDialog(
     onDismissRequest = onDecline,
     containerColor = ClawTheme.colors.surfaceRaised,
-    title = { Text("Trust this gateway?", style = ClawTheme.type.section, color = ClawTheme.colors.text) },
+    title = {
+      Text(
+        stringResource(R.string.trust_this_gateway),
+        style = ClawTheme.type.section,
+        color = ClawTheme.colors.text,
+      )
+    },
     text = { Text(message, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted) },
     confirmButton = {
       TextButton(onClick = onAccept) {
-        Text("Trust")
+        Text(stringResource(R.string.trust_and_continue))
       }
     },
     dismissButton = {
       TextButton(onClick = onDecline) {
-        Text("Cancel")
+        Text(stringResource(R.string.cancel))
       }
     },
   )
@@ -1801,6 +1812,8 @@ private fun gatewaySummary(
     status.contains("connecting") || status.contains("reconnecting") -> "Connecting..."
     status.contains("pairing") -> "Waiting for pairing"
     status.contains("auth") -> "Authentication needed"
+    status.contains("fingerprint verification timed out") -> "TLS timed out"
+    status.contains("no tls endpoint") -> "No TLS endpoint"
     status.contains("certificate") || status.contains("tls") -> "Certificate review needed"
     else -> "Not connected"
   }

@@ -626,7 +626,9 @@ function resumeSubagentRun(runId: string) {
   if (typeof entry.endedAt === "number" && isDeliverySuspended(entry)) {
     return;
   }
-  if (entry.pauseReason === "sessions_yield") {
+  // Yielded runs stay paused until explicitly steered, except orchestrators
+  // waiting on descendants: their settle retry must reach the wake path.
+  if (entry.pauseReason === "sessions_yield" && entry.wakeOnDescendantSettle !== true) {
     return;
   }
   // Skip entries that have exhausted their retry budget or expired (#18264).
@@ -1239,6 +1241,7 @@ export function replaceSubagentRunAfterSteer(params: {
   runTimeoutSeconds?: number;
   preserveFrozenResultFallback?: boolean;
   transcriptFile?: string;
+  task?: string;
 }) {
   return subagentRunManager.replaceSubagentRunAfterSteer(params);
 }

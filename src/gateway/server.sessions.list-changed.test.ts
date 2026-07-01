@@ -209,9 +209,9 @@ async function writeMainSessionStore(options?: SessionStoreEntryOptions) {
 function expectMainPatchBroadcast(
   result: Awaited<ReturnType<typeof invokeSessionsPatch>>,
   expected: Record<string, unknown>,
-) {
+): Record<string, unknown> {
   expectFields(result.responsePayload, { ok: true, key: "agent:main:main" });
-  expectChangedBroadcast(result.broadcastToConnIds, {
+  return expectChangedBroadcast(result.broadcastToConnIds, {
     sessionKey: "agent:main:main",
     reason: "patch",
     ...expected,
@@ -685,7 +685,31 @@ test("sessions.changed mutation events include live session setting metadata", a
     verboseLevel: "on",
   });
 
-  expectMainPatchBroadcast(result, sessionSettings);
+  expectMainPatchBroadcast(result, {
+    ...sessionSettings,
+    // An explicit session override resolves to the same effective mode and the
+    // sessions.changed builder carries the row-built channel-aware value.
+    effectiveResponseUsage: "full",
+  });
+});
+
+test("sessions.changed mutation events carry the resolved effectiveResponseUsage when the session has no override", async () => {
+  // No explicit responseUsage and no configured default → the row builder resolves
+  // effectiveResponseUsage to "off". The event must carry that resolved value, not
+  // the absent raw responseUsage, so a UI consumer's effective display stays fresh.
+  await writeMainSessionStore({ verboseLevel: "on" });
+
+  const result = await invokeSessionsPatch({
+    key: "main",
+    verboseLevel: "on",
+  });
+
+  const payload = expectMainPatchBroadcast(result, {
+    effectiveResponseUsage: "off",
+  });
+  // Raw responseUsage is genuinely absent (no override), proving the event does not
+  // merely echo the raw field.
+  expect(payload.responseUsage).toBeUndefined();
 });
 
 test("sessions.changed mutation events include sendPolicy metadata", async () => {

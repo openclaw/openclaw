@@ -11,6 +11,7 @@ import type { InteractiveReply, MessagePresentationAction } from "../../interact
 import { executePluginCommand, matchPluginCommand } from "../../plugins/commands.js";
 import type { PluginCommandDiagnosticsSession, PluginCommandResult } from "../../plugins/types.js";
 import type { ReplyPayload } from "../types.js";
+import { rejectNonOwnerCommand } from "./command-gates.js";
 import {
   buildCurrentOpenClawCliCommand,
   buildCurrentOpenClawCliExecEnv,
@@ -94,6 +95,10 @@ async function handleDiagnosticsCommandWithDeps(
       `Ignoring /diagnostics from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
     return { shouldContinue: false };
+  }
+  const nonOwner = rejectNonOwnerCommand(params, DIAGNOSTICS_COMMAND);
+  if (nonOwner) {
+    return nonOwner;
   }
   if (isCodexDiagnosticsConfirmationAction(args)) {
     const codexResult = await executeCodexDiagnosticsAddon(params, args);

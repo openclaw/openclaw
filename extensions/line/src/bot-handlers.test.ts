@@ -125,6 +125,7 @@ const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
   readAllowFromStoreMock: vi.fn(async () => [] as string[]),
   upsertPairingRequestMock: vi.fn(async (_args: unknown) => ({ code: "CODE", created: true })),
 }));
+const downloadLineMediaMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   resolvePairingIdLabel: () => "lineUserId",
@@ -133,9 +134,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
 }));
 
 vi.mock("./download.js", () => ({
-  downloadLineMedia: async () => {
-    throw new Error("downloadLineMedia should not be called from bot-handlers tests");
-  },
+  downloadLineMedia: downloadLineMediaMock,
 }));
 
 vi.mock("./send.js", () => ({
@@ -350,6 +349,10 @@ describe("handleLineWebhookEvents", () => {
     readAllowFromStoreMock.mockImplementation(async () => [] as string[]);
     upsertPairingRequestMock.mockReset();
     upsertPairingRequestMock.mockImplementation(async () => ({ code: "CODE", created: true }));
+    downloadLineMediaMock.mockReset();
+    downloadLineMediaMock.mockImplementation(async () => {
+      throw new Error("downloadLineMedia should not be called from bot-handlers tests");
+    });
   });
   it("blocks group messages when groupPolicy is disabled", async () => {
     const processMessage = vi.fn();
@@ -1003,6 +1006,48 @@ describe("handleLineWebhookEvents", () => {
     );
 
     expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards LINE file names to media downloads", async () => {
+    const processMessage = vi.fn();
+    downloadLineMediaMock.mockResolvedValueOnce({
+      path: "/tmp/line-media/voice-note.m4a",
+      contentType: "audio/x-m4a",
+      size: 1234,
+    });
+    const event = createTestMessageEvent({
+      message: {
+        id: "file-audio-1",
+        type: "file",
+        fileName: "voice-note.m4a",
+        fileSize: 4096,
+      } as MessageEvent["message"],
+      source: { type: "user", userId: "user-file-audio" },
+      webhookEventId: "evt-file-audio",
+    });
+
+    await handleLineWebhookEvents(
+      [event],
+      createLineWebhookTestContext({
+        processMessage,
+        dmPolicy: "open",
+      }),
+    );
+
+    expect(downloadLineMediaMock).toHaveBeenCalledWith("file-audio-1", "token", 1, {
+      originalFilename: "voice-note.m4a",
+    });
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allMedia: [
+          {
+            path: "/tmp/line-media/voice-note.m4a",
+            contentType: "audio/x-m4a",
+          },
+        ],
+      }),
+    );
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 

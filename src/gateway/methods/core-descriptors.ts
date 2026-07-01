@@ -218,6 +218,8 @@ export const CORE_GATEWAY_METHOD_SPECS: readonly CoreGatewayMethodSpec[] = [
   { name: "poll", scope: "operator.write", advertise: false },
   { name: "sessions.steer", scope: "operator.write", advertise: false },
   { name: "push.test", scope: "operator.write", advertise: false },
+  { name: "attach.grant", scope: "operator.admin", controlPlaneWrite: true },
+  { name: "attach.revoke", scope: "operator.admin" },
   { name: "push.web.vapidPublicKey", scope: "operator.write", advertise: false },
   { name: "push.web.subscribe", scope: "operator.write", advertise: false },
   { name: "push.web.unsubscribe", scope: "operator.write", advertise: false },

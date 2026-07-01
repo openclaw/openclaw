@@ -16,9 +16,14 @@ type OpenAICompatibleChatCompletionChunk = Omit<DeepPartial<ChatCompletionChunk>
 };
 
 const mockChunksRef: { chunks: OpenAICompatibleChatCompletionChunk[] } = { chunks: [] };
+const mockOpenAIOptionsRef: { options: unknown[] } = { options: [] };
 
 vi.mock("openai", () => {
   class MockOpenAI {
+    constructor(options: unknown) {
+      mockOpenAIOptionsRef.options.push(options);
+    }
+
     chat = {
       completions: {
         create: () => ({
@@ -118,6 +123,26 @@ function makeFinishChunk(
 }
 
 describe("OpenAI-compatible completions params", () => {
+  it("configures the OpenAI SDK client with guarded fetch", async () => {
+    mockOpenAIOptionsRef.options = [];
+    mockChunksRef.chunks = [makeTextChunk("ok"), makeFinishChunk("stop")];
+
+    const stream = streamOpenAICompletions(model, context, {
+      apiKey: "sk-test",
+    });
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(mockOpenAIOptionsRef.options).toHaveLength(1);
+    expect(mockOpenAIOptionsRef.options[0]).toMatchObject({
+      baseURL: "https://api.openai.com/v1",
+      dangerouslyAllowBrowser: true,
+    });
+    expect((mockOpenAIOptionsRef.options[0] as { fetch?: unknown }).fetch).toEqual(
+      expect.any(Function),
+    );
+  });
+
   it("skips unreadable schemas while preserving healthy official OpenAI tools", async () => {
     let capturedPayload: Record<string, unknown> | undefined;
     const stream = streamOpenAICompletions(
@@ -246,6 +271,121 @@ describe("OpenAI-compatible completions params", () => {
 
     expect(result.stopReason).toBe("error");
     expect(capturedPayload?.tools).toEqual([]);
+  });
+
+  it("replays update_plan-style empty non-image tool results as no output", async () => {
+    let capturedMessages:
+      | Array<{ role?: string; content?: unknown; tool_call_id?: string }>
+      | undefined;
+    const stream = streamOpenAICompletions(
+      model,
+      {
+        messages: [
+          {
+            role: "assistant",
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            content: [{ type: "toolCall", id: "call_plan", name: "update_plan", arguments: {} }],
+            timestamp: 1,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_plan",
+            toolName: "update_plan",
+            content: [],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+      } as never,
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: typeof capturedMessages }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedMessages?.find((message) => message.role === "tool")).toMatchObject({
+      role: "tool",
+      content: "(no output)",
+      tool_call_id: "call_plan",
+    });
+  });
+
+  it("preserves image-bearing tool results with image placeholders and attachments", async () => {
+    let capturedMessages:
+      | Array<{ role?: string; content?: unknown; tool_call_id?: string }>
+      | undefined;
+    const stream = streamOpenAICompletions(
+      { ...model, input: ["text", "image"] },
+      {
+        messages: [
+          {
+            role: "assistant",
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            content: [{ type: "toolCall", id: "call_shot", name: "screenshot", arguments: {} }],
+            timestamp: 1,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_shot",
+            toolName: "screenshot",
+            content: [{ type: "image", mimeType: "image/png", data: "aW1n" }],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+      } as never,
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: typeof capturedMessages }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedMessages?.find((message) => message.role === "tool")).toMatchObject({
+      role: "tool",
+      content: "(see attached image)",
+      tool_call_id: "call_shot",
+    });
+    expect(capturedMessages?.find((message) => Array.isArray(message.content))).toMatchObject({
+      role: "user",
+      content: [
+        { type: "text", text: "Attached image(s) from tool result:" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,aW1n" } },
+      ],
+    });
   });
 
   it("does not reread an unreadable tool inventory length", async () => {
@@ -1057,5 +1197,44 @@ describe("openai-completions stop-reason tool-call guard", () => {
 
     expect(result.stopReason).toBe("stop");
     expect(result.content.filter((b) => b.type === "toolCall")).toStrictEqual([]);
+  });
+
+  it("serializes structured tool results as tool text", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const stream = streamOpenAICompletions(
+      model,
+      {
+        messages: [
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "session_status",
+            content: [{ type: "json", payload: { sessionKey: "current", status: "ok" } }],
+            isError: false,
+            timestamp: 0,
+          },
+        ],
+      } as unknown as Context,
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedPayload = payload as Record<string, unknown>;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedPayload?.messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "tool",
+          tool_call_id: "call_1",
+          content: expect.stringContaining('"type":"json"'),
+        }),
+      ]),
+    );
   });
 });

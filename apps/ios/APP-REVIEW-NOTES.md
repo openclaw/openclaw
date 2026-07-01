@@ -105,6 +105,19 @@ Reopen OpenClaw, confirm Talk is still active, then tap `Stop Talk`.
 4. Confirm at least one `agent` row is connected.
 5. Confirm the iPhone review device appears in the connected instances list.
 
+## Live Activity / Dynamic Island
+
+1. Tap `Settings`.
+2. Tap `Reconnect`.
+3. Immediately send OpenClaw to the background by returning to the Home Screen
+   or locking the iPhone.
+4. Watch the Lock Screen or Dynamic Island while the Gateway reconnects.
+
+Expected result: while reconnecting, iOS can show an `OpenClaw` Live Activity
+with connection status such as `Connecting...` or `Reconnecting...`. On a fast
+network this status may be brief because OpenClaw ends the Live Activity after
+the Gateway reconnects successfully.
+
 ## Push Notification
 
 1. Tap the `Chat` tab.

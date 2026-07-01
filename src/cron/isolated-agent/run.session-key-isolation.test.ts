@@ -198,6 +198,7 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
       promptCacheKey?: string;
       bootstrapContextMode?: string;
       bootstrapContextRunKind?: string;
+      cleanupCliLiveSessionOnRunEnd?: boolean;
     };
     expect(runRequest.sessionId).toBe("isolated-cli-run-1");
     expect(runRequest.sessionKey).toBe("agent:default:cron:cli-monitor:run:isolated-cli-run-1");
@@ -205,6 +206,7 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     expect(runRequest.promptCacheKey).toBeUndefined();
     expect(runRequest.bootstrapContextMode).toBe("lightweight");
     expect(runRequest.bootstrapContextRunKind).toBe("cron");
+    expect(runRequest.cleanupCliLiveSessionOnRunEnd).toBe(true);
   });
 
   it("runs externally sourced CLI hook turns", async () => {

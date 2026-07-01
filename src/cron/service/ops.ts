@@ -18,6 +18,7 @@ import {
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { createCronExecutionId } from "../run-id.js";
+import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
@@ -86,7 +87,7 @@ function clearManualCronJobActive(
   state.activeManualRunJobIds.delete(jobId);
   clearCronJobActive(jobId, activeJobMarker);
   if (state.activeManualRunJobIds.size === 0) {
-    state.manualSetupTimeoutRestartNotified = false;
+    state.manualSetupTimeoutNotified = false;
   }
 }
 
@@ -98,11 +99,11 @@ function maybeNotifyManualIsolatedSetupTimeout(
     isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
   },
 ): boolean {
-  if (!result.isolatedAgentSetupTimeout || state.manualSetupTimeoutRestartNotified) {
+  if (!result.isolatedAgentSetupTimeout || state.manualSetupTimeoutNotified) {
     return false;
   }
   const notified = maybeNotifyIsolatedAgentSetupTimeout(state, result);
-  state.manualSetupTimeoutRestartNotified ||= notified;
+  state.manualSetupTimeoutNotified ||= notified;
   return notified;
 }
 
@@ -524,28 +525,47 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
     if (nextJob.schedule.kind === "every") {
       const anchor = nextJob.schedule.anchorMs;
       if (typeof anchor !== "number" || !Number.isFinite(anchor)) {
-        const patchSchedule = patch.schedule;
+        // Inherit the previous cadence anchor only for an unchanged-interval
+        // re-save (UIs resubmit the schedule without the internal anchorMs).
+        // Without this an idempotent edit re-phases the job to now, shifting
+        // every future fire time and skipping an already-due slot. A genuine
+        // interval change still anchors to the edit time so the new cadence
+        // starts now, matching the prior update semantics.
+        const previousAnchorMs =
+          job.schedule.kind === "every" &&
+          job.schedule.everyMs === nextJob.schedule.everyMs &&
+          typeof job.schedule.anchorMs === "number" &&
+          Number.isFinite(job.schedule.anchorMs)
+            ? job.schedule.anchorMs
+            : undefined;
         const fallbackAnchorMs =
-          patchSchedule?.kind === "every"
+          previousAnchorMs ??
+          (patch.schedule?.kind === "every"
             ? now
             : typeof nextJob.createdAtMs === "number" && Number.isFinite(nextJob.createdAtMs)
               ? nextJob.createdAtMs
-              : now;
+              : now);
         nextJob.schedule = {
           ...nextJob.schedule,
           anchorMs: Math.max(0, Math.floor(fallbackAnchorMs)),
         };
       }
     }
+    // Only advance a recurring job's next run when the schedule/enabled inputs
+    // actually changed. An idempotent re-save (same schedule, or re-enabling an
+    // already-enabled job) must preserve a still-due slot, matching the
+    // add/remove maintenance recompute; otherwise the pending run is dropped.
+    const schedulingInputsChanged =
+      (patch.schedule !== undefined || patch.enabled !== undefined) &&
+      !cronSchedulingInputsEqual(job, nextJob);
     const scheduleChanged = patch.schedule !== undefined;
-    const enabledChanged = patch.enabled !== undefined;
 
     if (scheduleChanged && nextJob.schedule.kind === "cron" && !isJobEnabled(nextJob)) {
       computeJobNextRunAtMs({ ...nextJob, enabled: true }, now);
     }
 
     nextJob.updatedAtMs = now;
-    if (scheduleChanged || enabledChanged) {
+    if (schedulingInputsChanged) {
       if (isJobEnabled(nextJob)) {
         nextJob.state.nextRunAtMs = computeJobNextRunAtMs(nextJob, now);
       } else {

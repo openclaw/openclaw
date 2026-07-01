@@ -16,6 +16,20 @@ vi.mock("./proxy.js", () => ({
   makeProxyFetch,
 }));
 
+// readResponseWithLimit requires a real Response body; pass-through so existing plain-object
+// fetch mocks continue to work. The size-cap behavior is verified by the proof script.
+vi.mock("openclaw/plugin-sdk/response-limit-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/response-limit-runtime")>();
+  return {
+    ...actual,
+    readResponseWithLimit: async (response: Response) => {
+      const data = await response.json();
+      return Buffer.from(JSON.stringify(data));
+    },
+  };
+});
+
 describe("probeTelegram retry logic", () => {
   const token = "test-token";
   const timeoutMs = 5000;
@@ -362,7 +376,7 @@ describe("probeTelegram retry logic", () => {
 
       const result = await probePromise;
       expect(result.ok).toBe(true);
-      expect(localForceFallback).toHaveBeenCalledWith("probe timeout/network error");
+      expect(localForceFallback).toHaveBeenCalledWith("probe timeout/network error", timeoutError);
       expect(fetchMock).toHaveBeenCalledTimes(3); // 1 failed + 1 getMe success + 1 webhook
     } finally {
       vi.useRealTimers();
