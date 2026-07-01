@@ -26,7 +26,11 @@ import {
   normalizeTalkSection,
   resolveActiveTalkProviderConfig,
 } from "../../config/talk.js";
-import type { TalkConfigResponse, TalkProviderConfig } from "../../config/types.gateway.js";
+import type {
+  TalkConfigResponse,
+  TalkProviderConfig,
+  TalkRealtimeConfig,
+} from "../../config/types.gateway.js";
 import type { OpenClawConfig, TtsConfig, TtsProviderConfigMap } from "../../config/types.js";
 import { listRealtimeTranscriptionProviders } from "../../realtime-transcription/provider-registry.js";
 import {
@@ -407,10 +411,13 @@ async function resolveTalkResponseFromConfig(params: {
     return undefined;
   }
 
-  const payload = buildTalkConfigResponse(normalizedTalk);
-  if (!payload) {
+  const sourcePayload = buildTalkConfigResponse(normalizedTalk);
+  if (!sourcePayload) {
     return undefined;
   }
+  const payload = params.includeSecrets
+    ? projectTalkSourcePayloadForSecrets(sourcePayload)
+    : sourcePayload;
 
   const sourceResolved = resolveActiveTalkProviderConfig(normalizedTalk);
   const runtimeResolved = resolveActiveTalkProviderConfig(params.runtimeConfig.talk);
@@ -485,6 +492,46 @@ function projectTalkResolvedProviderConfig(params: {
   const projected = redactConfigObject(params.resolvedConfig) as TalkProviderConfig;
   const apiKey = normalizeOptionalString(params.resolvedConfig.apiKey);
   return apiKey === undefined ? projected : { ...projected, apiKey };
+}
+
+function projectTalkSourceProviderConfigForSecrets(config: TalkProviderConfig): TalkProviderConfig {
+  const projected = redactConfigObject(config) as TalkProviderConfig;
+  if (config.apiKey === undefined || typeof config.apiKey === "string") {
+    return projected;
+  }
+  return { ...projected, apiKey: config.apiKey };
+}
+
+function projectTalkSourceProviderMapForSecrets(
+  providers: Record<string, TalkProviderConfig> | undefined,
+): Record<string, TalkProviderConfig> | undefined {
+  if (!providers) {
+    return undefined;
+  }
+  return Object.fromEntries(
+    Object.entries(providers).map(([providerId, providerConfig]) => [
+      providerId,
+      projectTalkSourceProviderConfigForSecrets(providerConfig),
+    ]),
+  );
+}
+
+function projectTalkRealtimeForSecrets(realtime: TalkRealtimeConfig): TalkRealtimeConfig {
+  const projected = redactConfigObject(realtime) as TalkRealtimeConfig;
+  const providers = projectTalkSourceProviderMapForSecrets(realtime.providers);
+  return providers ? { ...projected, providers } : projected;
+}
+
+function projectTalkSourcePayloadForSecrets(payload: TalkConfigResponse): TalkConfigResponse {
+  const projected = redactConfigObject(payload) as TalkConfigResponse;
+  const providers = projectTalkSourceProviderMapForSecrets(payload.providers);
+  if (providers) {
+    projected.providers = providers;
+  }
+  if (payload.realtime) {
+    projected.realtime = projectTalkRealtimeForSecrets(payload.realtime);
+  }
+  return projected;
 }
 
 async function resolveTalkProviderInputConfig(params: {

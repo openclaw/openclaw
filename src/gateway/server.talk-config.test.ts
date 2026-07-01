@@ -302,7 +302,8 @@ describe("gateway talk.config", () => {
       expect(res.ok).toBe(true);
       expectTalkConfig(res.payload?.config?.talk, {
         provider: GENERIC_TALK_PROVIDER_ID,
-        apiKey: "secret-key-abc",
+        providerApiKey: "__OPENCLAW_REDACTED__",
+        resolvedApiKey: "secret-key-abc",
       });
     });
   });
