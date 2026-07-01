@@ -382,47 +382,14 @@ describe("memory_search unavailable payloads", () => {
     expect(searchCalls).toBe(2);
   });
 
-  it("merges qmd runtime debug across zero-hit retry attempts", async () => {
+  it("keeps the zero-hit bootstrap retry for one-shot qmd searches", async () => {
     setMemoryBackend("qmd");
     let searchCalls = 0;
-    setMemorySearchImpl(async (opts) => {
+    setMemorySearchImpl(async () => {
       searchCalls += 1;
       if (searchCalls === 1) {
-        opts?.onDebug?.({
-          backend: "qmd",
-          configuredMode: "search",
-          effectiveMode: "search",
-          qmd: {
-            collectionValidation: {
-              cacheState: "hit",
-              elapsedMs: 2,
-              collectionCount: 2,
-              listCalls: 0,
-              showCalls: 0,
-            },
-            multiCollectionProbe: {
-              cacheState: "hit",
-              elapsedMs: 1,
-              supported: true,
-            },
-          },
-        });
         return [];
       }
-      opts?.onDebug?.({
-        backend: "qmd",
-        configuredMode: "search",
-        effectiveMode: "query",
-        fallback: "unsupported-search-flags",
-        qmd: {
-          searchPlan: {
-            command: "query",
-            collectionCount: 2,
-            groupCount: 2,
-            sources: ["memory", "sessions"],
-          },
-        },
-      });
       return [
         {
           path: "MEMORY.md",
@@ -440,8 +407,59 @@ describe("memory_search unavailable payloads", () => {
         agents: { list: [{ id: "main", default: true }] },
         memory: { backend: "qmd", citations: "off" },
       },
+      oneShotCliRun: true,
     });
-    const result = await tool.execute("zero-hit-debug-retry", {
+    const result = await tool.execute("qmd-zero-hit-cli", {
+      query: "hidden thread codename",
+    });
+
+    expect((result.details as { results?: Array<{ path: string }> }).results?.[0]?.path).toBe(
+      "MEMORY.md",
+    );
+    expect(searchCalls).toBe(2);
+    expect(getMemorySyncMockCalls()).toBe(1);
+  });
+
+  it("returns qmd runtime debug without forcing a zero-hit retry", async () => {
+    setMemoryBackend("qmd");
+    let searchCalls = 0;
+    setMemorySearchImpl(async (opts) => {
+      searchCalls += 1;
+      opts?.onDebug?.({
+        backend: "qmd",
+        configuredMode: "search",
+        effectiveMode: "search",
+        qmd: {
+          collectionValidation: {
+            cacheState: "hit",
+            elapsedMs: 2,
+            collectionCount: 2,
+            listCalls: 0,
+            showCalls: 0,
+          },
+          multiCollectionProbe: {
+            cacheState: "hit",
+            elapsedMs: 1,
+            supported: true,
+          },
+          searchPlan: {
+            command: "search",
+            collectionCount: 2,
+            groupCount: 2,
+            sources: ["memory", "sessions"],
+          },
+        },
+      });
+      return [];
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { backend: "qmd", citations: "off" },
+      },
+    });
+    const result = await tool.execute("zero-hit-debug-single", {
       query: "hidden thread codename",
     });
     const details = result.details as {
@@ -452,9 +470,11 @@ describe("memory_search unavailable payloads", () => {
       };
     };
 
-    expect(searchCalls).toBe(2);
-    expect(details.debug?.effectiveMode).toBe("query");
-    expect(details.debug?.fallback).toBe("unsupported-search-flags");
+    expect((result.details as { results?: Array<unknown> }).results).toEqual([]);
+    expect(searchCalls).toBe(1);
+    expect(getMemorySyncMockCalls()).toBe(0);
+    expect(details.debug?.effectiveMode).toBe("search");
+    expect(details.debug?.fallback).toBeUndefined();
     expect(details.debug?.qmd?.collectionValidation).toMatchObject({
       cacheState: "hit",
       collectionCount: 2,
@@ -464,7 +484,7 @@ describe("memory_search unavailable payloads", () => {
       supported: true,
     });
     expect(details.debug?.qmd?.searchPlan).toEqual({
-      command: "query",
+      command: "search",
       collectionCount: 2,
       groupCount: 2,
       sources: ["memory", "sessions"],
