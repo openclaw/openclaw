@@ -1,4 +1,5 @@
 // Google Meet plugin module implements calendar behavior.
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { googleApiError } from "./google-api-errors.js";
 
@@ -6,6 +7,7 @@ const GOOGLE_CALENDAR_API_BASE_URL = "https://www.googleapis.com/calendar/v3";
 const GOOGLE_CALENDAR_API_HOST = "www.googleapis.com";
 const GOOGLE_MEET_URL_HOST = "meet.google.com";
 const GOOGLE_CALENDAR_EVENTS_SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly";
+const GOOGLE_CALENDAR_JSON_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
 
 type GoogleCalendarEventDate = {
   date?: string;
@@ -197,7 +199,13 @@ async function fetchGoogleCalendarEvents(params: {
         scopes: [GOOGLE_CALENDAR_EVENTS_SCOPE],
       });
     }
-    const payload = (await response.json()) as { items?: unknown };
+    const body = await readResponseWithLimit(response, GOOGLE_CALENDAR_JSON_RESPONSE_MAX_BYTES, {
+      onOverflow: ({ size, maxBytes }) =>
+        new Error(
+          `Google Calendar API response too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+        ),
+    });
+    const payload = JSON.parse(body.toString("utf8")) as { items?: unknown };
     if (payload.items !== undefined && !Array.isArray(payload.items)) {
       throw new Error("Google Calendar events.list response had non-array items");
     }

@@ -10,6 +10,7 @@ import {
   parseOAuthCallbackInput,
   waitForLocalOAuthCallback,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { readGoogleApiErrorDetail } from "./google-api-errors.js";
 
@@ -18,6 +19,7 @@ const GOOGLE_MEET_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_MEET_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const GOOGLE_MEET_TOKEN_HOST = "oauth2.googleapis.com";
 const GOOGLE_MEET_DEFAULT_TOKEN_LIFETIME_SECONDS = 3600;
+const GOOGLE_MEET_OAUTH_JSON_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 const GOOGLE_MEET_SCOPES = [
   "https://www.googleapis.com/auth/meetings.space.created",
   "https://www.googleapis.com/auth/meetings.space.readonly",
@@ -89,7 +91,13 @@ async function executeGoogleTokenRequest(body: URLSearchParams): Promise<GoogleM
       const detail = await readGoogleApiErrorDetail(response);
       throw new Error(`Google OAuth token request failed (${response.status}): ${detail}`);
     }
-    const payload = (await response.json()) as {
+    const body = await readResponseWithLimit(response, GOOGLE_MEET_OAUTH_JSON_RESPONSE_MAX_BYTES, {
+      onOverflow: ({ size, maxBytes }) =>
+        new Error(
+          `Google Meet OAuth token response too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+        ),
+    });
+    const payload = JSON.parse(body.toString("utf8")) as {
       access_token?: string;
       expires_in?: number;
       refresh_token?: string;

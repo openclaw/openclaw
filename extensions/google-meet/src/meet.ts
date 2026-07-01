@@ -1,4 +1,5 @@
 // Google Meet plugin module implements meet behavior.
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { exportGoogleDriveDocumentText, extractGoogleDriveDocumentId } from "./drive.js";
@@ -13,6 +14,7 @@ const GOOGLE_MEET_MEDIA_SCOPE =
 const GOOGLE_MEET_SPACE_SCOPE = "https://www.googleapis.com/auth/meetings.space.readonly";
 const GOOGLE_MEET_SPACE_CREATED_SCOPE = "https://www.googleapis.com/auth/meetings.space.created";
 const GOOGLE_MEET_SPACE_SETTINGS_SCOPE = "https://www.googleapis.com/auth/meetings.space.settings";
+const GOOGLE_MEET_JSON_RESPONSE_MAX_BYTES = 4 * 1024 * 1024;
 
 export type GoogleMeetAccessType = "OPEN" | "TRUSTED" | "RESTRICTED";
 export type GoogleMeetEntryPointAccess = "ALL" | "CREATOR_APP_ONLY";
@@ -289,7 +291,13 @@ async function fetchGoogleMeetJson<T>(params: {
         scopes: [GOOGLE_MEET_MEDIA_SCOPE],
       });
     }
-    return (await response.json()) as T;
+    const body = await readResponseWithLimit(response, GOOGLE_MEET_JSON_RESPONSE_MAX_BYTES, {
+      onOverflow: ({ size, maxBytes }) =>
+        new Error(
+          `Google Meet API response too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+        ),
+    });
+    return JSON.parse(body.toString("utf8")) as T;
   } finally {
     await release();
   }
@@ -354,7 +362,13 @@ export async function fetchGoogleMeetSpace(params: {
         scopes: [GOOGLE_MEET_SPACE_SCOPE],
       });
     }
-    const payload = (await response.json()) as GoogleMeetSpace;
+    const body = await readResponseWithLimit(response, GOOGLE_MEET_JSON_RESPONSE_MAX_BYTES, {
+      onOverflow: ({ size, maxBytes }) =>
+        new Error(
+          `Google Meet API response too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+        ),
+    });
+    const payload = JSON.parse(body.toString("utf8")) as GoogleMeetSpace;
     if (!payload.name?.trim()) {
       throw new Error("Google Meet spaces.get response was missing name");
     }
@@ -397,7 +411,13 @@ export async function createGoogleMeetSpace(params: {
             : [GOOGLE_MEET_SPACE_CREATED_SCOPE],
       });
     }
-    const payload = (await response.json()) as GoogleMeetSpace;
+    const body = await readResponseWithLimit(response, GOOGLE_MEET_JSON_RESPONSE_MAX_BYTES, {
+      onOverflow: ({ size, maxBytes }) =>
+        new Error(
+          `Google Meet API response too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+        ),
+    });
+    const payload = JSON.parse(body.toString("utf8")) as GoogleMeetSpace;
     if (!payload.name?.trim()) {
       throw new Error("Google Meet spaces.create response was missing name");
     }
