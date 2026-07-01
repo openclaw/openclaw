@@ -9,11 +9,17 @@ import {
 
 const mocks = vi.hoisted(() => ({
   capturedGatewayClientOptions: [] as GatewayClientOptions[],
+  capturedSavedGatewayConfigs: [] as Array<{ contextPath?: string }>,
   ensureNodeHostConfig: vi.fn(async () => ({
     version: 1,
     nodeId: "node-test",
   })),
-  saveNodeHostConfig: vi.fn(async () => undefined),
+  saveNodeHostConfig: vi.fn(async (cfg: { gateway?: { contextPath?: string } }) => {
+    if (cfg?.gateway) {
+      mocks.capturedSavedGatewayConfigs.push(cfg.gateway);
+    }
+    return undefined;
+  }),
   getRuntimeConfig: vi.fn(() => ({
     gateway: {
       handshakeTimeoutMs: 1_000,
@@ -73,6 +79,11 @@ vi.mock("./plugin-node-host.js", () => ({
   })),
 }));
 
+function lastCapturedOptions(): GatewayClientOptions | undefined {
+  const list = mocks.capturedGatewayClientOptions;
+  return list[list.length - 1];
+}
+
 describe("runNodeHost", () => {
   it("maps runtime platforms to gateway platform ids", () => {
     expect(resolveNodeHostGatewayPlatform("darwin")).toBe("macos");
@@ -101,5 +112,108 @@ describe("runNodeHost", () => {
     expect(mocks.capturedGatewayClientOptions[0]?.deviceFamily).toBe(
       resolveNodeHostGatewayDeviceFamily(process.platform),
     );
+  });
+
+  it("appends context path to the Gateway WebSocket URL", async () => {
+    await expect(
+      runNodeHost({
+        gatewayHost: "127.0.0.1",
+        gatewayPort: 18789,
+        gatewayContextPath: "/gws",
+      }),
+    ).rejects.toThrow("event loop readiness timeout");
+
+    expect(lastCapturedOptions()?.url).toBe("ws://127.0.0.1:18789/gws");
+  });
+
+  it("preserves trailing slash in context path as-is", async () => {
+    await expect(
+      runNodeHost({
+        gatewayHost: "127.0.0.1",
+        gatewayPort: 18789,
+        gatewayContextPath: "/gws/",
+      }),
+    ).rejects.toThrow("event loop readiness timeout");
+
+    expect(lastCapturedOptions()?.url).toBe("ws://127.0.0.1:18789/gws/");
+  });
+
+  it("prepends leading slash when context path is missing one", async () => {
+    await expect(
+      runNodeHost({
+        gatewayHost: "127.0.0.1",
+        gatewayPort: 18789,
+        gatewayContextPath: "gws",
+      }),
+    ).rejects.toThrow("event loop readiness timeout");
+
+    expect(lastCapturedOptions()?.url).toBe("ws://127.0.0.1:18789/gws");
+  });
+
+  it("omits context path when empty or undefined", async () => {
+    await expect(
+      runNodeHost({
+        gatewayHost: "127.0.0.1",
+        gatewayPort: 18789,
+        gatewayContextPath: "",
+      }),
+    ).rejects.toThrow("event loop readiness timeout");
+
+    expect(lastCapturedOptions()?.url).toBe("ws://127.0.0.1:18789");
+  });
+
+  it("saves the gateway config with contextPath to node.json", async () => {
+    await expect(
+      runNodeHost({
+        gatewayHost: "127.0.0.1",
+        gatewayPort: 18789,
+        gatewayContextPath: "/gws",
+      }),
+    ).rejects.toThrow("event loop readiness timeout");
+
+    const lastSaved =
+      mocks.capturedSavedGatewayConfigs[mocks.capturedSavedGatewayConfigs.length - 1];
+    expect(lastSaved?.contextPath).toBe("/gws");
+  });
+
+  it("clears saved contextPath when opts do not pass one (retarget scenario)", async () => {
+    mocks.ensureNodeHostConfig.mockResolvedValueOnce({
+      version: 1,
+      nodeId: "node-test",
+      gateway: { contextPath: "/old-path" },
+    } as any);
+
+    await expect(
+      runNodeHost({
+        gatewayHost: "192.168.1.1",
+        gatewayPort: 9999,
+      }),
+    ).rejects.toThrow("event loop readiness timeout");
+
+    const lastSaved =
+      mocks.capturedSavedGatewayConfigs[mocks.capturedSavedGatewayConfigs.length - 1];
+    expect(lastSaved?.contextPath).toBeUndefined();
+    expect(lastCapturedOptions()?.url).toBe("ws://192.168.1.1:9999");
+  });
+
+  it("clears saved contextPath when explicitly passed as empty string", async () => {
+    mocks.ensureNodeHostConfig.mockResolvedValueOnce({
+      version: 1,
+      nodeId: "node-test",
+      gateway: { contextPath: "/old-path" },
+    } as any);
+
+    await expect(
+      runNodeHost({
+        gatewayHost: "127.0.0.1",
+        gatewayPort: 18789,
+        gatewayContextPath: "",
+      }),
+    ).rejects.toThrow("event loop readiness timeout");
+
+    const lastSaved =
+      mocks.capturedSavedGatewayConfigs[mocks.capturedSavedGatewayConfigs.length - 1];
+    expect(lastSaved?.contextPath || undefined).toBeUndefined();
+    expect(lastCapturedOptions()?.url).toBe("ws://127.0.0.1:18789");
   });
 });
