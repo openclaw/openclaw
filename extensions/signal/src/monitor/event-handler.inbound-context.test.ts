@@ -9,9 +9,24 @@ const [
   { createSignalEventHandler },
 ] = await Promise.all([import("./event-handler.test-harness.js"), import("./event-handler.js")]);
 
+type DispatchInboundMessageMockParams = {
+  ctx: MsgContext;
+  replyOptions?: {
+    allowToolLifecycleWhenProgressHidden?: boolean;
+    onReplyStart?: () => void | Promise<void>;
+    onToolStart?: (payload: { name?: string }) => void | Promise<void>;
+    onCompactionStart?: () => void | Promise<void>;
+    onCompactionEnd?: () => void | Promise<void>;
+  };
+};
+
+type SendReactionSignalMockCall = [string, number, string, unknown];
+
 const {
   sendTypingMock,
   sendReadReceiptMock,
+  sendReactionSignalMock,
+  removeReactionSignalMock,
   dispatchInboundMessageMock,
   enqueueSystemEventMock,
   recordInboundSessionMock,
@@ -21,18 +36,15 @@ const {
   return {
     sendTypingMock: vi.fn(),
     sendReadReceiptMock: vi.fn(),
+    sendReactionSignalMock: vi.fn(async () => ({ ok: true })),
+    removeReactionSignalMock: vi.fn(async () => ({ ok: true })),
     enqueueSystemEventMock: vi.fn(),
     recordInboundSessionMock: vi.fn(),
-    dispatchInboundMessageMock: vi.fn(
-      async (params: {
-        ctx: MsgContext;
-        replyOptions?: { onReplyStart?: () => void | Promise<void> };
-      }) => {
-        captureState.ctx = params.ctx;
-        await Promise.resolve(params.replyOptions?.onReplyStart?.());
-        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-      },
-    ),
+    dispatchInboundMessageMock: vi.fn(async (params: DispatchInboundMessageMockParams) => {
+      captureState.ctx = params.ctx;
+      await Promise.resolve(params.replyOptions?.onReplyStart?.());
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+    }),
     capture: captureState,
   };
 });
@@ -45,6 +57,11 @@ vi.mock("../send.js", () => ({
   sendMessageSignal: vi.fn(),
   sendTypingSignal: sendTypingMock,
   sendReadReceiptSignal: sendReadReceiptMock,
+}));
+
+vi.mock("../send-reactions.js", () => ({
+  sendReactionSignal: sendReactionSignalMock,
+  removeReactionSignal: removeReactionSignalMock,
 }));
 
 vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
@@ -98,11 +115,19 @@ function requireCapturedContext(): MsgContext {
   return capture.ctx;
 }
 
+function nextTimerTick(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
 describe("signal createSignalEventHandler inbound context", () => {
   beforeEach(() => {
     delete capture.ctx;
     sendTypingMock.mockReset().mockResolvedValue(true);
     sendReadReceiptMock.mockReset().mockResolvedValue(true);
+    sendReactionSignalMock.mockReset().mockResolvedValue({ ok: true });
+    removeReactionSignalMock.mockReset().mockResolvedValue({ ok: true });
     enqueueSystemEventMock.mockReset();
     recordInboundSessionMock.mockReset().mockResolvedValue(undefined);
     dispatchInboundMessageMock.mockClear();
@@ -233,6 +258,446 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.Body).toContain("summarize the release notes");
     expect(context.Body).not.toBe(context.BodyForAgent);
     expect(context.UntrustedContext).toBeUndefined();
+  });
+
+  it("runs Telegram-parity Signal status reactions when explicitly enabled", async () => {
+    dispatchInboundMessageMock.mockImplementationOnce(
+      async (params: DispatchInboundMessageMockParams) => {
+        capture.ctx = params.ctx;
+        await nextTimerTick();
+        await params.replyOptions?.onToolStart?.({ name: "exec" });
+        await nextTimerTick();
+        await params.replyOptions?.onCompactionStart?.();
+        await nextTimerTick();
+        await params.replyOptions?.onCompactionEnd?.();
+        await nextTimerTick();
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 1 } };
+      },
+    );
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: {
+            ackReaction: "👀",
+            ackReactionScope: "direct",
+            inbound: { debounceMs: 0 },
+            statusReactions: {
+              enabled: true,
+              timing: {
+                debounceMs: 0,
+                doneHoldMs: 0,
+                errorHoldMs: 0,
+                stallSoftMs: 60_000,
+                stallHardMs: 120_000,
+              },
+            },
+          },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        timestamp: 1700000000001,
+        dataMessage: {
+          message: "ship it",
+          attachments: [],
+        },
+      }),
+    );
+    for (let i = 0; i < 5; i += 1) {
+      await nextTimerTick();
+    }
+
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    const sentEmojis = (
+      sendReactionSignalMock.mock.calls as unknown as SendReactionSignalMockCall[]
+    ).map((call) => call[2]);
+    expect(sentEmojis).toEqual(expect.arrayContaining(["👀", "🧠", "🛠️", "🗜️", "✅"]));
+    expect(sentEmojis.at(-1)).toBe("👀");
+    expect(removeReactionSignalMock).not.toHaveBeenCalled();
+    expect(dispatchInboundMessageMock.mock.calls[0]?.[0].replyOptions).toEqual(
+      expect.objectContaining({ allowToolLifecycleWhenProgressHidden: true }),
+    );
+    expect(sendReactionSignalMock).toHaveBeenCalledWith(
+      "+15550002222",
+      1700000000001,
+      "👀",
+      expect.objectContaining({
+        accountId: "default",
+        baseUrl: "http://localhost",
+      }),
+    );
+  });
+
+  it("clears the latest Signal status reaction after reply when removeAckAfterReply is enabled", async () => {
+    dispatchInboundMessageMock.mockImplementationOnce(
+      async (params: DispatchInboundMessageMockParams) => {
+        capture.ctx = params.ctx;
+        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 1 } };
+      },
+    );
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: {
+            ackReaction: "👀",
+            ackReactionScope: "direct",
+            removeAckAfterReply: true,
+            inbound: { debounceMs: 0 },
+            statusReactions: {
+              enabled: true,
+              timing: {
+                debounceMs: 0,
+                doneHoldMs: 0,
+                errorHoldMs: 0,
+                stallSoftMs: 60_000,
+                stallHardMs: 120_000,
+              },
+            },
+          },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        timestamp: 1700000000001,
+        dataMessage: {
+          message: "ship it",
+          attachments: [],
+        },
+      }),
+    );
+    for (let i = 0; i < 5; i += 1) {
+      await nextTimerTick();
+    }
+
+    const sentEmojis = (
+      sendReactionSignalMock.mock.calls as unknown as SendReactionSignalMockCall[]
+    ).map((call) => call[2]);
+    expect(sentEmojis).toContain("✅");
+    expect(removeReactionSignalMock).toHaveBeenCalledWith(
+      "+15550002222",
+      1700000000001,
+      "✅",
+      expect.objectContaining({
+        accountId: "default",
+        baseUrl: "http://localhost",
+      }),
+    );
+  });
+
+  it("uses dataMessage timestamp fallback for Signal status reactions", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: {
+            ackReaction: "👀",
+            ackReactionScope: "direct",
+            inbound: { debounceMs: 0 },
+            statusReactions: {
+              enabled: true,
+              timing: {
+                debounceMs: 0,
+                doneHoldMs: 0,
+                errorHoldMs: 0,
+                stallSoftMs: 60_000,
+                stallHardMs: 120_000,
+              },
+            },
+          },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        timestamp: undefined,
+        dataMessage: {
+          timestamp: 1700000000002,
+          message: "ship it",
+          attachments: [],
+        },
+      }),
+    );
+    await nextTimerTick();
+
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendReactionSignalMock).toHaveBeenCalledWith(
+      "+15550002222",
+      1700000000002,
+      "👀",
+      expect.objectContaining({
+        accountId: "default",
+        baseUrl: "http://localhost",
+      }),
+    );
+  });
+
+  it("does not send Signal status reactions unless explicitly enabled", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        timestamp: 1700000000001,
+        dataMessage: {
+          message: "ship it",
+          attachments: [],
+        },
+      }),
+    );
+    await nextTimerTick();
+
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendReactionSignalMock).not.toHaveBeenCalled();
+    expect(removeReactionSignalMock).not.toHaveBeenCalled();
+  });
+
+  it("does not send Signal status reactions when reactionLevel is off", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: {
+            ackReaction: "👀",
+            ackReactionScope: "direct",
+            inbound: { debounceMs: 0 },
+            statusReactions: { enabled: true },
+          },
+          channels: {
+            signal: {
+              dmPolicy: "open",
+              allowFrom: ["*"],
+              reactionLevel: "off",
+            },
+          },
+        } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        timestamp: 1700000000001,
+        dataMessage: {
+          message: "ship it",
+          attachments: [],
+        },
+      }),
+    );
+    await nextTimerTick();
+
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendReactionSignalMock).not.toHaveBeenCalled();
+  });
+
+  it("does not send Signal status reactions when ackReactionScope is off", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: {
+            ackReaction: "👀",
+            ackReactionScope: "off",
+            inbound: { debounceMs: 0 },
+            statusReactions: { enabled: true },
+          },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        timestamp: 1700000000001,
+        dataMessage: {
+          message: "ship it",
+          attachments: [],
+        },
+      }),
+    );
+    await nextTimerTick();
+
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    expect(sendReactionSignalMock).not.toHaveBeenCalled();
+  });
+
+  it("treats message-tool-only Signal replies as successful status outcomes", async () => {
+    dispatchInboundMessageMock.mockImplementationOnce(
+      async (params: DispatchInboundMessageMockParams) => {
+        capture.ctx = params.ctx;
+        return { queuedFinal: false, counts: { tool: 1, block: 0, final: 0 } };
+      },
+    );
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: {
+            ackReaction: "👀",
+            ackReactionScope: "direct",
+            inbound: { debounceMs: 0 },
+            statusReactions: {
+              enabled: true,
+              timing: {
+                debounceMs: 0,
+                doneHoldMs: 0,
+                errorHoldMs: 0,
+                stallSoftMs: 60_000,
+                stallHardMs: 120_000,
+              },
+            },
+          },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        timestamp: 1700000000001,
+        dataMessage: {
+          message: "ship it",
+          attachments: [],
+        },
+      }),
+    );
+    for (let i = 0; i < 3; i += 1) {
+      await nextTimerTick();
+    }
+
+    const sentEmojis = (
+      sendReactionSignalMock.mock.calls as unknown as SendReactionSignalMockCall[]
+    ).map((call) => call[2]);
+    expect(sentEmojis).toContain("✅");
+    expect(sentEmojis).not.toContain("❌");
+  });
+
+  it("targets Signal group status reactions with groupId and message author", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: {
+            ackReaction: "👀",
+            ackReactionScope: "group-all",
+            inbound: { debounceMs: 0 },
+            statusReactions: {
+              enabled: true,
+              timing: {
+                debounceMs: 0,
+                doneHoldMs: 0,
+                errorHoldMs: 0,
+                stallSoftMs: 60_000,
+                stallHardMs: 120_000,
+              },
+            },
+          },
+          channels: {
+            signal: {
+              groupPolicy: "allowlist",
+              groupAllowFrom: ["g1"],
+              groups: { "*": { requireMention: false } },
+            },
+          },
+        } as any,
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["g1"],
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        timestamp: 1700000000001,
+        dataMessage: {
+          message: "ship it",
+          attachments: [],
+          groupInfo: { groupId: "g1", groupName: "Test Group" },
+        },
+      }),
+    );
+    await nextTimerTick();
+
+    expect(sendReactionSignalMock).toHaveBeenCalledWith(
+      "",
+      1700000000001,
+      "👀",
+      expect.objectContaining({
+        groupId: "g1",
+        targetAuthor: "+15550001111",
+      }),
+    );
+  });
+
+  it("keeps dispatch running when Signal status reaction send fails", async () => {
+    sendReactionSignalMock.mockRejectedValueOnce(new Error("reaction rejected"));
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: {
+            ackReaction: "👀",
+            ackReactionScope: "direct",
+            inbound: { debounceMs: 0 },
+            statusReactions: {
+              enabled: true,
+              timing: {
+                debounceMs: 0,
+                doneHoldMs: 0,
+                errorHoldMs: 0,
+                stallSoftMs: 60_000,
+                stallHardMs: 120_000,
+              },
+            },
+          },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        timestamp: 1700000000001,
+        dataMessage: {
+          message: "ship it",
+          attachments: [],
+        },
+      }),
+    );
+    await nextTimerTick();
+
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+    expect(capture.ctx?.To).toBe("+15550002222");
   });
 
   it("keeps pending group history structured while current text stays command-clean", async () => {
