@@ -247,6 +247,28 @@ describe("routine service", () => {
     });
   });
 
+  it("preserves the internal cron store key when toggling routines", async () => {
+    await withOpenClawTestState({ prefix: "routine-toggle-store-key-" }, async () => {
+      const cron = createFakeCronService();
+      const cronStorePath = "/tmp/cron.sqlite";
+      const created = await createRoutine(createRoutineInput(), { cron, cronStorePath });
+
+      const toggled = await setRoutineEnabled(created.routine.id, false, { cron, cronStorePath });
+
+      expect(toggled.routine.enabled).toBe(false);
+      expect(toggled.routine.trigger).not.toHaveProperty("cronStoreKey");
+      expect(readStoredRoutineJson(created.routine.id)?.trigger).toMatchObject({
+        cronStoreKey: cronStorePath,
+      });
+      await expect(
+        inspectRoutine(created.routine.id, { cron, cronStorePath }),
+      ).resolves.toMatchObject({
+        id: created.routine.id,
+        enabled: false,
+      });
+    });
+  });
+
   it("treats announce delivery with implicit last channel as idempotent", async () => {
     await withOpenClawTestState({ prefix: "routine-delivery-last-idempotent-" }, async () => {
       const cron = createFakeCronService();

@@ -807,13 +807,18 @@ function stageRoutineRecordForCreate(record: RoutineRecord): RoutineStoredRecord
   return record.enabled ? { ...record, createStage: "creating" } : record;
 }
 
-function toPublicRoutineRecord(record: RoutineStoredRecord): RoutineRecord {
+function clearRoutineInternalStages(record: RoutineStoredRecord): RoutineRecord {
   const {
     createStage: _createStage,
     enableStage: _enableStage,
     disableStage: _disableStage,
-    ...publicRecord
+    ...recordWithoutStages
   } = record;
+  return recordWithoutStages;
+}
+
+function toPublicRoutineRecord(record: RoutineStoredRecord): RoutineRecord {
+  const publicRecord = clearRoutineInternalStages(record);
   return {
     ...publicRecord,
     trigger: {
@@ -1117,7 +1122,7 @@ function stageRoutineRecordForToggle(
   enabled: boolean,
 ): RoutineStoredRecord {
   return {
-    ...toPublicRoutineRecord(record),
+    ...clearRoutineInternalStages(record),
     enabled,
     updatedAtMs: Date.now(),
     ...(enabled ? { enableStage: "enabling" as const } : { disableStage: "disabling" as const }),
@@ -1381,7 +1386,7 @@ export async function setRoutineEnabled(
           changed: false,
         };
       }
-      const disabled = toPublicRoutineRecord({
+      const disabled = clearRoutineInternalStages({
         ...record,
         enabled: false,
         updatedAtMs: Date.now(),
@@ -1399,7 +1404,7 @@ export async function setRoutineEnabled(
     }
     if (!changed) {
       const cleanRecord = hasRoutineInternalStage(record)
-        ? toPublicRoutineRecord({
+        ? clearRoutineInternalStages({
             ...record,
             enabled: cronJob.enabled,
             updatedAtMs: cronJob.updatedAtMs,
@@ -1424,7 +1429,7 @@ export async function setRoutineEnabled(
       await context.cron.update(cronJob.id, { enabled });
     }
     const updatedCronJob = await context.cron.readJob(cronJob.id);
-    const updatedRecord = toPublicRoutineRecord({
+    const updatedRecord = clearRoutineInternalStages({
       ...(stagedToggleRecord ?? record),
       enabled,
       updatedAtMs: Date.now(),
