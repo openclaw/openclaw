@@ -42,6 +42,8 @@ export type ResolvedAgentConfig = {
   embeddedAgent?: AgentEntry["embeddedAgent"];
   sandbox?: AgentEntry["sandbox"];
   tools?: AgentEntry["tools"];
+  /** Runtime descriptor (e.g., "embedded", "acp") for non-default agent runtimes. */
+  runtime?: AgentEntry["runtime"];
 };
 
 let defaultAgentWarned = false;
@@ -162,6 +164,7 @@ export function resolveAgentConfig(
         : undefined,
     sandbox: entry.sandbox,
     tools: entry.tools,
+    runtime: entry.runtime,
   };
 }
 

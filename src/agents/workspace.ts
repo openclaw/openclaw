@@ -818,6 +818,12 @@ export async function ensureAgentWorkspace(params?: {
   dir?: string;
   ensureBootstrapFiles?: boolean;
   /**
+   * When true, skip creating the workspace directory, writing bootstrap
+   * files, and running git init. Used for runtime-managed agents (e.g.,
+   * ACP) that do not need a local workspace.
+   */
+  runtimeManaged?: boolean;
+  /**
    * List of optional bootstrap filenames to skip writing.
    * Applies only to SOUL.md, USER.md, HEARTBEAT.md, IDENTITY.md.
    * Required workspace setup such as AGENTS.md and TOOLS.md still runs.
@@ -839,6 +845,12 @@ export async function ensureAgentWorkspace(params?: {
   const [attestationPath, ...legacyAttestationPaths] = resolveWorkspaceAttestationPaths(dir);
   const attestationPaths = [attestationPath, ...legacyAttestationPaths];
   const recentAttestationPath = await findRecentWorkspaceAttestationPath(attestationPaths);
+
+  // Runtime-managed agents (e.g. ACP) without an explicit workspace
+  // do not need local workspace scaffolding.
+  if (params?.runtimeManaged) {
+    return { dir };
+  }
 
   if (!(await pathExists(dir)) && recentAttestationPath) {
     throw new WorkspaceVanishedError({
