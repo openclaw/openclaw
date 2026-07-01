@@ -1,6 +1,8 @@
 /**
  * Sanitizes and validates replayed session history before model calls.
  */
+import { createReadStream, statSync } from "node:fs";
+import { createInterface } from "node:readline";
 import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -66,6 +68,8 @@ import {
 } from "./thinking.js";
 
 const MODEL_SNAPSHOT_CUSTOM_TYPE = "model-snapshot";
+const PARENT_COMPACTION_SCAN_MAX_BYTES = 64 * 1024 * 1024;
+const MAX_PARENT_COMPACTION_SCAN_CACHE_ENTRIES = 8;
 type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
 type ModelSnapshotEntry = {
   timestamp: number;
@@ -74,6 +78,17 @@ type ModelSnapshotEntry = {
   modelId?: string;
 };
 type AssistantReplayMessage = Extract<AgentMessage, { role: "assistant" }>;
+type ParentCompactionCandidate = {
+  firstKeptEntryId: string;
+  timestampMs: number;
+};
+type ParentCompactionScanCacheEntry = {
+  snapshotKey: string;
+  parentIdById: ReadonlyMap<string, string | null>;
+  compactions: readonly ParentCompactionCandidate[];
+};
+
+const parentCompactionScanCache = new Map<string, ParentCompactionScanCacheEntry>();
 
 type ProviderReplayHookParams = {
   config?: OpenClawConfig;
@@ -685,6 +700,223 @@ function assertOpenAIResponsesToolUseResultInvariant(messages: AgentMessage[]): 
   return messages;
 }
 
+function parseReplayTimestampMs(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function hasCompactionSummaryMessage(messages: AgentMessage[]): boolean {
+  return messages.some((message) => (message as { role?: unknown })?.role === "compactionSummary");
+}
+
+function latestAssistantPredatesTimestamp(
+  messages: AgentMessage[],
+  timestampMs: number | null,
+): boolean {
+  if (timestampMs === null) {
+    return false;
+  }
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if ((message as { role?: unknown })?.role !== "assistant") {
+      continue;
+    }
+    const messageTimestampMs = parseReplayTimestampMs(
+      (message as { timestamp?: unknown }).timestamp,
+    );
+    return messageTimestampMs !== null && messageTimestampMs < timestampMs;
+  }
+  return false;
+}
+
+function hasMissingParentAncestor(params: {
+  entryId: string;
+  parentIdById: ReadonlyMap<string, string | null>;
+  childEntryIds: ReadonlySet<string>;
+}): boolean {
+  const seen = new Set<string>();
+  let parentId = params.parentIdById.get(params.entryId);
+  while (typeof parentId === "string" && parentId.length > 0 && !seen.has(parentId)) {
+    seen.add(parentId);
+    if (!params.childEntryIds.has(parentId)) {
+      return true;
+    }
+    parentId = params.parentIdById.get(parentId);
+  }
+  return false;
+}
+
+function readParentSessionSnapshotKey(parentSessionFile: string): string | null {
+  let stats: ReturnType<typeof statSync>;
+  try {
+    stats = statSync(parentSessionFile);
+  } catch {
+    return null;
+  }
+  if (!stats.isFile() || stats.size > PARENT_COMPACTION_SCAN_MAX_BYTES) {
+    return null;
+  }
+  return `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}:${stats.ctimeMs}`;
+}
+
+function rememberParentCompactionScan(
+  parentSessionFile: string,
+  entry: ParentCompactionScanCacheEntry,
+): ParentCompactionScanCacheEntry {
+  parentCompactionScanCache.delete(parentSessionFile);
+  parentCompactionScanCache.set(parentSessionFile, entry);
+  while (parentCompactionScanCache.size > MAX_PARENT_COMPACTION_SCAN_CACHE_ENTRIES) {
+    const oldestKey = parentCompactionScanCache.keys().next().value;
+    if (oldestKey === undefined) {
+      break;
+    }
+    parentCompactionScanCache.delete(oldestKey);
+  }
+  return entry;
+}
+
+async function readParentCompactionScan(
+  parentSessionFile: string,
+): Promise<ParentCompactionScanCacheEntry | null> {
+  const snapshotKey = readParentSessionSnapshotKey(parentSessionFile);
+  if (snapshotKey === null) {
+    parentCompactionScanCache.delete(parentSessionFile);
+    return null;
+  }
+  const cached = parentCompactionScanCache.get(parentSessionFile);
+  if (cached?.snapshotKey === snapshotKey) {
+    return cached;
+  }
+  const parentIdById = new Map<string, string | null>();
+  const compactions: ParentCompactionCandidate[] = [];
+  const input = createReadStream(parentSessionFile, { encoding: "utf8" });
+  const lines = createInterface({ input, crlfDelay: Infinity });
+  try {
+    for await (const line of lines) {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      const record = parsed as { id?: unknown; parentId?: unknown; type?: unknown };
+      if (typeof record.id === "string") {
+        parentIdById.set(
+          record.id,
+          typeof record.parentId === "string" || record.parentId === null ? record.parentId : null,
+        );
+      }
+      if (record.type !== "compaction") {
+        continue;
+      }
+      const firstKeptEntryId = (parsed as { firstKeptEntryId?: unknown }).firstKeptEntryId;
+      if (typeof firstKeptEntryId !== "string") {
+        continue;
+      }
+      const ts = parseReplayTimestampMs((parsed as { timestamp?: unknown }).timestamp);
+      if (ts !== null) {
+        compactions.push({ firstKeptEntryId, timestampMs: ts });
+      }
+    }
+  } catch {
+    return null;
+  } finally {
+    input.destroy();
+  }
+  return rememberParentCompactionScan(parentSessionFile, {
+    snapshotKey,
+    parentIdById,
+    compactions,
+  });
+}
+
+async function readLatestParentCompactionTimestampMs(
+  parentSessionFile: string,
+  maxTimestampMs: number,
+  childEntryIds: ReadonlySet<string>,
+): Promise<number | null> {
+  const parentScan = await readParentCompactionScan(parentSessionFile);
+  if (parentScan === null) {
+    return null;
+  }
+  let latestCompactionTimestamp: number | null = null;
+  for (const compaction of parentScan.compactions) {
+    if (!childEntryIds.has(compaction.firstKeptEntryId)) {
+      continue;
+    }
+    if (
+      !hasMissingParentAncestor({
+        entryId: compaction.firstKeptEntryId,
+        parentIdById: parentScan.parentIdById,
+        childEntryIds,
+      })
+    ) {
+      continue;
+    }
+    if (compaction.timestampMs <= maxTimestampMs) {
+      latestCompactionTimestamp =
+        latestCompactionTimestamp === null
+          ? compaction.timestampMs
+          : Math.max(latestCompactionTimestamp, compaction.timestampMs);
+    }
+  }
+  return latestCompactionTimestamp;
+}
+
+async function resolveBoundarylessCompactionTimestampMs(params: {
+  sessionManager: SessionManager;
+  messages: AgentMessage[];
+}): Promise<number | null> {
+  if (hasCompactionSummaryMessage(params.messages)) {
+    return null;
+  }
+  const getHeader = (
+    params.sessionManager as {
+      getHeader?: () => { parentSession?: unknown; timestamp?: unknown } | null;
+    }
+  ).getHeader;
+  const header = typeof getHeader === "function" ? getHeader.call(params.sessionManager) : null;
+  const parentSession = header?.parentSession;
+  if (typeof parentSession !== "string" || parentSession.trim().length === 0) {
+    return null;
+  }
+  const successorTimestampMs = parseReplayTimestampMs(header?.timestamp);
+  if (successorTimestampMs === null) {
+    return null;
+  }
+  let activeBranchEntryIds: Set<string>;
+  try {
+    activeBranchEntryIds = new Set(
+      params.sessionManager
+        .getBranch()
+        .map((entry: { id?: unknown }) => (typeof entry.id === "string" ? entry.id : undefined))
+        .filter((id): id is string => id !== undefined),
+    );
+  } catch {
+    return null;
+  }
+  if (activeBranchEntryIds.size === 0) {
+    return null;
+  }
+  const compactionTimestampMs = await readLatestParentCompactionTimestampMs(
+    parentSession.trim(),
+    successorTimestampMs,
+    activeBranchEntryIds,
+  );
+  if (compactionTimestampMs === null) {
+    return null;
+  }
+  return compactionTimestampMs;
+}
+
 /**
  * Applies the generic replay-history cleanup pipeline before provider-owned
  * replay hooks run.
@@ -760,11 +992,27 @@ export async function sanitizeSessionHistory(params: {
   // stripInvalidThinkingSignatures runs. Pre-compaction kept messages carry signatures
   // bound to the original prefix; after compaction the prefix changes and Anthropic
   // rejects them. Timestamp comparison with the latest compaction summary identifies
-  // the affected messages regardless of path (standard or truncateAfterCompaction).
+  // the affected messages. For legacy successor files that lost the summary boundary,
+  // recover the timestamp from the parent transcript before stripping.
+  const boundarylessCompactionTimestampMs =
+    signedThinkingProvider || policy.preserveSignatures
+      ? await resolveBoundarylessCompactionTimestampMs({
+          sessionManager: params.sessionManager,
+          messages: sanitizedImages,
+        })
+      : null;
   const compactionStaleStripped =
     signedThinkingProvider || policy.preserveSignatures
-      ? stripStaleThinkingSignaturesForCompactionReplay(sanitizedImages)
+      ? stripStaleThinkingSignaturesForCompactionReplay(sanitizedImages, {
+          compactionTimestampMs: boundarylessCompactionTimestampMs,
+        })
       : sanitizedImages;
+  const preserveLatestAssistantForInvalidThinking = latestAssistantPredatesTimestamp(
+    compactionStaleStripped,
+    boundarylessCompactionTimestampMs,
+  )
+    ? false
+    : preserveLatestAssistantThinking;
   // Some recovery paths supply a narrow policy with preserveSignatures disabled.
   // Native signed-thinking providers still cannot replay missing/blank
   // signatures once the assistant turn is no longer latest in the outbound
@@ -772,7 +1020,7 @@ export async function sanitizeSessionHistory(params: {
   const validatedThinkingSignatures =
     signedThinkingProvider || policy.preserveSignatures
       ? stripInvalidThinkingSignatures(compactionStaleStripped, {
-          preserveLatestAssistant: preserveLatestAssistantThinking,
+          preserveLatestAssistant: preserveLatestAssistantForInvalidThinking,
         })
       : compactionStaleStripped;
   const droppedReasoning = policy.dropReasoningFromHistory

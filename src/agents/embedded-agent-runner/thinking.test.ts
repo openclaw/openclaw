@@ -1094,6 +1094,70 @@ describe("stripStaleThinkingSignaturesForCompactionReplay", () => {
     expect(stripStaleThinkingSignaturesForCompactionReplay(messages)).toBe(messages);
   });
 
+  it("recovers boundaryless transcripts when callers provide the compaction timestamp", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "old q" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "old think", thinkingSignature: "stale_sig" },
+          { type: "text", text: "old answer" },
+        ],
+        timestamp: 1000,
+      }),
+      castAgentMessage({ role: "user", content: "new q" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "latest think", thinkingSignature: "latest_sig" },
+          { type: "text", text: "latest answer" },
+        ],
+        timestamp: 3000,
+      }),
+    ];
+
+    const result = stripStaleThinkingSignaturesForCompactionReplay(messages, {
+      compactionTimestampMs: 2000,
+    });
+
+    expect(result).not.toBe(messages);
+    const historical = result[1] as AssistantMessage;
+    const latest = result[3] as AssistantMessage;
+    expect(historical.content).toEqual([
+      { type: "thinking", thinking: "old think" },
+      { type: "text", text: "old answer" },
+    ]);
+    expect(latest.content).toEqual([
+      { type: "thinking", thinking: "latest think", thinkingSignature: "latest_sig" },
+      { type: "text", text: "latest answer" },
+    ]);
+  });
+
+  it("strips boundaryless redacted thinking before a recovered compaction timestamp", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "old q" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "redacted_thinking", data: "stale_redacted" },
+          { type: "text", text: "old answer" },
+        ],
+        timestamp: 1000,
+      }),
+    ];
+
+    const result = stripStaleThinkingSignaturesForCompactionReplay(messages, {
+      compactionTimestampMs: 2000,
+    });
+
+    expect(result).not.toBe(messages);
+    const assistant = result[1] as AssistantMessage;
+    expect(assistant.content).toEqual([
+      { type: "redacted_thinking" },
+      { type: "text", text: "old answer" },
+    ]);
+  });
+
   it("strips thinking signatures from assistant messages at or before the compaction timestamp", () => {
     const compactionSummary = castAgentMessage({
       role: "compactionSummary",

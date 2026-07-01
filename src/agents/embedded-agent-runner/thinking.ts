@@ -180,12 +180,23 @@ export function stripThinkingSignaturesFromMessage(message: AgentMessage): Agent
  * in the new context and retain their signatures. Messages with no parseable timestamp are
  * left unchanged.
  *
+ * Some older successor transcripts were already written without a compaction summary
+ * boundary. Callers can pass a recovered compaction timestamp for those transcripts so
+ * the same timestamp-based stale stripping applies without broadening normal replay.
+ *
  * Returns the original array reference when nothing was changed.
  */
 export function stripStaleThinkingSignaturesForCompactionReplay(
   messages: AgentMessage[],
+  options: {
+    compactionTimestampMs?: number | null;
+  } = {},
 ): AgentMessage[] {
-  let latestCompactionTimestamp: number | null = null;
+  let latestCompactionTimestamp: number | null =
+    typeof options.compactionTimestampMs === "number" &&
+    Number.isFinite(options.compactionTimestampMs)
+      ? options.compactionTimestampMs
+      : null;
   for (const message of messages) {
     if ((message as { role?: unknown }).role !== "compactionSummary") {
       continue;
