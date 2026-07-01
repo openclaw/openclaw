@@ -569,9 +569,6 @@ export const imessageActionsRuntime = {
       ["poll", "vote", "--chat", params.chatGuid, "--poll", params.pollGuid, ...selector],
       params.options,
     );
-    // imsg resolves the option index/text to the canonical option label and
-    // echoes it back; the message tool uses it to drop a redundant text reply
-    // that just restates the vote.
     const optionText = typeof result.optionText === "string" ? result.optionText.trim() : "";
     return { messageId: resolveMessageId(result), ...(optionText ? { optionText } : {}) };
   },

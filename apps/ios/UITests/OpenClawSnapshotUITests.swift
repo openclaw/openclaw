@@ -3,6 +3,11 @@ import XCTest
 
 @MainActor
 final class OpenClawSnapshotUITests: XCTestCase {
+    private enum ScreenshotAppearance: String, CaseIterable {
+        case light
+        case dark
+    }
+
     private struct ScreenshotTarget {
         let initialTab: String
         let initialDestination: String
@@ -31,9 +36,12 @@ final class OpenClawSnapshotUITests: XCTestCase {
     }
 
     func testConnectedGatewayTabs() {
-        for target in Self.screenshotTargets {
-            launchApp(for: target)
-            snapshot(target.name, timeWaitingForIdle: 5)
+        for appearance in ScreenshotAppearance.allCases {
+            for target in Self.screenshotTargets {
+                launchApp(for: target, appearance: appearance)
+                let name = appearance == .light ? target.name : "\(target.name)-dark"
+                snapshot(name, timeWaitingForIdle: 5)
+            }
         }
     }
 
@@ -103,13 +111,18 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertEqual(app.state, .runningForeground)
     }
 
-    private func launchApp(for target: ScreenshotTarget) {
+    private func launchApp(
+        for target: ScreenshotTarget,
+        appearance: ScreenshotAppearance = .light)
+    {
         self.app?.terminate()
 
         let app = XCUIApplication()
         setupSnapshot(app, waitForAnimations: false)
         app.launchArguments += [
             "--openclaw-screenshot-mode",
+            "--openclaw-appearance",
+            appearance.rawValue,
             "--openclaw-initial-tab",
             target.initialTab,
             "--openclaw-initial-destination",

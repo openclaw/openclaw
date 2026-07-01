@@ -56,6 +56,21 @@ function readMessageText(params: Record<string, unknown>): string | undefined {
   return readStringParam(params, "text") ?? readStringParam(params, "message");
 }
 
+function resolveIMessageDeliveryTarget(args: Record<string, unknown>): string | undefined {
+  const chatGuid = readStringParam(args, "chatGuid");
+  const chatId = readPositiveIntegerParam(args, "chatId");
+  const chatIdentifier = readStringParam(args, "chatIdentifier");
+  const targets = [
+    chatGuid ? `chat_guid:${chatGuid}` : undefined,
+    chatId !== undefined ? `chat_id:${chatId}` : undefined,
+    chatIdentifier ? `chat_identifier:${chatIdentifier}` : undefined,
+  ].filter((value): value is string => Boolean(value));
+  if (targets.length > 1) {
+    throw new Error("iMessage action received conflicting delivery target aliases.");
+  }
+  return targets[0];
+}
+
 function rememberOutboundBridgeMessage(params: {
   accountId: string;
   messageId?: string;
@@ -409,26 +424,32 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     reply: {
       aliases: ["chatGuid", "chatIdentifier", "chatId", "messageId"],
       deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+      resolveDeliveryTarget: ({ args }) => resolveIMessageDeliveryTarget(args),
     },
     sendWithEffect: {
       aliases: ["chatGuid", "chatIdentifier", "chatId"],
       deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+      resolveDeliveryTarget: ({ args }) => resolveIMessageDeliveryTarget(args),
     },
     sendAttachment: {
       aliases: ["chatGuid", "chatIdentifier", "chatId"],
       deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+      resolveDeliveryTarget: ({ args }) => resolveIMessageDeliveryTarget(args),
     },
     poll: {
       aliases: ["chatGuid", "chatIdentifier", "chatId"],
       deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+      resolveDeliveryTarget: ({ args }) => resolveIMessageDeliveryTarget(args),
     },
     "poll-vote": {
       aliases: ["chatGuid", "chatIdentifier", "chatId", "pollId", "messageId"],
       deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+      resolveDeliveryTarget: ({ args }) => resolveIMessageDeliveryTarget(args),
     },
     "upload-file": {
       aliases: ["chatGuid", "chatIdentifier", "chatId"],
       deliveryTargetAliases: ["chatGuid", "chatIdentifier", "chatId"],
+      resolveDeliveryTarget: ({ args }) => resolveIMessageDeliveryTarget(args),
     },
     renameGroup: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
     setGroupIcon: { aliases: ["chatGuid", "chatIdentifier", "chatId"] },
@@ -463,16 +484,20 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     assertActionEnabled(action, account.config.actions);
     const cliPathForProbe = account.config.cliPath?.trim() || "imsg";
     let privateApiStatus = getCachedIMessagePrivateApiStatus(cliPathForProbe);
+    const probePrivateApiStatus = async (forceRefresh = false) => {
+      privateApiStatus = await probeIMessagePrivateApi(
+        cliPathForProbe,
+        account.config.probeTimeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS,
+        forceRefresh ? { forceRefresh: true } : undefined,
+      );
+    };
     const assertPrivateApiEnabled = async () => {
       if (privateApiStatus?.available !== true) {
         // Probe lazily: the running gateway only populates the cache via the
         // status adapter, which doesn't fire eagerly on first dispatch. Run
         // an inline probe so the first react/send-rich attempt after `imsg
         // launch` succeeds without requiring a manual `channels status`.
-        privateApiStatus = await probeIMessagePrivateApi(
-          cliPathForProbe,
-          account.config.probeTimeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS,
-        );
+        await probePrivateApiStatus();
       }
       if (!privateApiStatus?.available) {
         // Surface the silent-drop case: the throw becomes a tool-result
@@ -488,10 +513,10 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
           ? ` imsg reports: ${privateApiStatus.statusMessage}`
           : "";
         log.warn(
-          `iMessage ${action} blocked: private API bridge unavailable (accountId=${account.accountId}, cliPath=${cliPathForProbe}). Run \`imsg launch\` to re-inject the dylib, then \`openclaw channels status\` to refresh.${reason}`,
+          `iMessage ${action} blocked: private API bridge unavailable (accountId=${account.accountId}, cliPath=${cliPathForProbe}). Run \`imsg launch\` to re-inject the dylib, then \`openclaw channels status --probe\` to refresh.${reason}`,
         );
         throw new Error(
-          `iMessage ${action} requires the imsg private API bridge. Run imsg launch, then openclaw channels status to refresh capability detection.${reason}`,
+          `iMessage ${action} requires the imsg private API bridge. Run imsg launch, then openclaw channels status --probe to refresh capability detection.${reason}`,
         );
       }
     };
@@ -753,6 +778,14 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "poll") {
       await assertPrivateApiEnabled();
+      if (privateApiStatus?.selectors?.pollPayloadMessage !== true) {
+        await probePrivateApiStatus(true);
+      }
+      if (privateApiStatus?.selectors?.pollPayloadMessage !== true) {
+        throw new Error(
+          "iMessage poll requires an imsg bridge that advertises the pollPayloadMessage selector. Update imsg, run imsg launch to re-inject the bridge, then run openclaw channels status --probe to refresh capability detection.",
+        );
+      }
       // Shared `message`-tool poll params (see src/poll-params.ts): pollQuestion
       // + pollOption[]. normalizePollInput trims, enforces >=2 choices, and caps
       // at Apple's 12-option Messages limit so the bridge send cannot exceed it.
@@ -776,14 +809,22 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "poll-vote") {
       await assertPrivateApiEnabled();
-      // Enforce the poll.vote capability at execution, not just tool discovery:
-      // a caller can dispatch poll-vote directly without going through
-      // describeMessageTool, and released imsg (which carries the
-      // pollPayloadMessage selector for poll-send but predates the `poll vote`
-      // command) would otherwise reject the shell-out with an opaque CLI error.
+      if (
+        privateApiStatus?.selectors?.pollVoteMessage !== true ||
+        !imessageRpcSupportsMethod(privateApiStatus, "poll.vote")
+      ) {
+        await probePrivateApiStatus(true);
+      }
+      if (privateApiStatus?.selectors?.pollVoteMessage !== true) {
+        throw new Error(
+          "iMessage poll-vote requires an imsg bridge that advertises the pollVoteMessage selector. Update imsg, run imsg launch to re-inject the bridge, then run openclaw channels status --probe to refresh capability detection.",
+        );
+      }
+      // A previously injected helper can be newer than cliPath. The selector
+      // proves native construction; rpc_methods proves this binary has vote.
       if (!imessageRpcSupportsMethod(privateApiStatus, "poll.vote")) {
         throw new Error(
-          "iMessage poll-vote requires an imsg build that advertises the poll.vote capability. Update imsg, then run openclaw channels status to refresh capability detection.",
+          "iMessage poll-vote requires an imsg build that advertises the poll.vote capability. Update imsg, then run openclaw channels status --probe to refresh capability detection.",
         );
       }
       // The poll being voted on is an inbound message; the agent references it
@@ -807,10 +848,10 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       // Option selection: 1-based index, explicit UUID, or option text — imsg
       // resolves index/text to the stable optionIdentifier from the decoded poll.
       // Require exactly one selector so a conflicting pair can't silently vote
-      // by precedence (which would also seed the wrong echo label).
+      // by precedence.
       const optionIndex = readPositiveIntegerParam(params, "pollOptionIndex");
       const optionId = readStringParam(params, "pollOptionId");
-      const optionText = readStringParam(params, "pollOption") ?? readStringParam(params, "option");
+      const optionText = readStringParam(params, "pollOptionText");
       const selectorCount = [
         optionIndex !== undefined,
         Boolean(optionId),
@@ -818,12 +859,12 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       ].filter(Boolean).length;
       if (selectorCount === 0) {
         throw new Error(
-          "iMessage poll-vote requires pollOptionIndex, pollOptionId, or pollOption.",
+          "iMessage poll-vote requires pollOptionIndex, pollOptionId, or pollOptionText.",
         );
       }
       if (selectorCount > 1) {
         throw new Error(
-          "iMessage poll-vote requires exactly one of pollOptionIndex, pollOptionId, or pollOption.",
+          "iMessage poll-vote requires exactly one of pollOptionIndex, pollOptionId, or pollOptionText.",
         );
       }
       const resolvedChatGuid = await chatGuid();
@@ -840,8 +881,6 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         messageId: result.messageId,
         chatGuid: resolvedChatGuid,
       });
-      // Surface the resolved option label so the message tool can suppress a
-      // redundant follow-up text that merely restates the vote (poll_vote_echo).
       return jsonResult({
         ok: true,
         messageId: result.messageId,

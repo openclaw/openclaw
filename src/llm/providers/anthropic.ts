@@ -43,7 +43,6 @@ import type {
   AssistantMessageEvent,
   CacheRetention,
   Context,
-  ImageContent,
   Message,
   Model,
   ModelThinkingLevel,
@@ -69,6 +68,11 @@ import { resolveCacheRetention } from "./cache-retention.js";
 import { resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { adjustMaxTokensForThinking, buildBaseOptions } from "./simple-options.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultBlockText,
+  extractToolResultText,
+} from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 const ANTHROPIC_CACHE_CONTROL_LIMIT = 4;
@@ -123,7 +127,7 @@ const toClaudeCodeName = (name: string) => ccToolLookup.get(name.toLowerCase()) 
 /**
  * Convert content blocks to Anthropic API format
  */
-function convertContentBlocks(content: (TextContent | ImageContent)[]):
+function convertContentBlocks(content: readonly unknown[]):
   | string
   | Array<
       | { type: "text"; text: string }
@@ -136,37 +140,61 @@ function convertContentBlocks(content: (TextContent | ImageContent)[]):
           };
         }
     > {
-  // If only text blocks, return as concatenated string for simplicity
-  const hasImages = content.some((c) => c.type === "image");
+  const text = extractToolResultText(content);
+  const mediaPlaceholder = describeToolResultMediaPlaceholder(content);
+  const hasImages =
+    Array.isArray(content) &&
+    content.some(
+      (item) =>
+        item && typeof item === "object" && (item as Record<string, unknown>).type === "image",
+    );
+
   if (!hasImages) {
-    return sanitizeSurrogates(content.map((c) => (c as TextContent).text).join("\n"));
+    const sanitized = sanitizeSurrogates(text);
+    return sanitized.trim().length > 0 ? sanitized : (mediaPlaceholder ?? "");
   }
 
-  // If we have images, convert to content block array
-  const blocks = content.map((block) => {
-    if (block.type === "text") {
-      return {
-        type: "text" as const,
-        text: sanitizeSurrogates(block.text),
-      };
+  const blocks: Array<
+    | { type: "text"; text: string }
+    | {
+        type: "image";
+        source: {
+          type: "base64";
+          media_type: "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+          data: string;
+        };
+      }
+  > = [];
+  let hasTextBlock = false;
+
+  for (const block of Array.isArray(content) ? content : []) {
+    if (!block || typeof block !== "object") {
+      continue;
     }
-    return {
+    const record = block as Record<string, unknown>;
+    const blockText = extractToolResultBlockText(block);
+    if (blockText) {
+      blocks.push({ type: "text" as const, text: sanitizeSurrogates(blockText) });
+      hasTextBlock = true;
+    }
+    if (record.type !== "image") {
+      continue;
+    }
+    blocks.push({
       type: "image" as const,
       source: {
         type: "base64" as const,
-        media_type: block.mimeType as "image/jpeg" | "image/png" | "image/gif" | "image/webp",
-        data: block.data,
+        media_type: (typeof record.mimeType === "string" ? record.mimeType : "image/jpeg") as
+          | "image/jpeg"
+          | "image/png"
+          | "image/gif"
+          | "image/webp",
+        data: typeof record.data === "string" ? record.data : "",
       },
-    };
-  });
-
-  // If only images (no text), add placeholder text block
-  const hasText = blocks.some((b) => b.type === "text");
-  if (!hasText) {
-    blocks.unshift({
-      type: "text" as const,
-      text: "(see attached image)",
     });
+  }
+  if (!hasTextBlock) {
+    blocks.unshift({ type: "text" as const, text: mediaPlaceholder ?? "(see attached image)" });
   }
 
   return blocks;

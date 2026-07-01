@@ -4,6 +4,7 @@ import type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
+import { Type } from "typebox";
 import { resolveIMessageAccount } from "./accounts.js";
 import { IMESSAGE_ACTION_NAMES, IMESSAGE_ACTIONS } from "./actions-contract.js";
 import {
@@ -67,22 +68,29 @@ export function describeIMessageMessageTool({
     if (action === "unsend" && privateApiStatus?.selectors?.retractMessagePart !== true) {
       continue;
     }
-    // Native polls need an imsg bridge build whose injected helper exposes the
-    // poll-payload IMMessage initializer. Older bridges report the action gate
-    // open but cannot construct the balloon, so hide poll unless the selector
-    // probe confirms it (mirrors the edit/unsend selector gates above).
+    // Keep first-dispatch discovery optimistic while the status cache is empty;
+    // handleAction probes lazily and enforces the exact selector before sending.
     if (
-      (action === "poll" || action === "poll-vote") &&
-      privateApiStatus?.selectors?.pollPayloadMessage !== true
+      action === "poll" &&
+      privateApiStatus?.selectors &&
+      !privateApiStatus.selectors.pollPayloadMessage
     ) {
       continue;
     }
-    // Voting is a newer CLI/RPC capability than poll-send: released imsg builds
-    // that already carry the pollPayloadMessage selector (poll create) may lack
-    // the `poll.vote` command. Gate poll-vote on the advertised rpc method so
-    // this plugin can ship ahead of the imsg release without offering a vote
-    // action that the CLI would reject.
-    if (action === "poll-vote" && !imessageRpcSupportsMethod(privateApiStatus, "poll.vote")) {
+    if (
+      action === "poll-vote" &&
+      privateApiStatus?.selectors &&
+      !privateApiStatus.selectors.pollVoteMessage
+    ) {
+      continue;
+    }
+    // The injected helper can outlive the selected imsg binary. Require both
+    // the native initializer and a binary new enough to advertise poll.vote.
+    if (
+      action === "poll-vote" &&
+      privateApiStatus &&
+      !imessageRpcSupportsMethod(privateApiStatus, "poll.vote")
+    ) {
       continue;
     }
     actions.add(action);
@@ -97,5 +105,20 @@ export function describeIMessageMessageTool({
   if (actions.delete("sendAttachment")) {
     actions.add("upload-file");
   }
-  return { actions: Array.from(actions) };
+  return {
+    actions: Array.from(actions),
+    ...(actions.has("poll-vote")
+      ? {
+          schema: {
+            properties: {
+              pollOptionText: Type.Optional(
+                Type.String({ description: "Exact iMessage poll option text." }),
+              ),
+            },
+            actions: ["poll-vote" as const],
+            visibility: "all-configured" as const,
+          },
+        }
+      : {}),
+  };
 }

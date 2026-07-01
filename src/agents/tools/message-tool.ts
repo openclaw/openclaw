@@ -4,7 +4,10 @@
  * Sends, edits, reacts to, polls, and routes messages through channel plugins and Gateway-backed actions.
  */
 import { createHash } from "node:crypto";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+} from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings, uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { Type, type TSchema } from "typebox";
 import {
@@ -50,6 +53,7 @@ import {
   runMessageAction,
   type MessageActionRunResult,
 } from "../../infra/outbound/message-action-runner.js";
+import { resolveActionDeliveryTargetAlias } from "../../infra/outbound/message-action-spec.js";
 import {
   resolveAllowedMessageActions,
   shouldApplyCrossContextMarker,
@@ -166,47 +170,9 @@ type VisibleTextSuppressionReason =
   | "inbound_metadata_echo"
   | "poll_vote_echo";
 
-// Per-session record of the option label from the most recent poll-vote, so a
-// follow-up text that merely restates the vote (the model narrates its choice,
-// e.g. "🦞 Blue." right after voting Blue) can be dropped. Same intent as the
-// inbound/internal echo suppression above, but the trigger lives in a prior
-// tool call this turn, so it needs a small bounded record to bridge the calls.
-// Single slot per session, short TTL (the echo lands in the same turn), and
-// consumed on match so only the immediate restatement is dropped.
 const POLL_VOTE_ECHO_TTL_MS = 30_000;
-const recentPollVoteBySession = new Map<string, { option: string; at: number; target: string }>();
 
-// The record is bound to the chat the vote was cast in (target/to, or a
-// current-source sentinel), so a vote in one conversation can never suppress a
-// matching text sent to a different conversation in the same session.
-export function pollVoteEchoTargetKey(params: Record<string, unknown>): string {
-  return (
-    readStringParam(params, "target") ??
-    readStringParam(params, "to") ??
-    readStringParam(params, "channelId") ??
-    "<current-source>"
-  );
-}
-
-export function recordPollVoteForEchoGuard(
-  sessionKey: string | undefined,
-  option: string,
-  target: string,
-): void {
-  const key = sessionKey?.trim();
-  const label = option.trim();
-  if (!key || !label) {
-    return;
-  }
-  recentPollVoteBySession.set(key, { option: label, at: Date.now(), target });
-}
-
-// Exported for tests. Strips only a leading emoji PREFIX (an emoji run followed
-// by whitespace, e.g. the agent's "🦞 ") and trailing sentence punctuation —
-// deliberately NOT internal or all punctuation, so distinct labels like "C#",
-// "C++", "Node.js" stay distinct and an emoji-only label ("🍎") is preserved
-// rather than collapsing to an empty string that would match any emoji send.
-export function normalizePollEchoText(text: string): string {
+function normalizePollEchoText(text: string): string {
   return text
     .replace(/^[\p{Extended_Pictographic}️‍]+\s+/u, "")
     .replace(/[.!?\s]+$/u, "")
@@ -214,41 +180,44 @@ export function normalizePollEchoText(text: string): string {
     .toLowerCase();
 }
 
-// True (and consumes the record) when `text` is a pure restatement of the
-// session's most recent poll vote. Anything with extra content normalizes to a
-// different string and passes through untouched.
-export function consumePollVoteEcho(
-  sessionKey: string | undefined,
-  text: string,
-  target: string,
-): boolean {
-  const key = sessionKey?.trim();
-  if (!key) {
-    return false;
+function resolvePollVoteEchoRoute(params: {
+  action: ChannelMessageActionName;
+  args: Record<string, unknown>;
+  channel?: string | null;
+  accountId?: string;
+  currentChannelId?: string;
+  currentMessagingTarget?: string;
+}): string | undefined {
+  const channel = normalizeMessageChannel(params.channel);
+  if (!channel) {
+    return undefined;
   }
-  const record = recentPollVoteBySession.get(key);
-  if (!record) {
-    return false;
+  let deliveryAliasTarget: string | undefined;
+  try {
+    deliveryAliasTarget = resolveActionDeliveryTargetAlias(params.action, params.args, {
+      channel,
+      aliasSpec: getChannelPlugin(channel)?.actions?.messageActionTargetAliases?.[params.action],
+    });
+  } catch {
+    return undefined;
   }
-  // Only suppress within the same conversation the vote was cast in.
-  if (record.target !== target) {
-    return false;
+  const targets = ["target", "to", "channelId"]
+    .map((key) => normalizeOptionalStringifiedId(params.args[key]))
+    .concat(deliveryAliasTarget ?? [])
+    .filter((value): value is string => Boolean(value));
+  if (new Set(targets).size > 1) {
+    return undefined;
   }
-  if (Date.now() - record.at > POLL_VOTE_ECHO_TTL_MS) {
-    recentPollVoteBySession.delete(key);
-    return false;
-  }
-  const normalizedOption = normalizePollEchoText(record.option);
-  // An option that normalizes to empty (e.g. punctuation-only) can never be a
-  // meaningful "exact restatement" — never suppress on it.
-  if (!normalizedOption) {
-    return false;
-  }
-  const isEcho = normalizePollEchoText(text) === normalizedOption;
-  if (isEcho) {
-    recentPollVoteBySession.delete(key);
-  }
-  return isEcho;
+  const target = targets[0];
+  const currentTargets = new Set(
+    [params.currentMessagingTarget, params.currentChannelId].filter((value): value is string =>
+      Boolean(value),
+    ),
+  );
+  // Plugin-declared aliases keep owner-specific target fields out of core.
+  // A route mismatch fails open; provider/account keys prevent cross-send suppression.
+  const routeTarget = !target || currentTargets.has(target) ? "<current-source>" : target;
+  return `${channel}\0${normalizeAccountId(params.accountId ?? "default")}\0${routeTarget}`;
 }
 
 function sanitizeUserVisibleToolTextResult(
@@ -1225,6 +1194,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     options?.resolveCommandSecretRefsViaGateway ?? resolveCommandSecretRefsViaGateway;
   const runMessageActionForTool = options?.runMessageAction ?? runMessageAction;
   let generatedIdempotencyCounter = 0;
+  let recentPollVote: { option: string; route: string; recordedAt: number } | undefined;
   const failedAutogeneratedIdempotencyKeys = new Map<string, string>();
   const effectiveCurrentChannel = resolveEffectiveCurrentChannelContext(options);
   const currentThreadTs =
@@ -1363,24 +1333,6 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               : "Suppressed outbound message text because it matched internal runtime context.",
         });
       }
-      // Drop a text send/reply that only restates a poll vote just cast this
-      // turn — the vote already shows on the poll, so the narration is noise.
-      if (action === "send" || action === "reply") {
-        const outboundText =
-          readStringParam(params, "text") ??
-          readStringParam(params, "message") ??
-          readStringParam(params, "content");
-        if (
-          outboundText &&
-          consumePollVoteEcho(options?.agentSessionKey, outboundText, pollVoteEchoTargetKey(params))
-        ) {
-          return jsonResult({
-            status: "suppressed",
-            reason: "poll_vote_echo" satisfies VisibleTextSuppressionReason,
-            message: "Suppressed outbound text because it only restated the poll vote just cast.",
-          });
-        }
-      }
       const requireExplicitTarget = options?.requireExplicitTarget === true;
       if (requireExplicitTarget && actionNeedsExplicitTarget(action)) {
         const explicitTarget =
@@ -1423,6 +1375,42 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const accountId = readStringParam(params, "accountId") ?? agentAccountId;
       if (accountId) {
         params.accountId = accountId;
+      }
+      const pollVoteEchoRoute = resolvePollVoteEchoRoute({
+        action,
+        args: params,
+        channel: scope.channel ?? effectiveCurrentChannel.currentChannelProvider,
+        accountId,
+        currentChannelId: effectiveCurrentChannel.currentChannelId,
+        currentMessagingTarget: effectiveCurrentChannel.currentMessagingTarget,
+      });
+      if (
+        recentPollVote &&
+        sourceReplySinkDeliveryMode === "message_tool_only" &&
+        (action === "send" || action === "reply")
+      ) {
+        if (Date.now() - recentPollVote.recordedAt > POLL_VOTE_ECHO_TTL_MS) {
+          recentPollVote = undefined;
+        } else if (pollVoteEchoRoute === recentPollVote.route) {
+          const vote = recentPollVote;
+          recentPollVote = undefined;
+          const outboundText =
+            readStringParam(params, "text") ??
+            readStringParam(params, "message") ??
+            readStringParam(params, "content");
+          const normalizedOption = normalizePollEchoText(vote.option);
+          if (
+            outboundText &&
+            normalizedOption &&
+            normalizePollEchoText(outboundText) === normalizedOption
+          ) {
+            return jsonResult({
+              status: "suppressed",
+              reason: "poll_vote_echo" satisfies VisibleTextSuppressionReason,
+              message: "Suppressed outbound text because it only restated the poll vote just cast.",
+            });
+          }
+        }
       }
 
       const gatewayResolved = resolveGatewayOptions(readGatewayCallOptions(params));
@@ -1524,17 +1512,16 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }
 
       const toolResult = getToolResult(result);
-      // Remember a just-cast vote's option label so a redundant restatement text
-      // later this turn is dropped by the poll_vote_echo guard above.
-      if (action === "poll-vote") {
+      if (
+        action === "poll-vote" &&
+        pollVoteEchoRoute &&
+        sourceReplySinkDeliveryMode === "message_tool_only"
+      ) {
         const details = toolResult?.details as { pollVotedOption?: unknown } | undefined;
-        const voted = typeof details?.pollVotedOption === "string" ? details.pollVotedOption : "";
-        if (voted) {
-          recordPollVoteForEchoGuard(
-            options?.agentSessionKey,
-            voted,
-            pollVoteEchoTargetKey(params),
-          );
+        const option =
+          typeof details?.pollVotedOption === "string" ? details.pollVotedOption.trim() : "";
+        if (option) {
+          recentPollVote = { option, route: pollVoteEchoRoute, recordedAt: Date.now() };
         }
       }
       if (toolResult) {
