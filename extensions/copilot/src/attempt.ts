@@ -226,6 +226,7 @@ async function finalizeCopilotAttempt(
           ? { error: "Copilot SDK turn timed out." }
           : {}),
       durationMs: now() - attemptStartedAt,
+      rawBody: params.rawBody,
     },
     ctx,
   });
@@ -717,6 +718,7 @@ export async function runCopilotAttempt(
           messages,
           ctx: hookContext,
           bootstrapContextRunKind: input.bootstrapContextRunKind,
+          rawBody: input.rawBody,
           ...("beforeAgentStartResult" in input
             ? { beforeAgentStartResult: input.beforeAgentStartResult }
             : {}),

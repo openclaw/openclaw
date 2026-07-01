@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   cancelQueuedSteeringMessage,
+  resolveQueuedRawBody,
   steerAndWaitForTranscriptCommit,
   type EmbeddedAgentActiveSessionSteerTarget,
 } from "./attempt.queue-message.js";
@@ -252,5 +253,27 @@ describe("embedded OpenClaw queued steering cancellation", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// PR #52664: the active embedded run reports rawBody on before_prompt_build /
+// agent_end. A queued injection must re-derive that value rather than leaving
+// the previous direct-user text in place, or internal injections leak it.
+describe("resolveQueuedRawBody", () => {
+  it("uses the queued turn's clean text when a direct-user steer provides it", () => {
+    expect(resolveQueuedRawBody({ steeringMode: "all", rawBody: "hello steer" })).toBe(
+      "hello steer",
+    );
+  });
+
+  it("clears stale rawBody when an internal injection omits the key", () => {
+    // sessions_send / Talk active-run control / subagent active wakes build
+    // queue options without rawBody; they must not inherit the prior turn's.
+    expect(resolveQueuedRawBody({ steeringMode: "all" })).toBeUndefined();
+    expect(resolveQueuedRawBody(undefined)).toBeUndefined();
+  });
+
+  it("clears rawBody when a provenance-gated steer passes an explicit undefined", () => {
+    expect(resolveQueuedRawBody({ steeringMode: "all", rawBody: undefined })).toBeUndefined();
   });
 });

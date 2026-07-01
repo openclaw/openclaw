@@ -33,6 +33,16 @@ export type EmbeddedAgentQueueMessageOptions = {
   deliveryTimeoutMs?: number;
   waitForTranscriptCommit?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /**
+   * Provenance-gated clean user-input text for the queued message. The embedded
+   * run re-derives its tracked rawBody from this on every injection for
+   * subsequent `before_prompt_build` / `agent_end` hook events: a string sets it
+   * to the queued turn's text, and an omitted/`undefined` value (direct-user
+   * gating, or internal injections such as sessions_send / Talk active-run
+   * control / subagent active wakes) clears it so stale direct-user text is
+   * never reported as theirs. See PR #52664.
+   */
+  rawBody?: string;
 };
 
 export type ActiveEmbeddedRunSnapshot = {

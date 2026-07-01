@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isSystemEventProvider,
+  resolveDirectUserRawBody,
   resolveEffectiveReplyRoute,
   type EffectiveReplyRouteContext,
   type EffectiveReplyRouteEntry,
@@ -405,5 +406,53 @@ describe("isSystemEventProvider", () => {
     expect(isSystemEventProvider("exec-event")).toBe(true);
     expect(isSystemEventProvider("slack")).toBe(false);
     expect(isSystemEventProvider(undefined)).toBe(false);
+  });
+});
+
+describe("resolveDirectUserRawBody", () => {
+  it("returns the candidate for direct external-user channel input", () => {
+    expect(
+      resolveDirectUserRawBody({
+        candidate: "hello",
+        provider: "telegram",
+        inputProvenance: undefined,
+      }),
+    ).toBe("hello");
+    expect(
+      resolveDirectUserRawBody({
+        candidate: "hello",
+        provider: "discord",
+        inputProvenance: { kind: "external_user" },
+      }),
+    ).toBe("hello");
+  });
+
+  it("clears for system-event providers", () => {
+    for (const provider of ["heartbeat", "cron-event", "exec-event"]) {
+      expect(
+        resolveDirectUserRawBody({
+          candidate: "system text",
+          provider,
+          inputProvenance: undefined,
+        }),
+      ).toBeUndefined();
+    }
+  });
+
+  it("clears for inter-session and internal-system provenance", () => {
+    expect(
+      resolveDirectUserRawBody({
+        candidate: "relayed text",
+        provider: "telegram",
+        inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveDirectUserRawBody({
+        candidate: "routed text",
+        provider: "telegram",
+        inputProvenance: { kind: "internal_system" },
+      }),
+    ).toBeUndefined();
   });
 });
