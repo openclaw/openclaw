@@ -199,7 +199,7 @@ env:
 
 jobs:
   prepare:
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     continue-on-error: ${{ inputs.advisory }}
     outputs:
       baseline_file_name: ${{ steps.baseline_metadata.outputs.file_name }}

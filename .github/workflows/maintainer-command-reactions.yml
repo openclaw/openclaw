@@ -13,7 +13,7 @@ concurrency:
 jobs:
   react:
     if: ${{ !endsWith(github.actor, '[bot]') }}
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     permissions:
       issues: write
       pull-requests: write

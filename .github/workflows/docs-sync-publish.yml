@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   sync-publish-repo:
-    runs-on: ubuntu-latest
+    runs-on: tenki-standard-medium-4c-8g
     env:
       OPENCLAW_DOCS_SYNC_TOKEN: ${{ secrets.OPENCLAW_DOCS_SYNC_TOKEN }}
     steps:

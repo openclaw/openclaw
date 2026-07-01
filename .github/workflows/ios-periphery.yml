@@ -19,7 +19,7 @@ permissions:
 jobs:
   scope:
     name: Detect iOS scan scope
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     outputs:
       should-scan: ${{ steps.scope.outputs.should-scan }}
     steps:
@@ -61,7 +61,7 @@ jobs:
     name: Scan iOS dead code
     needs: scope
     if: ${{ needs.scope.outputs.should-scan == 'true' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 45
     steps:
       - name: Checkout

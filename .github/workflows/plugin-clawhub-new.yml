@@ -38,7 +38,7 @@ env:
 
 jobs:
   resolve_bootstrap_plan:
-    runs-on: ubuntu-latest
+    runs-on: tenki-standard-medium-4c-8g
     permissions:
       contents: read
     outputs:
@@ -223,7 +223,7 @@ jobs:
     name: Validate release publish approval
     needs: resolve_bootstrap_plan
     if: github.event_name == 'workflow_dispatch' && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true'
-    runs-on: ubuntu-latest
+    runs-on: tenki-standard-medium-4c-8g
     permissions:
       actions: read
       contents: read
@@ -259,7 +259,7 @@ jobs:
   validate_bootstrap_trusted_publisher_cli:
     needs: [resolve_bootstrap_plan, validate_release_publish_approval]
     if: always() && github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true' && needs.validate_release_publish_approval.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: tenki-standard-medium-4c-8g
     permissions:
       contents: read
     steps:
@@ -292,7 +292,7 @@ jobs:
         validate_bootstrap_trusted_publisher_cli,
       ]
     if: always() && github.event_name == 'workflow_dispatch' && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true' && needs.validate_release_publish_approval.result == 'success' && (inputs.dry_run == true || needs.validate_bootstrap_trusted_publisher_cli.result == 'success')
-    runs-on: ubuntu-latest
+    runs-on: tenki-standard-medium-4c-8g
     environment: clawhub-plugin-bootstrap
     permissions:
       contents: read
@@ -411,7 +411,7 @@ jobs:
   verify_bootstrap_clawhub_package:
     needs: [resolve_bootstrap_plan, publish_bootstrap_plugins]
     if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.resolve_bootstrap_plan.outputs.has_bootstrap_candidates == 'true'
-    runs-on: ubuntu-latest
+    runs-on: tenki-standard-medium-4c-8g
     permissions:
       contents: read
     strategy:

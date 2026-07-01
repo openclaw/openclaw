@@ -62,7 +62,7 @@ env:
 jobs:
   validate_selected_ref:
     name: Validate selected ref
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     outputs:
       selected_revision: ${{ steps.validate.outputs.selected_revision }}
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
@@ -144,7 +144,7 @@ jobs:
       - validate_selected_ref
       - generate_qa_evidence
     if: ${{ always() && needs.validate_selected_ref.result == 'success' && (inputs.qa_evidence_run_id != '' || needs.generate_qa_evidence.result == 'success') }}
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 30
     permissions:
       actions: read

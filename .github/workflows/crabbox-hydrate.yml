@@ -42,7 +42,7 @@ jobs:
   hydrate:
     name: hydrate
     if: ${{ inputs.crabbox_job != 'hydrate-github' && inputs.crabbox_job != 'hydrate-windows-daemon' }}
-    runs-on: [self-hosted, "${{ inputs.crabbox_runner_label }}"]
+    runs-on: tenki-standard-large-plus-16c-32g
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -335,7 +335,7 @@ jobs:
   hydrate-windows-daemon:
     name: hydrate-windows-daemon
     if: ${{ inputs.crabbox_job == 'hydrate-windows-daemon' }}
-    runs-on: [self-hosted, "${{ inputs.crabbox_runner_label }}"]
+    runs-on: tenki-standard-large-plus-16c-32g
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -568,7 +568,7 @@ jobs:
   hydrate-github:
     name: hydrate-github
     if: ${{ inputs.crabbox_job == 'hydrate-github' }}
-    runs-on: [self-hosted, "${{ inputs.crabbox_runner_label }}"]
+    runs-on: tenki-standard-large-plus-16c-32g
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6

@@ -28,11 +28,11 @@ env:
 
 jobs:
   check:
-    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    if: ${{ github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     permissions:
       contents: read
     name: "check"
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: ${{ fromJSON(inputs.timeout_minutes || '120') }}
     steps:
       - name: Begin Testbox

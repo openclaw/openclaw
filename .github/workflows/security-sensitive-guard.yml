@@ -21,7 +21,7 @@ concurrency:
 jobs:
   security-sensitive-guard-detect:
     if: ${{ !github.event.pull_request.draft }}
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 5
     steps:
       - name: Check security-sensitive guard rollout eligibility
@@ -69,7 +69,7 @@ jobs:
     if: ${{ !github.event.pull_request.draft && always() }}
     needs:
       - security-sensitive-guard-detect
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 5
     steps:
       - name: Check security-sensitive guard rollout eligibility

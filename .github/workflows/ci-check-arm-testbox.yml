@@ -24,11 +24,11 @@ env:
 
 jobs:
   check-arm:
-    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    if: ${{ github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     permissions:
       contents: read
     name: "check-arm"
-    runs-on: blacksmith-16vcpu-ubuntu-2404-arm
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 120
     steps:
       - name: Begin Testbox

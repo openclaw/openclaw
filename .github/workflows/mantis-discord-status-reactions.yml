@@ -50,7 +50,7 @@ jobs:
           )
         )
       }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: tenki-standard-medium-4c-8g
     outputs:
       authorized: ${{ steps.permission.outputs.authorized }}
     steps:
@@ -81,7 +81,7 @@ jobs:
     name: Resolve Mantis request
     needs: authorize_actor
     if: needs.authorize_actor.outputs.authorized == 'true'
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: tenki-standard-medium-4c-8g
     outputs:
       baseline_ref: ${{ steps.resolve.outputs.baseline_ref }}
       candidate_ref: ${{ steps.resolve.outputs.candidate_ref }}
@@ -173,7 +173,7 @@ jobs:
     name: Validate selected refs
     needs: resolve_request
     if: ${{ needs.resolve_request.outputs.should_run == 'true' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: tenki-standard-medium-4c-8g
     outputs:
       baseline_revision: ${{ steps.validate.outputs.baseline_revision }}
       candidate_revision: ${{ steps.validate.outputs.candidate_revision }}
@@ -240,7 +240,7 @@ jobs:
     name: Run Discord status reaction before/after
     needs: [resolve_request, validate_refs]
     if: ${{ needs.resolve_request.outputs.should_run == 'true' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 180
     environment: qa-live-shared
     steps:
@@ -585,7 +585,7 @@ jobs:
     name: Clear Mantis command reaction
     needs: [resolve_request, validate_refs, run_status_reactions]
     if: ${{ always() && github.event_name == 'issue_comment' && needs.resolve_request.outputs.request_source == 'issue_comment' }}
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     permissions:
       issues: write
     steps:

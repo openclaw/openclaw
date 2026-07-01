@@ -26,7 +26,7 @@ concurrency:
 jobs:
   promote_signed_windows_installers:
     name: Promote signed Windows installers
-    runs-on: windows-latest
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 30
     steps:
       - name: Validate inputs

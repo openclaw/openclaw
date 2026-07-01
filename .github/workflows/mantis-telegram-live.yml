@@ -62,7 +62,7 @@ jobs:
           )
         )
       }}
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     outputs:
       authorized: ${{ steps.permission.outputs.authorized }}
     steps:
@@ -93,7 +93,7 @@ jobs:
     name: Resolve Mantis request
     needs: authorize_actor
     if: needs.authorize_actor.outputs.authorized == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     outputs:
       candidate_ref: ${{ steps.resolve.outputs.candidate_ref }}
       crabbox_provider: ${{ steps.resolve.outputs.crabbox_provider }}
@@ -204,7 +204,7 @@ jobs:
     name: Validate candidate ref
     needs: resolve_request
     if: ${{ needs.resolve_request.outputs.should_run == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     outputs:
       candidate_revision: ${{ steps.validate.outputs.candidate_revision }}
     steps:
@@ -259,7 +259,7 @@ jobs:
     name: Run Telegram live QA with Crabbox evidence
     needs: [resolve_request, validate_ref]
     if: ${{ needs.resolve_request.outputs.should_run == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 180
     environment: qa-live-shared
     outputs:
@@ -567,7 +567,7 @@ jobs:
     name: Clear Mantis command reaction
     needs: [resolve_request, validate_ref, run_telegram_live]
     if: ${{ always() && github.event_name == 'issue_comment' && needs.resolve_request.outputs.request_source == 'issue_comment' }}
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     permissions:
       issues: write
     steps:

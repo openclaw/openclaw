@@ -124,7 +124,7 @@ env:
 jobs:
   resolve_target:
     name: Resolve target ref
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 10
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
@@ -230,7 +230,7 @@ jobs:
     name: Verify Docker runtime image assets
     needs: [resolve_target]
     if: inputs.rerun_group == 'all'
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 20
     permissions:
       contents: read
@@ -256,7 +256,7 @@ jobs:
     name: Run normal full CI
     needs: [resolve_target, docker_runtime_assets_preflight]
     if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","ci"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: ${{ inputs.release_profile != 'minimum' && 240 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -389,7 +389,7 @@ jobs:
     name: Run plugin prerelease validation
     needs: [resolve_target, docker_runtime_assets_preflight]
     if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: ${{ inputs.release_profile == 'full' && 300 || inputs.release_profile == 'stable' && 240 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -522,7 +522,7 @@ jobs:
     name: Run release/live/Docker/QA validation
     needs: [resolve_target, docker_runtime_assets_preflight]
     if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: ${{ inputs.release_profile != 'minimum' && 240 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -771,7 +771,7 @@ jobs:
     needs: [resolve_target]
     if: ${{ always() && needs.resolve_target.result == 'success' && inputs.rerun_group == 'npm-telegram' && (inputs.npm_telegram_package_spec != '' || inputs.release_package_spec != '') }}
     continue-on-error: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: ${{ inputs.release_profile == 'full' && 360 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -889,7 +889,7 @@ jobs:
     name: Run product performance evidence
     needs: [resolve_target, docker_runtime_assets_preflight]
     if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","performance"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: ${{ inputs.release_profile == 'full' && 360 || 120 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -1022,7 +1022,7 @@ jobs:
         performance,
       ]
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 5
     steps:
       - name: Verify child workflow results

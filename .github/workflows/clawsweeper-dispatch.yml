@@ -23,7 +23,7 @@ concurrency:
 
 jobs:
   dispatch:
-    runs-on: ubuntu-latest
+    runs-on: tenki-standard-medium-4c-8g
     if: >-
       ${{
         (github.event_name != 'issue_comment' ||

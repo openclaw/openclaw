@@ -40,7 +40,7 @@ concurrency:
 jobs:
   dispatch:
     name: Dispatch selected Mantis workflow
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: tenki-standard-medium-4c-8g
     steps:
       - name: Dispatch scenario
         env:

@@ -308,7 +308,7 @@ env:
 jobs:
   resolve_package:
     name: Resolve package candidate
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 60
     outputs:
       docker_lanes: ${{ steps.profile.outputs.docker_lanes }}
@@ -537,7 +537,7 @@ jobs:
   package_integrity:
     name: Package integrity
     needs: resolve_package
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 10
     steps:
       - name: Checkout package workflow ref
@@ -652,7 +652,7 @@ jobs:
     name: Verify package acceptance
     needs: [resolve_package, package_integrity, docker_acceptance, package_telegram]
     if: always()
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 5
     steps:
       - name: Verify package acceptance results

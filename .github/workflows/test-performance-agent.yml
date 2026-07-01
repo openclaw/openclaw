@@ -31,7 +31,7 @@ jobs:
           github.event.workflow_run.event == 'push' &&
           github.event.workflow_run.head_branch == 'main' &&
           !endsWith(github.event.workflow_run.actor.login, '[bot]')))
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 240
     steps:
       - name: Checkout

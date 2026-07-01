@@ -29,7 +29,7 @@ concurrency:
 jobs:
   resolve:
     name: Resolve stable release closeout inputs
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 10
     outputs:
       full_release_validation_run_id: ${{ steps.inputs.outputs.full_release_validation_run_id }}
@@ -269,7 +269,7 @@ jobs:
     name: Verify stable main closeout
     needs: resolve
     if: ${{ needs.resolve.outputs.should_closeout == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 20
     steps:
       - name: Checkout resolved main state

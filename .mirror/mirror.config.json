@@ -1,0 +1,32 @@
+{
+  "upstream": "openclaw/openclaw",
+  "fork": "hashbender/openclaw",
+  "since_pr": 98445,
+  "runner_large": "tenki-standard-large-plus-16c-32g",
+  "runner_medium": "tenki-standard-medium-4c-8g",
+  "pr_ci_bases": ["main"],
+  "decouple": {
+    "subs": [
+      [
+        "  build-artifacts:\n    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}\n    permissions:\n      contents: read\n    name: \"build-artifacts\"\n    runs-on: tenki-standard-medium-4c-8g\n",
+        "  build-artifacts:\n    if: ${{ github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}\n    permissions:\n      contents: read\n    name: \"build-artifacts\"\n    runs-on: tenki-standard-medium-4c-8g\n"
+      ],
+      [
+        "  check:\n    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}\n    permissions:\n      contents: read\n    name: \"check\"\n    runs-on: tenki-standard-medium-4c-8g\n",
+        "  check:\n    if: ${{ github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}\n    permissions:\n      contents: read\n    name: \"check\"\n    runs-on: tenki-standard-medium-4c-8g\n"
+      ],
+      [
+        "  check-arm:\n    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}\n    permissions:\n      contents: read\n    name: \"check-arm\"\n    runs-on: tenki-standard-medium-4c-8g\n",
+        "  check-arm:\n    if: ${{ github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}\n    permissions:\n      contents: read\n    name: \"check-arm\"\n    runs-on: tenki-standard-medium-4c-8g\n"
+      ]
+    ],
+    "gate_jobs": [
+      "auto-response",
+      "dependency-guard-detect",
+      "dependency-guard-autoscrub",
+      "dependency-guard",
+      "label"
+    ],
+    "accept_skipped": true
+  }
+}

@@ -46,7 +46,7 @@ env:
 
 jobs:
   preview_plugins_clawhub:
-    runs-on: ubuntu-latest
+    runs-on: tenki-standard-medium-4c-8g
     permissions:
       contents: read
     outputs:
@@ -269,7 +269,7 @@ jobs:
     name: Validate release publish approval
     needs: preview_plugins_clawhub
     if: github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
-    runs-on: ubuntu-latest
+    runs-on: tenki-standard-medium-4c-8g
     permissions:
       actions: read
       contents: read
@@ -305,7 +305,7 @@ jobs:
   pack_plugins_clawhub_artifacts:
     needs: [preview_plugins_clawhub, validate_release_publish_approval]
     if: github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
-    runs-on: ubuntu-latest
+    runs-on: tenki-standard-medium-4c-8g
     permissions:
       contents: read
     strategy:
@@ -374,7 +374,7 @@ jobs:
   approve_plugins_clawhub_release:
     needs: [preview_plugins_clawhub, pack_plugins_clawhub_artifacts]
     if: always() && github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: tenki-standard-medium-4c-8g
     environment: clawhub-plugin-release
     permissions:
       contents: read
@@ -414,7 +414,7 @@ jobs:
   verify_published_clawhub_package:
     needs: [preview_plugins_clawhub, publish_plugins_clawhub]
     if: github.event_name == 'workflow_dispatch' && inputs.dry_run != true && needs.preview_plugins_clawhub.outputs.has_candidates == 'true'
-    runs-on: ubuntu-latest
+    runs-on: tenki-standard-medium-4c-8g
     permissions:
       contents: read
     strategy:

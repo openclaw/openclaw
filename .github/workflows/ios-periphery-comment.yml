@@ -17,7 +17,7 @@ permissions:
 jobs:
   comment:
     name: Comment on PR
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     if: >
       github.repository == 'openclaw/openclaw' &&
       github.event.workflow_run.event == 'pull_request' &&

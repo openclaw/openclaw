@@ -20,7 +20,7 @@ env:
 
 jobs:
   docs:
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 20
     steps:
       - name: Checkout

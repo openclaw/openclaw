@@ -45,7 +45,7 @@ env:
 
 jobs:
   preflight:
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     outputs:
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       run_install_smoke: ${{ steps.manifest.outputs.run_install_smoke }}
@@ -100,7 +100,7 @@ jobs:
   install-smoke-fast:
     needs: [preflight]
     if: needs.preflight.outputs.run_fast_install_smoke == 'true' && needs.preflight.outputs.run_full_install_smoke != 'true'
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     env:
       DOCKER_BUILD_SUMMARY: "false"
       DOCKER_BUILD_RECORD_UPLOAD: "false"
@@ -209,7 +209,7 @@ jobs:
   root_dockerfile_image:
     needs: [preflight]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     outputs:
       image_ref: ${{ steps.image.outputs.image_ref }}
     env:
@@ -286,7 +286,7 @@ jobs:
   qr_package_install_smoke:
     needs: [preflight]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     steps:
       - name: Checkout CLI
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -302,7 +302,7 @@ jobs:
   root_dockerfile_smokes:
     needs: [preflight, root_dockerfile_image]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     steps:
       - name: Checkout CLI
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -405,7 +405,7 @@ jobs:
   installer_smoke:
     needs: [preflight, root_dockerfile_image]
     if: needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     env:
       DOCKER_BUILD_SUMMARY: "false"
       DOCKER_BUILD_RECORD_UPLOAD: "false"
@@ -496,7 +496,7 @@ jobs:
   bun_global_install_smoke:
     needs: [preflight, root_dockerfile_image]
     if: needs.preflight.outputs.run_full_install_smoke == 'true' && needs.preflight.outputs.run_bun_global_install_smoke == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     steps:
       - name: Checkout CLI
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -531,7 +531,7 @@ jobs:
   docker-e2e-fast:
     needs: [preflight]
     if: needs.preflight.outputs.run_fast_install_smoke == 'true' || needs.preflight.outputs.run_full_install_smoke == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 12
     env:
       DOCKER_BUILD_SUMMARY: "false"

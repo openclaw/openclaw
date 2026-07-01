@@ -108,7 +108,7 @@ env:
 jobs:
   run_package_telegram_e2e:
     name: Run package Telegram E2E
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: tenki-standard-medium-4c-8g
     continue-on-error: ${{ inputs.advisory }}
     timeout-minutes: 60
     environment: qa-live-shared

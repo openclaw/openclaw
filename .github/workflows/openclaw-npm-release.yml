@@ -52,7 +52,7 @@ jobs:
   preflight_openclaw_npm:
     if: ${{ inputs.preflight_only }}
     # Preflight builds the full release package before publish; ubuntu-latest can OOM in tsdown.
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: tenki-standard-medium-4c-8g
     permissions:
       contents: read
     steps:
@@ -385,7 +385,7 @@ jobs:
 
   validate_publish_request:
     if: ${{ !inputs.preflight_only }}
-    runs-on: ubuntu-latest
+    runs-on: tenki-standard-medium-4c-8g
     permissions:
       actions: read
       contents: read
@@ -465,7 +465,7 @@ jobs:
     # npm trusted publishing + provenance requires this to stay on ubuntu-latest.
     needs: [validate_publish_request]
     if: ${{ !inputs.preflight_only }}
-    runs-on: ubuntu-latest
+    runs-on: tenki-standard-medium-4c-8g
     environment: npm-release
     permissions:
       actions: read

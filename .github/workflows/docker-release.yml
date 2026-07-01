@@ -32,7 +32,7 @@ env:
 jobs:
   validate_manual_backfill:
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     permissions:
       contents: read
     steps:
@@ -60,7 +60,7 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     needs: validate_manual_backfill
     # WARNING: KEEP MANUAL BACKFILLS GATED BY THE docker-release ENVIRONMENT.
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     environment: docker-release
     permissions: {}
     steps:
@@ -70,7 +70,7 @@ jobs:
         run: echo "Approved Docker backfill for $RELEASE_TAG"
 
   validate_publish_config:
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     permissions:
       contents: read
     steps:
@@ -94,7 +94,7 @@ jobs:
     needs: [approve_manual_backfill, validate_publish_config]
     if: ${{ always() && needs.validate_publish_config.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
     # WARNING: DO NOT REVERT THIS TO A BLACKSMITH RUNNER WITHOUT RE-VALIDATING TAG BACKFILLS.
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     permissions:
       packages: write
       contents: read
@@ -316,7 +316,7 @@ jobs:
     needs: [approve_manual_backfill, validate_publish_config]
     if: ${{ always() && needs.validate_publish_config.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
     # WARNING: DO NOT REVERT THIS TO A BLACKSMITH RUNNER WITHOUT RE-VALIDATING TAG BACKFILLS.
-    runs-on: ubuntu-24.04-arm
+    runs-on: tenki-standard-medium-4c-8g
     permissions:
       packages: write
       contents: read
@@ -519,7 +519,7 @@ jobs:
     needs: [approve_manual_backfill, validate_publish_config, build-amd64, build-arm64]
     if: ${{ always() && needs.validate_publish_config.result == 'success' && needs.build-amd64.result == 'success' && needs.build-arm64.result == 'success' && (github.event_name != 'workflow_dispatch' || needs.approve_manual_backfill.result == 'success') }}
     # WARNING: DO NOT REVERT THIS TO A BLACKSMITH RUNNER WITHOUT RE-VALIDATING TAG BACKFILLS.
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     permissions:
       packages: write
       contents: read
@@ -656,7 +656,7 @@ jobs:
   verify-attestations:
     needs: [create-manifest]
     if: ${{ always() && needs.create-manifest.result == 'success' }}
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     permissions:
       contents: read
       packages: read

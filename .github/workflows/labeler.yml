@@ -27,10 +27,11 @@ permissions: {}
 
 jobs:
   label:
+    if: ${{ github.repository == 'openclaw/openclaw' }}
     permissions:
       contents: read
       pull-requests: write
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     steps:
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: app-token
@@ -464,7 +465,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     steps:
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: app-token
@@ -763,7 +764,7 @@ jobs:
     if: github.event_name == 'issues'
     permissions:
       issues: write
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     steps:
       - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         id: app-token

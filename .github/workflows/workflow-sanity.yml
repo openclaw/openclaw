@@ -23,7 +23,7 @@ env:
 jobs:
   no-tabs:
     if: github.event_name != 'workflow_dispatch'
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     steps:
       - &workflow_sanity_checkout_step
         name: Checkout
@@ -83,7 +83,7 @@ jobs:
 
   actionlint:
     if: github.event_name != 'workflow_dispatch'
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     steps:
       - *workflow_sanity_checkout_step
       - name: Setup Python
@@ -198,7 +198,7 @@ jobs:
 
   generated-doc-baselines:
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     steps:
       - *workflow_sanity_checkout_step
       - name: Setup Node environment

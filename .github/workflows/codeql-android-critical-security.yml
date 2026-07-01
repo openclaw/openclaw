@@ -20,7 +20,7 @@ permissions:
 jobs:
   android:
     name: Critical Security (android)
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 45
     steps:
       - name: Checkout

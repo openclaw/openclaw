@@ -75,7 +75,7 @@ env:
 jobs:
   authorize_actor:
     name: Authorize workflow actor
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     outputs:
       authorized: ${{ steps.permission.outputs.authorized }}
     steps:
@@ -106,7 +106,7 @@ jobs:
     name: Validate candidate ref
     needs: authorize_actor
     if: needs.authorize_actor.outputs.authorized == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     outputs:
       candidate_revision: ${{ steps.validate.outputs.candidate_revision }}
     steps:
@@ -160,7 +160,7 @@ jobs:
   run_slack_desktop:
     name: Run Slack desktop smoke
     needs: validate_ref
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 180
     environment: qa-live-shared
     steps:

@@ -1,0 +1,52 @@
+# hack_your_workflow ongoing mirror watcher.
+#
+# Schedule-only (never push/PR, so it can't recurse). Every 30 min it replays
+# any NEW upstream PRs (>= the baseline in .mirror/mirror.config.json) onto this
+# fork so the same CI fires on tenki. Uses MIRROR_PAT (NOT GITHUB_TOKEN) because
+# pushes/PRs made with GITHUB_TOKEN do not trigger further workflow runs, which
+# would defeat the load test.
+name: zzz-mirror-watch
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'   # every 30 minutes
+  workflow_dispatch: {}        # manual "run now"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-watch
+  cancel-in-progress: false    # never interrupt an in-flight mirror pass
+
+jobs:
+  mirror:
+    runs-on: tenki-standard-medium-4c-8g
+    steps:
+      - name: Checkout tooling (full history, lazy blobs)
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          filter: blob:none
+          # Don't persist the read-only GITHUB_TOKEN as a github.com auth header;
+          # it would override the MIRROR_PAT in the fork remote URL and 403 the push.
+          persist-credentials: false
+
+      - name: Mirror new upstream PRs
+        env:
+          GH_TOKEN: ${{ secrets.MIRROR_PAT }}
+          PAT: ${{ secrets.MIRROR_PAT }}
+        run: |
+          set -euo pipefail
+          test -n "${PAT}" || { echo "::error::MIRROR_PAT secret is not set"; exit 1; }
+          test -f .mirror/mirror.config.json || { echo "::error::missing .mirror/mirror.config.json"; exit 1; }
+          git config --global user.name  "qbit-mirror-bot"
+          git config --global user.email "qbit-mirror-bot@users.noreply.github.com"
+          upstream="$(python3 -c 'import json;print(json.load(open(".mirror/mirror.config.json"))["upstream"])')"
+          # this checkout's 'origin' is the fork; rename it and add upstream.
+          git remote rename origin fork
+          git remote set-url fork "https://x-access-token:${PAT}@github.com/${GITHUB_REPOSITORY}"
+          git remote add origin "https://github.com/${upstream}"
+          # continue mode (no --reset-bases): mirror only not-yet-mirrored PRs at
+          # or after the baseline; idempotent via the Mirror-of body marker.
+          python3 .mirror/mirror.py --repo-dir . --execute --delay 30

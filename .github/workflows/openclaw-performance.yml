@@ -71,7 +71,7 @@ env:
 jobs:
   kova:
     name: ${{ matrix.title }}
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 240
     strategy:
       fail-fast: false

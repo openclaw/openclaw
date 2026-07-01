@@ -84,7 +84,7 @@ env:
 jobs:
   resolve_release_target:
     name: Resolve release target
-    runs-on: ubuntu-latest
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 20
     outputs:
       sha: ${{ steps.manifest.outputs.sha || steps.ref.outputs.sha }}
@@ -461,7 +461,7 @@ jobs:
   publish:
     name: Publish plugins, then OpenClaw
     needs: [resolve_release_target]
-    runs-on: ubuntu-latest
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 120
     environment: npm-release
     steps:

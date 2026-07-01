@@ -19,11 +19,12 @@ permissions: {}
 
 jobs:
   auto-response:
+    if: ${{ github.repository == 'openclaw/openclaw' }}
     permissions:
       contents: read
       issues: write
       pull-requests: write
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:

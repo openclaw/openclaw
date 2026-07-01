@@ -22,7 +22,7 @@ env:
 jobs:
   build:
     name: Build live media runner image
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 30
     steps:
       - name: Checkout

@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   dispatch-translate:
-    runs-on: ubuntu-latest
+    runs-on: tenki-standard-medium-4c-8g
     steps:
       - name: Trigger translation coordinator in publish repo
         env:

@@ -15,8 +15,8 @@ concurrency:
 
 jobs:
   dependency-guard-detect:
-    if: ${{ !github.event.pull_request.draft }}
-    runs-on: ubuntu-24.04
+    if: ${{ github.repository == 'openclaw/openclaw' && !github.event.pull_request.draft }}
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 5
     outputs:
       autoscrub: ${{ steps.guard.outputs.autoscrub }}
@@ -39,9 +39,9 @@ jobs:
         run: node scripts/github/dependency-guard.mjs
 
   dependency-guard-autoscrub:
-    if: ${{ !github.event.pull_request.draft && needs.dependency-guard-detect.outputs.autoscrub == 'true' }}
+    if: ${{ github.repository == 'openclaw/openclaw' && !github.event.pull_request.draft && needs.dependency-guard-detect.outputs.autoscrub == 'true' }}
     needs: dependency-guard-detect
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 5
     permissions:
       contents: read
@@ -87,11 +87,11 @@ jobs:
         run: node scripts/github/dependency-guard.mjs
 
   dependency-guard:
-    if: ${{ !github.event.pull_request.draft && always() }}
+    if: ${{ github.repository == 'openclaw/openclaw' && !github.event.pull_request.draft && always() }}
     needs:
       - dependency-guard-detect
       - dependency-guard-autoscrub
-    runs-on: ubuntu-24.04
+    runs-on: tenki-standard-medium-4c-8g
     timeout-minutes: 5
     steps:
       - name: Check out trusted base workflow scripts
