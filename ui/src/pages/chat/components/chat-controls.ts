@@ -3,7 +3,6 @@ import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import type {
   AgentsListResult,
-  GatewayThinkingLevelOption,
   ModelAuthStatusResult,
   ModelCatalogEntry,
   SessionsListResult,
@@ -17,54 +16,29 @@ import {
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import { resolveChatModelSelectState } from "../../../lib/chat/model-select-state.ts";
 import {
-  formatInheritedThinkingLabel,
+  resolveChatFastModeSelectState,
+  resolveChatModelSelectState,
+  type ChatFastModeSelectState,
+  type ChatFastModeSelectValue,
+  type ChatModelSelectOption,
+} from "../../../lib/chat/model-select-state.ts";
+import {
   formatThinkingOverrideLabel,
-  normalizeThinkingOptionValue,
-  type ThinkingCatalogEntry,
-  listThinkingLevelLabels,
-  normalizeThinkLevel,
-  resolveThinkingDefaultForModel,
+  resolveChatThinkingSelectState,
+  type ChatThinkingSelectState,
 } from "../../../lib/chat/thinking.ts";
 import { isMonitoredAuthProvider } from "../../../lib/model-auth-helpers.ts";
 import {
   collectQuotaWindowsFromAuthStatus,
   formatQuotaReset,
 } from "../../../lib/provider-quota-summary.ts";
-import { pushUniqueTrimmedSelectOption } from "../../../lib/select-options.ts";
 import { isCronSessionKey } from "../../../lib/session-display.ts";
-import { sessionModelMatchesDefaults } from "../../../lib/session-model-defaults.ts";
 import {
   isSessionKeyTiedToAgent,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../../lib/sessions/session-key.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../../lib/string-coerce.ts";
-
-type ChatInlineSelectOption = {
-  value: string;
-  label: string;
-};
-
-type ChatThinkingSelectOption = {
-  value: string;
-  label: string;
-};
-
-type ChatThinkingSelectState = {
-  currentOverride: string;
-  defaultLabel: string;
-  defaultValue: string;
-  options: ChatThinkingSelectOption[];
-};
-
-type ChatFastModeSelectState = {
-  currentOverride: "" | "on" | "off" | "auto";
-  disabled: boolean;
-  options: ChatInlineSelectOption[];
-  supported: boolean;
-};
 
 export type ChatModelControlsState = {
   basePath?: string;
@@ -100,7 +74,7 @@ export type ChatControlsState = ChatModelControlsState & {
 
 export type ChatModelControlsOptions = {
   modelOverrides?: Readonly<Record<string, string | null>>;
-  onFastModeSelect?: (value: "" | "on" | "off" | "auto") => Promise<unknown> | unknown;
+  onFastModeSelect?: (value: ChatFastModeSelectValue) => Promise<unknown> | unknown;
   onModelSelect?: (value: string) => Promise<unknown> | unknown;
   onThinkingSelect?: (value: string) => Promise<unknown> | unknown;
   onToggleCronSessions?: () => void;
@@ -110,15 +84,6 @@ export type ChatControlsOptions = ChatModelControlsOptions & {
   onNavigate?: (routeId: RouteId) => void;
   onRefresh: () => Promise<void> | void;
 };
-
-const FAST_MODE_PROVIDER_IDS = new Set([
-  "anthropic",
-  "minimax",
-  "minimax-portal",
-  "openai",
-  "openrouter",
-  "xai",
-]);
 
 function chatAutoScrollLabel(mode: ChatAutoScrollMode) {
   switch (mode) {
@@ -455,8 +420,23 @@ export function renderChatModelSelect(
     sessionKey: state.sessionKey,
     sessionsResult: state.sessionsResult,
   });
-  const thinking = resolveChatThinkingSelectState(state);
-  const fastMode = resolveChatFastModeSelectState(state, currentOverride);
+  const thinking = resolveChatThinkingSelectState({
+    catalog: state.chatModelCatalog,
+    sessionKey: state.sessionKey,
+    sessionsResult: state.sessionsResult,
+  });
+  const fastMode = resolveChatFastModeSelectState({
+    activeRunId: state.chatRunId,
+    catalog: state.chatModelCatalog,
+    connected: state.connected,
+    currentModelOverride: currentOverride,
+    gatewayAvailable: Boolean(state.client),
+    loading: state.chatLoading,
+    sending: state.chatSending,
+    sessionKey: state.sessionKey,
+    sessionsResult: state.sessionsResult,
+    stream: state.chatStream,
+  });
   const busy =
     state.chatLoading || state.chatSending || Boolean(state.chatRunId) || state.chatStream !== null;
   const disabled =
@@ -479,12 +459,11 @@ export function renderChatModelSelect(
       ? thinking.defaultLabel
       : (thinking.options.find((entry) => entry.value === thinking.currentOverride)?.label ??
         thinking.currentOverride);
-  const modelOptions = [{ value: "", label: defaultLabel }, ...selectOptions];
 
   return renderChatModelReasoningSelect({
     disabled,
     fastMode,
-    modelOptions,
+    modelOptions: [{ value: "", label: defaultLabel }, ...selectOptions],
     selectedModelLabel: selectedLabel,
     selectedModelValue: currentOverride,
     selectedThinkingLabel,
@@ -498,194 +477,13 @@ export function renderChatModelSelect(
   });
 }
 
-function resolveThinkingTargetModel(state: ChatModelControlsState): {
-  provider: string | null;
-  model: string | null;
-} {
-  const activeRow = state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
-  return {
-    provider: activeRow?.modelProvider ?? state.sessionsResult?.defaults?.modelProvider ?? null,
-    model: activeRow?.model ?? state.sessionsResult?.defaults?.model ?? null,
-  };
-}
-
-function resolveProviderFromModelValue(
-  value: string,
-  catalog: ChatModelControlsState["chatModelCatalog"],
-): string | null {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const separator = trimmed.indexOf("/");
-  if (separator > 0) {
-    return trimmed.slice(0, separator).toLowerCase();
-  }
-  return (
-    catalog
-      .find((entry) => entry.id.trim().toLowerCase() === trimmed.toLowerCase())
-      ?.provider.trim()
-      .toLowerCase() || null
-  );
-}
-
-function resolveChatFastModeSelectState(
-  state: ChatModelControlsState,
-  currentModelOverride: string,
-): ChatFastModeSelectState {
-  const activeRow = state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
-  const { provider } = resolveThinkingTargetModel(state);
-  const effectiveProvider =
-    resolveProviderFromModelValue(currentModelOverride, state.chatModelCatalog ?? []) ??
-    provider?.trim().toLowerCase() ??
-    null;
-  const currentOverride =
-    activeRow?.fastMode === "auto"
-      ? "auto"
-      : activeRow?.fastMode === true
-        ? "on"
-        : activeRow?.fastMode === false
-          ? "off"
-          : "";
-  const supported = Boolean(
-    (effectiveProvider && FAST_MODE_PROVIDER_IDS.has(effectiveProvider)) || currentOverride,
-  );
-  return {
-    currentOverride,
-    disabled:
-      !supported ||
-      !state.connected ||
-      state.chatLoading ||
-      state.chatSending ||
-      Boolean(state.chatRunId) ||
-      state.chatStream !== null ||
-      !state.client,
-    options: [
-      { value: "", label: "Default" },
-      { value: "on", label: "Fast" },
-      { value: "off", label: "Standard" },
-      { value: "auto", label: "Auto" },
-    ],
-    supported,
-  };
-}
-
-function buildThinkingOptions(
-  levels: readonly GatewayThinkingLevelOption[],
-  currentOverride: string,
-): ChatThinkingSelectOption[] {
-  const seen = new Set<string>();
-  const options: ChatThinkingSelectOption[] = [];
-  const addOption = (value: string, label?: string) => {
-    const normalizedValue = normalizeThinkingOptionValue(value);
-    pushUniqueTrimmedSelectOption(options, seen, normalizedValue, () =>
-      formatThinkingOverrideLabel(normalizedValue, label),
-    );
-  };
-
-  for (const level of levels) {
-    addOption(level.id, level.label);
-  }
-  if (currentOverride) {
-    addOption(currentOverride);
-  }
-  return options;
-}
-
-function isOffThinkingOption(value: string | null | undefined): boolean {
-  return normalizeThinkingOptionValue(value ?? "") === "off";
-}
-
-function isOffOnlyThinkingLevels(levels: readonly GatewayThinkingLevelOption[]): boolean {
-  return levels.every((level) => isOffThinkingOption(level.id || level.label));
-}
-
-function resolveThinkingLevelOptions(
-  activeRow: SessionsListResult["sessions"][number] | undefined,
-  defaults: SessionsListResult["defaults"] | undefined,
-  provider: string | null,
-  model: string | null,
-  catalog: readonly ThinkingCatalogEntry[],
-): GatewayThinkingLevelOption[] {
-  const modelMatchesDefaults = sessionModelMatchesDefaults(activeRow, defaults);
-  const catalogEntry =
-    provider && model
-      ? catalog.find((entry) => entry.provider === provider && entry.id === model)
-      : undefined;
-  const explicitLevels =
-    (activeRow?.thinkingLevels?.length ? activeRow.thinkingLevels : null) ??
-    (modelMatchesDefaults && defaults?.thinkingLevels?.length ? defaults.thinkingLevels : null);
-  if (explicitLevels) {
-    if (catalogEntry?.reasoning === false && isOffOnlyThinkingLevels(explicitLevels)) {
-      return [];
-    }
-    return explicitLevels;
-  }
-  const explicitLabels =
-    (activeRow?.thinkingOptions?.length ? activeRow.thinkingOptions : null) ??
-    (modelMatchesDefaults && defaults?.thinkingOptions?.length ? defaults.thinkingOptions : null);
-  if (catalogEntry?.reasoning === false) {
-    if (!explicitLabels || explicitLabels.every(isOffThinkingOption)) {
-      return [];
-    }
-  }
-  const labels =
-    explicitLabels ??
-    (provider && model ? listThinkingLevelLabels(provider, model) : listThinkingLevelLabels());
-  return labels.map((label) => ({
-    id: normalizeThinkLevel(label) ?? normalizeLowercaseStringOrEmpty(label),
-    label,
-  }));
-}
-
-export function resolveChatThinkingSelectState(
-  state: ChatModelControlsState,
-): ChatThinkingSelectState {
-  const activeRow = state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
-  const persisted = activeRow?.thinkingLevel;
-  const currentOverride =
-    typeof persisted === "string" && persisted.trim()
-      ? (normalizeThinkLevel(persisted) ?? persisted.trim())
-      : "";
-  const defaults = state.sessionsResult?.defaults;
-  const { provider, model } = resolveThinkingTargetModel(state);
-  const levels = resolveThinkingLevelOptions(
-    activeRow,
-    defaults,
-    provider,
-    model,
-    state.chatModelCatalog ?? [],
-  );
-  const defaultFromSessionDefaults =
-    (!activeRow || sessionModelMatchesDefaults(activeRow, defaults)) && defaults?.thinkingDefault
-      ? defaults.thinkingDefault
-      : undefined;
-  const defaultLevel =
-    activeRow?.thinkingDefault ??
-    defaultFromSessionDefaults ??
-    (provider && model
-      ? resolveThinkingDefaultForModel({
-          provider,
-          model,
-          catalog: state.chatModelCatalog ?? [],
-        })
-      : "off");
-  const effectiveOverride = levels.length === 0 && currentOverride === "off" ? "" : currentOverride;
-  return {
-    currentOverride: effectiveOverride,
-    defaultLabel: formatInheritedThinkingLabel(defaultLevel),
-    defaultValue: normalizeThinkingOptionValue(defaultLevel),
-    options: buildThinkingOptions(levels, effectiveOverride),
-  };
-}
-
 function formatCombinedPickerModelLabel(label: string): string {
   const match = /^Default \((.+)\)$/u.exec(label);
   return match?.[1] ?? label;
 }
 
 function formatCombinedPickerModelOptionLabel(
-  option: ChatInlineSelectOption,
+  option: ChatModelSelectOption,
   selected: boolean,
 ): string {
   return option.value === "" && selected
@@ -700,15 +498,15 @@ function formatCombinedPickerThinkingLabel(label: string): string {
 function renderChatModelReasoningSelect(params: {
   fastMode: ChatFastModeSelectState;
   disabled: boolean;
-  modelOptions: ChatInlineSelectOption[];
+  modelOptions: ChatModelSelectOption[];
   selectedModelLabel: string;
   selectedModelValue: string;
   selectedThinkingLabel: string;
   selectedThinkingValue: string;
   thinkingDefaultValue: string;
   thinkingDisabled: boolean;
-  thinkingOptions: ChatInlineSelectOption[];
-  onFastModeSelect: (value: "" | "on" | "off" | "auto") => Promise<unknown>;
+  thinkingOptions: ChatModelSelectOption[];
+  onFastModeSelect: (value: ChatFastModeSelectValue) => Promise<unknown>;
   onModelSelect: (value: string) => Promise<unknown>;
   onThinkingSelect: (value: string) => Promise<unknown>;
 }) {
@@ -739,8 +537,6 @@ function renderChatModelReasoningSelect(params: {
     (option) => option.value === selectedThinkingValue,
   );
   const sliderIndex = Math.max(hasThinkingOverride ? overrideStopIndex : defaultStopIndex, 0);
-  // Inherited defaults may not exist on the offered scale. Keep the label
-  // truthful and leave the parked thumb visually unanchored.
   const sliderUnanchored = !hasThinkingOverride && defaultStopIndex < 0;
   const sliderFillPercent = (index: number) =>
     sliderStops.length > 1 ? (index / (sliderStops.length - 1)) * 100 : 0;
@@ -951,7 +747,7 @@ function renderChatModelReasoningSelect(params: {
                           fastMode.options,
                           (speed) => speed.value,
                           (speed) => {
-                            const speedValue = speed.value as "" | "on" | "off" | "auto";
+                            const speedValue = speed.value as ChatFastModeSelectValue;
                             const speedSelected = speedValue === fastMode.currentOverride;
                             return html`
                               <button

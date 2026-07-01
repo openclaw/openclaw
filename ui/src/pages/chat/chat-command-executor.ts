@@ -3,16 +3,11 @@
  * Calls gateway RPC methods and returns formatted results.
  */
 
-import {
-  formatFastModeCommandOptions,
-  formatFastModeCurrentStatus,
-} from "../../../../src/shared/fast-mode.js";
+import { formatFastModeCommandOptions } from "../../../../src/shared/fast-mode.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsListResult,
   GatewaySessionRow,
-  GatewayThinkingLevelOption,
-  FastMode,
   ModelCatalogEntry,
   SessionsListResult,
 } from "../../api/types.ts";
@@ -23,12 +18,16 @@ import {
   resolvePreferredServerChatModelValue,
 } from "../../lib/chat/model-ref.ts";
 import {
-  formatThinkingLevels,
-  normalizeThinkLevel,
-  resolveThinkingDefaultForModel,
+  normalizeChatFastModeInput,
+  resolveChatFastModeStatus,
+} from "../../lib/chat/model-select-state.ts";
+import {
+  formatThinkingCommandOptionsForSession,
+  isThinkingLevelOptionForSession,
+  resolveCurrentThinkingLevel,
+  resolveThinkingLevelInput,
 } from "../../lib/chat/thinking.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
-import { sessionModelMatchesDefaults } from "../../lib/session-model-defaults.ts";
 import type { SessionCapability, SessionPatch } from "../../lib/sessions/index.ts";
 import {
   DEFAULT_AGENT_ID,
@@ -359,19 +358,6 @@ async function executeVerbose(
   }
 }
 
-function normalizeFastMode(raw: string): FastMode | undefined {
-  if (raw === "auto") {
-    return "auto";
-  }
-  if (raw === "on") {
-    return true;
-  }
-  if (raw === "off") {
-    return false;
-  }
-  return undefined;
-}
-
 async function executeFast(
   client: GatewayBrowserClient,
   sessionKey: string,
@@ -385,7 +371,7 @@ async function executeFast(
       const session = await loadCurrentSession(context, sessionKey);
       return {
         content: formatDirectiveOptions(
-          resolveCurrentFastModeStatus(session),
+          resolveChatFastModeStatus(session),
           formatFastModeCommandOptions({
             fastAutoOnSeconds: session?.fastAutoOnSeconds,
           }),
@@ -410,7 +396,7 @@ async function executeFast(
     }
   }
 
-  const nextMode = normalizeFastMode(rawMode);
+  const nextMode = normalizeChatFastModeInput(rawMode);
   if (nextMode === undefined) {
     return {
       content: `Unrecognized fast mode "${args.trim()}". Valid levels: on, off, auto, default, status.`,
@@ -548,77 +534,6 @@ function formatDirectiveOptions(text: string, options: string): string {
   return `${text}\nOptions: ${options}.`;
 }
 
-function formatThinkingOptionsForSession(
-  session: GatewaySessionRow | undefined,
-  defaults?: SessionsListResult["defaults"],
-  separator = ", ",
-): string {
-  return resolveThinkingLevelOptionsForSession(session, defaults)
-    .map((level) => level.label)
-    .join(separator);
-}
-
-function formatThinkingCommandOptionsForSession(
-  session: GatewaySessionRow | undefined,
-  defaults?: SessionsListResult["defaults"],
-): string {
-  const options = formatThinkingOptionsForSession(session, defaults);
-  return options.split(", ").includes("default") ? options : `default, ${options}`;
-}
-
-function resolveThinkingLevelInput(
-  rawLevel: string,
-  session: GatewaySessionRow | undefined,
-  defaults: SessionsListResult["defaults"] | undefined,
-): string | undefined {
-  const normalized = normalizeThinkLevel(rawLevel);
-  if (normalized) {
-    return normalized;
-  }
-  const rawKey = normalizeLowercaseStringOrEmpty(rawLevel);
-  return resolveThinkingLevelOptionsForSession(session, defaults)
-    .map((option) => ({
-      id: normalizeThinkLevel(option.id) ?? normalizeLowercaseStringOrEmpty(option.id),
-      label: normalizeLowercaseStringOrEmpty(option.label),
-    }))
-    .find((option) => option.id === rawKey || option.label === rawKey)?.id;
-}
-
-function isThinkingLevelOptionForSession(
-  session: GatewaySessionRow | undefined,
-  defaults: SessionsListResult["defaults"] | undefined,
-  level: string,
-): boolean {
-  return resolveThinkingLevelOptionsForSession(session, defaults).some((option) => {
-    const id = normalizeThinkLevel(option.id) ?? normalizeLowercaseStringOrEmpty(option.id);
-    return id === level || normalizeThinkLevel(option.label) === level;
-  });
-}
-
-function resolveThinkingLevelOptionsForSession(
-  session: GatewaySessionRow | undefined,
-  defaults: SessionsListResult["defaults"] | undefined,
-): GatewayThinkingLevelOption[] {
-  if (session?.thinkingLevels?.length) {
-    return session.thinkingLevels;
-  }
-  const matchesDefaults = sessionModelMatchesDefaults(session, defaults);
-  if (matchesDefaults && defaults?.thinkingLevels?.length) {
-    return defaults.thinkingLevels;
-  }
-  const labels =
-    (session?.thinkingOptions?.length ? session.thinkingOptions : null) ??
-    (matchesDefaults && defaults?.thinkingOptions?.length ? defaults.thinkingOptions : null) ??
-    formatThinkingLevels(
-      session?.modelProvider ?? defaults?.modelProvider,
-      session?.model ?? defaults?.model,
-    ).split(/\s*,\s*/);
-  return labels.filter(Boolean).map((label) => ({
-    id: normalizeThinkLevel(label) ?? normalizeLowercaseStringOrEmpty(label),
-    label,
-  }));
-}
-
 async function listSessions(
   context: SlashCommandContext,
   options?: Parameters<SessionCapability["list"]>[0],
@@ -712,46 +627,6 @@ async function loadModelCatalog(
     }
     throw err;
   }
-}
-
-function resolveCurrentThinkingLevel(
-  session: GatewaySessionRow | undefined,
-  defaults: SessionsListResult["defaults"] | undefined,
-  models: ModelCatalogEntry[],
-): string {
-  const persisted = normalizeThinkLevel(session?.thinkingLevel);
-  if (persisted) {
-    return (
-      resolveThinkingLevelOptionsForSession(session, defaults).find(
-        (level) => normalizeThinkLevel(level.id) === persisted,
-      )?.label ?? persisted
-    );
-  }
-  if (session?.thinkingDefault) {
-    return session.thinkingDefault;
-  }
-  if ((!session || sessionModelMatchesDefaults(session, defaults)) && defaults?.thinkingDefault) {
-    return defaults.thinkingDefault;
-  }
-  const provider = session?.modelProvider ?? defaults?.modelProvider;
-  const model = session?.model ?? defaults?.model;
-  if (!provider || !model) {
-    return "off";
-  }
-  return resolveThinkingDefaultForModel({
-    provider,
-    model,
-    catalog: models,
-  });
-}
-
-function resolveCurrentFastModeStatus(session: GatewaySessionRow | undefined): string {
-  const mode = session?.effectiveFastMode ?? session?.fastMode;
-  return formatFastModeCurrentStatus({
-    mode,
-    source: session?.effectiveFastModeSource,
-    fastAutoOnSeconds: session?.fastAutoOnSeconds,
-  });
 }
 
 async function resolveSteerTarget(

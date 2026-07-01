@@ -1,5 +1,11 @@
 // Chat model select state derivation.
-import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
+import { formatFastModeCurrentStatus } from "../../../../src/shared/fast-mode.js";
+import type {
+  FastMode,
+  GatewaySessionRow,
+  ModelCatalogEntry,
+  SessionsListResult,
+} from "../../api/types.ts";
 import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
 import {
   buildCatalogDisplayLookup,
@@ -29,6 +35,37 @@ export type ChatModelSelectState = {
   defaultLabel: string;
   options: ChatModelSelectOption[];
 };
+
+export type ChatFastModeSelectValue = "" | "on" | "off" | "auto";
+
+export type ChatFastModeSelectState = {
+  currentOverride: ChatFastModeSelectValue;
+  disabled: boolean;
+  options: ChatModelSelectOption[];
+  supported: boolean;
+};
+
+type ChatFastModeSelectStateInput = {
+  activeRunId: string | null;
+  catalog: ModelCatalogEntry[];
+  connected: boolean;
+  currentModelOverride: string;
+  gatewayAvailable: boolean;
+  loading: boolean;
+  sending: boolean;
+  sessionKey: string;
+  sessionsResult: SessionsListResult | null;
+  stream: string | null;
+};
+
+const FAST_MODE_PROVIDER_IDS = new Set([
+  "anthropic",
+  "minimax",
+  "minimax-portal",
+  "openai",
+  "openrouter",
+  "xai",
+]);
 
 function resolveActiveSessionRow(state: ChatModelSelectStateInput) {
   return state.sessionsResult?.sessions?.find((row) => row.key === state.sessionKey);
@@ -102,5 +139,86 @@ export function resolveChatModelSelectState(
     defaultDisplay,
     defaultLabel: defaultModel ? `Default (${defaultDisplay})` : "Default model",
     options: buildChatModelOptions(catalog, displayLookup, currentOverride, defaultModel),
+  };
+}
+
+export function normalizeChatFastModeInput(raw: string): FastMode | undefined {
+  if (raw === "auto") {
+    return "auto";
+  }
+  if (raw === "on") {
+    return true;
+  }
+  if (raw === "off") {
+    return false;
+  }
+  return undefined;
+}
+
+export function resolveChatFastModeStatus(
+  session: GatewaySessionRow | undefined,
+): string {
+  return formatFastModeCurrentStatus({
+    mode: session?.effectiveFastMode ?? session?.fastMode,
+    source: session?.effectiveFastModeSource,
+    fastAutoOnSeconds: session?.fastAutoOnSeconds,
+  });
+}
+
+function resolveProviderFromModelValue(value: string, catalog: ModelCatalogEntry[]): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const separator = trimmed.indexOf("/");
+  if (separator > 0) {
+    return trimmed.slice(0, separator).toLowerCase();
+  }
+  return (
+    catalog
+      .find((entry) => entry.id.trim().toLowerCase() === trimmed.toLowerCase())
+      ?.provider.trim()
+      .toLowerCase() || null
+  );
+}
+
+export function resolveChatFastModeSelectState(
+  input: ChatFastModeSelectStateInput,
+): ChatFastModeSelectState {
+  const activeRow = input.sessionsResult?.sessions?.find((row) => row.key === input.sessionKey);
+  const defaultProvider = input.sessionsResult?.defaults?.modelProvider;
+  const effectiveProvider =
+    resolveProviderFromModelValue(input.currentModelOverride, input.catalog) ??
+    activeRow?.modelProvider?.trim().toLowerCase() ??
+    defaultProvider?.trim().toLowerCase() ??
+    null;
+  const currentOverride =
+    activeRow?.fastMode === "auto"
+      ? "auto"
+      : activeRow?.fastMode === true
+        ? "on"
+        : activeRow?.fastMode === false
+          ? "off"
+          : "";
+  const supported = Boolean(
+    (effectiveProvider && FAST_MODE_PROVIDER_IDS.has(effectiveProvider)) || currentOverride,
+  );
+  return {
+    currentOverride,
+    disabled:
+      !supported ||
+      !input.connected ||
+      input.loading ||
+      input.sending ||
+      Boolean(input.activeRunId) ||
+      input.stream !== null ||
+      !input.gatewayAvailable,
+    options: [
+      { value: "", label: "Default" },
+      { value: "on", label: "Fast" },
+      { value: "off", label: "Standard" },
+      { value: "auto", label: "Auto" },
+    ],
+    supported,
   };
 }

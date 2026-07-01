@@ -1,4 +1,12 @@
 // Control UI module implements thinking behavior.
+import type {
+  GatewaySessionRow,
+  GatewayThinkingLevelOption,
+  ModelCatalogEntry,
+  SessionsListResult,
+} from "../../api/types.ts";
+import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
+import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 export type ThinkingCatalogEntry = {
@@ -57,10 +65,6 @@ export function listThinkingLevelLabels(
   return BASE_THINKING_LEVELS;
 }
 
-export function formatThinkingLevels(provider?: string | null, model?: string | null): string {
-  return listThinkingLevelLabels(provider, model).join(", ");
-}
-
 export function resolveThinkingDefaultForModel(params: {
   provider: string;
   model: string;
@@ -70,6 +74,228 @@ export function resolveThinkingDefaultForModel(params: {
     (entry) => entry.provider === params.provider && entry.id === params.model,
   );
   return candidate?.reasoning ? "low" : "off";
+}
+
+type ThinkingSessionDefaults = SessionsListResult["defaults"] | undefined;
+
+export type ChatThinkingSelectState = {
+  currentOverride: string;
+  defaultLabel: string;
+  defaultValue: string;
+  options: Array<{ value: string; label: string }>;
+};
+
+export function resolveThinkingLevelOptionsForSession(
+  session: GatewaySessionRow | undefined,
+  defaults: ThinkingSessionDefaults,
+): GatewayThinkingLevelOption[] {
+  const { provider, model } = resolveThinkingTargetModel({ defaults, session });
+  return resolveThinkingLevelOptions({ catalog: [], defaults, model, provider, session });
+}
+
+export function formatThinkingCommandOptionsForSession(
+  session: GatewaySessionRow | undefined,
+  defaults?: SessionsListResult["defaults"],
+): string {
+  const options = resolveThinkingLevelOptionsForSession(session, defaults)
+    .map((level) => level.label)
+    .join(", ");
+  return options.split(", ").includes("default") ? options : `default, ${options}`;
+}
+
+export function resolveThinkingLevelInput(
+  rawLevel: string,
+  session: GatewaySessionRow | undefined,
+  defaults: ThinkingSessionDefaults,
+): string | undefined {
+  const normalized = normalizeThinkLevel(rawLevel);
+  if (normalized) {
+    return normalized;
+  }
+  const rawKey = normalizeLowercaseStringOrEmpty(rawLevel);
+  return resolveThinkingLevelOptionsForSession(session, defaults)
+    .map((option) => ({
+      id: normalizeThinkLevel(option.id) ?? normalizeLowercaseStringOrEmpty(option.id),
+      label: normalizeLowercaseStringOrEmpty(option.label),
+    }))
+    .find((option) => option.id === rawKey || option.label === rawKey)?.id;
+}
+
+export function isThinkingLevelOptionForSession(
+  session: GatewaySessionRow | undefined,
+  defaults: ThinkingSessionDefaults,
+  level: string,
+): boolean {
+  return resolveThinkingLevelOptionsForSession(session, defaults).some((option) => {
+    const id = normalizeThinkLevel(option.id) ?? normalizeLowercaseStringOrEmpty(option.id);
+    return id === level || normalizeThinkLevel(option.label) === level;
+  });
+}
+
+export function resolveCurrentThinkingLevel(
+  session: GatewaySessionRow | undefined,
+  defaults: ThinkingSessionDefaults,
+  models: ModelCatalogEntry[],
+): string {
+  const persisted = normalizeThinkLevel(session?.thinkingLevel);
+  if (persisted) {
+    return (
+      resolveThinkingLevelOptionsForSession(session, defaults).find(
+        (level) => normalizeThinkLevel(level.id) === persisted,
+      )?.label ?? persisted
+    );
+  }
+  if (session?.thinkingDefault) {
+    return session.thinkingDefault;
+  }
+  if ((!session || sessionModelMatchesDefaults(session, defaults)) && defaults?.thinkingDefault) {
+    return defaults.thinkingDefault;
+  }
+  const provider = session?.modelProvider ?? defaults?.modelProvider;
+  const model = session?.model ?? defaults?.model;
+  if (!provider || !model) {
+    return "off";
+  }
+  return resolveThinkingDefaultForModel({
+    provider,
+    model,
+    catalog: models,
+  });
+}
+
+function buildThinkingOptions(
+  levels: readonly GatewayThinkingLevelOption[],
+  currentOverride: string,
+): Array<{ value: string; label: string }> {
+  const seen = new Set<string>();
+  const options: Array<{ value: string; label: string }> = [];
+  const addOption = (value: string, label?: string) => {
+    const normalizedValue = normalizeThinkingOptionValue(value);
+    pushUniqueTrimmedSelectOption(options, seen, normalizedValue, () =>
+      formatThinkingOverrideLabel(normalizedValue, label),
+    );
+  };
+
+  for (const level of levels) {
+    addOption(level.id, level.label);
+  }
+  if (currentOverride) {
+    addOption(currentOverride);
+  }
+  return options;
+}
+
+function isOffThinkingOption(value: string | null | undefined): boolean {
+  return normalizeThinkingOptionValue(value ?? "") === "off";
+}
+
+function isOffOnlyThinkingLevels(levels: readonly GatewayThinkingLevelOption[]): boolean {
+  return levels.every((level) => isOffThinkingOption(level.id || level.label));
+}
+
+function resolveThinkingTargetModel(params: {
+  defaults: ThinkingSessionDefaults;
+  session: GatewaySessionRow | undefined;
+}): { provider: string | null; model: string | null } {
+  return {
+    provider: params.session?.modelProvider ?? params.defaults?.modelProvider ?? null,
+    model: params.session?.model ?? params.defaults?.model ?? null,
+  };
+}
+
+function resolveThinkingLevelOptions(params: {
+  catalog: readonly ThinkingCatalogEntry[];
+  defaults: ThinkingSessionDefaults;
+  hideUnsupportedOffOnly?: boolean;
+  model: string | null;
+  provider: string | null;
+  session: GatewaySessionRow | undefined;
+}): GatewayThinkingLevelOption[] {
+  const modelMatchesDefaults = sessionModelMatchesDefaults(params.session, params.defaults);
+  const catalogEntry =
+    params.provider && params.model
+      ? params.catalog.find(
+          (entry) => entry.provider === params.provider && entry.id === params.model,
+        )
+      : undefined;
+  const explicitLevels =
+    (params.session?.thinkingLevels?.length ? params.session.thinkingLevels : null) ??
+    (modelMatchesDefaults && params.defaults?.thinkingLevels?.length
+      ? params.defaults.thinkingLevels
+      : null);
+  if (explicitLevels) {
+    if (
+      params.hideUnsupportedOffOnly &&
+      catalogEntry?.reasoning === false &&
+      isOffOnlyThinkingLevels(explicitLevels)
+    ) {
+      return [];
+    }
+    return explicitLevels;
+  }
+  const explicitLabels =
+    (params.session?.thinkingOptions?.length ? params.session.thinkingOptions : null) ??
+    (modelMatchesDefaults && params.defaults?.thinkingOptions?.length
+      ? params.defaults.thinkingOptions
+      : null);
+  if (params.hideUnsupportedOffOnly && catalogEntry?.reasoning === false) {
+    if (!explicitLabels || explicitLabels.every(isOffThinkingOption)) {
+      return [];
+    }
+  }
+  const labels =
+    explicitLabels ??
+    (params.provider && params.model
+      ? listThinkingLevelLabels(params.provider, params.model)
+      : listThinkingLevelLabels());
+  return labels.map((label) => ({
+    id: normalizeThinkLevel(label) ?? normalizeLowercaseStringOrEmpty(label),
+    label,
+  }));
+}
+
+export function resolveChatThinkingSelectState(params: {
+  catalog: readonly ThinkingCatalogEntry[];
+  sessionKey: string;
+  sessionsResult: SessionsListResult | null;
+}): ChatThinkingSelectState {
+  const session = params.sessionsResult?.sessions?.find((row) => row.key === params.sessionKey);
+  const persisted = session?.thinkingLevel;
+  const currentOverride =
+    typeof persisted === "string" && persisted.trim()
+      ? (normalizeThinkLevel(persisted) ?? persisted.trim())
+      : "";
+  const defaults = params.sessionsResult?.defaults;
+  const { provider, model } = resolveThinkingTargetModel({ defaults, session });
+  const levels = resolveThinkingLevelOptions({
+    catalog: params.catalog,
+    defaults,
+    hideUnsupportedOffOnly: true,
+    model,
+    provider,
+    session,
+  });
+  const defaultFromSessionDefaults =
+    (!session || sessionModelMatchesDefaults(session, defaults)) && defaults?.thinkingDefault
+      ? defaults.thinkingDefault
+      : undefined;
+  const defaultLevel =
+    session?.thinkingDefault ??
+    defaultFromSessionDefaults ??
+    (provider && model
+      ? resolveThinkingDefaultForModel({
+          provider,
+          model,
+          catalog: params.catalog,
+        })
+      : "off");
+  const effectiveOverride = levels.length === 0 && currentOverride === "off" ? "" : currentOverride;
+  return {
+    currentOverride: effectiveOverride,
+    defaultLabel: formatInheritedThinkingLabel(defaultLevel),
+    defaultValue: normalizeThinkingOptionValue(defaultLevel),
+    options: buildThinkingOptions(levels, effectiveOverride),
+  };
 }
 
 export function normalizeThinkingOptionValue(raw: string): string {
