@@ -31,6 +31,7 @@ enum LaunchAgentManager {
     }
 
     static func plistContents(bundlePath: String) -> String {
+        let environmentXML = self.environmentVariablesXML()
         """
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -40,24 +41,47 @@ enum LaunchAgentManager {
           <string>ai.openclaw.mac</string>
           <key>ProgramArguments</key>
           <array>
-            <string>\(bundlePath)/Contents/MacOS/OpenClaw</string>
+            <string>\(self.plistEscaped("\(bundlePath)/Contents/MacOS/OpenClaw"))</string>
           </array>
           <key>WorkingDirectory</key>
-          <string>\(FileManager().homeDirectoryForCurrentUser.path)</string>
+          <string>\(self.plistEscaped(FileManager().homeDirectoryForCurrentUser.path))</string>
           <key>RunAtLoad</key>
           <true/>
           <key>EnvironmentVariables</key>
-          <dict>
-            <key>PATH</key>
-            <string>\(CommandResolver.preferredPaths().joined(separator: ":"))</string>
+          <dict>\(environmentXML)
           </dict>
           <key>StandardOutPath</key>
-          <string>\(LogLocator.launchdLogPath)</string>
+          <string>\(self.plistEscaped(LogLocator.launchdLogPath))</string>
           <key>StandardErrorPath</key>
-          <string>\(LogLocator.launchdLogPath)</string>
+          <string>\(self.plistEscaped(LogLocator.launchdLogPath))</string>
         </dict>
         </plist>
         """
+    }
+
+    private static func environmentVariablesXML() -> String {
+        var env: [(String, String)] = [
+            ("PATH", CommandResolver.preferredPaths().joined(separator: ":")),
+        ]
+        for key in ["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"] {
+            if let value = OpenClawEnv.path(key) {
+                env.append((key, value))
+            }
+        }
+        return env
+            .map { key, value in
+                "\n            <key>\(self.plistEscaped(key))</key>\n            <string>\(self.plistEscaped(value))</string>"
+            }
+            .joined()
+    }
+
+    private static func plistEscaped(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&apos;")
     }
 
     @discardableResult
