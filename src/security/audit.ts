@@ -31,11 +31,14 @@ import {
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
 import {
+  normalizeConfiguredSafeBins,
+  normalizeConfiguredTrustedSafeBinDirs,
+} from "../infra/exec-safe-bin-config.js";
+import {
   listInterpreterLikeSafeBins,
   resolveMergedSafeBinProfileFixtures,
 } from "../infra/exec-safe-bin-runtime-policy.js";
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
-import { normalizeTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
@@ -940,26 +943,6 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
     });
   }
 
-  const normalizeConfiguredSafeBins = (entries: unknown): string[] => {
-    if (!Array.isArray(entries)) {
-      return [];
-    }
-    return Array.from(
-      new Set(
-        entries
-          .map((entry) => normalizeOptionalLowercaseString(entry) ?? "")
-          .filter((entry) => entry.length > 0),
-      ),
-    ).toSorted();
-  };
-  const normalizeConfiguredTrustedDirs = (entries: unknown): string[] => {
-    if (!Array.isArray(entries)) {
-      return [];
-    }
-    return normalizeTrustedSafeBinDirs(
-      entries.filter((entry): entry is string => typeof entry === "string"),
-    );
-  };
   const classifyRiskySafeBinTrustedDir = (entry: string): string | null => {
     const raw = entry.trim();
     if (!raw) {
@@ -1003,7 +986,7 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
   const globalExec = cfg.tools?.exec;
   const riskyTrustedDirHits: string[] = [];
   const collectRiskyTrustedDirHits = (scopePath: string, entries: unknown): void => {
-    for (const entry of normalizeConfiguredTrustedDirs(entries)) {
+    for (const entry of normalizeConfiguredTrustedSafeBinDirs(entries)) {
       const reason = classifyRiskySafeBinTrustedDir(entry);
       if (!reason) {
         continue;

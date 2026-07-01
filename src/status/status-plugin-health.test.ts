@@ -395,4 +395,42 @@ describe("plugin health status formatting", () => {
     expect(text).toContain("Installed (not active): 1 (installed-idle)");
     expect(text).not.toContain("Configured to run but not loaded:");
   });
+
+  it("flags configured memory embedding providers that no loaded plugin registers", () => {
+    const text = formatDetailedPluginHealth({
+      plugins: [{ id: "runtime-ok", status: "loaded", enabled: true }],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeLoadedPluginIds: ["runtime-ok"],
+      unregisteredMemoryEmbeddingProviders: [
+        { configuredId: "custom-embed", source: "provider" },
+        { configuredId: "fallback-embed", source: "fallback" },
+      ],
+    });
+
+    expect(text).toContain(
+      "Configured memory provider not registered: 2 (custom-embed (memorySearch.provider), fallback-embed (memorySearch.fallback))",
+    );
+    // Observer-only: the unregistered-provider signal never enters the compact line.
+    expect(text.split("\n")[0]).toBe("🔌 Plugins: OK");
+  });
+
+  it("omits the memory-provider line when none are unregistered or the field is absent", () => {
+    const withEmpty = formatDetailedPluginHealth({
+      plugins: [{ id: "runtime-ok", status: "loaded", enabled: true }],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeLoadedPluginIds: ["runtime-ok"],
+      unregisteredMemoryEmbeddingProviders: [],
+    });
+    const withAbsent = formatDetailedPluginHealth({
+      plugins: [{ id: "runtime-ok", status: "loaded", enabled: true }],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeLoadedPluginIds: ["runtime-ok"],
+    });
+
+    expect(withEmpty).not.toContain("Configured memory provider not registered:");
+    expect(withAbsent).not.toContain("Configured memory provider not registered:");
+  });
 });

@@ -13,6 +13,7 @@ import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import { resolveToolDisplay } from "../tool-display.ts";
 import type {
+  ChatItem,
   MessageContentItem,
   MessageGroup,
   NormalizedMessage,
@@ -364,54 +365,61 @@ function extractTranscriptAttachments(message: unknown): AttachmentItem[] {
   return attachments;
 }
 
-export function renderReadingIndicatorGroup(
-  assistant?: AssistantIdentity,
-  basePath?: string,
-  authToken?: string | null,
-) {
+/** A contiguous run of in-flight streaming items rendered under one assistant group. */
+export type StreamGroupPart = Extract<ChatItem, { kind: "stream" } | { kind: "reading-indicator" }>;
+
+type StreamGroupOptions = {
+  onOpenSidebar?: (content: SidebarContent) => void;
+  assistant?: AssistantIdentity;
+  basePath?: string;
+  authToken?: string | null;
+};
+
+function renderReadingIndicatorBubble() {
   return html`
-    <div class="chat-group assistant">
-      ${renderChatAvatar("assistant", assistant, undefined, basePath, authToken)}
-      <div class="chat-group-messages">
-        <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
-          <span class="chat-reading-indicator__dots">
-            <span></span><span></span><span></span>
-          </span>
-        </div>
-      </div>
+    <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
+      <span class="chat-reading-indicator__dots"> <span></span><span></span><span></span> </span>
     </div>
   `;
 }
 
-export function renderStreamingGroup(
-  text: string,
-  startedAt: number,
-  isStreaming = true,
-  onOpenSidebar?: (content: SidebarContent) => void,
-  assistant?: AssistantIdentity,
-  basePath?: string,
-  authToken?: string | null,
-) {
+// One assistant group per contiguous run of streaming items: a reply that
+// arrives as several stream segments renders under a single avatar/footer
+// instead of flashing a separate avatar+bubble per segment (#63956).
+export function renderStreamGroup(parts: StreamGroupPart[], opts: StreamGroupOptions = {}) {
+  const { onOpenSidebar, assistant, basePath, authToken } = opts;
   const name = assistant?.name ?? "Assistant";
+  // Footer (sender + time) anchors to the earliest streamed segment; a run that
+  // is only the reading indicator has no timestamp and therefore no footer.
+  const streamStarts = parts.flatMap((part) => (part.kind === "stream" ? [part.startedAt] : []));
+  const footerStartedAt = streamStarts.length > 0 ? Math.min(...streamStarts) : null;
 
   return html`
     <div class="chat-group assistant">
       ${renderChatAvatar("assistant", assistant, undefined, basePath, authToken)}
       <div class="chat-group-messages">
-        ${renderGroupedMessage(
-          {
-            role: "assistant",
-            content: [{ type: "text", text }],
-            timestamp: startedAt,
-          },
-          `stream:${startedAt}`,
-          { isStreaming, showReasoning: false },
-          onOpenSidebar,
+        ${parts.map((part) =>
+          part.kind === "reading-indicator"
+            ? renderReadingIndicatorBubble()
+            : renderGroupedMessage(
+                {
+                  role: "assistant",
+                  content: [{ type: "text", text: part.text }],
+                  timestamp: part.startedAt,
+                },
+                part.key,
+                { isStreaming: part.isStreaming, showReasoning: false },
+                onOpenSidebar,
+              ),
         )}
-        <div class="chat-group-footer">
-          <span class="chat-sender-name">${name}</span>
-          ${renderChatTimestamp(startedAt)}
-        </div>
+        ${footerStartedAt !== null
+          ? html`
+              <div class="chat-group-footer">
+                <span class="chat-sender-name">${name}</span>
+                ${renderChatTimestamp(footerStartedAt)}
+              </div>
+            `
+          : nothing}
       </div>
     </div>
   `;
