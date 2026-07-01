@@ -4835,7 +4835,7 @@
     },
     {
       "kind": "ui-named-argument",
-      "line": 97,
+      "line": 96,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/design/ClawSurfaces.kt",
       "source": "Needs attention",
       "surface": "android",
