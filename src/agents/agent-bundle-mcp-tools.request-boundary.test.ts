@@ -41,6 +41,7 @@ function makeConfiguredRuntime(
     sessionId: "session-request-boundary",
     workspaceDir: "/workspace",
     configFingerprint: "fingerprint",
+    callerContextKey: "",
     createdAt: 0,
     lastUsedAt: 0,
     markUsed: () => {},

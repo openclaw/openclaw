@@ -71,19 +71,28 @@ export async function prepareBundleProbeCliConfig(params?: {
   additionalConfig?: Parameters<typeof prepareCliBundleMcpConfig>[0]["additionalConfig"];
   env?: Parameters<typeof prepareCliBundleMcpConfig>[0]["env"];
 }) {
-  // Bundle discovery reads HOME for per-user plugin roots.
-  return await withEnvAsync({ HOME: bundleProbeHomeDir }, async () => {
-    return await prepareCliBundleMcpConfig({
-      enabled: true,
-      mode: "claude-config-file",
-      backend: {
-        command: "node",
-        args: ["./fake-claude.mjs"],
-      },
-      workspaceDir: bundleProbeWorkspaceDir,
-      config: createEnabledBundleProbeConfig(),
-      additionalConfig: params?.additionalConfig,
-      env: params?.env,
-    });
-  });
+  // Bundle discovery reads HOME for per-user plugin roots; set USERPROFILE and clear
+  // OPENCLAW_HOME/OPENCLAW_STATE_DIR for consistent cross-platform behavior.
+  return await withEnvAsync(
+    {
+      HOME: bundleProbeHomeDir,
+      USERPROFILE: bundleProbeHomeDir,
+      OPENCLAW_HOME: bundleProbeHomeDir,
+      OPENCLAW_STATE_DIR: undefined,
+    },
+    async () => {
+      return await prepareCliBundleMcpConfig({
+        enabled: true,
+        mode: "claude-config-file",
+        backend: {
+          command: "node",
+          args: ["./fake-claude.mjs"],
+        },
+        workspaceDir: bundleProbeWorkspaceDir,
+        config: createEnabledBundleProbeConfig(),
+        additionalConfig: params?.additionalConfig,
+        env: params?.env,
+      });
+    },
+  );
 }

@@ -74,6 +74,30 @@ export type McpServerConfig = {
   toolFilter?: McpServerToolFilterConfig;
   /** Codex-specific projection controls for Codex app-server/runtime config. */
   codex?: McpServerCodexConfig;
+  /**
+   * When true, bundle MCP merges OpenClaw caller identity HTTP headers onto this
+   * server's remote (`url`) transport: `x-openclaw-agent-id`,
+   * `x-openclaw-account-id`, and `x-openclaw-message-channel`. These headers
+   * identify who is calling but carry no bearer-token power. Default off (omit
+   * or false).
+   *
+   * Trust requirements (all enforced):
+   *  - The flag is honored only in owner-managed `mcp.servers` (this property)
+   *    or in OpenClaw runtime-supplied layers (e.g. the loopback gateway
+   *    server). Setting it inside a plugin's `.mcp.json` is silently ignored.
+   *  - The opt-in entry MUST itself declare a non-empty `url`. A name-only
+   *    opt-in is rejected, so an unrelated earlier merge layer (existing
+   *    `--mcp-config` file, plugin `.mcp.json`) cannot supply a URL for the
+   *    same name and inherit caller headers.
+   *  - At apply time the merged URL must still byte-for-byte match the
+   *    owner-declared URL; if some other layer rewrote the URL, no caller
+   *    headers are attached.
+   *
+   * Existing user-supplied `headers` (compared case-insensitively, matching
+   * HTTP semantics) are never overwritten, and non-string values permitted by
+   * `headers` (numbers, booleans) are preserved verbatim.
+   */
+  injectCallerContext?: boolean;
   [key: string]: unknown;
 };
 

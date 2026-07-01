@@ -257,6 +257,7 @@ function makeRuntime(
     sessionId: "session-colliding-tools",
     workspaceDir: "/tmp",
     configFingerprint: "fingerprint",
+    callerContextKey: "",
     createdAt,
     get lastUsedAt() {
       return lastUsedAt;

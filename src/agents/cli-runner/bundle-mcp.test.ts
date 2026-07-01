@@ -49,9 +49,11 @@ describe("prepareCliBundleMcpConfig", () => {
     const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
       mcpServers?: Record<string, { args?: string[] }>;
     };
-    expect(raw.mcpServers?.bundleProbe?.args).toEqual([
+    const bundleProbeArg = raw.mcpServers?.bundleProbe?.args?.[0];
+    expect(bundleProbeArg).toBeDefined();
+    expect(await fs.realpath(bundleProbeArg!)).toEqual(
       await fs.realpath(cliBundleMcpHarness.bundleProbeServerPath),
-    ]);
+    );
     expect(prepared.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
     expect(prepared.mcpResumeHash).toMatch(/^[0-9a-f]{64}$/);
 
@@ -110,7 +112,11 @@ describe("prepareCliBundleMcpConfig", () => {
     const raw = JSON.parse(await fs.readFile(generatedConfigPath, "utf-8")) as {
       mcpServers?: Record<string, { args?: string[] }>;
     };
-    expect(raw.mcpServers?.workspaceProbe?.args).toEqual([await fs.realpath(serverPath)]);
+    const workspaceProbeArg = raw.mcpServers?.workspaceProbe?.args?.[0];
+    expect(workspaceProbeArg).toBeDefined();
+    expect(await fs.realpath(workspaceProbeArg!)).toEqual(
+      await fs.realpath(serverPath),
+    );
 
     await prepared.cleanup?.();
   });
@@ -151,6 +157,7 @@ describe("prepareCliBundleMcpConfig", () => {
     expect(raw.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
     expect(raw.mcpServers?.openclaw?.headers?.Authorization).toBe("Bearer loopback-token-123");
     expect(raw.mcpServers?.openclaw?.headers?.["x-openclaw-cli-capture-key"]).toBe("");
+    expect(raw.mcpServers?.openclaw?.headers?.["x-openclaw-agent-id"]).toBeUndefined();
     await prepareCliBundleMcpCaptureAttempt({
       mode: "claude-config-file",
       backend: prepared.backend,
@@ -171,6 +178,34 @@ describe("prepareCliBundleMcpConfig", () => {
 
     await prepared.cleanup?.();
     await otherEnvPrepared.cleanup?.();
+  });
+
+  it("merges caller context onto loopback HTTP MCP when the server sets injectCallerContext true", async () => {
+    const prepared = await prepareBundleProbeCliConfig({
+      additionalConfig: {
+        mcpServers: {
+          openclaw: {
+            type: "http",
+            url: "http://127.0.0.1:23119/mcp",
+            headers: {
+              Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+            },
+            injectCallerContext: true,
+          },
+        },
+      },
+    });
+
+    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
+    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+      mcpServers?: Record<string, { headers?: Record<string, string> }>;
+    };
+    expect(raw.mcpServers?.openclaw?.headers?.["x-openclaw-agent-id"]).toBe(
+      "${OPENCLAW_MCP_AGENT_ID}",
+    );
+
+    await prepared.cleanup?.();
   });
 
   it("preserves extra env values alongside generated MCP config", async () => {

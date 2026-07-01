@@ -170,6 +170,22 @@ target server during config edits.
   block before passing native `mcp_servers` config to Codex. Omit the block to
   keep the server projected for every Codex app-server agent with Codex's
   default MCP approval behavior.
+- `mcp.servers.<name>.injectCallerContext`: set `true` to have OpenClaw merge
+  caller identity headers onto every request this server receives:
+  `x-openclaw-agent-id`, `x-openclaw-account-id`, and
+  `x-openclaw-message-channel`. These are informational only — they carry no
+  bearer-token power and do not include the session key. Default `false` (opt
+  in per server). **Trust requirements** (all enforced):
+  - The flag is honoured only for servers declared in the owner-managed
+    `mcp.servers` block (this section). Setting it in a plugin-supplied
+    `.mcp.json` is silently ignored.
+  - The opt-in entry **must** declare a non-empty `url`. A name-only entry is
+    rejected, so an unrelated `--mcp-config` file or plugin `.mcp.json` cannot
+    supply a URL for the same name and inherit caller headers.
+  - At runtime, the merged URL must byte-for-byte match the owner-declared URL.
+    If another config layer rewrites the URL, no caller headers are attached.
+  - Existing user-supplied `headers` (matched case-insensitively) are never
+    overwritten.
 - `mcp.sessionIdleTtlMs`: idle TTL for session-scoped bundled MCP runtimes.
   One-shot embedded runs request run-end cleanup; this TTL is the backstop for
   long-lived sessions and future callers.
