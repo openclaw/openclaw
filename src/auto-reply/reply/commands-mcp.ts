@@ -2,7 +2,7 @@
 import {
   peekSessionMcpRuntime,
   resolveSessionMcpConfigSummary,
-} from "../../agents/agent-bundle-mcp-runtime.js";
+} from "../../agents/agent-bundle-mcp-tools.js";
 import type { McpToolCatalog } from "../../agents/agent-bundle-mcp-types.js";
 import {
   listConfiguredMcpServers,
