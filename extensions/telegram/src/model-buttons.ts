@@ -6,6 +6,9 @@
  * - mdl_list_{prov}_{pg}  - show models for provider (page N, 1-indexed)
  * - mdl_sel_{provider/id} - select model (standard)
  * - mdl_sel/{model}       - select model (compact fallback when standard is >64 bytes)
+ * - mdl_idx/{provider}/{i}- select model by sorted-list index (fallback when
+ *                          even the compact encoding exceeds 64 bytes; the
+ *                          handler re-derives the same sort order)
  * - mdl_back              - back to providers list
  */
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -17,6 +20,7 @@ export type ParsedModelCallback =
   | { type: "providers" }
   | { type: "list"; provider: string; page: number }
   | { type: "select"; provider?: string; model: string }
+  | { type: "select-index"; provider: string; index: number }
   | { type: "back" };
 
 export type ProviderInfo = {
@@ -47,6 +51,7 @@ const CALLBACK_PREFIX = {
   list: "mdl_list_",
   selectStandard: "mdl_sel_",
   selectCompact: "mdl_sel/",
+  selectedIndex: "mdl_idx/",
 } as const;
 
 /**
@@ -85,6 +90,16 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
     }
   }
 
+  // mdl_idx/{provider}/{index} (index fallback for names too long to fit)
+  const indexSelMatch = trimmed.match(/^mdl_idx\/([^/]+)\/(\d+)$/);
+  if (indexSelMatch) {
+    const [, provider, indexStr] = indexSelMatch;
+    const index = parseStrictPositiveInteger(indexStr);
+    if (provider && index !== undefined) {
+      return { type: "select-index", provider, index: index - 1 };
+    }
+  }
+
   // mdl_sel_{provider/model}
   const selMatch = trimmed.match(/^mdl_sel_(.+)$/);
   if (selMatch) {
@@ -107,13 +122,29 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
 export function buildModelSelectionCallbackData(params: {
   provider: string;
   model: string;
+  /**
+   * 0-based index of the model within the provider's locale-sorted model list.
+   * When the standard and compact encodings both exceed Telegram's 64-byte
+   * callback_data limit, an index-based fallback is emitted so the model is
+   * still selectable. The caller re-derives the same sort order on resolution.
+   */
+  sortedIndex?: number;
 }): string | null {
   const fullCallbackData = `${CALLBACK_PREFIX.selectStandard}${params.provider}/${params.model}`;
   if (fitsTelegramCallbackData(fullCallbackData)) {
     return fullCallbackData;
   }
   const compactCallbackData = `${CALLBACK_PREFIX.selectCompact}${params.model}`;
-  return fitsTelegramCallbackData(compactCallbackData) ? compactCallbackData : null;
+  if (fitsTelegramCallbackData(compactCallbackData)) {
+    return compactCallbackData;
+  }
+  if (params.sortedIndex !== undefined && params.sortedIndex >= 0) {
+    const indexCallbackData = `${CALLBACK_PREFIX.selectedIndex}${params.provider}/${params.sortedIndex + 1}`;
+    if (fitsTelegramCallbackData(indexCallbackData)) {
+      return indexCallbackData;
+    }
+  }
+  return null;
 }
 
 export function resolveModelSelection(params: {
@@ -210,9 +241,20 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   const endIndex = Math.min(startIndex + pageSize, models.length);
   const pageModels = models.slice(startIndex, endIndex);
 
-  for (const model of pageModels) {
-    const callbackData = buildModelSelectionCallbackData({ provider, model });
-    // Skip models that still exceed Telegram's callback_data limit.
+  for (let pageOffset = 0; pageOffset < pageModels.length; pageOffset++) {
+    const model = pageModels[pageOffset];
+    // pageModels is a slice of the sorted `models` list, so the global index
+    // is startIndex + pageOffset. Used as a 64-byte-safe callback fallback so
+    // long model names (e.g. namespaced Ollama tags) stay selectable.
+    const sortedIndex = startIndex + pageOffset;
+    const callbackData = buildModelSelectionCallbackData({
+      provider,
+      model,
+      sortedIndex,
+    });
+    // Only drop if every encoding (standard, compact, index) exceeds the
+    // Telegram callback_data limit. In practice the index fallback always
+    // fits, so this branch now only guards against pathological providers.
     if (!callbackData) {
       continue;
     }

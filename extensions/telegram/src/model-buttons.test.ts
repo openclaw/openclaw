@@ -33,6 +33,7 @@ describe("parseModelCallbackData", () => {
         "mdl_sel/anthropic/claude-3-7-sonnet",
         { type: "select", model: "anthropic/claude-3-7-sonnet" },
       ],
+      ["mdl_idx/ollama/3", { type: "select-index", provider: "ollama", index: 2 }],
       ["  mdl_prov  ", { type: "providers" }],
     ] as const;
     for (const [input, expected] of cases) {
@@ -50,6 +51,10 @@ describe("parseModelCallbackData", () => {
       "mdl_list_openai_9007199254740993",
       "mdl_sel_noslash",
       "mdl_sel/",
+      "mdl_idx/openai",
+      "mdl_idx/openai/abc",
+      "mdl_idx//3",
+      "mdl_idx/openai/0",
     ];
     for (const input of invalid) {
       expect(parseModelCallbackData(input), input).toBeNull();
@@ -127,6 +132,30 @@ describe("buildModelSelectionCallbackData", () => {
   it("returns null when even compact callback exceeds Telegram limit", () => {
     const tooLongModel = "x".repeat(80);
     expect(buildModelSelectionCallbackData({ provider: "openai", model: tooLongModel })).toBeNull();
+  });
+
+  it("falls back to index encoding when standard and compact callbacks exceed the limit", () => {
+    const tooLongModel = "x".repeat(80);
+    expect(
+      buildModelSelectionCallbackData({
+        provider: "openai",
+        model: tooLongModel,
+        sortedIndex: 4,
+      }),
+    ).toBe("mdl_idx/openai/5");
+  });
+
+  it("returns null when no encoding fits even with an index", () => {
+    // Provider name alone is so long that even the index callback overflows.
+    const tooLongProvider = "p".repeat(80);
+    const tooLongModel = "x".repeat(80);
+    expect(
+      buildModelSelectionCallbackData({
+        provider: tooLongProvider,
+        model: tooLongModel,
+        sortedIndex: 0,
+      }),
+    ).toBeNull();
   });
 });
 
@@ -495,12 +524,10 @@ describe("large model lists (OpenRouter-scale)", () => {
     }
   });
 
-  it("skips models that would exceed callback_data limit", () => {
-    const models = [
-      "short-model",
-      "this-is-an-extremely-long-model-name-that-definitely-exceeds-the-sixty-four-byte-limit",
-      "another-short",
-    ];
+  it("uses index fallback when a model name exceeds callback_data limit", () => {
+    const longModel =
+      "this-is-an-extremely-long-model-name-that-definitely-exceeds-the-sixty-four-byte-limit";
+    const models = ["short-model", longModel, "another-short"];
     const result = buildModelsKeyboard({
       provider: "openrouter",
       models,
@@ -508,10 +535,32 @@ describe("large model lists (OpenRouter-scale)", () => {
       totalPages: 1,
     });
 
-    // Should have 2 model buttons (skipping the long one) + back
+    // All three models render. The middle model falls back to a
+    // mdl_idx/{provider}/{sortedIndex+1} callback because the standard
+    // (mdl_sel_) and compact (mdl_sel/) encodings both exceed 64 bytes.
     const modelButtons = result.filter((row) => !row[0]?.callback_data.startsWith("mdl_back"));
-    expect(modelButtons.length).toBe(2);
+    expect(modelButtons.length).toBe(3);
     expect(modelButtons[0]?.[0]?.text).toBe("short-model");
-    expect(modelButtons[1]?.[0]?.text).toBe("another-short");
+    expect(modelButtons[0]?.[0]?.callback_data).toBe("mdl_sel_openrouter/short-model");
+    expect(modelButtons[1]?.[0]?.callback_data).toBe("mdl_idx/openrouter/2");
+    expect(modelButtons[2]?.[0]?.text).toBe("another-short");
+    expect(modelButtons[2]?.[0]?.callback_data).toBe("mdl_sel_openrouter/another-short");
+  });
+
+  it("drops a model only when every encoding (standard, compact, index) overflows", () => {
+    const tooLongProvider = "p".repeat(80);
+    const longModel = "x".repeat(80);
+    const result = buildModelsKeyboard({
+      provider: tooLongProvider,
+      models: ["short", longModel],
+      currentPage: 1,
+      totalPages: 1,
+    });
+
+    // Only "short" survives: index fallback still overflows because the
+    // provider name alone is longer than 64 bytes.
+    const modelButtons = result.filter((row) => !row[0]?.callback_data.startsWith("mdl_back"));
+    expect(modelButtons.length).toBe(1);
+    expect(modelButtons[0]?.[0]?.text).toBe("short");
   });
 });

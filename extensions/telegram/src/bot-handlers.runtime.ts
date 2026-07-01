@@ -2795,7 +2795,7 @@ export const registerTelegramHandlers = ({
       }
 
       // Model selection callback handler (mdl_prov, mdl_list_*, mdl_sel_*, mdl_back)
-      const modelCallback = parseModelCallbackData(data);
+      let modelCallback = parseModelCallbackData(data);
       if (modelCallback) {
         if (
           !(await isTelegramModelCallbackAuthorized({
@@ -2935,6 +2935,34 @@ export const registerTelegramHandlers = ({
             throw new TelegramRetryableCallbackError(err);
           }
           return;
+        }
+
+        // mdl_idx/{provider}/{i} — fallback when the model name plus the
+        // mdl_sel encoding exceeds Telegram's 64-byte callback_data limit.
+        // Re-derive the same locale-sorted list buildModelsKeyboard uses so
+        // the 0-based index points at the same row the user pressed.
+        if (modelCallback.type === "select-index") {
+          const modelSet = byProvider.get(modelCallback.provider);
+          const sorted = modelSet
+            ? [...modelSet].toSorted((left, right) => left.localeCompare(right))
+            : [];
+          const resolvedModel = sorted[modelCallback.index];
+          if (!resolvedModel) {
+            try {
+              await editMessageWithButtons(
+                `❌ Model index ${modelCallback.index + 1} for "${modelCallback.provider}" is no longer available.`,
+                [],
+              );
+            } catch (err) {
+              throw new TelegramRetryableCallbackError(err);
+            }
+            return;
+          }
+          modelCallback = {
+            type: "select",
+            provider: modelCallback.provider,
+            model: resolvedModel,
+          };
         }
 
         if (modelCallback.type === "select") {
