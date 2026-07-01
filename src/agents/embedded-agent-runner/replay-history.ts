@@ -30,6 +30,7 @@ import {
   validateGeminiTurns,
 } from "../embedded-agent-helpers.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
+import { computeEffectiveSettings } from "../agent-hooks/context-pruning/settings.js";
 import { isReasoningOnlyLengthAssistantTurn } from "../replay-turn-classification.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
@@ -317,7 +318,7 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       continue;
     }
     if (Array.isArray(replayContent) && replayContent.length === 0) {
-      // An assistant turn can legitimately end with `content: []` — for
+      // An assistant turn can legitimately end with `content: []` - for
       // example the silent-reply / NO_REPLY path locked in by
       // run.empty-error-retry.test.ts ("Clean stop with no output is a
       // legitimate silent reply, not a crash"). We must NOT inject the
@@ -349,11 +350,11 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
   // Drop trailing stream-error / zero-usage-empty-stop placeholder turns. The
   // sentinel was synthesized to satisfy Bedrock Converse's "ContentBlock must
   // not be empty" rule for *non-trailing* error turns; when it is the trailing
-  // entry, prefill-strict providers (e.g. github-copilot/claude-opus-4.6 — the
+  // entry, prefill-strict providers (e.g. github-copilot/claude-opus-4.6 - the
   // exact path reported in #77228) reject the request with
   // `400 This model does not support assistant message prefill. The
   // conversation must end with a user message.`. The original turn carried
-  // `content: []` and zero usage — there is no information to lose by
+  // `content: []` and zero usage - there is no information to lose by
   // dropping it. This trim runs after the main loop so it also catches a
   // sentinel that was *persisted* to disk by an earlier session-file repair
   // pass (matching the same content shape the loop above produces).
@@ -384,7 +385,7 @@ function isReplayDroppableTrailingAssistant(message: AgentMessage | undefined): 
   // session-file-repair.rewriteAssistantEntryWithEmptyContent (always
   // stopReason="error") or the in-memory rewrite earlier in this same
   // normalizeAssistantReplayContent loop (preserves the original
-  // stopReason — "error" or zero-usage "stop"). Drop only when the trailing
+  // stopReason - "error" or zero-usage "stop"). Drop only when the trailing
   // turn carries that synthetic provenance: without this guard, a real
   // model reply that happens to consist of exactly the sentinel string
   // would be silently removed on next replay
@@ -757,9 +758,36 @@ export async function sanitizeSessionHistory(params: {
   const droppedReasoning = policy.dropReasoningFromHistory
     ? dropReasoningFromHistory(validatedThinkingSignatures)
     : validatedThinkingSignatures;
-  const droppedThinking = policy.dropThinkingBlocks
-    ? dropThinkingBlocks(droppedReasoning)
-    : droppedReasoning;
+  // Compute effective context pruning settings using normalization path
+  const rawPruningConfig = params.config?.agents?.defaults?.contextPruning;
+  const effectivePruningSettings = computeEffectiveSettings(rawPruningConfig);
+
+  // Apply thinking block pruning respecting provider strategy boundaries
+  // Provider strategy (policy.dropThinkingBlocks) controls default behavior:
+  // - Providers that natively drop thinking (e.g., Gemini) apply pruning by default.
+  // - Providers that preserve thinking (e.g., Claude) keep blocks by default.
+  // User can override provider strategy with overrideProviderStrategy: true
+  // WARNING: Overriding may break provider-specific features (e.g., Anthropic signature validation).
+  const shouldPruneThinking = effectivePruningSettings?.thinking?.enabled ?? false;
+  const overrideProvider = effectivePruningSettings?.thinking?.overrideProviderStrategy ?? false;
+  const providerDropsThinking = policy.dropThinkingBlocks;
+
+  // Decision logic with provider strategy priority + user explicit override:
+  // 1. If provider natively drops thinking blocks (dropThinkingBlocks=true), apply user config.
+  // 2. If provider preserves thinking blocks (dropThinkingBlocks=false), require explicit override.
+  // 3. keepRecentTurns ensures latest thinking blocks are always preserved for active context.
+  const applyThinkingPruning =
+    providerDropsThinking
+      ? shouldPruneThinking
+      : shouldPruneThinking && overrideProvider;
+
+  const droppedThinking = applyThinkingPruning
+    ? dropThinkingBlocks(droppedReasoning, {
+        keepRecentTurns: effectivePruningSettings?.thinking?.keepRecentTurns ?? 1,
+      })
+    : providerDropsThinking
+      ? dropThinkingBlocks(droppedReasoning)
+      : droppedReasoning;
   const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
     allowedToolNames: params.allowedToolNames,
     allowProviderOwnedThinkingReplay,

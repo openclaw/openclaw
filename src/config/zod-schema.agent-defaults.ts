@@ -152,6 +152,14 @@ export const AgentDefaultsSchema = z
           })
           .strict()
           .optional(),
+        thinking: z
+          .object({
+            enabled: z.boolean().optional(),
+            keepRecentTurns: z.number().int().min(1).optional(),
+            overrideProviderStrategy: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),

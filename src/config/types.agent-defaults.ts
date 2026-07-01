@@ -86,6 +86,28 @@ export type AgentContextPruningConfig = {
     /** Placeholder text inserted when a tool result is hard-cleared. */
     placeholder?: string;
   };
+  /**
+   * Thinking block pruning configuration.
+   *
+   * Provider strategy controls default behavior:
+   * - Providers that natively drop thinking (e.g., Gemini) apply pruning by default.
+   * - Providers that preserve thinking (e.g., Claude) keep blocks by default.
+   *
+   * Override provider strategy only when necessary:
+   * - Use `overrideProviderStrategy: true` to force pruning for providers that normally preserve.
+   * - WARNING: May break provider-specific features (e.g., Anthropic signature validation).
+   * - `keepRecentTurns` ensures latest thinking is always preserved for active context.
+   *
+   * Default: enabled=true, keepRecentTurns=1, overrideProviderStrategy=false
+   */
+  thinking?: {
+    /** Enable thinking block pruning during replay view assembly. Default: true */
+    enabled?: boolean;
+    /** Number of most recent assistant turns to preserve thinking blocks. Default: 1 */
+    keepRecentTurns?: number;
+    /** Override provider's preservation strategy. Default: false. Use with caution. */
+    overrideProviderStrategy?: boolean;
+  };
 };
 
 export type AgentStartupContextConfig = {

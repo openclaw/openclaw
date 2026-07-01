@@ -92,6 +92,7 @@ function buildToolTrimSettings() {
     tools: DEFAULT_CONTEXT_PRUNING_SETTINGS.tools,
     softTrim: { maxChars: 200, headChars: 100, tailChars: 50 },
     hardClear: { ...DEFAULT_CONTEXT_PRUNING_SETTINGS.hardClear, enabled: false },
+    thinking: DEFAULT_CONTEXT_PRUNING_SETTINGS.thinking,
   };
 }
 
