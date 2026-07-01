@@ -143,19 +143,17 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.deliveryPayloads).toEqual([{ text: "⚠️ ✉️ Message failed", isError: true }]);
   });
 
-  it("keeps real trailing errors fatal even when earlier assistant output exists", () => {
+  it("treats trailing errors as non-fatal when final assistant visible text proves recovery", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [{ text: "Partial result" }, { text: "model provider unreachable", isError: true }],
       finalAssistantVisibleText: "Partial result",
       preferFinalAssistantVisibleText: true,
     });
 
-    expect(result.hasFatalErrorPayload).toBe(true);
-    expect(result.embeddedRunError).toBe("model provider unreachable");
-    expect(result.outputText).toBe("model provider unreachable");
-    expect(result.deliveryPayloads).toEqual([
-      { text: "model provider unreachable", isError: true },
-    ]);
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.embeddedRunError).toBeUndefined();
+    expect(result.outputText).toBe("Partial result");
+    expect(result.deliveryPayloads).toEqual([{ text: "Partial result" }]);
   });
 
   it("keeps error payloads fatal when the run also reported a run-level error", () => {
@@ -323,7 +321,7 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.deliveryPayloadHasStructuredContent).toBe(true);
   });
 
-  it("returns only the last error payload when all payloads are errors", () => {
+  it("recovers via finalAssistantVisibleText when all payloads are errors", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [
         { text: "first error", isError: true },
@@ -333,9 +331,10 @@ describe("resolveCronPayloadOutcome", () => {
       preferFinalAssistantVisibleText: true,
     });
 
-    expect(result.outputText).toBe("last error");
-    expect(result.deliveryPayloads).toEqual([{ text: "last error", isError: true }]);
-    expect(result.deliveryPayload).toEqual({ text: "last error", isError: true });
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.embeddedRunError).toBeUndefined();
+    expect(result.outputText).toBe("Recovered final answer");
+    expect(result.deliveryPayloads).toEqual([{ text: "Recovered final answer" }]);
   });
 
   it("keeps multi-payload direct delivery when finalAssistantVisibleText is not preferred", () => {
@@ -436,5 +435,73 @@ describe("resolveCronPayloadOutcome", () => {
 
     expect(result.hasFatalErrorPayload).toBe(true);
     expect(result.embeddedRunError).toBe("Exec failed before SYSTEM_RUN_DENIED could be retried");
+  });
+
+  it("recovers when finalAssistantVisibleText exists despite unmarked exec error", () => {
+    // Reproduces #96255: exec tool rejects a shell redirect ("unknown arg: >"),
+    // agent retries without the redirect and succeeds, then produces a full
+    // final report. The exec error payload has no ⚠️ 🛠️ prefix and no
+    // nonTerminalToolErrorWarning metadata, so no existing gate catches it.
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "Working on the query..." },
+        { text: "unknown arg: >", isError: true },
+        // Intermediate tool-output payloads may exist but aren't "deliverable".
+      ],
+      finalAssistantVisibleText: "Here is the full daily report with all sections.",
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.hasFatalStructuredErrorPayload).toBe(false);
+    expect(result.embeddedRunError).toBeUndefined();
+    expect(result.outputText).toBe("Here is the full daily report with all sections.");
+    expect(result.deliveryPayloads).toEqual([
+      { text: "Here is the full daily report with all sections." },
+    ]);
+  });
+
+  it("keeps errors fatal when runLevelError is set despite finalAssistantVisibleText", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "unknown arg: >", isError: true }],
+      runLevelError: { kind: "context_overflow", message: "exceeded context window" },
+      finalAssistantVisibleText: "Partial report before context overflow.",
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toContain("unknown arg: >");
+  });
+
+  it("keeps errors fatal when failureSignal is fatalForCron despite finalAssistantVisibleText", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "unknown arg: >", isError: true }],
+      failureSignal: {
+        kind: "execution_denied",
+        message: "approval required",
+        fatalForCron: true,
+      },
+      finalAssistantVisibleText: "I tried to run the command.",
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(true);
+    expect(result.embeddedRunError).toContain("unknown arg: >");
+  });
+
+  it("delivers finalAssistantVisibleText on false-policy channel when recovery gate fires", () => {
+    // Regression for ClawSweeper P1: Feishu/Slack channels that do NOT set
+    // preferFinalAssistantVisibleText should still receive the final report
+    // when hasRecoveredByFinalAnswer cleared fatal state.
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "Working on it..." }, { text: "exec failed: unknown arg", isError: true }],
+      finalAssistantVisibleText: "Daily report:\n- Item 1\n- Item 2",
+      // Explicitly false: simulates Feishu/Slack channel policy
+      preferFinalAssistantVisibleText: false,
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.hasFatalStructuredErrorPayload).toBe(false);
+    expect(result.embeddedRunError).toBeUndefined();
+    expect(result.outputText).toBe("Daily report:\n- Item 1\n- Item 2");
+    expect(result.deliveryPayloads).toEqual([{ text: "Daily report:\n- Item 1\n- Item 2" }]);
   });
 });

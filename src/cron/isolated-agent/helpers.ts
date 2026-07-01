@@ -294,6 +294,13 @@ export function resolveCronPayloadOutcome(params: {
     !hasStructuredDeliveryPayloads &&
     errorPayloads.length > 0 &&
     errorPayloads.every((payload) => isCronToolWarning(payload?.text));
+  // When the agent produced a final visible answer and the session itself
+  // didn't error, the run recovered — even when the last error payload lacks
+  // a recovery marker and no later deliverable payloads exist.
+  const hasRecoveredByFinalAnswer =
+    !params.runLevelError &&
+    params.failureSignal?.fatalForCron !== true &&
+    normalizedFinalAssistantVisibleText !== undefined;
   // Structured error payloads are fatal unless later successful output or a
   // known non-terminal warning proves the agent recovered.
   const hasFatalStructuredErrorPayload =
@@ -301,18 +308,24 @@ export function resolveCronPayloadOutcome(params: {
     !hasSuccessfulPayloadAfterLastError &&
     !hasPendingPresentationWarning &&
     !hasNonTerminalToolErrorWarning &&
-    !hasRecoveredToolWarning;
+    !hasRecoveredToolWarning &&
+    !hasRecoveredByFinalAnswer;
   // Fatal structured errors own the final delivery payload unless later output
   // proves recovery; otherwise cron would announce stale partial success text.
   // Keep structured/media announce payloads intact. Only collapse purely textual
   // cron announce output to the final assistant-visible answer.
   // A final assistant answer can replace textual warning payloads, but never
   // structured/media payloads that carry the actual delivery content.
+  // When hasRecoveredByFinalAnswer cleared fatal state, the final text is also
+  // the recovery proof — deliver it regardless of channel policy so Feishu,
+  // Slack, and other channels without preferFinalAssistantVisibleText don't
+  // dispatch the recovered error payload as a success announce.
   const shouldUseFinalAssistantVisibleText =
-    params.preferFinalAssistantVisibleText === true &&
     normalizedFinalAssistantVisibleText !== undefined &&
     !hasFatalStructuredErrorPayload &&
-    !hasStructuredDeliveryPayloads;
+    !hasStructuredDeliveryPayloads &&
+    (params.preferFinalAssistantVisibleText === true ||
+      (hasRecoveredByFinalAnswer && hasErrorPayload));
   const summary = shouldUseFinalAssistantVisibleText
     ? (pickSummaryFromOutput(normalizedFinalAssistantVisibleText) ?? fallbackSummary)
     : fallbackSummary;
