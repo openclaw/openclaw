@@ -65,7 +65,7 @@ async function materializeGuardedResponse(response: Response): Promise<Response>
         `Discord gateway metadata response too large: ${size} bytes (limit: ${maxBytes} bytes)`,
       ),
   });
-  return new Response(body, {
+  return new Response(new Uint8Array(body), {
     status: response.status,
     statusText: response.statusText,
     headers: response.headers,
