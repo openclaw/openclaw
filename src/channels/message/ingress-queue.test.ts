@@ -603,7 +603,7 @@ describe("channel ingress queue", () => {
           claim_owner: overrides.claim_owner ?? null,
           claimed_at: overrides.claimed_at ?? null,
           completed_at: overrides.completed_at ?? null,
-        } as Record<string, unknown>),
+        } as any),
       );
     }
 
