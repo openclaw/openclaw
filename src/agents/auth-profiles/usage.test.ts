@@ -10,6 +10,7 @@ import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 import {
   testing as authProfileUsageTesting,
   clearAuthProfileCooldown,
+  clearProviderAuthProfileCooldowns,
   clearExpiredCooldowns,
   isProfileInCooldown,
   markAuthProfileBlockedUntil,
@@ -701,6 +702,126 @@ describe("clearAuthProfileCooldown", () => {
     const store = makeStore(undefined);
     await clearAuthProfileCooldown({ store, profileId: "nonexistent" });
     expect(store.usageStats).toBeUndefined();
+  });
+});
+
+describe("clearProviderAuthProfileCooldowns", () => {
+  it("clears matching provider profiles in one locked update", async () => {
+    const freshStore = makeStore({
+      "anthropic:default": {
+        disabledUntil: Date.now() + 3_600_000,
+        disabledReason: "billing",
+        errorCount: 3,
+        failureCounts: { billing: 3 },
+      },
+      "openai:default": {
+        cooldownUntil: Date.now() + 60_000,
+        cooldownReason: "rate_limit",
+        errorCount: 2,
+        failureCounts: { rate_limit: 2 },
+      },
+    });
+    const localStore = makeStore({});
+    storeMocks.updateAuthProfileStoreWithLock.mockImplementation(async ({ updater }) => {
+      expect(updater(freshStore)).toBe(true);
+      return freshStore;
+    });
+
+    await clearProviderAuthProfileCooldowns({
+      store: localStore,
+      provider: "anthropic",
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(storeMocks.updateAuthProfileStoreWithLock).toHaveBeenCalledTimes(1);
+    expectProfileErrorStateCleared(localStore.usageStats?.["anthropic:default"]);
+    expect(localStore.usageStats?.["openai:default"]?.cooldownReason).toBe("rate_limit");
+    expect(storeMocks.saveAuthProfileStore).not.toHaveBeenCalled();
+  });
+
+  it("clears usage for runtime-overlay profiles that are absent from the locked profile map", async () => {
+    const localStore = makeStore({
+      "anthropic:claude-cli": {
+        disabledUntil: Date.now() + 3_600_000,
+        disabledReason: "billing",
+        errorCount: 2,
+        failureCounts: { billing: 2 },
+      },
+    });
+    localStore.profiles["anthropic:claude-cli"] = {
+      type: "oauth",
+      provider: "anthropic",
+      access: "claude-access-token",
+      refresh: "claude-refresh-token",
+      expires: 4_102_444_800_000,
+    };
+    const freshStore: AuthProfileStore = {
+      version: 1,
+      profiles: {},
+      usageStats: {
+        "anthropic:claude-cli": {
+          disabledUntil: Date.now() + 3_600_000,
+          disabledReason: "billing",
+          errorCount: 2,
+          failureCounts: { billing: 2 },
+        },
+      },
+    };
+    storeMocks.updateAuthProfileStoreWithLock.mockImplementation(async ({ updater }) => {
+      expect(updater(freshStore)).toBe(true);
+      return freshStore;
+    });
+
+    await clearProviderAuthProfileCooldowns({ store: localStore, provider: "anthropic" });
+
+    expectProfileErrorStateCleared(localStore.usageStats?.["anthropic:claude-cli"]);
+  });
+
+  it("clears explicit refreshed profile ids even before they appear in the profile map", async () => {
+    const localStore = makeStore({});
+    const freshStore = makeStore({
+      "anthropic:plugin-refresh": {
+        disabledUntil: Date.now() + 3_600_000,
+        disabledReason: "format",
+        errorCount: 1,
+        failureCounts: { format: 1 },
+      },
+    });
+    storeMocks.updateAuthProfileStoreWithLock.mockImplementation(async ({ updater }) => {
+      expect(updater(freshStore)).toBe(true);
+      return freshStore;
+    });
+
+    await clearProviderAuthProfileCooldowns({
+      store: localStore,
+      provider: "anthropic",
+      profileIds: ["anthropic:plugin-refresh"],
+    });
+
+    expectProfileErrorStateCleared(localStore.usageStats?.["anthropic:plugin-refresh"]);
+  });
+
+  it("falls back to the provided store when the lock update is unavailable", async () => {
+    const store = makeStore({
+      "anthropic:default": {
+        cooldownUntil: Date.now() + 60_000,
+        disabledUntil: Date.now() + 3_600_000,
+        disabledReason: "billing",
+        errorCount: 5,
+        failureCounts: { billing: 3 },
+      },
+      "openai:default": {
+        cooldownUntil: Date.now() + 60_000,
+        cooldownReason: "rate_limit",
+        errorCount: 2,
+      },
+    });
+
+    await clearProviderAuthProfileCooldowns({ store, provider: "anthropic" });
+
+    expectProfileErrorStateCleared(store.usageStats?.["anthropic:default"]);
+    expect(store.usageStats?.["openai:default"]?.cooldownReason).toBe("rate_limit");
+    expect(storeMocks.saveAuthProfileStore).toHaveBeenCalledWith(store, undefined);
   });
 });
 

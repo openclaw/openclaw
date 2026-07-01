@@ -13,9 +13,11 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { readProviderJsonResponse } from "../provider-http-errors.js";
 import { notifyAuthProfileFailureHook, setAuthProfileFailureHook } from "./failure-hook.js";
+import { listProfilesForProvider } from "./profile-list.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
 
 const authProfileUsageLog = createSubsystemLogger("agent/embedded");
@@ -578,6 +580,39 @@ function updateUsageStatsEntry(
   store.usageStats[profileId] = updater(store.usageStats[profileId]);
 }
 
+function resolveProviderCooldownEntryIds(
+  store: AuthProfileStore,
+  provider: string,
+  profileIds?: string[],
+): string[] {
+  return profileIds === undefined
+    ? listProfilesForProvider(store, provider)
+    : profileIds.filter((profileId) => {
+        const profileProvider = store.profiles[profileId]?.provider;
+        return (
+          profileProvider === undefined ||
+          resolveProviderIdForAuth(profileProvider) === resolveProviderIdForAuth(provider)
+        );
+      });
+}
+
+function clearProviderCooldownEntries(
+  store: AuthProfileStore,
+  provider: string,
+  profileIds?: string[],
+): boolean {
+  const idsToClear = resolveProviderCooldownEntryIds(store, provider, profileIds);
+  let changed = false;
+  for (const profileId of new Set(idsToClear)) {
+    if (!store.usageStats?.[profileId]) {
+      continue;
+    }
+    updateUsageStatsEntry(store, profileId, (existing) => resetUsageStats(existing));
+    changed = true;
+  }
+  return changed;
+}
+
 function keepActiveWindowOrRecompute(params: {
   existingUntil: number | undefined;
   now: number;
@@ -1004,6 +1039,53 @@ export async function clearAuthProfileCooldown(params: {
   }
 
   updateUsageStatsEntry(store, profileId, (existing) => resetUsageStats(existing));
+  authProfileUsageDeps.saveAuthProfileStore(store, agentDir);
+}
+
+/**
+ * Clear cooldown/disabled state for provider profiles. Omitting profileIds
+ * clears every profile owned by the provider; passing profileIds limits cleanup
+ * to those refreshed profiles.
+ */
+export async function clearProviderAuthProfileCooldowns(params: {
+  store: AuthProfileStore;
+  provider: string;
+  profileIds?: string[];
+  agentDir?: string;
+}): Promise<void> {
+  const { store, provider, profileIds, agentDir } = params;
+  const providerWideProfileIds =
+    profileIds === undefined ? listProfilesForProvider(store, provider) : undefined;
+  let lockedStoreChanged = false;
+  const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
+    agentDir,
+    updater: (freshStore) => {
+      const lockedProfileIds =
+        profileIds === undefined
+          ? [...(providerWideProfileIds ?? []), ...listProfilesForProvider(freshStore, provider)]
+          : profileIds;
+      lockedStoreChanged = clearProviderCooldownEntries(freshStore, provider, lockedProfileIds);
+      return lockedStoreChanged;
+    },
+  });
+  if (updated) {
+    // Keep the caller's runtime-only overlay entries in sync with the fresh
+    // locked store without re-saving a stale pre-lock snapshot to disk.
+    const callerProfileIds = resolveProviderCooldownEntryIds(store, provider, profileIds);
+    const callerUsageStats = store.usageStats;
+    store.usageStats = updated.usageStats;
+    for (const profileId of new Set(callerProfileIds)) {
+      if (updated.usageStats?.[profileId] || !callerUsageStats?.[profileId]) {
+        continue;
+      }
+      updateUsageStatsEntry(store, profileId, () => resetUsageStats(callerUsageStats[profileId]));
+    }
+    return;
+  }
+
+  if (!clearProviderCooldownEntries(store, provider, profileIds)) {
+    return;
+  }
   authProfileUsageDeps.saveAuthProfileStore(store, agentDir);
 }
 export { testing as __testing };

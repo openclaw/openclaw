@@ -494,9 +494,13 @@ function isCliAgentRuntime(runtime: string | undefined, cfg: OpenClawConfig | un
   return isCliRuntimeAlias(normalized) || isCliProvider(normalized, cfg);
 }
 
-async function resolveModelFallbackCandidateHarnessAuthPrecheck(
+function resolveModelFallbackCandidateHarnessAuthCooldownPolicy(
   params: ModelFallbackRuntimeContext & ModelCandidate,
-): Promise<{ skipsProviderAuthCooldown: boolean }> {
+): {
+  skipsProviderAuthCooldown: boolean;
+  agentRuntime?: string;
+  agentHarnessRuntimeOverride?: string;
+} {
   if (!params.cfg) {
     return { skipsProviderAuthCooldown: false };
   }
@@ -534,17 +538,31 @@ async function resolveModelFallbackCandidateHarnessAuthPrecheck(
   if (agentRuntime === "auto" || (agentRuntime === "codex" && agentRuntimeSource === "implicit")) {
     return { skipsProviderAuthCooldown: false };
   }
+  return {
+    skipsProviderAuthCooldown: agentRuntime !== "codex",
+    agentRuntime,
+    agentHarnessRuntimeOverride,
+  };
+}
+
+async function resolveModelFallbackCandidateHarnessAuthPrecheck(
+  params: ModelFallbackRuntimeContext & ModelCandidate,
+): Promise<{ skipsProviderAuthCooldown: boolean }> {
+  const policy = resolveModelFallbackCandidateHarnessAuthCooldownPolicy(params);
+  if (!policy.agentRuntime) {
+    return { skipsProviderAuthCooldown: false };
+  }
   await params.prepareAgentHarnessRuntime?.({
     provider: params.provider,
     model: params.model,
-    agentHarnessRuntimeOverride,
+    agentHarnessRuntimeOverride: policy.agentHarnessRuntimeOverride,
   });
-  if (!getRegisteredAgentHarness(agentRuntime)) {
-    throw new MissingAgentHarnessError(agentRuntime);
+  if (!getRegisteredAgentHarness(policy.agentRuntime)) {
+    throw new MissingAgentHarnessError(policy.agentRuntime);
   }
   // Explicit non-Codex plugin harnesses own transport/auth; stale OpenClaw
   // provider cooldowns must not block the harness before it starts.
-  return { skipsProviderAuthCooldown: agentRuntime !== "codex" };
+  return { skipsProviderAuthCooldown: policy.skipsProviderAuthCooldown };
 }
 
 function resolveCandidateAttemptError(
@@ -1160,6 +1178,62 @@ function shouldProbePrimaryDuringCooldown(params: {
   return params.now >= soonest - PROBE_MARGIN_MS;
 }
 
+function hasLaterAvailableAuthFallbackCandidate(params: {
+  candidates: ModelCandidate[];
+  currentIndex: number;
+  cfg: OpenClawConfig | undefined;
+  authRuntime: ModelFallbackAuthRuntime;
+  authStore: AuthProfileStore;
+  sessionId?: string;
+  agentId?: string;
+  sessionKey?: string;
+  resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
+}): boolean {
+  for (let i = params.currentIndex + 1; i < params.candidates.length; i += 1) {
+    const candidate = params.candidates[i];
+    if (!candidate) {
+      continue;
+    }
+    if (
+      params.sessionId &&
+      isFallbackCandidateSkipped({
+        sessionId: params.sessionId,
+        provider: candidate.provider,
+        model: candidate.model,
+      })
+    ) {
+      continue;
+    }
+    const harnessAuth = resolveModelFallbackCandidateHarnessAuthCooldownPolicy({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      resolveAgentHarnessRuntimeOverride: params.resolveAgentHarnessRuntimeOverride,
+      ...candidate,
+    });
+    if (harnessAuth.skipsProviderAuthCooldown) {
+      return true;
+    }
+    const profileIds = params.authRuntime.resolveAuthProfileOrder({
+      cfg: params.cfg,
+      store: params.authStore,
+      provider: candidate.provider,
+    });
+    if (profileIds.length === 0) {
+      return true;
+    }
+    if (
+      profileIds.some(
+        (id) =>
+          !params.authRuntime.isProfileInCooldown(params.authStore, id, undefined, candidate.model),
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** @internal – exposed for unit tests only */
 export const probeThrottleInternals = {
   lastProbeAttempt,
@@ -1195,6 +1269,7 @@ function resolveCooldownDecision(params: {
   isPrimary: boolean;
   requestedModel: boolean;
   hasFallbackCandidates: boolean;
+  hasAvailableAuthFallbackCandidate: boolean;
   now: number;
   probeThrottleKey: string;
   authRuntime: ModelFallbackAuthRuntime;
@@ -1233,7 +1308,11 @@ function resolveCooldownDecision(params: {
   // single-provider setups on the throttle (no fallback chain to prefer) and
   // multi-fallback setups near cooldown expiry, so both recover without a restart.
   if (inferredReason === "billing") {
-    if (params.isPrimary && shouldProbe) {
+    const shouldProbeSingleProviderBilling =
+      params.isPrimary &&
+      !params.hasAvailableAuthFallbackCandidate &&
+      isProbeThrottleOpen(params.now, params.probeThrottleKey);
+    if (params.isPrimary && (shouldProbe || shouldProbeSingleProviderBilling)) {
       return { type: "attempt", reason: inferredReason, markProbe: true };
     }
     return {
@@ -1476,6 +1555,17 @@ async function runWithModelFallbackInternal<T>(
           isPrimary,
           requestedModel,
           hasFallbackCandidates,
+          hasAvailableAuthFallbackCandidate: hasLaterAvailableAuthFallbackCandidate({
+            candidates,
+            currentIndex: i,
+            cfg: params.cfg,
+            authRuntime,
+            authStore,
+            sessionId: params.sessionId,
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+            resolveAgentHarnessRuntimeOverride: params.resolveAgentHarnessRuntimeOverride,
+          }),
           now,
           probeThrottleKey,
           authRuntime,
