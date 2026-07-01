@@ -1101,3 +1101,67 @@ describe("exec backgrounded onUpdate suppression", () => {
     isWin ? 10_000 : 5_000,
   );
 });
+
+describe("process tool action validation (#69582)", () => {
+  type ProcessExecuteArgs = Parameters<ReturnType<typeof createProcessTool>["execute"]>[1];
+  const tool = createProcessTool();
+
+  async function invoke(rawAction: unknown, options?: { omitSessionId?: boolean }) {
+    return tool.execute("call-id", {
+      action: rawAction,
+      ...(options?.omitSessionId ? {} : { sessionId: "anything" }),
+    } as unknown as ProcessExecuteArgs);
+  }
+
+  it("rejects action: {} with a clear invalid-action error, not 'sessionId is required'", async () => {
+    const result = await invoke({});
+    const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
+    expect(text).toContain("Invalid 'action' parameter");
+    expect(text).not.toContain("sessionId is required");
+    expect((result.details as { status?: string }).status).toBe("failed");
+  });
+
+  it("rejects action: {} before checking sessionId", async () => {
+    const result = await invoke({}, { omitSessionId: true });
+    const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
+    expect(text).toContain("Invalid 'action' parameter");
+    expect(text).not.toContain("sessionId is required");
+    expect((result.details as { status?: string }).status).toBe("failed");
+  });
+
+  it("rejects action: '' / null / number / array with the same invalid-action error", async () => {
+    for (const bad of ["", null, 42, ["list"]]) {
+      const result = await invoke(bad);
+      const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
+      expect(text).toContain("Invalid 'action' parameter");
+      expect(text).toContain("Do not retry with the same argument shape.");
+    }
+  });
+
+  it("rejects an unknown action string with the invalid-action error", async () => {
+    const result = await invoke("delete");
+    const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
+    expect(text).toContain("Invalid 'action' parameter");
+    expect(text).toContain("delete");
+    expect(text).toMatch(/list, poll, log, write, send-keys, submit, paste, kill, clear, remove/);
+  });
+
+  it("accepts every documented action string without raising the invalid-action error", async () => {
+    for (const ok of [
+      "list",
+      "poll",
+      "log",
+      "write",
+      "send-keys",
+      "submit",
+      "paste",
+      "kill",
+      "clear",
+      "remove",
+    ]) {
+      const result = await invoke(ok);
+      const text = (result.content as Array<{ type: string; text: string }>)[0]?.text ?? "";
+      expect(text).not.toContain("Invalid 'action' parameter");
+    }
+  });
+});
