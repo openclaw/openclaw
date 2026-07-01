@@ -227,6 +227,10 @@ function callArg(
   return call[argIndex];
 }
 
+function mockCalls(mock: { mock: { calls: unknown[] } }): unknown[][] {
+  return mock.mock.calls as unknown[][];
+}
+
 function expectMainCronRunSessionKey(value: unknown, jobId: string) {
   expect(value).toMatch(new RegExp(`^agent:main:cron:${jobId}:run:\\d+$`));
 }
@@ -620,7 +624,7 @@ describe("buildGatewayCronService", () => {
       runCronChangedMock.mockClear();
       await state.cron.run(job.id, "force");
 
-      const event = runCronChangedMock.mock.calls
+      const event = mockCalls(runCronChangedMock)
         .map((_, index) =>
           requireRecord(
             callArg(runCronChangedMock, index, 0, "cron_changed event"),
@@ -718,7 +722,7 @@ describe("buildGatewayCronService", () => {
 
       expect(sendCronAnnouncePayloadStrictMock).not.toHaveBeenCalled();
 
-      const event = runCronChangedMock.mock.calls
+      const event = mockCalls(runCronChangedMock)
         .map((_, index) =>
           requireRecord(
             callArg(runCronChangedMock, index, 0, "cron_changed event"),

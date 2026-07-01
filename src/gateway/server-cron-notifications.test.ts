@@ -30,8 +30,12 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function mockCalls(mock: { mock: { calls: unknown[] } }): unknown[][] {
+  return mock.mock.calls as unknown[][];
+}
+
 function webhookRequestBody() {
-  const call = (mocks.fetchWithSsrFGuard.mock.calls as unknown[][])[0];
+  const call = mockCalls(mocks.fetchWithSsrFGuard)[0];
   if (!call) {
     throw new Error("expected webhook request call");
   }
