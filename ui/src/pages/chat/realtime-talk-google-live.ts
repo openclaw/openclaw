@@ -1,6 +1,10 @@
 // Control UI chat module implements realtime talk google live behavior.
-import { base64ToBytes, bytesToBase64, floatToPcm16 } from "./realtime-talk-audio.ts";
-import { RealtimeTalkPcmOutputQueue } from "./realtime-talk-pcm-output.ts";
+import {
+  base64ToBytes,
+  bytesToBase64,
+  floatToPcm16,
+  RealtimeTalkPcmOutputQueue,
+} from "./realtime-talk-audio.ts";
 import type { RealtimeTalkJsonPcmWebSocketSessionResult } from "./realtime-talk-shared.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,

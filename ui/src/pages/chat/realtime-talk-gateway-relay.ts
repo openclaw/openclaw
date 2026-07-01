@@ -1,6 +1,5 @@
 // Control UI chat module implements realtime talk gateway relay behavior.
-import { bytesToBase64, floatToPcm16 } from "./realtime-talk-audio.ts";
-import { RealtimeTalkPcmOutputQueue } from "./realtime-talk-pcm-output.ts";
+import { bytesToBase64, floatToPcm16, RealtimeTalkPcmOutputQueue } from "./realtime-talk-audio.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
