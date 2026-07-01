@@ -13,15 +13,16 @@ describe("extractToolResultText", () => {
         keyMaterial: "key-material-value-1234567890",
         jwt: "jwt-value-1234567890",
         session: "session-value-1234567890",
-        code: "code-value-1234567890",
-        error: { code: "ERR_ROOTOPAQUEPROVIDERCODE1234567890" },
+        code: "VISIBLE_STATUS_CODE",
+        error: { code: "ERR_VISIBLE_PROVIDER_CODE" },
         oauth: { code: "OPAQUEPROVIDERCODE1234567890" },
-        providerError: { error: { code: "ERR_OPAQUEPROVIDERCODE1234567890" } },
+        providerError: { error: { code: "ERR_VISIBLE_PROVIDER_NESTED_CODE" } },
         signature: "signature-value-1234567890",
         cookie: "cookie-value-1234567890",
         "set-cookie": "set-cookie-value-1234567890",
         paymentCredential: "payment-credential-value-1234567890",
-        cardNumber: "41111111111111112222",
+        cardNumber: 4111111111111111,
+        cvc: 123,
         credential: "live-credential-value",
         appSecret: "app-secret-value",
         rawSecret: "raw-secret-value",
@@ -37,6 +38,9 @@ describe("extractToolResultText", () => {
     expect(text).toContain('"rawSecret":"');
     expect(text).toContain('"token":"');
     expect(text).toContain('"visible":"safe-value"');
+    expect(text).toContain('"code":"VISIBLE_STATUS_CODE"');
+    expect(text).toContain('"code":"ERR_VISIBLE_PROVIDER_CODE"');
+    expect(text).toContain('"code":"ERR_VISIBLE_PROVIDER_NESTED_CODE"');
     expect(text).not.toContain("api-token-value-1234567890");
     expect(text).not.toContain("private-key-value-1234567890");
     expect(text).not.toContain("private-key-snake-1234567890");
@@ -44,15 +48,13 @@ describe("extractToolResultText", () => {
     expect(text).not.toContain("key-material-value-1234567890");
     expect(text).not.toContain("jwt-value-1234567890");
     expect(text).not.toContain("session-value-1234567890");
-    expect(text).not.toContain("code-value-1234567890");
-    expect(text).not.toContain("ERR_ROOTOPAQUEPROVIDERCODE1234567890");
     expect(text).not.toContain("OPAQUEPROVIDERCODE1234567890");
-    expect(text).not.toContain("ERR_OPAQUEPROVIDERCODE1234567890");
     expect(text).not.toContain("signature-value-1234567890");
     expect(text).not.toContain("cookie-value-1234567890");
     expect(text).not.toContain("set-cookie-value-1234567890");
     expect(text).not.toContain("payment-credential-value-1234567890");
-    expect(text).not.toContain("41111111111111112222");
+    expect(text).not.toContain("4111111111111111");
+    expect(text).not.toContain('"cvc":123');
     expect(text).not.toContain("live-credential-value");
     expect(text).not.toContain("app-secret-value");
     expect(text).not.toContain("raw-secret-value");

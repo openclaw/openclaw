@@ -1149,7 +1149,7 @@ describe("redactSecrets", () => {
     expect(serialized).not.toContain("opaque-refresh-token-value");
   });
 
-  it("keeps internal diagnostic fields while redacting opaque code values", () => {
+  it("keeps structured error codes while redacting OAuth authorization codes", () => {
     const output = redactSecrets({
       manifest: {
         sourceFiles: { session: "$WORKSPACE_DIR/session.jsonl" },
@@ -1160,16 +1160,22 @@ describe("redactSecrets", () => {
         ],
       },
       status: { code: "SYSTEM_RUN_DENIED" },
+      invalidRequestStatus: { status: { code: "INVALID_REQUEST" } },
       details: { error: { code: "SYSTEM_RUN_DENIED" } },
+      nodeError: { code: "NOT_PAIRED" },
+      policyError: { code: "POLICY_DENIED" },
+      invalidRequestDetails: { error: { code: "INVALID_REQUEST" } },
       error: { code: "ERR_ROOTOPAQUECODE1234567890" },
       diagnostic: { error: { code: "ERR_DIAGNOSTIC_TEST" } },
       stabilityBundle: { error: { code: "ERR_STABILITY_TEST" } },
       trajectoryExport: { error: { code: "ERR_TRAJECTORY_TEST" } },
       oauth: { code: "oauth-code-value-1234567890" },
       oauthNestedError: { error: { code: "ERR_OPAQUEOAUTHCODE1234567890" } },
-      provider: { code: "PROVIDEROPAQUECODE1234567890" },
+      provider: { code: "PROVIDER_STATUS_CODE" },
+      providerAuth: { code: "provider-auth-code-value-1234567890" },
       providerDetails: { error: { code: "SYSTEM_RUN_DENIED" } },
       providerNestedError: { error: { code: "ERR_PROVIDEROPAQUECODE1234567890" } },
+      numericSecrets: { cardNumber: 4111111111111111, cvc: 123, token: 1234567890, amount: 4200 },
     });
 
     expect(output.manifest.sourceFiles.session).toBe("$WORKSPACE_DIR/session.jsonl");
@@ -1179,16 +1185,27 @@ describe("redactSecrets", () => {
       { code: "incomplete-session-branch" },
     ]);
     expect(output.status.code).toBe("SYSTEM_RUN_DENIED");
+    expect(output.invalidRequestStatus.status.code).toBe("INVALID_REQUEST");
     expect(output.details.error.code).toBe("SYSTEM_RUN_DENIED");
-    expect(output.error.code).not.toBe("ERR_ROOTOPAQUECODE1234567890");
+    expect(output.nodeError.code).toBe("NOT_PAIRED");
+    expect(output.policyError.code).toBe("POLICY_DENIED");
+    expect(output.invalidRequestDetails.error.code).toBe("INVALID_REQUEST");
+    expect(output.error.code).toBe("ERR_ROOTOPAQUECODE1234567890");
     expect(output.diagnostic.error.code).toBe("ERR_DIAGNOSTIC_TEST");
     expect(output.stabilityBundle.error.code).toBe("ERR_STABILITY_TEST");
     expect(output.trajectoryExport.error.code).toBe("ERR_TRAJECTORY_TEST");
     expect(output.oauth.code).not.toBe("oauth-code-value-1234567890");
-    expect(output.oauthNestedError.error.code).not.toBe("ERR_OPAQUEOAUTHCODE1234567890");
-    expect(output.provider.code).not.toBe("PROVIDEROPAQUECODE1234567890");
-    expect(output.providerDetails.error.code).not.toBe("SYSTEM_RUN_DENIED");
-    expect(output.providerNestedError.error.code).not.toBe("ERR_PROVIDEROPAQUECODE1234567890");
+    expect(output.oauthNestedError.error.code).toBe("ERR_OPAQUEOAUTHCODE1234567890");
+    expect(output.provider.code).toBe("PROVIDER_STATUS_CODE");
+    expect(output.providerAuth.code).not.toBe("provider-auth-code-value-1234567890");
+    expect(output.providerDetails.error.code).toBe("SYSTEM_RUN_DENIED");
+    expect(output.providerNestedError.error.code).toBe("ERR_PROVIDEROPAQUECODE1234567890");
+    expect(output.numericSecrets).toEqual({
+      cardNumber: "***",
+      cvc: "***",
+      token: "***",
+      amount: 4200,
+    });
   });
 });
 

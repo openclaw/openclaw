@@ -2270,10 +2270,10 @@ describe("google transport stream", () => {
               keyMaterial: "leaked-key-material-value-12345",
               jwt: "leaked-jwt-value-1234567890",
               session: "leaked-session-value-123456",
-              code: "leaked-code-value-1234567890",
-              error: { code: "ERR_ROOTOPAQUEGOOGLECODE1234567890" },
+              code: "VISIBLE_STATUS_CODE",
+              error: { code: "ERR_VISIBLE_GOOGLE_CODE" },
               oauth: { code: "OPAQUEGOOGLECODE1234567890" },
-              providerError: { error: { code: "ERR_OPAQUEGOOGLECODE1234567890" } },
+              providerError: { error: { code: "ERR_VISIBLE_PROVIDER_GOOGLE_CODE" } },
               signature: "leaked-signature-value-12345",
               cookie: "leaked-cookie-value-123456",
               "set-cookie": "leaked-set-cookie-value-12345",
@@ -2292,6 +2292,9 @@ describe("google transport stream", () => {
       .functionResponse as { response: { output: string } };
 
     expect(functionResponse.response.output).toContain('"visible":"safe-value"');
+    expect(functionResponse.response.output).toContain('"code":"VISIBLE_STATUS_CODE"');
+    expect(functionResponse.response.output).toContain('"code":"ERR_VISIBLE_GOOGLE_CODE"');
+    expect(functionResponse.response.output).toContain('"code":"ERR_VISIBLE_PROVIDER_GOOGLE_CODE"');
     for (const leakedValue of [
       "leaked-private-key-value-12345",
       "leaked-private-key-snake-12345",
@@ -2299,10 +2302,7 @@ describe("google transport stream", () => {
       "leaked-key-material-value-12345",
       "leaked-jwt-value-1234567890",
       "leaked-session-value-123456",
-      "leaked-code-value-1234567890",
-      "ERR_ROOTOPAQUEGOOGLECODE1234567890",
       "OPAQUEGOOGLECODE1234567890",
-      "ERR_OPAQUEGOOGLECODE1234567890",
       "leaked-signature-value-12345",
       "leaked-cookie-value-123456",
       "leaked-set-cookie-value-12345",

@@ -109,6 +109,21 @@ describe("extractToolErrorMessage", () => {
     expect(extractToolErrorCode(sanitized)).toBe("SYSTEM_RUN_DENIED");
   });
 
+  it("preserves structured invalid-request tool error codes through sanitization", () => {
+    const sanitized = sanitizeToolResult({
+      details: {
+        status: "failed",
+        nodeError: {
+          code: "INVALID_REQUEST",
+          message: "approval expired",
+        },
+      },
+    }) as { details: { nodeError: { code: string; message: string } } };
+
+    expect(sanitized.details.nodeError.code).toBe("INVALID_REQUEST");
+    expect(extractToolErrorCode(sanitized)).toBe("INVALID_REQUEST");
+  });
+
   it("does not extract error codes from prose-only tool output", () => {
     expect(
       extractToolErrorCode({

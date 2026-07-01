@@ -88,20 +88,9 @@ const FORM_BODY_LINE_BREAK_SPLIT_RE = /(\r\n|\r|\n)/u;
 const FORM_BODY_LINE_BREAK_SEGMENT_RE = /^(?:\r\n|\r|\n)$/u;
 const PAYMENT_CREDENTIAL_JSON_KEYS = String.raw`cardNumber|card_number|cardCvc|card_cvc|cardCvv|card_cvv|cvc|cvv|securityCode|security_code|paymentCredential|payment_credential|sharedPaymentToken|shared_payment_token`;
 const STRUCTURED_SECRET_FIELD_RE = new RegExp(
-  String.raw`^(?:api[-_]?key|apiKey|api[-_]?token|apiToken|token|secret|password|passwd|credential|authorization|private[-_]?key|privateKey|access[-_]?token|accessToken|refresh[-_]?token|refreshToken|id[-_]?token|idToken|auth[-_]?token|authToken|client[-_]?secret|clientSecret|app[-_]?secret|appSecret|secret[-_]?value|secretValue|raw[-_]?secret|rawSecret|secret[-_]?input|secretInput|key|key[-_]?material|keyMaterial|jwt|session|code|signature|cookie|set[-_]?cookie|${PAYMENT_CREDENTIAL_QUERY_KEYS}|${PAYMENT_CREDENTIAL_JSON_KEYS})$`,
+  String.raw`^(?:api[-_]?key|apiKey|api[-_]?token|apiToken|token|secret|password|passwd|credential|authorization|private[-_]?key|privateKey|access[-_]?token|accessToken|refresh[-_]?token|refreshToken|id[-_]?token|idToken|auth[-_]?token|authToken|client[-_]?secret|clientSecret|app[-_]?secret|appSecret|secret[-_]?value|secretValue|raw[-_]?secret|rawSecret|secret[-_]?input|secretInput|key|key[-_]?material|keyMaterial|jwt|session|signature|cookie|set[-_]?cookie|${PAYMENT_CREDENTIAL_QUERY_KEYS}|${PAYMENT_CREDENTIAL_JSON_KEYS})$`,
   "i",
 );
-const STRUCTURED_DIAGNOSTIC_STATUS_CODE_VALUES = new Set(["SYSTEM_RUN_DENIED"]);
-const STRUCTURED_INTERNAL_WARNING_CODE_VALUES = new Set([
-  "cyclic-session-branch",
-  "incomplete-session-branch",
-  "invalid-runtime-event",
-  "invalid-runtime-json",
-  "invalid-session-json",
-  "invalid-session-row",
-]);
-const STRUCTURED_DIAGNOSTIC_ERROR_CODE_VALUE_RE =
-  /^(?:ERR_[A-Z0-9_]{1,80}|E[A-Z0-9_]{2,40}|MODULE_NOT_FOUND|UND_ERR_[A-Z0-9_]{1,80}|OPENCLAW_[A-Z0-9_]{1,80})$/u;
 const STRUCTURED_INTERNAL_SOURCE_PATH_VALUE_RE = /^\$WORKSPACE_DIR\/[A-Za-z0-9._/-]+\.jsonl$/u;
 const STRUCTURED_APP_PASSWORD_FIELD_RE =
   /^(?:apple|icloud|app[-_]?specific[-_]?password|appSpecificPassword|application[-_]?password|text|content|message|error|errorMessage|detail|details|reason)$/i;
@@ -1070,8 +1059,8 @@ function redactSensitiveFieldValueWithOptions(
     return redacted;
   }
   const normalizedStructuredKey = key.toLowerCase();
-  if (shouldPreserveStructuredDiagnosticCode(normalizedStructuredKey, value, path)) {
-    return value;
+  if (shouldRedactStructuredAuthorizationCode(normalizedStructuredKey, path)) {
+    return maskToken(value);
   }
   if (
     normalizedStructuredKey === "session" &&
@@ -1115,45 +1104,24 @@ function pathEndsWith(path: readonly string[], suffix: readonly string[]): boole
   return suffix.every((part, index) => path[path.length - suffix.length + index] === part);
 }
 
-function shouldPreserveStructuredDiagnosticCode(
+function shouldRedactStructuredAuthorizationCode(
   normalizedKey: string,
-  value: string,
   path: readonly string[],
 ): boolean {
   if (normalizedKey !== "code") {
     return false;
   }
   const normalizedPath = path.map((part) => part.toLowerCase());
-  if (normalizedPath.some((part) => part.includes("oauth") || part.includes("provider"))) {
+  if (pathEndsWith(normalizedPath, ["error", "code"])) {
     return false;
   }
-  if (STRUCTURED_DIAGNOSTIC_STATUS_CODE_VALUES.has(value)) {
-    return true;
-  }
-  if (
-    pathEndsWith(path, ["warnings", "code"]) &&
-    STRUCTURED_INTERNAL_WARNING_CODE_VALUES.has(value)
-  ) {
-    return true;
-  }
-  if (pathEndsWith(path, ["status", "code"])) {
-    return STRUCTURED_DIAGNOSTIC_STATUS_CODE_VALUES.has(value);
-  }
-  if (isStructuredDiagnosticErrorCodePath(path)) {
-    return STRUCTURED_DIAGNOSTIC_ERROR_CODE_VALUE_RE.test(value);
-  }
-  return false;
+  const parent = normalizedPath.at(-2) ?? "";
+  return parent.includes("oauth") || parent.includes("auth");
 }
 
-function isStructuredDiagnosticErrorCodePath(path: readonly string[]): boolean {
-  if (!pathEndsWith(path, ["error", "code"])) {
-    return false;
-  }
-  const normalizedPath = path.map((part) => part.toLowerCase());
-  return normalizedPath.some(
-    (part) =>
-      part.includes("diagnostic") || part.includes("stability") || part.includes("trajectory"),
-  );
+function shouldRedactStructuredPrimitiveField(key: string, path: readonly string[]): boolean {
+  const normalizedKey = key.toLowerCase();
+  return shouldRedactStructuredAuthorizationCode(normalizedKey, path) || isSensitiveFieldKey(key);
 }
 
 function isPlainRedactableObject(value: object): value is Record<string, unknown> {
@@ -1175,7 +1143,7 @@ function redactStructuredSecretValue(
     return value;
   }
   if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return value;
+    return shouldRedactStructuredPrimitiveField(key, path) ? "***" : value;
   }
   if (Array.isArray(value)) {
     if (seen.has(value)) {
