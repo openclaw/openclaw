@@ -5,6 +5,7 @@ import PackageDescription
 
 let package = Package(
     name: "OpenClaw",
+    defaultLocalization: "en",
     platforms: [
         .macOS(.v15),
     ],
