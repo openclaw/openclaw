@@ -888,6 +888,7 @@ describe("runCodexAppServerSideQuestion", () => {
     await expect(
       runCodexAppServerSideQuestion(
         sideParams({
+          cfg: { tools: { loopDetection: { enabled: true } } } as never,
           sessionKey: "agent:main:session-1",
           messageChannel: "discord",
           messageProvider: "discord-voice",
@@ -970,6 +971,7 @@ describe("runCodexAppServerSideQuestion", () => {
     await expect(
       runCodexAppServerSideQuestion(
         sideParams({
+          cfg: { tools: { loopDetection: { enabled: true } } } as never,
           sessionKey: "agent:main:session-1",
           messageChannel: "discord",
           messageProvider: "discord-voice",

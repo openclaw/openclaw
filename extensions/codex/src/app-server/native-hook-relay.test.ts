@@ -187,21 +187,22 @@ describe("Codex native hook relay config", () => {
     });
   });
 
-  it("keeps selected no-policy PreToolUse installed with an unavailable no-op marker", () => {
+  it("does not install PreToolUse when the relay reports no local work", () => {
     expect(
       buildCodexNativeHookRelayConfig({
         relay: createRelay({ inactiveEvents: ["pre_tool_use"] }),
-        events: ["pre_tool_use"],
+        events: ["pre_tool_use", "permission_request"],
       }),
     ).toEqual({
       "features.hooks": true,
-      "hooks.PreToolUse": [
+      "hooks.PreToolUse": [],
+      "hooks.PermissionRequest": [
         {
           hooks: [
             {
               type: "command",
               command:
-                "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event pre_tool_use --pre-tool-use-unavailable noop --timeout 4000",
+                "openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event permission_request --timeout 4000",
               timeout: 5,
               async: false,
               statusMessage: "OpenClaw native hook relay",
@@ -210,11 +211,11 @@ describe("Codex native hook relay config", () => {
         },
       ],
       "hooks.state": {
-        "/<session-flags>/config.toml:pre_tool_use:0:0": {
+        "/<session-flags>/config.toml:permission_request:0:0": {
           enabled: true,
           trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
         },
-        "<session-flags>/config.toml:pre_tool_use:0:0": {
+        "<session-flags>/config.toml:permission_request:0:0": {
           enabled: true,
           trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
         },
@@ -320,10 +321,8 @@ function createRelay(options?: {
     shouldRelayEvent: (event) => !inactiveEvents.has(event),
     commandForEvent: (event, commandOptions) =>
       `openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event ${event}${
-        event === "pre_tool_use" && inactiveEvents.has(event)
-          ? " --pre-tool-use-unavailable noop"
-          : ""
-      }${commandOptions?.timeoutMs ? ` --timeout ${commandOptions.timeoutMs}` : ""}`,
+        commandOptions?.timeoutMs ? ` --timeout ${commandOptions.timeoutMs}` : ""
+      }`,
     renew: () => undefined,
     unregister: () => undefined,
   };
