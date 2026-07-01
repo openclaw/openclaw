@@ -77,6 +77,7 @@ import {
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { emitDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   claimAgentRunContext,
@@ -1129,6 +1130,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       modelRun?: boolean;
       promptMode?: "full" | "minimal" | "none";
       bootstrapContextMode?: "full" | "lightweight";
+      // Commitment fan-out scope is scheduler-internal and cannot be selected over Gateway RPC.
       bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
       acpTurnSource?: "manual_spawn";
       internalRuntimeHandoffId?: string;
@@ -1515,6 +1517,12 @@ export const agentHandlers: GatewayRequestHandlers = {
           resolvedSessionId: currentSessionId,
         })
       ) {
+        emitDiagnosticEvent({
+          type: "exec.approval.followup_suppressed",
+          approvalId: execApprovalFollowupApprovalId,
+          reason: "session_rebound",
+          phase: "gateway_preflight",
+        });
         context.logGateway.info(
           `Dropping stale exec approval followup ${execApprovalFollowupApprovalId}: session ${requestedSessionKeyRaw} rebound (expected ${expectedSessionId}, current ${currentSessionId}) before the approval resolved`,
         );

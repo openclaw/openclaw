@@ -1538,7 +1538,7 @@ function buildTurnScopedCollaborationInstructions(
   if (params.trigger === "cron") {
     return joinPresentSections(buildCronCollaborationInstructions(), contextInstructions);
   }
-  if (params.trigger === "heartbeat") {
+  if (params.trigger === "heartbeat" && params.bootstrapContextRunKind !== "commitment-only") {
     return joinPresentSections(
       buildHeartbeatCollaborationInstructions(),
       contextInstructions,

@@ -81,6 +81,15 @@ const mocks = vi.hoisted(() => ({
     provider: "openai",
     model: "gpt-4.1-mini",
   })),
+  prepareImageDescriptionInput: vi.fn(async () => ({
+    buffer: Buffer.from("image"),
+    fileName: "photo.jpg",
+    mime: "image/jpeg",
+  })),
+  describePreparedImageWithModel: vi.fn(async () => ({
+    text: "friendly lobster",
+    model: "gpt-4.1-mini",
+  })),
   describeImageFileWithModel: vi.fn(async () => ({
     text: "friendly lobster",
     model: "gpt-4.1-mini",
@@ -289,6 +298,10 @@ vi.mock("../gateway/connection-details.js", () => ({
 vi.mock("../media-understanding/runtime.js", () => ({
   describeImageFile:
     mocks.describeImageFile as typeof import("../media-understanding/runtime.js").describeImageFile,
+  prepareImageDescriptionInput:
+    mocks.prepareImageDescriptionInput as typeof import("../media-understanding/runtime.js").prepareImageDescriptionInput,
+  describePreparedImageWithModel:
+    mocks.describePreparedImageWithModel as typeof import("../media-understanding/runtime.js").describePreparedImageWithModel,
   describeImageFileWithModel:
     mocks.describeImageFileWithModel as typeof import("../media-understanding/runtime.js").describeImageFileWithModel,
   describeVideoFile: vi.fn(),
@@ -498,6 +511,8 @@ describe("capability cli", () => {
       return {};
     }) as never);
     mocks.describeImageFile.mockClear();
+    mocks.prepareImageDescriptionInput.mockClear();
+    mocks.describePreparedImageWithModel.mockClear();
     mocks.describeImageFileWithModel.mockClear();
     mocks.generateImage.mockReset();
     mocks.generateVideo.mockReset();
@@ -630,8 +645,15 @@ describe("capability cli", () => {
     return calls[index]?.[0];
   }
 
+  function firstImagePrepareCall() {
+    const calls = mocks.prepareImageDescriptionInput.mock.calls as unknown as Array<
+      [ImageDescribeParams]
+    >;
+    return calls[0]?.[0];
+  }
+
   function firstImageDescribeWithModelCall() {
-    const calls = mocks.describeImageFileWithModel.mock.calls as unknown as Array<
+    const calls = mocks.describePreparedImageWithModel.mock.calls as unknown as Array<
       [ImageDescribeParams]
     >;
     return calls[0]?.[0];
@@ -1333,8 +1355,9 @@ describe("capability cli", () => {
       ],
     });
 
+    const prepareCall = firstImagePrepareCall();
     const describeCall = firstImageDescribeWithModelCall();
-    expect(path.basename(describeCall?.filePath ?? "")).toBe("photo.jpg");
+    expect(path.basename(prepareCall?.filePath ?? "")).toBe("photo.jpg");
     expect(describeCall?.provider).toBe("ollama");
     expect(describeCall?.model).toBe("qwen2.5vl:7b");
     expect(describeCall?.prompt).toBe("Count visible buttons");
@@ -1359,9 +1382,9 @@ describe("capability cli", () => {
       ],
     });
 
-    const describeCall = firstImageDescribeWithModelCall();
-    expect(describeCall?.filePath).toBe("https://example.com/photo.png");
-    expect(describeCall?.mediaUrl).toBe("https://example.com/photo.png");
+    const prepareCall = firstImagePrepareCall();
+    expect(prepareCall?.filePath).toBe("https://example.com/photo.png");
+    expect(prepareCall?.mediaUrl).toBe("https://example.com/photo.png");
     expect(mocks.describeImageFile).not.toHaveBeenCalled();
     const outputs = firstJsonOutput()?.outputs as Array<Record<string, unknown>>;
     expect(outputs[0]?.path).toBe("https://example.com/photo.png");
@@ -1382,11 +1405,115 @@ describe("capability cli", () => {
       ],
     });
 
+    const prepareCall = firstImagePrepareCall();
     const describeCall = firstImageDescribeWithModelCall();
-    expect(describeCall?.filePath).toBe("https://httpbin.org/image/png");
+    expect(prepareCall?.filePath).toBe("https://httpbin.org/image/png");
     expect(describeCall?.provider).toBe("minimax-cn");
     expect(describeCall?.model).toBe("MiniMax-VL-01");
     expect(mocks.describeImageFile).not.toHaveBeenCalled();
+  });
+
+  it("falls back to configured image models for explicit-model image describe", async () => {
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValueOnce({
+      resolvedConfig: {},
+      effectiveConfig: {
+        agents: {
+          defaults: {
+            imageModel: {
+              primary: "openrouter/google/gemma-4-31b-it:free",
+              fallbacks: ["openrouter/google/gemma-4-31b-it"],
+            },
+          },
+        },
+      },
+      diagnostics: [],
+    });
+    mocks.describePreparedImageWithModel
+      .mockRejectedValueOnce(new Error("upstream 429 rate limit"))
+      .mockResolvedValueOnce({
+        text: "fallback description",
+        model: "google/gemma-4-31b-it",
+      });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "describe",
+        "--file",
+        "photo.jpg",
+        "--model",
+        "openrouter/google/gemma-4-31b-it:free",
+        "--json",
+      ],
+    });
+
+    expect(mocks.prepareImageDescriptionInput).toHaveBeenCalledTimes(1);
+    const calls = mocks.describePreparedImageWithModel.mock.calls as unknown as Array<
+      [ImageDescribeParams]
+    >;
+    expect(calls.map(([call]) => `${String(call.provider)}/${String(call.model)}`)).toEqual([
+      "openrouter/google/gemma-4-31b-it:free",
+      "openrouter/google/gemma-4-31b-it",
+    ]);
+    expect(firstJsonOutput()).toMatchObject({
+      ok: true,
+      capability: "image.describe",
+      provider: "openrouter",
+      model: "google/gemma-4-31b-it",
+      attempts: [
+        {
+          provider: "openrouter",
+          model: "google/gemma-4-31b-it:free",
+          error: "upstream 429 rate limit",
+        },
+      ],
+      outputs: [
+        {
+          text: "fallback description",
+          model: "google/gemma-4-31b-it",
+        },
+      ],
+    });
+  });
+
+  it("does not retry image input preparation failures as model fallbacks", async () => {
+    mocks.resolveCommandConfigWithSecrets.mockResolvedValueOnce({
+      resolvedConfig: {},
+      effectiveConfig: {
+        agents: {
+          defaults: {
+            imageModel: {
+              primary: "openrouter/google/gemma-4-31b-it:free",
+              fallbacks: ["openrouter/google/gemma-4-31b-it"],
+            },
+          },
+        },
+      },
+      diagnostics: [],
+    });
+    mocks.prepareImageDescriptionInput.mockRejectedValueOnce(new Error("image file not found"));
+
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "image",
+          "describe",
+          "--file",
+          "missing.jpg",
+          "--model",
+          "openrouter/google/gemma-4-31b-it:free",
+          "--json",
+        ],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expectRuntimeErrorContains("image file not found");
+    expect(runtimeErrorMessages().join("\n")).not.toContain("All image models failed");
+    expect(mocks.describePreparedImageWithModel).not.toHaveBeenCalled();
   });
 
   it("passes describe-many prompts to each image", async () => {

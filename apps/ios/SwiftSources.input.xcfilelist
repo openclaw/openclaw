@@ -99,6 +99,7 @@ Sources/Status/VoiceWakeToast.swift
 Sources/Voice/TalkGatewayPermissionState.swift
 Sources/Voice/TalkDefaults.swift
 Sources/Voice/RealtimeTalkRelaySession.swift
+Sources/Voice/TalkGatewaySpeechClient.swift
 Sources/Voice/TalkModeGatewayConfig.swift
 Sources/Voice/TalkModeManager.swift
 Sources/Voice/TalkModeManager+Permissions.swift

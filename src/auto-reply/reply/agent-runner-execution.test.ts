@@ -8,6 +8,10 @@ import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-erro
 import { MissingProviderAuthError } from "../../agents/model-auth.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import {
+  HEARTBEAT_RUN_SCOPE,
+  type ReplyOptionsWithHeartbeatRunScope,
+} from "../../infra/heartbeat-run-scope.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
@@ -547,7 +551,7 @@ function expectBlockReplyCall(
 
 function createMinimalRunAgentTurnParams(overrides?: {
   followupRun?: FollowupRun;
-  opts?: GetReplyOptions;
+  opts?: GetReplyOptions & ReplyOptionsWithHeartbeatRunScope;
   replyOperation?: ReplyOperation;
   sessionCtx?: TemplateContext;
   typingSignals?: TypingSignaler;
@@ -1427,6 +1431,41 @@ describe("runAgentTurnWithFallback", () => {
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
       provider: "codex-cli",
       model: "gpt-5.4",
+    });
+  });
+
+  it("propagates commitment-only bootstrap scope to CLI runs", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("claude-cli", "sonnet-4.6"),
+      provider: "claude-cli",
+      model: "sonnet-4.6",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "claude-cli";
+    followupRun.run.model = "sonnet-4.6";
+    const params = createMinimalRunAgentTurnParams({
+      followupRun,
+      opts: {
+        isHeartbeat: true,
+        bootstrapContextMode: "lightweight",
+        [HEARTBEAT_RUN_SCOPE]: "commitment-only",
+      },
+    });
+    params.isHeartbeat = true;
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback(params);
+
+    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+      trigger: "heartbeat",
+      bootstrapContextMode: "lightweight",
+      bootstrapContextRunKind: "commitment-only",
     });
   });
 

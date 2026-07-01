@@ -955,6 +955,25 @@ describe("Codex app-server turn params", () => {
       "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md.",
     );
 
+    params.bootstrapContextRunKind = "commitment-only";
+    const commitmentCollaborationMode = buildTurnCollaborationMode(params, {
+      turnScopedDeveloperInstructions: "Turn-only workspace instructions.",
+      heartbeatCollaborationInstructions:
+        "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md. Read it before proceeding.",
+    });
+    expect(commitmentCollaborationMode.settings.developer_instructions).toContain(
+      "# Collaboration Mode: Default",
+    );
+    expect(commitmentCollaborationMode.settings.developer_instructions).toContain(
+      "Turn-only workspace instructions.",
+    );
+    expect(commitmentCollaborationMode.settings.developer_instructions).not.toContain(
+      "This is an OpenClaw heartbeat turn",
+    );
+    expect(commitmentCollaborationMode.settings.developer_instructions).not.toContain(
+      "HEARTBEAT.md exists at /tmp/workspace/HEARTBEAT.md.",
+    );
+
     params.trigger = "user";
     expect(
       buildTurnCollaborationMode(params, {
