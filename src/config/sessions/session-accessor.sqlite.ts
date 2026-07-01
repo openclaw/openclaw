@@ -74,6 +74,7 @@ import type {
   TranscriptUpdatePayload,
 } from "./session-accessor.sqlite-contract.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
 import {
   foldedSessionKeyAliasCandidates,
   normalizeStoreSessionKey,
@@ -653,6 +654,7 @@ export async function cleanupSqliteSessionLifecycleArtifacts(
     };
     runOpenClawAgentWriteTransaction((database) => {
       result = cleanupSqliteSessionLifecycleArtifactsInTransaction(database, {
+        archiveRemovedEntryTranscripts: params.archiveRemovedEntryTranscripts !== false,
         archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
         sessionKeySegmentPrefix,
         transcriptContentMarker,
@@ -1228,7 +1230,7 @@ export async function importSqliteSessionRows(
     runOpenClawAgentWriteTransaction((database) => {
       const importedEntry = {
         ...params.entry,
-        sessionFile: formatSqliteTranscriptTarget({
+        sessionFile: formatSqliteSessionMarkerForScope({
           ...resolved,
           sessionId: params.entry.sessionId,
         }),
@@ -2637,6 +2639,7 @@ function emitArchivedSqliteTranscriptUpdates(
 }
 
 function deleteSqliteSessionStateIfUnreferenced(params: {
+  archiveTranscript?: boolean;
   archiveDirectory: string;
   database: OpenClawAgentDatabase;
   reason?: "deleted" | "reset";
@@ -2648,12 +2651,15 @@ function deleteSqliteSessionStateIfUnreferenced(params: {
   }
   const hadTranscriptState =
     readSessionTranscriptUpdatedAt(params.database, params.sessionId) !== undefined;
-  const archivedTranscript = archiveSqliteTranscriptRows({
-    archiveDirectory: params.archiveDirectory,
-    database: params.database,
-    reason: params.reason ?? "deleted",
-    sessionId: params.sessionId,
-  });
+  const archivedTranscript =
+    params.archiveTranscript === false
+      ? null
+      : archiveSqliteTranscriptRows({
+          archiveDirectory: params.archiveDirectory,
+          database: params.database,
+          reason: params.reason ?? "deleted",
+          sessionId: params.sessionId,
+        });
   const db = getSessionKysely(params.database.db);
   executeSqliteQuerySync(
     params.database.db,
@@ -2663,6 +2669,7 @@ function deleteSqliteSessionStateIfUnreferenced(params: {
 }
 
 function cleanupSqliteOrphanLifecycleTranscriptState(params: {
+  archiveRemovedEntryTranscripts: boolean;
   archiveDirectory: string;
   database: OpenClawAgentDatabase;
   referencedSessionIds: ReadonlySet<string>;
@@ -2698,12 +2705,14 @@ function cleanupSqliteOrphanLifecycleTranscriptState(params: {
     ) {
       continue;
     }
-    const archived = archiveSqliteTranscriptRows({
-      archiveDirectory: params.archiveDirectory,
-      database: params.database,
-      reason: "deleted",
-      sessionId: row.session_id,
-    });
+    const archived = params.archiveRemovedEntryTranscripts
+      ? archiveSqliteTranscriptRows({
+          archiveDirectory: params.archiveDirectory,
+          database: params.database,
+          reason: "deleted",
+          sessionId: row.session_id,
+        })
+      : null;
     executeSqliteQuerySync(
       params.database.db,
       db.deleteFrom("sessions").where("session_id", "=", row.session_id),
@@ -2718,6 +2727,7 @@ function cleanupSqliteOrphanLifecycleTranscriptState(params: {
 function cleanupSqliteSessionLifecycleArtifactsInTransaction(
   database: OpenClawAgentDatabase,
   params: {
+    archiveRemovedEntryTranscripts: boolean;
     archiveDirectory: string;
     sessionKeySegmentPrefix: string;
     transcriptContentMarker: string;
@@ -2773,6 +2783,7 @@ function cleanupSqliteSessionLifecycleArtifactsInTransaction(
   let archivedTranscriptArtifacts = 0;
   for (const sessionId of removedSessionIds) {
     const archived = deleteSqliteSessionStateIfUnreferenced({
+      archiveTranscript: params.archiveRemovedEntryTranscripts,
       archiveDirectory: params.archiveDirectory,
       database,
       referencedSessionIds,
@@ -2783,6 +2794,7 @@ function cleanupSqliteSessionLifecycleArtifactsInTransaction(
     }
   }
   archivedTranscriptArtifacts += cleanupSqliteOrphanLifecycleTranscriptState({
+    archiveRemovedEntryTranscripts: params.archiveRemovedEntryTranscripts,
     archiveDirectory: params.archiveDirectory,
     database,
     referencedSessionIds,
@@ -3327,12 +3339,12 @@ function forkSqliteParentTranscriptInTransaction(
     sessionId,
     sessionKey: normalizeSqliteSessionKey(params.targetSessionKey),
   };
-  const parentSessionFile = formatSqliteTranscriptTarget({
+  const parentSessionFile = formatSqliteSessionMarkerForScope({
     ...resolved,
     sessionId: params.parentEntry.sessionId,
     sessionKey: normalizeSqliteSessionKey(params.parentSessionKey),
   });
-  const sessionFile = formatSqliteTranscriptTarget(targetScope);
+  const sessionFile = formatSqliteSessionMarkerForScope(targetScope);
   const shouldPersistBranch = source.preserveLeafControl || hasAssistantEntry(source.branchEntries);
   if (shouldPersistBranch) {
     writeSqliteParentForkTranscriptInTransaction(database, targetScope, {
@@ -3488,7 +3500,7 @@ function forkSqliteCheckpointTranscriptInTransaction(
     sessionId,
     sessionKey: params.targetSessionKey,
   };
-  const sessionFile = formatSqliteTranscriptTarget(targetScope);
+  const sessionFile = formatSqliteSessionMarkerForScope(targetScope);
   appendTranscriptEventInTransaction(
     database,
     targetScope,
@@ -4024,7 +4036,10 @@ function isTranscriptAgentMessage(value: unknown): value is AgentMessage {
   );
 }
 
-function formatSqliteTranscriptTarget(scope: ResolvedTranscriptScope): string {
-  const pathPart = scope.path ? `:${scope.path}` : "";
-  return `sqlite:${scope.agentId}:${scope.sessionId}${pathPart}`;
+function formatSqliteSessionMarkerForScope(scope: ResolvedTranscriptScope): string {
+  return formatSqliteSessionFileMarker({
+    agentId: scope.agentId,
+    sessionId: scope.sessionId,
+    storePath: scope.path ?? resolveOpenClawAgentSqlitePath(toDatabaseOptions(scope)),
+  });
 }

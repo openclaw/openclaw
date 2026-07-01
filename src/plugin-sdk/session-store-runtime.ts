@@ -18,6 +18,7 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { SessionTranscriptEvent } from "./session-transcript-runtime.js";
 
 const SQLITE_SESSION_STORE_BACKUP_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 
@@ -36,6 +37,8 @@ type SessionStoreEntrySummary = {
   sessionKey: string;
   entry: SessionEntry;
 };
+
+export type SessionStoreTranscriptEvent = SessionTranscriptEvent;
 
 type SessionStoreEntryUpdate = (
   entry: SessionEntry,
@@ -131,7 +134,7 @@ export function loadTranscriptEventsSync(params: {
   sessionId: string;
   sessionKey?: string;
   storePath?: string;
-}): unknown[] {
+}): SessionStoreTranscriptEvent[] {
   return loadAccessorTranscriptEventsSync(params);
 }
 
@@ -240,6 +243,12 @@ export async function cleanupSessionLifecycleArtifacts(
 }
 
 export { resolveStorePath } from "../config/sessions/paths.js";
+export {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+  sqliteSessionFileMarkerMatchesSession,
+  type SqliteSessionFileMarker,
+} from "../config/sessions/sqlite-marker.js";
 export {
   readRecentUserAssistantTextForSession,
   type SessionRecentConversationText,

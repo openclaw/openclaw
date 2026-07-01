@@ -66,7 +66,7 @@ export {
   listSessionEntries,
   resolveStorePath,
 } from "../../../../src/plugin-sdk/session-store-runtime.js";
-export { parseSqliteSessionFileMarker } from "../../../../src/config/sessions/sqlite-marker.js";
+export { parseSqliteSessionFileMarker } from "../../../../src/plugin-sdk/session-store-runtime.js";
 export type { SessionEntry } from "../../../../src/config/sessions/types.js";
 export type { SessionSendPolicyConfig } from "../../../../src/config/types.base.js";
 export type {

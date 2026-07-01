@@ -14,6 +14,7 @@ import {
   appendRegularFile,
   resolveRegularFileAppendFlags,
 } from "openclaw/plugin-sdk/security-runtime";
+import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import { flattenCodexDynamicToolFunctions, type CodexDynamicToolSpec } from "./protocol.js";
 
@@ -141,16 +142,6 @@ function resolveTrajectoryPointerFilePath(sessionFile: string): string {
   return sessionFile.endsWith(".jsonl")
     ? `${sessionFile.slice(0, -".jsonl".length)}.trajectory-path.json`
     : `${sessionFile}.trajectory-path.json`;
-}
-
-function parseSqliteSessionFileMarker(
-  sessionFile: string,
-): { sessionId: string; storePath: string } | undefined {
-  const match = /^sqlite:[^:]+:([^:]+):(.*)$/u.exec(sessionFile.trim());
-  if (!match?.[1] || !match[2]) {
-    return undefined;
-  }
-  return { sessionId: match[1], storePath: match[2] };
 }
 
 function writeTrajectoryPointerBestEffort(params: {

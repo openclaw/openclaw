@@ -1164,6 +1164,36 @@ export async function truncateOversizedToolResultsInRuntimeTranscript(params: {
   }
 }
 
+/** Truncates oversized tool results in either a SQLite runtime target or explicit file target. */
+export async function truncateOversizedToolResultsInActiveTarget(params: {
+  scope: RuntimeTranscriptScope;
+  contextWindowTokens: number;
+  maxCharsOverride?: number;
+  aggregateMaxCharsOverride?: number;
+  config?: OpenClawConfig;
+}): Promise<{ truncated: boolean; truncatedCount: number; reason?: string }> {
+  if (parseSqliteSessionFileMarker(params.scope.sessionFile)) {
+    return await truncateOversizedToolResultsInRuntimeTranscript(params);
+  }
+  if (!params.scope.sessionFile) {
+    return {
+      truncated: false,
+      truncatedCount: 0,
+      reason: "no session file",
+    };
+  }
+  return await truncateOversizedToolResultsInSession({
+    sessionFile: params.scope.sessionFile,
+    contextWindowTokens: params.contextWindowTokens,
+    maxCharsOverride: params.maxCharsOverride,
+    aggregateMaxCharsOverride: params.aggregateMaxCharsOverride,
+    sessionId: params.scope.sessionId,
+    sessionKey: params.scope.sessionKey,
+    agentId: params.scope.agentId,
+    config: params.config,
+  });
+}
+
 /**
  * Truncates a named transcript file artifact.
  */

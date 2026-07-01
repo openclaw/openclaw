@@ -11,6 +11,8 @@ import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   deleteSessionEntry,
   listSessionEntries,
+  loadTranscriptEventsSync,
+  parseSqliteSessionFileMarker,
   resolveSessionStoreBackupPaths,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -20,7 +22,6 @@ const FEISHU_STATE_DIR = "feishu";
 const BACKUP_PREFIX = "feishu-state-repair";
 const BLANK_USER_MESSAGE_REPAIR_THRESHOLD = 3;
 const SESSION_FILE_INSPECTION_MAX_BYTES = 16 * 1024 * 1024;
-const SQLITE_TRANSCRIPT_TARGET_PREFIX = "sqlite:";
 
 type FeishuDoctorFinding =
   | {
@@ -124,7 +125,7 @@ function resolveFeishuAgentSessionsDir(agentId: string): string {
 }
 
 function isSqliteTranscriptMarker(value: string): boolean {
-  return value.trim().startsWith(SQLITE_TRANSCRIPT_TARGET_PREFIX);
+  return parseSqliteSessionFileMarker(value) !== undefined;
 }
 
 function safeReadDir(dir: string): fs.Dirent[] {
@@ -398,6 +399,72 @@ function isUserMessage(value: unknown): boolean {
   );
 }
 
+function inspectTranscriptEntries(params: {
+  sessionKey: string;
+  storePath: string;
+  transcriptPath: string;
+  entries: unknown[];
+  allowMissingSessionHeader?: boolean;
+  malformedLines?: number;
+}): FeishuDoctorFinding | null {
+  let blankUserMessageRun = 0;
+  let maxBlankUserMessageRun = 0;
+  for (const entry of params.entries) {
+    if (isBlankUserMessage(entry)) {
+      blankUserMessageRun += 1;
+      maxBlankUserMessageRun = Math.max(maxBlankUserMessageRun, blankUserMessageRun);
+    } else if (isUserMessage(entry)) {
+      blankUserMessageRun = 0;
+    }
+  }
+
+  if (params.entries.length === 0) {
+    if (params.allowMissingSessionHeader) {
+      return null;
+    }
+    return {
+      kind: "invalid-session-transcript",
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      path: params.transcriptPath,
+      reason: "empty transcript",
+    };
+  }
+  const firstEntry = params.entries[0];
+  if (
+    !isSessionHeader(firstEntry) &&
+    (!params.allowMissingSessionHeader ||
+      (!isUserMessage(firstEntry) && !isBlankUserMessage(firstEntry)))
+  ) {
+    return {
+      kind: "invalid-session-transcript",
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      path: params.transcriptPath,
+      reason: "invalid session header",
+    };
+  }
+  if ((params.malformedLines ?? 0) > 0) {
+    return {
+      kind: "invalid-session-transcript",
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      path: params.transcriptPath,
+      reason: `${params.malformedLines} malformed JSONL line(s)`,
+    };
+  }
+  if (maxBlankUserMessageRun >= BLANK_USER_MESSAGE_REPAIR_THRESHOLD) {
+    return {
+      kind: "blank-user-message-run",
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+      path: params.transcriptPath,
+      count: maxBlankUserMessageRun,
+    };
+  }
+  return null;
+}
+
 function inspectSessionTranscript(params: {
   sessionKey: string;
   storePath: string;
@@ -437,8 +504,6 @@ function inspectSessionTranscript(params: {
 
   const entries: unknown[] = [];
   let malformedLines = 0;
-  let blankUserMessageRun = 0;
-  let maxBlankUserMessageRun = 0;
   for (const line of raw.split(/\r?\n/)) {
     if (!line.trim()) {
       continue;
@@ -446,54 +511,55 @@ function inspectSessionTranscript(params: {
     try {
       const entry = JSON.parse(line);
       entries.push(entry);
-      if (isBlankUserMessage(entry)) {
-        blankUserMessageRun += 1;
-        maxBlankUserMessageRun = Math.max(maxBlankUserMessageRun, blankUserMessageRun);
-      } else if (isUserMessage(entry)) {
-        blankUserMessageRun = 0;
-      }
     } catch {
       malformedLines += 1;
     }
   }
 
-  if (entries.length === 0) {
+  return inspectTranscriptEntries({ ...params, entries, malformedLines });
+}
+
+function inspectSqliteSessionTranscript(params: {
+  agentId: string;
+  sessionKey: string;
+  storePath: string;
+  entry: FeishuSessionEntry;
+}): FeishuDoctorFinding | null {
+  if (typeof params.entry.sessionFile !== "string") {
+    return null;
+  }
+  const marker = parseSqliteSessionFileMarker(params.entry.sessionFile);
+  if (!marker) {
+    return null;
+  }
+  const sessionId =
+    typeof params.entry.sessionId === "string" && params.entry.sessionId.trim()
+      ? params.entry.sessionId.trim()
+      : marker.sessionId;
+  let entries: unknown[];
+  try {
+    entries = loadTranscriptEventsSync({
+      agentId: marker.agentId,
+      sessionId,
+      sessionKey: params.sessionKey,
+      storePath: marker.storePath,
+    });
+  } catch {
     return {
       kind: "invalid-session-transcript",
       sessionKey: params.sessionKey,
       storePath: params.storePath,
-      path: params.transcriptPath,
-      reason: "empty transcript",
+      path: params.entry.sessionFile,
+      reason: "unreadable",
     };
   }
-  if (!isSessionHeader(entries[0])) {
-    return {
-      kind: "invalid-session-transcript",
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      path: params.transcriptPath,
-      reason: "invalid session header",
-    };
-  }
-  if (malformedLines > 0) {
-    return {
-      kind: "invalid-session-transcript",
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      path: params.transcriptPath,
-      reason: `${malformedLines} malformed JSONL line(s)`,
-    };
-  }
-  if (maxBlankUserMessageRun >= BLANK_USER_MESSAGE_REPAIR_THRESHOLD) {
-    return {
-      kind: "blank-user-message-run",
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      path: params.transcriptPath,
-      count: maxBlankUserMessageRun,
-    };
-  }
-  return null;
+  return inspectTranscriptEntries({
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    transcriptPath: params.entry.sessionFile,
+    allowMissingSessionHeader: true,
+    entries,
+  });
 }
 
 function collectFeishuSessionFindings(params: {
@@ -502,6 +568,10 @@ function collectFeishuSessionFindings(params: {
   storePath: string;
   entry: FeishuSessionEntry;
 }): FeishuDoctorFinding[] {
+  const sqliteFinding = inspectSqliteSessionTranscript(params);
+  if (sqliteFinding) {
+    return [sqliteFinding];
+  }
   const transcriptCandidates = resolveSessionTranscriptCandidates(params);
   const existing = transcriptCandidates.filter(existsFile);
   if (transcriptCandidates.length > 0 && existing.length === 0) {

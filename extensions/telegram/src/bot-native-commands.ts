@@ -1,6 +1,5 @@
 // Telegram plugin module implements bot native commands behavior.
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import type { Bot, Context } from "grammy";
 import {
   loadModelCatalog,
@@ -41,6 +40,7 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
+  formatSqliteSessionFileMarker,
   getSessionEntry,
   resolveStorePath,
   type SessionEntry,
@@ -225,26 +225,16 @@ function resolveTelegramCommandSessionFile(params: {
   sessionId: string;
   storePath: string;
 }): string {
-  const sqliteMarker = `sqlite:${params.agentId}:${params.sessionId}:${path.resolve(params.storePath)}`;
+  const sqliteMarker = formatSqliteSessionFileMarker({
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+    storePath: params.storePath,
+  });
   const explicitSessionFile = params.sessionFile?.trim();
-  if (explicitSessionFile && telegramSessionFileMarkerMatchesCurrentSession(params)) {
+  if (explicitSessionFile === sqliteMarker) {
     return explicitSessionFile;
   }
   return sqliteMarker;
-}
-
-function telegramSessionFileMarkerMatchesCurrentSession(params: {
-  agentId: string;
-  sessionFile?: string;
-  sessionId: string;
-  storePath: string;
-}): boolean {
-  const marker = params.sessionFile?.trim();
-  const prefix = `sqlite:${params.agentId}:${params.sessionId}:`;
-  if (!marker?.startsWith(prefix)) {
-    return false;
-  }
-  return path.resolve(marker.slice(prefix.length)) === path.resolve(params.storePath);
 }
 
 function resolveTelegramProgressPlaceholder(command: {

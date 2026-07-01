@@ -27,6 +27,7 @@ let getToolResultTextLength: typeof import("./tool-result-truncation.js").getToo
 let truncateOversizedToolResultsInMessages: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInMessages;
 let truncateOversizedToolResultsInRuntimeTranscript: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInRuntimeTranscript;
 let truncateOversizedToolResultsInSession: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInSession;
+let truncateOversizedToolResultsInActiveTarget: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInActiveTarget;
 let sessionLikelyHasOversizedToolResults: typeof import("./tool-result-truncation.js").sessionLikelyHasOversizedToolResults;
 let estimateToolResultReductionPotential: typeof import("./tool-result-truncation.js").estimateToolResultReductionPotential;
 let DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.js").DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
@@ -47,6 +48,7 @@ async function loadFreshToolResultTruncationModuleForTest() {
     truncateOversizedToolResultsInMessages,
     truncateOversizedToolResultsInRuntimeTranscript,
     truncateOversizedToolResultsInSession,
+    truncateOversizedToolResultsInActiveTarget,
     sessionLikelyHasOversizedToolResults,
     estimateToolResultReductionPotential,
     DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
@@ -714,6 +716,34 @@ describe("truncateOversizedToolResultsInSession", () => {
 
     expect(toolResultTexts.some((text) => text.includes("truncated"))).toBe(true);
     expect(toolResultTexts.join("").length).toBeLessThan(medium.length * 3);
+  });
+
+  it("dispatches explicit file transcript targets to file-backed truncation", async () => {
+    const dir = await createTmpDir();
+    const sm = SessionManager.create(dir, dir);
+    sm.appendMessage(makeUserMessage("hello"));
+    sm.appendMessage(makeAssistantMessage("calling tools"));
+    sm.appendMessage(makeToolResult("x".repeat(500_000), "call_1"));
+    const sessionFile = sm.getSessionFile()!;
+
+    const result = await truncateOversizedToolResultsInActiveTarget({
+      scope: {
+        agentId: "main",
+        sessionFile,
+        sessionId: "explicit-file-session",
+        sessionKey: "agent:main:explicit-file",
+      },
+      contextWindowTokens: 100,
+    });
+
+    expect(result.truncated).toBe(true);
+    expect(result.truncatedCount).toBeGreaterThan(0);
+    const toolResult = SessionManager.open(sessionFile)
+      .getBranch()
+      .find((entry) => entry.type === "message" && entry.message.role === "toolResult");
+    expect(
+      toolResult?.type === "message" ? getFirstToolResultText(toolResult.message) : "",
+    ).toContain("truncated");
   });
 
   it("honors SQLite leaf controls when truncating runtime transcripts", async () => {

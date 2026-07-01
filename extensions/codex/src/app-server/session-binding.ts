@@ -13,6 +13,7 @@ import {
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { type FileLockOptions, withFileLock } from "openclaw/plugin-sdk/file-lock";
+import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   CODEX_PLUGINS_MARKETPLACE_NAME,
   normalizeCodexServiceTier,
@@ -41,7 +42,6 @@ const CODEX_APP_SERVER_BINDING_LOCK_OPTIONS: FileLockOptions = {
   },
   stale: CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS * 2,
 };
-const SQLITE_SESSION_FILE_MARKER_RE = /^sqlite:([^:]+):([^:]+):(.*)$/u;
 const bindingMutationQueues = new Map<string, Promise<void>>();
 const bindingMutationContext = new AsyncLocalStorage<Set<string>>();
 
@@ -103,14 +103,14 @@ export type CodexAppServerContextEngineProjectionBinding = {
 };
 
 function resolveSqliteCodexAppServerBindingPath(sessionFile: string): string | undefined {
-  const match = SQLITE_SESSION_FILE_MARKER_RE.exec(sessionFile.trim());
-  if (!match?.[1] || !match[2] || !match[3]) {
+  const marker = parseSqliteSessionFileMarker(sessionFile);
+  if (!marker) {
     return undefined;
   }
-  const safeAgentId = encodeURIComponent(match[1]);
-  const safeSessionId = encodeURIComponent(match[2]);
+  const safeAgentId = encodeURIComponent(marker.agentId);
+  const safeSessionId = encodeURIComponent(marker.sessionId);
   return path.join(
-    path.dirname(path.resolve(match[3])),
+    path.dirname(path.resolve(marker.storePath)),
     `.codex-app-server.${safeAgentId}.${safeSessionId}.json`,
   );
 }

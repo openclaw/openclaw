@@ -10,7 +10,11 @@ import {
   migrateSessionEntries,
   parseSessionEntries,
 } from "openclaw/plugin-sdk/agent-sessions";
-import { listSessionEntries } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  listSessionEntries,
+  parseSqliteSessionFileMarker,
+  type SqliteSessionFileMarker,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { sanitizeCodexHistoryImagePayloads } from "./image-payload-sanitizer.js";
 
@@ -19,12 +23,6 @@ export type CodexMirroredSessionHistoryTarget = {
   sessionFile: string;
   sessionId: string;
   sessionKey?: string;
-};
-
-type SqliteSessionFileMarker = {
-  agentId: string;
-  sessionId: string;
-  storePath: string;
 };
 
 /** Returns sanitized session-context messages for a Codex mirrored session file. */
@@ -104,18 +102,4 @@ function resolveSqliteMarkerSessionKey(
       return entry.sessionId === marker.sessionId;
     });
   return sessionEntry?.sessionKey;
-}
-
-function parseSqliteSessionFileMarker(
-  sessionFile: string | undefined,
-): SqliteSessionFileMarker | undefined {
-  const match = /^sqlite:([^:]+):([^:]+):(.*)$/u.exec(sessionFile?.trim() ?? "");
-  if (!match?.[1] || !match[2] || !match[3]) {
-    return undefined;
-  }
-  return {
-    agentId: match[1],
-    sessionId: match[2],
-    storePath: match[3],
-  };
 }

@@ -275,4 +275,42 @@ describe("session-store-runtime compatibility surface", () => {
         .filter((file) => file.startsWith("lifecycle-owned-old.jsonl.deleted.")),
     ).toHaveLength(1);
   });
+
+  it("honors lifecycle cleanup without archiving removed entry transcripts", async () => {
+    const sessionKey = "agent:main:lifecycle-owned-discard";
+    const oldTimestamp = Date.now() - 600_000;
+    await seedSessionEntry(sessionKey, {
+      sessionId: "lifecycle-owned-discard",
+      updatedAt: oldTimestamp,
+    });
+    await appendTranscriptEvent(
+      { agentId: "main", sessionKey, sessionId: "lifecycle-owned-discard", storePath },
+      {
+        runId: "lifecycle-owned-discard",
+        timestamp: new Date(oldTimestamp).toISOString(),
+        type: "metadata",
+      },
+    );
+
+    await expect(
+      cleanupSessionLifecycleArtifacts({
+        agentId: "main",
+        archiveRemovedEntryTranscripts: false,
+        storePath,
+        sessionKeySegmentPrefix: "lifecycle-owned-",
+        transcriptContentMarker: '"runId":"lifecycle-owned-',
+        orphanTranscriptMinAgeMs: 300_000,
+      }),
+    ).resolves.toEqual({
+      archivedTranscriptArtifacts: 0,
+      removedEntries: 1,
+    });
+
+    expect(getSessionEntry({ sessionKey, storePath })).toBeUndefined();
+    expect(
+      fs
+        .readdirSync(tempDir)
+        .filter((file) => file.startsWith("lifecycle-owned-discard.jsonl.deleted.")),
+    ).toHaveLength(0);
+  });
 });

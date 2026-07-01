@@ -2,7 +2,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import {
+  formatSqliteSessionFileMarker,
   listSessionEntries,
   type SessionEntry,
   upsertSessionEntry,
@@ -69,6 +71,17 @@ function storePath(agentId = "main"): string {
 
 function sqliteStorePath(agentId = "main"): string {
   return path.join(stateDir(), "agents", agentId, "agent", "openclaw-agent.sqlite");
+}
+
+function corruptTranscriptEventJson(agentId: string, sessionId: string): void {
+  const database = new DatabaseSync(sqliteStorePath(agentId));
+  try {
+    database
+      .prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ?")
+      .run("{", sessionId);
+  } finally {
+    database.close();
+  }
 }
 
 async function writeStore(entries: Record<string, unknown>, agentId = "main"): Promise<string> {
@@ -217,6 +230,91 @@ describe("Feishu doctor state repair", () => {
     });
 
     expect(result).toEqual({ changeNotes: [], warningNotes: [] });
+  });
+
+  it("repairs SQLite-backed Feishu sessions with repeated blank user messages", async () => {
+    const targetStorePath = storePath();
+    const sessionKey = "agent:main:feishu:direct:ou_sqlite_blank";
+    const sessionId = "sess-sqlite-blank";
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath: targetStorePath,
+      sessionKey,
+      entry: {
+        sessionId,
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId,
+          storePath: targetStorePath,
+        }),
+        updatedAt: Date.now(),
+      },
+    });
+    for (const content of ["", "", ""]) {
+      await appendSessionTranscriptMessageByIdentity({
+        agentId: "main",
+        sessionId,
+        sessionKey,
+        storePath: targetStorePath,
+        message: { role: "user", content },
+      });
+    }
+
+    const result = await runFeishuDoctorSequence({
+      cfg: feishuConfig(),
+      env: process.env,
+      shouldRepair: true,
+    });
+
+    expect(result.warningNotes).toEqual([]);
+    expect(result.changeNotes.join("\n")).toContain("Removed 1 Feishu-scoped session entry");
+    expect(readStoreEntries(targetStorePath)[sessionKey]).toBeUndefined();
+    await expect(
+      readSessionTranscriptEvents({
+        agentId: "main",
+        sessionId,
+        sessionKey,
+        storePath: targetStorePath,
+      }),
+    ).resolves.toEqual([]);
+  });
+
+  it("repairs SQLite-backed Feishu sessions with corrupt transcript rows", async () => {
+    const targetStorePath = storePath();
+    const sessionKey = "agent:main:feishu:direct:ou_sqlite_corrupt";
+    const sessionId = "sess-sqlite-corrupt";
+    await upsertSessionEntry({
+      agentId: "main",
+      storePath: targetStorePath,
+      sessionKey,
+      entry: {
+        sessionId,
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId: "main",
+          sessionId,
+          storePath: targetStorePath,
+        }),
+        updatedAt: Date.now(),
+      },
+    });
+    await appendSessionTranscriptMessageByIdentity({
+      agentId: "main",
+      sessionId,
+      sessionKey,
+      storePath: targetStorePath,
+      message: { role: "user", content: "bad row follows" },
+    });
+    corruptTranscriptEventJson("main", sessionId);
+
+    const result = await runFeishuDoctorSequence({
+      cfg: feishuConfig(),
+      env: process.env,
+      shouldRepair: true,
+    });
+
+    expect(result.warningNotes).toEqual([]);
+    expect(result.changeNotes.join("\n")).toContain("Removed 1 Feishu-scoped session entry");
+    expect(readStoreEntries(targetStorePath)[sessionKey]).toBeUndefined();
   });
 
   it("keeps Feishu sessions with separated blank user messages", async () => {

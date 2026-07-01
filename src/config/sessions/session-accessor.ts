@@ -92,7 +92,11 @@ import {
 } from "./store.js";
 import { resolveAllAgentSessionStoreTargetsSync, type SessionStoreTarget } from "./targets.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
-import { replayRecentUserAssistantMessages } from "./transcript-replay.js";
+import {
+  readRecentUserAssistantReplayRecordsFromJsonl,
+  replayRecentUserAssistantMessages,
+  selectRecentUserAssistantReplayRecords,
+} from "./transcript-replay.js";
 import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
@@ -1793,11 +1797,14 @@ export async function persistSessionResetLifecycle(params: {
     persistError = err instanceof Error ? err : new Error(String(err));
   }
 
-  const replayedMessages = await replayRecentUserAssistantMessages({
-    sourceTranscript: params.previousEntry.sessionFile,
-    targetTranscript: params.nextSessionFile,
-    newSessionId: params.nextEntry.sessionId,
-  });
+  const sqliteReplayedMessages = await replayRecentUserAssistantMessagesToSqlite(params);
+  const replayedMessages =
+    sqliteReplayedMessages ??
+    (await replayRecentUserAssistantMessages({
+      sourceTranscript: params.previousEntry.sessionFile,
+      targetTranscript: params.nextSessionFile,
+      newSessionId: params.nextEntry.sessionId,
+    }));
 
   if (params.cleanupPreviousTranscript && params.previousSessionId) {
     await archivePreviousSessionTranscript({
@@ -1814,6 +1821,70 @@ export async function persistSessionResetLifecycle(params: {
     throw persistError;
   }
   return { replayedMessages };
+}
+
+async function replayRecentUserAssistantMessagesToSqlite(params: {
+  agentId?: string;
+  nextEntry: SessionEntry;
+  nextSessionFile: string;
+  previousEntry: SessionEntry;
+  previousSessionId?: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<number | undefined> {
+  const targetMarker = parseSqliteSessionFileMarker(params.nextSessionFile);
+  if (!targetMarker) {
+    return undefined;
+  }
+
+  try {
+    const sourceMarker = parseSqliteSessionFileMarker(params.previousEntry.sessionFile);
+    const sourceRecords = sourceMarker
+      ? selectRecentUserAssistantReplayRecords(
+          await loadTranscriptEvents({
+            agentId: sourceMarker.agentId,
+            sessionId: params.previousSessionId ?? sourceMarker.sessionId,
+            sessionKey: params.sessionKey,
+            storePath: sourceMarker.storePath,
+          }),
+        )
+      : await readRecentUserAssistantReplayRecordsFromJsonl({
+          sourceTranscript: params.previousEntry.sessionFile,
+        });
+    if (sourceRecords.length === 0) {
+      return 0;
+    }
+
+    for (const record of sourceRecords) {
+      const replayMessage = extractReplayMessage(record);
+      if (replayMessage === undefined) {
+        continue;
+      }
+      await appendTranscriptMessage(
+        {
+          agentId: targetMarker.agentId,
+          sessionId: targetMarker.sessionId,
+          sessionKey: params.sessionKey,
+          storePath: targetMarker.storePath,
+        },
+        { message: replayMessage },
+      );
+    }
+    return sourceRecords.length;
+  } catch {
+    return 0;
+  }
+}
+
+function extractReplayMessage(record: unknown): unknown | undefined {
+  if (!record || typeof record !== "object" || Array.isArray(record)) {
+    return undefined;
+  }
+  const candidate = record as { message?: unknown; type?: unknown };
+  if (candidate.type !== "message") {
+    return undefined;
+  }
+  return candidate.message && typeof candidate.message === "object" ? candidate.message : undefined;
 }
 
 /**

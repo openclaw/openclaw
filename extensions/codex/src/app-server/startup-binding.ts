@@ -9,6 +9,7 @@ import {
   embeddedAgentLog,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
 import { isJsonObject, type JsonValue } from "./protocol.js";
 import { clearCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
@@ -175,7 +176,7 @@ async function readCodexSessionRecordForSessionFile(
 }
 
 function isSqliteSessionFileMarker(sessionFile: string | undefined): boolean {
-  return /^sqlite:[^:]+:[^:]+:./u.test(sessionFile?.trim() ?? "");
+  return parseSqliteSessionFileMarker(sessionFile) !== undefined;
 }
 
 type CodexAppServerRolloutTokenSnapshot = {

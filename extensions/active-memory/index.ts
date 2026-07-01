@@ -29,6 +29,7 @@ import {
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { parseAgentSessionKey, parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
 import { isPathInside } from "openclaw/plugin-sdk/security-runtime";
+import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   readSessionTranscriptEvents,
   type SessionTranscriptTargetParams,
@@ -307,12 +308,6 @@ type ActiveMemoryTranscriptSource =
       kind: "file";
       sessionFile: string;
     };
-
-type ActiveMemorySqliteTranscriptMarker = {
-  agentId: string;
-  sessionId: string;
-  storePath: string;
-};
 
 type RecallSubagentResult = {
   rawReply: string;
@@ -1738,29 +1733,11 @@ function fileTranscriptSource(sessionFile: string): ActiveMemoryTranscriptSource
   return { kind: "file", sessionFile };
 }
 
-function parseActiveMemorySqliteTranscriptMarker(
-  sessionFile: string | undefined,
-): ActiveMemorySqliteTranscriptMarker | undefined {
-  const marker = normalizeOptionalString(sessionFile);
-  if (!marker?.startsWith("sqlite:")) {
-    return undefined;
-  }
-  const match = /^sqlite:([^:]+):([^:]+):(.*)$/u.exec(marker);
-  if (!match?.[1] || !match[2] || !match[3]) {
-    return undefined;
-  }
-  return {
-    agentId: match[1],
-    sessionId: match[2],
-    storePath: match[3],
-  };
-}
-
 function transcriptSourceFromReturnedSessionFile(params: {
   sessionFile: string;
   sessionKey: string;
 }): ActiveMemoryTranscriptSource {
-  const marker = parseActiveMemorySqliteTranscriptMarker(params.sessionFile);
+  const marker = parseSqliteSessionFileMarker(normalizeOptionalString(params.sessionFile));
   if (!marker) {
     return fileTranscriptSource(params.sessionFile);
   }
