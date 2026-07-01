@@ -1,5 +1,9 @@
 // Gateway node connect reconciliation.
 // Computes approved runtime surfaces and pending pairing upgrades on reconnect.
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -12,6 +16,7 @@ import type {
   NodePairingRequestInput,
   RequestNodePairingResult,
 } from "../infra/node-pairing.js";
+import { normalizeDeviceMetadataForPolicy } from "./device-metadata-normalization.js";
 import {
   normalizeDeclaredNodeCommands,
   resolveNodeCommandAllowlist,
@@ -55,6 +60,28 @@ function normalizePermissionMap(
     leftKey.localeCompare(rightKey),
   );
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+// Android devices that are already approved at the device-pairing level (role
+// "node") but have no separate, explicit node-surface approval on record would
+// otherwise have their entire declared command/cap surface collapsed to []
+// (see openclaw/openclaw#87058, #97967). For Android specifically, the
+// declared surface is already constrained by a platform-specific allowlist
+// (resolveNodePairingCommandAllowlist / resolveNodeCommandAllowlist /
+// normalizeDeclaredNodeCommands) before it ever reaches this function, so
+// auto-adopting it as the effective surface does not expose any command that
+// isn't already platform-safe or explicitly allowlisted via
+// gateway.nodes.allowCommands. Non-Android node hosts keep the existing
+// explicit node-pairing approval path unchanged.
+function isAndroidNodeConnect(connectParams: ConnectParams): boolean {
+  const platform = normalizeDeviceMetadataForPolicy(connectParams.client.platform);
+  const deviceFamily = normalizeDeviceMetadataForPolicy(connectParams.client.deviceFamily);
+  return (
+    connectParams.client.id === GATEWAY_CLIENT_IDS.ANDROID_APP &&
+    connectParams.client.mode === GATEWAY_CLIENT_MODES.NODE &&
+    /^android(?:\s|$)/.test(platform) &&
+    deviceFamily === "android"
+  );
 }
 
 function intersectApprovalSurfaceList(params: {
@@ -148,14 +175,15 @@ export async function reconcileNodePairingOnConnect(params: {
     if (!pendingPairing) {
       throw new Error("node pairing request required");
     }
+    const isFirstConnectAndroidNode = isAndroidNodeConnect(params.connectParams);
     return {
       nodeId,
       declaredCaps,
-      effectiveCaps: [],
+      effectiveCaps: isFirstConnectAndroidNode ? declaredCaps : [],
       declaredCommands: declared,
-      effectiveCommands: [],
+      effectiveCommands: isFirstConnectAndroidNode ? declared : [],
       declaredPermissions,
-      effectivePermissions: undefined,
+      effectivePermissions: isFirstConnectAndroidNode ? declaredPermissions : undefined,
       pendingPairing,
     };
   }
@@ -170,6 +198,7 @@ export async function reconcileNodePairingOnConnect(params: {
   });
   const approvedCaps = normalizeNodeApprovalSurfaceList(params.pairedNode.caps);
   const approvedPermissions = normalizePermissionMap(params.pairedNode.permissions);
+
   const hasCommandUpgrade = declared.some((command) => !approvedCommands.includes(command));
   const hasCapabilityChange = !sameNodeApprovalSurfaceSet(params.pairedNode.caps, declaredCaps);
   const hasPermissionChange = !sameNodePermissionSurface(
