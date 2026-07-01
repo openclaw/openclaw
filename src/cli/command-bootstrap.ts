@@ -5,6 +5,7 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { CliPluginRegistryPolicy } from "./command-catalog.js";
 import { resolveCliCommandPathPolicy } from "./command-path-policy.js";
 import { ensureCliPluginRegistryLoaded } from "./plugin-registry-loader.js";
+import { handlePermissionError } from "./permission-error-handler";
 
 const configGuardModuleLoader = createLazyImportLoader(() => import("./program/config-guard.js"));
 
@@ -45,3 +46,18 @@ export async function ensureCliCommandBootstrap(params: {
     routeLogsToStderr: params.suppressDoctorStdout,
   });
 }
+
+process.on("uncaughtException", (err) => {
+  const handled = handlePermissionError(err);
+  if (!handled) {
+    console.error("Uncaught Exception:", err);
+  }
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (reason) => {
+  const handled = handlePermissionError(reason as Error);
+  if (!handled) {
+    console.error("Unhandled Rejection:", reason);
+  }
+});
