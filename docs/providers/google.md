@@ -64,6 +64,10 @@ Choose your preferred auth method and follow the setup steps.
   </Tab>
 
   <Tab title="Gemini CLI (OAuth)">
+    <Warning>
+    Direct bundled runtime registration for Gemini CLI requires setting `OPENCLAW_ENABLE_GOOGLE_GEMINI_CLI_HARNESS=1` in the Gateway or daemon environment before OpenClaw starts. Existing setup-registry compatibility remains available for stored `google-gemini-cli` auth profiles, but operators must set this flag when they want the bundled runtime to directly register the Gemini CLI provider/backend.
+    </Warning>
+
     **Best for:** reusing an existing Gemini CLI login via PKCE OAuth instead of a separate API key.
 
     <Warning>
