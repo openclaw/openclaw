@@ -193,13 +193,8 @@ async function summarizeChunks(params: {
       );
       hasGeneratedChunk = true;
     } catch (err) {
-      // Propagate only when the caller explicitly cancelled. Provider-side
-      // AbortErrors (signal not aborted) fall through to partial/fallback paths.
+      const timeout = isTimeoutError(err);
       if (params.signal.aborted) {
-        throw err;
-      }
-      // Real non-abort transport timeouts still propagate immediately.
-      if (!isAbortError(err) && isTimeoutError(err)) {
         throw err;
       }
       // No chunk has succeeded yet — rethrow so summarizeWithFallback
@@ -217,7 +212,9 @@ async function summarizeChunks(params: {
         completedChunks,
         totalChunks: chunks.length,
       });
-      const partial = new Error("partial summarization failure");
+      const partial = new Error(
+        timeout ? "partial summarization timeout" : "partial summarization failure",
+      );
       (partial as PartialSummaryError).partialSummary =
         `${summary!}\n\n[Partial summary: chunks 1-${completedChunks} of ${chunks.length} were summarized. Chunks ${completedChunks + 1}-${chunks.length} could not be processed.]`;
       throw partial;
