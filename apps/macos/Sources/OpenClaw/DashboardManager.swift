@@ -17,17 +17,20 @@ final class DashboardManager {
     @discardableResult
     func showConfiguredWindowIfPossible() -> Bool {
         let mode = AppStateStore.shared.connectionMode
-        guard let config = self.immediateDashboardConfig(mode: mode),
-              let url = try? GatewayEndpointStore.dashboardURL(
-                  for: config,
-                  mode: mode,
-                  authToken: config.token)
+        guard let config = self.immediateDashboardConfig(mode: mode) else {
+            return false
+        }
+        let token = GatewayConnection.controlUiSharedAuthToken(config: config)
+        guard let url = try? GatewayEndpointStore.dashboardURL(
+            for: config,
+            mode: mode,
+            authToken: token)
         else {
             return false
         }
         let auth = DashboardWindowAuth(
             gatewayUrl: Self.websocketURLString(for: url),
-            token: config.token,
+            token: token,
             password: config.password?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty)
         guard auth.hasCredential else {
             return false
@@ -48,7 +51,7 @@ final class DashboardManager {
         dashboardManagerLogger.info("dashboard show requested mode=\(String(describing: mode), privacy: .public)")
         let config = try await self.dashboardConfig(mode: mode)
         dashboardManagerLogger.info("dashboard config url=\(config.url.absoluteString, privacy: .public)")
-        let token = await GatewayConnection.shared.controlUiAutoAuthToken(config: config)
+        let token = GatewayConnection.controlUiSharedAuthToken(config: config)
         let url = try GatewayEndpointStore.dashboardURL(for: config, mode: mode, authToken: token)
         let auth = DashboardWindowAuth(
             gatewayUrl: Self.websocketURLString(for: url),

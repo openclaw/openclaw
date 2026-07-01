@@ -284,7 +284,7 @@ struct GatewayEndpointStoreTests {
         #expect(url.query == nil)
     }
 
-    @Test func `dashboard URL can use native auth token override`() throws {
+    @Test func `dashboard URL can use shared auth token override`() throws {
         let config: GatewayConnection.Config = try (
             url: #require(URL(string: "ws://127.0.0.1:18789")),
             token: nil,
@@ -294,8 +294,8 @@ struct GatewayEndpointStoreTests {
             for: config,
             mode: .local,
             localBasePath: "/control",
-            authToken: "device-token")
-        #expect(url.absoluteString == "http://127.0.0.1:18789/control/#token=device-token")
+            authToken: "shared-token")
+        #expect(url.absoluteString == "http://127.0.0.1:18789/control/#token=shared-token")
         #expect(url.query == nil)
     }
 
