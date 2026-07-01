@@ -65,6 +65,17 @@ describe("delivery context helpers", () => {
       accountId: "bot-a",
     });
     expect(merged?.threadId).toBeUndefined();
+
+    expect(
+      mergeDeliveryContext(
+        { accountId: "bot-a" },
+        { channel: "telegram", to: "123", accountId: "bot-b", threadId: "99" },
+      ),
+    ).toEqual({
+      channel: undefined,
+      to: undefined,
+      accountId: "bot-a",
+    });
   });
 
   it("uses fallback route fields when fallback has no channel", () => {
