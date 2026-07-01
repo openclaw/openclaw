@@ -9,6 +9,7 @@ import {
   isDynamicOperatorGatewayMethod,
   resolveCoreOperatorGatewayMethodScope,
 } from "./methods/core-descriptors.js";
+import { resolveGatewayMethodDescriptorScope } from "./methods/registry.js";
 import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
@@ -51,10 +52,10 @@ function resolveScopedMethod(method: string): OperatorScope | undefined {
   if (reservedScope) {
     return reservedScope;
   }
-  const pluginDescriptor = getPluginRegistryState()?.activeRegistry?.gatewayMethodDescriptors?.find(
-    (descriptor) => descriptor.name === method,
+  const pluginScope = resolveGatewayMethodDescriptorScope(
+    getPluginRegistryState()?.activeRegistry?.gatewayMethodDescriptors,
+    method,
   );
-  const pluginScope = pluginDescriptor?.scope;
   return pluginScope === "node" || pluginScope === "dynamic" ? undefined : pluginScope;
 }
 

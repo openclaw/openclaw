@@ -9,6 +9,7 @@ import {
 import {
   DYNAMIC_GATEWAY_METHOD_SCOPE,
   type GatewayMethodDescriptor,
+  type GatewayMethodScope,
   type GatewayMethodHandler,
   type GatewayMethodDescriptorInput,
   type GatewayMethodOwner,
@@ -21,6 +22,33 @@ export { createCoreGatewayMethodDescriptors, isCoreGatewayMethodClassified };
 
 function normalizeMethodName(name: string): string {
   return name.trim();
+}
+
+function readGatewayMethodDescriptorName(descriptor: unknown): string | undefined {
+  try {
+    const name = (descriptor as { name?: unknown }).name;
+    return typeof name === "string" ? normalizeMethodName(name) || undefined : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readGatewayMethodDescriptorScope(descriptor: unknown): GatewayMethodScope | undefined {
+  try {
+    return (descriptor as { scope?: GatewayMethodScope }).scope;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeReadablePluginDescriptor(
+  descriptor: unknown,
+): GatewayMethodDescriptorInput | undefined {
+  try {
+    return normalizeDescriptor(descriptor as GatewayMethodDescriptorInput);
+  } catch {
+    return undefined;
+  }
 }
 
 function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethodDescriptor {
@@ -49,6 +77,37 @@ function normalizeDescriptor(input: GatewayMethodDescriptorInput): GatewayMethod
     ...(input.controlPlaneWrite === true ? { controlPlaneWrite: true } : {}),
     ...(input.advertise === false ? { advertise: false } : {}),
   };
+}
+
+/** Lists readable method names from plugin/channel-owned descriptor rows. */
+export function listGatewayMethodDescriptorNames(
+  descriptors: readonly unknown[] | undefined,
+): string[] {
+  const names: string[] = [];
+  for (const descriptor of descriptors ?? []) {
+    const name = readGatewayMethodDescriptorName(descriptor);
+    if (name) {
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+/** Resolves the scope for a readable plugin gateway method descriptor. */
+export function resolveGatewayMethodDescriptorScope(
+  descriptors: readonly unknown[] | undefined,
+  method: string,
+): GatewayMethodScope | undefined {
+  for (const descriptor of descriptors ?? []) {
+    if (readGatewayMethodDescriptorName(descriptor) !== method) {
+      continue;
+    }
+    const scope = readGatewayMethodDescriptorScope(descriptor);
+    if (scope !== undefined) {
+      return scope;
+    }
+  }
+  return undefined;
 }
 
 /** Creates a read-only registry for gateway method lookup, listing, and policy metadata. */
@@ -124,7 +183,10 @@ export function createPluginGatewayMethodDescriptors(
 ): GatewayMethodDescriptorInput[] {
   const descriptors = registry.gatewayMethodDescriptors ?? [];
   if (descriptors.length > 0) {
-    return [...descriptors];
+    return descriptors.flatMap((descriptor) => {
+      const normalized = normalizeReadablePluginDescriptor(descriptor);
+      return normalized ? [normalized] : [];
+    });
   }
   // Older plugin registries only carried handlers, so keep them callable but assign admin scope
   // until the plugin can provide explicit descriptor metadata.

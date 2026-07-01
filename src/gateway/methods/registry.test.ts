@@ -8,6 +8,8 @@ import {
   createGatewayMethodRegistry,
   createPluginGatewayMethodDescriptors,
   createPluginGatewayMethodDescriptor,
+  listGatewayMethodDescriptorNames,
+  resolveGatewayMethodDescriptorScope,
 } from "./registry.js";
 
 const handler: GatewayRequestHandler = ({ respond }) => respond(true, { ok: true });
@@ -103,5 +105,71 @@ describe("gateway method registry", () => {
     expect(registry.listMethods()).toEqual(["legacy.ping"]);
     expect(registry.getHandler("legacy.ping")).toBe(handler);
     expect(registry.getScope("legacy.ping")).toBe(ADMIN_SCOPE);
+  });
+
+  it("skips unreadable plugin gateway method descriptor rows", () => {
+    const poisonedDescriptor = Object.defineProperty({}, "name", {
+      get() {
+        throw new Error("gateway descriptor exploded");
+      },
+    });
+    const healthyDescriptor = createPluginGatewayMethodDescriptor({
+      pluginId: "healthy",
+      name: "healthy.ping",
+      handler,
+      scope: READ_SCOPE,
+    });
+
+    const descriptors = createPluginGatewayMethodDescriptors({
+      gatewayHandlers: { "healthy.ping": handler },
+      gatewayMethodDescriptors: [poisonedDescriptor as never, healthyDescriptor],
+    });
+    const registry = createGatewayMethodRegistry(descriptors);
+
+    expect(registry.listMethods()).toEqual(["healthy.ping"]);
+    expect(registry.getScope("healthy.ping")).toBe(READ_SCOPE);
+  });
+
+  it("reads gateway method descriptor names and scopes row-locally", () => {
+    const poisonedDescriptor = Object.defineProperties(
+      {},
+      {
+        name: {
+          get() {
+            throw new Error("gateway descriptor name exploded");
+          },
+        },
+        scope: {
+          get() {
+            throw new Error("gateway descriptor scope exploded");
+          },
+        },
+      },
+    );
+    const unreadableScopeDescriptor = Object.defineProperty({ name: "healthy.ping" }, "scope", {
+      get() {
+        throw new Error("gateway descriptor scope exploded");
+      },
+    });
+    const healthyDescriptor = createPluginGatewayMethodDescriptor({
+      pluginId: "healthy",
+      name: "healthy.ping",
+      handler,
+      scope: WRITE_SCOPE,
+    });
+
+    expect(
+      listGatewayMethodDescriptorNames([
+        poisonedDescriptor,
+        unreadableScopeDescriptor,
+        healthyDescriptor,
+      ]),
+    ).toEqual(["healthy.ping", "healthy.ping"]);
+    expect(
+      resolveGatewayMethodDescriptorScope(
+        [poisonedDescriptor, unreadableScopeDescriptor, healthyDescriptor],
+        "healthy.ping",
+      ),
+    ).toBe(WRITE_SCOPE);
   });
 });
