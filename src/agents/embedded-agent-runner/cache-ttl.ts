@@ -53,7 +53,8 @@ export function isCacheTtlEligibleProvider(
       modelApi,
     }) ||
     (normalizedProvider === "kilocode" && isAnthropicModelRef(normalizedModelId)) ||
-    isGooglePromptCacheEligible({ modelApi, modelId: normalizedModelId })
+    isGooglePromptCacheEligible({ modelApi, modelId: normalizedModelId }) ||
+    normalizedProvider === "openai"
   );
 }
 
