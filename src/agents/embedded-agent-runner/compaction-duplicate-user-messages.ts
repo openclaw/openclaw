@@ -57,11 +57,11 @@ function duplicateSignature(message: unknown): { key: string; timestamp: number 
   // Real messages store sender metadata as __openclaw.senderIsOwner; use it
   // as a partial discriminator until full senderId propagation lands.
   const record = message as Record<string, unknown>;
-  // eslint-disable-next-line no-underscore-dangle — field name from gateway message schema
+  /* eslint-disable no-underscore-dangle — field name from gateway message schema */
   const openclaw = isRecord(record.__openclaw)
-    ? // eslint-disable-next-line no-underscore-dangle
-      (record.__openclaw as Record<string, unknown>)
+    ? (record.__openclaw as Record<string, unknown>)
     : {};
+  /* eslint-enable no-underscore-dangle */
   const senderIsOwner =
     typeof openclaw.senderIsOwner === "boolean" ? String(openclaw.senderIsOwner) : "";
   return {
