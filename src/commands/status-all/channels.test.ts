@@ -122,6 +122,38 @@ describe("buildChannelsTable", () => {
     expect(detailRow?.Notes).toContain("credential not checked");
   });
 
+  it("redacts sensitive channel base URL material in account notes", async () => {
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
+      {
+        ...discordPlugin,
+        config: {
+          ...discordPlugin.config,
+          describeAccount: () => ({
+            baseUrl:
+              "https://oc-user:oc-pass@mm.example.com/hooks?token=oc-token-raw&keep=1&api_key=oc-api-key-raw",
+          }),
+        },
+      },
+    ]);
+    mocks.resolveInspectedChannelAccount.mockResolvedValue({
+      account: {
+        tokenStatus: "available",
+        tokenSource: "config",
+      },
+      enabled: true,
+      configured: true,
+    });
+
+    const table = await buildChannelsTable({ channels: { discord: { enabled: true } } });
+
+    const notes = table.details[0]?.rows[0]?.Notes;
+    expect(notes).toContain("https://***:***@mm.example.com/hooks?token=***&keep=1&api_key=***");
+    expect(notes).not.toContain("oc-user");
+    expect(notes).not.toContain("oc-pass");
+    expect(notes).not.toContain("oc-token-raw");
+    expect(notes).not.toContain("oc-api-key-raw");
+  });
+
   it("shows configured official external channels when the plugin is missing", async () => {
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
     mocks.missingOfficialExternalChannels.add("feishu");
