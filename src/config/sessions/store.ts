@@ -6,7 +6,6 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { resolveStoredSessionOwnerAgentId } from "../../gateway/session-store-key.js";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
   deliveryContextFromChannelRoute,
@@ -17,7 +16,6 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
-import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
 import {
@@ -26,11 +24,8 @@ import {
 } from "./disk-budget.js";
 import { extractGeneratedTranscriptSessionId } from "./generated-transcript-session-id.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
-import {
-  resolveExplicitSessionFilePath,
-  resolveSessionFilePath,
-  resolveStorePath,
-} from "./paths.js";
+import { resolveExplicitSessionFilePath, resolveSessionFilePath } from "./paths.js";
+import { resolveSessionStorePathForScope } from "./session-store-path.js";
 import {
   ensureSessionStorePromptBlobsForPersistence,
   isSessionSkillPromptBlobReadable,
@@ -57,6 +52,7 @@ import {
   normalizeSessionStore,
   readSessionEntries,
   readSessionEntry,
+  stripPersistedSkillsCache,
 } from "./store-load.js";
 import {
   applyFileBackedSessionStoreMaintenance,
@@ -347,23 +343,22 @@ function cloneSessionEntry(entry: SessionEntry): SessionEntry {
   return cloneSessionStoreRecord({ entry }).entry;
 }
 
-function resolveSessionWorkflowStorePath(
-  options: SessionEntryWorkflowOptions & { sessionKey?: string },
-): string {
-  if (options.storePath) {
-    return options.storePath;
-  }
-  const agentId = options.agentId ?? resolveAgentIdFromSessionKey(options.sessionKey);
-  return resolveStorePath(getRuntimeConfig().session?.store, {
-    agentId,
-    env: options.env,
+export function projectSessionEntryForPersistenceRevision(params: {
+  storePath: string;
+  entry: SessionEntry;
+}): SessionEntry {
+  const stripped = stripPersistedSkillsCache(params.entry);
+  const projected = projectSessionStoreForPersistence({
+    storePath: params.storePath,
+    store: { entry: stripped },
   });
+  return projected.store.entry ?? stripped;
 }
 
 export function getSessionEntry(
   options: SessionEntryWorkflowOptions & { sessionKey: string },
 ): SessionEntry | undefined {
-  const entry = readSessionEntry(resolveSessionWorkflowStorePath(options), options.sessionKey, {
+  const entry = readSessionEntry(resolveSessionStorePathForScope(options), options.sessionKey, {
     hydrateSkillPromptRefs: options.hydrateSkillPromptRefs,
   }) as SessionEntry | undefined;
   return entry ? cloneSessionEntry(entry) : undefined;
@@ -372,7 +367,7 @@ export function getSessionEntry(
 export function listSessionEntries(
   options: SessionEntryWorkflowOptions = {},
 ): Array<{ sessionKey: string; entry: SessionEntry }> {
-  return readSessionEntries(resolveSessionWorkflowStorePath(options)).map(
+  return readSessionEntries(resolveSessionStorePathForScope(options)).map(
     ([sessionKey, entry]) => ({
       sessionKey,
       entry: cloneSessionEntry(entry as SessionEntry),
@@ -1813,7 +1808,7 @@ export async function patchSessionEntry(
 export async function patchSessionEntryWithKey(
   params: SessionEntryPatchParams,
 ): Promise<{ sessionKey: string; entry: SessionEntry } | null> {
-  const storePath = resolveSessionWorkflowStorePath(params);
+  const storePath = resolveSessionStorePathForScope(params);
   return await runExclusiveSessionStoreWrite(storePath, async () => {
     const store = loadMutableSessionStoreForWriter(storePath);
     const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
@@ -1855,7 +1850,7 @@ export async function upsertSessionEntry(
     entry: SessionEntry;
   },
 ): Promise<void> {
-  const storePath = resolveSessionWorkflowStorePath(params);
+  const storePath = resolveSessionStorePathForScope(params);
   await runExclusiveSessionStoreWrite(storePath, async () => {
     const store = loadMutableSessionStoreForWriter(storePath);
     const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });

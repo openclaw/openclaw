@@ -332,4 +332,47 @@ describe("isDeliveredMessageToolOnlySourceReplyResult", () => {
       }),
     ).toBe(false);
   });
+
+  it("accepts confirmed explicit routes when the caller verified the source route", () => {
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: "message_tool_only",
+        toolName: "message",
+        args: {
+          action: "reply",
+          channel: "imessage",
+          target: "+12069106512",
+          message: "reply",
+        },
+        result: { ok: true, messageId: "imessage-853" },
+        allowExplicitSourceRoute: true,
+      }),
+    ).toBe(true);
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: "message_tool_only",
+        toolName: "message",
+        args: {
+          action: "reply",
+          channel: "imessage",
+          target: "+12069106512",
+          message: "reply",
+        },
+        result: { ok: true, messageId: "imessage-853" },
+      }),
+    ).toBe(false);
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: "message_tool_only",
+        toolName: "message",
+        args: {
+          action: "react",
+          channel: "imessage",
+          target: "+12069106512",
+        },
+        result: { ok: true },
+        allowExplicitSourceRoute: true,
+      }),
+    ).toBe(false);
+  });
 });

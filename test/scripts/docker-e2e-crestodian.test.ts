@@ -8,11 +8,11 @@ function readScript(pathname: string): string {
 
 describe("Crestodian Docker E2E scripts", () => {
   it("keeps first-run checks wired to packaged CLI and Crestodian behavior", () => {
-    const source = readScript("scripts/e2e/crestodian-first-run-docker-client.ts");
+    const source = readScript("test/e2e/qa-lab/runtime/crestodian-first-run-docker-client.ts");
     const spec = readScript("scripts/e2e/crestodian-first-run-spec.json");
 
-    expect(source).toContain("../../dist/cli/run-main.js");
-    expect(source).toContain("../../dist/crestodian/crestodian.js");
+    expect(source).toContain("../../../../dist/cli/run-main.js");
+    expect(source).toContain("../../../../dist/crestodian/crestodian.js");
     expect(source).toContain("shouldStartOnboardingForFreshInstall");
     expect(source).toContain("shouldStartCrestodianForModernOnboard");
     expect(source).toContain('runCli(["node", "openclaw", "onboard"');

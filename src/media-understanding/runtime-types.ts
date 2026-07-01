@@ -65,6 +65,24 @@ export type DescribeImageFileWithModelParams = {
   timeoutMs?: number;
 };
 
+export type PreparedImageDescriptionInput = {
+  buffer: Buffer;
+  fileName: string;
+  mime?: string;
+};
+
+export type PrepareImageDescriptionInputParams = Pick<
+  DescribeImageFileWithModelParams,
+  "filePath" | "mediaUrl" | "mime" | "cfg" | "timeoutMs"
+>;
+
+export type DescribePreparedImageWithModelParams = Omit<
+  DescribeImageFileWithModelParams,
+  "filePath" | "mediaUrl" | "mime"
+> & {
+  image: PreparedImageDescriptionInput;
+};
+
 type DescribeImageFileWithModelResult = Awaited<
   ReturnType<NonNullable<MediaUnderstandingProvider["describeImage"]>>
 >;
@@ -115,6 +133,12 @@ export type MediaUnderstandingRuntime = {
     params: RunMediaUnderstandingFileParams,
   ) => Promise<RunMediaUnderstandingFileResult>;
   describeImageFile: (params: DescribeImageFileParams) => Promise<RunMediaUnderstandingFileResult>;
+  prepareImageDescriptionInput: (
+    params: PrepareImageDescriptionInputParams,
+  ) => Promise<PreparedImageDescriptionInput>;
+  describePreparedImageWithModel: (
+    params: DescribePreparedImageWithModelParams,
+  ) => Promise<DescribeImageFileWithModelResult>;
   describeImageFileWithModel: (
     params: DescribeImageFileWithModelParams,
   ) => Promise<DescribeImageFileWithModelResult>;

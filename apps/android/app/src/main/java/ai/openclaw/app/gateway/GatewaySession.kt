@@ -69,7 +69,7 @@ private enum class GatewayConnectAuthSource {
 }
 
 /**
- * Structured auth failure guidance from the gateway, preserved for reconnect and UI decisions.
+ * Structured connect failure guidance from the gateway, preserved for reconnect and UI decisions.
  */
 data class GatewayConnectErrorDetails(
   val code: String?,
@@ -79,6 +79,10 @@ data class GatewayConnectErrorDetails(
   val reason: String? = null,
   val requestId: String? = null,
   val retryable: Boolean = false,
+  val clientMinProtocol: Int? = null,
+  val clientMaxProtocol: Int? = null,
+  val expectedProtocol: Int? = null,
+  val minimumProbeProtocol: Int? = null,
 )
 
 /**
@@ -889,6 +893,10 @@ class GatewaySession(
                 reason = it["reason"].asStringOrNull(),
                 requestId = normalizePairingRequestId(it["requestId"].asStringOrNull()),
                 retryable = it["retryable"].asBooleanOrNull() == true,
+                clientMinProtocol = it["clientMinProtocol"].asIntOrNull(),
+                clientMaxProtocol = it["clientMaxProtocol"].asIntOrNull(),
+                expectedProtocol = it["expectedProtocol"].asIntOrNull(),
+                minimumProbeProtocol = it["minimumProbeProtocol"].asIntOrNull(),
               )
             }
           ErrorShape(code, msg, details)
@@ -1262,6 +1270,7 @@ internal fun shouldPauseGatewayReconnectAfterAuthFailure(
           )
       )
     "AUTH_TOKEN_MISMATCH" -> deviceTokenRetryBudgetUsed && !pendingDeviceTokenRetry
+    "PROTOCOL_MISMATCH" -> true
     else -> false
   }
 
@@ -1313,6 +1322,12 @@ private fun JsonElement?.asBooleanOrNull(): Boolean? =
 private fun JsonElement?.asLongOrNull(): Long? =
   when (this) {
     is JsonPrimitive -> content.toLongOrNull()
+    else -> null
+  }
+
+private fun JsonElement?.asIntOrNull(): Int? =
+  when (this) {
+    is JsonPrimitive -> content.toIntOrNull()
     else -> null
   }
 

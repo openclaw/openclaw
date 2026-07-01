@@ -404,6 +404,12 @@ timeout behavior, see [Codex harness reference](/plugins/codex-harness-reference
 The bundled plugin registers `/codex` as a slash command on any channel that
 supports OpenClaw text commands.
 
+Native execution and control require an owner or an `operator.admin` Gateway
+client. This includes binding or resuming threads, sending or stopping turns,
+changing model, fast-mode, or permission state, compacting or reviewing, and
+detaching a binding. Other authorized senders retain read-only status, help,
+account, model, thread, MCP server, skill, and binding inspection commands.
+
 Common forms:
 
 - `/codex status` checks app-server connectivity, models, account, rate limits,
