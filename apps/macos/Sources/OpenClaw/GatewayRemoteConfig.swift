@@ -5,6 +5,9 @@ import Darwin
 #endif
 
 enum GatewayRemoteConfig {
+    static let directGatewayUrlValidationMessage =
+        "Gateway URL must use wss:// for public hosts; ws:// is allowed for localhost, LAN, .local, and Tailnet hosts."
+
     enum TransportSource: Equatable {
         case explicit
         case inferredRemoteURL
