@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   listClickClackAccountIds,
   resolveClickClackAccount,
+  resolveClickClackRuntimeToken,
   resolveDefaultClickClackAccountId,
 } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
@@ -179,5 +180,90 @@ describe("ClickClack account resolution", () => {
 
     expect(resolveClickClackAccount({ cfg }).reconnectMs).toBe(100);
     expect(resolveClickClackAccount({ cfg, accountId: "slow" }).reconnectMs).toBe(60_000);
+  });
+
+  it("marks exec SecretRefs as configured without resolving the value synchronously (#98428)", () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          enabled: true,
+          baseUrl: "https://app.clickclack.chat",
+          workspace: "wsp_1",
+          accounts: {
+            service: {
+              token: {
+                source: "exec",
+                provider: "example_exec",
+                id: "CLICKCLACK_SERVICE_TOKEN",
+              },
+            },
+          },
+        },
+      },
+      secrets: {
+        providers: {
+          example_exec: {
+            source: "exec",
+            command: "/path/to/resolver",
+            jsonOnly: true,
+          },
+        },
+      },
+    } satisfies CoreConfig;
+
+    const account = resolveClickClackAccount({ cfg, accountId: "service" });
+    // Sync inspect path: configured even though exec value can't be read here.
+    expect(account.configured).toBe(true);
+    // Sync inspect path leaves the value empty; runtime resolver materializes it.
+    expect(account.token).toBe("");
+  });
+
+  it("marks file SecretRefs as configured without resolving the value synchronously (#98428)", () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          enabled: true,
+          baseUrl: "https://app.clickclack.chat",
+          workspace: "wsp_1",
+          token: {
+            source: "file",
+            provider: "default",
+            id: "/etc/openclaw/clickclack.token",
+          },
+        },
+      },
+    } satisfies CoreConfig;
+
+    expect(resolveClickClackAccount({ cfg }).configured).toBe(true);
+    expect(resolveClickClackAccount({ cfg }).token).toBe("");
+  });
+
+  it("resolveClickClackRuntimeToken resolves configured SecretRefs via the SDK runtime resolver", async () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          enabled: true,
+          baseUrl: "https://app.clickclack.chat",
+          workspace: "wsp_1",
+          accounts: {
+            service: {
+              token: {
+                source: "env",
+                provider: "default",
+                id: "CLICKCLACK_SERVICE_TOKEN",
+              },
+            },
+          },
+        },
+      },
+    } satisfies CoreConfig;
+
+    const token = await resolveClickClackRuntimeToken({
+      cfg,
+      accountId: "service",
+      value: cfg.channels.clickclack?.accounts?.service?.token,
+      env: { CLICKCLACK_SERVICE_TOKEN: "ccb_runtime_live" },
+    });
+    expect(token).toBe("ccb_runtime_live");
   });
 });

@@ -15,6 +15,7 @@ import {
   normalizeResolvedSecretInputString,
   resolveSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
+import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClickClackAccountConfig, CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
@@ -57,7 +58,7 @@ function resolveClickClackToken(params: {
   value: unknown;
   accountId: string;
   env?: NodeJS.ProcessEnv;
-}): string {
+}): { value: string; configuredRef: boolean } {
   const resolved = resolveSecretInputString({
     value: params.value,
     path:
@@ -67,8 +68,21 @@ function resolveClickClackToken(params: {
     defaults: params.cfg.secrets?.defaults,
     mode: "inspect",
   });
-  if (resolved.status !== "available") {
-    if (resolved.status === "configured_unavailable" && resolved.ref.source === "env") {
+  if (resolved.status === "available") {
+    return {
+      value:
+        normalizeResolvedSecretInputString({
+          value: resolved.value,
+          path: "channels.clickclack.token",
+        }) ?? "",
+      configuredRef: false,
+    };
+  }
+  if (resolved.status === "configured_unavailable") {
+    // Synchronous env-var lookup stays here so inspect/status paths can resolve
+    // the value without spawning resolvers. file/exec refs can't be resolved
+    // synchronously — runtime paths must call resolveClickClackRuntimeToken.
+    if (resolved.ref.source === "env") {
       const providerConfig = params.cfg.secrets?.providers?.[resolved.ref.provider];
       if (providerConfig) {
         if (providerConfig.source !== "env") {
@@ -89,16 +103,42 @@ function resolveClickClackToken(params: {
           `Secret provider "${resolved.ref.provider}" is not configured (ref: env:${resolved.ref.provider}:${resolved.ref.id}).`,
         );
       }
-      return normalizeSecretInputString((params.env ?? process.env)[resolved.ref.id]) ?? "";
+      return {
+        value: normalizeSecretInputString((params.env ?? process.env)[resolved.ref.id]) ?? "",
+        configuredRef: true,
+      };
     }
-    return "";
+    // file/exec SecretRef: configured, but value is only available via the
+    // async runtime resolver. Status paths treat the account as configured so
+    // startup doesn't mark ClickClack "missing"; runtime paths must call
+    // resolveClickClackRuntimeToken before using the token.
+    return { value: "", configuredRef: true };
   }
-  return (
-    normalizeResolvedSecretInputString({
-      value: resolved.value,
-      path: "channels.clickclack.token",
-    }) ?? ""
-  );
+  return { value: "", configuredRef: false };
+}
+
+/**
+ * Resolves the runtime ClickClack token value for gateway/outbound paths.
+ * Uses the configured SecretRef runtime resolver so `exec`/`file` refs are
+ * actually evaluated, instead of only the synchronous `env` special case.
+ */
+export async function resolveClickClackRuntimeToken(params: {
+  cfg: CoreConfig;
+  value: unknown;
+  accountId: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<string> {
+  const path =
+    params.accountId === DEFAULT_ACCOUNT_ID
+      ? "channels.clickclack.token"
+      : `channels.clickclack.accounts.${params.accountId}.token`;
+  const resolved = await resolveConfiguredSecretInputString({
+    config: params.cfg,
+    env: params.env ?? process.env,
+    value: params.value,
+    path,
+  });
+  return resolved.value ?? "";
 }
 
 /**
@@ -115,17 +155,24 @@ export function resolveClickClackAccount(params: {
   const baseEnabled = params.cfg.channels?.clickclack?.enabled !== false;
   const enabled = baseEnabled && merged.enabled !== false;
   const baseUrl = merged.baseUrl?.trim().replace(/\/$/, "") ?? "";
-  const token = resolveClickClackToken({
+  const tokenResolution = resolveClickClackToken({
     cfg: params.cfg,
     value: merged.token,
     accountId,
     env: params.env,
   });
+  const token = tokenResolution.value;
   const workspace = merged.workspace?.trim() ?? "";
+  // A configured SecretRef (env/file/exec) counts as configured even when the
+  // synchronous resolver can't surface a plaintext value — runtime paths call
+  // resolveClickClackRuntimeToken to materialize the actual token. This keeps
+  // `openclaw channels status` from marking direct exec SecretRef tokens as
+  // "not configured" when the secrets audit already proves resolvability.
+  const configured = Boolean(baseUrl && workspace && (token || tokenResolution.configuredRef));
   return {
     accountId,
     enabled,
-    configured: Boolean(baseUrl && token && workspace),
+    configured,
     name: normalizeOptionalString(merged.name),
     baseUrl,
     token,
