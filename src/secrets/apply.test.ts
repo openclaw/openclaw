@@ -38,6 +38,12 @@ const OPENAI_API_KEY_ENV_REF = {
   id: "OPENAI_API_KEY",
 } as const;
 
+const ANTHROPIC_API_KEY_ENV_REF = {
+  source: "env",
+  provider: "default",
+  id: "ANTHROPIC_API_KEY",
+} as const;
+
 type ApplyFixture = {
   rootDir: string;
   stateDir: string;
@@ -182,13 +188,14 @@ function createOpenAiProviderTarget(params?: {
   path?: string;
   pathSegments?: string[];
   providerId?: string;
+  ref?: SecretsApplyPlan["targets"][number]["ref"];
 }): SecretsApplyPlan["targets"][number] {
   return {
     type: "models.providers.apiKey",
     path: params?.path ?? "models.providers.openai.apiKey",
     ...(params?.pathSegments ? { pathSegments: params.pathSegments } : {}),
     providerId: params?.providerId ?? "openai",
-    ref: OPENAI_API_KEY_ENV_REF,
+    ref: params?.ref ?? OPENAI_API_KEY_ENV_REF,
   };
 }
 
@@ -328,7 +335,143 @@ describe("secrets apply", () => {
     expect(nextAuthJson.openai).toBeUndefined();
 
     const nextEnv = await fs.readFile(fixture.envPath, "utf8");
-    expect(nextEnv).not.toContain("sk-openai-plaintext");
+    expect(nextEnv).not.toContain("sk-ope...text");
+    expect(nextEnv).toContain("UNRELATED=value");
+  });
+
+  it("preserves same-value env credentials that were not migrated", async () => {
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          openai: createOpenAiProviderConfig("shared...y"), // pragma: allowlist secret
+          anthropic: {
+            baseUrl: "https://api.anthropic.com/v1",
+            api: "anthropic-messages",
+            apiKey: "shared...y", // pragma: allowlist secret
+            models: [{ id: "claude-opus-5", name: "claude-opus-5" }],
+          },
+        },
+      },
+    });
+    await fs.writeFile(
+      fixture.envPath,
+      [
+        "OPENAI_API_KEY=shared...y", // pragma: allowlist secret
+        "ANTHROPIC_API_KEY=shared...y", // pragma: allowlist secret
+        "UNRELATED=value",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const plan = createPlan({
+      targets: [createOpenAiProviderTarget()],
+      options: createOneWayScrubOptions(),
+    });
+
+    await runSecretsApply({ plan, env: fixture.env, write: true });
+
+    const nextEnv = await fs.readFile(fixture.envPath, "utf8");
+    expect(nextEnv).not.toContain("OPENAI_API_KEY=shared...y");
+    expect(nextEnv).toContain("ANTHROPIC_API_KEY=shared...y");
+    expect(nextEnv).toContain("UNRELATED=value");
+
+    const nextConfig = JSON.parse(await fs.readFile(fixture.configPath, "utf8")) as {
+      models: {
+        providers: {
+          openai: { apiKey: unknown };
+          anthropic: { apiKey: unknown };
+        };
+      };
+    };
+    expect(nextConfig.models.providers.openai.apiKey).toEqual(OPENAI_API_KEY_ENV_REF);
+    expect(nextConfig.models.providers.anthropic.apiKey).toBe("shared...y");
+  });
+
+  it("scrubs each migrated env key when multiple targets share a value", async () => {
+    await writeJsonFile(fixture.configPath, {
+      models: {
+        providers: {
+          openai: createOpenAiProviderConfig("shared...y"), // pragma: allowlist secret
+          anthropic: {
+            baseUrl: "https://api.anthropic.com/v1",
+            api: "anthropic-messages",
+            apiKey: "shared...y", // pragma: allowlist secret
+            models: [{ id: "claude-opus-5", name: "claude-opus-5" }],
+          },
+        },
+      },
+    });
+    await fs.writeFile(
+      fixture.envPath,
+      [
+        "OPENAI_API_KEY=shared...y", // pragma: allowlist secret
+        "ANTHROPIC_API_KEY=shared...y", // pragma: allowlist secret
+        "UNRELATED=value",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const plan = createPlan({
+      targets: [
+        createOpenAiProviderTarget(),
+        createOpenAiProviderTarget({
+          path: "models.providers.anthropic.apiKey",
+          pathSegments: ["models", "providers", "anthropic", "apiKey"],
+          providerId: "anthropic",
+          ref: ANTHROPIC_API_KEY_ENV_REF,
+        }),
+      ],
+      options: createOneWayScrubOptions(),
+    });
+    fixture.env.ANTHROPIC_API_KEY = "shared...y"; // pragma: allowlist secret
+
+    await runSecretsApply({ plan, env: fixture.env, write: true });
+
+    const nextEnv = await fs.readFile(fixture.envPath, "utf8");
+    expect(nextEnv).not.toContain("OPENAI_API_KEY=shared...y");
+    expect(nextEnv).not.toContain("ANTHROPIC_API_KEY=shared...y");
+    expect(nextEnv).toContain("UNRELATED=value");
+  });
+
+  it("only scrubs migrated env keys for auth-profile targets", async () => {
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "shared...y", // pragma: allowlist secret
+        },
+      },
+    });
+    await fs.writeFile(
+      fixture.envPath,
+      [
+        "OPENAI_API_KEY=shared...y", // pragma: allowlist secret
+        "ANTHROPIC_API_KEY=shared...y", // pragma: allowlist secret
+        "UNRELATED=value",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const plan = createPlan({
+      targets: [
+        {
+          type: "auth-profiles.api_key.key",
+          path: "profiles.openai:default.key",
+          pathSegments: ["profiles", "openai:default", "key"],
+          agentId: "main",
+          ref: OPENAI_API_KEY_ENV_REF,
+        },
+      ],
+      options: createOneWayScrubOptions(),
+    });
+
+    await runSecretsApply({ plan, env: fixture.env, write: true });
+
+    const nextEnv = await fs.readFile(fixture.envPath, "utf8");
+    expect(nextEnv).not.toContain("OPENAI_API_KEY=shared...y");
+    expect(nextEnv).toContain("ANTHROPIC_API_KEY=shared...y");
     expect(nextEnv).toContain("UNRELATED=value");
   });
 
