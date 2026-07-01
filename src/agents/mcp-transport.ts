@@ -11,6 +11,8 @@ import {
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { FetchLike, Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { substituteString, containsEnvVarReference } from "../config/env-substitution.js";
+import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
 import { logDebug } from "../logger.js";
 import {
   buildMcpHttpFetch,
@@ -95,10 +97,24 @@ export function resolveMcpTransport(
     return null;
   }
   if (resolved.kind === "stdio") {
+    const processEnv = process.env;
+    const finalEnv: Record<string, string> = {};
+    for (const [key, value] of Object.entries(resolved.env || {})) {
+      if (isDangerousHostEnvVarName(key)) {
+        throw new Error(
+          `Dynamic environment variable substitution generated a dangerous host environment variable: ${key}`,
+        );
+      }
+      finalEnv[key] =
+        value && containsEnvVarReference(value)
+          ? substituteString(value, processEnv, "mcp.servers.*.env")
+          : value;
+    }
+
     const transport = new OpenClawStdioClientTransport({
       command: resolved.command,
       args: resolved.args,
-      env: resolved.env,
+      env: finalEnv,
       cwd: resolved.cwd,
       stderr: "pipe",
     });
@@ -120,22 +136,50 @@ export function resolveMcpTransport(
           config: resolved.oauth,
         })
       : undefined;
+  const headers =
+    resolved.auth === "oauth" ? withoutMcpAuthorizationHeader(resolved.headers) : resolved.headers;
+
   const baseFetch = buildMcpHttpFetch({
     sslVerify: resolved.sslVerify,
     clientCert: resolved.clientCert,
     clientKey: resolved.clientKey,
     resourceUrl: resolved.url,
   });
-  const headers =
-    resolved.auth === "oauth" ? withoutMcpAuthorizationHeader(resolved.headers) : resolved.headers;
+
+  const substitutingFetch: FetchLike = (url, init) => {
+    let finalInit = init;
+    if (init?.headers) {
+      const mergedHeaders = new Headers(init.headers);
+      let needsReplace = false;
+      const processEnv = process.env;
+      for (const [key, value] of mergedHeaders.entries()) {
+        if (value && containsEnvVarReference(value)) {
+          mergedHeaders.set(key, substituteString(value, processEnv, "mcp.servers.*.headers"));
+          needsReplace = true;
+        }
+      }
+      if (needsReplace) {
+        // We reconstruct as a plain object to avoid surprising any fetch polyfills or assertions
+        // that expect a plain object, particularly in tests.
+        const plainHeaders: Record<string, string> = {};
+        for (const [key, value] of mergedHeaders.entries()) {
+          plainHeaders[key] = value;
+        }
+        finalInit = { ...init, headers: plainHeaders };
+      }
+    }
+    return baseFetch(url, finalInit);
+  };
+
   const httpFetch =
     resolved.auth === "oauth"
       ? withSameOriginMcpHttpHeaders({
-          fetchFn: baseFetch,
+          fetchFn: substitutingFetch,
           headers,
           resourceUrl: resolved.url,
         })
-      : baseFetch;
+      : substitutingFetch;
+
   if (resolved.transportType === "streamable-http") {
     return {
       transport: new StreamableHTTPClientTransport(new URL(resolved.url), {
@@ -150,11 +194,15 @@ export function resolveMcpTransport(
       supportsParallelToolCalls: resolved.supportsParallelToolCalls,
     };
   }
-  const sseHeaders: Record<string, string> = { ...headers };
-  const hasHeaders = Object.keys(sseHeaders).length > 0;
+
+  const sseHeaders = headers ? { ...headers } : {};
+  if (resolved.auth === "oauth" && sseHeaders.authorization) {
+    delete sseHeaders.authorization;
+  }
+
   return {
     transport: new SSEClientTransport(new URL(resolved.url), {
-      requestInit: resolved.auth === "oauth" || !hasHeaders ? undefined : { headers: sseHeaders },
+      requestInit: resolved.auth === "oauth" || !headers ? undefined : { headers },
       fetch: httpFetch,
       eventSourceInit: {
         fetch: buildSseEventSourceFetch(resolved.auth === "oauth" ? {} : sseHeaders, httpFetch),

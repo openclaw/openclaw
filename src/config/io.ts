@@ -1301,6 +1301,7 @@ function resolveConfigForRead(
   return {
     resolvedConfigRaw: resolveConfigEnvVars(resolvedIncludes, env, {
       onMissing: (w) => envWarnings.push(w),
+      ignorePaths: ["mcp.servers.*.env", "mcp.servers.*.headers"],
     }),
     // Capture env snapshot after substitution for write-time ${VAR} restoration.
     envSnapshotForRestore: { ...env } as Record<string, string | undefined>,

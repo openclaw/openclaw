@@ -1363,6 +1363,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     shouldResolveRawConfigEnvVars
       ? (resolveConfigEnvVars(rawConfig, env, {
           onMissing: () => undefined,
+          ignorePaths: ["mcp.servers.*.env", "mcp.servers.*.headers"],
         }) as OpenClawConfig)
       : rawConfig,
     env,
@@ -1370,6 +1371,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const activationSourceConfig = shouldResolveRawConfigEnvVars
     ? (resolveConfigEnvVars(rawActivationSourceConfig, env, {
         onMissing: () => undefined,
+        ignorePaths: ["mcp.servers.*.env", "mcp.servers.*.headers"],
       }) as OpenClawConfig)
     : rawActivationSourceConfig;
   const normalized = normalizePluginsConfig(cfg.plugins);

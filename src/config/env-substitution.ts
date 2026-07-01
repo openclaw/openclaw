@@ -83,12 +83,14 @@ export type EnvSubstitutionWarning = {
   configPath: string;
 };
 
-type SubstituteOptions = {
+export type SubstituteOptions = {
   /** When set, missing vars call this instead of throwing and the original placeholder is preserved. */
   onMissing?: (warning: EnvSubstitutionWarning) => void;
+  /** Paths to skip substitution for. Supports simple wildcard '*' matches like 'mcp.servers.*.env'. */
+  ignorePaths?: string[];
 };
 
-function substituteString(
+export function substituteString(
   value: string,
   env: NodeJS.ProcessEnv,
   configPath: string,
@@ -168,6 +170,19 @@ function substituteAny(
   path: string,
   opts?: SubstituteOptions,
 ): unknown {
+  if (
+    opts?.ignorePaths &&
+    opts.ignorePaths.some((p) => {
+      if (!p.includes("*")) {
+        return path === p || path.startsWith(`${p}.`) || path.startsWith(`${p}[`);
+      }
+      const regexStr = "^" + p.replace(/\./g, "\\.").replace(/\*/g, "[^.]+") + "($|\\.|\\[)";
+      return new RegExp(regexStr).test(path);
+    })
+  ) {
+    return value;
+  }
+
   if (typeof value === "string") {
     return substituteString(value, env, path, opts);
   }
