@@ -105,8 +105,6 @@ export function withFirstStreamEventTimeout<T>(
           }
           yield next.value;
         }
-      } catch (error) {
-        throw error;
       } finally {
         clear();
         if (!completed) {

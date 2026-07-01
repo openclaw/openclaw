@@ -140,7 +140,9 @@ describe("withFirstStreamEventTimeout", () => {
   it("passes through events after the first event without adding inter-event timing", async () => {
     async function* delayedSecondEvent() {
       yield "first";
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 50);
+      });
       yield "second";
     }
 
