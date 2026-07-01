@@ -1348,6 +1348,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         }
       }
 
+      const gatewayOpts = readGatewayCallOptions(params);
       const rawConfig = options?.config ?? loadConfigForTool();
       const scope = resolveMessageSecretScope({
         channel: params.channel,
@@ -1413,7 +1414,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         }
       }
 
-      const gatewayResolved = resolveGatewayOptions(readGatewayCallOptions(params));
+      const gatewayResolved = resolveGatewayOptions(gatewayOpts);
       const gateway = {
         url: gatewayResolved.url,
         token: gatewayResolved.token,

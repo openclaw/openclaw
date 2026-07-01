@@ -34,6 +34,15 @@ export type GatewayServiceRestartResult = { outcome: "completed" } | { outcome: 
 
 export type GatewayServiceEnvArgs = {
   env?: GatewayServiceEnv;
+  // Bounds service-manager probes (e.g. `systemctl`) so a wedged daemon socket
+  // cannot hang status reads indefinitely. Only status read paths set this;
+  // control/install paths leave it unset to preserve their existing behavior.
+  timeoutMs?: number;
+};
+
+/** Options for read-only service inspection that should fail soft under a deadline. */
+export type GatewayServiceReadOptions = {
+  timeoutMs?: number;
 };
 
 export type GatewayServiceEnvironmentValueSource = "inline" | "file" | "inline-and-file";

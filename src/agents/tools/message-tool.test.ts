@@ -457,6 +457,7 @@ describe("message tool gateway timeout", () => {
           timeoutMs,
         }),
       ).rejects.toThrow("timeoutMs must be a positive integer");
+      expect(mocks.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
       expect(mocks.runMessageAction).not.toHaveBeenCalled();
     },
   );
