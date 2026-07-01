@@ -402,6 +402,22 @@ async function ensureSessionRuntimeCleanup(params: {
   }
   params.assertCurrent?.();
   abortEmbeddedAgentRun(params.sessionId);
+
+  // Always reap MCP processes for the old session — even if the agent run
+  // doesn't terminate within the grace window, stale processes must not
+  // survive to hold file locks or occupy ports for the next session.
+  // The aborted run will be GC'd by the process supervisor regardless.
+  logVerbose(`sessions cleanup: retiring MCP runtime for session ${params.sessionId} (fix #92569)`);
+  await retireSessionMcpRuntime({
+    sessionId: params.sessionId,
+    reason: "gateway-session-cleanup",
+    onError: (error, sessionId) => {
+      logVerbose(
+        `sessions cleanup: failed to dispose bundle MCP runtime for ${sessionId}: ${String(error)}`,
+      );
+    },
+  });
+
   const ended = await waitForEmbeddedAgentRunEnd(params.sessionId, 15_000);
   params.assertCurrent?.();
   clearBootstrapSnapshot(params.target.canonicalKey);
