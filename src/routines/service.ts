@@ -707,28 +707,120 @@ export async function inspectRoutine(
   return toRoutineView(record, cronJob);
 }
 
-async function ensureRoutineBackingCronJob(params: {
+function assertRoutineBackingCronJobMatches(
+  record: RoutineRecord,
+  normalized: NormalizedRoutineCreate,
+  cronJob: CronJob,
+): void {
+  if (cronJob.deleteAfterRun !== false) {
+    throw new Error(`routine backing cron job changed deleteAfterRun: ${record.trigger.cronJobId}`);
+  }
+  const comparable = createRoutineRecordFromCronJob(record, cronJob);
+  if (
+    routineIntentSignature(comparable, {
+      includeEveryAnchor: hasExplicitEveryAnchor(record.trigger.schedule),
+    }) !== routineIntentSignatureFromNormalized(normalized)
+  ) {
+    throw new Error(`routine id already exists with different intent: ${normalized.id}`);
+  }
+}
+
+async function resolveRoutineBackingCronJob(params: {
   record: RoutineRecord;
   normalized: NormalizedRoutineCreate;
   context: RoutineCronContext;
-}): Promise<CronJob> {
+}): Promise<{ cronJob: CronJob; created: boolean }> {
   assertRoutineCronStoreActive(params.record, params.context.cronStorePath);
   const existing = await params.context.cron.readJob(params.record.trigger.cronJobId);
   if (existing) {
-    return existing;
+    assertRoutineBackingCronJobMatches(params.record, params.normalized, existing);
+    return { cronJob: existing, created: false };
   }
+  assertNewRoutineScheduleIsValid(params.normalized.cronInput.schedule);
+  await params.context.validateCronCreate?.(params.normalized.cronInput);
+  let added: CronJob;
   try {
-    return await params.context.cron.add({
+    added = await params.context.cron.add({
       ...params.normalized.cronInput,
       id: params.record.trigger.cronJobId,
     });
   } catch (err) {
     const created = await params.context.cron.readJob(params.record.trigger.cronJobId);
     if (created) {
-      return created;
+      try {
+        assertRoutineBackingCronJobMatches(params.record, params.normalized, created);
+      } catch (matchErr) {
+        const rollbackError = await removeCreatedRoutineBackingCronJob({
+          context: params.context,
+          cronJobId: created.id,
+          reason: "invalid routine backing cron job",
+          cause: matchErr,
+        });
+        if (rollbackError) {
+          throw rollbackError;
+        }
+        throw matchErr;
+      }
+      return { cronJob: created, created: true };
     }
     throw err;
   }
+  try {
+    assertRoutineBackingCronJobMatches(params.record, params.normalized, added);
+  } catch (err) {
+    const rollbackError = await removeCreatedRoutineBackingCronJob({
+      context: params.context,
+      cronJobId: added.id,
+      reason: "invalid routine backing cron job",
+      cause: err,
+    });
+    if (rollbackError) {
+      throw rollbackError;
+    }
+    throw err;
+  }
+  return { cronJob: added, created: true };
+}
+
+async function removeCreatedRoutineBackingCronJob(params: {
+  context: RoutineCronContext;
+  cronJobId: string;
+  reason: string;
+  cause: unknown;
+}): Promise<Error | undefined> {
+  try {
+    const result = await params.context.cron.remove(params.cronJobId);
+    if (result.ok) {
+      return undefined;
+    }
+    return new Error(
+      `${params.reason}: ${formatErrorMessage(params.cause)}; failed to roll back backing cron job: ${
+        params.cronJobId
+      }`,
+    );
+  } catch (rollbackErr) {
+    return new Error(
+      `${params.reason}: ${formatErrorMessage(params.cause)}; failed to roll back backing cron job: ${formatErrorMessage(
+        rollbackErr,
+      )}`,
+    );
+  }
+}
+
+async function routinePersistFailureError(params: {
+  context: RoutineCronContext;
+  cronJobId: string;
+  cause: unknown;
+}): Promise<Error> {
+  const rollbackError = await removeCreatedRoutineBackingCronJob({
+    context: params.context,
+    cronJobId: params.cronJobId,
+    reason: "failed to persist routine",
+    cause: params.cause,
+  });
+  return (
+    rollbackError ?? new Error(`failed to persist routine: ${formatErrorMessage(params.cause)}`)
+  );
 }
 
 export async function createRoutine(
@@ -744,16 +836,10 @@ export async function createRoutine(
       if (existing) {
         assertRoutineCronStoreActive(existing, context.cronStorePath);
         const existingCronJob = await context.cron.readJob(existing.trigger.cronJobId);
-        if (existingCronJob && existingCronJob.deleteAfterRun !== false) {
-          throw new Error(
-            `routine backing cron job changed deleteAfterRun: ${existing.trigger.cronJobId}`,
-          );
-        }
-        const comparable = existingCronJob
-          ? createRoutineRecordFromCronJob(existing, existingCronJob)
-          : existing;
-        if (
-          routineIntentSignature(comparable, {
+        if (existingCronJob) {
+          assertRoutineBackingCronJobMatches(existing, normalized, existingCronJob);
+        } else if (
+          routineIntentSignature(existing, {
             includeEveryAnchor: hasExplicitEveryAnchor(existing.trigger.schedule),
           }) !== routineIntentSignatureFromNormalized(normalized)
         ) {
@@ -783,8 +869,6 @@ export async function createRoutine(
         };
       }
 
-      assertNewRoutineScheduleIsValid(normalized.cronInput.schedule);
-      await context.validateCronCreate?.(normalized.cronInput);
       const nowMs = Date.now();
       const draft = createRoutineRecord({
         normalized,
@@ -795,7 +879,8 @@ export async function createRoutine(
         updatedAtMs: nowMs,
         cronStorePath: context.cronStorePath,
       });
-      const cronJob = await ensureRoutineBackingCronJob({ record: draft, normalized, context });
+      const backing = await resolveRoutineBackingCronJob({ record: draft, normalized, context });
+      const { cronJob } = backing;
       const record = createRoutineRecord({
         normalized,
         enabled: cronJob.enabled,
@@ -808,6 +893,13 @@ export async function createRoutine(
       try {
         upsertRoutineRecordToSqlite(record);
       } catch (err) {
+        if (backing.created) {
+          throw await routinePersistFailureError({
+            context,
+            cronJobId: cronJob.id,
+            cause: err,
+          });
+        }
         throw new Error(`failed to persist routine: ${formatErrorMessage(err)}`);
       }
       return {

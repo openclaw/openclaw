@@ -2,7 +2,10 @@ import crypto from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CronServiceContract } from "../cron/service-contract.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../cron/types.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createRoutine,
@@ -328,6 +331,7 @@ describe("routine service", () => {
             sessionTarget: "isolated",
             wakeMode: "now",
             payload: { kind: "agentTurn", message: "Summarize open work" },
+            delivery: { mode: "announce" },
           },
           cronJobId,
           1,
@@ -343,6 +347,100 @@ describe("routine service", () => {
       await expect(inspectRoutine(created.routine.id, { cron })).resolves.toMatchObject({
         status: { backing: "linked" },
       });
+    });
+  });
+
+  it("rejects deterministic orphan cron jobs with different intent", async () => {
+    await withOpenClawTestState({ prefix: "routine-orphan-drift-" }, async () => {
+      const cron = createFakeCronService();
+      const input = createRoutineInput();
+      const cronJobId = createRoutineCronJobIdForTest(input.id ?? "daily-ops");
+      cron.jobs.set(
+        cronJobId,
+        createCronJob(
+          {
+            id: cronJobId,
+            name: "Daily ops",
+            enabled: true,
+            deleteAfterRun: false,
+            agentId: "ops",
+            schedule: { kind: "every", everyMs: 120_000 },
+            sessionTarget: "isolated",
+            wakeMode: "now",
+            payload: { kind: "agentTurn", message: "Summarize open work" },
+            delivery: { mode: "announce" },
+          },
+          cronJobId,
+          1,
+        ),
+      );
+
+      await expect(createRoutine(input, { cron })).rejects.toThrow("different intent");
+      expect(cron.add).not.toHaveBeenCalled();
+      await expect(inspectRoutine(input.id ?? "daily-ops", { cron })).resolves.toBeUndefined();
+    });
+  });
+
+  it("recovers a matching orphan cron job without current delivery validation", async () => {
+    await withOpenClawTestState({ prefix: "routine-orphan-delivery-replay-" }, async () => {
+      const cron = createFakeCronService();
+      const input = createRoutineInput();
+      const cronJobId = createRoutineCronJobIdForTest(input.id ?? "daily-ops");
+      cron.jobs.set(
+        cronJobId,
+        createCronJob(
+          {
+            id: cronJobId,
+            name: "Daily ops",
+            enabled: true,
+            deleteAfterRun: false,
+            agentId: "ops",
+            schedule: { kind: "every", everyMs: 60_000 },
+            sessionTarget: "isolated",
+            wakeMode: "now",
+            payload: { kind: "agentTurn", message: "Summarize open work" },
+            delivery: { mode: "announce" },
+          },
+          cronJobId,
+          1,
+        ),
+      );
+      const validateCronCreate = vi.fn(async () => {
+        throw new Error("delivery unavailable");
+      });
+
+      const created = await createRoutine(input, { cron, validateCronCreate });
+
+      expect(created.routine.status.backing).toBe("linked");
+      expect(validateCronCreate).not.toHaveBeenCalled();
+      expect(cron.add).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rolls back a newly added cron job when routine persistence fails", async () => {
+    await withOpenClawTestState({ prefix: "routine-persist-rollback-" }, async () => {
+      const cron = createFakeCronService();
+      let cronJobId = "";
+      cron.add.mockImplementationOnce(async (input: CronJobCreate) => {
+        const job = createCronJob(input, input.id ?? "created-job", 1);
+        cronJobId = job.id;
+        cron.jobs.set(job.id, job);
+        openOpenClawStateDatabase().db.exec(`
+          CREATE TRIGGER routine_records_force_fail
+          BEFORE INSERT ON routine_records
+          BEGIN
+            SELECT RAISE(FAIL, 'forced routine persist failure');
+          END;
+        `);
+        return job;
+      });
+
+      await expect(createRoutine(createRoutineInput({ id: undefined }), { cron })).rejects.toThrow(
+        "failed to persist routine: forced routine persist failure",
+      );
+
+      expect(cron.remove).toHaveBeenCalledWith(cronJobId);
+      expect(cron.jobs.has(cronJobId)).toBe(false);
     });
   });
 
