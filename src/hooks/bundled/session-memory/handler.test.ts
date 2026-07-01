@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { buildSessionStartupContextPrelude } from "../../../auto-reply/reply/startup-context.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
@@ -291,6 +292,72 @@ describe("session-memory hook", () => {
     expect(memoryContent).not.toContain("NO_REPLY");
   });
 
+  it("keeps leaked role scaffolding out of saved and next-session memory context", async () => {
+    const timestamp = new Date("2026-06-30T12:00:00.000Z");
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "Keep this example:\n```text\nuser\nassistant:\n```" },
+      {
+        role: "assistant",
+        content: [
+          "Visible answer.",
+          "user",
+          "I need",
+          "assistant:",
+          "Incomplete.",
+          "",
+          "The word below is intentional prose:",
+          "system",
+          "Keep it.",
+          "",
+          "```text",
+          "user",
+          "assistant:",
+          "system",
+          "```",
+        ].join("\n"),
+      },
+    ]);
+    const { memoryContent, nextSessionContext } = await withEnvAsync({ TZ: "UTC" }, async () => {
+      const { tempDir, sessionFile } = await writeSessionTranscript({
+        name: "role-leak.jsonl",
+        content: sessionContent,
+      });
+      const cfg = {
+        agents: { defaults: { workspace: tempDir, userTimezone: "UTC" } },
+      } satisfies OpenClawConfig;
+      const memoryResult = await runNewWithPreviousSessionEntry({
+        tempDir,
+        cfg,
+        timestamp,
+        previousSessionEntry: { sessionId: "role-leak", sessionFile },
+      });
+      const startupContext = await buildSessionStartupContextPrelude({
+        workspaceDir: tempDir,
+        cfg,
+        nowMs: timestamp.getTime(),
+      });
+      return { memoryContent: memoryResult.memoryContent, nextSessionContext: startupContext };
+    });
+
+    expect(memoryContent).toContain(
+      "**assistant:**\n\n> Visible answer.\n> user\n> I need\n> assistant:\n> Incomplete.",
+    );
+    expect(memoryContent).not.toContain("\nuser\nI need");
+    expect(memoryContent).not.toContain("\nassistant:\nIncomplete");
+    expect(memoryContent).toContain("The word below is intentional prose:\n> system\n> Keep it.");
+    expect(memoryContent).toContain("> ```text\n> user\n> assistant:\n> system\n> ```");
+    expect(nextSessionContext).toContain("[Startup context loaded by runtime]");
+    expect(nextSessionContext).toContain(
+      "**assistant:**\n\n> Visible answer.\n> user\n> I need\n> assistant:\n> Incomplete.",
+    );
+    expect(nextSessionContext).not.toContain("\nuser\nI need");
+    expect(nextSessionContext).not.toContain("\nassistant:\nIncomplete");
+    expect(nextSessionContext).toContain(
+      "The word below is intentional prose:\n> system\n> Keep it.",
+    );
+    expect(nextSessionContext).toContain("> user\n> assistant:\n> system");
+  });
+
   it("does not call the model provider for a filename slug by default", async () => {
     const sessionContent = createMockSessionContent([
       { role: "user", content: "Hello there" },
@@ -577,6 +644,8 @@ describe("session-memory hook", () => {
       { role: "assistant", content: "Here is help info" },
       { role: "user", content: "Normal message" },
       { role: "user", content: "/new" },
+      { role: "user", content: "  /new" },
+      { role: "user", content: "\t/help" },
     ]);
     const memoryContent = await readSessionTranscript({ sessionContent });
 
@@ -933,8 +1002,31 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("standalone gateway reply");
   });
 
+  it("deduplicates trimmed delivery mirrors without changing assistant display bytes", async () => {
+    const sessionContent = [
+      JSON.stringify({ type: "message", message: { role: "user", content: "Continue" } }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "  user\nKeep this indentation" },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: "user\nKeep this indentation" }],
+        },
+      }),
+    ].join("\n");
+
+    const memoryContent = await readSessionTranscript({ sessionContent });
+    expect(memoryContent!.match(/\*\*assistant:\*\*/g)).toHaveLength(1);
+    expect(memoryContent).toContain(">   user\n> Keep this indentation");
+  });
+
   it("preserves delivery-mirror after user turn even when mirroring older assistant text", async () => {
-    // Without the user-turn reset of `lastAssistantText`, a delivery-mirror
+    // Without the user-turn reset of `lastAssistantCanonicalText`, a delivery-mirror
     // row after a user message that echoes a *previous* turn's assistant
     // content would be incorrectly filtered.
     const sessionContent = [
