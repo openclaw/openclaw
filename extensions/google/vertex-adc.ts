@@ -295,6 +295,17 @@ export async function readGoogleOauthTokenResponsePayload(
 
 function decodeGoogleOauthTokenResponseBody(bytes: Buffer, contentEncoding: string | null): string {
   if (shouldGunzipGoogleOauthTokenResponse(bytes, contentEncoding)) {
+    // Check gzip ISIZE (last 4 bytes is original uncompressed size mod 2^32)
+    // before decompressing — a small compressed payload that decompresses to
+    // a huge buffer would OOM during gunzipSync before the post-check catches it.
+    if (bytes.length >= 4) {
+      const isize = bytes.readUInt32LE(bytes.length - 4);
+      if (isize > MAX_DECODED_TOKEN_BODY_BYTES) {
+        throw new Error(
+          `google-vertex-adc: decompressed token response exceeds ${MAX_DECODED_TOKEN_BODY_BYTES} bytes`,
+        );
+      }
+    }
     let decoded: Buffer;
     try {
       decoded = gunzipSync(bytes);
