@@ -28,6 +28,7 @@ import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.h
 import { isPromiseLike } from "./embedded-agent-subscribe.promise.js";
 import { isAssistantMessage } from "./embedded-agent-utils.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
+import { summarizeToolErrorForAbort } from "./tool-error-summary.js";
 
 export {
   handleCompactionEnd,
@@ -175,6 +176,12 @@ export function handleAgentEnd(
       typeof ctx.state.terminalAborted === "boolean"
         ? ctx.state.terminalAborted
         : ctx.params.isTerminalAborted?.();
+    // Surface the last tool failure (e.g. a tool-call validation loop) on the terminal
+    // lifecycle event, gated to error/abort terminals so clean ends stay metadata-free.
+    const toolErrorSummary =
+      (isError || terminalAborted === true) && ctx.state.lastToolError
+        ? summarizeToolErrorForAbort(ctx.state.lastToolError)
+        : undefined;
     const terminalMeta = {
       ...(terminalStopReason ? { stopReason: terminalStopReason } : {}),
       ...(ctx.state.yielded === true ? { yielded: true } : {}),
@@ -183,6 +190,7 @@ export function handleAgentEnd(
         ? { providerStarted: ctx.state.providerStarted }
         : {}),
       ...(typeof terminalAborted === "boolean" ? { aborted: terminalAborted } : {}),
+      ...(toolErrorSummary ? { toolErrorSummary } : {}),
     };
     const phase =
       ctx.params.terminalLifecyclePhase === "finishing" ? "finishing" : isError ? "error" : "end";
