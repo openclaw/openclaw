@@ -592,6 +592,54 @@ describe("waitForAgentJob", () => {
       vi.useRealTimers();
     }
   });
+
+  it("resolves with the pending timeout snapshot when the wait timer expires before the grace fires (#89095)", async () => {
+    // Symmetric with the pending-error-before-wait-timer test above. Without
+    // RC1's fix, the wait-timer fallback only consulted getPendingAgentRunError
+    // and ignored getPendingAgentRunTimeout — so a subagent force-killed by its
+    // runTimeoutSeconds (which records a pending *timeout* snapshot, not a
+    // pending error) silently resolved to null. The parent waiting via
+    // sessions_yield then hung in state=processing because isTerminalWaitTimeout
+    // never became true. See sunnydongbo's live repro on issue #89095.
+    vi.useFakeTimers();
+    try {
+      const runId = `run-pending-timeout-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 5_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 100 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt: 100,
+          endedAt: 200,
+          aborted: true,
+          timeoutPhase: "provider",
+          providerStarted: true,
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(6_000);
+
+      const result = await waitPromise;
+      expect(result).not.toBeNull();
+      expectRecordFields(result as Record<string, unknown>, {
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 200,
+        timeoutPhase: "provider",
+        providerStarted: true,
+      });
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe("augmentChatHistoryWithCanvasBlocks", () => {

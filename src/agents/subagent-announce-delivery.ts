@@ -960,6 +960,29 @@ function resolveTextCompletionDirectFallback(events: readonly AgentInternalEvent
       return result;
     }
   }
+  // Second pass: synthesize a terminal notice when no ok-with-content completion
+  // exists but at least one task_completion is present. Without this, a direct-
+  // channel parent waiting via sessions_yield never sees a terminal message when
+  // the child stops with no deliverable payload — common when context-overflow
+  // compaction trims the wrap-up turn, when the child is force-killed by run
+  // timeout, or any clean stopReason=stop completion that emits no payload.
+  // The notice is bounded (no raw child output is leaked) and short enough to
+  // fit any channel's per-message budget.
+  // See https://github.com/openclaw/openclaw/issues/89095.
+  for (let index = (events?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const event = events?.[index];
+    if (event?.type !== "task_completion" || event.source !== "subagent") {
+      continue;
+    }
+    const status = typeof event.status === "string" ? event.status : "stop";
+    const rawResult = typeof event.result === "string" ? event.result.trim() : "";
+    const statusHint = typeof event.statusLabel === "string" ? event.statusLabel.trim() : "";
+    const reasonHint =
+      rawResult === "(no output)" || rawResult === ""
+        ? "no visible reply"
+        : statusHint || "incomplete";
+    return `Background task finished without producing a visible reply (status: ${status}, reason: ${reasonHint}).`;
+  }
   return undefined;
 }
 
@@ -1626,14 +1649,14 @@ async function sendSubagentAnnounceDirectly(params: {
       !hasGatewayAgentMessagingToolDeliveryEvidence(directAnnounceResponse) &&
       !hasIntentionalSilentGatewayAgentPayload(directAnnounceResponse)
     ) {
-      if (hasFailedSubagentNoOutputCompletion(params.internalEvents)) {
-        return {
-          delivered: false,
-          path: "direct",
-          reason: "visible_reply_missing",
-          error: "completion agent did not produce a visible reply",
-        };
-      }
+      // Try the direct text-completion fallback FIRST. The synth notice in
+      // resolveTextCompletionDirectFallback now always returns content when any
+      // task_completion event exists (including failed/timeout/empty payloads),
+      // so a parent yielded via sessions_yield receives a bounded terminal
+      // notice rather than silently retry-abandoning. Without reordering, the
+      // hasFailedSubagentNoOutputCompletion gate below short-circuits to
+      // visible_reply_missing for the exact "(no output)" case the synth path
+      // is meant to cover. See https://github.com/openclaw/openclaw/issues/89095.
       if (subagentDirectMessageCompletionRequiresMessageTool) {
         const textDelivery = await deliverTextCompletionDirect({
           cfg,
@@ -1645,6 +1668,14 @@ async function sendSubagentAnnounceDirectly(params: {
         if (textDelivery) {
           return textDelivery;
         }
+      }
+      if (hasFailedSubagentNoOutputCompletion(params.internalEvents)) {
+        return {
+          delivered: false,
+          path: "direct",
+          reason: "visible_reply_missing",
+          error: "completion agent did not produce a visible reply",
+        };
       }
       return {
         delivered: false,
