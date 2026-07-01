@@ -56,7 +56,9 @@ Focused validation observed on the PR2 branch:
     `{"ok":true,"runtimeRunId":"run_gateway_proof"}`
 - `node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/durable`
   - 14 files, 53 tests passed.
-- `node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/commands/durable.test.ts src/durable/store-factory.test.ts src/durable/sqlite-store.test.ts`
+- `node scripts/run-vitest.mjs run --config test/vitest/vitest.commands.config.ts src/commands/durable.test.ts`
+  - 1 file, 2 tests passed.
+- `node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts src/durable/store-factory.test.ts src/durable/sqlite-store.test.ts`
   - 2 files, 11 tests passed.
 - `node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server-methods/durable.test.ts`
   - 2 files, 4 tests passed.
