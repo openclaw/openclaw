@@ -125,15 +125,16 @@ export function createPluginApprovalHandlers(
         approvalKind: "plugin",
         deliverRequest: () => {
           if (!opts?.forwarder?.handlePluginApprovalRequested) {
-            return false;
+            return { delivered: false, attempted: false };
           }
           return opts.forwarder
             .handlePluginApprovalRequested(requestEvent)
+            .then((delivered) => ({ delivered, attempted: delivered }))
             .catch((err: unknown) => {
               context.logGateway?.error?.(
                 `plugin approvals: forward request failed: ${String(err)}`,
               );
-              return false;
+              return { delivered: false, attempted: true };
             });
         },
       });

@@ -163,7 +163,7 @@ describe("createExecApprovalIosPushDelivery", () => {
 
     const accepted = await delivery.handleRequested(approvalRequest("approval-1"));
 
-    expect(accepted).toBe(false);
+    expect(accepted).toEqual({ delivered: false, attempted: false });
     expect(loadApnsRegistrationsMock).not.toHaveBeenCalled();
     expect(sendApnsExecApprovalAlertMock).not.toHaveBeenCalled();
   });
@@ -175,7 +175,7 @@ describe("createExecApprovalIosPushDelivery", () => {
 
     const accepted = await delivery.handleRequested(approvalRequest("approval-2"));
 
-    expect(accepted).toBe(true);
+    expect(accepted).toEqual({ delivered: true, attempted: true });
     expect(loadApnsRegistrationsMock).toHaveBeenCalledWith(["ios-device-1"]);
     expect(sendApnsExecApprovalAlertMock).toHaveBeenCalledTimes(1);
   });
@@ -216,7 +216,7 @@ describe("createExecApprovalIosPushDelivery", () => {
       isTargetVisible,
     });
 
-    expect(accepted).toBe(false);
+    expect(accepted).toEqual({ delivered: false, attempted: false });
     expect(isTargetVisible).toHaveBeenCalledWith({
       deviceId: "ios-device-1",
       scopes: ["operator.approvals", "operator.read"],
@@ -242,7 +242,7 @@ describe("createExecApprovalIosPushDelivery", () => {
 
     const accepted = await delivery.handleRequested(approvalRequest("approval-dead-route"));
 
-    expect(accepted).toBe(false);
+    expect(accepted).toEqual({ delivered: false, attempted: true });
     expect(sendApnsExecApprovalAlertMock).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledWith(
       "exec approvals: iOS request push failed node=ios-device-1 status=410 reason=Unregistered",

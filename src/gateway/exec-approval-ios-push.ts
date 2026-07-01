@@ -362,7 +362,7 @@ export function createExecApprovalIosPushDelivery(params: { log: GatewayLikeLogg
     async handleRequested(
       request: ExecApprovalRequest,
       opts?: { isTargetVisible?: (target: ApprovalPushTarget) => boolean },
-    ): Promise<boolean> {
+    ): Promise<{ delivered: boolean; attempted: boolean }> {
       const deliveryStatePromise = (async (): Promise<ApprovalDeliveryState | null> => {
         const plan = await resolveDeliveryPlan({
           requireApprovalScope: true,
@@ -394,7 +394,7 @@ export function createExecApprovalIosPushDelivery(params: { log: GatewayLikeLogg
         pendingDeliveryStateById.delete(request.id);
       }
       if (!deliveryState) {
-        return false;
+        return { delivered: false, attempted: false };
       }
 
       const { attempted, delivered } = await deliveryState.requestPushPromise;
@@ -408,9 +408,9 @@ export function createExecApprovalIosPushDelivery(params: { log: GatewayLikeLogg
         ) {
           approvalDeliveriesById.delete(request.id);
         }
-        return false;
+        return { delivered: false, attempted: true };
       }
-      return true;
+      return { delivered: true, attempted: true };
     },
 
     /** Sends cleanup wakes for resolved approval requests. */
