@@ -923,7 +923,7 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.deviceIdentity).toBeNull();
   });
 
-  it("uses local backend auth-none without a device identity when required", async () => {
+  it("preserves device identity with local backend auth-none (operator scopes survive)", async () => {
     getRuntimeConfig.mockReturnValue({
       gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
     });
@@ -940,7 +940,8 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.scopes).toEqual(["operator.read", "operator.pairing"]);
     expect(lastClientOptions?.token).toBeUndefined();
     expect(lastClientOptions?.password).toBeUndefined();
-    expect(lastClientOptions?.deviceIdentity).toBeNull();
+    // auth mode "none" no longer strips device identity; operator scopes like operator.write must survive
+    expect(lastClientOptions?.deviceIdentity).not.toBeNull();
   });
 
   it("rejects required local backend shared auth for remote targets", async () => {

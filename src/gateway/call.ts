@@ -485,12 +485,10 @@ function shouldOmitDeviceIdentityForGatewayCall(params: {
   url: string;
   token?: string;
   password?: string;
-  allowAuthNone?: boolean;
 }): boolean {
   const mode = params.opts.mode ?? GATEWAY_CLIENT_MODES.CLI;
   const clientName = params.opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI;
-  const hasDirectLocalBackendAuth =
-    Boolean(params.token || params.password) || params.allowAuthNone === true;
+  const hasDirectLocalBackendAuth = Boolean(params.token || params.password);
   return (
     mode === GATEWAY_CLIENT_MODES.BACKEND &&
     clientName === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT &&
@@ -1153,17 +1151,19 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
   const token = useStoredDeviceAuth ? undefined : resolvedCredentials.token;
   const password = useStoredDeviceAuth ? undefined : resolvedCredentials.password;
-  const allowAuthNone =
-    opts.requireLocalBackendSharedAuth === true &&
-    resolveGatewayCallAuth(context.config).mode === "none";
+  // auth mode "none" satisfies the local-backend shared-auth check but must not
+  // strip device identity, which would drop operator scopes like operator.write.
+  const hasLocalBackendSharedAuth =
+    Boolean(token || password) ||
+    (opts.requireLocalBackendSharedAuth === true &&
+      resolveGatewayCallAuth(context.config).mode === "none");
   const omitDeviceIdentity = shouldOmitDeviceIdentityForGatewayCall({
     opts,
     url,
     token,
     password,
-    allowAuthNone,
   });
-  if (opts.requireLocalBackendSharedAuth && !omitDeviceIdentity) {
+  if (opts.requireLocalBackendSharedAuth && !hasLocalBackendSharedAuth) {
     throw new GatewayLocalBackendSharedAuthUnavailableError(
       "local backend shared auth requires a loopback gateway with token/password credentials or auth mode none",
     );
