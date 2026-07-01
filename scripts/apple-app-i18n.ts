@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { NATIVE_I18N_LOCALES } from "./native-app-i18n.ts";
@@ -7,6 +7,11 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
 const REQUIRED_LOCALES = ["en", ...NATIVE_I18N_LOCALES];
 const FORMAT_RE = /%(?:\d+\$)?[@a-z]/giu;
+const APPLE_LOCALE_DIRECTORIES: Record<string, string> = {
+  "ja-JP": "ja",
+  "zh-CN": "zh-Hans",
+  "zh-TW": "zh-Hant",
+};
 
 const CATALOGS = [
   {
@@ -89,6 +94,10 @@ function formatTokens(value: string): string[] {
   return [...value.matchAll(FORMAT_RE)].map((match) => match[0]).toSorted();
 }
 
+function stringsLiteral(value: string): string {
+  return JSON.stringify(value);
+}
+
 export async function checkAppleAppI18n() {
   let checked = 0;
   for (const spec of CATALOGS) {
@@ -149,10 +158,42 @@ export async function checkAppleAppI18n() {
   );
 }
 
-if (process.argv[1] && import.meta.url === `file://${path.resolve(process.argv[1])}`) {
-  const [command] = process.argv.slice(2);
-  if (command !== "check") {
-    throw new Error("usage: node --import tsx scripts/apple-app-i18n.ts check");
-  }
+export async function compileMacosLocalizations(outputDir: string) {
   await checkAppleAppI18n();
+  const spec = CATALOGS[1];
+  const catalog = JSON.parse(await readFile(path.join(ROOT, spec.path), "utf8")) as Catalog;
+  if (!catalog.strings) {
+    throw new Error(`invalid Apple string catalog: ${spec.path}`);
+  }
+
+  for (const locale of REQUIRED_LOCALES) {
+    const localeDir = APPLE_LOCALE_DIRECTORIES[locale] ?? locale;
+    const lprojDir = path.join(outputDir, `${localeDir}.lproj`);
+    const lines = Object.entries(catalog.strings)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, entry]) => {
+        const value = entry.localizations?.[locale]?.stringUnit?.value;
+        if (!value) {
+          throw new Error(
+            `Apple catalog ${spec.path} is missing ${locale} for ${JSON.stringify(key)}`,
+          );
+        }
+        return `${stringsLiteral(key)} = ${stringsLiteral(value)};`;
+      });
+    await mkdir(lprojDir, { recursive: true });
+    await writeFile(path.join(lprojDir, "Localizable.strings"), `${lines.join("\n")}\n`, "utf8");
+  }
+}
+
+if (process.argv[1] && import.meta.url === `file://${path.resolve(process.argv[1])}`) {
+  const [command, flag, value] = process.argv.slice(2);
+  if (command === "check") {
+    await checkAppleAppI18n();
+  } else if (command === "compile-macos" && flag === "--output" && value) {
+    await compileMacosLocalizations(path.resolve(value));
+  } else {
+    throw new Error(
+      "usage: node --import tsx scripts/apple-app-i18n.ts check|compile-macos --output <dir>",
+    );
+  }
 }
