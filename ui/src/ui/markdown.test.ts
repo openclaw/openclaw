@@ -955,4 +955,93 @@ describe("renderMarkdownSidebar", () => {
       "No previewable markdown content.",
     );
   });
+
+  it("renders editable text files as a lightweight text area", () => {
+    const container = document.createElement("div");
+    const onDraftChange = vi.fn();
+    const onReset = vi.fn();
+    const onSave = vi.fn();
+
+    render(
+      renderMarkdownSidebar({
+        content: {
+          kind: "markdown",
+          title: "notes.md",
+          content: "# notes",
+          editableTextFile: {
+            path: "notes.md",
+            sessionKey: "agent:main:main",
+            base: "# notes\n",
+            draft: "# notes\nupdated\n",
+            canEdit: true,
+            dirty: true,
+            saving: false,
+            sizeLabel: "16 B",
+            updatedLabel: "just now",
+            onDraftChange,
+            onReset,
+            onSave,
+          },
+        },
+        error: null,
+        onClose: () => undefined,
+        onViewRawText: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector(".sidebar-title")?.textContent?.trim()).toBe("notes.md");
+    expect(container.querySelector(".sidebar-markdown-reader")).toBeNull();
+    expect(container.querySelector(".sidebar-file-editor")?.textContent).toContain("Unsaved");
+    expect(container.querySelector(".sidebar-file-editor")?.textContent).toContain("16 B");
+    const textarea = container.querySelector<HTMLTextAreaElement>(".sidebar-file-editor__textarea");
+    expect(textarea?.value).toBe("# notes\nupdated\n");
+    expect(textarea?.getAttribute("aria-label")).toBe("Edit notes.md");
+
+    textarea!.value = "# changed\n";
+    textarea!.dispatchEvent(new Event("input", { bubbles: true }));
+    container.querySelector<HTMLButtonElement>(".sidebar-file-editor .primary")?.click();
+    container.querySelector<HTMLButtonElement>(".sidebar-file-editor .btn")?.click();
+
+    expect(onDraftChange).toHaveBeenCalledWith("# changed\n");
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onReset).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders non-admin editable text files as read-only", () => {
+    const container = document.createElement("div");
+    const onSave = vi.fn();
+
+    render(
+      renderMarkdownSidebar({
+        content: {
+          kind: "markdown",
+          title: "notes.md",
+          content: "# notes",
+          editableTextFile: {
+            path: "notes.md",
+            sessionKey: "agent:main:main",
+            base: "# notes\n",
+            draft: "# notes\nupdated\n",
+            canEdit: false,
+            dirty: true,
+            saving: false,
+            onDraftChange: () => undefined,
+            onReset: () => undefined,
+            onSave,
+          },
+        },
+        error: null,
+        onClose: () => undefined,
+        onViewRawText: () => undefined,
+      }),
+      container,
+    );
+
+    expect(
+      container.querySelector<HTMLTextAreaElement>(".sidebar-file-editor__textarea")?.readOnly,
+    ).toBe(true);
+    container.querySelector<HTMLButtonElement>(".sidebar-file-editor .primary")?.click();
+    expect(onSave).not.toHaveBeenCalled();
+  });
 });

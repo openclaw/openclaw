@@ -73,6 +73,19 @@ export const SessionFileRelevanceSchema = Type.Union([
   Type.Literal("mixed"),
 ]);
 
+/** Encoding used when a session file preview includes inline content. */
+export const SessionFileContentEncodingSchema = Type.Union([
+  Type.Literal("utf8"),
+  Type.Literal("base64"),
+]);
+
+/** Preview renderer class for a session workspace file. */
+export const SessionFilePreviewKindSchema = Type.Union([
+  Type.Literal("text"),
+  Type.Literal("image"),
+  Type.Literal("unsupported"),
+]);
+
 /** One file path referenced by a session transcript. */
 export const SessionFileEntrySchema = Type.Object(
   {
@@ -82,6 +95,10 @@ export const SessionFileEntrySchema = Type.Object(
     missing: Type.Boolean(),
     size: Type.Optional(Type.Integer({ minimum: 0 })),
     updatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    mimeType: Type.Optional(NonEmptyString),
+    contentEncoding: Type.Optional(SessionFileContentEncodingSchema),
+    previewKind: Type.Optional(SessionFilePreviewKindSchema),
+    editable: Type.Optional(Type.Boolean()),
     content: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
@@ -146,6 +163,28 @@ export const SessionsFilesGetParamsSchema = Type.Object(
 
 /** Result for reading one session-referenced file. */
 export const SessionsFilesGetResultSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    root: Type.Optional(NonEmptyString),
+    file: SessionFileEntrySchema,
+  },
+  { additionalProperties: false },
+);
+
+/** Writes one text file inside the session workspace root. */
+export const SessionsFilesSetParamsSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    path: NonEmptyString,
+    content: Type.String(),
+    agentId: Type.Optional(NonEmptyString),
+    baseUpdatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+/** Result for writing one text file inside the session workspace root. */
+export const SessionsFilesSetResultSchema = Type.Object(
   {
     sessionKey: NonEmptyString,
     root: Type.Optional(NonEmptyString),

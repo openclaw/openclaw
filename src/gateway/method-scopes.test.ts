@@ -423,6 +423,21 @@ describe("core gateway method classification", () => {
       });
     }
   });
+
+  it("keeps session workspace file writes admin-gated", () => {
+    expect(listGatewayMethods()).toContain("sessions.files.set");
+    expect(coreGatewayHandlers).toHaveProperty("sessions.files.set");
+    expect(resolveLeastPrivilegeOperatorScopesForMethod("sessions.files.set")).toEqual([
+      "operator.admin",
+    ]);
+    expect(authorizeOperatorScopesForMethod("sessions.files.set", ["operator.write"])).toEqual({
+      allowed: false,
+      missingScope: "operator.admin",
+    });
+    expect(authorizeOperatorScopesForMethod("sessions.files.set", ["operator.admin"])).toEqual({
+      allowed: true,
+    });
+  });
 });
 
 describe("CLI default operator scopes", () => {
