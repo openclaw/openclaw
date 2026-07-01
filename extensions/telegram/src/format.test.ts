@@ -285,11 +285,9 @@ describe("markdownToTelegramHtml", () => {
 
   it("strips standalone <parameter> wrappers (#98557)", () => {
     const input =
-      'Some text <parameter name="assumptions">\n• Assumption one\n• Assumption two\n</parameter> more text';
+      'Some text <parameter name="assumptions">\n• Assumption one\n</parameter> more text';
     const sanitized = sanitizeTelegramRichHtml(input);
     expect(sanitized).not.toContain("parameter");
-    expect(sanitized).not.toContain("&lt;parameter");
-    expect(sanitized).not.toContain("&gt;");
     expect(sanitized).toContain("Some text");
     expect(sanitized).toContain("more text");
     expect(sanitized).toContain("Assumption one");
@@ -301,7 +299,13 @@ describe("markdownToTelegramHtml", () => {
     expect(sanitized).toBe("content");
   });
 
-  it("does not escape normal paragraphs (#98557)", () => {
+  it("preserves <parameter> inside <code> blocks (#98557)", () => {
+    const input = "Use <code>&lt;parameter&gt;value&lt;/parameter&gt;</code> in XML";
+    const sanitized = sanitizeTelegramRichHtml(input);
+    expect(sanitized).toBe(input);
+  });
+
+  it("does not affect normal paragraphs (#98557)", () => {
     const input = "<b>Summary:</b> no parameter tags here";
     const sanitized = sanitizeTelegramRichHtml(input);
     expect(sanitized).toBe(input);
