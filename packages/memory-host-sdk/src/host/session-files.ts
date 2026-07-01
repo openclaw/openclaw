@@ -843,6 +843,7 @@ export async function buildSessionEntry(
       if (
         !generatedByCronRun &&
         allowArchiveContentCronClassification &&
+        collected.length === 0 &&
         isGeneratedCronPromptMessage(normalizeSessionText(rawText), message.role)
       ) {
         generatedByCronRun = true;
