@@ -471,7 +471,23 @@ export async function waitForAgentJob(params: {
 
     const timer = setSafeTimeout(() => {
       const pendingError = getPendingAgentRunError(runId);
-      finish(pendingError ? createPendingErrorTimeoutSnapshot(pendingError.snapshot) : null);
+      if (pendingError) {
+        finish(createPendingErrorTimeoutSnapshot(pendingError.snapshot));
+        return;
+      }
+      const pendingTimeout = getPendingAgentRunTimeout(runId);
+      // Forward only canonical hard timeouts. Reuse the shared terminal-outcome
+      // classifier (which excludes restart-cancelled and soft queue/draining
+      // snapshots) instead of rederiving the hard/soft gate here, so those stay
+      // correctable via retry grace.
+      if (
+        pendingTimeout &&
+        terminalOutcomeFromSnapshot(pendingTimeout.snapshot)?.reason === "hard_timeout"
+      ) {
+        finish(pendingTimeout.snapshot);
+        return;
+      }
+      finish(null);
     }, timeoutMs);
     const onAbort: (() => void) | undefined = () => finish(null);
     signal?.addEventListener("abort", onAbort, { once: true });
