@@ -121,6 +121,21 @@ export function classifySessionAttention(params: {
     };
   }
 
+  // External runtimes emit run.progress without registering an embedded run
+  // handle, leaving activeWorkKind undefined; without this gate an actively
+  // streaming session is force-recovered while its lane has nothing to reclaim.
+  const lastProgressAgeMs = params.activity.lastProgressAgeMs;
+  if (typeof lastProgressAgeMs === "number" && lastProgressAgeMs <= params.staleMs) {
+    return {
+      eventType: "session.long_running",
+      reason:
+        params.queueDepth > 0
+          ? "queued_behind_untracked_active_progress"
+          : "untracked_active_progress",
+      classification: "long_running",
+      recoveryEligible: false,
+    };
+  }
   return {
     eventType: "session.stuck",
     reason: params.queueDepth > 0 ? "queued_work_without_active_run" : "stale_session_state",
