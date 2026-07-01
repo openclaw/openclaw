@@ -79,21 +79,21 @@ describe("compaction duplicate user message pruning", () => {
     expect(duplicateIds).toEqual(new Set(["entry-2"]));
   });
 
-  it("keeps same text from different senders inside the duplicate window (#98310)", () => {
-    const alice = {
+  it("keeps same text from different senders when senderIsOwner differs (#98310)", () => {
+    const owner = {
       role: "user",
       content: "please run the deployment status check for production",
       timestamp: 1_000,
-      senderId: "alice",
+      __openclaw: { senderIsOwner: true },
     } as const;
-    const bob = {
+    const nonOwner = {
       role: "user",
       content: "please run the deployment status check for production",
       timestamp: 2_000,
-      senderId: "bob",
+      __openclaw: { senderIsOwner: false },
     } as const;
 
-    expect(dedupeDuplicateUserMessagesForCompaction([alice, bob])).toEqual([alice, bob]);
+    expect(dedupeDuplicateUserMessagesForCompaction([owner, nonOwner])).toEqual([owner, nonOwner]);
   });
 
   it("still dedupes same sender inside the duplicate window", () => {
@@ -101,13 +101,13 @@ describe("compaction duplicate user message pruning", () => {
       role: "user",
       content: "please run the deployment status check for production",
       timestamp: 1_000,
-      senderId: "alice",
+      __openclaw: { senderIsOwner: false },
     } as const;
     const retry = {
       role: "user",
       content: "please run the deployment status check for production",
       timestamp: 2_000,
-      senderId: "alice",
+      __openclaw: { senderIsOwner: false },
     } as const;
 
     expect(dedupeDuplicateUserMessagesForCompaction([first, retry])).toEqual([first]);
