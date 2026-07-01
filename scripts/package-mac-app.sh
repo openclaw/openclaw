@@ -286,23 +286,8 @@ rm -rf "$APP_ROOT/Contents/Resources/DeviceModels"
 cp -R "$ROOT_DIR/apps/macos/Sources/OpenClaw/Resources/DeviceModels" "$APP_ROOT/Contents/Resources/DeviceModels"
 
 echo "🌐 Copying app localizations"
-OPENCLAW_RESOURCE_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/OpenClaw_OpenClaw.bundle"
-if [ ! -d "$OPENCLAW_RESOURCE_BUNDLE" ]; then
-  echo "ERROR: OpenClaw resource bundle not found at $OPENCLAW_RESOURCE_BUNDLE" >&2
-  exit 1
-fi
-shopt -s nullglob
-OPENCLAW_LOCALIZATION_DIRS=("$OPENCLAW_RESOURCE_BUNDLE"/*.lproj)
-shopt -u nullglob
-if [[ "${#OPENCLAW_LOCALIZATION_DIRS[@]}" -eq 0 ]]; then
-  echo "ERROR: OpenClaw localization directories not found in $OPENCLAW_RESOURCE_BUNDLE" >&2
-  exit 1
-fi
-for localization_dir in "${OPENCLAW_LOCALIZATION_DIRS[@]}"; do
-  localization_name="$(basename "$localization_dir")"
-  rm -rf "$APP_ROOT/Contents/Resources/$localization_name"
-  cp -R "$localization_dir" "$APP_ROOT/Contents/Resources/$localization_name"
-done
+node --import tsx "$ROOT_DIR/scripts/apple-app-i18n.ts" compile-macos \
+  --output "$APP_ROOT/Contents/Resources"
 
 echo "📦 Copying Control UI assets"
 CONTROL_UI_SRC="$ROOT_DIR/dist/control-ui"

@@ -383,12 +383,6 @@ describe("package-mac-app plist stamping", () => {
 
   it("fails closed when required Swift resources are missing", () => {
     const script = readFileSync(scriptPath, "utf8");
-    const openClawBlock = script.slice(
-      script.indexOf(
-        'OPENCLAW_RESOURCE_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/OpenClaw_OpenClaw.bundle"',
-      ),
-      script.indexOf('echo "📦 Copying Control UI assets"'),
-    );
     const openClawKitBlock = script.slice(
       script.indexOf(
         'OPENCLAWKIT_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/OpenClawKit_OpenClawKit.bundle"',
@@ -396,14 +390,10 @@ describe("package-mac-app plist stamping", () => {
       script.indexOf("running_packaged_app_pids()"),
     );
 
-    expect(openClawBlock).toContain("ERROR: OpenClaw resource bundle not found");
-    expect(openClawBlock).toContain("ERROR: OpenClaw localization directories not found");
-    expect(openClawBlock).toContain(
-      'cp -R "$localization_dir" "$APP_ROOT/Contents/Resources/$localization_name"',
+    expect(script).toContain(
+      'node --import tsx "$ROOT_DIR/scripts/apple-app-i18n.ts" compile-macos',
     );
-    expect(openClawBlock).toContain("exit 1");
-    expect(openClawBlock).not.toContain("WARN:");
-    expect(openClawBlock).not.toContain("continuing");
+    expect(script).toContain('--output "$APP_ROOT/Contents/Resources"');
     expect(openClawKitBlock).toContain("ERROR: OpenClawKit resource bundle not found");
     expect(openClawKitBlock).toContain("exit 1");
     expect(openClawKitBlock).not.toContain("WARN:");
