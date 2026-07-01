@@ -11,4 +11,5 @@ export {
   getMemorySearchManager,
   type MemorySearchManagerPurpose,
   type MemorySearchManagerResult,
+  releaseMemoryIndexManagers,
 } from "./search-manager.js";

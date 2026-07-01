@@ -80,11 +80,27 @@ export async function closeActiveMemorySearchManagers(cfg?: OpenClawConfig): Pro
   await runtime?.closeAllMemorySearchManagers?.();
 }
 
-/** Closes the plugin-backed memory search manager for one agent. */
+/**
+ * Closes the plugin-backed memory search manager for one agent. With scope
+ * "index-managers" it releases only the disposable local index managers and
+ * keeps the shared manager alive, used by active-memory recall-timeout cleanup
+ * so a request-scoped timeout does not tear down the long-lived QMD manager
+ * (#96455).
+ */
 export async function closeActiveMemorySearchManager(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  scope?: "manager" | "index-managers";
 }): Promise<void> {
   const runtime = getMemoryRuntime();
-  await runtime?.closeMemorySearchManager?.(params);
+  const target = { cfg: params.cfg, agentId: params.agentId };
+  if (params.scope === "index-managers" && runtime?.releaseMemoryIndexManagers) {
+    // memory-core implements the narrow hook, so recall-timeout cleanup releases
+    // only the disposable index managers and leaves the shared QMD manager alive
+    // (#96455). A runtime without it falls through to the legacy close below, so
+    // its prior post-timeout cleanup (#84048) is not silently dropped.
+    await runtime.releaseMemoryIndexManagers(target);
+    return;
+  }
+  await runtime?.closeMemorySearchManager?.(target);
 }
