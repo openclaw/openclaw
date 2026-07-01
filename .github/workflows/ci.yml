@@ -834,7 +834,6 @@ jobs:
         run: pnpm native:i18n:check
 
       - name: Check Android app i18n resources
-        if: needs.preflight.outputs.run_android == 'true'
         run: pnpm android:i18n:check
 
   checks-fast-core:
