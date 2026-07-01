@@ -134,6 +134,7 @@ import {
   resolveChatAttachmentMaxBytes,
   UnsupportedAttachmentError,
 } from "../chat-attachments.js";
+import { evaluateChatClarification } from "../chat-clarification.js";
 import {
   augmentChatHistoryWithCanvasBlocks,
   dropPreSessionStartAnnouncePairs,
@@ -889,18 +890,23 @@ async function buildAssistantDisplayContentFromReplyPayloads(params: {
     } else if (typeof payload.text === "string" && payload.text.trim().length > 0) {
       strippedTextPayloadCount += 1;
     }
-    if (params.includeSensitiveMedia === false && payload.sensitiveMedia === true) {
+    const includeSensitiveMedia = !(
+      params.includeSensitiveMedia === false && payload.sensitiveMedia === true
+    );
+    if (!includeSensitiveMedia && payload.trustedLocalMedia !== true) {
       continue;
     }
-    const audioBlocks = await buildWebchatAudioContentBlocksFromReplyPayloads([payload], {
-      localRoots: Array.isArray(params.managedImageLocalRoots)
-        ? params.managedImageLocalRoots
-        : undefined,
-      onLocalAudioAccessDenied: (err) => {
-        params.onLocalAudioAccessDenied?.(formatForLog(err));
-      },
-    });
-    content.push(...audioBlocks);
+    if (includeSensitiveMedia) {
+      const audioBlocks = await buildWebchatAudioContentBlocksFromReplyPayloads([payload], {
+        localRoots: Array.isArray(params.managedImageLocalRoots)
+          ? params.managedImageLocalRoots
+          : undefined,
+        onLocalAudioAccessDenied: (err) => {
+          params.onLocalAudioAccessDenied?.(formatForLog(err));
+        },
+      });
+      content.push(...audioBlocks);
+    }
 
     const mediaUrls = Array.from(
       new Set([
@@ -3144,6 +3150,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       systemInputProvenance?: InputProvenance;
       systemProvenanceReceipt?: string;
       suppressCommandInterpretation?: boolean;
+      clarification?: {
+        bypass?: boolean;
+        answer?: string;
+      };
       idempotencyKey: string;
     };
     const suppressCommandInterpretation = p.suppressCommandInterpretation === true;
@@ -3362,6 +3372,42 @@ export const chatHandlers: GatewayRequestHandlers = {
         cached: true,
         runId: clientRunId,
       });
+      return;
+    }
+    const clarificationDecision = evaluateChatClarification({
+      message: inboundMessage,
+      hasAttachments: normalizedAttachments.length > 0,
+      hasPriorSessionContext: Boolean(entry?.sessionId || requestedSessionId),
+      bypass: p.clarification?.bypass === true,
+      isSystemOrigin: Boolean(
+        systemInputProvenance || systemProvenanceReceipt || explicitOriginResult.value,
+      ),
+      suppressCommandInterpretation,
+    });
+    if (clarificationDecision.action === "clarify") {
+      const ackedAtMs = performance.now();
+      const serverTiming = shouldIncludeChatSendAckServerTiming(client?.connect?.client)
+        ? chatSendAckServerTimingAttributes({
+            receivedToAckMs: roundedChatSendTimingMs(ackedAtMs - chatSendReceivedAtMs),
+            loadSessionMs: sessionLoadMs,
+          })
+        : undefined;
+      const payload = {
+        runId: clientRunId,
+        status: "needs_clarification" as const,
+        clarification: clarificationDecision.clarification,
+        ...(serverTiming ? { serverTiming } : {}),
+      };
+      setGatewayDedupeEntry({
+        dedupe: context.dedupe,
+        key: `chat:${clientRunId}`,
+        entry: {
+          ts: Date.now(),
+          ok: true,
+          payload,
+        },
+      });
+      respond(true, payload, undefined, { runId: clientRunId });
       return;
     }
     const clientInfo = client?.connect?.client;

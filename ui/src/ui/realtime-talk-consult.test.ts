@@ -62,6 +62,37 @@ describe("RealtimeTalkSession consult handoff", () => {
     expect(submit).toHaveBeenCalledWith("call-1", { result: "Basement lights are off." });
   });
 
+  it("submits immediate clarification results without waiting for a chat run", async () => {
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "talk.client.toolCall") {
+        return {
+          runId: "run-clarify-1",
+          status: "needs_clarification",
+          result: "I need a little more detail before starting: what exactly should I change?",
+        };
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const addEventListener = vi.fn();
+    const submit = vi.fn();
+
+    await submitRealtimeTalkConsult({
+      ctx: {
+        client: { request, addEventListener },
+        sessionKey: "agent:main:main",
+        callbacks: {},
+      } as never,
+      callId: "call-1",
+      args: { question: "Fix this" },
+      submit,
+    });
+
+    expect(submit).toHaveBeenCalledWith("call-1", {
+      result: "I need a little more detail before starting: what exactly should I change?",
+    });
+    expect(addEventListener).not.toHaveBeenCalled();
+  });
+
   it("prefers source-reply final text over an earlier empty Talk consult final", async () => {
     let listener: ((event: { event: string; payload?: unknown }) => void) | undefined;
     const request = vi.fn(async (method: string) => {
@@ -553,6 +584,49 @@ describe("RealtimeTalkSession consult handoff", () => {
       submit,
     });
 
+    expect(submit).toHaveBeenCalledWith("call-1", {
+      status: "cancelled",
+      message: "Cancelled the active OpenClaw run.",
+    });
+  });
+
+  it("aborts the returned consult session when an active consult signal is cancelled", async () => {
+    const consultSessionKey = "agent:main:subagent:talk:deadbeefdeadbeef";
+    const controller = new AbortController();
+    const request = vi.fn(async (method: string) => {
+      if (method === "talk.client.toolCall") {
+        return { runId: "run-1", sessionKey: consultSessionKey };
+      }
+      if (method === "chat.abort") {
+        return { ok: true, aborted: true };
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    const addEventListener = vi.fn(() => () => undefined);
+    const submit = vi.fn();
+
+    const consult = submitRealtimeTalkConsult({
+      ctx: {
+        client: { request, addEventListener },
+        sessionKey: "agent:main:main",
+        callbacks: {},
+      } as never,
+      callId: "call-1",
+      args: { question: "Check files" },
+      submit,
+      signal: controller.signal,
+    });
+
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("talk.client.toolCall", expect.any(Object));
+    });
+    controller.abort();
+    await consult;
+
+    expect(request).toHaveBeenCalledWith("chat.abort", {
+      sessionKey: consultSessionKey,
+      runId: "run-1",
+    });
     expect(submit).toHaveBeenCalledWith("call-1", {
       status: "cancelled",
       message: "Cancelled the active OpenClaw run.",

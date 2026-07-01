@@ -29,6 +29,10 @@ import { resolveSessionStoreEntry } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  evaluateChatClarification,
+  type ChatClarificationRequest,
+} from "../../gateway/chat-clarification.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
@@ -207,6 +211,19 @@ function normalizePromptRouteChannel(raw?: string | null): string | undefined {
 
 function normalizeToolProgressDetail(value: unknown): "explain" | "raw" | undefined {
   return value === "explain" || value === "raw" ? value : undefined;
+}
+
+function buildClarificationReply(request: ChatClarificationRequest): ReplyPayload {
+  return {
+    text: [
+      "I need a little more detail before I start.",
+      "",
+      request.question,
+      "",
+      "Helpful detail:",
+      ...request.suggestions.map((suggestion) => `- ${suggestion}`),
+    ].join("\n"),
+  };
 }
 
 function resolvePersistedPromptProvider(entry?: SessionEntry): string | undefined {
@@ -749,6 +766,20 @@ export async function runPreparedReply(
     return {
       text: "I didn't receive any text in your message. Please resend or add a caption.",
     };
+  }
+  const clarificationDecision = evaluateChatClarification({
+    message: rawBodyTrimmed || baseBodyFinal,
+    hasAttachments: hasMediaAttachment,
+    hasPriorSessionContext: !isNewSession || hasCurrentReplyTargetContext,
+    isSystemOrigin:
+      isHeartbeat ||
+      isSystemEventProvider(ctx.Provider) ||
+      isSystemEventProvider(sessionCtx.Provider) ||
+      inboundEventKind === "room_event",
+  });
+  if (clarificationDecision.action === "clarify") {
+    typing.cleanup();
+    return buildClarificationReply(clarificationDecision.clarification);
   }
   const promptEnvelopeBase = buildReplyPromptEnvelopeBase({
     ctx,

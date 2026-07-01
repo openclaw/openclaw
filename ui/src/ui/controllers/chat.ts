@@ -47,7 +47,11 @@ import type {
   GatewaySessionsDefaults,
   ModelCatalogEntry,
 } from "../types.ts";
-import type { ChatAttachment } from "../ui-types.ts";
+import type {
+  ChatAttachment,
+  ChatClarificationRequest,
+  ChatClarificationResponse,
+} from "../ui-types.ts";
 import { generateUUID } from "../uuid.ts";
 import {
   formatMissingOperatorReadScopeMessage,
@@ -891,7 +895,7 @@ function buildApiAttachments(attachments?: ChatAttachment[]) {
     : undefined;
 }
 
-export type ChatSendAckStatus = "started" | "in_flight" | "ok";
+export type ChatSendAckStatus = "started" | "in_flight" | "ok" | "needs_clarification";
 
 export type ChatSendAckServerTiming = {
   receivedToAckMs?: number;
@@ -902,6 +906,7 @@ export type ChatSendAckServerTiming = {
 export type ChatSendAck = {
   runId: string;
   status: ChatSendAckStatus;
+  clarification?: ChatClarificationRequest;
   serverTiming?: ChatSendAckServerTiming;
 };
 
@@ -925,6 +930,45 @@ function normalizeChatSendAckServerTiming(value: unknown): ChatSendAckServerTimi
   return Object.keys(timing).length > 0 ? timing : undefined;
 }
 
+function normalizeChatClarificationRequest(value: unknown): ChatClarificationRequest | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const question =
+    typeof record.question === "string" && record.question.trim()
+      ? record.question.trim()
+      : undefined;
+  if (!question) {
+    return undefined;
+  }
+  const issues = Array.isArray(record.issues)
+    ? record.issues
+        .map((issue) => {
+          if (!issue || typeof issue !== "object") {
+            return null;
+          }
+          const entry = issue as Record<string, unknown>;
+          const key = typeof entry.key === "string" && entry.key.trim() ? entry.key.trim() : "";
+          const label =
+            typeof entry.label === "string" && entry.label.trim() ? entry.label.trim() : "";
+          return key && label ? { key, label } : null;
+        })
+        .filter((issue): issue is { key: string; label: string } => issue !== null)
+    : [];
+  const suggestions = Array.isArray(record.suggestions)
+    ? record.suggestions
+        .filter((suggestion): suggestion is string => typeof suggestion === "string")
+        .map((suggestion) => suggestion.trim())
+        .filter(Boolean)
+    : undefined;
+  return {
+    question,
+    issues,
+    ...(suggestions && suggestions.length > 0 ? { suggestions } : {}),
+  };
+}
+
 function normalizeChatSendAck(payload: unknown, fallbackRunId: string): ChatSendAck {
   if (!payload || typeof payload !== "object") {
     return { runId: fallbackRunId, status: "started" };
@@ -934,9 +978,18 @@ function normalizeChatSendAck(payload: unknown, fallbackRunId: string): ChatSend
     typeof record.runId === "string" && record.runId.trim() ? record.runId.trim() : fallbackRunId;
   const status = record.status;
   const serverTiming = normalizeChatSendAckServerTiming(record.serverTiming);
+  const normalizedStatus =
+    status === "in_flight" || status === "ok" || status === "needs_clarification"
+      ? status
+      : "started";
+  const clarification =
+    normalizedStatus === "needs_clarification"
+      ? normalizeChatClarificationRequest(record.clarification)
+      : undefined;
   return {
     runId,
-    status: status === "in_flight" || status === "ok" ? status : "started",
+    status: normalizedStatus,
+    ...(clarification ? { clarification } : {}),
     ...(serverTiming ? { serverTiming } : {}),
   };
 }
@@ -949,6 +1002,7 @@ export async function requestChatSend(
     runId: string;
     sessionKey?: string;
     agentId?: string;
+    clarification?: ChatClarificationResponse;
   },
 ): Promise<ChatSendAck> {
   const routing = resolveChatSendRouting(state, params);
@@ -962,6 +1016,7 @@ export async function requestChatSend(
     deliver: false,
     idempotencyKey: params.runId,
     attachments: buildApiAttachments(params.attachments),
+    ...(params.clarification ? { clarification: params.clarification } : {}),
   });
   return normalizeChatSendAck(payload, params.runId);
 }

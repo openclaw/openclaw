@@ -13,6 +13,30 @@ export type ChatQueueSkillWorkshopRevision = {
   agentId?: string;
 };
 
+export type ChatClarificationIssue = {
+  key: string;
+  label: string;
+};
+
+export type ChatClarificationRequest = {
+  question: string;
+  issues: ChatClarificationIssue[];
+  suggestions?: string[];
+};
+
+export type ChatClarificationResponse = {
+  bypass?: boolean;
+  answer?: string;
+};
+
+export type PendingChatClarification = ChatClarificationRequest & {
+  runId: string;
+  sessionKey: string;
+  originalMessage: string;
+  agentId?: string;
+  attachments?: ChatAttachment[];
+};
+
 export type ChatQueueItem = {
   id: string;
   text: string;
@@ -32,6 +56,7 @@ export type ChatQueueItem = {
   sessionKey?: string;
   agentId?: string;
   skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
+  clarification?: ChatClarificationResponse;
 };
 
 export type ChatSessionRefreshTarget = {

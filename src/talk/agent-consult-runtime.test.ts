@@ -205,6 +205,28 @@ describe("realtime voice agent consult runtime", () => {
     );
   });
 
+  it("asks for clarification before launching vague embedded voice consults", async () => {
+    const { runtime, runEmbeddedAgent } = createAgentRuntime();
+
+    const result = await consultRealtimeVoiceAgent({
+      cfg: {} as never,
+      agentRuntime: runtime as never,
+      logger: { warn: vi.fn() },
+      sessionKey: "voice:15550001234",
+      messageProvider: "voice",
+      lane: "voice",
+      runIdPrefix: "voice-realtime-consult:call-1",
+      args: { question: "Fix this" },
+      transcript: [],
+      surface: "a live phone call",
+      userLabel: "Caller",
+    });
+
+    expect(result.text).toContain("I need a little more detail before starting");
+    expect(result.text).toContain("What exactly should I work on");
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  });
+
   it("scopes sandbox resolution to the configured consult agent", async () => {
     const { runtime, runEmbeddedAgent } = createAgentRuntime();
 
@@ -343,7 +365,7 @@ describe("realtime voice agent consult runtime", () => {
       messageProvider: "voice",
       lane: "voice",
       runIdPrefix: "voice-realtime-consult:call-1",
-      args: { question: "Send a status message." },
+      args: { question: "Summarize the caller's status question." },
       transcript: [],
       surface: "a live phone call",
       userLabel: "Caller",
@@ -400,7 +422,7 @@ describe("realtime voice agent consult runtime", () => {
       messageProvider: "voice",
       lane: "voice",
       runIdPrefix: "voice-realtime-consult:call-1",
-      args: { question: "Send this to the original chat." },
+      args: { question: "Summarize the current call for the original chat." },
       transcript: [],
       surface: "a live phone call",
       userLabel: "Caller",

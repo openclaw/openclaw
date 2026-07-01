@@ -654,6 +654,110 @@
   margin: 0;
 }
 
+.agent-chat__prompt-quality {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 8px 10px 0;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--warning) 36%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--warning) 10%, var(--card));
+  color: var(--text);
+}
+
+.agent-chat__prompt-quality-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+
+.agent-chat__prompt-quality-icon {
+  display: inline-flex;
+  width: 17px;
+  height: 17px;
+  margin-top: 1px;
+  color: var(--warning);
+  flex-shrink: 0;
+}
+
+.agent-chat__prompt-quality-icon svg {
+  width: 17px;
+  height: 17px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.agent-chat__prompt-quality-title {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.agent-chat__prompt-quality-subtitle,
+.agent-chat__prompt-quality-list {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.agent-chat__prompt-quality-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-chat__prompt-quality-list li {
+  padding: 4px 7px;
+  border: 1px solid color-mix(in srgb, var(--warning) 22%, var(--border));
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--warning) 7%, transparent);
+}
+
+.agent-chat__prompt-quality-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.agent-chat__clarification-suggestions {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0 0 0 18px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.agent-chat__clarification-answer {
+  width: 100%;
+  min-height: 56px;
+  max-height: 150px;
+  resize: vertical;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 9px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.agent-chat__clarification-answer:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
 .agent-chat__composer-controls {
   display: flex;
   position: relative;

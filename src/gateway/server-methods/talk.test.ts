@@ -1338,11 +1338,14 @@ describe("talk.client.toolCall handler", () => {
       params?: Record<string, unknown>;
     };
     expectRecordFields(chatInput.req, { method: "chat.send" });
-    expectRecordFields(chatInput.params, { sessionKey: "main" });
+    const talkSessionKey = chatInput.params?.sessionKey;
+    expect(typeof talkSessionKey).toBe("string");
+    expect(talkSessionKey).toMatch(/^agent:main:subagent:talk:[0-9a-f]{16}$/);
     expect(chatInput.params?.message).toContain("What is in this repo?");
     expect(chatInput.params?.idempotencyKey).toMatch(/^talk-call-1-/);
     const response = expectRespondOk(respond, { runId: "run-voice-1" }) as Record<string, unknown>;
     expect(response.idempotencyKey).toMatch(/^talk-call-1-/);
+    expect(response.sessionKey).toBe(talkSessionKey);
   });
 
   it("passes configured consult thinking and fast-mode overrides to chat.send", async () => {
@@ -1378,6 +1381,57 @@ describe("talk.client.toolCall handler", () => {
     expectRespondOk(respond, { runId: "run-voice-1" });
   });
 
+  it("returns chat clarification requests as immediate speakable consult results", async () => {
+    mocks.chatSend.mockImplementationOnce(
+      async ({
+        respond,
+      }: {
+        respond: (ok: boolean, result?: unknown, error?: unknown) => void;
+      }) => {
+        respond(
+          true,
+          {
+            runId: "run-clarify-1",
+            status: "needs_clarification",
+            clarification: {
+              question: "What exactly should I work on?",
+              issues: [{ key: "missing_context", label: "Add context." }],
+              suggestions: ["Name the file or screen.", "Define what done means."],
+            },
+          },
+          undefined,
+        );
+      },
+    );
+    const respond = vi.fn();
+
+    await talkHandlers["talk.client.toolCall"]({
+      req: { type: "req", id: "1", method: "talk.client.toolCall" },
+      params: {
+        sessionKey: "main",
+        relaySessionId: "relay-1",
+        callId: "call-1",
+        name: "openclaw_agent_consult",
+        args: { question: "Fix this" },
+      },
+      client: { connId: "conn-1" } as never,
+      isWebchatConnect: () => false,
+      respond: respond as never,
+      context: {
+        getRuntimeConfig: () => ({}) as OpenClawConfig,
+      } as never,
+    });
+
+    const response = expectRespondOk(respond, {
+      runId: "run-clarify-1",
+      status: "needs_clarification",
+    }) as Record<string, unknown>;
+    expect(response.result).toContain("I need a little more detail before starting");
+    expect(response.result).toContain("What exactly should I work on?");
+    expect(response.result).toContain("Name the file or screen.");
+    expect(mocks.registerTalkRealtimeRelayAgentRun).not.toHaveBeenCalled();
+  });
+
   it("links relay-owned agent consult runs so relay cancellation can abort them", async () => {
     const respond = vi.fn();
 
@@ -1398,14 +1452,18 @@ describe("talk.client.toolCall handler", () => {
       } as never,
     });
 
+    const chatInput = mockCallArg(mocks.chatSend) as { params?: Record<string, unknown> };
+    const talkSessionKey = chatInput.params?.sessionKey;
+    expect(typeof talkSessionKey).toBe("string");
+    expect(talkSessionKey).toMatch(/^agent:main:subagent:talk:[0-9a-f]{16}$/);
     expect(mocks.registerTalkRealtimeRelayAgentRun).toHaveBeenCalledWith({
       relaySessionId: "relay-1",
       connId: "conn-1",
-      sessionKey: "main",
+      sessionKey: talkSessionKey,
       runId: "run-voice-1",
       callId: "call-1",
     });
-    expectRespondOk(respond, { runId: "run-voice-1" });
+    expectRespondOk(respond, { runId: "run-voice-1", sessionKey: talkSessionKey });
   });
 
   it("rejects client tool calls that are not the agent consult tool", async () => {

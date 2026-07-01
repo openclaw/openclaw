@@ -95,6 +95,15 @@ export const ChatSendParamsSchema = Type.Object(
     systemInputProvenance: Type.Optional(InputProvenanceSchema),
     systemProvenanceReceipt: Type.Optional(Type.String()),
     suppressCommandInterpretation: Type.Optional(Type.Boolean()),
+    clarification: Type.Optional(
+      Type.Object(
+        {
+          bypass: Type.Optional(Type.Boolean()),
+          answer: Type.Optional(Type.String({ maxLength: 16_384 })),
+        },
+        { additionalProperties: false },
+      ),
+    ),
     idempotencyKey: NonEmptyString,
   },
   { additionalProperties: false },

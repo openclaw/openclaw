@@ -86,9 +86,11 @@ import type {
 import type { SessionsListResult } from "./types.ts";
 import type {
   ChatAttachment,
+  ChatClarificationResponse,
   ChatQueueItem,
   ChatQueueSkillWorkshopRevision,
   ChatSessionRefreshTarget,
+  PendingChatClarification,
 } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
 import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
@@ -115,6 +117,7 @@ export type ChatHost = ChatInputHistoryState & {
   chatAvatarReason?: string | null;
   chatSideResult?: ChatSideResult | null;
   chatSideResultTerminalRuns?: Set<string>;
+  chatClarification?: PendingChatClarification | null;
   chatModelOverrides: Record<string, ChatModelOverride | null>;
   chatModelSwitchPromises?: Record<string, Promise<boolean>>;
   chatModelsLoading: boolean;
@@ -154,6 +157,7 @@ function setChatError(host: ChatHost, error: string | null) {
 
 export type ChatSendOptions = {
   confirmReset?: boolean;
+  clarification?: ChatClarificationResponse;
   restoreDraft?: boolean;
   skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
 };
@@ -435,6 +439,7 @@ function enqueuePendingSendMessage(
     ? "sending"
     : "waiting-reconnect",
   skillWorkshopRevision?: ChatQueueSkillWorkshopRevision,
+  clarification?: ChatClarificationResponse,
 ): ChatQueueItem | null {
   const trimmed = text.trim();
   const hasAttachments = Boolean(attachments && attachments.length > 0);
@@ -454,6 +459,7 @@ function enqueuePendingSendMessage(
     sessionKey: host.sessionKey,
     agentId: scopedAgentIdForSession(host, host.sessionKey),
     ...(skillWorkshopRevision ? { skillWorkshopRevision } : {}),
+    ...(clarification ? { clarification } : {}),
   };
   host.chatQueue = [...host.chatQueue, pending];
   recordChatSendTiming(host, pending, "pending-visible", submittedAtMs);
@@ -605,7 +611,7 @@ function cancelPendingSendBeforeRequest(
   }
 }
 
-type QueuedChatSendResult = "sent" | "pending" | "failed";
+type QueuedChatSendResult = "sent" | "pending" | "failed" | "clarification";
 
 type ChatSendTimingPhase =
   | "pending-visible"
@@ -623,7 +629,8 @@ type ChatSendTimingPhase =
   | "queued-busy"
   | "waiting-model"
   | "waiting-reconnect"
-  | "failed";
+  | "failed"
+  | "needs-clarification";
 
 type ChatSendTimingEntry = {
   runId: string;
@@ -1070,6 +1077,7 @@ async function sendQueuedChatMessage(
           runId,
           sessionKey,
           agentId: prepared.agentId,
+          clarification: prepared.clarification,
         });
     updateChatSendAckTiming(host, runId, ack, sendingItem, requestStartedAtMs);
     recordChatSendTiming(host, sendingItem, "ack", sendingItem.sendSubmittedAtMs, {
@@ -1078,6 +1086,41 @@ async function sendQueuedChatMessage(
       ...chatSendAckServerTimingEventFields(ack),
     });
     removeQueuedMessageWithoutReleasing(host, id, sessionKey);
+    if (ack.status === "needs_clarification") {
+      if (isVisibleSession()) {
+        host.chatClarification = {
+          question:
+            ack.clarification?.question ??
+            "What exactly should I work on, where should I look, and what does a good result look like?",
+          issues: ack.clarification?.issues ?? [],
+          ...(ack.clarification?.suggestions ? { suggestions: ack.clarification.suggestions } : {}),
+          runId: ack.runId,
+          sessionKey,
+          originalMessage: message,
+          ...(prepared.agentId ? { agentId: prepared.agentId } : {}),
+          ...(hasAttachments ? { attachments } : {}),
+        };
+        host.chatRunId = null;
+        host.chatStream = null;
+        (host as ChatHost & { chatStreamStartedAt?: number | null }).chatStreamStartedAt = null;
+        reconcileChatRunLifecycle(
+          host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
+          {
+            clearRunStatus: true,
+            clearLocalRun: true,
+            clearChatStream: true,
+            clearToolStream: true,
+          },
+        );
+        recordChatSendTiming(
+          host,
+          sendingItem,
+          "needs-clarification",
+          sendingItem.sendSubmittedAtMs,
+        );
+      }
+      return "clarification";
+    }
     if (isVisibleSession()) {
       appendUserChatMessage(
         host as unknown as ChatState,
@@ -1176,6 +1219,7 @@ async function sendChatMessageNow(
     restoreAttachments?: boolean;
     refreshSessions?: boolean;
     submittedAtMs?: number;
+    clarification?: ChatClarificationResponse;
   },
 ) {
   resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
@@ -1190,6 +1234,9 @@ async function sendChatMessageNow(
           opts?.attachments,
           opts?.refreshSessions,
           opts?.submittedAtMs,
+          undefined,
+          undefined,
+          opts?.clarification,
         );
   if (!queued) {
     return false;
@@ -1803,6 +1850,9 @@ export async function handleSendChat(
     if (messageOverride == null) {
       recordNonTranscriptInputHistory(host, message);
     }
+    if (!opts?.clarification) {
+      host.chatClarification = null;
+    }
 
     const modelSwitchReady = waitForPendingChatModelSwitch(host, submittedSessionKey);
     const waitingForModel = modelSwitchReady !== true;
@@ -1814,6 +1864,7 @@ export async function handleSendChat(
       submittedAtMs,
       waitingForModel ? "waiting-model" : undefined,
       skillWorkshopRevision,
+      opts?.clarification,
     );
     if (!queued) {
       return;
@@ -1864,8 +1915,49 @@ export async function handleSendChat(
       restoreAttachments: Boolean(messageOverride && opts?.restoreDraft),
       refreshSessions,
       submittedAtMs,
+      clarification: opts?.clarification,
     });
   });
+}
+
+export async function submitChatClarification(host: ChatHost, answer: string) {
+  const pending = host.chatClarification;
+  const trimmedAnswer = answer.trim();
+  if (!pending || !trimmedAnswer) {
+    return;
+  }
+  if (pending.sessionKey !== host.sessionKey) {
+    setChatError(host, "Switch back to the original chat before answering this clarification.");
+    return;
+  }
+  const original = pending.originalMessage.trim();
+  const message = `${original}\n\nClarification answer:\n${trimmedAnswer}`;
+  const attachments = pending.attachments?.length
+    ? snapshotChatAttachments(pending.attachments)
+    : undefined;
+  host.chatClarification = null;
+  await sendChatMessageNow(host, message, {
+    attachments,
+    clarification: {
+      bypass: true,
+      answer: trimmedAnswer,
+    },
+    submittedAtMs: controlUiNowMs(),
+  });
+}
+
+export function cancelChatClarification(host: ChatHost) {
+  const pending = host.chatClarification;
+  if (!pending) {
+    return;
+  }
+  host.chatClarification = null;
+  if (!host.chatMessage.trim()) {
+    host.chatMessage = pending.originalMessage;
+  }
+  if (pending.attachments?.length && host.chatAttachments.length === 0) {
+    host.chatAttachments = pending.attachments;
+  }
 }
 
 function shouldQueueLocalSlashCommand(name: string): boolean {

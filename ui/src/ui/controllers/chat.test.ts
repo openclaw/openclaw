@@ -1957,6 +1957,47 @@ describe("sendChatMessage", () => {
     });
   });
 
+  it("preserves clarification ACKs and sends clarification bypass metadata", async () => {
+    const request = vi.fn().mockResolvedValue({
+      runId: "run-clarify",
+      status: "needs_clarification",
+      clarification: {
+        question: "What exactly should I work on?",
+        issues: [
+          { key: "missing_context", label: "Add context." },
+          { key: "", label: "ignored" },
+        ],
+        suggestions: ["Name the target.", ""],
+      },
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await requestChatSend(state, {
+      message: "fix this",
+      runId: "run-clarify",
+      clarification: { bypass: true, answer: "Use ui/src/ui/views/chat.ts." },
+    });
+
+    expect(result).toEqual({
+      runId: "run-clarify",
+      status: "needs_clarification",
+      clarification: {
+        question: "What exactly should I work on?",
+        issues: [{ key: "missing_context", label: "Add context." }],
+        suggestions: ["Name the target."],
+      },
+    });
+    expect(request).toHaveBeenCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        clarification: { bypass: true, answer: "Use ui/src/ui/views/chat.ts." },
+      }),
+    );
+  });
+
   it("omits literal global send agentId until selected/default agent is known", async () => {
     const request = vi.fn().mockResolvedValue({ runId: "run-global", status: "started" });
     const state = createState({

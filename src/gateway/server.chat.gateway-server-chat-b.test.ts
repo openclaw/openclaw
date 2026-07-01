@@ -917,6 +917,117 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.send returns a clarification request before starting vague operator prompts", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown; meta?: unknown }> =
+        [];
+      const context = {
+        loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        agentRunSeq: new Map<string, number>(),
+        chatAbortControllers: new Map(),
+        chatAbortedRuns: new Map(),
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        chatDeltaLastBroadcastText: new Map(),
+        agentDeltaSentAt: new Map(),
+        bufferedAgentEvents: new Map(),
+        clearChatRunState: vi.fn(),
+        addChatRun: vi.fn(),
+        removeChatRun: vi.fn(),
+        broadcast: vi.fn(),
+        broadcastToConnIds: vi.fn(),
+        nodeSendToSession: vi.fn(),
+        registerToolEventRecipient: vi.fn(),
+        getRuntimeConfig: () => ({}),
+        dedupe: new Map(),
+      } as unknown as GatewayRequestContext;
+
+      const params = {
+        sessionKey: "main",
+        message: "fix this",
+        idempotencyKey: "idem-clarify",
+      };
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      await chatHandlers["chat.send"]({
+        req: { type: "req", id: "clarify", method: "chat.send", params },
+        params,
+        client: null,
+        isWebchatConnect: () => true,
+        respond: ((ok, payload, error, meta) => {
+          responses.push({ ok, payload, error, meta });
+        }) as RespondFn,
+        context,
+      });
+
+      expect(responses).toEqual([
+        {
+          ok: true,
+          payload: {
+            runId: "idem-clarify",
+            status: "needs_clarification",
+            clarification: {
+              question: expect.stringContaining("What exactly should I work on"),
+              issues: expect.arrayContaining([
+                expect.objectContaining({ key: "vague_reference" }),
+                expect.objectContaining({ key: "missing_context" }),
+              ]),
+              suggestions: expect.any(Array),
+            },
+          },
+          error: undefined,
+          meta: { runId: "idem-clarify" },
+        },
+      ]);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      expect(context.addChatRun).not.toHaveBeenCalled();
+
+      await chatHandlers["chat.send"]({
+        req: { type: "req", id: "clarify-retry", method: "chat.send", params },
+        params,
+        client: null,
+        isWebchatConnect: () => true,
+        respond: ((ok, payload, error, meta) => {
+          responses.push({ ok, payload, error, meta });
+        }) as RespondFn,
+        context,
+      });
+
+      expect(responses[1]).toMatchObject({
+        ok: true,
+        payload: {
+          runId: "idem-clarify",
+          status: "needs_clarification",
+        },
+        error: undefined,
+        meta: { cached: true },
+      });
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+    } finally {
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await removeTempDir(sessionDir);
+    }
+  });
+
   test("chat.abort cancels chat.send during attachment preparation before ACK", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     const firstCatalog =

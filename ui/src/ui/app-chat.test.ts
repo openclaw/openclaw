@@ -54,6 +54,8 @@ let markQueuedChatSendsWaitingForReconnect: typeof import("./app-chat.ts").markQ
 let retryReconnectableQueuedChatSends: typeof import("./app-chat.ts").retryReconnectableQueuedChatSends;
 let recordChatSendServerTiming: typeof import("./app-chat.ts").recordChatSendServerTiming;
 let recordFirstAssistantChatTiming: typeof import("./app-chat.ts").recordFirstAssistantChatTiming;
+let submitChatClarification: typeof import("./app-chat.ts").submitChatClarification;
+let cancelChatClarification: typeof import("./app-chat.ts").cancelChatClarification;
 
 async function loadChatHelpers(): Promise<void> {
   ({
@@ -70,6 +72,8 @@ async function loadChatHelpers(): Promise<void> {
     retryReconnectableQueuedChatSends,
     recordChatSendServerTiming,
     recordFirstAssistantChatTiming,
+    submitChatClarification,
+    cancelChatClarification,
   } = await import("./app-chat.ts"));
 }
 
@@ -162,6 +166,10 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     lastError: null,
     sessionKey: "agent:main",
     basePath: "",
+    settings: { lastActiveSessionKey: "main" } as ChatHost["settings"],
+    applySettings(next: ChatHost["settings"]) {
+      this.settings = { ...this.settings, ...next };
+    },
     hello: null,
     chatAvatarUrl: null,
     chatAvatarSource: null,
@@ -169,6 +177,7 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     chatAvatarReason: null,
     chatSideResult: null,
     chatSideResultTerminalRuns: new Set<string>(),
+    chatClarification: null,
     sessionsLoading: false,
     sessionsResult: null,
     sessionsResultAgentId: null,
@@ -1492,6 +1501,108 @@ describe("handleSendChat", () => {
       serverLoadSessionMs: 4,
       serverPrepareAttachmentsMs: 0.5,
     });
+  });
+
+  it("shows a clarification request without appending a user message or starting a run", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return {
+          runId: "run-clarify",
+          status: "needs_clarification",
+          clarification: {
+            question: "What exactly should I work on?",
+            issues: [{ key: "missing_context", label: "Add context." }],
+            suggestions: ["Name the target."],
+          },
+        };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "fix this",
+      eventLogBuffer: [],
+      tab: "debug",
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatMessages).toStrictEqual([]);
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStream).toBeNull();
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(host.chatMessage).toBe("");
+    expect(host.chatClarification).toMatchObject({
+      runId: "run-clarify",
+      sessionKey: "agent:main",
+      originalMessage: "fix this",
+      question: "What exactly should I work on?",
+      issues: [{ key: "missing_context", label: "Add context." }],
+      suggestions: ["Name the target."],
+    });
+    expect(eventPayloads(host, "control-ui.chat.send")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "needs-clarification",
+        }),
+      ]),
+    );
+  });
+
+  it("resends clarified prompts with bypass metadata", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { runId: "run-started", status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "agent:main",
+      chatClarification: {
+        runId: "run-clarify",
+        sessionKey: "agent:main",
+        originalMessage: "fix this",
+        question: "What exactly should I work on?",
+        issues: [],
+      },
+    });
+
+    await submitChatClarification(host, "Use ui/src/ui/views/chat.ts and add tests.");
+
+    expect(host.lastError).toBeNull();
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "chat.send",
+      "clarified chat send payload",
+    );
+    expect(payload.message).toBe(
+      "fix this\n\nClarification answer:\nUse ui/src/ui/views/chat.ts and add tests.",
+    );
+    expect(payload.clarification).toEqual({
+      bypass: true,
+      answer: "Use ui/src/ui/views/chat.ts and add tests.",
+    });
+    expect(host.chatClarification).toBeNull();
+    expect(host.chatMessages).toHaveLength(1);
+  });
+
+  it("restores the original prompt when a clarification is cancelled", () => {
+    const host = makeHost({
+      chatMessage: "",
+      chatClarification: {
+        runId: "run-clarify",
+        sessionKey: "agent:main",
+        originalMessage: "fix this",
+        question: "What exactly should I work on?",
+        issues: [],
+      },
+    });
+
+    cancelChatClarification(host);
+
+    expect(host.chatClarification).toBeNull();
+    expect(host.chatMessage).toBe("fix this");
   });
 
   it("records Gateway post-ACK server timing milestones for a chat send", async () => {

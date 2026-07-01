@@ -1,6 +1,6 @@
 // Gateway Talk realtime agent-consult bridge.
 // Starts chat.send runs that answer realtime Talk tool calls.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   ErrorCodes,
   errorShape,
@@ -8,15 +8,43 @@ import {
   type ErrorShape,
 } from "../../packages/gateway-protocol/src/index.js";
 import { normalizeTalkSection } from "../config/talk.js";
-import { buildRealtimeVoiceAgentConsultChatMessage } from "../talk/agent-consult-tool.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  buildRealtimeVoiceAgentClarificationResult,
+  buildRealtimeVoiceAgentConsultChatMessage,
+} from "../talk/agent-consult-tool.js";
 import { chatHandlers } from "./server-methods/chat.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
   GatewayRequestHandlers,
 } from "./server-methods/shared-types.js";
+import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
 import { registerTalkRealtimeRelayAgentRun } from "./talk-realtime-relay.js";
 import { formatForLog } from "./ws-log.js";
+
+function hashTalkConsultScope(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+
+export function resolveTalkRealtimeAgentConsultSessionKey(params: {
+  cfg: OpenClawConfig;
+  sessionKey: string;
+  relaySessionId?: string;
+  connId?: string;
+  callId: string;
+}): string {
+  const parentSessionKey = resolveSessionStoreKey({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+  });
+  if (parentSessionKey.includes(":subagent:talk:")) {
+    return parentSessionKey;
+  }
+  const agentId = resolveSessionStoreAgentId(params.cfg, parentSessionKey);
+  const scope = params.relaySessionId ?? params.connId ?? params.callId;
+  return `agent:${agentId}:subagent:talk:${hashTalkConsultScope(`${parentSessionKey}\0${scope}`)}`;
+}
 
 /**
  * Starts the agent-consult chat run that backs realtime Talk tool calls.
@@ -32,7 +60,18 @@ export async function startTalkRealtimeAgentConsult(params: {
   relaySessionId?: string;
   connId?: string;
 }): Promise<
-  { ok: true; runId: string; idempotencyKey: string } | { ok: false; error: ErrorShape }
+  | {
+      ok: true;
+      runId: string;
+      idempotencyKey: string;
+      sessionKey: string;
+      status?: "needs_clarification";
+      result?: string;
+    }
+  | {
+      ok: false;
+      error: ErrorShape;
+    }
 > {
   let message: string;
   try {
@@ -41,7 +80,15 @@ export async function startTalkRealtimeAgentConsult(params: {
     return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)) };
   }
   const idempotencyKey = `talk-${params.callId}-${randomUUID()}`;
-  const normalizedTalk = normalizeTalkSection(params.context.getRuntimeConfig().talk);
+  const cfg = params.context.getRuntimeConfig();
+  const normalizedTalk = normalizeTalkSection(cfg.talk);
+  const sessionKey = resolveTalkRealtimeAgentConsultSessionKey({
+    cfg,
+    sessionKey: params.sessionKey,
+    relaySessionId: params.relaySessionId,
+    connId: params.connId,
+    callId: params.callId,
+  });
   let chatResponse: { ok: true; result: unknown } | { ok: false; error: ErrorShape } | undefined;
   await chatHandlers["chat.send"]({
     req: {
@@ -53,7 +100,7 @@ export async function startTalkRealtimeAgentConsult(params: {
     isWebchatConnect: params.isWebchatConnect,
     context: params.context,
     params: {
-      sessionKey: params.sessionKey,
+      sessionKey,
       message,
       idempotencyKey,
       ...(normalizedTalk?.consultThinkingLevel
@@ -83,20 +130,33 @@ export async function startTalkRealtimeAgentConsult(params: {
     return { ok: false, error: chatResponse.error };
   }
   const result = chatResponse.result;
-  const runId =
+  const resultRecord =
     result && typeof result === "object" && !Array.isArray(result)
-      ? typeof (result as Record<string, unknown>).runId === "string"
-        ? (result as Record<string, string>).runId
-        : idempotencyKey
-      : idempotencyKey;
+      ? (result as Record<string, unknown>)
+      : undefined;
+  const runId = typeof resultRecord?.runId === "string" ? resultRecord.runId : idempotencyKey;
+  if (resultRecord?.status === "needs_clarification") {
+    const clarification =
+      resultRecord.clarification && typeof resultRecord.clarification === "object"
+        ? (resultRecord.clarification as { question?: string; suggestions?: string[] })
+        : {};
+    return {
+      ok: true,
+      runId,
+      idempotencyKey,
+      sessionKey,
+      status: "needs_clarification",
+      result: buildRealtimeVoiceAgentClarificationResult(clarification),
+    };
+  }
   if (params.relaySessionId && params.connId) {
     registerTalkRealtimeRelayAgentRun({
       relaySessionId: params.relaySessionId,
       connId: params.connId,
-      sessionKey: params.sessionKey,
+      sessionKey,
       runId,
       callId: params.callId,
     });
   }
-  return { ok: true, runId, idempotencyKey };
+  return { ok: true, runId, idempotencyKey, sessionKey };
 }

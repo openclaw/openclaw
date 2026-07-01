@@ -240,6 +240,43 @@ function ownerParams(): Parameters<typeof runPreparedReply>[0] {
   return params;
 }
 
+function textOnlyParams(
+  body: string,
+  overrides: Partial<Parameters<typeof runPreparedReply>[0]> = {},
+): Parameters<typeof runPreparedReply>[0] {
+  const params = baseParams({
+    ctx: {
+      Body: body,
+      RawBody: body,
+      CommandBody: body,
+      OriginatingChannel: "webchat",
+      OriginatingTo: "direct",
+      Provider: "webchat",
+      ChatType: "direct",
+    },
+    sessionCtx: {
+      Body: body,
+      BodyStripped: body,
+      Provider: "webchat",
+      ChatType: "direct",
+      OriginatingChannel: "webchat",
+      OriginatingTo: "direct",
+    },
+    command: {
+      surface: "webchat",
+      channel: "webchat",
+      isAuthorizedSender: true,
+      abortKey: "session-key",
+      ownerList: [],
+      senderIsOwner: false,
+      rawBodyNormalized: body,
+      commandBodyNormalized: body,
+    } as never,
+    ...overrides,
+  });
+  return params;
+}
+
 type MockCallSource = {
   mock: {
     calls: ReadonlyArray<ReadonlyArray<unknown>>;
@@ -304,6 +341,44 @@ describe("runPreparedReply media-only handling", () => {
     await loadFreshGetReplyRunModuleForTest();
 
     expect(storeRuntimeLoads).not.toHaveBeenCalled();
+  });
+
+  it("asks for clarification before launching ambiguous human-originated prompts", async () => {
+    const params = textOnlyParams("fix this");
+
+    const result = await runPreparedReply(params);
+
+    expect(result).toEqual({
+      text: expect.stringContaining("What exactly should I work on"),
+    });
+    expect(result).toEqual({
+      text: expect.stringContaining("Helpful detail:"),
+    });
+    expect(runReplyAgent).not.toHaveBeenCalled();
+    expect(params.typing.cleanup).toHaveBeenCalled();
+  });
+
+  it("does not clarify heartbeat/system-origin prompts", async () => {
+    const params = textOnlyParams("fix this", {
+      opts: { isHeartbeat: true } as never,
+      ctx: {
+        Body: "fix this",
+        RawBody: "fix this",
+        CommandBody: "fix this",
+        Provider: "heartbeat",
+        ChatType: "direct",
+      },
+      sessionCtx: {
+        Body: "fix this",
+        BodyStripped: "fix this",
+        Provider: "heartbeat",
+        ChatType: "direct",
+      },
+    });
+
+    await runPreparedReply(params);
+
+    expect(runReplyAgent).toHaveBeenCalledOnce();
   });
 
   it("passes approved elevated defaults to the runner", async () => {

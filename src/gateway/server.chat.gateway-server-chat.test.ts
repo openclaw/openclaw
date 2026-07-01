@@ -1530,6 +1530,111 @@ describe("gateway server chat", () => {
     );
   });
 
+  test("chat.history renders trusted sensitive local images as managed image blocks", async () => {
+    await withMainSessionStore(
+      async (dir) => {
+        const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+        process.env.OPENCLAW_STATE_DIR = dir;
+        const pngB64 =
+          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
+        const imagePath = path.join(dir, "media", "outbound", "context-map.png");
+        await fs.mkdir(path.dirname(imagePath), { recursive: true });
+        await fs.writeFile(imagePath, Buffer.from(pngB64, "base64"));
+        dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+          const [params] = args as [
+            {
+              dispatcher: {
+                sendFinalReply: (payload: {
+                  text?: string;
+                  mediaUrls?: string[];
+                  trustedLocalMedia?: boolean;
+                  sensitiveMedia?: boolean;
+                }) => boolean;
+                markComplete: () => void;
+                waitForIdle: () => Promise<void>;
+                getQueuedCounts: () => { final: number; block: number; tool: number };
+              };
+            },
+          ];
+          params.dispatcher.sendFinalReply({
+            text: "Context treemap",
+            mediaUrls: [imagePath],
+            trustedLocalMedia: true,
+            sensitiveMedia: true,
+          });
+          params.dispatcher.markComplete();
+          await params.dispatcher.waitForIdle();
+          return {
+            queuedFinal: true,
+            counts: params.dispatcher.getQueuedCounts(),
+          };
+        });
+
+        try {
+          const finalPromise = onceMessage(
+            ws,
+            (o) =>
+              o.type === "event" &&
+              o.event === "chat" &&
+              o.payload?.state === "final" &&
+              o.payload?.runId === "idem-sensitive-local-image",
+            8000,
+          );
+          const res = await rpcReq(ws, "chat.send", {
+            sessionKey: "main",
+            message: "/context map",
+            idempotencyKey: "idem-sensitive-local-image",
+          });
+
+          expect(res.ok).toBe(true);
+          await finalPromise;
+
+          let assistantMessage: Record<string, unknown> | undefined;
+          await vi.waitFor(
+            async () => {
+              const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+                sessionKey: "main",
+              });
+              expect(historyRes.ok).toBe(true);
+              const messages = historyRes.payload?.messages ?? [];
+              assistantMessage = messages.find(
+                (message): message is Record<string, unknown> =>
+                  typeof message === "object" &&
+                  message !== null &&
+                  (message as { role?: unknown }).role === "assistant",
+              );
+              if (!assistantMessage) {
+                throw new Error("Expected assistant history message");
+              }
+            },
+            { timeout: CHAT_RESPONSE_TIMEOUT_MS },
+          );
+          const assistantContent = (assistantMessage as { content?: unknown[] }).content ?? [];
+          expect(assistantContent).toHaveLength(2);
+          expect(assistantContent[0]).toEqual({ type: "text", text: "Context treemap" });
+          const imageBlock = expectRecordFields(assistantContent[1], {
+            type: "image",
+            alt: "context-map.png",
+            mimeType: "image/png",
+            width: 1,
+            height: 1,
+          });
+          expect(String(imageBlock.url)).toContain("/api/chat/media/outgoing/");
+          const serializedAssistant = JSON.stringify(assistantMessage);
+          expect(serializedAssistant).not.toContain(imagePath);
+          expect(serializedAssistant).not.toContain(pngB64);
+        } finally {
+          if (previousStateDir == null) {
+            delete process.env.OPENCLAW_STATE_DIR;
+          } else {
+            process.env.OPENCLAW_STATE_DIR = previousStateDir;
+          }
+        }
+      },
+      { sessionId: "sess-sensitive-local-image" },
+    );
+  });
+
   test("chat.history hides assistant NO_REPLY-only entries and keeps mixed-content assistant entries", async () => {
     const historyMessages = await loadChatHistoryWithMessages(buildNoReplyHistoryFixture(true));
     const roleAndText = historyMessages
@@ -1773,7 +1878,10 @@ describe("gateway server chat", () => {
       const releaseBlockedReply = mockBlockedChatReply();
 
       try {
-        await sendChatAndExpectStarted(runId, "hold chat run open");
+        await sendChatAndExpectStarted(
+          runId,
+          "Hold this chat run open for the agent wait lifecycle coordination test.",
+        );
 
         const waitWhileChatActive = await rpcReq(ws, "agent.wait", {
           runId,
@@ -1794,7 +1902,10 @@ describe("gateway server chat", () => {
       const releaseBlockedReply = mockBlockedChatReply();
 
       try {
-        await sendChatAndExpectStarted(runId, "hold chat run open");
+        await sendChatAndExpectStarted(
+          runId,
+          "Hold this chat run open for the lifecycle completion coordination test.",
+        );
 
         emitAgentEvent({
           runId,

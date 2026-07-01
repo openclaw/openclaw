@@ -9,6 +9,7 @@ import {
 import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { evaluateChatClarification } from "../gateway/chat-clarification.js";
 import type { RuntimeLogger, PluginRuntimeCore } from "../plugins/runtime/types-core.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
@@ -17,8 +18,10 @@ import {
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import {
+  buildRealtimeVoiceAgentClarificationResult,
   buildRealtimeVoiceAgentConsultPrompt,
   collectRealtimeVoiceAgentConsultVisibleText,
+  parseRealtimeVoiceAgentConsultArgs,
   type RealtimeVoiceAgentConsultTranscriptEntry,
 } from "./agent-consult-tool.js";
 
@@ -241,6 +244,17 @@ export async function consultRealtimeVoiceAgent(params: {
   extraSystemPrompt?: string;
   fallbackText?: string;
 }): Promise<RealtimeVoiceAgentConsultResult> {
+  const parsedArgs = parseRealtimeVoiceAgentConsultArgs(params.args);
+  const clarificationDecision = evaluateChatClarification({
+    message: parsedArgs.question,
+    hasPriorSessionContext: Boolean(parsedArgs.context || params.transcript.length > 0),
+  });
+  if (clarificationDecision.action === "clarify") {
+    return {
+      text: buildRealtimeVoiceAgentClarificationResult(clarificationDecision.clarification),
+    };
+  }
+
   const agentId = params.agentId ?? "main";
   const agentDir = params.agentRuntime.resolveAgentDir(params.cfg, agentId);
   const workspaceDir = params.agentRuntime.resolveAgentWorkspaceDir(params.cfg, agentId);

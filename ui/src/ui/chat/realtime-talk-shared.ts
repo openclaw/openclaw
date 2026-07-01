@@ -531,6 +531,7 @@ export async function submitRealtimeTalkConsult(params: {
   const { ctx, callId, submit } = params;
   ctx.callbacks.onStatus?.("thinking");
   let runId: string | undefined;
+  let runSessionKey = ctx.sessionKey;
   let aborted = false;
   let submitted = false;
   const submitOnce = (result: unknown) => {
@@ -548,7 +549,7 @@ export async function submitRealtimeTalkConsult(params: {
   const abortRun = () => {
     aborted = true;
     if (runId) {
-      void ctx.client.request("chat.abort", { sessionKey: ctx.sessionKey, runId });
+      void ctx.client.request("chat.abort", { sessionKey: runSessionKey, runId });
     }
   };
   if (params.signal?.aborted) {
@@ -559,17 +560,32 @@ export async function submitRealtimeTalkConsult(params: {
   try {
     const args =
       typeof params.args === "string" ? JSON.parse(params.args || "{}") : (params.args ?? {});
-    const response = await ctx.client.request<{ runId?: string; idempotencyKey?: string }>(
-      "talk.client.toolCall",
-      {
-        sessionKey: ctx.sessionKey,
-        callId,
-        name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-        args,
-        ...(params.relaySessionId ? { relaySessionId: params.relaySessionId } : {}),
-      },
-    );
+    const response = await ctx.client.request<{
+      runId?: string;
+      idempotencyKey?: string;
+      sessionKey?: string;
+      status?: string;
+      result?: string;
+    }>("talk.client.toolCall", {
+      sessionKey: ctx.sessionKey,
+      callId,
+      name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+      args,
+      ...(params.relaySessionId ? { relaySessionId: params.relaySessionId } : {}),
+    });
+    runSessionKey =
+      typeof response.sessionKey === "string" && response.sessionKey.trim()
+        ? response.sessionKey
+        : ctx.sessionKey;
     runId = response.runId ?? response.idempotencyKey;
+    if (response.status === "needs_clarification") {
+      const result =
+        typeof response.result === "string" && response.result.trim()
+          ? response.result
+          : "I need a little more detail before starting.";
+      submitOnce({ result });
+      return;
+    }
     if (!runId) {
       throw new Error("OpenClaw realtime tool call did not return a run id");
     }

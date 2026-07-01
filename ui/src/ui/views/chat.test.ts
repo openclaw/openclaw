@@ -1899,6 +1899,60 @@ describe("chat slash menu accessibility", () => {
     expect(onSend).toHaveBeenCalledTimes(1);
   });
 
+  it("renders clarification questions and submits the answer", () => {
+    const onClarificationAnswer = vi.fn();
+    const onClarificationCancel = vi.fn();
+    const container = document.createElement("div");
+    const props = {
+      clarification: {
+        runId: "run-clarify",
+        sessionKey: "agent:main",
+        originalMessage: "fix this",
+        question: "What exactly should I work on?",
+        issues: [{ key: "missing_context", label: "Add context." }],
+        suggestions: ["Name the target."],
+      },
+      onClarificationAnswer,
+      onClarificationCancel,
+    };
+    const renderCurrent = () => {
+      render(renderChat(createChatProps({ ...props, onRequestUpdate: renderCurrent })), container);
+    };
+    renderCurrent();
+
+    expect(container.textContent).toContain("More detail needed before starting");
+    expect(container.textContent).toContain("What exactly should I work on?");
+    const answer = container.querySelector<HTMLTextAreaElement>(
+      ".agent-chat__clarification-answer",
+    );
+    expect(answer).toBeInstanceOf(HTMLTextAreaElement);
+    answer!.value = "Use ui/src/ui/views/chat.ts and add tests.";
+    answer!.dispatchEvent(new Event("input", { bubbles: true }));
+    container
+      .querySelector<HTMLButtonElement>(".agent-chat__clarification .agent-chat__input-btn")!
+      .click();
+
+    expect(onClarificationAnswer).toHaveBeenCalledWith(
+      "Use ui/src/ui/views/chat.ts and add tests.",
+    );
+
+    const cancelContainer = renderChatView({
+      clarification: {
+        runId: "run-clarify-2",
+        sessionKey: "agent:main",
+        originalMessage: "fix this",
+        question: "What exactly should I work on?",
+        issues: [],
+      },
+      onClarificationCancel,
+    });
+    cancelContainer
+      .querySelectorAll<HTMLButtonElement>(".agent-chat__clarification .agent-chat__input-btn")[1]!
+      .click();
+
+    expect(onClarificationCancel).toHaveBeenCalledTimes(1);
+  });
+
   it("requests slash command hydration only after slash intent", () => {
     const onSlashIntent = vi.fn(async () => undefined);
     const container = renderChatView({ onSlashIntent });
@@ -1982,6 +2036,102 @@ describe("chat slash menu accessibility", () => {
     keydownComposer(container, "Enter");
 
     expect(onDraftChange).toHaveBeenCalledWith("send from enter");
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens prompt quality review before sending a vague task prompt", () => {
+    let draft = "";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const onSend = vi.fn();
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange,
+            onRequestUpdate: renderCurrent,
+            onSend,
+          }),
+        ),
+        container,
+      );
+    };
+    renderCurrent();
+
+    inputDraft(container, "fix this");
+    container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Prompt could use more detail");
+    expect(container.textContent).toContain("Name what this refers to");
+  });
+
+  it("can add structure to a weak prompt from the review panel", () => {
+    let draft = "";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange,
+            onRequestUpdate: renderCurrent,
+          }),
+        ),
+        container,
+      );
+    };
+    renderCurrent();
+
+    inputDraft(container, "fix this");
+    container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+    Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.includes("Add structure"))
+      ?.click();
+
+    expect(draft).toContain("fix this");
+    expect(draft).toContain("Context:");
+    expect(draft).toContain("When done:");
+    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toContain("Context:");
+  });
+
+  it("can send a weak prompt after explicit review bypass", () => {
+    let draft = "";
+    const onDraftChange = vi.fn((next: string) => {
+      draft = next;
+    });
+    const onSend = vi.fn();
+    const container = document.createElement("div");
+    const renderCurrent = () => {
+      render(
+        renderChat(
+          createChatProps({
+            draft,
+            getDraft: () => draft,
+            onDraftChange,
+            onRequestUpdate: renderCurrent,
+            onSend,
+          }),
+        ),
+        container,
+      );
+    };
+    renderCurrent();
+
+    inputDraft(container, "fix this");
+    container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
+    Array.from(container.querySelectorAll<HTMLButtonElement>("button"))
+      .find((button) => button.textContent?.includes("Send anyway"))
+      ?.click();
+
     expect(onSend).toHaveBeenCalledTimes(1);
   });
 

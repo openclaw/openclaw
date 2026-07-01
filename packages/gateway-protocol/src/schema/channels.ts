@@ -220,6 +220,9 @@ export const TalkClientToolCallResultSchema = Type.Object(
   {
     runId: NonEmptyString,
     idempotencyKey: NonEmptyString,
+    sessionKey: NonEmptyString,
+    status: Type.Optional(Type.Literal("needs_clarification")),
+    result: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );

@@ -32,6 +32,10 @@ export type RealtimeVoiceAgentConsultTranscriptEntry = {
   role: "user" | "assistant";
   text: string;
 };
+type RealtimeVoiceAgentClarificationRequest = {
+  question?: string;
+  suggestions?: string[];
+};
 
 /** Shared realtime voice function-tool descriptor projected to providers. */
 export const REALTIME_VOICE_AGENT_CONSULT_TOOL: RealtimeVoiceTool = {
@@ -184,6 +188,25 @@ export function buildRealtimeVoiceAgentConsultChatMessage(args: unknown): string
   ]
     .filter(Boolean)
     .join("\n\n");
+}
+
+/** Build a concise speakable response when a delegated request needs clarification. */
+export function buildRealtimeVoiceAgentClarificationResult(
+  clarification: RealtimeVoiceAgentClarificationRequest,
+): string {
+  const question = normalizeOptionalString(clarification.question);
+  const suggestions = (clarification.suggestions ?? [])
+    .map((suggestion) => normalizeOptionalString(suggestion))
+    .filter((suggestion): suggestion is string => Boolean(suggestion))
+    .slice(0, 2);
+  return [
+    question
+      ? `I need a little more detail before starting: ${question}`
+      : "I need a little more detail before starting.",
+    suggestions.length ? `Helpful details would be: ${suggestions.join(" ")}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 /** Build the delegated OpenClaw agent prompt for a live voice consult. */
