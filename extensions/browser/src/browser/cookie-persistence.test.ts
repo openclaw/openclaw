@@ -64,6 +64,25 @@ describe("managed Chrome cookie persistence", () => {
     expect((fs.statSync(file).mode & 0o777).toString(8)).toBe("600");
   });
 
+  it("narrows an existing broad cookie sidecar when saving", async () => {
+    const file = resolveCookieStorePath(userDataDir);
+    await fsp.writeFile(file, JSON.stringify({ savedAt: 1, cookies: [{ name: "old" }] }));
+    fs.chmodSync(file, 0o644);
+    withCdpSocketMock.mockImplementationOnce(async (_wsUrl, callback) => {
+      return await callback(async () => ({
+        cookies: [{ name: "session", value: "abc", domain: "example.com", path: "/" }],
+      }));
+    });
+
+    await saveManagedChromeCookies("ws://127.0.0.1/devtools/browser/mock", userDataDir);
+
+    const parsed = JSON.parse(await fsp.readFile(file, "utf8")) as { cookies?: unknown[] };
+    expect(parsed.cookies).toEqual([
+      { name: "session", value: "abc", domain: "example.com", path: "/" },
+    ]);
+    expect((fs.statSync(file).mode & 0o777).toString(8)).toBe("600");
+  });
+
   it("clears an existing snapshot with an empty CDP cookie result", async () => {
     const file = resolveCookieStorePath(userDataDir);
     await fsp.writeFile(file, JSON.stringify({ savedAt: 1, cookies: [{ name: "kept" }] }), {

@@ -40,6 +40,20 @@ export function deleteManagedChromeCookieStore(userDataDir: string): void {
   fs.rmSync(resolveCookieStorePath(userDataDir), { force: true });
 }
 
+function writeRestrictiveCookieStore(file: string, payload: string): void {
+  const tempFile = path.join(
+    path.dirname(file),
+    `.${path.basename(file)}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`,
+  );
+  try {
+    fs.writeFileSync(tempFile, payload, { mode: 0o600 });
+    fs.renameSync(tempFile, file);
+    fs.chmodSync(file, 0o600);
+  } finally {
+    fs.rmSync(tempFile, { force: true });
+  }
+}
+
 function normalizeSavedCookieParam(
   cookie: Record<string, unknown>,
 ): Record<string, unknown> | null {
@@ -101,7 +115,7 @@ export async function saveManagedChromeCookies(wsUrl: string, userDataDir: strin
       log.debug(`cleared saved cookies for ${userDataDir}`);
       return;
     }
-    fs.writeFileSync(file, JSON.stringify({ savedAt: Date.now(), cookies }), { mode: 0o600 });
+    writeRestrictiveCookieStore(file, JSON.stringify({ savedAt: Date.now(), cookies }));
     log.debug(`saved ${cookies.length} cookies for ${userDataDir}`);
   } catch (err) {
     log.debug(`cookie save skipped: ${err instanceof Error ? err.message : String(err)}`);
