@@ -1,9 +1,21 @@
 // Browser tests cover output directories plugin behavior.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ensureOutputDirectory } from "./output-directories.js";
+
+const canCreateDirectorySymlinks = (() => {
+  try {
+    const tempLink = path.join(os.tmpdir(), `symlink-dir-test-${Math.random().toString(36).substring(2)}`);
+    fsSync.symlinkSync(os.tmpdir(), tempLink, process.platform === "win32" ? "junction" : "dir");
+    fsSync.unlinkSync(tempLink);
+    return true;
+  } catch {
+    return false;
+  }
+})();
 
 async function withTempDir<T>(run: (tempDir: string) => Promise<T>): Promise<T> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-output-dir-test-"));
@@ -37,14 +49,14 @@ describe("ensureOutputDirectory", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateDirectorySymlinks)(
     "rejects symlinked output directory ancestors",
     async () => {
       await withTempDir(async (tempDir) => {
         const outsideDir = path.join(tempDir, "outside");
         await fs.mkdir(outsideDir);
         const symlinkDir = path.join(tempDir, "downloads");
-        await fs.symlink(outsideDir, symlinkDir);
+        await fs.symlink(outsideDir, symlinkDir, process.platform === "win32" ? "junction" : "dir");
 
         await expect(ensureOutputDirectory(path.join(symlinkDir, "nested"))).rejects.toThrow(
           /symlink|output directory/i,
