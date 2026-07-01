@@ -25,6 +25,7 @@ export type UserTurnInput = {
   idempotencyKey?: string;
   senderIsOwner?: boolean;
   provenance?: InputProvenance;
+  contextRefs?: readonly Record<string, unknown>[];
   mediaOnlyText?: string;
 };
 
