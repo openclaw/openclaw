@@ -324,7 +324,7 @@ openclaw infer image describe \
   --json
 ```
 
-`--model` must be a full `<provider/model>` ref. When it is set, `openclaw infer image describe` runs that model directly instead of skipping description because the model supports native vision.
+`--model` must be a full `<provider/model>` ref. When it is set, `openclaw infer image describe` tries that model first instead of skipping description because the model supports native vision. If the model call fails, OpenClaw can continue through configured `agents.defaults.imageModel.fallbacks`; file or URL preparation errors still fail before fallback attempts.
 
 Use `infer image describe` when you want OpenClaw's image-understanding provider flow, configured `agents.defaults.imageModel`, and image-description output shape. Use `infer model run --file` when you want a raw multimodal model probe with a custom prompt and one or more images.
 
