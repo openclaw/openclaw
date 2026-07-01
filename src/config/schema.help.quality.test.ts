@@ -102,6 +102,7 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.inputType",
   "agents.defaults.memorySearch.queryInputType",
   "agents.defaults.memorySearch.documentInputType",
+  "agents.defaults.memorySearch.queryInstructionTemplate",
   "agents.defaults.memorySearch.outputDimensionality",
   "agents.defaults.memorySearch.store.vector.enabled",
   "agents.defaults.memorySearch.store.vector.extensionPath",

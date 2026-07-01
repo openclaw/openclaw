@@ -1,6 +1,7 @@
 // Memory core host embedding exports expose host embedding primitives to the memory plugin.
 export {
   applyEmbeddingBatchOutputLine,
+  applyQueryInstructionTemplate,
   buildBatchHeaders,
   buildCaseInsensitiveExtensionGlob,
   buildEmbeddingBatchGroupOptions,
