@@ -65,6 +65,74 @@ describe("collectPluginToolAllowlistWarnings", () => {
     ]);
   });
 
+  it("skips unreadable manifest ids before healthy tool owners", () => {
+    const poisonedPlugin = {
+      get id(): string {
+        throw new Error("doctor tool allowlist plugin id exploded");
+      },
+      channels: [],
+      cliBackends: [],
+      hooks: [],
+      manifestPath: "/virtual/poisoned/openclaw.plugin.json",
+      origin: "bundled",
+      providers: [],
+      rootDir: "/virtual/poisoned",
+      skills: [],
+      source: "/virtual/poisoned/index.ts",
+      contracts: {
+        tools: ["poisoned_tool"],
+      },
+    };
+
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        plugins: { allow: ["telegram"] },
+        tools: { allow: ["firecrawl_search"] },
+      },
+      manifestRegistry: {
+        diagnostics: [],
+        plugins: [poisonedPlugin, ...manifestRegistry.plugins],
+      } as unknown as PluginManifestRegistry,
+    });
+
+    expect(warnings).toEqual([
+      '- tools.allow references tool "firecrawl_search", owned by plugin "firecrawl", but plugins.allow does not include the owning plugin. Add "firecrawl" to plugins.allow or remove plugins.allow.',
+    ]);
+  });
+
+  it("skips unreadable manifest tool contracts before healthy tool owners", () => {
+    const poisonedPlugin = {
+      id: "poisoned-plugin",
+      channels: [],
+      cliBackends: [],
+      hooks: [],
+      manifestPath: "/virtual/poisoned/openclaw.plugin.json",
+      origin: "bundled",
+      providers: [],
+      rootDir: "/virtual/poisoned",
+      skills: [],
+      source: "/virtual/poisoned/index.ts",
+      get contracts(): { tools: string[] } {
+        throw new Error("doctor tool allowlist contracts exploded");
+      },
+    };
+
+    const warnings = collectPluginToolAllowlistWarnings({
+      cfg: {
+        plugins: { allow: ["telegram"] },
+        tools: { allow: ["firecrawl_search"] },
+      },
+      manifestRegistry: {
+        diagnostics: [],
+        plugins: [poisonedPlugin, ...manifestRegistry.plugins],
+      } as unknown as PluginManifestRegistry,
+    });
+
+    expect(warnings).toEqual([
+      '- tools.allow references tool "firecrawl_search", owned by plugin "firecrawl", but plugins.allow does not include the owning plugin. Add "firecrawl" to plugins.allow or remove plugins.allow.',
+    ]);
+  });
+
   it("warns when a tool policy references a known plugin outside plugins.allow", () => {
     const warnings = collectPluginToolAllowlistWarnings({
       cfg: {
