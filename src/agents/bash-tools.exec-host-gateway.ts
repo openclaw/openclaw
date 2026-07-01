@@ -1014,6 +1014,7 @@ export async function processGatewayAllowlist(
         initiatingSurface,
         sentApproverDms,
         unavailableReason,
+        ask: hostAsk,
         allowedDecisions: approvalAllowedDecisions,
       }),
     };

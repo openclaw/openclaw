@@ -12,6 +12,7 @@ import {
   type ExecApprovalPendingReplyParams,
   type ExecApprovalReplyDecision,
 } from "../infra/exec-approval-reply.js";
+import { formatAllowAlwaysUnavailableMessage } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import {
   buildApprovalPendingReplyPayload,
@@ -208,12 +209,11 @@ function buildDecisionText(allowedDecisions: readonly ExecApprovalReplyDecision[
 function buildManualInstructionSection(params: {
   approvalId: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
+  ask?: string | null;
 }): string[] {
   const lines: string[] = [];
   if (!params.allowedDecisions.includes("allow-always")) {
-    lines.push(
-      "Allow Always is unavailable because the effective policy requires approval every time.",
-    );
+    lines.push(formatAllowAlwaysUnavailableMessage(params.ask));
   }
   if (params.allowedDecisions.length > 0) {
     lines.push(
@@ -307,6 +307,7 @@ function buildApprovalReactionPromptText(params: {
   const manualInstructions = buildManualInstructionSection({
     approvalId: view.approvalId,
     allowedDecisions,
+    ask: view.approvalKind === "exec" ? view.ask : undefined,
   });
   if (manualInstructions.length > 0) {
     sections.push(manualInstructions.join("\n"));

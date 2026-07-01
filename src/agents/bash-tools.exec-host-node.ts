@@ -455,6 +455,7 @@ export async function executeNodeHostCommand(
           initiatingSurface,
           sentApproverDms,
           unavailableReason,
+          ask: approvalDecisionAsk,
           allowedDecisions,
           nodeId: target.nodeId,
         });

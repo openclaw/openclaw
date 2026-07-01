@@ -642,7 +642,33 @@ describe("exec approval forwarder", () => {
     const text = getFirstDeliveryText(deliver);
     expect(text).toContain("Reply with: /approve req-1 allow-once|deny");
     expect(text).not.toContain("allow-once|allow-always|deny");
-    expect(text).toContain("Allow Always is unavailable");
+    expect(text).toContain(
+      "Allow Always is unavailable because the effective policy requires approval every time.",
+    );
+    expect(text).not.toContain("shell redirection or runtime payload");
+  });
+
+  it("shows one-shot allow-always message in forwarded fallback text when unavailableDecisions excludes allow-always", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        request: {
+          ...baseRequest.request,
+          ask: "on-miss",
+          unavailableDecisions: ["allow-always"],
+        },
+      }),
+    ).resolves.toBe(true);
+    await Promise.resolve();
+    const text = getFirstDeliveryText(deliver);
+    expect(text).toContain("Reply with: /approve req-1 allow-once|deny");
+    expect(text).not.toContain("allow-once|allow-always|deny");
+    expect(text).toContain(
+      "Allow Always is unavailable for this command. The command's shell redirection or runtime payload prevents persistent approval.",
+    );
+    expect(text).not.toContain("effective policy requires approval every time");
   });
 
   it.each([
