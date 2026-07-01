@@ -9,7 +9,7 @@
   "providerCatalogEntry": "./provider-discovery.ts",
   "modelCatalog": {
     "runtimeAugment": true,
-        "providers": {
+    "providers": {
       "claude-cli": {
         "models": [
           {
@@ -20,7 +20,7 @@
             "mediaInput": {
               "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
             },
-            "contextWindow": 1048576,
+            "contextWindow": 1000000,
             "maxTokens": 128000
           },
           {

@@ -142,7 +142,7 @@ export default definePluginEntry({
                   ),
                 },
               ],
-              configPatch: buildCloudflareAiGatewayConfigPatch(metadata),
+              configPatch: buildCloudflareAiGatewayConfigPatch(metadata, ctx.config),
               defaultModel: CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
             };
           },

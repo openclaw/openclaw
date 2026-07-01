@@ -4,7 +4,13 @@
  */
 import Anthropic from "@anthropic-ai/sdk";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { stream, type Model, type SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
+import {
+  stream,
+  type Model,
+  type SimpleStreamOptions,
+  type ThinkingLevel,
+} from "openclaw/plugin-sdk/llm";
+import { resolveClaudeSonnet5ModelIdentity } from "openclaw/plugin-sdk/provider-model-shared";
 
 const MANTLE_ANTHROPIC_BETA = "fine-grained-tool-streaming-2025-05-14";
 type AnthropicOptions = ConstructorParameters<typeof Anthropic>[0];
@@ -23,8 +29,12 @@ export function resolveMantleAnthropicBaseUrl(baseUrl: string): string {
   return `${trimmed}/anthropic`;
 }
 
-function requiresDefaultSampling(modelId: string): boolean {
-  return modelId.includes("claude-opus-4-7");
+function isClaudeSonnet5Model(model: Model): boolean {
+  return resolveClaudeSonnet5ModelIdentity(model) !== undefined;
+}
+
+function requiresDefaultSampling(model: Model): boolean {
+  return model.id.includes("claude-opus-4-7") || isClaudeSonnet5Model(model);
 }
 
 function isClaudeMythosPreviewModel(model: Model): boolean {
@@ -44,17 +54,34 @@ function resolveMantleReasoning(
   model: Model,
   options: SimpleStreamOptions | undefined,
 ): NonNullable<SimpleStreamOptions["reasoning"]> | undefined {
-  if (requiresDefaultSampling(model.id)) {
+  if (model.id.includes("claude-opus-4-7")) {
     return undefined;
   }
-  const reasoning = options?.reasoning ?? (isClaudeMythosPreviewModel(model) ? "high" : undefined);
+  const reasoning =
+    options?.reasoning ??
+    (isClaudeMythosPreviewModel(model) || isClaudeSonnet5Model(model) ? "high" : undefined);
   if (!isClaudeMythosPreviewModel(model)) {
     return reasoning;
+  }
+  if (reasoning === "off") {
+    return "high";
   }
   if (reasoning === "minimal") {
     return "low";
   }
   return reasoning === "xhigh" || reasoning === "max" ? "high" : reasoning;
+}
+
+function mapSonnet5Effort(
+  reasoning: NonNullable<SimpleStreamOptions["reasoning"]>,
+): "low" | "medium" | "high" | "xhigh" | "max" {
+  if (reasoning === "minimal" || reasoning === "low") {
+    return "low";
+  }
+  if (reasoning === "medium" || reasoning === "xhigh" || reasoning === "max") {
+    return reasoning;
+  }
+  return "high";
 }
 
 function mergeHeaders(
@@ -75,8 +102,10 @@ function buildMantleAnthropicBaseOptions(
   apiKey: string,
 ) {
   return {
-    temperature: requiresDefaultSampling(model.id) ? undefined : options?.temperature,
-    maxTokens: options?.maxTokens || Math.min(model.maxTokens, 32_000),
+    temperature: requiresDefaultSampling(model) ? undefined : options?.temperature,
+    maxTokens:
+      options?.maxTokens ||
+      (isClaudeSonnet5Model(model) ? model.maxTokens : Math.min(model.maxTokens, 32_000)),
     signal: options?.signal,
     apiKey,
     cacheRetention: options?.cacheRetention,
@@ -90,7 +119,7 @@ function buildMantleAnthropicBaseOptions(
 function adjustMaxTokensForThinking(
   baseMaxTokens: number,
   modelMaxTokens: number,
-  reasoningLevel: NonNullable<SimpleStreamOptions["reasoning"]>,
+  reasoningLevel: ThinkingLevel,
   customBudgets?: SimpleStreamOptions["thinkingBudgets"],
 ): { maxTokens: number; thinkingBudget: number } {
   const defaultBudgets = {
@@ -140,11 +169,21 @@ export function createMantleAnthropicStreamFn(deps?: {
     // The client API is the same, but the SDK class private field makes types nominal.
     const streamClient = client as unknown as AnthropicStreamClient;
     const reasoning = resolveMantleReasoning(model, options);
-    if (!reasoning) {
+    const sonnet5 = isClaudeSonnet5Model(model);
+    if (!reasoning || reasoning === "off") {
       return streamFn(model as Model<"anthropic-messages">, context, {
         ...base,
         client: streamClient,
         thinkingEnabled: false,
+      });
+    }
+
+    if (sonnet5) {
+      return streamFn(model as Model<"anthropic-messages">, context, {
+        ...base,
+        client: streamClient,
+        thinkingEnabled: true,
+        effort: mapSonnet5Effort(reasoning),
       });
     }
 

@@ -153,7 +153,7 @@ export function normalizeBuiltInProviderModelId(provider: string, model: string)
     const vercelAliases: Record<string, string> = {
       "opus-4.6": "claude-opus-4-6",
       "sonnet-5": "claude-sonnet-5",
-      sonnet: "claude-sonnet-5",
+      sonnet: "claude-sonnet-4-6",
       "sonnet-4.6": "claude-sonnet-4-6",
     };
     const aliased = vercelAliases[normalizeLowercaseStringOrEmpty(model)] ?? model;

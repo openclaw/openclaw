@@ -25,11 +25,13 @@ import {
 } from "../../shared/anthropic-auth-headers.js";
 import {
   resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeSonnet5ModelIdentity,
   requiresClaudeAdaptiveThinking,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
   usesClaudeFable5MessagesContract,
+  usesClaudeStreamingRefusalContract,
 } from "../../shared/anthropic-model-contract.js";
 import { applyAnthropicRefusal } from "../../shared/anthropic-refusal.js";
 import { createDeferredEventBuffer } from "../../shared/deferred-event-buffer.js";
@@ -469,9 +471,9 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
       stopReason: "stop",
       timestamp: Date.now(),
     };
-    // Fable classifiers can refuse after partial generation, so no event is
-    // safe to expose until the terminal stop reason is known.
-    const refusalBuffer = usesClaudeFable5MessagesContract(model)
+    // Classifier refusals can invalidate partial output, so no event is safe
+    // to expose until the terminal stop reason is known.
+    const refusalBuffer = usesClaudeStreamingRefusalContract(model)
       ? createDeferredEventBuffer<AssistantMessageEvent>(stream, () =>
           notifyLlmRequestActivity(options?.signal),
         )
@@ -766,11 +768,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 };
 
 function normalizeAnthropicToolChoice(
-  model: Model<"anthropic-messages">,
+  thinkingEnabled: boolean,
   toolChoice: NonNullable<AnthropicOptions["toolChoice"]>,
 ): AnthropicProjectedToolChoice {
   if (
-    requiresClaudeAdaptiveThinking(model) &&
+    thinkingEnabled &&
     (toolChoice === "any" || (typeof toolChoice === "object" && toolChoice.type === "tool"))
   ) {
     return { type: "auto" as const };
@@ -842,8 +844,23 @@ export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleS
   }
 
   const base = buildBaseOptions(model, options, apiKey);
-  if (!options?.reasoning) {
-    const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
+  const mandatoryAdaptiveThinking = requiresClaudeAdaptiveThinking(model);
+  const fable5 = usesClaudeFable5MessagesContract(model);
+  if (options?.reasoning === "off" && !mandatoryAdaptiveThinking) {
+    return streamAnthropic(model, context, {
+      ...base,
+      thinkingEnabled: false,
+    } satisfies AnthropicOptions);
+  }
+  const reasoning = options?.reasoning === "off" ? (fable5 ? "low" : "high") : options?.reasoning;
+  if (resolveClaudeSonnet5ModelIdentity(model)) {
+    return streamAnthropic(model, context, {
+      ...base,
+      thinkingEnabled: true,
+      effort: mapThinkingLevelToEffort(model, reasoning ?? "high"),
+    } satisfies AnthropicOptions);
+  }
+  if (!reasoning) {
     return streamAnthropic(model, context, {
       ...base,
       thinkingEnabled: mandatoryAdaptiveThinking,
@@ -854,7 +871,7 @@ export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleS
   // For Opus 4.6 and Sonnet 4.6: use adaptive thinking with effort level
   // For older models: use budget-based thinking
   if (supportsAdaptiveThinking(model)) {
-    const effort = mapThinkingLevelToEffort(model, options.reasoning);
+    const effort = mapThinkingLevelToEffort(model, reasoning);
     return streamAnthropic(model, context, {
       ...base,
       thinkingEnabled: true,
@@ -867,8 +884,8 @@ export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleS
   const adjusted = adjustMaxTokensForThinking(
     base.maxTokens,
     model.maxTokens,
-    options.reasoning,
-    options.thinkingBudgets,
+    reasoning,
+    options?.thinkingBudgets,
   );
 
   return streamAnthropic(model, context, {
@@ -1123,7 +1140,10 @@ function buildParams(
   }
 
   if (options?.toolChoice) {
-    const normalizedToolChoice = normalizeAnthropicToolChoice(model, options.toolChoice);
+    const normalizedToolChoice = normalizeAnthropicToolChoice(
+      replayThinkingEnabled,
+      options.toolChoice,
+    );
     const projectedToolChoice = toolProjection
       ? reconcileAnthropicToolChoice(normalizedToolChoice, toolProjection)
       : normalizedToolChoice;

@@ -7,6 +7,7 @@ import {
   normalizeClaudePermissionArgs,
   normalizeClaudeSettingSourcesArgs,
   resolveClaudePermissionMode,
+  prepareClaudeCliExecution,
   resolveClaudeCliExecutionArgs,
 } from "./cli-shared.js";
 
@@ -216,6 +217,16 @@ describe("resolveClaudeCliExecutionArgs", () => {
   });
 });
 
+describe("prepareClaudeCliExecution", () => {
+  it("sets the per-run Claude Code thinking opt-out only for explicit off", () => {
+    expect(prepareClaudeCliExecution("off")).toEqual({
+      env: { MAX_THINKING_TOKENS: "0" },
+    });
+    expect(prepareClaudeCliExecution("high")).toBeUndefined();
+    expect(prepareClaudeCliExecution(undefined)).toBeUndefined();
+  });
+});
+
 describe("normalizeClaudeBackendConfig", () => {
   it("normalizes both args and resumeArgs for custom overrides", () => {
     const normalized = normalizeClaudeBackendConfig({
@@ -340,6 +351,19 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.resolveExecutionArgs).toBe(resolveClaudeCliExecutionArgs);
   });
 
+  it("wires explicit thinking off into the Claude CLI process environment", () => {
+    const backend = buildAnthropicCliBackend();
+
+    expect(
+      backend.prepareExecution?.({
+        workspaceDir: "/tmp",
+        provider: "claude-cli",
+        modelId: "claude-sonnet-5",
+        thinkingLevel: "off",
+      }),
+    ).toEqual({ env: { MAX_THINKING_TOKENS: "0" } });
+  });
+
   it("opts bundled Claude CLI into bounded raw transcript reseed without disabling native resume", () => {
     const backend = buildAnthropicCliBackend();
 
@@ -375,6 +399,8 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.config.clearEnv).toContain("ANTHROPIC_CUSTOM_HEADERS");
     expect(backend.config.clearEnv).toContain("ANTHROPIC_OAUTH_TOKEN");
     expect(backend.config.clearEnv).toContain("CLAUDE_CONFIG_DIR");
+    expect(backend.config.clearEnv).toContain("CLAUDE_CODE_DISABLE_THINKING");
+    expect(backend.config.clearEnv).toContain("CLAUDE_CODE_EFFORT_LEVEL");
     expect(backend.config.clearEnv).toContain("CLAUDE_CODE_USE_BEDROCK");
     expect(backend.config.clearEnv).toContain("CLAUDE_CODE_OAUTH_TOKEN");
     expect(backend.config.clearEnv).toContain("CLAUDE_CODE_PLUGIN_CACHE_DIR");
@@ -384,6 +410,7 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.config.clearEnv).toContain("OTEL_METRICS_EXPORTER");
     expect(backend.config.clearEnv).toContain("OTEL_EXPORTER_OTLP_PROTOCOL");
     expect(backend.config.clearEnv).toContain("OTEL_SDK_DISABLED");
+    expect(backend.config.clearEnv).toContain("MAX_THINKING_TOKENS");
   });
 
   it("disables native background Bash and Monitor tools in args and resumeArgs", () => {

@@ -25,12 +25,6 @@ function isOpus48BedrockModelRef(modelRef: string): boolean {
   );
 }
 
-function isSonnet5BedrockModelRef(modelRef: string): boolean {
-  return /(?:^|[/.:])(?:(?:us|eu|ap|apac|au|jp|global)\.)?(?:anthropic\.)?claude-sonnet-5(?:$|[-.:/])/i.test(
-    modelRef,
-  );
-}
-
 function isOpus46BedrockModelRef(modelRef: string): boolean {
   return /(?:^|[/.:])(?:(?:us|eu|ap|apac|au|jp|global)\.)?(?:anthropic\.)?claude-opus-4[.-]6(?:$|[-.:/])/i.test(
     modelRef,
@@ -66,9 +60,7 @@ export function isLatestAdaptiveBedrockModelRef(
     resolveClaudeFable5ModelIdentity(modelRef) !== undefined ||
     [modelId, canonicalModelId].some(
       (candidate) =>
-        isSonnet5BedrockModelRef(candidate) ||
-        isOpus47OrNewerBedrockModelRef(candidate) ||
-        isMythosPreviewBedrockModelRef(candidate),
+        isOpus47OrNewerBedrockModelRef(candidate) || isMythosPreviewBedrockModelRef(candidate),
     )
   );
 }
@@ -83,10 +75,7 @@ export function supportsBedrockNativeMaxEffort(
   }
   const canonicalModelId = resolveClaudeModelIdentity({ id: modelId, params });
   return [modelId, canonicalModelId].some(
-    (modelRef) =>
-      isSonnet5BedrockModelRef(modelRef) ||
-      isOpus46BedrockModelRef(modelRef) ||
-      isOpus47OrNewerBedrockModelRef(modelRef),
+    (modelRef) => isOpus46BedrockModelRef(modelRef) || isOpus47OrNewerBedrockModelRef(modelRef),
   );
 }
 
@@ -104,12 +93,7 @@ export function resolveBedrockNativeThinkingLevelMap(
   }
   const canonicalModelId = resolveClaudeModelIdentity(modelRef);
   return {
-    xhigh: [modelId, canonicalModelId].some(
-      (candidateRef) =>
-        isSonnet5BedrockModelRef(candidateRef) || isOpus47OrNewerBedrockModelRef(candidateRef),
-    )
-      ? "xhigh"
-      : null,
+    xhigh: [modelId, canonicalModelId].some(isOpus47OrNewerBedrockModelRef) ? "xhigh" : null,
     max: "max",
   };
 }
@@ -127,12 +111,6 @@ export function resolveBedrockClaudeThinkingProfile(
       levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "xhigh" }, { id: "adaptive" }, { id: "max" }],
       defaultLevel: "high",
       preserveWhenCatalogReasoningFalse: true,
-    };
-  }
-  if (modelRefs.some(isSonnet5BedrockModelRef)) {
-    return {
-      levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "xhigh" }, { id: "adaptive" }, { id: "max" }],
-      defaultLevel: "high",
     };
   }
   if (modelRefs.some(isOpus48BedrockModelRef)) {

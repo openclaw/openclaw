@@ -481,6 +481,9 @@ function resolveGoogleThinkingConfig(
   if (!options?.reasoning) {
     return getDisabledThinkingConfig(model.id);
   }
+  if (options.reasoning === "off") {
+    return getDisabledThinkingConfig(model.id);
+  }
   if (isAdaptiveReasoningLevel(options.reasoning)) {
     if (isGoogleGemini3ProModel(model.id) || isGoogleGemini3FlashModel(model.id)) {
       return { includeThoughts: true };

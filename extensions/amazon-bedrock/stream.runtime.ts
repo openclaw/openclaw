@@ -81,7 +81,7 @@ function readBedrockStopDetails(fields: DocumentType | undefined): unknown {
   return record.stop_details ?? record.stopDetails;
 }
 
-function normalizeFableToolChoice(
+function normalizeAdaptiveClaudeToolChoice(
   toolChoice: BedrockOptions["toolChoice"],
 ): BedrockOptions["toolChoice"] {
   if (toolChoice === "any" || (typeof toolChoice === "object" && toolChoice?.type === "tool")) {
@@ -231,7 +231,9 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
         },
         toolConfig: convertToolConfig(
           context.tools,
-          fable5 ? normalizeFableToolChoice(options.toolChoice) : options.toolChoice,
+          fable5 || sendsAdaptiveThinking
+            ? normalizeAdaptiveClaudeToolChoice(options.toolChoice)
+            : options.toolChoice,
         ),
         additionalModelRequestFields,
         ...(fable5 ? { additionalModelResponseFieldPaths: ["/stop_details"] } : {}),
@@ -376,15 +378,13 @@ function resolveSimpleBedrockOptions(
     return {
       ...base,
       maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens),
-      reasoning: options?.reasoning ?? "high",
+      reasoning: options?.reasoning === "off" ? "low" : (options?.reasoning ?? "high"),
       thinkingBudgets: options?.thinkingBudgets,
     } satisfies BedrockOptions;
   }
   if (!options?.reasoning) {
     const reasoning =
-      isAnthropicClaudeModel(model) && requiresMandatoryAdaptiveThinking(model)
-        ? "high"
-        : undefined;
+      isAnthropicClaudeModel(model) && defaultsAdaptiveThinking(model) ? "high" : undefined;
     return {
       ...base,
       ...(reasoning !== undefined
@@ -392,6 +392,10 @@ function resolveSimpleBedrockOptions(
         : {}),
       reasoning,
     } satisfies BedrockOptions;
+  }
+
+  if (options.reasoning === "off") {
+    return { ...base, reasoning: "off" } satisfies BedrockOptions;
   }
 
   if (isAnthropicClaudeModel(model)) {
@@ -607,7 +611,7 @@ function supportsAdaptiveThinking(model: Model<"bedrock-converse-stream">): bool
   );
 }
 
-function requiresMandatoryAdaptiveThinking(model: Model<"bedrock-converse-stream">): boolean {
+function defaultsAdaptiveThinking(model: Model<"bedrock-converse-stream">): boolean {
   const profileModelId = resolveClaudeProfileNameModelId(model.name);
   return (
     isClaudeMythosPreviewModelId(resolveClaudeModelIdentity(model)) ||
@@ -1037,6 +1041,9 @@ function buildAdditionalModelRequestFields(
   model: Model<"bedrock-converse-stream">,
   options: BedrockOptions,
 ): DocumentType | undefined {
+  if (options.reasoning === "off") {
+    return undefined;
+  }
   if (
     !options.reasoning ||
     (!model.reasoning &&

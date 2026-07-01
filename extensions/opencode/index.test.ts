@@ -311,9 +311,8 @@ describe("opencode provider plugin", () => {
       throw new Error("expected OpenCode Zen static provider");
     }
 
-    expect(result.provider.models).toHaveLength(50);
+    expect(result.provider.models).toHaveLength(49);
     expect(result.provider.models.map((model) => model.id)).toContain("claude-opus-4-8");
-    expect(result.provider.models.map((model) => model.id)).toContain("claude-sonnet-5");
     expect(result.provider.models.map((model) => model.id)).toContain("glm-5.2");
     expect(result.provider.models.map((model) => model.id)).toContain("minimax-m2.7");
     expect(result.provider.models.find((model) => model.id === "minimax-m2.7")).toMatchObject({

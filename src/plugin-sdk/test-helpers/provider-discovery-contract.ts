@@ -902,7 +902,7 @@ export function describeCloudflareAiGatewayProviderDiscoveryContract(
         api: "anthropic-messages",
         apiKey: "CLOUDFLARE_AI_GATEWAY_API_KEY",
       });
-      expect(providerModelIds(provider)).toEqual(["claude-sonnet-4-6"]);
+      expect(providerModelIds(provider)).toEqual(["claude-sonnet-4-6", "claude-sonnet-5"]);
     });
   });
 }

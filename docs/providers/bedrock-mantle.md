@@ -1,15 +1,17 @@
 ---
-summary: "Use Amazon Bedrock Mantle (OpenAI-compatible) models with OpenClaw"
+summary: "Use Amazon Bedrock Mantle OpenAI-compatible and Claude Messages models with OpenClaw"
 read_when:
   - You want to use Bedrock Mantle hosted OSS models with OpenClaw
   - You need the Mantle OpenAI-compatible endpoint for GPT-OSS, Qwen, Kimi, or GLM
+  - You want to use Claude Sonnet 5 through Amazon Bedrock
 title: "Amazon Bedrock Mantle"
 ---
 
 OpenClaw includes a bundled **Amazon Bedrock Mantle** provider that connects to
-the Mantle OpenAI-compatible endpoint. Mantle hosts open-source and
-third-party models (GPT-OSS, Qwen, Kimi, GLM, and similar) through a standard
-`/v1/chat/completions` surface backed by Bedrock infrastructure.
+the Mantle OpenAI-compatible and Anthropic Messages endpoints. Mantle hosts
+open-source and third-party models (GPT-OSS, Qwen, Kimi, GLM, and similar)
+through `/v1/chat/completions`, while Claude models such as Sonnet 5 use the
+native `/anthropic/v1/messages` route.
 
 | Property       | Value                                                                                       |
 | -------------- | ------------------------------------------------------------------------------------------- |
@@ -116,9 +118,9 @@ The bearer token is the same `AWS_BEARER_TOKEN_BEDROCK` used by the standard [Am
 
 ### Supported regions
 
-`us-east-1`, `us-east-2`, `us-west-2`, `ap-northeast-1`,
-`ap-south-1`, `ap-southeast-3`, `eu-central-1`, `eu-west-1`, `eu-west-2`,
-`eu-south-1`, `eu-north-1`, `sa-east-1`.
+`us-east-1`, `us-east-2`, `us-gov-west-1`, `us-west-2`, `ap-northeast-1`,
+`ap-south-1`, `ap-southeast-2`, `ap-southeast-3`, `eu-central-1`, `eu-west-1`,
+`eu-west-2`, `eu-south-1`, `eu-north-1`, `sa-east-1`.
 
 ## Manual configuration
 
@@ -165,8 +167,8 @@ If you prefer explicit config instead of auto-discovery:
     continue to work normally.
   </Accordion>
 
-  <Accordion title="Claude Opus 4.7 via the Anthropic Messages route">
-    Mantle also exposes an Anthropic Messages route that carries Claude models through the same bearer-authenticated streaming path. Claude Opus 4.7 (`amazon-bedrock-mantle/claude-opus-4.7`) is callable through this route with provider-owned streaming, so AWS bearer tokens are not treated like Anthropic API keys.
+  <Accordion title="Claude via the Anthropic Messages route">
+    Mantle also exposes an Anthropic Messages route that carries Claude models through the same bearer-authenticated streaming path. Claude Sonnet 5 (`amazon-bedrock-mantle/anthropic.claude-sonnet-5`) and Claude Opus 4.7 are callable through this route with provider-owned streaming, so AWS bearer tokens are not treated like Anthropic API keys. Sonnet 5 defaults to adaptive thinking at `high` effort; set thinking to `off` to disable it.
 
     When you pin an Anthropic Messages model on the Mantle provider, OpenClaw uses the `anthropic-messages` API surface instead of `openai-completions` for that model. Auth still comes from `AWS_BEARER_TOKEN_BEDROCK` (or the minted IAM bearer token).
 
@@ -177,13 +179,15 @@ If you prefer explicit config instead of auto-discovery:
           "amazon-bedrock-mantle": {
             models: [
               {
-                id: "claude-opus-4.7",
-                name: "Claude Opus 4.7",
+                id: "anthropic.claude-sonnet-5",
+                name: "Claude Sonnet 5",
                 api: "anthropic-messages",
                 reasoning: true,
                 input: ["text", "image"],
+                cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
                 contextWindow: 1000000,
-                maxTokens: 32000,
+                maxTokens: 128000,
+                thinkingLevelMap: { xhigh: "xhigh", max: "max" },
               },
             ],
           },
@@ -197,8 +201,10 @@ If you prefer explicit config instead of auto-discovery:
   <Accordion title="Relationship to Amazon Bedrock provider">
     Bedrock Mantle is a separate provider from the standard
     [Amazon Bedrock](/providers/bedrock) provider. Mantle uses an
-    OpenAI-compatible `/v1` surface, while the standard Bedrock provider uses
-    the native Bedrock API.
+    OpenAI-compatible `/v1` surface plus an Anthropic Messages route, while the
+    standard Bedrock provider uses the Bedrock Runtime Invoke and Converse APIs.
+    Sonnet 5 is available through Mantle's native Messages surface, not through
+    the legacy Bedrock Runtime provider.
 
     Both providers share the same `AWS_BEARER_TOKEN_BEDROCK` credential when
     present.

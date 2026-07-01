@@ -90,9 +90,6 @@ function canonicalizeKnownClaudeCliModelId(modelId: string): string | null {
   if (!normalized) {
     return null;
   }
-  if (normalized.startsWith("claude-sonnet-5")) {
-    return null;
-  }
   const upgraded = upgradeOldClaudeModelId(normalized);
   if (upgraded) {
     return attachModelAuthProfile(upgraded, split.profile);

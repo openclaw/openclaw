@@ -10,7 +10,7 @@ import { completeSimple } from "../llm/stream.js";
 import type {
   AssistantMessage,
   Model,
-  ThinkingLevel as SimpleCompletionThinkingLevel,
+  ModelThinkingLevel as SimpleCompletionThinkingLevel,
 } from "../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
 import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
@@ -359,12 +359,13 @@ function normalizeSimpleCompletionReasoning(
 ): SimpleCompletionThinkingLevel | undefined {
   switch (reasoning) {
     case undefined:
-    case "off":
       return undefined;
+    case "off":
+      return "off";
     case "adaptive":
       return "medium";
     case "max":
-      return "xhigh";
+      return "max";
     default:
       return reasoning;
   }

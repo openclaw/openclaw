@@ -32,6 +32,7 @@ import {
   type ProviderPlugin,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
   resolveClaudeThinkingProfile,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
@@ -64,7 +65,7 @@ const ANTHROPIC_OPUS_48_DOT_MODEL_ID = "claude-opus-4.8";
 const ANTHROPIC_OPUS_47_MODEL_ID = "claude-opus-4-7";
 const ANTHROPIC_OPUS_47_DOT_MODEL_ID = "claude-opus-4.7";
 const ANTHROPIC_GA_1M_CONTEXT_TOKENS = 1_048_576;
-const ANTHROPIC_FABLE_CONTEXT_TOKENS = 1_000_000;
+const ANTHROPIC_EXACT_1M_CONTEXT_TOKENS = 1_000_000;
 const ANTHROPIC_MODERN_MAX_OUTPUT_TOKENS = 128_000;
 const ANTHROPIC_OPUS_46_MODEL_ID = "claude-opus-4-6";
 const ANTHROPIC_OPUS_46_DOT_MODEL_ID = "claude-opus-4.6";
@@ -288,7 +289,9 @@ function buildAnthropicForwardCompatModel(
     input: ["text", "image"],
     cost: isAnthropicFable5Model(trimmedModelId)
       ? { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 }
-      : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      : isAnthropicSonnet5Model(trimmedModelId)
+        ? { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }
+        : { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: resolveAnthropicFixedContextWindow(trimmedModelId) ?? 200_000,
     maxTokens: isAnthropic128kOutputModel(trimmedModelId)
       ? ANTHROPIC_MODERN_MAX_OUTPUT_TOKENS
@@ -349,15 +352,19 @@ function isAnthropicFable5Model(modelId: string): boolean {
   return resolveClaudeFable5ModelIdentity({ id: modelId }) !== undefined;
 }
 
+function isAnthropicSonnet5Model(modelId: string): boolean {
+  return resolveClaudeSonnet5ModelIdentity({ id: modelId }) !== undefined;
+}
+
 function resolveAnthropicFixedContextWindow(modelId: string): number | undefined {
-  if (isAnthropicFable5Model(modelId)) {
-    return ANTHROPIC_FABLE_CONTEXT_TOKENS;
+  if (isAnthropicFable5Model(modelId) || isAnthropicSonnet5Model(modelId)) {
+    return ANTHROPIC_EXACT_1M_CONTEXT_TOKENS;
   }
   return isAnthropicGa1MModel(modelId) ? ANTHROPIC_GA_1M_CONTEXT_TOKENS : undefined;
 }
 
 function isAnthropic128kOutputModel(modelId: string): boolean {
-  if (isAnthropicFable5Model(modelId)) {
+  if (isAnthropicFable5Model(modelId) || isAnthropicSonnet5Model(modelId)) {
     return true;
   }
   return /^claude-(?:opus-4-8|sonnet-5)(?=$|[^a-z0-9])/.test(
@@ -365,8 +372,8 @@ function isAnthropic128kOutputModel(modelId: string): boolean {
   );
 }
 
-function isAnthropicOpus47OrNewerModel(modelId: string): boolean {
-  return supportsClaudeNativeXhighEffort({ id: modelId }) && !isAnthropicFable5Model(modelId);
+function isAnthropicLargeImageModel(modelId: string): boolean {
+  return supportsClaudeNativeXhighEffort({ id: modelId });
 }
 
 function isAnthropicMythosPreviewModel(modelId: string): boolean {
@@ -429,7 +436,9 @@ function applyAnthropicFixedContextWindow(params: {
   if (hasConfiguredModelContextOverride(params.config, params.provider, params.modelId)) {
     return undefined;
   }
-  const exactContextWindow = isAnthropicFable5Model(params.contractModelId);
+  const exactContextWindow =
+    isAnthropicFable5Model(params.contractModelId) ||
+    isAnthropicSonnet5Model(params.contractModelId);
   const nextContextWindow = exactContextWindow
     ? fixedContextWindow
     : Math.max(params.model.contextWindow ?? 0, fixedContextWindow);
@@ -472,7 +481,7 @@ function applyAnthropicThinkingLevelMap(params: {
   model: ProviderRuntimeModel;
 }): ProviderRuntimeModel | undefined {
   const fable5 = isAnthropicFable5Model(params.modelId);
-  const nativeXhigh = fable5 || isAnthropicOpus47OrNewerModel(params.modelId);
+  const nativeXhigh = fable5 || supportsClaudeNativeXhighEffort({ id: params.modelId });
   if (!supportsAnthropicNativeMaxEffort(params.modelId)) {
     return undefined;
   }
@@ -516,9 +525,7 @@ function resolveAnthropicImageMediaInput(modelId: string, modelName?: string) {
     return undefined;
   }
   const refs = [modelId, modelName].filter((value): value is string => typeof value === "string");
-  const largeImageModel = refs.some(
-    (ref) => isAnthropicFable5Model(ref) || isAnthropicOpus47OrNewerModel(ref),
-  );
+  const largeImageModel = refs.some((ref) => isAnthropicLargeImageModel(ref));
   return {
     image: {
       maxSidePx: largeImageModel ? 2576 : 1568,
@@ -558,7 +565,8 @@ function normalizeAnthropicResolvedModel(
     return undefined;
   }
   const contractModel =
-    isAnthropicFable5Model(contractModelId) && !ctx.model.reasoning
+    (isAnthropicFable5Model(contractModelId) || isAnthropicSonnet5Model(contractModelId)) &&
+    !ctx.model.reasoning
       ? { ...ctx.model, reasoning: true }
       : ctx.model;
   const imageCapableModel =

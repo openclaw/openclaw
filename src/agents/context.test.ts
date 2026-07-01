@@ -11,6 +11,7 @@ import {
 import {
   ANTHROPIC_CONTEXT_1M_TOKENS,
   ANTHROPIC_FABLE_CONTEXT_TOKENS,
+  ANTHROPIC_SONNET_5_CONTEXT_TOKENS,
   ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS,
   applyConfiguredContextWindows,
   applyDiscoveredContextWindows,
@@ -418,6 +419,9 @@ describe("resolveContextTokensForModel", () => {
   it.each([
     ["anthropic", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
     ["anthropic-vertex", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
+    ["anthropic", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
+    ["anthropic-vertex", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
+    ["claude-cli", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
     ["anthropic", "claude-sonnet-4-6", ANTHROPIC_CONTEXT_1M_TOKENS],
     ["anthropic-vertex", "claude-sonnet-4-6", ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS],
   ])(
@@ -434,9 +438,26 @@ describe("resolveContextTokensForModel", () => {
     },
   );
 
+  it.each(["claude-sonnet-50", "claude-sonnet-5x"])(
+    "does not apply the Sonnet 5 context contract to %s",
+    (modelId) => {
+      expect(
+        resolveContextTokensForModel({
+          provider: "anthropic",
+          model: modelId,
+          fallbackContextTokens: 200_000,
+          allowAsyncLoad: false,
+        }),
+      ).toBe(200_000);
+    },
+  );
+
   it.each([
     ["anthropic", "claude-fable-5"],
     ["anthropic-vertex", "claude-fable-5"],
+    ["anthropic", "claude-sonnet-5"],
+    ["anthropic-vertex", "claude-sonnet-5"],
+    ["claude-cli", "claude-sonnet-5"],
     ["anthropic", "claude-sonnet-4-6"],
     ["anthropic-vertex", "claude-sonnet-4-6"],
   ])("honors an authored %s window for fixed model %s", (provider, modelId) => {
@@ -530,6 +551,9 @@ describe("resolveContextTokensForModel", () => {
   it.each([
     ["anthropic", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
     ["anthropic-vertex", "claude-fable-5", ANTHROPIC_FABLE_CONTEXT_TOKENS],
+    ["anthropic", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
+    ["anthropic-vertex", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
+    ["claude-cli", "claude-sonnet-5", ANTHROPIC_SONNET_5_CONTEXT_TOKENS],
     ["anthropic", "claude-sonnet-4-6", ANTHROPIC_CONTEXT_1M_TOKENS],
     ["anthropic-vertex", "claude-sonnet-4-6", ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS],
   ])(

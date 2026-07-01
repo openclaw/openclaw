@@ -7,18 +7,19 @@ import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-s
 /** Provider id used in model refs and auth profiles. */
 export const CLOUDFLARE_AI_GATEWAY_PROVIDER_ID = "cloudflare-ai-gateway";
 /** Default Cloudflare AI Gateway model id exposed by the bundled provider. */
-export const CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_ID = "claude-sonnet-5";
+export const CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_ID = "claude-sonnet-4-6";
 /** Fully-qualified default model ref used by onboarding. */
 export const CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF = `${CLOUDFLARE_AI_GATEWAY_PROVIDER_ID}/${CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_ID}`;
 
-const CLOUDFLARE_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW = 1_000_000;
-const CLOUDFLARE_AI_GATEWAY_DEFAULT_MAX_TOKENS = 128_000;
+const CLOUDFLARE_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW = 200_000;
+const CLOUDFLARE_AI_GATEWAY_DEFAULT_MAX_TOKENS = 64_000;
 const CLOUDFLARE_AI_GATEWAY_DEFAULT_COST = {
   input: 3,
   output: 15,
   cacheRead: 0.3,
   cacheWrite: 3.75,
 };
+const CLOUDFLARE_AI_GATEWAY_SONNET_5_MODEL_ID = "claude-sonnet-5";
 
 /**
  * Builds a provider model definition, allowing tests/catalog code to override
@@ -29,17 +30,37 @@ export function buildCloudflareAiGatewayModelDefinition(params?: {
   name?: string;
   reasoning?: boolean;
   input?: Array<"text" | "image">;
+  contextWindow?: number;
+  maxTokens?: number;
+  mediaInput?: ModelDefinitionConfig["mediaInput"];
 }): ModelDefinitionConfig {
   const id = params?.id?.trim() || CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_ID;
   return {
     id,
-    name: params?.name ?? "Claude Sonnet 5",
+    name: params?.name ?? "Claude Sonnet 4.6",
     reasoning: params?.reasoning ?? true,
     input: params?.input ?? ["text", "image"],
     cost: CLOUDFLARE_AI_GATEWAY_DEFAULT_COST,
-    contextWindow: CLOUDFLARE_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW,
-    maxTokens: CLOUDFLARE_AI_GATEWAY_DEFAULT_MAX_TOKENS,
+    contextWindow: params?.contextWindow ?? CLOUDFLARE_AI_GATEWAY_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: params?.maxTokens ?? CLOUDFLARE_AI_GATEWAY_DEFAULT_MAX_TOKENS,
+    ...(params?.mediaInput ? { mediaInput: params.mediaInput } : {}),
   };
+}
+
+/** Build the current catalog without changing the shipped onboarding default. */
+export function buildCloudflareAiGatewayModelDefinitions(): ModelDefinitionConfig[] {
+  return [
+    buildCloudflareAiGatewayModelDefinition(),
+    buildCloudflareAiGatewayModelDefinition({
+      id: CLOUDFLARE_AI_GATEWAY_SONNET_5_MODEL_ID,
+      name: "Claude Sonnet 5",
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      mediaInput: {
+        image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+      },
+    }),
+  ];
 }
 
 /**

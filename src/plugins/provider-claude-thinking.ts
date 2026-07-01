@@ -3,8 +3,10 @@
 // `plugin-sdk/provider-model-shared`.
 import {
   CLAUDE_FABLE_5_THINKING_PROFILE,
+  CLAUDE_SONNET_5_THINKING_PROFILE,
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
+  resolveClaudeSonnet5ModelIdentity,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeXhighEffort,
 } from "@openclaw/llm-core";
@@ -38,6 +40,11 @@ export function resolveClaudeThinkingProfile(
   const canonicalModelId = resolveClaudeModelIdentity(ref);
   if (resolveClaudeFable5ModelIdentity(ref)) {
     return CLAUDE_FABLE_5_THINKING_PROFILE;
+  }
+  // Sonnet 5 supports explicit opt-out, but omitted thinking defaults to
+  // adaptive thinking at high effort on every Anthropic API surface.
+  if (resolveClaudeSonnet5ModelIdentity(ref)) {
+    return CLAUDE_SONNET_5_THINKING_PROFILE;
   }
   if (supportsClaudeNativeXhighEffort(ref)) {
     return {

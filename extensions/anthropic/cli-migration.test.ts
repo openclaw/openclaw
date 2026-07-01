@@ -56,6 +56,7 @@ describe("anthropic Claude model refs", () => {
     expect(resolveKnownAnthropicModelRef("anthropic/claude-sonnet-4-7")).toBe(
       "anthropic/claude-sonnet-4-7",
     );
+    expect(resolveKnownAnthropicModelRef("claude-sonnet-5")).toBe("anthropic/claude-sonnet-5");
     expect(resolveKnownAnthropicModelRef("anthropic/claude-haiku-4-5")).toBe(
       "anthropic/claude-haiku-4-5",
     );

@@ -33,12 +33,16 @@ export const MANTLE_IAM_TOKEN_MARKER = "__amazon_bedrock_mantle_iam__";
 // Mantle region & endpoint helpers
 // ---------------------------------------------------------------------------
 
+// This is the AWS bedrock-mantle endpoint list, not the broader Claude model
+// availability list. Reject unknown regions before token generation/discovery.
 const MANTLE_SUPPORTED_REGIONS = [
   "us-east-1",
   "us-east-2",
+  "us-gov-west-1",
   "us-west-2",
   "ap-northeast-1",
   "ap-south-1",
+  "ap-southeast-2",
   "ap-southeast-3",
   "eu-central-1",
   "eu-west-1",
@@ -390,6 +394,21 @@ export async function resolveImplicitMantleProvider(params: {
   // adaptive thinking semantics.
   const claudeModels: ModelDefinitionConfig[] = [
     {
+      id: "anthropic.claude-sonnet-5",
+      name: "Claude Sonnet 5",
+      api: "anthropic-messages" as const,
+      reasoning: true,
+      params: { canonicalModelId: "claude-sonnet-5" },
+      input: ["text", "image"],
+      mediaInput: {
+        image: { maxSidePx: 2576, preferredSidePx: 2576, tokenMode: "provider" },
+      },
+      cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    },
+    {
       id: "anthropic.claude-opus-4-7",
       name: "Claude Opus 4.7",
       api: "anthropic-messages" as const,
@@ -416,7 +435,13 @@ export async function resolveImplicitMantleProvider(params: {
       maxTokens: 128_000,
     },
   ];
-  const allModels = [...models, ...claudeModels];
+  // Discovery can return these ids with generic limits. Replace those rows so
+  // downstream first-match lookup cannot select incomplete metadata.
+  const exactClaudeModelIds = new Set(claudeModels.map((model) => model.id));
+  const allModels = [
+    ...models.filter((model) => !exactClaudeModelIds.has(model.id)),
+    ...claudeModels,
+  ];
 
   return {
     baseUrl: `${mantleEndpoint(region)}/v1`,

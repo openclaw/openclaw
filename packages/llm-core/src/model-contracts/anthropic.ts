@@ -30,6 +30,20 @@ export const CLAUDE_FABLE_5_THINKING_PROFILE = {
   preserveWhenCatalogReasoningFalse: true,
 } as const;
 
+export const CLAUDE_SONNET_5_THINKING_PROFILE = {
+  levels: [
+    { id: "off" },
+    { id: "minimal" },
+    { id: "low" },
+    { id: "medium" },
+    { id: "high" },
+    { id: "xhigh" },
+    { id: "adaptive" },
+    { id: "max" },
+  ],
+  defaultLevel: "high",
+} as const;
+
 /** Resolve the canonical normalized Claude model id for one runtime model ref. */
 export function resolveClaudeModelIdentity(ref: ClaudeModelRef): string {
   const configuredCanonicalModelId =
@@ -45,6 +59,16 @@ export function resolveClaudeModelIdentity(ref: ClaudeModelRef): string {
 export function resolveClaudeFable5ModelIdentity(ref: ClaudeModelRef): string | undefined {
   const normalized = resolveClaudeModelIdentity(ref);
   const match = /(?:^|-)claude-fable-5(?=$|[^a-z0-9])/.exec(normalized);
+  if (!match) {
+    return undefined;
+  }
+  return normalized.slice((match.index ?? 0) + (match[0].startsWith("-") ? 1 : 0));
+}
+
+/** Resolve Claude Sonnet 5 through direct ids, cloud ids, or deployment metadata. */
+export function resolveClaudeSonnet5ModelIdentity(ref: ClaudeModelRef): string | undefined {
+  const normalized = resolveClaudeModelIdentity(ref);
+  const match = /(?:^|-)claude-sonnet-5(?=$|[^a-z0-9])/.exec(normalized);
   if (!match) {
     return undefined;
   }

@@ -174,7 +174,13 @@ billing behavior:
   </Tab>
 </Tabs>
 
-## Thinking defaults (Claude Fable 5, 4.8, and 4.6)
+## Thinking defaults (Claude Sonnet 5, Fable 5, 4.8, and 4.6)
+
+`anthropic/claude-sonnet-5` uses adaptive thinking at `high` effort by default.
+Use `/think off` to disable thinking, or `/think xhigh|max` for the model's
+higher native effort levels. OpenClaw sends adaptive-thinking requests without
+manual thinking budgets or custom sampling parameters, which Sonnet 5 does not
+accept.
 
 `anthropic/claude-fable-5` always uses adaptive thinking and defaults to `high`
 effort. Because Anthropic does not allow thinking to be disabled for this model,
@@ -320,15 +326,17 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
   </Accordion>
 
   <Accordion title="1M context window">
-    Anthropic's 1M context window is available on GA-capable Claude 4.x models
-    such as Opus 4.8, Opus 4.7, Opus 4.6, and Sonnet 4.6. OpenClaw sizes those models at
-    1M automatically:
+    Claude Sonnet 5 has an exact 1,000,000-token input window and supports up to
+    128,000 output tokens. Anthropic's 1M context window is also available on
+    GA-capable Claude 4.x models such as Opus 4.8, Opus 4.7, Opus 4.6, and
+    Sonnet 4.6. OpenClaw sizes these models automatically:
 
     ```json5
     {
       agents: {
         defaults: {
           models: {
+            "anthropic/claude-sonnet-5": {},
             "anthropic/claude-opus-4-6": {},
           },
         },

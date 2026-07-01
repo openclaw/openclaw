@@ -385,9 +385,12 @@ describe("Anthropic provider", () => {
   });
 
   it.each([
-    ["anthropic", "sk-ant-provider"],
-    ["anthropic-vertex", "vertex-token"],
-  ])("surfaces structured Anthropic streaming refusals for %s", async (provider, apiKey) => {
+    ["claude-fable-5", "Claude Fable 5", "anthropic", "sk-ant-provider"],
+    ["claude-sonnet-5", "Claude Sonnet 5", "anthropic", "sk-ant-provider"],
+    ["claude-sonnet-5", "Claude Sonnet 5", "anthropic-vertex", "vertex-token"],
+    ["claude-sonnet-5", "Claude Sonnet 5", "amazon-bedrock-mantle", "aws-token"],
+    ["claude-sonnet-5", "Claude Sonnet 5", "cloudflare-ai-gateway", "gateway-token"],
+  ])("surfaces structured %s streaming refusals for %s", async (id, name, provider, apiKey) => {
     const client = {
       messages: {
         create: vi.fn(() => ({
@@ -430,8 +433,8 @@ describe("Anthropic provider", () => {
 
     const stream = streamAnthropic(
       makeAnthropicModel({
-        id: "claude-fable-5",
-        name: "Claude Fable 5",
+        id,
+        name,
         provider,
       }),
       { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
@@ -706,6 +709,63 @@ describe("Anthropic provider", () => {
     expect(capturedPayload).not.toHaveProperty("temperature");
   });
 
+  it("defaults Claude Sonnet 5 to adaptive high effort", async () => {
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel({
+        id: "claude-sonnet-5",
+        name: "Claude Sonnet 5",
+        reasoning: true,
+        maxTokens: 128_000,
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      {
+        apiKey: "sk-ant-provider",
+        temperature: 0.2,
+        onPayload: (payload) => {
+          capturedPayload = payload;
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect(capturedPayload).toMatchObject({
+      thinking: { type: "adaptive", display: "summarized" },
+      output_config: { effort: "high" },
+    });
+    expect(capturedPayload).not.toHaveProperty("temperature");
+  });
+
+  it("disables thinking for an explicit Claude Sonnet 5 off level", async () => {
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel({
+        id: "claude-sonnet-5",
+        name: "Claude Sonnet 5",
+        reasoning: true,
+        maxTokens: 128_000,
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      {
+        apiKey: "sk-ant-provider",
+        reasoning: "off",
+        temperature: 0.2,
+        onPayload: (payload) => {
+          capturedPayload = payload;
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect(capturedPayload).toMatchObject({ thinking: { type: "disabled" } });
+    expect(capturedPayload).not.toHaveProperty("output_config");
+    expect(capturedPayload).not.toHaveProperty("temperature");
+  });
+
   it("preserves native max effort for Claude Mythos Preview", async () => {
     let capturedPayload: unknown;
     const stream = streamSimpleAnthropic(
@@ -751,6 +811,35 @@ describe("Anthropic provider", () => {
       },
       {
         apiKey: "sk-ant-provider",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect(capturedPayload).toMatchObject({
+      thinking: { type: "adaptive" },
+      output_config: { effort: "high" },
+    });
+  });
+
+  it("keeps mandatory Mythos Preview thinking enabled for explicit off", async () => {
+    let capturedPayload: unknown;
+    const stream = streamSimpleAnthropic(
+      makeAnthropicModel({
+        id: "prod-mythos-preview",
+        name: "Production Claude",
+        provider: "microsoft-foundry",
+        params: { canonicalModelId: "claude-mythos-preview" },
+        reasoning: true,
+      }),
+      { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
+      {
+        apiKey: "sk-ant-provider",
+        reasoning: "off",
         onPayload: (payload) => {
           capturedPayload = payload;
           throw new Error("stop before network");
@@ -943,6 +1032,71 @@ describe("Anthropic provider", () => {
 
     expect(capturedPayload).toMatchObject({
       thinking: { type: "adaptive", display: "summarized" },
+      tool_choice: { type: "auto" },
+    });
+  });
+
+  it("preserves forced Sonnet 5 tool choice when thinking is disabled", async () => {
+    let capturedPayload: unknown;
+    const stream = streamAnthropic(
+      makeAnthropicModel({ id: "claude-sonnet-5", name: "Claude Sonnet 5" }),
+      {
+        messages: [{ role: "user", content: "Use a tool.", timestamp: 0 }],
+        tools: [
+          {
+            name: "lookup",
+            description: "Lookup",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        thinkingEnabled: false,
+        toolChoice: "any",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect(capturedPayload).toMatchObject({
+      thinking: { type: "disabled" },
+      tool_choice: { type: "any" },
+    });
+  });
+
+  it("normalizes forced Sonnet 5 tool choice while adaptive thinking is enabled", async () => {
+    let capturedPayload: unknown;
+    const stream = streamAnthropic(
+      makeAnthropicModel({ id: "claude-sonnet-5", name: "Claude Sonnet 5" }),
+      {
+        messages: [{ role: "user", content: "Use a tool.", timestamp: 0 }],
+        tools: [
+          {
+            name: "lookup",
+            description: "Lookup",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        thinkingEnabled: true,
+        effort: "high",
+        toolChoice: "any",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+        },
+      },
+    );
+
+    await stream.result();
+
+    expect(capturedPayload).toMatchObject({
+      thinking: { type: "adaptive" },
       tool_choice: { type: "auto" },
     });
   });

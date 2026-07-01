@@ -645,7 +645,7 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
     );
   });
 
-  it("normalizes OpenClaw-only thinking levels before using shared model runtime simple completion", async () => {
+  it("preserves max effort for provider-owned simple completion clamping", async () => {
     const model = {
       provider: "openai",
       id: "gpt-5.4",
@@ -680,13 +680,13 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
         messages: [{ role: "user", content: "pong", timestamp: 1 }],
       },
       {
-        reasoning: "xhigh",
+        reasoning: "max",
         apiKey: "sk-test",
       },
     );
   });
 
-  it("omits reasoning for local simple completion when thinking is off", async () => {
+  it("preserves explicit off for local simple completion", async () => {
     const model = {
       provider: "openai",
       id: "gpt-5.4",
@@ -721,6 +721,7 @@ describe("completeWithPreparedSimpleCompletionModel", () => {
         messages: [{ role: "user", content: "pong", timestamp: 1 }],
       },
       {
+        reasoning: "off",
         apiKey: "sk-test",
       },
     );
