@@ -22,7 +22,7 @@ import {
 const SilentReplyPolicySchema = z.union([z.literal("allow"), z.literal("disallow")]);
 
 const NonNegativeByteSizeSchema = z.union([
-  z.number().int().nonnegative(),
+  z.number().int().nonnegative().refine(Number.isSafeInteger, "Expected a safe integer byte size"),
   z.string().refine(isValidNonNegativeByteSizeString, "Expected byte size string like 2mb"),
 ]);
 

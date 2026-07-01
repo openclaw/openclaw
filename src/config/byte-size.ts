@@ -8,7 +8,9 @@ import { parseByteSize } from "../cli/parse-bytes.js";
 export function parseNonNegativeByteSize(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) {
     const int = Math.floor(value);
-    return int >= 0 ? int : null;
+    // Match the string path (parseByteSize): an unsafe-integer byte size silently loses precision,
+    // so reject it instead of returning a corrupted value. Keeps numeric and string config parity.
+    return Number.isSafeInteger(int) && int >= 0 ? int : null;
   }
   if (typeof value === "string") {
     const trimmed = value.trim();

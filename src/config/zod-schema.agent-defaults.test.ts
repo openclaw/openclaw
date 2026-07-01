@@ -316,6 +316,20 @@ describe("agent defaults schema", () => {
     expect(result.compaction?.maxActiveTranscriptBytes).toBe("20mb");
   });
 
+  it("rejects unsafe numeric byte sizes in compaction defaults", () => {
+    const unsafe = Number.MAX_SAFE_INTEGER + 1;
+    expect(
+      AgentDefaultsSchema.safeParse({
+        compaction: { maxActiveTranscriptBytes: unsafe },
+      }).success,
+    ).toBe(false);
+    expect(
+      AgentDefaultsSchema.safeParse({
+        compaction: { memoryFlush: { forceFlushTranscriptBytes: unsafe } },
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts compaction.midTurnPrecheck.enabled", () => {
     const result = AgentDefaultsSchema.parse({
       compaction: {
