@@ -43,6 +43,27 @@ describe("mattermost session route", () => {
     expect(channelRoute.sessionKey).toContain("thread456");
   });
 
+  it("keys a resolved group target under group:, matching inbound classification (#95646)", () => {
+    const route = resolveMattermostOutboundSessionRoute({
+      cfg: {},
+      agentId: "main",
+      accountId: "acct-1",
+      target: "mattermost:channel:priv123",
+      resolvedTarget: { kind: "group", to: "channel:priv123" },
+    });
+
+    const groupRoute = expectRoute(route);
+    expect(groupRoute.peer.kind).toBe("group");
+    expect(groupRoute.peer.id).toBe("priv123");
+    expect(groupRoute.chatType).toBe("group");
+    expect(groupRoute.from).toBe("mattermost:group:priv123");
+    // Delivery target string stays channel: — Mattermost addresses all channels
+    // (including private) by id; only the session namespace is type-aware.
+    expect(groupRoute.to).toBe("channel:priv123");
+    expect(groupRoute.baseSessionKey).toContain(":group:priv123");
+    expect(groupRoute.baseSessionKey).not.toContain(":channel:priv123");
+  });
+
   it("recovers channel thread routes from currentSessionKey", () => {
     const route = resolveMattermostOutboundSessionRoute({
       cfg: {},
