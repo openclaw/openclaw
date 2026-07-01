@@ -730,6 +730,7 @@ extension OnboardingWizardView {
         self.showQRScanner = false
         self.connectMessage = "Connecting via QR code..."
         self.statusLine = "QR loaded. Connecting to \(link.host):\(link.port)..."
+        self.step = .connect
         Task { await self.connectManual() }
     }
 
