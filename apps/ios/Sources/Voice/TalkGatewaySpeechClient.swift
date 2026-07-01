@@ -122,7 +122,7 @@ protocol TalkBufferedAudioPlaying {
 }
 
 @MainActor
-final class TalkBufferedAudioPlayer: NSObject, TalkBufferedAudioPlaying, AVAudioPlayerDelegate {
+final class TalkBufferedAudioPlayer: NSObject, TalkBufferedAudioPlaying, @preconcurrency AVAudioPlayerDelegate {
     static let shared = TalkBufferedAudioPlayer()
 
     private final class Playback: @unchecked Sendable {
