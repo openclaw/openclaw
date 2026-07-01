@@ -1764,7 +1764,7 @@ export function persistAllowAlwaysDecision(params: {
 }
 
 export function minSecurity(a: ExecSecurity, b: ExecSecurity): ExecSecurity {
-  const order: Record<ExecSecurity, number> = { deny: 0, allowlist: 1, full: 2 };
+  const order: Record<ExecSecurity, number> = { full: 0, allowlist: 1, deny: 2 };
   return order[a] <= order[b] ? a : b;
 }
 
