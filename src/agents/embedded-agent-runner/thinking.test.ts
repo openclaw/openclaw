@@ -1136,6 +1136,81 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     );
     expect(callCount).toBe(1);
   });
+
+  it("fires the onRecoveredAnthropicThinking hook when errorBody-based recovery succeeds", async () => {
+    // The recovery notification hook must fire after a successful retry so
+    // callers (session manager, telemetry) can observe the self-heal event.
+    const providerError = new ProviderHttpError(
+      "LLM request failed: provider rejected the request schema or tool payload.",
+      {
+        status: 400,
+        body: '{"error":{"message":"Invalid `signature` in `thinking` block"}}',
+      },
+    );
+    const hookCalls: Array<{
+      originalCount: number;
+      cleanedCount: number;
+    }> = [];
+    let callCount = 0;
+    const wrapped = wrapAnthropicStreamWithRecovery(
+      (() => {
+        callCount += 1;
+        if (callCount === 1) {
+          return Promise.reject(providerError);
+        }
+        const stream = createAssistantMessageEventStream();
+        const finalMessage = createTestAssistantMessage({
+          content: [{ type: "text", text: "recovered response" }],
+          stopReason: "stop",
+        }) as AssistantMessage;
+        queueMicrotask(() => {
+          stream.push({ type: "start", partial: finalMessage });
+          stream.push({ type: "done", reason: "stop", message: finalMessage });
+          stream.end();
+        });
+        return stream;
+      }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
+      {
+        id: "test-session",
+        onRecoveredAnthropicThinking: (recovery) => {
+          hookCalls.push({
+            originalCount: recovery.originalMessages.length,
+            cleanedCount: recovery.cleanedMessages.length,
+          });
+        },
+      },
+    );
+
+    // The wrapper returns a Promise (first call rejected) that resolves to
+    // the retry stream.  Drain events and await result() so the recovery
+    // notification hook fires, then verify the hook payload.
+    const response = (await wrapped(
+      {} as never,
+      {
+        messages: castAgentMessages([
+          {
+            role: "assistant",
+            content: [{ type: "thinking", thinking: "secret", thinkingSignature: "sig" }],
+          },
+        ]),
+      } as never,
+      {} as never,
+    )) as { result: () => Promise<unknown> } & AsyncIterable<unknown>;
+
+    const events: unknown[] = [];
+    for await (const event of response) {
+      events.push(event);
+    }
+    const result = await response.result();
+
+    expect(callCount).toBe(2);
+    expect(result).toBeDefined();
+    expect(hookCalls).toHaveLength(1);
+    expect(hookCalls[0].originalCount).toBe(1);
+    // Retry strips thinking blocks: 1 original assistant → 1 cleaned message.
+    expect(hookCalls[0].cleanedCount).toBe(1);
+    expect(events.some((e) => (e as { type?: string }).type === "done")).toBe(true);
+  });
 });
 
 describe("stripStaleThinkingSignaturesForCompactionReplay", () => {
