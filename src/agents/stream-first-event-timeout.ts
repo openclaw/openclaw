@@ -30,7 +30,7 @@ export function createFirstStreamEventTimeoutError(context: FirstStreamEventTime
     formatOptionalField("model", context.model),
   ].join("");
   return new Error(
-    `${stage}HTTP stream opened but did not deliver a first SSE event within ${context.timeoutMs}ms after streaming headers.${details}` +
+    `${stage}HTTP stream opened but did not deliver a first SSE event within ${context.timeoutMs}ms after streaming headers (first-event timeout).${details}` +
       (context.hint ? ` ${context.hint}` : ""),
   );
 }

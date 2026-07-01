@@ -34,7 +34,7 @@ describe("withFirstStreamEventTimeout", () => {
       });
       const iterator = stream[Symbol.asyncIterator]();
       const next = expect(iterator.next()).rejects.toThrow(
-        /completions HTTP stream opened but did not deliver a first SSE event within 5ms/,
+        /completions HTTP stream opened but did not deliver a first SSE event within 5ms after streaming headers \(first-event timeout\)/,
       );
 
       await vi.advanceTimersByTimeAsync(5);
