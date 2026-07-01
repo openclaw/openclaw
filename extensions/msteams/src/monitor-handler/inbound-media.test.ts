@@ -6,7 +6,7 @@ vi.mock("../attachments.js", () => ({
   downloadMSTeamsGraphMedia: vi.fn(async () => ({ media: [] })),
   downloadMSTeamsBotFrameworkAttachments: vi.fn(async () => ({ media: [], attachmentCount: 0 })),
   buildMSTeamsGraphMessageUrls: vi.fn(() => [
-    "https://graph.microsoft.com/v1.0/chats/c/messages/m",
+    "https://graph.microsoft.com/v1.0/teams/team-aad-guid/channels/chan/messages/m",
   ]),
   extractMSTeamsHtmlAttachmentIds: vi.fn(() => ["att-0", "att-1"]),
   isBotFrameworkPersonalChatId: vi.fn((id: string | null | undefined) => {
@@ -26,12 +26,21 @@ import {
 } from "../attachments.js";
 import { resolveMSTeamsInboundMedia } from "./inbound-media.js";
 
+// Channel context by default: the Graph fallback is a channel/group code path,
+// so its trigger tests must run against a channel conversation, not a DM.
 const baseParams = {
   maxBytes: 1024 * 1024,
   tokenProvider: { getAccessToken: vi.fn(async () => "token") },
-  conversationType: "personal",
-  conversationId: "19:user_bot@unq.gbl.spaces",
-  activity: { id: "msg-1", replyToId: undefined, channelData: {} },
+  conversationType: "channel",
+  conversationId: "19:channel-thread@thread.tacv2",
+  activity: {
+    id: "msg-1",
+    replyToId: undefined,
+    channelData: {
+      team: { id: "19:team-general@thread.tacv2", aadGroupId: "team-aad-guid" },
+      channel: { id: "19:channel-thread@thread.tacv2" },
+    },
+  },
   log: { debug: vi.fn() },
 };
 
@@ -73,10 +82,10 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
     expect(downloadMSTeamsGraphMedia).toHaveBeenCalled();
   });
 
-  it("does NOT trigger Graph fallback for mention-only HTML (no <attachment> tags)", async () => {
+  it("triggers Graph fallback for channel/group mention-only HTML (no <attachment> tags)", async () => {
     vi.mocked(downloadMSTeamsAttachments).mockResolvedValue([]);
     // Mention cards include `<at>` markers but no `<attachment id="...">`,
-    // so the extractor returns an empty ID list. The fallback must skip.
+    // so the extractor returns an empty ID list, but the Graph fetch must still run for channel/group threads.
     vi.mocked(extractMSTeamsHtmlAttachmentIds).mockReturnValueOnce([]);
     vi.mocked(downloadMSTeamsGraphMedia).mockClear();
     vi.mocked(buildMSTeamsGraphMessageUrls).mockClear();
@@ -91,8 +100,7 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
       ],
     });
 
-    expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
-    expect(buildMSTeamsGraphMessageUrls).not.toHaveBeenCalled();
+    expect(buildMSTeamsGraphMessageUrls).toHaveBeenCalled();
   });
 
   it("does NOT trigger Graph fallback when no attachments are text/html", async () => {
@@ -157,7 +165,7 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
     expect(log.debug).toHaveBeenCalledWith("graph media fetch empty", {
       attempts: [
         {
-          url: "https://graph.microsoft.com/v1.0/chats/c/messages/m",
+          url: "https://graph.microsoft.com/v1.0/teams/team-aad-guid/channels/chan/messages/m",
           hostedStatus: undefined,
           attachmentStatus: undefined,
           hostedCount: undefined,
@@ -176,6 +184,7 @@ describe("resolveMSTeamsInboundMedia bot framework DM routing", () => {
     conversationType: "personal",
     conversationId: "a:1dRsHCobZ1AxURzY05Dc",
     serviceUrl: "https://smba.trafficmanager.net/amer/",
+    activity: { id: "msg-1", replyToId: undefined, channelData: {} },
   };
 
   it("routes 'a:' conversation IDs through the Bot Framework attachment endpoint", async () => {
@@ -293,6 +302,7 @@ describe("resolveMSTeamsInboundMedia bot framework DM routing", () => {
       log,
       conversationType: "personal",
       conversationId: "a:bf-dm-id",
+      activity: { id: "msg-1", replyToId: undefined, channelData: {} },
       attachments: [
         {
           contentType: "text/html",
