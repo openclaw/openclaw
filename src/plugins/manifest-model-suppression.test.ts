@@ -24,6 +24,19 @@ function createMetadataSnapshot(plugins: Record<string, unknown>[]) {
   };
 }
 
+function createPoisonedManifestPlugin(
+  id: string,
+  field: "origin" | "modelCatalog",
+): Record<string, unknown> {
+  const plugin = { id, providers: [id], origin: "bundled" };
+  Object.defineProperty(plugin, field, {
+    get() {
+      throw new Error(`manifest model suppression ${field} metadata exploded`);
+    },
+  });
+  return plugin;
+}
+
 describe("manifest model suppression", () => {
   beforeEach(() => {
     mocks.loadPluginMetadataSnapshot.mockReset();
@@ -105,6 +118,48 @@ describe("manifest model suppression", () => {
         env: process.env,
       }),
     ).toBeUndefined();
+  });
+
+  it("skips unreadable manifest suppression metadata while resolving healthy suppressions", () => {
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      index: { plugins: [] },
+      diagnostics: [],
+      plugins: [
+        createPoisonedManifestPlugin("bad-origin", "origin"),
+        createPoisonedManifestPlugin("bad-model-catalog", "modelCatalog"),
+        {
+          id: "openai",
+          origin: "bundled",
+          providers: ["openai"],
+          modelCatalog: {
+            aliases: {
+              "azure-openai-responses": {
+                provider: "openai",
+              },
+            },
+            suppressions: [
+              {
+                provider: "azure-openai-responses",
+                model: "gpt-5.3-codex-spark",
+                reason: "Use openai/gpt-5.5.",
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(
+      resolveManifestBuiltInModelSuppression({
+        provider: "azure-openai-responses",
+        id: "gpt-5.3-codex-spark",
+        env: process.env,
+      }),
+    ).toEqual({
+      suppress: true,
+      errorMessage:
+        "Unknown model: azure-openai-responses/gpt-5.3-codex-spark. Use openai/gpt-5.5.",
+    });
   });
 
   it("reads planned manifest suppressions fresh per lookup", () => {

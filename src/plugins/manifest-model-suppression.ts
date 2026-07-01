@@ -10,6 +10,37 @@ import {
   isManifestPluginAvailableForControlPlane,
   loadManifestMetadataSnapshot,
 } from "./manifest-contract-eligibility.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
+
+type ManifestModelCatalogSuppressionPluginRecord = Pick<
+  PluginManifestRecord,
+  "id" | "providers" | "modelCatalog"
+>;
+
+function readManifestModelCatalogSuppressionPlugin(params: {
+  snapshot: ReturnType<typeof loadManifestMetadataSnapshot>;
+  plugin: PluginManifestRecord;
+  config?: OpenClawConfig;
+}): ManifestModelCatalogSuppressionPluginRecord | undefined {
+  try {
+    if (
+      !isManifestPluginAvailableForControlPlane({
+        snapshot: params.snapshot,
+        plugin: params.plugin,
+        config: params.config,
+      })
+    ) {
+      return undefined;
+    }
+    return {
+      id: params.plugin.id,
+      providers: params.plugin.providers,
+      modelCatalog: params.plugin.modelCatalog,
+    };
+  } catch {
+    return undefined;
+  }
+}
 
 function listManifestModelCatalogSuppressions(params: {
   config?: OpenClawConfig;
@@ -23,13 +54,15 @@ function listManifestModelCatalogSuppressions(params: {
   });
   const registry = {
     diagnostics: snapshot.diagnostics,
-    plugins: snapshot.plugins.filter((plugin) =>
-      isManifestPluginAvailableForControlPlane({
-        snapshot,
-        plugin,
-        config: params.config,
-      }),
-    ),
+    plugins: snapshot.plugins
+      .map((plugin) =>
+        readManifestModelCatalogSuppressionPlugin({
+          snapshot,
+          plugin,
+          config: params.config,
+        }),
+      )
+      .filter((plugin): plugin is ManifestModelCatalogSuppressionPluginRecord => Boolean(plugin)),
   };
   const planned = planManifestModelCatalogSuppressions({ registry });
   return planned.suppressions;
