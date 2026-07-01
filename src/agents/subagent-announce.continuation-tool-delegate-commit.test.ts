@@ -148,7 +148,9 @@ describe("announce tool-delegate accepted spawn commits the TaskFlow row (C2)", 
     ]);
 
     await runSubagentAnnounceFlow(buildToolDelegateParams());
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
 
     expect(spawnSpy).toHaveBeenCalledTimes(1);
     const spawnArgs = spawnSpy.mock.calls[0][0] as Record<string, unknown>;
@@ -170,7 +172,9 @@ describe("announce tool-delegate accepted spawn commits the TaskFlow row (C2)", 
     spawnSpy.mockResolvedValue({ status: "forbidden", error: "depth exceeded" });
 
     await runSubagentAnnounceFlow(buildToolDelegateParams());
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 50);
+    });
 
     expect(spawnSpy).toHaveBeenCalledTimes(1);
     expect(mockedMarkPendingDelegateSpawnAccepted).not.toHaveBeenCalled();
