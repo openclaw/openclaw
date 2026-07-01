@@ -1180,6 +1180,49 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("MINIMAX_API_KEY");
   });
 
+  it("retains config SecretRef env values for macOS LaunchAgent env files", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: {
+        HOME: tmpDir,
+        TELEGRAM_DEFAULT_BOTTOKEN: "telegram-shell-token",
+      },
+      port: 3000,
+      runtime: "node",
+      platform: "darwin",
+      config: {
+        env: {
+          vars: {
+            TELEGRAM_DEFAULT_BOTTOKEN: "your-real-telegram-default-token-here",
+          },
+        },
+        channels: {
+          telegram: {
+            accounts: {
+              default: {
+                botToken: {
+                  source: "env",
+                  provider: "default",
+                  id: "TELEGRAM_DEFAULT_BOTTOKEN",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.TELEGRAM_DEFAULT_BOTTOKEN).toBe("telegram-shell-token");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("TELEGRAM_DEFAULT_BOTTOKEN");
+  });
+
   it("retains .env values when config env has an unresolved self reference", async () => {
     await writeStateDirDotEnv("MINIMAX_API_KEY=minimax-dotenv-key\n", {
       stateDir: path.join(tmpDir, ".openclaw"),

@@ -170,7 +170,7 @@ type ExecSecretRefPassEnvSource = {
 function collectConfigSecretRefServiceEnvVars(params: {
   env: Record<string, string | undefined>;
   config?: OpenClawConfig;
-  durableEnvironment: Record<string, string | undefined>;
+  stateDirDotEnvEnvironment: Record<string, string | undefined>;
   warn?: DaemonInstallWarnFn;
 }): Record<string, string> {
   if (!params.config) {
@@ -207,7 +207,7 @@ function collectConfigSecretRefServiceEnvVars(params: {
       );
       continue;
     }
-    if (Object.hasOwn(params.durableEnvironment, key)) {
+    if (Object.hasOwn(params.stateDirDotEnvEnvironment, key)) {
       continue;
     }
     const value = params.env[key]?.trim();
@@ -534,7 +534,7 @@ async function buildGatewayInstallEnvironment(params: {
   const configSecretRefEnvironment = collectConfigSecretRefServiceEnvVars({
     env: params.env,
     config: params.config,
-    durableEnvironment,
+    stateDirDotEnvEnvironment,
     warn: params.warn,
   });
   const authStore = await resolveAuthProfileStoreForServiceEnv(params.authStore);
@@ -568,10 +568,6 @@ async function buildGatewayInstallEnvironment(params: {
   addServiceEnvPlanEntries(plan, configSecretRefEnvironment, { source: "config-secretref-env" });
   addServiceEnvPlanEntries(plan, execSecretRefPassEnvEnvironment, { source: "exec-passenv" });
   addServiceEnvPlanEntries(plan, authProfileEnvironment, { source: "auth-profile-env" });
-  // Config-secretref env refs are explicit user-configured secrets. Include them
-  // when computing managed keys so generated service files reference them via
-  // OPENCLAW_SERVICE_MANAGED_ENV_KEYS instead of writing plaintext values inline
-  // (#95895).
   const managedServiceEnvKeys = formatManagedServiceEnvKeys(
     {
       ...durableEnvironment,

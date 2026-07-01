@@ -5,7 +5,6 @@ import {
   writeManagedServiceEnvKeysToEnvironment,
 } from "./service-managed-env.js";
 
-// LaunchAgent plists need selected dotenv values inlined so launchd receives them.
 function isLaunchAgentServiceEnvironment(params: {
   platform: NodeJS.Platform;
   serviceEnvironment: Record<string, string | undefined>;
@@ -36,11 +35,12 @@ export function applyManagedServiceEnvRenderPolicy(params: {
     return;
   }
   for (const entry of params.plan.entriesByNormalizedKey.values()) {
-    if (entry.source !== "state-dotenv" || !managedKeys.has(entry.normalizedKey)) {
+    if (
+      !managedKeys.has(entry.normalizedKey) ||
+      (entry.source !== "state-dotenv" && entry.source !== "config-secretref-env")
+    ) {
       continue;
     }
-    // launchd does not read shell dotenv files; inline only the managed dotenv
-    // keys declared for this service.
     params.plan.environment[entry.rawKey] = entry.value;
     params.plan.environmentValueSources[entry.rawKey] = "inline";
   }
