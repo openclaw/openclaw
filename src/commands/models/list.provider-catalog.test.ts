@@ -237,6 +237,7 @@ describe("loadProviderCatalogModelsForList", () => {
     );
     providerDiscoveryMocks.buildModelsJsonSourceFingerprint.mockResolvedValue({
       agentDir: baseParams.agentDir,
+      cacheable: true,
       fingerprint: "provider-source-fingerprint",
       workspaceDir: "/tmp/provider-workspace",
     });
@@ -363,15 +364,38 @@ describe("loadProviderCatalogModelsForList", () => {
     });
   });
 
+  it("skips provider catalog state cache read and write when the source fingerprint is uncacheable", async () => {
+    providerDiscoveryMocks.buildModelsJsonSourceFingerprint.mockResolvedValue({
+      agentDir: baseParams.agentDir,
+      cacheable: false,
+      workspaceDir: "/tmp/provider-workspace",
+    });
+    providerDiscoveryMocks.readCachedAgentModelCatalog.mockReturnValueOnce([
+      { provider: "moonshot", id: "cached-stale", name: "Cached Stale" },
+    ]);
+
+    const rows = await loadProviderCatalogModelsForList({
+      ...baseParams,
+      providerFilter: "moonshot",
+    });
+
+    expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual(["moonshot/kimi-k2.6"]);
+    expect(providerDiscoveryMocks.buildAgentModelCatalogCacheKey).not.toHaveBeenCalled();
+    expect(providerDiscoveryMocks.readCachedAgentModelCatalog).not.toHaveBeenCalled();
+    expect(providerDiscoveryMocks.writeCachedAgentModelCatalog).not.toHaveBeenCalled();
+  });
+
   it("misses cached provider catalog rows when source freshness changes", async () => {
     providerDiscoveryMocks.buildModelsJsonSourceFingerprint
       .mockResolvedValueOnce({
         agentDir: baseParams.agentDir,
+        cacheable: true,
         fingerprint: "old-provider-source",
         workspaceDir: "/tmp/provider-workspace",
       })
       .mockResolvedValueOnce({
         agentDir: baseParams.agentDir,
+        cacheable: true,
         fingerprint: "new-provider-source",
         workspaceDir: "/tmp/provider-workspace",
       });

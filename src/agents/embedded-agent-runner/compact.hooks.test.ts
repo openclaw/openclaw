@@ -10,6 +10,7 @@ import {
   createPreparedEmbeddedAgentSettingsManagerMock,
   createOpenClawCodingToolsMock,
   enqueueCommandInLaneMock,
+  ensureOpenClawModelsJsonMock,
   ensureRuntimePluginsLoaded,
   estimateTokensMock,
   getMemorySearchManagerMock,
@@ -2543,5 +2544,39 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expect(result.ok).toBe(true);
     expect(result.compacted).toBe(true);
     expect(contextEngineCompactMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("compactEmbeddedAgentSessionDirect targetProvider wiring (Clawsweeper P2 round-6 on #73261)", () => {
+  beforeAll(async () => {
+    ({ compactEmbeddedAgentSessionDirect, compactEmbeddedAgentSession } =
+      await loadCompactHooksHarness());
+  });
+
+  beforeEach(() => {
+    resetCompactHooksHarnessMocks();
+  });
+
+  it("threads targetProvider: provider into ensureOpenClawModelsJson so the short-circuit can fire", async () => {
+    // Without the fix (Clawsweeper P2 on #73261), the compact embedded caller passed only
+    // { workspaceDir } — the targetProvider short-circuit never fired because options.targetProvider
+    // was undefined.  After the fix, the resolved provider is forwarded so the scoped-cache
+    // short-circuit can skip a full models.json plan when the disk config already matches.
+    await compactEmbeddedAgentSessionDirect(wrappedCompactionArgs());
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(
+      undefined,
+      expect.any(String),
+      expect.objectContaining({ targetProvider: "openai" }),
+    );
+  });
+
+  it("threads the caller-supplied provider, not only the default, when a provider param is passed", async () => {
+    // Confirm that the wiring follows the resolved provider rather than always "openai".
+    await compactEmbeddedAgentSessionDirect(wrappedCompactionArgs({ provider: "anthropic" }));
+    expect(ensureOpenClawModelsJsonMock).toHaveBeenCalledWith(
+      undefined,
+      expect.any(String),
+      expect.objectContaining({ targetProvider: "anthropic" }),
+    );
   });
 });

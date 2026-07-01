@@ -356,26 +356,30 @@ export async function loadProviderCatalogModelsForList(params: {
     providerDiscoveryProviderIds: scopedPluginIds,
     workspaceDir: params.metadataSnapshot?.workspaceDir,
   });
-  const catalogKey = buildAgentModelCatalogCacheKey({
-    agentDir: params.agentDir,
-    cacheScope: {
-      envFingerprint: buildProviderCatalogEnvCacheFingerprint(env),
-      source: "models-list-provider-catalog",
-      providerFilter,
-      scopedPluginIds,
-      sourceFingerprint: sourceFingerprint.fingerprint,
-      staticOnly: params.staticOnly === true,
-    },
-    config: params.cfg,
-    metadataSnapshot: params.metadataSnapshot,
-    workspaceDir: params.metadataSnapshot?.workspaceDir,
-  });
-  const cached = readCachedAgentModelCatalog({
-    agentDir: params.agentDir,
-    catalogKey,
-  }) as Model[] | undefined;
-  if (cached?.length) {
-    return cached;
+  const catalogKey = sourceFingerprint.cacheable
+    ? buildAgentModelCatalogCacheKey({
+        agentDir: params.agentDir,
+        cacheScope: {
+          envFingerprint: buildProviderCatalogEnvCacheFingerprint(env),
+          source: "models-list-provider-catalog",
+          providerFilter,
+          scopedPluginIds,
+          sourceFingerprint: sourceFingerprint.fingerprint,
+          staticOnly: params.staticOnly === true,
+        },
+        config: params.cfg,
+        metadataSnapshot: params.metadataSnapshot,
+        workspaceDir: params.metadataSnapshot?.workspaceDir,
+      })
+    : undefined;
+  if (catalogKey) {
+    const cached = readCachedAgentModelCatalog({
+      agentDir: params.agentDir,
+      catalogKey,
+    }) as Model[] | undefined;
+    if (cached?.length) {
+      return cached;
+    }
   }
 
   const providers = (
@@ -448,10 +452,12 @@ export async function loadProviderCatalogModelsForList(params: {
     }
     return left.id.localeCompare(right.id);
   });
-  writeCachedAgentModelCatalog({
-    agentDir: params.agentDir,
-    catalogKey,
-    entries: sorted,
-  });
+  if (catalogKey) {
+    writeCachedAgentModelCatalog({
+      agentDir: params.agentDir,
+      catalogKey,
+      entries: sorted,
+    });
+  }
   return sorted;
 }

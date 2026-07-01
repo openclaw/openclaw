@@ -18,7 +18,10 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveAgentDir } from "./agent-scope.js";
 import { loadPersistedAuthProfileStore } from "./auth-profiles/persisted.js";
-import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
+import {
+  readPersistedAuthProfileStoreRawOutcome,
+  resolveAuthProfileDatabasePath,
+} from "./auth-profiles/sqlite.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
@@ -208,6 +211,71 @@ describe("auth profile sqlite store", () => {
 
       await childExit;
       expect(loaded?.profiles["openai:default"]).toMatchObject({ key: "sk-test" });
+    });
+  });
+
+  it("waits for brief rollback-journal contention before fingerprint outcome reads", async () => {
+    await withAgentDirEnv("openclaw-auth-sqlite-outcome-contention-", async (agentDir) => {
+      saveAuthProfileStore(apiKeyStore("sk-test"), agentDir);
+      closeOpenClawAgentDatabasesForTest();
+
+      const databasePath = resolveAuthProfileDatabasePath(agentDir);
+      const setup = new DatabaseSync(databasePath);
+      setup.exec("PRAGMA journal_mode = DELETE;");
+      setup.close();
+
+      const child = spawn(
+        process.execPath,
+        [
+          "-e",
+          `
+            const { DatabaseSync } = require("node:sqlite");
+            const db = new DatabaseSync(process.argv[1]);
+            db.exec("PRAGMA journal_mode = DELETE; BEGIN EXCLUSIVE;");
+            db.prepare(
+              "UPDATE auth_profile_store SET updated_at = updated_at + 1 WHERE store_key = ?",
+            ).run("primary");
+            process.stdout.write("locked\\n");
+            setTimeout(() => {
+              db.exec("ROLLBACK;");
+              db.close();
+            }, 250);
+          `,
+          databasePath,
+        ],
+        { stdio: ["ignore", "pipe", "pipe"] },
+      );
+      const childExit = new Promise<void>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("exit", (code) => {
+          if (code === 0) {
+            resolve();
+          } else {
+            reject(new Error(`contention child exited with code ${code}`));
+          }
+        });
+      });
+      await new Promise<void>((resolve, reject) => {
+        let locked = false;
+        child.stdout.once("data", () => {
+          locked = true;
+          resolve();
+        });
+        child.once("error", reject);
+        child.once("exit", (code) => {
+          if (!locked) {
+            reject(new Error(`contention child exited before locking with code ${code}`));
+          }
+        });
+      });
+
+      const outcome = readPersistedAuthProfileStoreRawOutcome(agentDir);
+
+      await childExit;
+      expect(outcome.kind).toBe("present");
+      expect(outcome.kind === "present" ? outcome.data : undefined).toMatchObject(
+        apiKeyStore("sk-test"),
+      );
     });
   });
 

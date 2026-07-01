@@ -83,6 +83,40 @@ function parseJsonCell(raw: string | null | undefined): unknown {
   }
 }
 
+/**
+ * Discriminated outcome for raw auth-store reads that must distinguish a
+ * legitimately absent store (missing DB file, missing row, or an empty/NULL
+ * JSON cell) from an UNREADABLE one (SQLite open/query failure, or a present
+ * but malformed JSON payload that `JSON.parse` rejects).
+ *
+ * The plain `readPersistedAuthProfileStoreRaw` collapses both failure shapes
+ * onto `null`, which is correct for callers that only want a best-effort
+ * payload, but unsafe for the models-config ready-cache fingerprint: an
+ * unreadable/corrupt store fingerprinted as `absent` lets stale provider/auth
+ * discovery ride a cache hit instead of forcing a fail-closed re-plan
+ * (Codex P1 on PR #90741, models-config.ts:301). The fingerprint path uses
+ * this outcome-returning reader so it can treat `unreadable` as uncacheable.
+ */
+export type AuthProfileStoreRawReadOutcome =
+  | { kind: "present"; data: unknown }
+  | { kind: "absent" }
+  | { kind: "unreadable"; error: unknown };
+
+// Parse a JSON cell into a discriminated outcome.  An empty / NULL cell is a
+// legitimate absent row; a non-empty string that fails `JSON.parse` is a
+// malformed payload — surfaced as `unreadable` rather than masquerading as
+// absent.
+function parseJsonCellOutcome(raw: string | null | undefined): AuthProfileStoreRawReadOutcome {
+  if (!raw) {
+    return { kind: "absent" };
+  }
+  try {
+    return { kind: "present", data: JSON.parse(raw) as unknown };
+  } catch (error) {
+    return { kind: "unreadable", error };
+  }
+}
+
 function getAuthProfileKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<AuthProfileDatabase>(db);
 }
@@ -122,6 +156,40 @@ function readAuthProfileJsonCellReadOnly(pathname: string, target: "store" | "st
   }
 }
 
+// Outcome-returning twin of `readAuthProfileJsonCellReadOnly` for the store
+// row.  Unlike the plain reader, it distinguishes a SQLite open/query failure
+// or a malformed JSON cell (`unreadable`) from a legitimately empty row
+// (`absent`).  Only the store target is needed today (the fingerprint path);
+// keep it store-scoped rather than generalizing prematurely.
+function readAuthProfileStoreCellOutcomeReadOnly(pathname: string): AuthProfileStoreRawReadOutcome {
+  const sqlite = requireNodeSqlite();
+  let db: DatabaseSync;
+  try {
+    db = new sqlite.DatabaseSync(pathname, { readOnly: true });
+  } catch (error) {
+    return { kind: "unreadable", error };
+  }
+  try {
+    // Keep parity with the plain read-only auth helper so transient writer locks
+    // do not turn a readable store into an uncacheable auth fingerprint.
+    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
+    const kysely = getAuthProfileKysely(db);
+    const row = executeSqliteQueryTakeFirstSync(
+      db,
+      kysely
+        .selectFrom("auth_profile_store")
+        .select("store_json")
+        .where("store_key", "=", PRIMARY_ROW_KEY),
+    );
+    return parseJsonCellOutcome(row?.store_json);
+  } catch (error) {
+    return { kind: "unreadable", error };
+  } finally {
+    clearNodeSqliteKyselyCacheForDatabase(db);
+    db.close();
+  }
+}
+
 /** Reads the raw persisted secrets-store payload without coercing the schema. */
 export function readPersistedAuthProfileStoreRaw(
   agentDir?: string,
@@ -143,6 +211,42 @@ export function readPersistedAuthProfileStoreRaw(
     return null;
   }
   return readAuthProfileJsonCellReadOnly(databasePath, "store");
+}
+
+/**
+ * Reads the raw persisted secrets-store payload as a discriminated outcome
+ * that distinguishes a legitimately absent store from an unreadable/corrupt
+ * one.  Mirrors `readPersistedAuthProfileStoreRaw`'s no-create, read-only
+ * behavior (checks `fs.existsSync` before opening, opens `{ readOnly: true }`)
+ * but never collapses a SQLite open/query failure or malformed JSON cell onto
+ * the absent case.  The models-config ready-cache fingerprint uses this so an
+ * untrusted auth-store read fails closed (uncacheable → re-plan) instead of
+ * masquerading as "no auth profiles configured" (Codex P1 on PR #90741).
+ */
+export function readPersistedAuthProfileStoreRawOutcome(
+  agentDir?: string,
+  database?: OpenClawAgentDatabase,
+): AuthProfileStoreRawReadOutcome {
+  if (database) {
+    try {
+      const db = getAuthProfileKysely(database.db);
+      const row = executeSqliteQueryTakeFirstSync(
+        database.db,
+        db
+          .selectFrom("auth_profile_store")
+          .select("store_json")
+          .where("store_key", "=", PRIMARY_ROW_KEY),
+      );
+      return parseJsonCellOutcome(row?.store_json);
+    } catch (error) {
+      return { kind: "unreadable", error };
+    }
+  }
+  const databasePath = resolveAuthProfileDatabasePath(agentDir);
+  if (!fs.existsSync(databasePath)) {
+    return { kind: "absent" };
+  }
+  return readAuthProfileStoreCellOutcomeReadOnly(databasePath);
 }
 
 /** Reads the raw persisted runtime-state payload without coercing the schema. */

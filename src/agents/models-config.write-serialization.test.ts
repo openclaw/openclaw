@@ -259,6 +259,71 @@ describe("models-config write serialization", () => {
     });
   });
 
+  it("does not rewrite root models.json for plugin-catalog-only write plans (byte-equality guard)", async () => {
+    // Regression for PR #90741 [P2]: the planner returns `action: "write"`
+    // even when the root bytes are unchanged, as long as a plugin catalog
+    // sidecar still needs (re)writing. The caller must keep the root
+    // byte-equality guard so sidecar-only reconciliation does not churn the
+    // root models.json on disk (and must not report `wrote: true` from a
+    // root write that never happened).
+    await withModelsTempHome(async (home) => {
+      const agentDir = path.join(home, "agent");
+      const rootContents = `${JSON.stringify({ providers: {} }, null, 2)}\n`;
+      // Seed the root file so the plan's contents are byte-identical to disk.
+      await fs.mkdir(agentDir, { recursive: true });
+      const rootPath = path.join(agentDir, "models.json");
+      await fs.writeFile(rootPath, rootContents);
+      const seededRootStat = await fs.stat(rootPath);
+
+      // Plugin-catalog-only write plan: root contents match disk exactly,
+      // but a new sidecar must be written.
+      planOpenClawModelsJsonMock.mockImplementation(async () => ({
+        action: "write",
+        contents: rootContents,
+        pluginCatalogWrites: {
+          [encodePluginModelCatalogRelativePath("zai")]: `${JSON.stringify(
+            {
+              generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+              providers: {
+                zai: {
+                  baseUrl: "https://api.z.ai/api/paas/v4",
+                  api: "openai-completions",
+                  apiKey: "ZAI_API_KEY",
+                  models: [{ id: "glm-5.1", name: "GLM 5.1" }],
+                },
+              },
+            },
+            null,
+            2,
+          )}\n`,
+        },
+      }));
+
+      const result = await ensureOpenClawModelsJson({}, agentDir);
+
+      // The root models.json must NOT have been (re)written: no writeText
+      // call targeting its basename, and its bytes are preserved.
+      const rootWrites = writePrivateStoreTextWriteMock.mock.calls.filter(
+        (call) => path.basename((call[0] as { filePath: string }).filePath) === "models.json",
+      );
+      expect(rootWrites).toHaveLength(0);
+      expect(await fs.readFile(rootPath, "utf8")).toBe(rootContents);
+
+      // The plugin catalog sidecar WAS written, so the call reconciled state.
+      const catalogPath = path.join(agentDir, "plugins", "zai", PLUGIN_MODEL_CATALOG_FILE);
+      const catalog = JSON.parse(await fs.readFile(catalogPath, "utf8")) as {
+        providers?: Record<string, unknown>;
+      };
+      expect(Object.keys(catalog.providers ?? {})).toEqual(["zai"]);
+
+      // `wrote` reflects the catalog reconciliation, not a root write.
+      expect(result.wrote).toBe(true);
+      // The root file's identity (mode/size) is undisturbed by the no-op.
+      const finalRootStat = await fs.stat(rootPath);
+      expect(finalRootStat.size).toBe(seededRootStat.size);
+    });
+  });
+
   it("removes stale plugin-owned model catalogs", async () => {
     await withModelsTempHome(async (home) => {
       const agentDir = path.join(home, "agent");
