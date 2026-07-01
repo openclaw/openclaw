@@ -17,7 +17,7 @@ import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
   ensureWorkspaceAndSessions,
-  resolveControlUiLinks,
+  resolveLocalControlUiProbeLinks,
   waitForGatewayReachable,
 } from "../onboard-helpers.js";
 import { enableDefaultOnboardingInternalHooks } from "../onboard-hooks.js";
@@ -299,7 +299,7 @@ export async function runNonInteractiveLocalSetup(params: {
 
   if (!opts.skipHealth) {
     const { healthCommand } = await import("../health.js");
-    const links = resolveControlUiLinks({
+    const links = resolveLocalControlUiProbeLinks({
       bind: gatewayResult.bind as "auto" | "lan" | "loopback" | "custom" | "tailnet",
       port: gatewayResult.port,
       customBindHost: nextConfig.gateway?.customBindHost,
