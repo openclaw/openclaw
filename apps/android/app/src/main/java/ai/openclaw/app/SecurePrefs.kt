@@ -41,6 +41,9 @@ class SecurePrefs(
       "notifications.forwarding.maxEventsPerMinute"
     private const val notificationsForwardingSessionKeyKey = "notifications.forwarding.sessionKey"
     private const val installedAppsSharingEnabledKey = "device.apps.sharing.enabled"
+    private const val installedAppsDisclosureConsentVersionKey =
+      "device.apps.prominentDisclosure.consentVersion"
+    private const val currentInstalledAppsDisclosureConsentVersion = 1
     private const val voiceMicEnabledKey = "voice.micEnabled"
     private const val appearanceThemeModeKey = "appearance.themeMode"
   }
@@ -118,7 +121,7 @@ class SecurePrefs(
   val canvasDebugStatusEnabled: StateFlow<Boolean> = _canvasDebugStatusEnabled
 
   private val _installedAppsSharingEnabled =
-    MutableStateFlow(plainPrefs.getBoolean(installedAppsSharingEnabledKey, false))
+    MutableStateFlow(loadInstalledAppsSharingEnabled())
   val installedAppsSharingEnabled: StateFlow<Boolean> = _installedAppsSharingEnabled
 
   private val _notificationForwardingEnabled =
@@ -264,8 +267,24 @@ class SecurePrefs(
   }
 
   fun setInstalledAppsSharingEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean(installedAppsSharingEnabledKey, value) }
+    plainPrefs.edit {
+      putBoolean(installedAppsSharingEnabledKey, value)
+      if (value) {
+        putInt(installedAppsDisclosureConsentVersionKey, currentInstalledAppsDisclosureConsentVersion)
+      }
+    }
     _installedAppsSharingEnabled.value = value
+  }
+
+  private fun loadInstalledAppsSharingEnabled(): Boolean {
+    val enabled = plainPrefs.getBoolean(installedAppsSharingEnabledKey, false)
+    if (!enabled) return false
+
+    val consentVersion = plainPrefs.getInt(installedAppsDisclosureConsentVersionKey, 0)
+    if (consentVersion >= currentInstalledAppsDisclosureConsentVersion) return true
+
+    plainPrefs.edit { putBoolean(installedAppsSharingEnabledKey, false) }
+    return false
   }
 
   internal fun getNotificationForwardingPolicy(appPackageName: String): NotificationForwardingPolicy {

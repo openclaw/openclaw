@@ -1,8 +1,10 @@
 require "fileutils"
 require "json"
+require "net/http"
 require "open3"
 require "shellwords"
 require "supply/client"
+require "uri"
 
 default_platform(:android)
 
@@ -84,6 +86,16 @@ end
 
 def play_image_upload_requested?
   ENV["SUPPLY_UPLOAD_IMAGES"] == "1"
+end
+
+def play_data_safety_upload_requested?
+  ENV["GOOGLE_PLAY_UPLOAD_DATA_SAFETY"] == "1"
+end
+
+def play_data_safety_labels_path
+  raw = ENV["GOOGLE_PLAY_DATA_SAFETY_LABELS"].to_s.strip
+  raw = ENV["GOOGLE_PLAY_DATA_SAFETY_LABELS_PATH"].to_s.strip if raw.empty?
+  raw.empty? ? File.join(play_metadata_path, "data_safety_labels.csv") : File.expand_path(raw, repo_root)
 end
 
 def play_auth_options
@@ -184,6 +196,55 @@ def validate_android_screenshots!
   if play_screenshot_paths.empty?
     UI.user_error!("SUPPLY_UPLOAD_SCREENSHOTS=1 but no PNG screenshots were found under apps/android/fastlane/metadata/android/*/images.")
   end
+end
+
+def validate_play_data_safety_labels!(required: play_data_safety_upload_requested?)
+  labels_path = play_data_safety_labels_path
+  return false if !required && !File.exist?(labels_path)
+
+  unless File.exist?(labels_path)
+    UI.user_error!("Missing Google Play Data Safety CSV at #{labels_path}. Export or review the current Play Console declaration before upload.")
+  end
+  UI.user_error!("Google Play Data Safety CSV at #{labels_path} is empty.") unless env_present?(File.read(labels_path))
+  true
+end
+
+def google_api_error_message(response)
+  parsed = JSON.parse(response.body)
+  message = parsed.dig("error", "message")
+  return message if env_present?(message)
+
+  response.body.to_s.strip
+rescue JSON::ParserError
+  response.body.to_s.strip
+end
+
+def upload_play_data_safety_labels!(required: true)
+  return unless validate_play_data_safety_labels!(required: required)
+
+  if play_validate_only?
+    UI.important("GOOGLE_PLAY_VALIDATE_ONLY=1 set; validated Data Safety CSV locally without uploading.")
+    return
+  end
+
+  client = Supply::Client.make_from_config(params: play_auth_options)
+  headers = { "Content-Type" => "application/json" }
+  client.client.authorization.apply!(headers)
+
+  uri = URI("https://androidpublisher.googleapis.com/androidpublisher/v3/applications/#{URI.encode_www_form_component(play_package_name)}/dataSafety")
+  request = Net::HTTP::Post.new(uri, headers)
+  request.body = JSON.dump({ safetyLabels: File.read(play_data_safety_labels_path) })
+
+  response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: true) do |http|
+    http.request(request)
+  end
+
+  unless response.is_a?(Net::HTTPSuccess)
+    detail = google_api_error_message(response)
+    UI.user_error!("Google Play Data Safety upload failed: HTTP #{response.code} #{detail}")
+  end
+
+  UI.success("Uploaded Google Play Data Safety declaration for #{play_package_name}.")
 end
 
 def release_artifact_path(version)
@@ -310,6 +371,7 @@ def validate_android_release_preflight!(version_metadata)
   prepare_android_release_signing!
   validate_android_release_signing!
   validate_android_release_notes!
+  validate_play_data_safety_labels! if play_data_safety_upload_requested?
   print_android_release_plan!(version_metadata)
 end
 
@@ -331,9 +393,17 @@ def upload_play_store_metadata!(version_metadata)
     skip_upload_screenshots: !play_screenshot_upload_requested?,
     validate_only: play_validate_only?
   )
+
+  upload_play_data_safety_labels! if play_data_safety_upload_requested?
 end
 
-def upload_play_store_build!(version_metadata, upload_metadata: false, upload_images: false, upload_screenshots: false)
+def upload_play_store_build!(
+  version_metadata,
+  upload_metadata: false,
+  upload_images: false,
+  upload_screenshots: false,
+  upload_data_safety: false
+)
   release_sha = release_git_sha
   ensure_mobile_release_ref_available!(
     platform: "android",
@@ -361,6 +431,8 @@ def upload_play_store_build!(version_metadata, upload_metadata: false, upload_im
     skip_upload_screenshots: !upload_screenshots,
     validate_only: play_validate_only?
   )
+
+  upload_play_data_safety_labels! if upload_data_safety || play_data_safety_upload_requested?
 
   unless play_validate_only?
     record_mobile_release_ref!(
@@ -422,6 +494,11 @@ platform :android do
     UI.success("Uploaded Android Play metadata for #{version_metadata[:version]} (#{version_metadata[:version_code]}).")
   end
 
+  desc "Upload the reviewed Google Play Data Safety CSV"
+  lane :data_safety do
+    upload_play_data_safety_labels!
+  end
+
   desc "Build signed Android release artifacts locally without uploading"
   lane :play_store_archive do
     sync_android_versioning!
@@ -451,7 +528,12 @@ platform :android do
     ENV["SUPPLY_UPLOAD_METADATA"] = "1"
     ENV["SUPPLY_UPLOAD_SCREENSHOTS"] = "1"
     build_release_artifacts!
-    upload_play_store_build!(version_metadata, upload_metadata: true, upload_screenshots: true)
+    upload_play_store_build!(
+      version_metadata,
+      upload_metadata: true,
+      upload_screenshots: true,
+      upload_data_safety: play_data_safety_upload_requested?
+    )
     UI.success("Uploaded Android Play build to #{play_track}: version=#{version_metadata[:version]} code=#{version_metadata[:version_code]}")
     UI.important("Production promotion remains manual in Google Play Console.")
   end

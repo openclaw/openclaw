@@ -1490,6 +1490,7 @@
     "android:release": "bash scripts/android-release.sh",
     "android:release:archive": "bash -lc 'source ./scripts/lib/android-fastlane.sh && cd apps/android && run_android_fastlane android play_store_archive'",
     "android:release:auth:check": "bash -lc 'source ./scripts/lib/android-fastlane.sh && cd apps/android && run_android_fastlane android auth_check'",
+    "android:release:data-safety": "bash -lc 'source ./scripts/lib/android-fastlane.sh && cd apps/android && run_android_fastlane android data_safety'",
     "android:release:metadata": "bash -lc 'source ./scripts/lib/android-fastlane.sh && cd apps/android && run_android_fastlane android metadata'",
     "android:release:preflight": "bash -lc 'source ./scripts/lib/android-fastlane.sh && cd apps/android && run_android_fastlane android release_preflight'",
     "android:release:signing:check": "bash -lc 'source ./scripts/lib/android-fastlane.sh && cd apps/android && run_android_fastlane android signing_check'",

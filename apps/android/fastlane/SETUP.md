@@ -79,6 +79,22 @@ Upload metadata, release notes, and the Play AAB to the internal testing track:
 pnpm android:release:upload
 ```
 
+When Play Console Data Safety answers change, export or review the declaration
+CSV and upload it through Fastlane with the same Play credentials:
+
+```bash
+GOOGLE_PLAY_DATA_SAFETY_LABELS=apps/android/fastlane/metadata/android/data_safety_labels.csv \
+pnpm android:release:data-safety
+```
+
+To include the reviewed Data Safety CSV in a release upload, set:
+
+```bash
+GOOGLE_PLAY_UPLOAD_DATA_SAFETY=1 \
+GOOGLE_PLAY_DATA_SAFETY_LABELS=apps/android/fastlane/metadata/android/data_safety_labels.csv \
+pnpm android:release:upload
+```
+
 Direct Fastlane entry point:
 
 ```bash
@@ -101,6 +117,7 @@ Release rules:
 - `pnpm android:version:sync` updates generated version artifacts.
 - `pnpm android:version:check` validates checked-in Android version artifacts.
 - `pnpm android:release:preflight` validates Google Play auth, Android release signing, synced versioning, release notes, and prints the package/track/version/versionCode that will be uploaded.
+- `pnpm android:release:data-safety` uploads the reviewed Google Play Data Safety CSV. The default path is `apps/android/fastlane/metadata/android/data_safety_labels.csv`; use `GOOGLE_PLAY_DATA_SAFETY_LABELS=<path>` to override it.
 - `pnpm android:release:signing:sync:pull` pulls encrypted Android signing assets from `apps-signing`.
 - `pnpm android:release:signing:sync:push` creates or refreshes encrypted Android signing assets in `apps-signing`.
 - `pnpm android:screenshots` builds and installs the Play debug app, launches deterministic screenshot scenes, and captures raw PNGs.

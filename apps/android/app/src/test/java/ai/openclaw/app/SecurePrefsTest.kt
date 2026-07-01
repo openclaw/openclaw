@@ -75,6 +75,23 @@ class SecurePrefsTest {
 
     assertTrue(prefs.installedAppsSharingEnabled.value)
     assertTrue(plainPrefs.getBoolean("device.apps.sharing.enabled", false))
+    assertEquals(1, plainPrefs.getInt("device.apps.prominentDisclosure.consentVersion", 0))
+  }
+
+  @Test
+  fun installedAppsSharing_legacyOptInWithoutDisclosureLoadsDisabled() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs
+      .edit()
+      .clear()
+      .putBoolean("device.apps.sharing.enabled", true)
+      .commit()
+
+    val prefs = SecurePrefs(context)
+
+    assertFalse(prefs.installedAppsSharingEnabled.value)
+    assertFalse(plainPrefs.getBoolean("device.apps.sharing.enabled", true))
   }
 
   @Test

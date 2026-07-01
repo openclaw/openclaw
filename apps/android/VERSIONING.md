@@ -51,8 +51,9 @@ Recommended workflow:
 5. Run `pnpm android:release:preflight` to validate Play auth, signing, synced versioning, and release notes.
 6. Run `ANDROID_SCREENSHOT_AVD=<avd-name> pnpm android:screenshots` to refresh raw Google Play screenshots with a script-managed emulator, or run `pnpm android:screenshots` when exactly one ADB device is already connected.
 7. Run `pnpm android:release:archive` to produce the signed Play AAB and third-party APK.
-8. Run `pnpm android:release:upload` to upload metadata, screenshots, and the Play AAB to Google Play internal testing.
-9. Promote to production manually in Google Play Console.
+8. When Play Console Data Safety answers change, review the CSV declaration and run `pnpm android:release:data-safety`, or set `GOOGLE_PLAY_UPLOAD_DATA_SAFETY=1` during release upload.
+9. Run `pnpm android:release:upload` to upload metadata, screenshots, and the Play AAB to Google Play internal testing.
+10. Promote to production manually in Google Play Console.
 
 The third-party flavor is archived as a signed APK for non-Play distribution. It is not uploaded by the Play release lane.
 

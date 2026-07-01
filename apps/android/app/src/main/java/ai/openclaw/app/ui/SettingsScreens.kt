@@ -78,11 +78,13 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -755,6 +757,7 @@ private fun PhoneCapabilitiesScreen(
   val preventSleep by viewModel.preventSleep.collectAsState()
   val canvasDebugStatusEnabled by viewModel.canvasDebugStatusEnabled.collectAsState()
   val installedAppsSharingEnabled by viewModel.installedAppsSharingEnabled.collectAsState()
+  var showInstalledAppsDisclosure by remember { mutableStateOf(false) }
   val cameraPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
       viewModel.setCameraEnabled(granted)
@@ -803,6 +806,24 @@ private fun PhoneCapabilitiesScreen(
     }
   }
 
+  fun setInstalledAppsSharing(checked: Boolean) {
+    if (!checked) {
+      viewModel.setInstalledAppsSharingEnabled(false)
+      return
+    }
+    showInstalledAppsDisclosure = true
+  }
+
+  if (showInstalledAppsDisclosure) {
+    InstalledAppsDisclosureDialog(
+      onDismiss = { showInstalledAppsDisclosure = false },
+      onAllow = {
+        showInstalledAppsDisclosure = false
+        viewModel.setInstalledAppsSharingEnabled(true)
+      },
+    )
+  }
+
   SettingsDetailFrame(title = "Phone Capabilities", subtitle = "Choose what this phone can share.", icon = Icons.AutoMirrored.Filled.ScreenShare, onBack = onBack) {
     SettingsTogglePanel(
       rows =
@@ -814,7 +835,7 @@ private fun PhoneCapabilitiesScreen(
             if (installedAppsSharingEnabled) "OpenClaw can list launcher-visible apps." else "App list stays on this phone.",
             Icons.Default.Storage,
             installedAppsSharingEnabled,
-            viewModel::setInstalledAppsSharingEnabled,
+            ::setInstalledAppsSharing,
           ),
           SettingsToggleRow("Keep Awake", "Keep the node available during active work.", Icons.Default.Bolt, preventSleep, viewModel::setPreventSleep),
           SettingsToggleRow("Canvas Status", "Show screen-sharing debug state.", Icons.AutoMirrored.Filled.ScreenShare, canvasDebugStatusEnabled, viewModel::setCanvasDebugStatusEnabled),
@@ -831,6 +852,45 @@ private fun PhoneCapabilitiesScreen(
       }
     }
   }
+}
+
+@Composable
+private fun InstalledAppsDisclosureDialog(
+  onDismiss: () -> Unit,
+  onAllow: () -> Unit,
+) {
+  AlertDialog(
+    onDismissRequest = onDismiss,
+    title = {
+      Text(text = "Share installed apps?", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+    },
+    text = {
+      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+          text =
+            "OpenClaw collects and transmits installed application information from this phone, including app names, package IDs, and app status, only when you enable Installed Apps and your paired Gateway requests device.apps.",
+          style = ClawTheme.type.body,
+          color = ClawTheme.colors.text,
+        )
+        Text(
+          text =
+            "This data is sent from this phone to your user-managed OpenClaw Gateway to support installed-app and device-context assistant workflows. It never touches an OpenClaw-operated server. Your Gateway controls what happens next, including whether the data is included in requests to the model provider you configured.",
+          style = ClawTheme.type.body,
+          color = ClawTheme.colors.text,
+        )
+      }
+    },
+    confirmButton = {
+      TextButton(onClick = onAllow) {
+        Text(text = "Allow Installed Apps")
+      }
+    },
+    dismissButton = {
+      TextButton(onClick = onDismiss) {
+        Text(text = "Not Now")
+      }
+    },
+  )
 }
 
 @Composable
