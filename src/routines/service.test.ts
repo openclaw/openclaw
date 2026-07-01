@@ -535,6 +535,25 @@ describe("routine service", () => {
     });
   });
 
+  it("adopts generated-id backing cron jobs when the registry row is missing", async () => {
+    await withOpenClawTestState({ prefix: "routine-adopt-generated-orphan-" }, async () => {
+      const cron = createFakeCronService();
+      const input = createRoutineInput({ id: undefined });
+      const created = await createRoutine(input, { cron, cronStorePath: "/tmp/cron.sqlite" });
+      const routineId = created.routine.id;
+      const cronJobId = created.routine.trigger.cronJobId;
+      openOpenClawStateDatabase().db.exec("DELETE FROM routine_records");
+
+      const replay = await createRoutine(input, { cron, cronStorePath: "/tmp/cron.sqlite" });
+
+      expect(replay.created).toBe(false);
+      expect(replay.idempotent).toBe(true);
+      expect(replay.routine.id).toBe(routineId);
+      expect(replay.routine.trigger.cronJobId).toBe(cronJobId);
+      expect(cron.add).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("rejects a repeated create id with different intent", async () => {
     await withOpenClawTestState({ prefix: "routine-conflict-" }, async () => {
       const cron = createFakeCronService();

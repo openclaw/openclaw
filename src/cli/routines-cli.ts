@@ -194,7 +194,7 @@ function resolveDelivery(opts: RoutineCliOpts, payload: CronPayload, sessionTarg
     mode: deliveryMode,
     channel: hasWebhook
       ? undefined
-      : (channel ?? (deliveryMode === "announce" ? "last" : undefined)),
+      : (channel ?? (deliveryMode === "announce" && sessionKey ? "last" : undefined)),
     to: hasWebhook ? webhookUrl : to,
     threadId: hasWebhook ? undefined : threadId,
     accountId: hasWebhook ? undefined : accountId,

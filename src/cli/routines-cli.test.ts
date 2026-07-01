@@ -115,6 +115,30 @@ describe("registerRoutinesCli", () => {
     });
   });
 
+  it("leaves keyless explicit destinations for gateway channel validation", async () => {
+    await runRoutinesCommand([
+      "routines",
+      "create",
+      "+1h",
+      "check status",
+      "--name",
+      "Destination delivery",
+      "--to",
+      "chat-1",
+    ]);
+
+    const createCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "routines.create");
+    const params = createCall?.[2] as {
+      target?: { delivery?: { mode?: string; channel?: string; to?: string } };
+    };
+
+    expect(params?.target?.delivery).toMatchObject({
+      mode: "announce",
+      to: "chat-1",
+    });
+    expect(params?.target?.delivery?.channel).toBeUndefined();
+  });
+
   it("rejects announce delivery without a stable destination", async () => {
     await expect(
       runRoutinesCommand([

@@ -315,23 +315,12 @@ function deleteRoutineRecordFromSqlite(id: string, storeKey: string): boolean {
   return deleted;
 }
 
-function createRoutineId(): string {
-  return `routine-${crypto.randomUUID()}`;
-}
-
 function requireNonBlankString(value: string | undefined, label: string): string {
   const normalized = normalizeOptionalString(value);
   if (!normalized) {
     throw routineInvalidRequest(`${label} is required`);
   }
   return normalized;
-}
-
-function normalizeRoutineId(value: string | undefined): string {
-  if (value === undefined) {
-    return createRoutineId();
-  }
-  return normalizeExistingRoutineId(value);
 }
 
 function normalizeExistingRoutineId(value: string): string {
@@ -462,7 +451,6 @@ function normalizeRoutineDelivery(
 }
 
 function normalizeRoutineCreateInput(input: RoutineCreateInput): NormalizedRoutineCreate {
-  const id = normalizeRoutineId(input.id);
   const name = requireNonBlankString(input.name, "routine name");
   const description = normalizeOptionalString(input.description);
   const sessionTarget = normalizeRoutineSessionTarget(
@@ -492,6 +480,20 @@ function normalizeRoutineCreateInput(input: RoutineCreateInput): NormalizedRouti
   if (!cronInput) {
     throw routineInvalidRequest("invalid routine schedule or action");
   }
+  const target: RoutineTarget = {
+    sessionTarget: cronInput.sessionTarget,
+    wakeMode: cronInput.wakeMode,
+    ...(cronInput.delivery ? { delivery: cronInput.delivery } : {}),
+  };
+  const id =
+    input.id === undefined
+      ? createRoutineIdFromIntent({
+          name: cronInput.name,
+          ...(cronInput.description ? { description: cronInput.description } : {}),
+          cronInput,
+          target,
+        })
+      : normalizeExistingRoutineId(input.id);
   const cronInputWithId = { ...cronInput, id: createRoutineCronJobId(id) };
   assertRoutinePayloadNonBlank(cronInputWithId.payload);
   if (cronInputWithId.sessionTarget === "main" && cronInputWithId.delivery?.mode === "webhook") {
@@ -503,11 +505,7 @@ function normalizeRoutineCreateInput(input: RoutineCreateInput): NormalizedRouti
     ...(cronInputWithId.description ? { description: cronInputWithId.description } : {}),
     enabled: cronInputWithId.enabled ?? true,
     cronInput: cronInputWithId,
-    target: {
-      sessionTarget: cronInputWithId.sessionTarget,
-      wakeMode: cronInputWithId.wakeMode,
-      ...(cronInputWithId.delivery ? { delivery: cronInputWithId.delivery } : {}),
-    },
+    target,
   };
 }
 
@@ -596,16 +594,21 @@ function stableStringify(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function routineIntentSignatureFromNormalized(normalized: NormalizedRoutineCreate): string {
-  const cronInput = normalized.cronInput;
+function routineIntentSignatureFromNormalizedIntent(intent: {
+  name: string;
+  description?: string;
+  cronInput: CronJobCreate;
+  target: RoutineTarget;
+}): string {
+  const cronInput = intent.cronInput;
   return stableStringify({
-    name: normalized.name,
-    description: normalized.description,
+    name: intent.name,
+    description: intent.description,
     owner: {
       ...(cronInput.agentId ? { agentId: cronInput.agentId } : {}),
       ...(cronInput.sessionKey ? { sessionKey: cronInput.sessionKey } : {}),
     },
-    target: routineTargetIntent(normalized.target),
+    target: routineTargetIntent(intent.target),
     trigger: {
       kind: "schedule",
       schedule: routineScheduleIntent(
@@ -615,6 +618,24 @@ function routineIntentSignatureFromNormalized(normalized: NormalizedRoutineCreat
     },
     action: cronInput.payload,
   });
+}
+
+function routineIntentSignatureFromNormalized(normalized: NormalizedRoutineCreate): string {
+  return routineIntentSignatureFromNormalizedIntent(normalized);
+}
+
+function createRoutineIdFromIntent(intent: {
+  name: string;
+  description?: string;
+  cronInput: CronJobCreate;
+  target: RoutineTarget;
+}): string {
+  const digest = crypto
+    .createHash("sha256")
+    .update(routineIntentSignatureFromNormalizedIntent(intent))
+    .digest("hex")
+    .slice(0, 32);
+  return `routine-${digest}`;
 }
 
 function assertNewRoutineScheduleIsValid(schedule: CronSchedule): void {

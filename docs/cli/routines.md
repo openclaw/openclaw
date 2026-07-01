@@ -87,12 +87,14 @@ openclaw routines create --cron "0 18 * * 1-5" --tz America/Los_Angeles \
 
 Main-session routines require `--system-event` and do not support completion
 delivery flags. Isolated, current, and custom session routines require
-`--message`. Announce delivery requires either a stable `--to` destination or
-`--session-key`; otherwise message routines default to no completion delivery.
+`--message`. Announce delivery requires either `--session-key` or a resolvable
+`--to` destination; keyless `--to` values need `--channel` or a provider-prefixed
+destination when multiple channels are configured. Otherwise message routines
+default to no completion delivery.
 
 ## Idempotency
 
-Pass `--id` when scripts may retry creation:
+Pass `--id` when a script needs a human-chosen routine handle:
 
 ```bash
 openclaw routines create --id "weekday-standup" ...
@@ -100,7 +102,9 @@ openclaw routines create --id "weekday-standup" ...
 
 If the same id and same routine intent already exist, OpenClaw returns the
 existing routine and does not create another cron job. If the id exists with
-different intent, creation fails.
+different intent, creation fails. When `--id` is omitted, OpenClaw derives a
+stable id from the normalized routine intent so retrying the same create request
+is still idempotent.
 
 ## Inspect
 

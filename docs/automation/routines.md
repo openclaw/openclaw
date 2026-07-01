@@ -56,7 +56,9 @@ Repeated `routines.create` calls with the same `id` and same routine intent in
 the active cron store are idempotent: OpenClaw returns the existing routine
 instead of creating another cron job. Reusing the same id with different intent
 in that store is rejected so automation cannot accidentally fork a second
-operating loop.
+operating loop. When `id` is omitted, OpenClaw derives a stable id from the
+normalized routine intent so retrying the same create request remains
+idempotent.
 
 ## Relationship to cron and tasks
 
