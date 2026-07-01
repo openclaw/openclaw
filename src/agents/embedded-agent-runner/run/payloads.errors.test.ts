@@ -731,6 +731,143 @@ describe("buildEmbeddedRunPayloads", () => {
     expectSinglePayloadSummary(payloads, { text });
   });
 
+  it("suppresses mutating shell warnings when assistant output explicitly says the command recovered", () => {
+    const text =
+      "The check command failed because the filter treated a neutral job as failing; I reran the status check and it passed.";
+    const payloads = buildPayloads({
+      assistantTexts: [text],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "bash",
+        meta: "gh pr checks 123 --json name,state | jq -e '.[] | select(.state != \"SUCCESS\")'",
+        error: "Command exited with code 1",
+        mutatingAction: true,
+      },
+    });
+
+    expectSinglePayloadSummary(payloads, { text });
+  });
+
+  it("suppresses exec warnings when assistant output explicitly says the script recovered", () => {
+    const text = "The script failed on the first run; I corrected it and the script passed.";
+    const payloads = buildPayloads({
+      assistantTexts: [text],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "exec",
+        error: "Command exited with code 1",
+        mutatingAction: true,
+      },
+    });
+
+    expectSinglePayloadSummary(payloads, { text });
+  });
+
+  it("keeps mutating write warnings when assistant output only says a script error recovered", () => {
+    const text = "I fixed the error in the script and tests passed.";
+    const payloads = buildPayloads({
+      assistantTexts: [text],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "write",
+        error: "file missing",
+        mutatingAction: true,
+      },
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toBe(text);
+    expect(payloads[1]?.isError).toBe(true);
+    expect(payloads[1]?.text).toContain("Write");
+  });
+
+  it("keeps mutating write warnings when assistant output only says a file validation issue recovered", () => {
+    const text = "The file failed validation, so I fixed it and tests passed.";
+    const payloads = buildPayloads({
+      assistantTexts: [text],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "write",
+        error: "file missing",
+        mutatingAction: true,
+      },
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toBe(text);
+    expect(payloads[1]?.isError).toBe(true);
+    expect(payloads[1]?.text).toContain("Write");
+  });
+
+  it("keeps mutating edit warnings when assistant output only says a file validation issue recovered", () => {
+    const text = "The file failed validation, so I fixed it and tests passed.";
+    const payloads = buildPayloads({
+      assistantTexts: [text],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "edit",
+        error: "file missing",
+        mutatingAction: true,
+      },
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toBe(text);
+    expect(payloads[1]?.isError).toBe(true);
+    expect(payloads[1]?.text).toContain("Edit");
+  });
+
+  it("keeps mutating message warnings when assistant output acknowledges an unrelated command", () => {
+    const text = "The command failed at first, then passed after rerunning it.";
+    const payloads = buildPayloads({
+      assistantTexts: [text],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "message",
+        error: "send timed out",
+        mutatingAction: true,
+      },
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toBe(text);
+    expect(payloads[1]?.isError).toBe(true);
+    expect(payloads[1]?.text).toContain("Message");
+  });
+
+  it("suppresses mutating message warnings when assistant output acknowledges the send failure", () => {
+    const text = "The message send failed at first; I retried it and it passed.";
+    const payloads = buildPayloads({
+      assistantTexts: [text],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "message",
+        error: "send timed out",
+        mutatingAction: true,
+      },
+    });
+
+    expectSinglePayloadSummary(payloads, { text });
+  });
+
+  it("keeps mutating shell warnings when assistant output only says the command had no errors", () => {
+    const text = "The command completed with no errors.";
+    const payloads = buildPayloads({
+      assistantTexts: [text],
+      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
+      lastToolError: {
+        toolName: "exec",
+        error: "Command exited with code 1",
+        mutatingAction: true,
+      },
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toBe(text);
+    expect(payloads[1]?.isError).toBe(true);
+    expect(payloads[1]?.text).toContain("Exec");
+  });
+
   it("does not treat session_status read failures as mutating when explicitly flagged", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Status loaded."],
