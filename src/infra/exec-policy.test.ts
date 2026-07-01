@@ -21,7 +21,7 @@ describe("applyExecPolicyLayer", () => {
     });
   });
 
-  it("preserves caller fields but clears stale mode when applying explicit policy fields", () => {
+  it("preserves inherited mode when applying explicit policy fields by default", () => {
     const result = applyExecPolicyLayer(
       {
         ask: "on-miss" as const,
@@ -30,6 +30,26 @@ describe("applyExecPolicyLayer", () => {
         security: "allowlist" as const,
       },
       { security: "deny" },
+    );
+
+    expect(result).toEqual({
+      ask: "on-miss",
+      host: "node",
+      mode: "auto",
+      security: "deny",
+    });
+  });
+
+  it("clears stale inherited mode when legacy config layers request clearing", () => {
+    const result = applyExecPolicyLayer(
+      {
+        ask: "on-miss" as const,
+        host: "node",
+        mode: "auto" as const,
+        security: "allowlist" as const,
+      },
+      { security: "deny" },
+      { clearModeOnLegacyPolicy: true },
     );
 
     expect(result).toEqual({

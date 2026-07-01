@@ -144,3 +144,20 @@ export function parseTelegramTarget(to: string): TelegramTarget {
 export function resolveTelegramTargetChatType(target: string): "direct" | "group" | "unknown" {
   return parseTelegramTarget(target).chatType;
 }
+
+// A Telegram topic is a thread inside one chat, so cross-context matching is
+// done at the chat level (mirroring Slack, where threads are not a context
+// boundary). A bare user/chat target therefore matches a topic-bound context
+// for the same chat, e.g. "477789300" matches "477789300:topic:340799".
+export function telegramContextTargetsMatch(
+  target: string,
+  context: { currentChannelId?: string; currentMessagingTarget?: string },
+): boolean {
+  const targetChatId = parseTelegramTarget(target).chatId.toLowerCase();
+  const candidates = [context.currentMessagingTarget, context.currentChannelId].filter(
+    (value): value is string => Boolean(value),
+  );
+  return candidates.some(
+    (candidate) => parseTelegramTarget(candidate).chatId.toLowerCase() === targetChatId,
+  );
+}

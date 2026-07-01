@@ -35,6 +35,26 @@ const mocks = vi.hoisted(() => ({
         },
       };
     }
+    if (channel === "telegram") {
+      return {
+        threading: {
+          matchesToolContextTarget: ({
+            target,
+            toolContext,
+          }: {
+            target: string;
+            toolContext: { currentMessagingTarget?: string; currentChannelId?: string };
+          }) => {
+            const chatId = target.replace(/:topic:\d+$/, "");
+            const candidates = [
+              toolContext.currentMessagingTarget,
+              toolContext.currentChannelId,
+            ].filter(Boolean);
+            return candidates.some((c) => c!.replace(/:topic:\d+$/, "") === chatId);
+          },
+        },
+      };
+    }
     if (channel === "richchat") {
       return {
         messaging: {
@@ -172,12 +192,7 @@ describe("outbound policy helpers", () => {
       expected: /target provider "forum" while bound to "workspace"/,
     },
     {
-      cfg: {
-        ...workspaceConfig,
-        tools: {
-          message: { crossContext: { allowWithinProvider: false } },
-        },
-      } as OpenClawConfig,
+      cfg: workspaceConfig,
       channel: "workspace",
       action: "send" as const,
       to: "C999",
@@ -189,9 +204,18 @@ describe("outbound policy helpers", () => {
       cfg: {
         ...workspaceConfig,
         tools: {
-          message: { crossContext: { allowWithinProvider: false } },
+          message: { crossContext: { allowWithinProvider: true } },
         },
       } as OpenClawConfig,
+      channel: "workspace",
+      action: "send" as const,
+      to: "C999",
+      currentChannelId: "C123",
+      currentChannelProvider: "workspace",
+      expected: "allow" as const,
+    },
+    {
+      cfg: workspaceConfig,
       channel: "workspace",
       action: "upload-file" as const,
       to: "C999",
@@ -297,6 +321,46 @@ describe("outbound policy helpers", () => {
         },
       }),
     ).not.toThrow();
+  });
+
+  it("allows a bare Telegram user target when bound to a topic context", () => {
+    expect(() =>
+      enforceCrossContextPolicy({
+        channel: "telegram",
+        action: "send",
+        args: { to: "477789300" },
+        toolContext: {
+          currentChannelId: "477789300:topic:340799",
+          currentMessagingTarget: "477789300:topic:340799",
+          currentChannelProvider: "telegram",
+        },
+        cfg: {
+          tools: {
+            message: { crossContext: { allowWithinProvider: false } },
+          },
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("denies a different Telegram chat when within-provider sends are disabled", () => {
+    expect(() =>
+      enforceCrossContextPolicy({
+        channel: "telegram",
+        action: "send",
+        args: { to: "999999999" },
+        toolContext: {
+          currentChannelId: "477789300:topic:340799",
+          currentMessagingTarget: "477789300:topic:340799",
+          currentChannelProvider: "telegram",
+        },
+        cfg: {
+          tools: {
+            message: { crossContext: { allowWithinProvider: false } },
+          },
+        },
+      }),
+    ).toThrow(/Cross-context messaging denied/);
   });
 
   it("uses presentation when available and preferred", async () => {
