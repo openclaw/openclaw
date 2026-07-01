@@ -384,26 +384,116 @@ class OpenAiCompatibleEmbeddings implements Embeddings {
   }
 
   async embed(text: string, options?: { timeoutMs?: number }): Promise<number[]> {
+    if (
+      typeof this.dimensions === "number" &&
+      (!Number.isInteger(this.dimensions) || this.dimensions <= 0)
+    ) {
+      throw new Error("Embedding dimensions must be a positive integer");
+    }
+
+    try {
+      const response = await this.postEmbedding(text, { includeDimensions: true, options });
+      return normalizeEmbeddingVector(response.data?.[0]?.embedding);
+    } catch (error) {
+      if (typeof this.dimensions !== "number" || !isEmbeddingDimensionsRejectedError(error)) {
+        throw error;
+      }
+    }
+
+    const response = await this.postEmbedding(text, { includeDimensions: false, options });
+    const embedding = normalizeEmbeddingVector(response.data?.[0]?.embedding);
+    return this.trimEmbedding(embedding);
+  }
+
+  private async postEmbedding(
+    text: string,
+    request: {
+      includeDimensions: boolean;
+      options?: { timeoutMs?: number };
+    },
+  ): Promise<EmbeddingCreateResponse> {
     const params: Record<string, unknown> = {
       model: this.model,
       input: text,
+      ...(request.includeDimensions && typeof this.dimensions === "number"
+        ? { dimensions: this.dimensions }
+        : {}),
     };
-    if (this.dimensions) {
-      params.dimensions = this.dimensions;
-    }
+
     ensureGlobalUndiciEnvProxyDispatcher();
     // The OpenAI SDK's embeddings helper injects encoding_format=base64 when
     // omitted, then decodes the response. Several compatible providers either
     // reject encoding_format or always return float arrays, so use the generic
     // transport and normalize the response ourselves.
-    const response = await (
+    return await (
       await this.clientPromise
     ).post<EmbeddingCreateResponse>("/embeddings", {
       body: params,
-      ...(options?.timeoutMs ? { timeout: options.timeoutMs, maxRetries: 0 } : {}),
+      ...(request.options?.timeoutMs ? { timeout: request.options.timeoutMs, maxRetries: 0 } : {}),
     });
-    return normalizeEmbeddingVector(response.data?.[0]?.embedding);
   }
+
+  private trimEmbedding(embedding: number[]): number[] {
+    if (typeof this.dimensions !== "number") {
+      return embedding;
+    }
+    if (embedding.length < this.dimensions) {
+      throw new Error(
+        `Embedding model ${this.model} returned ${embedding.length} dimensions, need at least ${this.dimensions} for local truncation`,
+      );
+    }
+    return embedding.slice(0, this.dimensions);
+  }
+}
+
+function isEmbeddingDimensionsRejectedError(error: unknown): boolean {
+  const message = stringifyErrorLike(error).toLowerCase();
+  if (!mentionsEmbeddingDimensionsField(message)) {
+    return false;
+  }
+  return (
+    message.includes("extra_forbidden") ||
+    message.includes("extra inputs") ||
+    message.includes("not permitted") ||
+    message.includes("not allowed") ||
+    message.includes("unknown parameter") ||
+    message.includes("unknown field") ||
+    message.includes("unrecognized parameter") ||
+    message.includes("unrecognized field") ||
+    message.includes("unexpected parameter") ||
+    message.includes("unexpected field")
+  );
+}
+
+function mentionsEmbeddingDimensionsField(message: string): boolean {
+  return (
+    /\bbody\.dimensions\b/.test(message) ||
+    /\binput\.dimensions\b/.test(message) ||
+    /\bparam(?:eter)?\s*[:=]\s*["'`]?dimensions["'`]?\b/.test(message) ||
+    /\b(?:param(?:eter)?|field|argument)\s+["'`]?dimensions["'`]?\b/.test(message) ||
+    /\b["'`]?dimensions["'`]?\s+(?:param(?:eter)?|field|argument)\b/.test(message) ||
+    /(?:\(|\[)\s*['"](?:body|input)['"]\s*,\s*['"]dimensions['"]\s*(?:\)|\])/.test(message)
+  );
+}
+
+function stringifyErrorLike(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (!value || typeof value !== "object") {
+    return String(value);
+  }
+  const parts: string[] = value instanceof Error ? [value.message] : [];
+  const record = value as Record<string, unknown>;
+  for (const key of ["message", "type", "code", "param", "error"]) {
+    const item = record[key];
+    if (typeof item === "string" || typeof item === "number") {
+      parts.push(String(item));
+    } else if (item && typeof item === "object") {
+      parts.push(stringifyErrorLike(item));
+    }
+  }
+  return parts.join("\n");
 }
 
 class ProviderAdapterEmbeddings implements Embeddings {
