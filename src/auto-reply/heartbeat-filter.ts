@@ -336,10 +336,7 @@ export function isHeartbeatOkResponse(
   if (hasAssistantToolCall(message)) {
     return false;
   }
-  const { text, hasNonTextContent } = resolveMessageText(message.content);
-  if (hasNonTextContent) {
-    return false;
-  }
+  const { text } = resolveMessageText(message.content);
   return stripHeartbeatToken(text, { mode: "heartbeat", maxAckChars: ackMaxChars }).shouldSkip;
 }
 
