@@ -550,7 +550,7 @@ describe("subagent registry steer restarts", () => {
   });
 
   it("updates task to the dispatched steer message when provided", () => {
-    // Regression test: post-restart orphan recovery
+    // Regression test: orphan-session recovery
     // (`recoverOrphanedSubagentSessions` -> `resumeOrphanedSession` /
     // `buildResumeMessage` in `subagent-orphan-recovery.ts`) rewraps
     // `entry.task` into the [Subagent Task] block. If steer replacement did
@@ -579,7 +579,7 @@ describe("subagent registry steer restarts", () => {
   it("preserves the previous task when no replacement is provided", () => {
     // Backwards-compatibility guard: callers that do not pass a new task
     // (legacy or test fixtures) should still inherit the prior task so that
-    // redispatch after restart stays deterministic.
+    // orphan-session recovery remains deterministic.
     registerRun({
       runId: "run-task-preserve-old",
       childSessionKey: "agent:main:subagent:task-preserve",

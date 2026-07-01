@@ -574,11 +574,11 @@ export function createSubagentRunManager(params: {
     // Prefer the caller-supplied task (the text actually dispatched to the
     // child session during steer/wake/orphan-resume) over the previous run's
     // stale `task`. Falling back to the prior task preserves behavior for any
-    // caller that does not pass a replacement message. The post-restart
-    // orphan recovery path (`recoverOrphanedSubagentSessions` ->
+    // caller that does not pass a replacement message. The orphan-session
+    // recovery flow (`recoverOrphanedSubagentSessions` ->
     // `resumeOrphanedSession` / `buildResumeMessage` in
     // `subagent-orphan-recovery.ts`) rewraps the persisted `task` into the
-    // `[Subagent Task]` block after a gateway crash; using stale text would
+    // `[Subagent Task]` block after a gateway restart; using stale text would
     // silently re-run the original instruction and lose the user's steer
     // update.
     const nextTask =
