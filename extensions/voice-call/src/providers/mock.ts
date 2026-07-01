@@ -31,7 +31,8 @@ export class MockProvider implements VoiceCallProvider {
   readonly name = "mock" as const;
 
   verifyWebhook(_ctx: WebhookContext): WebhookVerificationResult {
-    return { ok: true, verifiedRequestKey: `mock:${crypto.randomUUID()}` };
+    const key = `mock:${crypto.createHash("sha256").update(`${_ctx.method}\n${_ctx.url}\n${_ctx.rawBody}`).digest("hex")}`;
+    return { ok: true, verifiedRequestKey: key };
   }
 
   parseWebhookEvent(
