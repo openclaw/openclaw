@@ -96,6 +96,21 @@ describe("isSilentReplyText", () => {
     expect(isSilentReplyText("")).toBe(false);
   });
 
+  it("returns true for a bare token with trailing terminal punctuation", () => {
+    expect(isSilentReplyText("NO_REPLY.")).toBe(true);
+    expect(isSilentReplyText("NO_REPLY!")).toBe(true);
+    expect(isSilentReplyText("NO_REPLY?")).toBe(true);
+    expect(isSilentReplyText("NO_REPLY\u2026")).toBe(true);
+    expect(isSilentReplyText("  NO_REPLY.  ")).toBe(true);
+  });
+
+  it("returns true for a bare token wrapped in quotes", () => {
+    expect(isSilentReplyText('"NO_REPLY"')).toBe(true);
+    expect(isSilentReplyText("'NO_REPLY'")).toBe(true);
+    expect(isSilentReplyText('"NO_REPLY."')).toBe(true);
+    expect(isSilentReplyText("\u201cNO_REPLY\u201d")).toBe(true);
+  });
+
   it("returns false for substantive text ending with token (#19537)", () => {
     const text = "Here is a helpful response.\n\nNO_REPLY";
     expect(isSilentReplyText(text)).toBe(false);
