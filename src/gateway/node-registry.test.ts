@@ -639,8 +639,6 @@ describe("gateway/node-registry", () => {
       }),
     ).resolves.toEqual({
       ok: false,
-      payload: undefined,
-      payloadJSON: null,
       error: {
         code: "UNSUPPORTED_CAPABILITY",
         message: 'node does not support command "system.execApprovals.get"',
