@@ -6,7 +6,6 @@ import {
 } from "../../infra/session-delivery-queue-storage.js";
 import type { SessionDeliveryContext } from "../../infra/session-delivery-queue-storage.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   CONTINUATION_DELEGATE_FANOUT_MODES,
   hasContinuationDelegateTargeting,
@@ -32,8 +31,6 @@ export type {
   ContinuationDelegateFanoutMode,
   ContinuationDelegateTargeting,
 };
-
-const log = createSubsystemLogger("continuation/targeting");
 
 export function resolveContinuationReturnTargetSessionKeys(
   params: ContinuationDelegateTargeting & {
@@ -122,21 +119,10 @@ export async function enqueueContinuationReturnDeliveries(
       ...(params.stateDir ? { sessionDeliveryAckStateDir: params.stateDir } : {}),
     });
     if (!enqueued) {
-      // The in-memory system-event queue collapsed this delivery as a duplicate
-      // of an already-queued identical-text return before the ack id could ride
-      // out on a queued event. The surviving duplicate carries the same text, so
-      // ack the dropped durable row now — otherwise `ackDrainedSessionDeliveries`
-      // never sees this id at drain time and restart recovery replays it as a
-      // duplicate return.
-      try {
-        await deps.ackSessionDelivery(deliveryId, params.stateDir);
-      } catch (err) {
-        // Best-effort: a failed ack just leaves the durable row for restart
-        // recovery, which is the pre-existing behavior for un-acked rows.
-        log.warn(
-          `Failed to ack de-duplicated continuation-return delivery ${deliveryId}: ${String(err)}`,
-        );
-      }
+      // Idempotent delivery enqueue can return the existing durable row id for
+      // the already-queued in-memory event. Do not ack here: that would delete
+      // the durable backing row for the surviving queued event before the
+      // prompt-drain path consumes it. The surviving event carries the ack id.
     }
     if (params.wakeRecipients) {
       deps.requestHeartbeatNow({

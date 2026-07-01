@@ -2752,12 +2752,15 @@ export const agentHandlers: GatewayRequestHandlers = {
           }
           const execApprovalFollowupElevatedDefaults =
             execApprovalFollowupRuntimeHandoff?.bashElevated;
+          const subagentTraceparentHandoff = consumeSubagentTraceparentHandoff({
+            idempotencyKey: idem,
+            sessionKey: resolvedSessionKey,
+          })?.traceparent;
+          const trustedContinuationRuntimeHandoff =
+            canUseInternalRuntimeHandoff || Boolean(subagentTraceparentHandoff);
           const inheritedTraceparent =
             (canUseInternalRuntimeHandoff ? request.traceparent : undefined) ??
-            consumeSubagentTraceparentHandoff({
-              idempotencyKey: idem,
-              sessionKey: resolvedSessionKey,
-            })?.traceparent ??
+            subagentTraceparentHandoff ??
             sessionContinuationTraceparent;
 
           dispatchAgentRunFromGateway({
@@ -2823,10 +2826,10 @@ export const agentHandlers: GatewayRequestHandlers = {
               // raw RPC clients can still set them. Ignore them for non-backend
               // clients so an ordinary caller cannot force continuation
               // queue-drain semantics or mark runs continuation/heartbeat-like.
-              drainsContinuationDelegateQueue: canUseInternalRuntimeHandoff
+              drainsContinuationDelegateQueue: trustedContinuationRuntimeHandoff
                 ? request.drainsContinuationDelegateQueue
                 : undefined,
-              continuationTrigger: canUseInternalRuntimeHandoff
+              continuationTrigger: trustedContinuationRuntimeHandoff
                 ? request.continuationTrigger
                 : undefined,
               traceparent: inheritedTraceparent,

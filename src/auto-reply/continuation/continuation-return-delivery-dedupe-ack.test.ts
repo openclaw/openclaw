@@ -1,8 +1,7 @@
-// P2 (web-Codex r3502790187) regression: when the in-memory system-event queue
-// collapses a continuation-return delivery as a duplicate before the ack id can
-// ride out on a queued event, the durable delivery row would otherwise never be
-// acked and restart recovery would replay it as a duplicate return. The dropped
-// duplicate's durable row must be acked at enqueue time instead.
+// P2 (web-Codex r3502790187) regression: idempotent continuation-return delivery
+// retries can return the same durable delivery id that already backs the
+// surviving queued system event. If the in-memory queue de-dupes the retry, do
+// NOT ack that id here or restart recovery loses the surviving queued event.
 
 import { describe, expect, it, vi } from "vitest";
 import { enqueueContinuationReturnDeliveries } from "./targeting.js";
@@ -21,7 +20,7 @@ function makeDeps(overrides: { enqueueSystemEvent: () => boolean }) {
 }
 
 describe("enqueueContinuationReturnDeliveries :: de-duplicated ack reconciliation", () => {
-  it("acks the durable delivery row when the system-event enqueue is de-duplicated", async () => {
+  it("does not ack an idempotent durable delivery row when the in-memory enqueue de-dupes it", async () => {
     const deps = makeDeps({ enqueueSystemEvent: () => false });
 
     const result = await enqueueContinuationReturnDeliveries(
@@ -36,9 +35,9 @@ describe("enqueueContinuationReturnDeliveries :: de-duplicated ack reconciliatio
 
     expect(deps.enqueueSessionDelivery).toHaveBeenCalledTimes(1);
     expect(deps.enqueueSystemEvent).toHaveBeenCalledTimes(1);
-    // The dropped duplicate's durable row is reconciled immediately.
-    expect(deps.ackSessionDelivery).toHaveBeenCalledTimes(1);
-    expect(deps.ackSessionDelivery).toHaveBeenCalledWith("delivery-id-1", "/tmp/state");
+    // The existing queued event carries the ack id; acking it here would delete
+    // the restart-recovery backing row before prompt drain consumes it.
+    expect(deps.ackSessionDelivery).not.toHaveBeenCalled();
     // The content still counts as delivered via the surviving duplicate.
     expect(result.enqueued).toBe(1);
   });
