@@ -14,7 +14,12 @@ import { resolveCronJobLastRunStatus } from "../cron-status.ts";
 import { formatRelativeTimestamp, formatMs } from "../format.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import { pathForTab } from "../navigation.ts";
-import { formatCronSchedule, formatNextRun } from "../presenter.ts";
+import {
+  formatCronRunningState,
+  formatCronSchedule,
+  formatNextRun,
+  isCronJobRunning,
+} from "../presenter.ts";
 import { normalizeStringEntries, uniqueStrings } from "../string-coerce.ts";
 import type { ChannelUiMetaEntry, CronJob, CronRunLogEntry, CronStatus } from "../types.ts";
 import type {
@@ -1628,6 +1633,10 @@ function renderJob(job: CronJob, props: CronProps) {
       ${renderJobPayload(job)}
       <div class="cron-job-footer">
         <div class="chip-row cron-job-chips">
+          <span class="chip">${t("cron.jobList.id")}: ${job.id}</span>
+          <span class=${`chip ${isCronJobRunning(job) ? "chip-ok" : ""}`}>
+            ${formatCronRunningState(job)}
+          </span>
           <span class=${`chip ${job.enabled ? "chip-ok" : "chip-danger"}`}>
             ${job.enabled ? t("cron.jobList.enabled") : t("cron.jobList.disabled")}
           </span>

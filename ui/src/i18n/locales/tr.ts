@@ -300,6 +300,7 @@ export const tr: TranslationMap = {
       agentJobsSubtitle: "Scheduled jobs targeting this agent.",
       noJobs: "No jobs assigned.",
       runNow: "Run Now",
+      jobId: "ID",
     },
     files: {
       emptyDraft: "Empty draft",
@@ -1700,6 +1701,7 @@ export const tr: TranslationMap = {
       run: "Çalıştır",
       history: "Geçmiş",
       remove: "Kaldır",
+      id: "ID",
     },
     jobDetail: {
       system: "Sistem",
@@ -1711,6 +1713,8 @@ export const tr: TranslationMap = {
     },
     jobState: {
       status: "Durum",
+      running: "Çalışıyor",
+      notRunning: "Çalışmıyor",
       next: "Sonraki",
       last: "Son",
     },

@@ -298,6 +298,7 @@ export const hi: TranslationMap = {
       agentJobsSubtitle: "इस एजेंट को लक्षित करने वाली शेड्यूल की गई जॉब्स।",
       noJobs: "कोई जॉब असाइन नहीं की गई।",
       runNow: "अभी चलाएँ",
+      jobId: "ID",
     },
     files: {
       emptyDraft: "खाली ड्राफ़्ट",
@@ -1674,6 +1675,7 @@ export const hi: TranslationMap = {
       run: "चलाएँ",
       history: "इतिहास",
       remove: "हटाएँ",
+      id: "ID",
     },
     jobDetail: {
       system: "सिस्टम",
@@ -1685,6 +1687,8 @@ export const hi: TranslationMap = {
     },
     jobState: {
       status: "स्थिति",
+      running: "चल रहा है",
+      notRunning: "नहीं चल रहा है",
       next: "अगला",
       last: "अंतिम",
     },

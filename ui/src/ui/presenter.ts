@@ -51,7 +51,16 @@ export function formatCronState(job: CronJob) {
   const next = state.nextRunAtMs ? formatMs(state.nextRunAtMs) : t("common.na");
   const last = state.lastRunAtMs ? formatMs(state.lastRunAtMs) : t("common.na");
   const status = resolveCronJobLastRunStatus(job);
-  return `${status} · next ${next} · last ${last}`;
+  return `${formatCronRunningState(job)} · ${status} · next ${next} · last ${last}`;
+}
+
+export function isCronJobRunning(job: CronJob) {
+  const runningAtMs = job.state?.runningAtMs;
+  return typeof runningAtMs === "number" && Number.isFinite(runningAtMs);
+}
+
+export function formatCronRunningState(job: CronJob) {
+  return isCronJobRunning(job) ? t("cron.jobState.running") : t("cron.jobState.notRunning");
 }
 
 export function formatCronSchedule(job: CronJob) {

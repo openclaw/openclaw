@@ -389,6 +389,48 @@ describe("renderAgents", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("shows cron job ids and running state in the agent cron panel", async () => {
+    const container = document.createElement("div");
+
+    render(
+      renderAgents(
+        createProps({
+          activePanel: "cron",
+          selectedAgentId: "beta",
+          cron: {
+            status: { enabled: true, jobs: 1, nextWakeAtMs: null },
+            jobs: [
+              {
+                id: "job-beta",
+                name: "Beta wakeup",
+                enabled: true,
+                createdAtMs: 0,
+                updatedAtMs: 0,
+                agentId: "beta",
+                schedule: { kind: "cron", expr: "0 9 * * *" },
+                sessionTarget: "isolated",
+                wakeMode: "next-heartbeat",
+                payload: { kind: "systemEvent", text: "ping" },
+                state: { runningAtMs: 1_700_000_000_000 },
+              },
+            ],
+            loading: false,
+            error: null,
+          },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const jobRow = Array.from(container.querySelectorAll(".list-item")).find((row) =>
+      row.textContent?.includes("Beta wakeup"),
+    );
+    const rowText = jobRow?.textContent?.replace(/\s+/g, " ").trim();
+    expect(rowText).toContain("ID: job-beta");
+    expect(rowText).toContain("Running");
+  });
 });
 
 describe("renderAgentFiles", () => {

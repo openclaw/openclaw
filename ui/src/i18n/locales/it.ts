@@ -298,6 +298,7 @@ export const it: TranslationMap = {
       agentJobsSubtitle: "Job pianificati destinati a questo agente.",
       noJobs: "Nessun job assegnato.",
       runNow: "Esegui ora",
+      jobId: "ID",
     },
     files: {
       emptyDraft: "Bozza vuota",
@@ -1706,6 +1707,7 @@ export const it: TranslationMap = {
       run: "Esegui",
       history: "Cronologia",
       remove: "Rimuovi",
+      id: "ID",
     },
     jobDetail: {
       system: "Sistema",
@@ -1717,6 +1719,8 @@ export const it: TranslationMap = {
     },
     jobState: {
       status: "Stato",
+      running: "In esecuzione",
+      notRunning: "Non in esecuzione",
       next: "Prossimo",
       last: "Ultimo",
     },

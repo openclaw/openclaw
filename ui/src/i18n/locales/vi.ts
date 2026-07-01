@@ -298,6 +298,7 @@ export const vi: TranslationMap = {
       agentJobsSubtitle: "Các tác vụ đã lên lịch nhắm đến agent này.",
       noJobs: "Chưa có tác vụ nào được gán.",
       runNow: "Chạy ngay",
+      jobId: "ID",
     },
     files: {
       emptyDraft: "Bản nháp trống",
@@ -1682,6 +1683,7 @@ export const vi: TranslationMap = {
       run: "Chạy",
       history: "Lịch sử",
       remove: "Xóa",
+      id: "ID",
     },
     jobDetail: {
       system: "Hệ thống",
@@ -1693,6 +1695,8 @@ export const vi: TranslationMap = {
     },
     jobState: {
       status: "Trạng thái",
+      running: "Đang chạy",
+      notRunning: "Không chạy",
       next: "Tiếp theo",
       last: "Cuối cùng",
     },

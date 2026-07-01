@@ -297,6 +297,7 @@ export const ko: TranslationMap = {
       agentJobsSubtitle: "Scheduled jobs targeting this agent.",
       noJobs: "No jobs assigned.",
       runNow: "Run Now",
+      jobId: "ID",
     },
     files: {
       emptyDraft: "Empty draft",
@@ -1678,6 +1679,7 @@ export const ko: TranslationMap = {
       run: "실행",
       history: "기록",
       remove: "제거",
+      id: "ID",
     },
     jobDetail: {
       system: "시스템",
@@ -1689,6 +1691,8 @@ export const ko: TranslationMap = {
     },
     jobState: {
       status: "상태",
+      running: "실행 중",
+      notRunning: "실행 중 아님",
       next: "다음",
       last: "마지막",
     },

@@ -300,6 +300,7 @@ export const nl: TranslationMap = {
       agentJobsSubtitle: "Geplande taken gericht op deze agent.",
       noJobs: "Geen taken toegewezen.",
       runNow: "Nu uitvoeren",
+      jobId: "ID",
     },
     files: {
       emptyDraft: "Lege conceptversie",
@@ -1699,6 +1700,7 @@ export const nl: TranslationMap = {
       run: "Uitvoeren",
       history: "Historie",
       remove: "Verwijderen",
+      id: "ID",
     },
     jobDetail: {
       system: "Systeem",
@@ -1710,6 +1712,8 @@ export const nl: TranslationMap = {
     },
     jobState: {
       status: "Status",
+      running: "Actief",
+      notRunning: "Niet actief",
       next: "Volgende",
       last: "Laatste",
     },

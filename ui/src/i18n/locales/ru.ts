@@ -299,6 +299,7 @@ export const ru: TranslationMap = {
       agentJobsSubtitle: "Запланированные задания, назначенные этому агенту.",
       noJobs: "Нет назначенных заданий.",
       runNow: "Запустить сейчас",
+      jobId: "ID",
     },
     files: {
       emptyDraft: "Пустой черновик",
@@ -1707,6 +1708,7 @@ export const ru: TranslationMap = {
       run: "Запустить",
       history: "История",
       remove: "Удалить",
+      id: "ID",
     },
     jobDetail: {
       system: "Система",
@@ -1718,6 +1720,8 @@ export const ru: TranslationMap = {
     },
     jobState: {
       status: "Статус",
+      running: "Выполняется",
+      notRunning: "Не выполняется",
       next: "Следующий",
       last: "Последний",
     },

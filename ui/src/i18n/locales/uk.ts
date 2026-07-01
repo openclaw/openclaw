@@ -299,6 +299,7 @@ export const uk: TranslationMap = {
       agentJobsSubtitle: "Scheduled jobs targeting this agent.",
       noJobs: "No jobs assigned.",
       runNow: "Run Now",
+      jobId: "ID",
     },
     files: {
       emptyDraft: "Empty draft",
@@ -1698,6 +1699,7 @@ export const uk: TranslationMap = {
       run: "Запустити",
       history: "Історія",
       remove: "Видалити",
+      id: "ID",
     },
     jobDetail: {
       system: "Система",
@@ -1709,6 +1711,8 @@ export const uk: TranslationMap = {
     },
     jobState: {
       status: "Статус",
+      running: "Запущено",
+      notRunning: "Не запущено",
       next: "Наступний",
       last: "Останній",
     },
