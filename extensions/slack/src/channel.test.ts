@@ -446,12 +446,66 @@ describe("slackPlugin status", () => {
       cfg,
     });
 
-    expect(probeSpy).toHaveBeenCalledWith("xoxb-test", 2500);
+    expect(probeSpy).toHaveBeenCalledWith("xoxb-test", 2500, { accountId: "default" });
     expect(result).toEqual({
       ok: true,
       status: 200,
       bot: { id: "B1", name: "openclaw-bot" },
       team: { id: "T1", name: "OpenClaw" },
+    });
+  });
+
+  it("renders Slack probe token warnings in capabilities output", () => {
+    const lines = slackPlugin.status?.formatCapabilitiesProbe?.({
+      probe: {
+        ok: true,
+        warning:
+          'slack auth.test returned user_id=UUSER without bot_id for account "default"; channels.slack.botToken or SLACK_BOT_TOKEN may contain a Slack user token (xoxp-...) instead of a bot token (xoxb-...).',
+        bot: { id: "UUSER", name: "human-installer" },
+        team: { id: "T1", name: "OpenClaw" },
+      },
+    });
+
+    expect(lines).toStrictEqual([
+      {
+        text: expect.stringContaining("without bot_id"),
+        tone: "warn",
+      },
+      { text: "Bot: @human-installer" },
+      { text: "Team: OpenClaw (T1)" },
+    ]);
+  });
+
+  it("passes named Slack account ids into probe warnings", async () => {
+    const probeSpy = vi.spyOn(probeModule, "probeSlack").mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      warning:
+        'slack auth.test returned user_id=UWORK without bot_id for account "work"; channels.slack.accounts.work.botToken may contain a Slack user token (xoxp-...) instead of a bot token (xoxb-...).',
+    });
+    const cfg = {
+      channels: {
+        slack: {
+          accounts: {
+            work: {
+              botToken: "xoxp-work",
+              appToken: "xapp-work",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const account = slackPlugin.config.resolveAccount(cfg, "work");
+
+    const result = await slackPlugin.status!.probeAccount!({
+      account,
+      timeoutMs: 2500,
+      cfg,
+    });
+
+    expect(probeSpy).toHaveBeenCalledWith("xoxp-work", 2500, { accountId: "work" });
+    expect(result).toMatchObject({
+      warning: expect.stringContaining("channels.slack.accounts.work.botToken"),
     });
   });
 

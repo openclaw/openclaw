@@ -189,6 +189,49 @@ describe("channelsCapabilitiesCommand", () => {
     ]);
   });
 
+  it("prints Slack auth warnings returned by a channel probe", async () => {
+    const plugin = buildPlugin({
+      id: "slack",
+      account: {
+        accountId: "default",
+        botToken: "xoxp-user-token",
+      },
+      probe: {
+        ok: true,
+        warning:
+          'slack auth.test returned user_id=UUSER without bot_id for account "default"; channels.slack.botToken or SLACK_BOT_TOKEN may contain a Slack user token (xoxp-...) instead of a bot token (xoxb-...).',
+      },
+    });
+    plugin.status = {
+      ...plugin.status,
+      formatCapabilitiesProbe: ({ probe }) => [
+        {
+          text: `Warning: ${(probe as { warning: string }).warning}`,
+          tone: "warn",
+        },
+      ],
+    };
+    vi.mocked(listChannelPlugins).mockReturnValue([plugin]);
+    vi.mocked(getChannelPlugin).mockReturnValue(plugin);
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: {} },
+      channelId: "slack",
+      plugin,
+      configChanged: false,
+    });
+
+    await channelsCapabilitiesCommand({ channel: "slack" }, runtime);
+
+    expect(logs).toStrictEqual([
+      [
+        "slack:default",
+        "Support: chatTypes=direct",
+        "Actions: send, broadcast, poll",
+        'Warning: slack auth.test returned user_id=UUSER without bot_id for account "default"; channels.slack.botToken or SLACK_BOT_TOKEN may contain a Slack user token (xoxp-...) instead of a bot token (xoxb-...).',
+      ].join("\n"),
+    ]);
+  });
+
   it("prints an empty all-channel report when no channels are configured", async () => {
     await channelsCapabilitiesCommand({ json: true }, runtime);
 

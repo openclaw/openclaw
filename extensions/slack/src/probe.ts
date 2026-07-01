@@ -13,7 +13,11 @@ export type SlackProbe = BaseProbeResult & {
   warning?: string;
 };
 
-export async function probeSlack(token: string, timeoutMs = 2500): Promise<SlackProbe> {
+export async function probeSlack(
+  token: string,
+  timeoutMs = 2500,
+  opts?: { accountId?: string | null },
+): Promise<SlackProbe> {
   const client = createSlackWebClient(token);
   const start = Date.now();
   try {
@@ -26,7 +30,10 @@ export async function probeSlack(token: string, timeoutMs = 2500): Promise<Slack
         elapsedMs: Date.now() - start,
       };
     }
-    const warning = formatSlackBotTokenIdentityWarning({ auth: result });
+    const warning = formatSlackBotTokenIdentityWarning({
+      auth: result,
+      accountId: opts?.accountId,
+    });
     return {
       ok: true,
       status: 200,
