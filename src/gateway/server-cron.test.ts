@@ -620,12 +620,10 @@ describe("buildGatewayCronService", () => {
       runCronChangedMock.mockClear();
       await state.cron.run(job.id, "force");
 
-      const hookEvents = runCronChangedMock.mock.calls as unknown as Array<
-        [{ action?: string; summary?: string }]
-      >;
-      const event = hookEvents.find(([hookEvent]) => hookEvent.action === "finished")?.[0];
-      expect(event).toBeDefined();
-      const summary = event?.summary ?? "";
+      const event = runCronChangedMock.mock.calls
+        .map((call) => requireRecord(call[0], "cron_changed event"))
+        .find((hookEvent) => hookEvent.action === "finished");
+      const summary = String(event?.summary ?? "");
       expect(summary).toContain("[redacted-url]");
       expect(summary).toContain("[redacted-code]");
       expect(summary).toContain("token=***");
@@ -671,10 +669,11 @@ describe("buildGatewayCronService", () => {
 
       await state.cron.run(job.id, "force");
 
-      const announceCalls = sendCronAnnouncePayloadStrictMock.mock.calls as unknown as Array<
-        [{ message?: string }]
-      >;
-      const message = announceCalls[0]?.[0]?.message ?? "";
+      const announcePayload = requireRecord(
+        callArg(sendCronAnnouncePayloadStrictMock, 0, 0, "cron announce payload"),
+        "cron announce payload",
+      );
+      const message = String(announcePayload.message ?? "");
       expect(message).toContain("token=***");
       expect(message).not.toContain("opaque-secret-value");
     } finally {
@@ -714,10 +713,9 @@ describe("buildGatewayCronService", () => {
 
       expect(sendCronAnnouncePayloadStrictMock).not.toHaveBeenCalled();
 
-      const hookEvents = runCronChangedMock.mock.calls as unknown as Array<
-        [{ action?: string; summary?: string }]
-      >;
-      const event = hookEvents.find(([hookEvent]) => hookEvent.action === "finished")?.[0];
+      const event = runCronChangedMock.mock.calls
+        .map((call) => requireRecord(call[0], "cron_changed event"))
+        .find((hookEvent) => hookEvent.action === "finished");
       expect(event?.summary).toBe(summary);
     } finally {
       state.cron.stop();
