@@ -339,15 +339,22 @@ describe("OpenRouter OAuth", () => {
       const ONE_MIB = 1024 * 1024;
       const chunk = Buffer.alloc(ONE_MIB, 0x41);
       const writeMore = () => {
-        if (socketDestroyed) return;
-        for (let i = 0; i < 4 && !socketDestroyed; i++) {
+        if (socketDestroyed) {
+          return;
+        }
+        for (let i = 0; i < 4; i++) {
+          if (socketDestroyed) {
+            return;
+          }
           bytesWritten += chunk.length;
           if (!res.write(chunk)) {
             res.once("drain", writeMore);
             return;
           }
         }
-        if (!socketDestroyed) setImmediate(writeMore);
+        if (!socketDestroyed) {
+          setImmediate(writeMore);
+        }
       };
       writeMore();
     });
@@ -357,7 +364,9 @@ describe("OpenRouter OAuth", () => {
       });
     });
 
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
     const port = (server.address() as { port: number }).port;
 
     // Point the OAuth exchange at our local server
@@ -377,7 +386,9 @@ describe("OpenRouter OAuth", () => {
       ).rejects.toThrow("OpenRouter OAuth key response exceeds");
     } finally {
       vi.unstubAllGlobals();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   });
 });
