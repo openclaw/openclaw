@@ -67,7 +67,7 @@ describe("diagnostic log events", () => {
     expect(event.message).toBe("hello diagnostic logs");
     expect(event.event).toBe("diagnostic.info");
     expect(event.category).toBe("diagnostic");
-    expect(event.outcome).toBe("unknown");
+    expect(event.outcome).toBe("success");
     expect(event.reason).toBe("none");
     expect(event.attributes).toStrictEqual({
       subsystem: "diagnostic",
@@ -209,9 +209,36 @@ describe("diagnostic log events", () => {
     const [event] = received;
     expect(event.event).toBe("gateway.auth.warn");
     expect(event.category).toBe("gateway.auth");
-    expect(event.outcome).toBe("unknown");
-    expect(event.reason).toBe("none");
+    expect(event.outcome).toBe("warning");
+    expect(event.reason).toBe("warning");
     expect(Object.hasOwn(event.attributes ?? {}, "__openclawDiagnosticLogSemantics")).toBe(false);
+  });
+
+  it("uses safe structured status and reason codes for generic log semantics", async () => {
+    const received: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
+    const unsubscribe = onInternalDiagnosticEvent((evt) => {
+      if (evt.type === "log.record") {
+        received.push(evt);
+      }
+    });
+
+    const logger = getChildLogger({ subsystem: "gateway/heartbeat" });
+    logger.warn(
+      {
+        reason: "channel_not_ready",
+        status: "skipped",
+      },
+      "heartbeat: channel not ready",
+    );
+    await flushDiagnosticEvents();
+    unsubscribe();
+
+    expect(received).toHaveLength(1);
+    const [event] = received;
+    expect(event.event).toBe("gateway.heartbeat.warn");
+    expect(event.category).toBe("gateway.heartbeat");
+    expect(event.outcome).toBe("warning");
+    expect(event.reason).toBe("channel_not_ready");
   });
 
   it("drops sensitive, blocked, and excess log attribute keys without copying large objects", async () => {

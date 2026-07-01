@@ -84,6 +84,7 @@ const MAX_FILE_LOG_MESSAGE_CHARS = 4 * 1024;
 const MAX_FILE_LOG_CONTEXT_VALUE_CHARS = 512;
 const DIAGNOSTIC_LOG_ATTRIBUTE_KEY_RE = /^[A-Za-z0-9_.:-]{1,64}$/u;
 const DIAGNOSTIC_LOG_SEMANTIC_VALUE_RE = /^[A-Za-z0-9_.:-]{1,120}$/u;
+const DIAGNOSTIC_LOG_REASON_CODE_RE = /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/u;
 const DIAGNOSTIC_LOG_SEMANTIC_SOURCE_KEYS = new Set([
   "eventName",
   "logEvent",
@@ -211,6 +212,69 @@ function diagnosticLogEventFromCategory(category: string, level: string): string
   }
   const levelSegment = normalizeDiagnosticLogSemanticValue(level.toLowerCase(), "log");
   return `${category}.${levelSegment}`;
+}
+
+function diagnosticLogOutcomeFromLevel(level: string): string {
+  switch (level.toUpperCase()) {
+    case "ERROR":
+    case "FATAL":
+      return "failure";
+    case "WARN":
+      return "warning";
+    case "INFO":
+      return "success";
+    default:
+      return "unknown";
+  }
+}
+
+function normalizeDiagnosticLogReasonCode(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = sanitizeDiagnosticLogText(value.trim(), MAX_DIAGNOSTIC_LOG_NAME_CHARS);
+  if (!normalized || normalized !== value.trim()) {
+    return undefined;
+  }
+  return DIAGNOSTIC_LOG_REASON_CODE_RE.test(normalized) ? normalized : undefined;
+}
+
+function diagnosticLogOutcomeFromStatus(value: unknown): string | undefined {
+  const status = normalizeDiagnosticLogReasonCode(value)?.toLowerCase();
+  if (!status) {
+    return undefined;
+  }
+  if (
+    status === "failed" ||
+    status === "failure" ||
+    status === "error" ||
+    status.endsWith("-failed") ||
+    status.endsWith("_failed")
+  ) {
+    return "failure";
+  }
+  if (
+    status === "skipped" ||
+    status === "warning" ||
+    status === "deferred" ||
+    status === "blocked" ||
+    status.endsWith("-skipped") ||
+    status.endsWith("_skipped")
+  ) {
+    return "warning";
+  }
+  if (
+    status === "ok" ||
+    status === "success" ||
+    status === "started" ||
+    status === "sent" ||
+    status === "ran" ||
+    status.endsWith("-ok") ||
+    status.endsWith("_ok")
+  ) {
+    return "success";
+  }
+  return undefined;
 }
 
 function readDiagnosticLogSemanticValue(
@@ -611,21 +675,44 @@ function buildDiagnosticLogRecord(logObj: TsLogRecord) {
     }
     return undefined;
   };
+  const firstReasonCodeValue = (keys: readonly string[]) => {
+    for (const source of semanticSources) {
+      if (!source) {
+        continue;
+      }
+      for (const key of keys) {
+        if (!Object.hasOwn(source, key)) {
+          continue;
+        }
+        const reason = normalizeDiagnosticLogReasonCode(source[key]);
+        if (reason) {
+          return reason;
+        }
+      }
+    }
+    return undefined;
+  };
+  const logLevelName = meta?.logLevelName ?? "INFO";
   const category = normalizeDiagnosticLogSemanticValue(
     firstSemanticSourceValue("category", ["logCategory"]) ?? bindings?.subsystem,
     "unknown",
   );
   const event = normalizeDiagnosticLogSemanticValue(
     firstSemanticSourceValue("event", ["logEvent"]),
-    diagnosticLogEventFromCategory(category, meta?.logLevelName ?? "INFO"),
+    diagnosticLogEventFromCategory(category, logLevelName),
+  );
+  const statusOutcome = diagnosticLogOutcomeFromStatus(
+    firstSemanticSourceValue("outcome", ["logOutcome"]) ??
+      firstReasonCodeValue(["status", "state"]),
   );
   const outcome = normalizeDiagnosticLogSemanticValue(
     firstSemanticSourceValue("outcome", ["logOutcome"]),
-    "unknown",
+    statusOutcome ?? diagnosticLogOutcomeFromLevel(logLevelName),
   );
+  const sourceReason = firstReasonCodeValue(["reason", "status", "state", "errorCategory"]);
   const reason = normalizeDiagnosticLogSemanticValue(
     firstSemanticSourceValue("reason", ["logReason"]),
-    "none",
+    sourceReason ?? (outcome === "warning" || outcome === "failure" ? outcome : "none"),
   );
 
   return {
