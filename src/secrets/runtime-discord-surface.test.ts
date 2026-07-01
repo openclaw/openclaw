@@ -1,4 +1,7 @@
 /** Tests Discord secret surfaces in runtime preparation. */
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import "./runtime-discord.test-support.ts";
 import {
@@ -69,6 +72,69 @@ describe("secrets runtime snapshot discord surface", () => {
     expect(accountSnapshot.config.channels?.discord?.accounts?.default?.token).toBe(
       "default-account-token",
     );
+  });
+
+  it("resolves the implicit default token when named Discord accounts are added", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-secrets-"));
+    try {
+      const secretsPath = path.join(root, "secrets.json");
+      await fs.writeFile(
+        secretsPath,
+        JSON.stringify({
+          discord: {
+            defaultToken: "default-account-token",
+            secondToken: "second-account-token",
+          },
+        }),
+        "utf8",
+      );
+      await fs.chmod(secretsPath, 0o600);
+
+      const snapshot = await prepareSecretsRuntimeSnapshot({
+        config: asConfig({
+          secrets: {
+            providers: {
+              discord_file: {
+                source: "file",
+                path: secretsPath,
+                mode: "json",
+              },
+            },
+          },
+          channels: {
+            discord: {
+              token: {
+                source: "file",
+                provider: "discord_file",
+                id: "/discord/defaultToken",
+              },
+              accounts: {
+                second: {
+                  enabled: true,
+                  token: {
+                    source: "file",
+                    provider: "discord_file",
+                    id: "/discord/secondToken",
+                  },
+                },
+              },
+            },
+          },
+        }),
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => loadAuthStoreWithProfiles({}),
+      });
+
+      expect(snapshot.config.channels?.discord?.token).toBe("default-account-token");
+      expect(snapshot.config.channels?.discord?.accounts?.second?.token).toBe(
+        "second-account-token",
+      );
+      expect(snapshot.warnings.map((warning) => warning.path)).not.toContain(
+        "channels.discord.token",
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("fails when non-default Discord account inherits an unresolved top-level token ref", async () => {
