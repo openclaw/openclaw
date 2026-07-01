@@ -117,6 +117,54 @@ function stringArrayField(value: Record<string, unknown>, key: string): string[]
   return field as string[];
 }
 
+function createSandboxBackendTestConfig(
+  overrides: Partial<CreateSandboxBackendParams["cfg"]> = {},
+): CreateSandboxBackendParams["cfg"] {
+  return {
+    mode: "all",
+    backend: "mxc",
+    scope: "session",
+    workspaceAccess: "rw",
+    workspaceRoot: "/workspace-root",
+    docker: {
+      binds: [],
+      capDrop: [],
+      containerPrefix: "openclaw-sbx-",
+      env: {},
+      image: "unused",
+      network: "none",
+      readOnlyRoot: true,
+      tmpfs: [],
+      workdir: "/workspace",
+    },
+    ssh: {
+      command: "ssh",
+      strictHostKeyChecking: true,
+      updateHostKeys: false,
+      workspaceRoot: "/tmp",
+    },
+    browser: {
+      allowHostControl: false,
+      autoStart: false,
+      autoStartTimeoutMs: 0,
+      binds: [],
+      cdpPort: 0,
+      cdpSourceRange: undefined,
+      enableNoVnc: false,
+      headless: true,
+      image: "",
+      network: "",
+      noVncPort: 0,
+      vncPort: 0,
+      containerPrefix: "",
+      enabled: false,
+    },
+    tools: {},
+    prune: { idleHours: 0, maxAgeDays: 0 },
+    ...overrides,
+  };
+}
+
 const MXC_TEST_ENV_KEYS = [
   "APPDATA",
   "ComSpec",
@@ -465,6 +513,72 @@ describe("createMxcSandboxBackendHandle", () => {
     expect(readonly).not.toContain(path.resolve(baseParams.workdir));
   });
 
+  test("workspaceAccess rw fails closed when protected skill roots exist", async () => {
+    const workdir = mkdtempSync(path.join(tmpdir(), "mxc-protected-skills-"));
+    const skillsWorkspaceDir = mkdtempSync(path.join(tmpdir(), "mxc-materialized-skills-"));
+    try {
+      mkdirSync(path.join(workdir, "skills", "demo"), { recursive: true });
+      mkdirSync(path.join(workdir, ".agents", "skills", "demo"), { recursive: true });
+      mkdirSync(path.join(workdir, ".openclaw", "sandbox-skills", "skills", "demo"), {
+        recursive: true,
+      });
+      mkdirSync(path.join(skillsWorkspaceDir, "skills", "demo"), { recursive: true });
+      const handle = createMxcSandboxBackendHandle({
+        ...baseParams,
+        workdir,
+        agentWorkspaceDir: workdir,
+        skillsWorkspaceDir,
+        workspaceAccess: "rw",
+      });
+
+      await expect(
+        handle.buildExecSpec({ command: "echo hello", env: {}, usePty: false }),
+      ).rejects.toThrow(/overlaps read-only path/u);
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+      rmSync(skillsWorkspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  test("workspaceAccess rw fails closed before materialized skill targets can be created", async () => {
+    const workdir = mkdtempSync(path.join(tmpdir(), "mxc-protected-skills-missing-target-"));
+    const skillsWorkspaceDir = mkdtempSync(path.join(tmpdir(), "mxc-materialized-skills-source-"));
+    try {
+      mkdirSync(path.join(skillsWorkspaceDir, "skills", "demo"), { recursive: true });
+      const handle = createMxcSandboxBackendHandle({
+        ...baseParams,
+        workdir,
+        agentWorkspaceDir: workdir,
+        skillsWorkspaceDir,
+        workspaceAccess: "rw",
+      });
+
+      await expect(
+        handle.buildExecSpec({ command: "echo hello", env: {}, usePty: false }),
+      ).rejects.toThrow(/overlaps read-only path/u);
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+      rmSync(skillsWorkspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  test("explicit readwritePaths cannot overlap read-only workspace roots", async () => {
+    const skillPath = path.join(baseParams.workdir, "skills");
+    mkdirSync(skillPath, { recursive: true });
+    const handle = createMxcSandboxBackendHandle({
+      ...baseParams,
+      config: {
+        ...baseConfig,
+        readwritePaths: [skillPath],
+      },
+      workspaceAccess: "none",
+    });
+
+    await expect(
+      handle.buildExecSpec({ command: "echo hello", env: {}, usePty: false }),
+    ).rejects.toThrow(/overlaps read-only path/u);
+  });
+
   test("explicit readwritePaths remain writable when workspaceAccess is none", async () => {
     const extraPath = mkdtempSync(path.join(tmpdir(), "mxc-extra-rw-"));
     try {
@@ -527,6 +641,88 @@ describe("createMxcSandboxBackendHandle", () => {
       ).rejects.toThrow(/Path escapes sandbox root/u);
     } finally {
       rmSync(workdir, { recursive: true, force: true });
+    }
+  });
+
+  test("filesystem bridge protects skill overlays when workspaceAccess is rw", async () => {
+    const workdir = mkdtempSync(path.join(tmpdir(), "mxc-fs-bridge-skills-"));
+    const skillsWorkspaceDir = mkdtempSync(path.join(tmpdir(), "mxc-fs-bridge-materialized-"));
+    try {
+      const workspaceSkillFile = path.join(workdir, "skills", "demo", "SKILL.md");
+      const agentSkillFile = path.join(workdir, ".agents", "skills", "demo", "SKILL.md");
+      const materializedSkillFile = path.join(skillsWorkspaceDir, "skills", "demo", "SKILL.md");
+      const shadowSkillFile = path.join(
+        workdir,
+        ".openclaw",
+        "sandbox-skills",
+        "skills",
+        "demo",
+        "SKILL.md",
+      );
+      mkdirSync(path.dirname(workspaceSkillFile), { recursive: true });
+      mkdirSync(path.dirname(agentSkillFile), { recursive: true });
+      mkdirSync(path.dirname(materializedSkillFile), { recursive: true });
+      mkdirSync(path.dirname(shadowSkillFile), { recursive: true });
+      writeFileSync(workspaceSkillFile, "# Workspace skill\n");
+      writeFileSync(agentSkillFile, "# Agent skill\n");
+      writeFileSync(materializedSkillFile, "# Materialized skill\n");
+      writeFileSync(shadowSkillFile, "# User-owned shadow\n");
+      const handle = createMxcSandboxBackendHandle({
+        ...baseParams,
+        workdir,
+      });
+      const bridge = handle.createFsBridge?.({
+        sandbox: {
+          workspaceDir: workdir,
+          agentWorkspaceDir: workdir,
+          skillsWorkspaceDir,
+          workspaceAccess: "rw",
+          containerName: handle.runtimeId,
+          containerWorkdir: workdir,
+          docker: { binds: [] },
+          backend: handle,
+        },
+      });
+      expect(bridge).toBeDefined();
+
+      await bridge?.writeFile({ filePath: "normal.txt", data: "ok", cwd: workdir });
+      expect(readFileSync(path.join(workdir, "normal.txt"), "utf-8")).toBe("ok");
+      await expect(
+        bridge?.readFile({
+          filePath: ".openclaw/sandbox-skills/skills/demo/SKILL.md",
+          cwd: workdir,
+        }),
+      ).resolves.toEqual(Buffer.from("# Materialized skill\n"));
+      await expect(
+        bridge?.writeFile({ filePath: "skills/demo/SKILL.md", cwd: workdir, data: "owned" }),
+      ).rejects.toThrow(/read-only/u);
+      await expect(bridge?.mkdirp({ filePath: "skills/new", cwd: workdir })).rejects.toThrow(
+        /read-only/u,
+      );
+      await expect(
+        bridge?.remove({ filePath: ".agents/skills/demo/SKILL.md", cwd: workdir }),
+      ).rejects.toThrow(/read-only/u);
+      await expect(
+        bridge?.rename({
+          from: "normal.txt",
+          to: ".openclaw/sandbox-skills/skills/demo/new.md",
+          cwd: workdir,
+        }),
+      ).rejects.toThrow(/read-only/u);
+      await expect(
+        bridge?.rename({
+          from: "skills/demo/SKILL.md",
+          to: "normal-skill.md",
+          cwd: workdir,
+        }),
+      ).rejects.toThrow(/read-only/u);
+      expect(readFileSync(workspaceSkillFile, "utf-8")).toBe("# Workspace skill\n");
+      expect(readFileSync(agentSkillFile, "utf-8")).toBe("# Agent skill\n");
+      expect(readFileSync(materializedSkillFile, "utf-8")).toBe("# Materialized skill\n");
+      expect(readFileSync(shadowSkillFile, "utf-8")).toBe("# User-owned shadow\n");
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+      rmSync(skillsWorkspaceDir, { recursive: true, force: true });
     }
   });
 
@@ -723,8 +919,10 @@ describe("createMxcSandboxBackendHandle", () => {
 
   test("Windows process containment drops missing readwrite and readonly filesystem entries", async () => {
     const workdir = mkdtempSync(path.join(tmpdir(), "mxc-win-dacl-workdir-"));
-    const existingPathWithSpace = mkdtempSync(path.join(workdir, "secret dir "));
-    const existingFile = path.join(workdir, "secret file.txt");
+    const readonlyRoot = mkdtempSync(path.join(tmpdir(), "mxc-win-dacl-readonly-"));
+    const existingReadwritePathWithSpace = mkdtempSync(path.join(workdir, "write dir "));
+    const existingReadonlyPathWithSpace = mkdtempSync(path.join(readonlyRoot, "secret dir "));
+    const existingFile = path.join(readonlyRoot, "secret file.txt");
     const missingPath = path.join(workdir, "missing-secret");
     writeFileSync(existingFile, "denied file contents");
     try {
@@ -733,11 +931,11 @@ describe("createMxcSandboxBackendHandle", () => {
         workdir,
         config: {
           ...baseConfig,
-          readwritePaths: [missingPath, existingPathWithSpace],
+          readwritePaths: [missingPath, existingReadwritePathWithSpace],
         },
         sandboxPolicy: sandboxPolicyOptions({
           filesystem: {
-            additionalReadonlyPaths: [missingPath, existingPathWithSpace, existingFile],
+            additionalReadonlyPaths: [missingPath, existingReadonlyPathWithSpace, existingFile],
           },
         }),
       });
@@ -747,14 +945,15 @@ describe("createMxcSandboxBackendHandle", () => {
       const readwrite = stringArrayField(filesystem, "readwritePaths");
       const readonly = stringArrayField(filesystem, "readonlyPaths");
       expect(readwrite).toContain(path.resolve(workdir));
-      expect(readwrite).toContain(path.resolve(existingPathWithSpace));
+      expect(readwrite).toContain(path.resolve(existingReadwritePathWithSpace));
       expect(readwrite).not.toContain(path.resolve(missingPath));
       expect(readwrite).not.toContain(missingPath);
-      expect(readonly).toContain(existingPathWithSpace);
+      expect(readonly).toContain(existingReadonlyPathWithSpace);
       expect(readonly).toContain(existingFile);
       expect(readonly).not.toContain(missingPath);
     } finally {
       rmSync(workdir, { recursive: true, force: true });
+      rmSync(readonlyRoot, { recursive: true, force: true });
     }
   });
 
@@ -986,50 +1185,42 @@ describe("createMxcSandboxBackendHandle", () => {
     ).resolves.toEqual({ stdout: Buffer.from("out"), stderr: Buffer.from("err"), code: 7 });
   });
 
+  test("factory carries protected skill workspace context into the exec guard", async () => {
+    const workdir = mkdtempSync(path.join(tmpdir(), "mxc-factory-workspace-"));
+    const skillsWorkspaceDir = mkdtempSync(path.join(tmpdir(), "mxc-factory-skills-"));
+    try {
+      mkdirSync(path.join(skillsWorkspaceDir, "skills", "demo"), { recursive: true });
+      mkdirSync(path.join(workdir, ".openclaw", "sandbox-skills", "skills", "demo"), {
+        recursive: true,
+      });
+      const createBackend = createMxcSandboxBackendFactory(baseConfig);
+      const handle = await createBackend({
+        sessionKey: "agent:main:main",
+        scopeKey: "mxc-test",
+        workspaceDir: workdir,
+        agentWorkspaceDir: workdir,
+        skillsWorkspaceDir,
+        cfg: createSandboxBackendTestConfig({ workspaceAccess: "rw" }),
+      });
+
+      await expect(
+        handle.buildExecSpec({ command: "echo hello", env: {}, usePty: false }),
+      ).rejects.toThrow(/overlaps read-only path/u);
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+      rmSync(skillsWorkspaceDir, { recursive: true, force: true });
+    }
+  });
+
   test("factory rejects unsupported Docker bind mounts", async () => {
     const createBackend = createMxcSandboxBackendFactory(baseConfig);
-    const cfg: CreateSandboxBackendParams["cfg"] = {
-      mode: "all",
-      backend: "mxc",
-      scope: "session",
+    const cfg = createSandboxBackendTestConfig({
       workspaceAccess: "none",
-      workspaceRoot: "/workspace-root",
       docker: {
+        ...createSandboxBackendTestConfig().docker,
         binds: ["/host/path:/workspace/path:ro"],
-        capDrop: [],
-        containerPrefix: "openclaw-sbx-",
-        env: {},
-        image: "unused",
-        network: "none",
-        readOnlyRoot: true,
-        tmpfs: [],
-        workdir: "/workspace",
       },
-      ssh: {
-        command: "ssh",
-        strictHostKeyChecking: true,
-        updateHostKeys: false,
-        workspaceRoot: "/tmp",
-      },
-      browser: {
-        allowHostControl: false,
-        autoStart: false,
-        autoStartTimeoutMs: 0,
-        binds: [],
-        cdpPort: 0,
-        cdpSourceRange: undefined,
-        enableNoVnc: false,
-        headless: true,
-        image: "",
-        network: "",
-        noVncPort: 0,
-        vncPort: 0,
-        containerPrefix: "",
-        enabled: false,
-      },
-      tools: {},
-      prune: { idleHours: 0, maxAgeDays: 0 },
-    };
+    });
 
     await expect(
       createBackend({

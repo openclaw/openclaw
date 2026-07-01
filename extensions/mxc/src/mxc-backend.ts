@@ -12,7 +12,11 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
+import {
+  resolvePreferredOpenClawTmpDir,
+  resolveReadOnlyWorkspaceSkillMounts,
+  type ReadOnlyWorkspaceSkillMount,
+} from "openclaw/plugin-sdk/sandbox";
 import type {
   SandboxBackendHandle,
   SandboxBackendExecSpec,
@@ -233,6 +237,87 @@ type BaselineApplicationContext = {
   hostEnv: BaselineHostEnv;
 };
 
+type MxcWorkspaceContext = {
+  workspaceDir: string;
+  agentWorkspaceDir: string;
+  skillsWorkspaceDir?: string;
+  workdir: string;
+  workspaceAccess: MxcWorkspaceAccess;
+};
+
+function resolveMxcProtectedSkillMounts(
+  context: MxcWorkspaceContext,
+): readonly ReadOnlyWorkspaceSkillMount[] {
+  return resolveReadOnlyWorkspaceSkillMounts({
+    workspaceDir: context.workspaceDir,
+    agentWorkspaceDir: context.agentWorkspaceDir,
+    skillsWorkspaceDir: context.skillsWorkspaceDir,
+    workdir: context.workdir,
+    workspaceAccess: context.workspaceAccess,
+  });
+}
+
+function resolveMxcProtectedSkillPolicyPaths(context: MxcWorkspaceContext): string[] {
+  const paths: string[] = [];
+  for (const mount of resolveMxcProtectedSkillMounts(context)) {
+    paths.push(path.resolve(mount.hostPath));
+    const containerPath = path.resolve(mount.containerPath);
+    if (containerPath !== path.resolve(mount.hostPath)) {
+      paths.push(containerPath);
+    }
+  }
+  return paths;
+}
+
+function resolveMxcWorkspaceContext(params: {
+  workdir: string;
+  agentWorkspaceDir?: string;
+  skillsWorkspaceDir?: string;
+  workspaceAccess?: MxcWorkspaceAccess;
+}): MxcWorkspaceContext {
+  const workspaceAccess = params.workspaceAccess ?? "rw";
+  return {
+    workspaceDir: params.workdir,
+    agentWorkspaceDir: params.agentWorkspaceDir ?? params.workdir,
+    ...(params.skillsWorkspaceDir ? { skillsWorkspaceDir: params.skillsWorkspaceDir } : {}),
+    workdir: params.workdir,
+    workspaceAccess,
+  };
+}
+
+function assertNoMxcReadwriteReadonlyOverlap(params: {
+  readwritePaths: readonly string[];
+  readonlyPaths: readonly string[];
+}): void {
+  for (const readwritePath of params.readwritePaths) {
+    for (const readonlyPath of params.readonlyPaths) {
+      if (pathsOverlap(readwritePath, readonlyPath)) {
+        throw new Error(
+          `MXC readwrite path ${readwritePath} overlaps read-only path ${readonlyPath}. Windows MXC cannot safely enforce nested read-only overlays under writable paths.`,
+        );
+      }
+    }
+  }
+}
+
+function pathsOverlap(first: string, second: string): boolean {
+  const left = normalizePathForOverlap(first);
+  const right = normalizePathForOverlap(second);
+  return isPathWithinOrEqual(left, right) || isPathWithinOrEqual(right, left);
+}
+
+function normalizePathForOverlap(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function isPathWithinOrEqual(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return (
+    relative === "" || (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
+  );
+}
+
 function resolveCurrentBaselineContext(projectDir: string): BaselineApplicationContext {
   return {
     homeDir: homedir(),
@@ -255,12 +340,13 @@ function applySandboxBaselineToConfig(
   context: BaselineApplicationContext,
   options: {
     sandboxTempDir: string;
-    workspaceAccess: MxcWorkspaceAccess;
+    workspace: MxcWorkspaceContext;
   },
 ): MxcContainerConfig {
   const filesystem = config.filesystem;
   const readwritePaths = [...(filesystem.readwritePaths ?? [])];
   const readonlyPaths = [...(filesystem.readonlyPaths ?? [])];
+  const protectedSkillPolicyPaths = resolveMxcProtectedSkillPolicyPaths(options.workspace);
   if (baseline.filesystem.restrictToProjectDir) {
     const baselineReadwritePaths = computeEffectiveReadwritePaths({
       projectDir: context.projectDir,
@@ -268,7 +354,7 @@ function applySandboxBaselineToConfig(
       tempEnv: context.hostEnv,
       additionalReadwritePaths: baseline.filesystem.additionalReadwritePaths,
     });
-    if (options.workspaceAccess === "rw") {
+    if (options.workspace.workspaceAccess === "rw") {
       readwritePaths.push(...baselineReadwritePaths);
     } else {
       const projectDir = path.resolve(context.projectDir);
@@ -278,14 +364,22 @@ function applySandboxBaselineToConfig(
       );
     }
   }
+  const resolvedReadonlyPaths = dedupeStable([
+    ...readonlyPaths,
+    ...protectedSkillPolicyPaths,
+    ...computeEffectiveReadonlyPaths(baseline.filesystem, context.hostEnv),
+  ]);
+  const resolvedReadwritePaths = dedupeStable(readwritePaths);
+  assertNoMxcReadwriteReadonlyOverlap({
+    readwritePaths: resolvedReadwritePaths,
+    readonlyPaths: protectedSkillPolicyPaths,
+  });
 
   config.filesystem = {
     ...filesystem,
-    readonlyPaths: dedupeStable([
-      ...readonlyPaths,
-      ...computeEffectiveReadonlyPaths(baseline.filesystem, context.hostEnv),
-    ]),
-    readwritePaths: dedupeStable(readwritePaths),
+    readonlyPaths: resolvedReadonlyPaths,
+    deniedPaths: filesystem.deniedPaths,
+    readwritePaths: resolvedReadwritePaths,
     clearPolicyOnExit: filesystem.clearPolicyOnExit ?? true,
   };
 
@@ -376,6 +470,7 @@ function buildContainerConfig(params: {
   args?: readonly string[];
   sandboxTempDir: string;
   workdir: string;
+  workspace: MxcWorkspaceContext;
   workspaceAccess: MxcWorkspaceAccess;
   env: Record<string, string>;
 }): MxcContainerConfig {
@@ -388,6 +483,7 @@ function buildContainerConfig(params: {
     args,
     sandboxTempDir,
     workdir,
+    workspace,
     workspaceAccess,
     env,
   } = params;
@@ -458,10 +554,14 @@ function buildContainerConfig(params: {
 
   const merged = applySandboxBaselineToConfig(mxcConfig, baseline, baselineContext, {
     sandboxTempDir,
-    workspaceAccess,
+    workspace,
   });
   normalizeNetworkPolicyForContainment(merged);
   merged.filesystem = filterMissingWindowsProcessFilesystemEntries(merged.filesystem);
+  assertNoMxcReadwriteReadonlyOverlap({
+    readwritePaths: merged.filesystem.readwritePaths ?? [],
+    readonlyPaths: merged.filesystem.readonlyPaths ?? [],
+  });
   return merged;
 }
 
@@ -503,6 +603,8 @@ export function createMxcSandboxBackendHandle(params: {
   config: MxcConfig;
   runtimeId: string;
   workdir: string;
+  agentWorkspaceDir?: string;
+  skillsWorkspaceDir?: string;
   workspaceAccess?: MxcWorkspaceAccess;
   sandboxPolicy?: Omit<SandboxPolicyLoaderOptions, "homeDir">;
 }): SandboxBackendHandle {
@@ -525,6 +627,8 @@ export function createMxcSandboxBackendHandle(params: {
         workdir ?? params.workdir,
       );
       const sandboxTempDir = createSandboxTempDir(baselineContext.hostEnv);
+      const workspaceAccess = params.workspaceAccess ?? "rw";
+      const workspace = resolveMxcWorkspaceContext({ ...params, workspaceAccess });
       try {
         const payload = buildContainerConfig({
           config: params.config,
@@ -534,7 +638,8 @@ export function createMxcSandboxBackendHandle(params: {
           command,
           sandboxTempDir,
           workdir: effectiveWorkdir,
-          workspaceAccess: params.workspaceAccess ?? "rw",
+          workspace,
+          workspaceAccess,
           env,
         });
 
@@ -588,6 +693,8 @@ export function createMxcSandboxBackendHandle(params: {
         tempDir: sandboxTempDir,
       });
       const execInput = cmdParams.stdin === undefined ? Buffer.alloc(0) : toBuffer(cmdParams.stdin);
+      const workspaceAccess = params.workspaceAccess ?? "rw";
+      const workspace = resolveMxcWorkspaceContext({ ...params, workspaceAccess });
 
       try {
         const payload = buildContainerConfig({
@@ -599,7 +706,8 @@ export function createMxcSandboxBackendHandle(params: {
           args: cmdParams.args,
           sandboxTempDir,
           workdir: effectiveWorkdir,
-          workspaceAccess: params.workspaceAccess ?? "rw",
+          workspace,
+          workspaceAccess,
           env: {},
         });
 
@@ -731,6 +839,8 @@ export function createMxcSandboxBackendFactory(config: MxcConfig) {
       config,
       runtimeId,
       workdir: params.workspaceDir,
+      agentWorkspaceDir: params.agentWorkspaceDir,
+      ...(params.skillsWorkspaceDir ? { skillsWorkspaceDir: params.skillsWorkspaceDir } : {}),
       workspaceAccess: params.cfg.workspaceAccess,
     });
   };

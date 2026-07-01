@@ -3,6 +3,8 @@ import path from "node:path";
 import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   createWritableRenameTargetResolver,
+  resolveReadOnlyWorkspaceSkillMounts,
+  type ReadOnlyWorkspaceSkillMount,
   type SandboxBackendHandle,
   type SandboxFsBridge,
   type SandboxFsStat,
@@ -20,17 +22,26 @@ type ResolvedMxcPath = SandboxResolvedPath & {
   writable: boolean;
 };
 
+type MxcProtectedSkillMount = {
+  hostRoot: string;
+  containerRoot: string;
+};
+
 export function createMxcFsBridge(params: { sandbox: MxcFsBridgeContext }): SandboxFsBridge {
   return new MxcFsBridge(params.sandbox);
 }
 
 class MxcFsBridge implements SandboxFsBridge {
+  private readonly protectedSkillMounts: readonly MxcProtectedSkillMount[];
+
   private readonly resolveRenameTargets = createWritableRenameTargetResolver(
     (target) => this.resolveTarget(target),
     (target, action) => this.ensureWritable(target, action),
   );
 
-  constructor(private readonly sandbox: MxcFsBridgeContext) {}
+  constructor(private readonly sandbox: MxcFsBridgeContext) {
+    this.protectedSkillMounts = resolveMxcProtectedSkillMounts(sandbox);
+  }
 
   resolvePath(params: { filePath: string; cwd?: string }): SandboxResolvedPath {
     const target = this.resolveTarget(params);
@@ -158,6 +169,10 @@ class MxcFsBridge implements SandboxFsBridge {
     const input = params.filePath.trim();
     const cwd = params.cwd?.trim() ? path.resolve(params.cwd) : workspaceRoot;
     const hostPath = path.isAbsolute(input) ? path.resolve(input) : path.resolve(cwd, input);
+    const protectedTarget = this.resolveProtectedSkillTarget(hostPath);
+    if (protectedTarget) {
+      return protectedTarget;
+    }
     if (!isPathInside(workspaceRoot, hostPath)) {
       throw new Error(
         `Path escapes sandbox root (${workspaceRoot}; container root ${this.sandbox.containerWorkdir}): ${params.filePath}. Use a path under ${this.sandbox.containerWorkdir}\\ instead.`,
@@ -173,11 +188,54 @@ class MxcFsBridge implements SandboxFsBridge {
     };
   }
 
+  private resolveProtectedSkillTarget(candidatePath: string): ResolvedMxcPath | null {
+    const workspaceRoot = path.resolve(this.sandbox.workspaceDir);
+    const mounts = [...this.protectedSkillMounts].toSorted(
+      (a, b) => b.containerRoot.length - a.containerRoot.length,
+    );
+    for (const mount of mounts) {
+      if (!isPathInside(mount.containerRoot, candidatePath)) {
+        continue;
+      }
+      const relativePath = path.relative(mount.containerRoot, candidatePath);
+      const hostPath = path.join(mount.hostRoot, relativePath);
+      return {
+        hostPath,
+        relativePath: path.relative(workspaceRoot, candidatePath),
+        containerPath: candidatePath,
+        mountRoot: mount.hostRoot,
+        writable: false,
+      };
+    }
+    return null;
+  }
+
   private ensureWritable(target: ResolvedMxcPath, action: string): void {
     if (!target.writable) {
       throw new Error(`Sandbox path is read-only; cannot ${action}: ${target.containerPath}`);
     }
   }
+}
+
+function resolveMxcProtectedSkillMounts(
+  sandbox: MxcFsBridgeContext,
+): readonly MxcProtectedSkillMount[] {
+  return resolveReadOnlyWorkspaceSkillMounts({
+    workspaceDir: sandbox.workspaceDir,
+    agentWorkspaceDir: sandbox.agentWorkspaceDir,
+    skillsWorkspaceDir: sandbox.skillsWorkspaceDir,
+    workdir: sandbox.containerWorkdir,
+    workspaceAccess: sandbox.workspaceAccess,
+  }).map(normalizeMxcProtectedSkillMount);
+}
+
+function normalizeMxcProtectedSkillMount(
+  mount: ReadOnlyWorkspaceSkillMount,
+): MxcProtectedSkillMount {
+  return {
+    hostRoot: path.resolve(mount.hostPath),
+    containerRoot: path.resolve(mount.containerPath),
+  };
 }
 
 async function assertLocalPathSafety(params: {
