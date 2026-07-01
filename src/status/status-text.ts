@@ -51,15 +51,12 @@ import {
   formatTaskStatusDetail,
   formatTaskStatusTitle,
 } from "../tasks/task-status.js";
-<<<<<<< HEAD
 import {
   buildCodexSyntheticUsageAuth,
   shouldUseCodexSyntheticUsageForRuntime,
 } from "./codex-synthetic-usage.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
-=======
 import { buildStatusMessage } from "./status-message.js";
->>>>>>> d9d2c04dc6 (refactor(status): Phase 2 of #94626 — selective static import + ??= fix)
 import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
 import type { BuildStatusTextParams } from "./status-text.types.js";
 
