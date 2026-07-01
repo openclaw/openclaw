@@ -295,6 +295,57 @@ describe("dashboardCommand", () => {
     expectNoLogWith("Token auto-auth unavailable");
   });
 
+  it("copies the resolved gateway token without overwriting it with the dashboard URL", async () => {
+    mockSnapshot({
+      source: "file",
+      provider: "local",
+      id: "/values/openclaw/gateway/auth/token",
+    });
+    resolveSecretRefValuesMock.mockResolvedValue(
+      new Map([["file:local:/values/openclaw/gateway/auth/token", "resolved-token"]]),
+    );
+    copyToClipboardMock.mockResolvedValue(true);
+    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
+    openUrlMock.mockResolvedValue(true);
+
+    await dashboardCommand(runtime, { copyToken: true });
+
+    expect(copyToClipboardMock).toHaveBeenCalledTimes(1);
+    expect(copyToClipboardMock).toHaveBeenCalledWith("resolved-token");
+    expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
+    expectLogWith("Gateway token copied to clipboard");
+    for (const call of runtime.log.mock.calls) {
+      expect(String(call[0])).not.toContain("resolved-token");
+      expect(String(call[0])).not.toContain("#token=");
+    }
+  });
+
+  it("opens a clean URL when copying a plaintext config token", async () => {
+    mockSnapshot("plain-token");
+    copyToClipboardMock.mockResolvedValue(true);
+    detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
+    openUrlMock.mockResolvedValue(true);
+
+    await dashboardCommand(runtime, { copyToken: true });
+
+    expect(copyToClipboardMock).toHaveBeenCalledTimes(1);
+    expect(copyToClipboardMock).toHaveBeenCalledWith("plain-token");
+    expect(openUrlMock).toHaveBeenCalledWith("http://127.0.0.1:18789/");
+    expectLogWith("Token auto-auth URL disabled because --copy-token");
+    expectNoLogWith("Token auto-auth included in browser/clipboard URL.");
+  });
+
+  it("does not copy the dashboard URL when --copy-token has no token to copy", async () => {
+    mockSnapshot("");
+    copyToClipboardMock.mockResolvedValue(true);
+
+    await dashboardCommand(runtime, { copyToken: true, noOpen: true });
+
+    expect(copyToClipboardMock).not.toHaveBeenCalled();
+    expectLogWith("Gateway token unavailable");
+    expectLogWith("openclaw dashboard --copy-token");
+  });
+
   it("keeps URL non-tokenized when env-template gateway.auth.token is unresolved", async () => {
     mockSnapshot("${CUSTOM_GATEWAY_TOKEN}");
     copyToClipboardMock.mockResolvedValue(true);

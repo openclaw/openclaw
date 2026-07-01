@@ -59,6 +59,10 @@ Prefer localhost, Tailscale Serve, or an SSH tunnel.
   prints/copies/opens a non-tokenized URL by design. This avoids exposing
   externally managed tokens in shell logs, clipboard history, or browser-launch
   arguments.
+- If the Control UI prompts for shared-secret auth and you need to recover a
+  resolved local token, run `openclaw dashboard --copy-token`. It copies the
+  gateway token to the clipboard for manual paste, never prints the token, and
+  opens a clean dashboard URL.
 - If `gateway.auth.token` is configured as a SecretRef and is unresolved in your
   current shell, `openclaw dashboard` still prints a non-tokenized URL plus
   actionable auth setup guidance.
@@ -93,8 +97,9 @@ Prefer localhost, Tailscale Serve, or an SSH tunnel.
   - Token: `openclaw config get gateway.auth.token`
   - Password: resolve the configured `gateway.auth.password` or
     `OPENCLAW_GATEWAY_PASSWORD`
-  - SecretRef-managed token: resolve the external secret provider or export
-    `OPENCLAW_GATEWAY_TOKEN` in this shell, then rerun `openclaw dashboard`
+  - SecretRef-managed token: run `openclaw dashboard --copy-token` on the
+    gateway host, or resolve the external secret provider/export
+    `OPENCLAW_GATEWAY_TOKEN` in this shell and rerun `openclaw dashboard`
   - No shared secret configured: `openclaw doctor --generate-gateway-token`
 - In the dashboard settings, paste the token or password into the auth field,
   then connect.
