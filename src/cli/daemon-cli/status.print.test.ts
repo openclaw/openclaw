@@ -907,6 +907,47 @@ describe("printDaemonStatus", () => {
     expect(logged).not.toContain("Warm-up: launch agents");
   });
 
+  it("keeps the warm-up hint (not owns-port guidance) when healthy is reachability-only and a stale gateway PID is still held", () => {
+    // inspectGatewayRestart can set healthy from reachability after ownership failed,
+    // while still returning non-empty staleGatewayPids. That must not be treated as
+    // owns-port proof, or this message would contradict the stale-PID diagnostic below.
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18789,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18789",
+        },
+        rpc: {
+          ok: false,
+          error: "gateway closed (1008 policy violation: invalid token)",
+          url: "ws://127.0.0.1:18789",
+        },
+        health: {
+          healthy: true,
+          staleGatewayPids: [9000],
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    const logged = runtime.log.mock.calls.map(([line]) => line).join("\n");
+    expect(logged).toContain("Warm-up: launch agents can take a few seconds");
+    expect(logged).not.toContain("Gateway process is running and owns the gateway port");
+    const errors = runtime.error.mock.calls.map(([line]) => line).join("\n");
+    expect(errors).toContain("Gateway runtime PID does not own the listening port");
+  });
+
   it("keeps the warm-up hint for an unhealthy gateway, even with the port held", () => {
     printDaemonStatus(
       {
