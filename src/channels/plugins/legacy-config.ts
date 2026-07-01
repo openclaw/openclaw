@@ -43,6 +43,118 @@ function shouldIncludeLegacyRuleForTouchedPaths(
   });
 }
 
+function readLegacyConfigRule(rule: unknown): LegacyConfigRule | undefined {
+  if (!rule || typeof rule !== "object") {
+    return undefined;
+  }
+  let path: unknown;
+  let message: unknown;
+  let match: unknown;
+  let requireSourceLiteral: unknown;
+  try {
+    const candidate = rule as LegacyConfigRule;
+    path = candidate.path;
+    message = candidate.message;
+    match = candidate.match;
+    requireSourceLiteral = candidate.requireSourceLiteral;
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(path) || !path.every((entry) => typeof entry === "string")) {
+    return undefined;
+  }
+  if (typeof message !== "string") {
+    return undefined;
+  }
+  const safeRule: LegacyConfigRule = {
+    path: [...path],
+    message,
+  };
+  if (typeof match === "function") {
+    safeRule.match = (value, root) => {
+      try {
+        return match(value, root) === true;
+      } catch {
+        return false;
+      }
+    };
+  }
+  if (requireSourceLiteral === true) {
+    safeRule.requireSourceLiteral = true;
+  }
+  return safeRule;
+}
+
+function collectReadableLegacyConfigRules(rules: unknown): LegacyConfigRule[] {
+  if (!Array.isArray(rules)) {
+    return [];
+  }
+  const readableRules: LegacyConfigRule[] = [];
+  let ruleCount: number;
+  try {
+    ruleCount = rules.length;
+  } catch {
+    return readableRules;
+  }
+  for (let index = 0; index < ruleCount; index += 1) {
+    let rule: unknown;
+    try {
+      rule = rules[index];
+    } catch {
+      continue;
+    }
+    const readableRule = readLegacyConfigRule(rule);
+    if (readableRule) {
+      readableRules.push(readableRule);
+    }
+  }
+  return readableRules;
+}
+
+function readBootstrapLegacyConfigRules(channelId: ChannelId): {
+  pluginFound: boolean;
+  rules: LegacyConfigRule[];
+} {
+  const plugin = getBootstrapChannelPlugin(channelId);
+  if (!plugin) {
+    return { pluginFound: false, rules: [] };
+  }
+  let rules: unknown;
+  try {
+    rules = plugin.doctor?.legacyConfigRules;
+  } catch {
+    return { pluginFound: true, rules: [] };
+  }
+  return {
+    pluginFound: true,
+    rules: collectReadableLegacyConfigRules(rules),
+  };
+}
+
+function readBundledLegacyConfigRules(
+  contractApi: ReturnType<typeof loadBundledChannelDoctorContractApi>,
+): {
+  contractFound: boolean;
+  rules: LegacyConfigRule[];
+} {
+  if (!contractApi) {
+    return { contractFound: false, rules: [] };
+  }
+  let rules: unknown;
+  try {
+    rules = contractApi.legacyConfigRules;
+  } catch {
+    return { contractFound: true, rules: [] };
+  }
+  if (!Array.isArray(rules)) {
+    return { contractFound: false, rules: [] };
+  }
+  return {
+    contractFound: true,
+    rules: collectReadableLegacyConfigRules(rules),
+  };
+}
+
 function collectRelevantChannelIdsForTouchedPaths(params: {
   raw?: unknown;
   touchedPaths?: ReadonlyArray<ReadonlyArray<string>>;
@@ -92,19 +204,18 @@ export function collectChannelLegacyConfigRules(
   const rules: LegacyConfigRule[] = [];
   const unresolvedChannelIds: ChannelId[] = [];
   for (const channelId of channelIds) {
-    const contractApi = loadBundledChannelDoctorContractApi(channelId);
-    const contractRules = contractApi?.legacyConfigRules;
-    if (Array.isArray(contractRules)) {
-      rules.push(...contractRules);
+    const bundled = readBundledLegacyConfigRules(loadBundledChannelDoctorContractApi(channelId));
+    if (bundled.contractFound) {
+      rules.push(...bundled.rules);
       continue;
     }
 
-    const plugin = getBootstrapChannelPlugin(channelId);
-    if (plugin?.doctor?.legacyConfigRules?.length) {
-      rules.push(...plugin.doctor.legacyConfigRules);
+    const bootstrap = readBootstrapLegacyConfigRules(channelId);
+    if (bootstrap.rules.length > 0) {
+      rules.push(...bootstrap.rules);
       continue;
     }
-    if (plugin) {
+    if (bootstrap.pluginFound) {
       continue;
     }
 
@@ -114,10 +225,12 @@ export function collectChannelLegacyConfigRules(
   }
   if (unresolvedChannelIds.length > 0) {
     rules.push(
-      ...listPluginDoctorLegacyConfigRules({
-        config: raw as OpenClawConfig,
-        pluginIds: unresolvedChannelIds,
-      }),
+      ...collectReadableLegacyConfigRules(
+        listPluginDoctorLegacyConfigRules({
+          config: raw as OpenClawConfig,
+          pluginIds: unresolvedChannelIds,
+        }),
+      ),
     );
   }
 
