@@ -195,6 +195,72 @@
         color: #0369a1;
       }
     </style>
+    <script>
+      window.MathJax = {
+        tex: {
+          inlineMath: [
+            ["$", "$"],
+            ["\\(", "\\)"],
+          ],
+          displayMath: [
+            ["$$", "$$"],
+            ["\\[", "\\]"],
+          ],
+          processEscapes: true,
+          processEnvironments: true,
+        },
+        options: {
+          skipHtmlTags: ["script", "noscript", "style", "textarea", "pre", "code"],
+        },
+        startup: {
+          typeset: false,
+        },
+      };
+    </script>
+    <script async src="./assets/mathjax-tex-svg.js"></script>
+    <script>
+      (function () {
+        var queued = false;
+
+        function runTypeset() {
+          queued = false;
+          var mj = window.MathJax;
+          if (!mj || typeof mj.typesetPromise !== "function") return;
+          mj.typesetPromise().catch(function () {});
+        }
+
+        function queueTypeset() {
+          if (queued) return;
+          queued = true;
+          if (typeof window.requestIdleCallback === "function") {
+            window.requestIdleCallback(runTypeset, { timeout: 500 });
+            return;
+          }
+          window.setTimeout(runTypeset, 120);
+        }
+
+        function shouldTypeset(mutations) {
+          for (var i = 0; i < mutations.length; i++) {
+            var mutation = mutations[i];
+            if (mutation.type === "characterData") return true;
+            if (mutation.addedNodes && mutation.addedNodes.length > 0) return true;
+          }
+          return false;
+        }
+
+        document.addEventListener("DOMContentLoaded", function () {
+          queueTypeset();
+          var observer = new MutationObserver(function (mutations) {
+            if (shouldTypeset(mutations)) queueTypeset();
+          });
+          observer.observe(document.body, {
+            subtree: true,
+            childList: true,
+            characterData: true,
+          });
+        });
+      })();
+    </script>
   </head>
   <body>
     <openclaw-app></openclaw-app>
