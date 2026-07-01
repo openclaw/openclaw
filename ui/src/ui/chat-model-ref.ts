@@ -165,13 +165,35 @@ export function formatChatModelDisplay(value: string): string {
   return `${trimmed.slice(separator + 1)} · ${trimmed.slice(0, separator)}`;
 }
 
+function formatAgentRuntimeSuffix(entry: ModelCatalogEntry): string {
+  const id = entry.agentRuntime?.id?.trim().toLowerCase();
+  const label = entry.agentRuntime?.label?.trim();
+  const source = entry.agentRuntime?.source;
+  if (!id || id === "auto" || id === "default" || !label) {
+    return "";
+  }
+  if (id === "openclaw" && source === "implicit") {
+    return "";
+  }
+  return ` · ${label}`;
+}
+
+function appendAgentRuntimeSuffix(label: string, entry: ModelCatalogEntry): string {
+  return `${label}${formatAgentRuntimeSuffix(entry)}`;
+}
+
 function formatRawCatalogLabel(entry: ModelCatalogEntry): string {
   const provider = entry.provider?.trim();
-  return provider ? `${entry.id} · ${provider}` : entry.id;
+  const rawLabel = provider ? `${entry.id} · ${provider}` : entry.id;
+  return appendAgentRuntimeSuffix(rawLabel, entry);
+}
+
+function resolveExplicitCatalogAlias(entry: ModelCatalogEntry): string {
+  return entry.alias?.trim() ?? "";
 }
 
 function resolveCatalogDisplayName(entry: ModelCatalogEntry): string {
-  return entry.alias?.trim() || entry.name.trim();
+  return resolveExplicitCatalogAlias(entry) || entry.name.trim();
 }
 
 function createQualifiedCatalogKey(entry: ModelCatalogEntry): string {
@@ -210,6 +232,12 @@ export function buildCatalogDisplayLookup(catalog: ModelCatalogEntry[]): Map<str
   const displayLookup = new Map<string, string>();
   for (const entry of catalog) {
     const qualifiedKey = createQualifiedCatalogKey(entry);
+    const explicitAlias = resolveExplicitCatalogAlias(entry);
+    if (explicitAlias) {
+      displayLookup.set(qualifiedKey, explicitAlias);
+      continue;
+    }
+
     const name = resolveCatalogDisplayName(entry);
     if (!name) {
       displayLookup.set(qualifiedKey, formatRawCatalogLabel(entry));
@@ -218,13 +246,14 @@ export function buildCatalogDisplayLookup(catalog: ModelCatalogEntry[]): Map<str
 
     const normalizedName = name.toLowerCase();
     if ((nameToValues.get(normalizedName)?.size ?? 0) <= 1) {
-      displayLookup.set(qualifiedKey, name);
+      displayLookup.set(qualifiedKey, appendAgentRuntimeSuffix(name, entry));
       continue;
     }
 
     const provider = entry.provider?.trim();
     if ((nameProviderToValues.get(createNameProviderKey(name, provider))?.size ?? 0) <= 1) {
-      displayLookup.set(qualifiedKey, provider ? `${name} · ${provider}` : `${name} · ${entry.id}`);
+      const providerLabel = provider ? `${name} · ${provider}` : `${name} · ${entry.id}`;
+      displayLookup.set(qualifiedKey, appendAgentRuntimeSuffix(providerLabel, entry));
       continue;
     }
 

@@ -22,4 +22,9 @@ export type ModelCatalogEntry = {
   params?: Record<string, unknown>;
   compat?: ModelCompatConfig;
   mediaInput?: ModelMediaInputConfig;
+  agentRuntime?: {
+    id: string;
+    label: string;
+    source: "implicit" | "model" | "provider" | "session-key";
+  };
 };
