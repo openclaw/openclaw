@@ -320,7 +320,7 @@ describe("fetchWithSlackAuth", () => {
     expect(mockFetch).toHaveBeenNthCalledWith(
       2,
       "https://cdn.slack-edge.com/presigned-url?sig=abc123",
-      { redirect: "follow" },
+      { headers: {}, redirect: "manual" },
     );
     expect(cancel).toHaveBeenCalledOnce();
   });
@@ -343,7 +343,7 @@ describe("fetchWithSlackAuth", () => {
 
     expect(mockFetch).toHaveBeenNthCalledWith(2, "https://files.slack.com/files/redirect-target", {
       headers: { Authorization: "Bearer xoxb-test-token" },
-      redirect: "follow",
+      redirect: "manual",
     });
     expect(cancel).toHaveBeenCalledOnce();
   });
@@ -407,8 +407,42 @@ describe("fetchWithSlackAuth", () => {
 
     expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(mockFetch).toHaveBeenNthCalledWith(2, "https://cdn.slack.com/new-url", {
-      redirect: "follow",
+      headers: {},
+      redirect: "manual",
     });
+  });
+
+  it("rejects redirects to non-Slack hosts (SSRF guard)", async () => {
+    const redirectResponse = new Response("redirect body", {
+      status: 302,
+      headers: { location: "https://internal.corp.example.com/admin" },
+    });
+    const cancel = vi.spyOn(redirectResponse.body!, "cancel").mockResolvedValue(undefined);
+    mockFetch.mockResolvedValueOnce(redirectResponse);
+
+    await expect(
+      fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token"),
+    ).rejects.toThrow(/non-Slack host "internal\.corp\.example\.com"/);
+
+    // Must not have fetched the redirect target.
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("rejects redirects to non-HTTPS protocol", async () => {
+    const redirectResponse = new Response("redirect body", {
+      status: 302,
+      headers: { location: "http://files.slack.com/insecure" },
+    });
+    const cancel = vi.spyOn(redirectResponse.body!, "cancel").mockResolvedValue(undefined);
+    mockFetch.mockResolvedValueOnce(redirectResponse);
+
+    await expect(
+      fetchWithSlackAuth("https://files.slack.com/test.jpg", "xoxb-test-token"),
+    ).rejects.toThrow(/non-HTTPS protocol/);
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(cancel).toHaveBeenCalledOnce();
   });
 });
 

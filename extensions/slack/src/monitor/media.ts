@@ -113,43 +113,66 @@ async function cancelUnreadResponseBody(response: Response): Promise<void> {
 /**
  * Fetches a URL with Authorization header while keeping same-origin redirects
  * authenticated and dropping auth once the redirect crosses origins.
+ *
+ * Every redirect target is re-validated against the Slack hostname allowlist
+ * (isSlackHostname) so a redirect cannot reach an arbitrary host. This closes
+ * the SSRF bypass where the old single-hop code only checked the protocol and
+ * then handed control to fetch's `redirect: "follow"`.
  */
 export async function fetchWithSlackAuth(url: string, token: string): Promise<Response> {
   const parsed = assertSlackFileUrl(url);
-  const authHeaders = createSlackAuthHeaders(token);
   const fetchImpl = resolveSlackFetchForRuntime();
+  const MAX_REDIRECTS = 5;
 
-  const initialRes = await fetchImpl(parsed.href, {
-    headers: authHeaders,
-    redirect: "manual",
-  });
+  let currentUrl = parsed;
+  let headers: HeadersInit = createSlackAuthHeaders(token);
 
-  if (initialRes.status < 300 || initialRes.status >= 400) {
-    return initialRes;
-  }
-
-  const redirectUrl = initialRes.headers.get("location");
-  if (!redirectUrl) {
-    return initialRes;
-  }
-
-  let resolvedUrl: URL;
-  try {
-    resolvedUrl = new URL(redirectUrl, parsed.href);
-  } catch {
-    return initialRes;
-  }
-  if (resolvedUrl.protocol !== "https:") {
-    return initialRes;
-  }
-  await cancelUnreadResponseBody(initialRes);
-  if (resolvedUrl.origin === parsed.origin) {
-    return fetchImpl(resolvedUrl.toString(), {
-      headers: authHeaders,
-      redirect: "follow",
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const res = await fetchImpl(currentUrl.toString(), {
+      headers,
+      redirect: "manual",
     });
+
+    if (res.status < 300 || res.status >= 400) {
+      return res;
+    }
+
+    const location = res.headers.get("location");
+    if (!location) {
+      return res;
+    }
+
+    let redirectUrl: URL;
+    try {
+      redirectUrl = new URL(location, currentUrl);
+    } catch {
+      return res;
+    }
+
+    // SSRF guard: every redirect target must be HTTPS on a Slack hostname.
+    if (redirectUrl.protocol !== "https:") {
+      await cancelUnreadResponseBody(res);
+      throw new Error(
+        `Refusing Slack media redirect with non-HTTPS protocol: ${redirectUrl.protocol}`,
+      );
+    }
+    if (!isSlackHostname(redirectUrl.hostname)) {
+      await cancelUnreadResponseBody(res);
+      throw new Error(`Refusing Slack media redirect to non-Slack host "${redirectUrl.hostname}"`);
+    }
+
+    await cancelUnreadResponseBody(res);
+
+    // Cross-origin redirect: drop Authorization so the Slack token is never
+    // sent to a different host, even one inside the Slack allowlist.
+    if (redirectUrl.origin !== currentUrl.origin) {
+      headers = {};
+    }
+
+    currentUrl = redirectUrl;
   }
-  return fetchImpl(resolvedUrl.toString(), { redirect: "follow" });
+
+  throw new Error(`Slack media fetch exceeded ${MAX_REDIRECTS} redirects`);
 }
 
 const SLACK_MEDIA_SSRF_POLICY = {
