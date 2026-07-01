@@ -45,8 +45,10 @@ const server = createServer((req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ choices: [{ finish_reason: "length" }] }));
   } else {
-    res.writeHead(429, { "content-type": "application/json" });
-    res.end(JSON.stringify({ error: { code: "1305", message: "unrecognized UA" } }));
+    // Per issue #98100 live proof: curl/8.0 also returns 200 from z.ai edge.
+    // Only reject requests with no User-Agent at all.
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ choices: [{ finish_reason: "length" }] }));
   }
 });
 
@@ -82,7 +84,9 @@ server.listen(PORT, () => {
         console.log("   ✓");
       }
 
-      console.log("\n3. Non-openclaw User-Agent → 429:");
+      console.log(
+        "\n3. Non-openclaw User-Agent (curl/8.0) → 200 (matches z.ai edge behavior per issue #98100):",
+      );
       const r3 = await rawFetch(
         `${BASE}/chat/completions`,
         "POST",
@@ -91,13 +95,15 @@ server.listen(PORT, () => {
         false,
       );
       console.log(`   Status: ${r3.status}`);
-      if (r3.status === 429) {
+      if (r3.status === 200) {
         passed++;
         console.log("   ✓");
       }
 
       if (passed === 3) {
-        console.log(`\n✓ ${passed}/3 passed — openclaw User-Agent probe header fixes the 429.`);
+        console.log(
+          `\n✓ ${passed}/3 passed — openclaw User-Agent probe header fixes the 429 (curl/8.0 also accepted, matching real z.ai edge).`,
+        );
       } else {
         console.error(`\n✗ ${passed}/3 passed — unexpected results.`);
         process.exitCode = 1;
