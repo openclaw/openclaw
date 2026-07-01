@@ -10,11 +10,35 @@ describe("minimaxUnderstandImage response boundaries", () => {
     vi.restoreAllMocks();
   });
 
+  it("accepts provider success JSON below the shared cap", async () => {
+    const content = "bounded-response-ok";
+    const fetchSpy = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          base_resp: { status_code: 0 },
+          content,
+          padding: "x".repeat(5 * 1024 * 1024),
+        }),
+        { status: 200 },
+      );
+    });
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    await expect(
+      minimaxUnderstandImage({
+        apiKey: "minimax-test-key",
+        prompt: "hi",
+        imageDataUrl: "data:image/png;base64,AAAA",
+        apiHost: "https://api.minimax.io",
+      }),
+    ).resolves.toBe(content);
+  });
+
   it("bounds large provider success response bodies", async () => {
     let canceled = false;
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
-        controller.enqueue(new Uint8Array(4 * 1024 * 1024));
+        controller.enqueue(new Uint8Array(16 * 1024 * 1024));
         controller.enqueue(new TextEncoder().encode("tail-marker"));
       },
       cancel() {
@@ -39,7 +63,7 @@ describe("minimaxUnderstandImage response boundaries", () => {
     if (!(error instanceof Error)) {
       throw new Error("expected MiniMax VLM request to throw an Error");
     }
-    expect(error.message).toContain("MiniMax VLM: JSON response exceeds");
+    expect(error.message).toContain("MiniMax VLM: JSON response exceeds 16777216 bytes");
     expect(error.message).not.toContain("tail-marker");
     expect(canceled).toBe(true);
   });
