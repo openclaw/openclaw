@@ -130,4 +130,38 @@ describe("resolveCurrentTurnImages", () => {
       expect(result.imageOrder).toEqual(["inline", "inline"]);
     });
   });
+
+  it("hydrates channel-delivered absolute-path media into native prompt images", async () => {
+    await withTempDir({ prefix: "openclaw-current-turn-images-" }, async (base) => {
+      const stateDir = path.join(base, "state");
+      const mediaDir = path.join(stateDir, "media");
+      const attachmentPath = path.join(mediaDir, "inbound", "telegram.jpg");
+      const imageBytes = Buffer.from("telegram-absolute-image");
+      await fs.mkdir(path.dirname(attachmentPath), { recursive: true });
+      await fs.writeFile(attachmentPath, imageBytes);
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+
+      const result = await resolveCurrentTurnImages({
+        ctx: {
+          Body: "<media:image>",
+          MediaPath: attachmentPath,
+          MediaPaths: [attachmentPath],
+          MediaType: "image/jpeg",
+          MediaTypes: ["image/jpeg"],
+        } satisfies MsgContext,
+        cfg: {} as OpenClawConfig,
+      });
+
+      expect(result).toStrictEqual({
+        images: [
+          {
+            type: "image",
+            data: imageBytes.toString("base64"),
+            mimeType: "image/jpeg",
+          },
+        ],
+        imageOrder: ["inline"],
+      });
+    });
+  });
 });

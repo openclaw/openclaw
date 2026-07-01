@@ -370,7 +370,17 @@ export class MediaAttachmentCache {
         return usableStateCandidate;
       }
     }
-    return path.resolve(rawPath);
+    // Validate absolute paths against local roots so channel-delivered inbound
+    // media files (e.g. Telegram saved attachments) are not silently dropped
+    // when the resolved path falls outside allowed roots.
+    const resolved = path.resolve(rawPath);
+    if (path.isAbsolute(rawPath)) {
+      const usableCandidate = resolveUsableLocalCandidate(resolved, this.localPathRoots);
+      if (usableCandidate) {
+        return usableCandidate;
+      }
+    }
+    return resolved;
   }
 
   private async ensureLocalStat(entry: AttachmentCacheEntry): Promise<number | undefined> {

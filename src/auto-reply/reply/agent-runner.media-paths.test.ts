@@ -395,8 +395,8 @@ describe("runReplyAgent media path normalization", () => {
     }
     expect(result).toMatchObject({
       text: "here is the chart",
-      mediaUrl: "/tmp/outbound-media/generated.png",
-      mediaUrls: ["/tmp/outbound-media/generated.png"],
+      mediaUrl: path.join("/tmp/outbound-media", "generated.png"),
+      mediaUrls: [path.join("/tmp/outbound-media", "generated.png")],
     });
     expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledWith(
       path.join("/tmp/workspace", "out", "generated.png"),
@@ -507,8 +507,8 @@ describe("runReplyAgent media path normalization", () => {
 
     expect(blockPayload).toEqual({
       text: "here is the chart",
-      mediaUrl: "/tmp/outbound-media/1-chart.png",
-      mediaUrls: ["/tmp/outbound-media/1-chart.png"],
+      mediaUrl: path.join("/tmp/outbound-media", "1-chart.png"),
+      mediaUrls: [path.join("/tmp/outbound-media", "1-chart.png")],
     });
     expect(finalPayload).toEqual(blockPayload);
     expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledTimes(1);
@@ -737,7 +737,7 @@ describe("runReplyAgent media path normalization", () => {
     expect(call?.imageOrder).toBeUndefined();
   });
 
-  it("falls back to prompt refs instead of forwarding partial current media", async () => {
+  it("forwards successfully resolved current media when a subset cannot be read", async () => {
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-native-agent-partial-"));
     cleanupPaths.push(tmpDir);
     const imagePath = path.join(tmpDir, "present.png");
@@ -781,7 +781,9 @@ describe("runReplyAgent media path normalization", () => {
           imageOrder?: string[];
         }
       | undefined;
-    expect(call?.images).toBeUndefined();
-    expect(call?.imageOrder).toBeUndefined();
+    expect(call?.images).toHaveLength(1);
+    expect(call?.images?.[0]?.type).toBe("image");
+    expect(call?.images?.[0]?.mimeType).toBe("image/png");
+    expect(call?.imageOrder).toEqual(["inline"]);
   });
 });
