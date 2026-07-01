@@ -131,6 +131,96 @@ describe("config schema", () => {
     expect(res.generatedAt.trim().length).toBeGreaterThan(0);
   });
 
+  it("accepts agent skillsMerge config", () => {
+    const result = OpenClawSchema.safeParse({
+      agents: {
+        defaults: {
+          skills: ["github", "weather"],
+        },
+        list: [
+          {
+            id: "writer",
+            skillsMerge: {
+              add: ["docs-search"],
+              remove: ["weather"],
+            },
+          },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts Telegram topic skillsMerge config", () => {
+    const result = TelegramConfigSchema.safeParse({
+      groups: {
+        "-1001234567890": {
+          skills: ["github", "weather"],
+          topics: {
+            "99": {
+              skillsMerge: {
+                add: ["project-docs"],
+                remove: ["weather"],
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects Telegram group and direct skillsMerge config", () => {
+    const groupResult = TelegramConfigSchema.safeParse({
+      groups: {
+        "-1001234567890": {
+          skillsMerge: {
+            add: ["project-docs"],
+          },
+        },
+      },
+    });
+    const directResult = TelegramConfigSchema.safeParse({
+      direct: {
+        "123": {
+          skillsMerge: {
+            add: ["project-docs"],
+          },
+        },
+      },
+    });
+
+    expect(groupResult.success).toBe(false);
+    expect(directResult.success).toBe(false);
+  });
+
+  it("rejects empty skillsMerge config", () => {
+    const agentResult = OpenClawSchema.safeParse({
+      agents: {
+        list: [{ id: "writer", skillsMerge: {} }],
+      },
+    });
+    const topicResult = TelegramConfigSchema.safeParse({
+      groups: {
+        "-1001234567890": {
+          topics: {
+            "99": {
+              skillsMerge: {
+                add: [],
+                remove: [],
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(agentResult.success).toBe(false);
+    expect(topicResult.success).toBe(false);
+  });
+
   it("accepts qmd query rerank override", () => {
     const result = OpenClawSchema.safeParse({
       memory: {

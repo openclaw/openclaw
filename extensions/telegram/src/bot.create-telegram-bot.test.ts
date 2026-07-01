@@ -4535,6 +4535,137 @@ describe("createTelegramBot", () => {
     expect(settings.groupSystemPrompt).toBe("Group prompt\n\nTopic prompt");
     expect(settings.skillFilter).toStrictEqual([]);
   });
+
+  it("merges topic skill filters over inherited group skills", () => {
+    const { groupConfig, topicConfig } = resolveTelegramScopedGroupConfig(
+      {
+        groupPolicy: "open",
+        groups: {
+          "-1001234567890": {
+            skills: ["github", "weather", "summarize"],
+            topics: {
+              "99": {
+                skillsMerge: {
+                  add: ["project-docs", "github"],
+                  remove: ["weather"],
+                },
+              },
+            },
+          },
+        },
+      },
+      -1001234567890,
+      99,
+    );
+    const settings = resolveTelegramGroupPromptSettings({ groupConfig, topicConfig });
+
+    expect(settings.skillFilter).toStrictEqual(["github", "summarize", "project-docs"]);
+  });
+
+  it("merges exact topic skill filters over topics star skills", () => {
+    const { groupConfig, topicConfig } = resolveTelegramScopedGroupConfig(
+      {
+        groupPolicy: "open",
+        groups: {
+          "-1001234567890": {
+            skills: ["fallback"],
+            topics: {
+              "*": {
+                skills: ["github", "weather"],
+              },
+              "99": {
+                skillsMerge: {
+                  add: ["project-docs"],
+                  remove: ["weather"],
+                },
+              },
+            },
+          },
+        },
+      },
+      -1001234567890,
+      99,
+    );
+    const settings = resolveTelegramGroupPromptSettings({ groupConfig, topicConfig });
+
+    expect(settings.skillFilter).toStrictEqual(["github", "project-docs"]);
+  });
+
+  it("treats topic skillsMerge without inherited skills as an explicit allowlist", () => {
+    const { groupConfig, topicConfig } = resolveTelegramScopedGroupConfig(
+      {
+        groupPolicy: "open",
+        groups: {
+          "-1001234567890": {
+            topics: {
+              "99": {
+                skillsMerge: {
+                  add: ["project-docs"],
+                  remove: ["weather"],
+                },
+              },
+            },
+          },
+        },
+      },
+      -1001234567890,
+      99,
+    );
+    const settings = resolveTelegramGroupPromptSettings({ groupConfig, topicConfig });
+
+    expect(settings.skillFilter).toStrictEqual(["project-docs"]);
+  });
+
+  it("treats empty topic skillsMerge as absent", () => {
+    const { groupConfig, topicConfig } = resolveTelegramScopedGroupConfig(
+      {
+        groupPolicy: "open",
+        groups: {
+          "-1001234567890": {
+            skills: ["github"],
+            topics: {
+              "99": {
+                skillsMerge: {},
+              },
+            },
+          },
+        },
+      },
+      -1001234567890,
+      99,
+    );
+    const settings = resolveTelegramGroupPromptSettings({ groupConfig, topicConfig });
+
+    expect(settings.skillFilter).toStrictEqual(["github"]);
+  });
+
+  it("keeps explicit topic skills as a replacement ahead of skillsMerge", () => {
+    const { groupConfig, topicConfig } = resolveTelegramScopedGroupConfig(
+      {
+        groupPolicy: "open",
+        groups: {
+          "-1001234567890": {
+            skills: ["github", "weather"],
+            topics: {
+              "99": {
+                skills: ["project-docs"],
+                skillsMerge: {
+                  add: ["summarize"],
+                  remove: ["github"],
+                },
+              },
+            },
+          },
+        },
+      },
+      -1001234567890,
+      99,
+    );
+    const settings = resolveTelegramGroupPromptSettings({ groupConfig, topicConfig });
+
+    expect(settings.skillFilter).toStrictEqual(["project-docs"]);
+  });
+
   it("delivers native /compact through the reply dispatcher", async () => {
     commandSpy.mockClear();
     sendMessageSpy.mockClear();

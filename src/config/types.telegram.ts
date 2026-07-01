@@ -272,6 +272,13 @@ export type TelegramTopicConfig = {
   groupPolicy?: GroupPolicy;
   /** If specified, only load these skills for this topic. Omit = all skills; empty = no skills. */
   skills?: string[];
+  /** Optional delta applied to the inherited group/direct topic skill filter when skills is omitted. */
+  skillsMerge?: {
+    /** Skill names to append to the inherited filter. */
+    add?: string[];
+    /** Skill names to remove from the inherited filter after additions are applied. */
+    remove?: string[];
+  };
   /** If false, disable the bot for this topic. */
   enabled?: boolean;
   /** Optional allowlist for topic senders (numeric Telegram user IDs). */

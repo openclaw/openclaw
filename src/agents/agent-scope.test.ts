@@ -1344,6 +1344,93 @@ describe("resolveAgentSkillsFilter", () => {
     expect(resolveAgentSkillsFilter(cfg, "writer")).toEqual(["docs-search"]);
   });
 
+  it("merges agents.list[].skillsMerge with inherited default skills", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          skills: ["github", "weather", "summarize"],
+        },
+        list: [
+          {
+            id: "writer",
+            skillsMerge: {
+              add: ["docs-search", "github"],
+              remove: ["weather"],
+            },
+          },
+        ],
+      },
+    };
+
+    expect(resolveAgentSkillsFilter(cfg, "writer")).toEqual(["github", "summarize", "docs-search"]);
+  });
+
+  it("treats agents.list[].skillsMerge without defaults as an explicit allowlist", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "writer",
+            skillsMerge: {
+              add: ["docs-search"],
+              remove: ["dangerous"],
+            },
+          },
+          {
+            id: "restricted",
+            skillsMerge: {
+              remove: ["dangerous"],
+            },
+          },
+        ],
+      },
+    };
+
+    expect(resolveAgentSkillsFilter(cfg, "writer")).toEqual(["docs-search"]);
+    expect(resolveAgentSkillsFilter(cfg, "restricted")).toStrictEqual([]);
+  });
+
+  it("treats empty agents.list[].skillsMerge as absent", () => {
+    const cfgWithDefaults: OpenClawConfig = {
+      agents: {
+        defaults: {
+          skills: ["github"],
+        },
+        list: [{ id: "writer", skillsMerge: {} }],
+      },
+    };
+    const cfgWithoutDefaults: OpenClawConfig = {
+      agents: {
+        list: [{ id: "writer", skillsMerge: {} }],
+      },
+    };
+
+    expect(resolveAgentSkillsFilter(cfgWithDefaults, "writer")).toEqual(["github"]);
+    expect(resolveAgentSkillsFilter(cfgWithoutDefaults, "writer")).toBeUndefined();
+  });
+
+  it("keeps agents.list[].skills replacement ahead of skillsMerge", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          skills: ["github", "weather"],
+        },
+        list: [
+          {
+            id: "writer",
+            skills: ["docs-search"],
+            skillsMerge: {
+              add: ["summarize"],
+              remove: ["github"],
+            },
+          },
+        ],
+      },
+    };
+
+    expect(resolveAgentSkillsFilter(cfg, "writer")).toEqual(["docs-search"]);
+  });
+
   it("keeps explicit empty agent skills as no skills", () => {
     const cfg: OpenClawConfig = {
       agents: {
