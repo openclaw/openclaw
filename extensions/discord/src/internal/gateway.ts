@@ -89,6 +89,7 @@ export class GatewayPlugin extends Plugin {
   private resumeGatewayUrl: string | null = null;
   private reconnectAttempts = 0;
   private shouldReconnect = false;
+  private intentionalDisconnect = false;
   private isConnecting = false;
   private readonly heartbeatTimers = new GatewayHeartbeatTimers();
   private readonly reconnectTimer = new GatewayReconnectTimer();
@@ -147,6 +148,7 @@ export class GatewayPlugin extends Plugin {
       return;
     }
     this.shouldReconnect = true;
+    this.intentionalDisconnect = false;
     this.lastHeartbeatAck = true;
     this.ws?.close(1000, "Reconnecting");
     const baseUrl =
@@ -161,6 +163,7 @@ export class GatewayPlugin extends Plugin {
 
   disconnect(): void {
     this.shouldReconnect = false;
+    this.intentionalDisconnect = true;
     this.stopReconnectTimer();
     this.stopHeartbeat();
     this.outboundLimiter.clear();
@@ -209,7 +212,19 @@ export class GatewayPlugin extends Plugin {
       this.isConnected = false;
       this.emitter.emit("debug", `Gateway websocket closed: ${code}`);
       if (!this.shouldReconnect) {
-        return;
+        if (this.intentionalDisconnect || isNormalGatewayCloseCode(closeCode)) {
+          return;
+        }
+        // Reconnect was disabled even though no intentional disconnect happened
+        // and the close is abnormal. This state has been observed on live
+        // gateways (lane silently dead until manual restart) but its owning
+        // transition has not been identified yet, so re-arm reconnect and log
+        // loudly enough that production occurrences can be traced back.
+        this.emitter.emit(
+          "debug",
+          `Gateway reconnect was disabled at abnormal close ${code} without an intentional disconnect; re-arming reconnect`,
+        );
+        this.shouldReconnect = true;
       }
       if (isFatalGatewayCloseCode(closeCode)) {
         this.shouldReconnect = false;
@@ -465,4 +480,8 @@ export class GatewayPlugin extends Plugin {
   hasIntent(intent: number): boolean {
     return Boolean((this.options.intents ?? 0) & intent);
   }
+}
+
+function isNormalGatewayCloseCode(code: number): boolean {
+  return code === 1000 || code === 1001;
 }
