@@ -718,7 +718,7 @@ export class OpenClawApp extends LitElement {
   toolStreamOrder: string[] = [];
   refreshSessionsAfterChat = new Map<
     string,
-    import("../lib/chat/chat-types.js").ChatSessionRefreshTarget
+    import("../lib/sessions/index.js").SessionRefreshTarget
   >();
   chatSideResultTerminalRuns = new Set<string>();
   basePath = "";

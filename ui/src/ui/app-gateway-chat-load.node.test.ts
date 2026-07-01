@@ -97,23 +97,6 @@ vi.mock("./gateway.ts", async (importOriginal) => {
 });
 
 vi.mock("../pages/chat/data.ts", () => ({
-  CHAT_SESSIONS_ACTIVE_MINUTES: 60,
-  CHAT_SESSIONS_REFRESH_LIMIT: 50,
-  createChatSessionsLoadOverrides: () => ({ activeMinutes: 60, limit: 50 }),
-  scopedAgentListParamsForSession: (_host: unknown, sessionKey: string) => {
-    const [, agentId] = sessionKey.split(":");
-    return sessionKey.startsWith("agent:") && agentId ? { agentId } : {};
-  },
-  scopedAgentListParamsForRefreshTarget: (
-    _host: unknown,
-    target: { sessionKey: string; agentId?: string },
-  ) => {
-    if (target.agentId) {
-      return { agentId: target.agentId };
-    }
-    const [, agentId] = target.sessionKey.split(":");
-    return target.sessionKey.startsWith("agent:") && agentId ? { agentId } : {};
-  },
   clearPendingQueueItemsForRun: vi.fn(),
   flushChatQueueForEvent: vi.fn(),
   hasReconnectableQueuedChatSends: vi.fn(() => false),
@@ -127,27 +110,22 @@ vi.mock("../pages/chat/chat-avatar.ts", () => ({
   refreshChatAvatar: refreshChatAvatarMock,
 }));
 
-vi.mock("../pages/chat/session-scope.ts", () => ({
-  createChatSessionsLoadOverrides: () => ({ activeMinutes: 60, limit: 50 }),
-  scopedAgentListParamsForSession: (_host: unknown, sessionKey: string) => {
+vi.mock("../lib/sessions/index.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/sessions/index.ts")>();
+  const scope = (_host: unknown, sessionKey: string) => {
     const [, agentId] = sessionKey.split(":");
     return sessionKey.startsWith("agent:") && agentId ? { agentId } : {};
-  },
-  scopedAgentListParamsForRefreshTarget: (
-    _host: unknown,
-    target: { sessionKey: string; agentId?: string },
-  ) => {
-    if (target.agentId) {
-      return { agentId: target.agentId };
-    }
-    const [, agentId] = target.sessionKey.split(":");
-    return target.sessionKey.startsWith("agent:") && agentId ? { agentId } : {};
-  },
-  scopedAgentParamsForSession: (_host: unknown, sessionKey: string) => {
-    const [, agentId] = sessionKey.split(":");
-    return sessionKey.startsWith("agent:") && agentId ? { agentId } : {};
-  },
-}));
+  };
+  return {
+    ...actual,
+    scopedAgentListParamsForRefreshTarget: (
+      _host: unknown,
+      target: { sessionKey: string; agentId?: string },
+    ) => (target.agentId ? { agentId: target.agentId } : scope(_host, target.sessionKey)),
+    scopedAgentListParamsForSession: scope,
+    scopedAgentParamsForSession: scope,
+  };
+});
 
 vi.mock("../pages/chat/scroll.ts", () => ({
   scheduleChatScroll: scheduleChatScrollMock,

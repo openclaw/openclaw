@@ -12,7 +12,6 @@ import type {
   ChatAttachment,
   ChatQueueItem,
   ChatQueueSkillWorkshopRevision,
-  ChatSessionRefreshTarget,
 } from "../../lib/chat/chat-types.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
@@ -22,6 +21,7 @@ import {
   scopedAgentParamsForSession,
   visibleSessionMatches,
   type SessionCapability,
+  type SessionRefreshTarget,
 } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -52,6 +52,7 @@ import {
 } from "./attachment-payload-store.ts";
 import { resolveAgentIdForSession } from "./chat-avatar.ts";
 import { executeSlashCommand } from "./chat-command-executor.ts";
+import { refreshChatSessionListForTarget } from "./chat-session.ts";
 import {
   INTERRUPTED_MODEL_WAIT_ERROR,
   persistStoredChatComposerQueue,
@@ -84,10 +85,6 @@ import {
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { scheduleChatScroll, resetChatScroll } from "./scroll.ts";
 import { clearChatMessagesFromCache, type ChatMessageCache } from "./session-message-cache.ts";
-import {
-  createChatSessionsLoadOverrides,
-  scopedAgentListParamsForRefreshTarget,
-} from "./session-scope.ts";
 import type { ChatSideResult } from "./side-result.ts";
 
 export type ChatHost = ChatInputHistoryState & {
@@ -122,7 +119,7 @@ export type ChatHost = ChatInputHistoryState & {
   sessionsShowArchived?: boolean;
   updateComplete?: Promise<unknown>;
   requestUpdate?: () => void;
-  refreshSessionsAfterChat: Map<string, ChatSessionRefreshTarget>;
+  refreshSessionsAfterChat: Map<string, SessionRefreshTarget>;
   pendingAbort?: { runId?: string | null; sessionKey: string; agentId?: string } | null;
   chatSubmitGuards?: Map<string, Promise<void>>;
   chatSendTimingsByRun?: Map<string, ChatSendTimingEntry>;
@@ -1088,11 +1085,7 @@ async function sendQueuedChatMessage(
         agentId: prepared.agentId,
       };
       if (ack.status === "ok") {
-        void host.sessions.refresh({
-          ...createChatSessionsLoadOverrides(host),
-          ...scopedAgentListParamsForRefreshTarget(host, refreshTarget),
-          force: true,
-        });
+        void refreshChatSessionListForTarget(host, refreshTarget);
       } else if (isNonTerminalAgentRunStatus(ack.status)) {
         host.refreshSessionsAfterChat.set(ack.runId, refreshTarget);
       }

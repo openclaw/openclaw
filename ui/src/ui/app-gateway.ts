@@ -25,6 +25,7 @@ import {
 } from "../app/exec-approval.ts";
 import { setLastActiveSessionKey, type UiSettings } from "../app/settings.ts";
 import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
+import { scopedAgentParamsForSession } from "../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
@@ -60,7 +61,6 @@ import {
 } from "../pages/chat/gateway.ts";
 import { reconcileChatRunLifecycle } from "../pages/chat/run-lifecycle.ts";
 import { scheduleChatScroll } from "../pages/chat/scroll.ts";
-import { scopedAgentParamsForSession } from "../pages/chat/session-scope.ts";
 import { parseChatSideResult, type ChatSideResult } from "../pages/chat/side-result.ts";
 import { loadDevices, type DevicesState } from "../pages/nodes/devices.ts";
 import { applySettings, syncUrlWithSessionKey } from "./app-settings.ts";

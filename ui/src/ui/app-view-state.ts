@@ -497,10 +497,7 @@ export type AppViewState = {
     overviewLogLines: string[];
     overviewLogCursor: number;
     client: GatewayBrowserClient | null;
-    refreshSessionsAfterChat: Map<
-      string,
-      import("../lib/chat/chat-types.js").ChatSessionRefreshTarget
-    >;
+    refreshSessionsAfterChat: Map<string, import("../lib/sessions/index.js").SessionRefreshTarget>;
     connect: () => void;
     setChatMobileControlsOpen: (
       open: boolean,

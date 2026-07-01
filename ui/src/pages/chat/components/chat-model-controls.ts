@@ -35,12 +35,11 @@ import {
 import { pushUniqueTrimmedSelectOption } from "../../../lib/select-options.ts";
 import { sessionModelMatchesDefaults } from "../../../lib/session-model-defaults.ts";
 import {
-  scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
   type SessionCapability,
 } from "../../../lib/sessions/index.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../../lib/string-coerce.ts";
-import { createChatSessionsLoadOverrides } from "../session-scope.ts";
+import { refreshCurrentChatSessionList } from "../chat-session.ts";
 
 type ChatInlineSelectOption = {
   value: string;
@@ -105,11 +104,7 @@ function setChatError(state: ChatModelControlsState, error: string | null) {
 }
 
 async function refreshSessionOptions(state: ChatModelControlsState) {
-  await state.sessions.refresh({
-    ...createChatSessionsLoadOverrides(state),
-    ...scopedAgentListParamsForSession(state, state.sessionKey),
-    force: true,
-  });
+  await refreshCurrentChatSessionList(state);
 }
 
 export function renderChatQuotaPill(

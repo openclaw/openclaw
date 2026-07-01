@@ -21,6 +21,7 @@ import {
   getVisibleSessionRows,
   resolveSessionNavigation,
   scopedAgentIdForSession,
+  scopedAgentListParamsForRefreshTarget,
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
   visibleSessionMatches,
@@ -184,6 +185,7 @@ export {
   getVisibleSessionRows,
   resolveSessionNavigation,
   scopedAgentIdForSession,
+  scopedAgentListParamsForRefreshTarget,
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
   visibleSessionMatches,
@@ -193,6 +195,7 @@ export type { SessionReconcileOptions } from "./reconcile.ts";
 export type {
   SessionNavigation,
   SessionNavigationInput,
+  SessionRefreshTarget,
   SessionScopeHost,
   SessionScopeHostWithKey,
 } from "./navigation.ts";

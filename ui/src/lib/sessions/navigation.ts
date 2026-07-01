@@ -46,6 +46,8 @@ export type SessionScopeHostWithKey = SessionScopeHost & {
   sessionKey: string;
 };
 
+export type SessionRefreshTarget = { sessionKey: string; agentId?: string };
+
 type SessionDefaults = {
   defaultAgentId?: string | null;
   mainKey?: string | null;
@@ -126,6 +128,16 @@ export function scopedAgentListParamsForSession(
         ? undefined
         : resolveUiDefaultAgentId(host));
   return agentId ? { agentId: normalizeAgentId(agentId) } : {};
+}
+
+export function scopedAgentListParamsForRefreshTarget(
+  host: SessionScopeHost,
+  target: SessionRefreshTarget,
+): { agentId?: string } {
+  const agentId =
+    normalizeOptionalString(target.agentId) ??
+    scopedAgentListParamsForSession(host, target.sessionKey).agentId;
+  return agentId ? { agentId } : {};
 }
 
 export function visibleSessionMatches(

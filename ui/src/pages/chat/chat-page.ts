@@ -38,7 +38,6 @@ import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { isCronSessionKey, resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
   resolveSessionKey,
-  scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
   type SessionCapability,
 } from "../../lib/sessions/index.ts";
@@ -61,6 +60,7 @@ import {
 import { applyModelCatalogResult, loadModels } from "../../ui/controllers/models.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
+import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { renderChatQuotaPill, renderChatModelSelect } from "./components/chat-model-controls.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
 import {
@@ -116,7 +116,6 @@ import {
   clearChatMessagesFromCache,
   readChatMessagesFromCache,
 } from "./session-message-cache.ts";
-import { createChatSessionsLoadOverrides } from "./session-scope.ts";
 import { createSessionWorkspaceProps, type SessionWorkspaceHost } from "./session-workspace.ts";
 import { renderChat, resetChatViewState, type ChatProps } from "./view.ts";
 
@@ -701,11 +700,7 @@ function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: string) 
 }
 
 async function refreshRouteSessionOptions(state: ChatPageHost) {
-  await state.sessions.refresh({
-    ...createChatSessionsLoadOverrides(state),
-    ...scopedAgentListParamsForSession(state, state.sessionKey),
-    force: true,
-  });
+  await refreshCurrentChatSessionList(state);
 }
 
 function resolveChatAgentId(

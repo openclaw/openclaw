@@ -34,8 +34,6 @@ export type ChatQueueItem = {
   skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
 };
 
-export type ChatSessionRefreshTarget = { sessionKey: string; agentId?: string };
-
 /** Union type for items in the chat thread */
 export type ChatItem =
   | { kind: "message"; key: string; message: unknown; duplicateCount?: number }
