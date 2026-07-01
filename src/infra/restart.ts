@@ -737,7 +737,9 @@ function isLaunchctlPrintNotLoaded(result: {
   if (result.error || result.status === 0 || result.status === null) {
     return false;
   }
-  const detail = `${result.stdout ?? ""}\n${result.stderr ?? ""}`.toLowerCase();
+  const stdout = result.stdout?.toString() ?? "";
+  const stderr = result.stderr?.toString() ?? "";
+  const detail = `${stdout}\n${stderr}`.toLowerCase();
   return (
     detail.includes("could not find service") ||
     detail.includes("service not loaded") ||
