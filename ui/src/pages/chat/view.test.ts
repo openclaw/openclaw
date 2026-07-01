@@ -23,7 +23,7 @@ import {
 } from "./attachment-payload-store.ts";
 import { renderWelcomeState } from "./chat-welcome.ts";
 import { renderChatQueue } from "./components/chat-composer-controls.ts";
-import { renderChatModelSelect, renderChatQuotaPill } from "./components/chat-model-controls.ts";
+import { renderChatModelSelect, renderChatQuotaPill } from "./components/chat-controls.ts";
 import { renderMarkdownSidebar } from "./components/chat-sidebar.ts";
 import { buildRawSidebarContent } from "./components/chat-sidebar.ts";
 import { renderChat, resetChatViewState } from "./view.ts";
