@@ -551,6 +551,65 @@ describe("buildChatItems", () => {
     ]);
   });
 
+  it("keeps distinct keyed preamble segments independent from accumulated stream snapshots", () => {
+    const items = buildChatItems(
+      createProps({
+        streamSegments: [
+          { text: "Checking workspace", ts: 0, itemId: "preamble-1" },
+          { text: "Checking workspace", ts: 0, itemId: "preamble-2" },
+          { text: "Checking workspace details", ts: 0, itemId: "preamble-3" },
+        ],
+        toolMessages: [{ role: "toolResult", content: "Tool output", timestamp: 1 }],
+      }),
+    );
+
+    expect(items).toMatchObject([
+      { kind: "stream", text: "Checking workspace", startedAt: 0 },
+      { kind: "stream", text: "Checking workspace", startedAt: 0 },
+      { kind: "stream", text: "Checking workspace details", startedAt: 0 },
+      { kind: "group", role: "tool" },
+    ]);
+  });
+
+  it("keeps already-visible tool cards before matching-timestamp keyed preambles", () => {
+    const items = buildChatItems(
+      createProps({
+        streamSegments: [{ text: "Checking after the tool", ts: 1, itemId: "preamble-after-tool" }],
+        toolMessages: [{ role: "toolResult", content: "Tool output", timestamp: 1 }],
+      }),
+    );
+
+    expect(items).toMatchObject([
+      { kind: "group", role: "tool" },
+      { kind: "stream", text: "Checking after the tool", startedAt: 1 },
+    ]);
+  });
+
+  it("orders a keyed preamble that arrived before a later tool above that tool", () => {
+    // Regression: keyed commentary must merge into the timestamp ordering path
+    // rather than render below every tool card. A preamble that arrived between
+    // an earlier and a later tool should stay between them while the run is live.
+    const items = buildChatItems(
+      createProps({
+        streamSegments: [
+          { text: "Planning the next step", ts: 2, itemId: "preamble-between-tools" },
+        ],
+        toolMessages: [
+          { role: "toolResult", content: "First tool", timestamp: 1 },
+          { role: "toolResult", content: "Second tool", timestamp: 3 },
+        ],
+      }),
+    );
+
+    expect(items).toMatchObject([
+      { kind: "group", role: "tool" },
+      { kind: "stream", text: "Planning the next step", startedAt: 2 },
+      { kind: "group", role: "tool" },
+    ]);
+    const streamItems = items.filter((item) => item.kind === "stream");
+    expect(streamItems).toHaveLength(1);
+  });
+
   it("suppresses metadata-only history messages before grouping", () => {
     const groups = messageGroups({
       messages: [
@@ -1138,3 +1197,60 @@ function createAssistantCanvasBlock(params: { suffix: string }) {
     },
   };
 }
+
+describe("tool turn outcome annotation (#89683)", () => {
+  function failedTool(timestamp: number) {
+    return {
+      role: "toolResult",
+      toolName: "shell",
+      content: JSON.stringify({ status: "failed", exitCode: 1 }),
+      isError: true,
+      timestamp,
+    };
+  }
+  function userMsg(text: string, timestamp: number) {
+    return { role: "user", content: text, timestamp };
+  }
+  function assistantReply(text: string, timestamp: number) {
+    return { role: "assistant", content: [{ type: "text", text }], timestamp };
+  }
+  function toolGroups(messages: unknown[]): MessageGroup[] {
+    return messageGroups({ messages }).filter((group) => group.role === "tool");
+  }
+
+  it("marks a failed tool followed by an assistant reply as turnSucceeded", () => {
+    const tools = toolGroups([
+      userMsg("search foo", 1),
+      failedTool(2),
+      assistantReply("No matches found.", 3),
+    ]);
+    expect(tools).toHaveLength(1);
+    expect(tools[0].turnSucceeded).toBe(true);
+  });
+
+  it("leaves a terminal failed tool (no assistant reply) as not-succeeded", () => {
+    const tools = toolGroups([userMsg("search foo", 1), failedTool(2)]);
+    expect(tools).toHaveLength(1);
+    expect(tools[0].turnSucceeded).toBe(false);
+  });
+
+  it("does not count an assistant group without reply text as success", () => {
+    const tools = toolGroups([
+      userMsg("search foo", 1),
+      failedTool(2),
+      { role: "assistant", content: [], timestamp: 3 },
+    ]);
+    expect(tools[0].turnSucceeded).toBe(false);
+  });
+
+  it("scopes the outcome per turn at user boundaries", () => {
+    const tools = toolGroups([
+      userMsg("first", 1),
+      failedTool(2),
+      assistantReply("done", 3),
+      userMsg("second", 4),
+      failedTool(5),
+    ]);
+    expect(tools.map((group) => group.turnSucceeded)).toEqual([true, false]);
+  });
+});

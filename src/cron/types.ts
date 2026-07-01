@@ -15,6 +15,20 @@ export type CronSchedule =
       tz?: string;
       /** Optional deterministic stagger window in milliseconds (0 keeps exact schedule). */
       staggerMs?: number;
+    }
+  | {
+      /**
+       * Event-driven (non-time) trigger: the job fires once when a gateway-owned
+       * watcher process running `command` exits. The watcher lives under the
+       * gateway ProcessSupervisor, NOT inside any agent turn's process tree, so
+       * it survives the per-turn spawn-and-kill teardown that CLI backends apply
+       * (#71662). On exit the job runs through the normal cron run pipeline, so
+       * delivery to the bound session works exactly like a scheduled main job.
+       * `computeNextRunAtMs` returns undefined for this kind (never time-due).
+       */
+      kind: "on-exit";
+      command: string;
+      cwd?: string;
     };
 
 /** Runtime target that decides whether a job joins main, isolated, or a named session. */
@@ -258,10 +272,11 @@ type CronAgentTurnPayload = {
 
 type CronAgentTurnPayloadPatch = {
   kind: "agentTurn";
-} & Partial<Omit<CronAgentTurnPayloadFields, "model" | "fallbacks" | "toolsAllow">> & {
+} & Partial<Omit<CronAgentTurnPayloadFields, "model" | "fallbacks" | "toolsAllow" | "thinking">> & {
     model?: string | null;
     fallbacks?: string[] | null;
     toolsAllow?: string[] | null;
+    thinking?: string | null;
   };
 
 type CronCommandPayloadFields = {

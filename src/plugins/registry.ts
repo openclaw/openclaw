@@ -107,7 +107,7 @@ import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import {
   clearPluginInteractiveHandlersForPlugin,
-  registerPluginInteractiveHandler,
+  registerRegistryPluginInteractiveHandler,
 } from "./interactive-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import {
@@ -2661,7 +2661,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
             pluginRuntimeRecordById.get(pluginId) ??
             registry.plugins.find((entry) => entry.id === pluginId);
           return record?.source
-            ? withPluginRuntimePluginScope({ pluginId, pluginSource: record.source }, run)
+            ? withPluginRuntimePluginScope(
+                {
+                  pluginId,
+                  pluginSource: record.source,
+                  pluginOrigin: record.origin,
+                  pluginTrustedOfficialInstall: record.trustedOfficialInstall,
+                },
+                run,
+              )
             : withPluginRuntimePluginScope({ pluginId }, run);
         };
         const getRuntimeProperty = () => {
@@ -2724,6 +2732,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
             complete: (params) =>
               withPluginRuntimePluginIdScope(pluginId, () => llm.complete(params)),
           } satisfies PluginRuntime["llm"];
+        }
+        if (prop === "nodes") {
+          const nodes = getRuntimeProperty();
+          return {
+            list: (params) => runWithPluginScope(() => nodes.list(params)),
+            invoke: (params) => runWithPluginScope(() => nodes.invoke(params)),
+          } satisfies PluginRuntime["nodes"];
         }
         if (prop !== "subagent") {
           return getRuntimeProperty();
@@ -2846,7 +2861,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerSecurityAuditCollector: (collector) =>
                 registerSecurityAuditCollector(record, collector),
               registerInteractiveHandler: (registration) => {
-                const result = registerPluginInteractiveHandler(record.id, registration, {
+                const result = registerRegistryPluginInteractiveHandler(record.id, registration, {
                   pluginName: record.name,
                   pluginRoot: record.rootDir,
                 });
@@ -2857,7 +2872,15 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                     source: record.source,
                     message: result.error ?? "interactive handler registration failed",
                   });
+                  return;
                 }
+                registry.interactiveHandlers ??= [];
+                registry.interactiveHandlers.push({
+                  ...registration,
+                  pluginId: record.id,
+                  pluginName: record.name,
+                  pluginRoot: record.rootDir,
+                });
               },
               onConversationBindingResolved: (handler) =>
                 registerConversationBindingResolvedHandler(record, handler),

@@ -1184,6 +1184,11 @@ function isCodexToolResultError(result: AgentToolResult<unknown>): boolean {
     status !== "success" &&
     status !== "completed" &&
     status !== "recorded" &&
+    status !== "created" &&
+    status !== "updated" &&
+    status !== "accepted" &&
+    status !== "found" &&
+    status !== "missing" &&
     status !== "pending" &&
     status !== "started" &&
     status !== "running" &&

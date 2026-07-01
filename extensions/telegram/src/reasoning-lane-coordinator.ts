@@ -94,17 +94,7 @@ export function splitTelegramReasoningText(
   const taggedReasoning = extractThinkingFromTaggedStreamOutsideCode(text);
   const strippedAnswer = stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
 
-  if (isReasoning === true) {
-    return { reasoningText: formatReasoningMessage(taggedReasoning || strippedAnswer || text) };
-  }
-
-  if (!taggedReasoning && strippedAnswer === text) {
-    return { answerText: text };
-  }
-
-  const reasoningText = taggedReasoning ? formatReasoningMessage(taggedReasoning) : undefined;
-  const answerText = strippedAnswer || undefined;
-  return { reasoningText, answerText };
+  return { reasoningText: formatReasoningMessage(taggedReasoning || strippedAnswer || text) };
 }
 
 type BufferedFinalAnswer = {

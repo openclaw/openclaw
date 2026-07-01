@@ -62,6 +62,10 @@ describe("nvidia provider catalog", () => {
         },
       },
     });
+    expect(provider.models[1]).toMatchObject({
+      id: "nvidia/nemotron-3-super-120b-a12b",
+      contextWindow: 1_048_576,
+    });
   });
 
   it("promotes ranked models from NVIDIA's featured catalog", async () => {

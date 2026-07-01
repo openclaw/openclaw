@@ -206,6 +206,12 @@ function createNormalizedQuoteTextInvalidError(operation = "sendMessage") {
   );
 }
 
+function createRichEntityInvalidError(entity = "EMAIL", operation = "sendRichMessage") {
+  return new Error(
+    `GrammyError: Call to '${operation}' failed! (400: Bad Request: RICH_MESSAGE_${entity}_INVALID)`,
+  );
+}
+
 function createWrappedPreConnectHttpError(operation = "sendMessage") {
   const root = Object.assign(new Error("getaddrinfo ENOTFOUND api.telegram.org"), {
     code: "ENOTFOUND",
@@ -1264,6 +1270,78 @@ describe("deliverReplies", () => {
       html: oauthProfileText,
       skip_entity_detection: true,
     });
+  });
+
+  it("falls back to plain text when a rich message is rejected for an invalid entity", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 12,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+    (bot.api.raw as unknown as { sendRichMessage: ReturnType<typeof vi.fn> }).sendRichMessage = vi
+      .fn()
+      .mockRejectedValue(createRichEntityInvalidError("EMAIL"));
+    const text = "Status includes openai:owner@example.com";
+
+    await deliverWith({
+      replies: [{ text }],
+      runtime,
+      bot,
+      richMessages: true,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    expect(firstMockCallArg(sendMessage, 1)).toBe(text);
+    expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("parse_mode");
+  });
+
+  it("falls back to plain text for other invalid rich entity validation errors", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 13,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+    (bot.api.raw as unknown as { sendRichMessage: ReturnType<typeof vi.fn> }).sendRichMessage = vi
+      .fn()
+      .mockRejectedValue(createRichEntityInvalidError("URL"));
+    const text = "Status with a rejected URL entity";
+
+    await deliverWith({
+      replies: [{ text }],
+      runtime,
+      bot,
+      richMessages: true,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(firstMockCallArg(sendMessage, 1)).toBe(text);
+  });
+
+  it("does not fall back to plain text for non-validation rich message errors", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 14,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+    (bot.api.raw as unknown as { sendRichMessage: ReturnType<typeof vi.fn> }).sendRichMessage = vi
+      .fn()
+      .mockRejectedValue(new Error("network error"));
+    const text = "Status text";
+
+    await expect(
+      deliverWith({
+        replies: [{ text }],
+        runtime,
+        bot,
+        richMessages: true,
+      }),
+    ).rejects.toThrow("network error");
+
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("uses legacy reply id when selected reply target differs from quote source", async () => {

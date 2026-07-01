@@ -3,7 +3,7 @@ options:
   bundleIdPrefix: ai.openclawfoundation
   deploymentTarget:
     iOS: "18.0"
-  xcodeVersion: "16.0"
+  xcodeVersion: "26.0"
 
 settings:
   base:
@@ -60,6 +60,8 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: Sources
+    resources:
+      - path: Resources/Localizable.xcstrings
     dependencies:
       - target: OpenClawShareExtension
         embed: true
@@ -185,6 +187,8 @@ targets:
       Release: Signing.xcconfig
     sources:
       - path: ShareExtension
+    resources:
+      - path: Resources/Localizable.xcstrings
     dependencies:
       - package: OpenClawKit
       - sdk: AppIntents.framework
@@ -227,6 +231,8 @@ targets:
     sources:
       - path: ActivityWidget
       - path: Sources/LiveActivity/OpenClawActivityAttributes.swift
+    resources:
+      - path: Resources/Localizable.xcstrings
     dependencies:
       - sdk: WidgetKit.framework
       - sdk: ActivityKit.framework
@@ -259,6 +265,8 @@ targets:
       - path: WatchApp
         excludes:
           - Info.plist
+    resources:
+      - path: Resources/Localizable.xcstrings
     dependencies:
       - sdk: AppIntents.framework
       - sdk: WatchConnectivity.framework

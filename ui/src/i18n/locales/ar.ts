@@ -1313,6 +1313,8 @@ export const ar: TranslationMap = {
     settings: "إعدادات الدردشة",
     thinkingToggle: "تبديل مخرجات تفكير/عمل المساعد",
     toolCallsToggle: "تبديل استدعاءات الأدوات ونتائج الأدوات",
+    commentaryToggle: "الاحتفاظ بالتعليق بعد الإجابة النهائية",
+    commentaryLabel: "التعليق",
     autoScrollMode: "وضع التمرير التلقائي",
     autoScrollAlways: "دائمًا",
     autoScrollNearBottom: "قرب الأسفل",
@@ -1357,6 +1359,11 @@ export const ar: TranslationMap = {
       retry: "إعادة المحاولة",
       retrySend: "إعادة محاولة الإرسال",
       retryQueuedMessage: "إعادة محاولة الرسالة في قائمة الانتظار",
+    },
+    pairingQrExpired: {
+      title: "انتهت صلاحية رمز الاقتران QR",
+      reason: "شغّل ‎/pair qr‎ مرة أخرى لإنشاء رمز إعداد جديد.",
+      badge: "منتهي الصلاحية",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",

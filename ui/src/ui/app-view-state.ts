@@ -10,6 +10,7 @@ import type { RealtimeTalkStatus } from "./chat/realtime-talk.ts";
 import type { ChatRunUiStatus } from "./chat/run-lifecycle.ts";
 import type { ChatMessageCache } from "./chat/session-message-cache.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
+import type { ChatStreamSegment } from "./chat/stream-text.ts";
 import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
@@ -101,6 +102,7 @@ export type AppViewState = {
   chatSending: boolean;
   chatMessage: string;
   chatAttachments: ChatAttachment[];
+  chatReplyTarget?: { messageId: string; text: string; senderLabel?: string | null } | null;
   chatMessages: unknown[];
   chatToolMessages: unknown[];
   activityEntries: ActivityEntry[];
@@ -110,7 +112,7 @@ export type AppViewState = {
   activityExpandedIds: Set<string>;
   activityAutoFollow: boolean;
   activityAtBottom: boolean;
-  chatStreamSegments: Array<{ text: string; ts: number }>;
+  chatStreamSegments: ChatStreamSegment[];
   chatStream: string | null;
   chatStreamStartedAt: number | null;
   chatRunId: string | null;

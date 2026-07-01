@@ -133,17 +133,21 @@ export type ExecProcessOutcome =
       status: "completed";
       exitCode: number;
       exitSignal: NodeJS.Signals | number | null;
+      exitReason?: TerminationReason;
       durationMs: number;
       aggregated: string;
       timedOut: false;
+      noOutputTimedOut?: boolean;
     }
   | {
       status: "failed";
       exitCode: number | null;
       exitSignal: NodeJS.Signals | number | null;
+      exitReason?: TerminationReason;
       durationMs: number;
       aggregated: string;
       timedOut: boolean;
+      noOutputTimedOut?: boolean;
       failureKind: ExecProcessFailureKind;
       reason: string;
     };
@@ -490,9 +494,11 @@ export function buildExecExitOutcome(params: {
       status: "completed",
       exitCode,
       exitSignal: params.exit.exitSignal,
+      exitReason: params.exit.reason,
       durationMs: params.durationMs,
       aggregated: params.aggregated + exitMsg,
       timedOut: false,
+      noOutputTimedOut: params.exit.noOutputTimedOut,
     };
   }
   const failureKind = classifyExecFailureKind({
@@ -510,9 +516,11 @@ export function buildExecExitOutcome(params: {
     status: "failed",
     exitCode: params.exit.exitCode,
     exitSignal: params.exit.exitSignal,
+    exitReason: params.exit.reason,
     durationMs: params.durationMs,
     aggregated: params.aggregated,
     timedOut: params.exit.timedOut,
+    noOutputTimedOut: params.exit.noOutputTimedOut,
     failureKind,
     reason: joinExecFailureOutput(params.aggregated, reason),
   };
@@ -939,7 +947,14 @@ export async function runExecProcess(opts: {
         timeoutSec: opts.timeoutSec,
       });
 
-      markExited(session, exit.exitCode, exit.exitSignal, outcome.status, exit.reason);
+      markExited(
+        session,
+        exit.exitCode,
+        exit.exitSignal,
+        outcome.status,
+        exit.reason,
+        exit.noOutputTimedOut,
+      );
       maybeNotifyOnExit(session, outcome.status);
       if (!session.child && session.stdin) {
         session.stdin.destroyed = true;

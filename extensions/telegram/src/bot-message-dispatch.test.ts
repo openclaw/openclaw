@@ -568,6 +568,23 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
   }
 
+  function createReasoningForumTopicContext(): TelegramMessageContext {
+    loadSessionStore.mockReturnValue({
+      s1: { reasoningLevel: "stream" },
+    });
+    return createContext({
+      ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      msg: {
+        chat: { id: -100123, type: "supergroup", is_forum: true },
+        message_id: 456,
+        message_thread_id: 88,
+      } as unknown as TelegramMessageContext["msg"],
+      chatId: -100123,
+      isGroup: true,
+      threadSpec: { id: 88, scope: "forum" },
+    });
+  }
+
   it("skips general understanding after describing a first-seen non-vision sticker", async () => {
     describeStickerImage.mockResolvedValueOnce("A curious sticker");
     const ctxPayload = {
@@ -3242,6 +3259,36 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.flush).toHaveBeenCalled();
   });
 
+  it("keeps streamed reasoning visible when tool progress lines are hidden", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onAssistantMessageStart?.();
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await replyOptions?.onReasoningStream?.({ text: "<think>Checking files</think>" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createReasoningStreamContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: {
+          mode: "progress",
+          progress: { label: "Shelling", toolProgress: false },
+        },
+      },
+    });
+
+    expect(draftStream.updatePreview).toHaveBeenCalledWith(
+      telegramProgressPreview(
+        "Shelling\n\n• Checking files",
+        "<b>Shelling</b>\n<i>Checking files</i>",
+      ),
+    );
+  });
+
   it.each([{ label: false }, { label: "Shelling", maxLines: 1 }] as const)(
     "does not duplicate Telegram progress HTML rows without a visible label",
     async (progress) => {
@@ -3520,6 +3567,41 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("preserves forum topic message_thread_id across streamed reasoning and final answer", async () => {
+    const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onReasoningStream?.({ text: "<think>Thinking</think>" });
+        await dispatcherOptions.deliver({ text: "Answer" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createReasoningForumTopicContext() });
+
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith("Thinking\n\n_Thinking_");
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Answer");
+    expect(answerDraftStream.stop).toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+      content: "Answer",
+      messageId: 2001,
+    });
+    expectRecordFields(mockCallArg(recordOutboundMessageForPromptContext), {
+      chatId: "-100123",
+      messageId: 2001,
+      text: "Answer",
+      messageThreadId: 88,
+    });
+    expectDraftStreamParams({ thread: { id: 88, scope: "forum" } });
+    expectRecordFields(mockCallArg(createTelegramDraftStream, 1), {
+      thread: { id: 88, scope: "forum" },
+    });
+  });
+
   it("replaces reasoning snapshots on the reasoning lane", async () => {
     const { reasoningDraftStream } = setupDraftStreams({
       answerMessageId: 2001,
@@ -3608,6 +3690,56 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await run;
   });
 
+  it("keeps shared durable reasoning payloads disabled when reasoning is off", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    });
+
+    await dispatchWithContext({ context: createContext() });
+
+    const dispatchParams = mockCallArg(dispatchReplyWithBufferedBlockDispatcher) as {
+      replyOptions?: { reasoningPayloadsEnabled?: boolean };
+    };
+    expect(dispatchParams.replyOptions?.reasoningPayloadsEnabled).toBe(false);
+  });
+
+  it("opts shared dispatch into durable reasoning payload delivery when reasoning streams", async () => {
+    setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    });
+
+    await dispatchWithContext({ context: createReasoningStreamContext() });
+
+    const dispatchParams = mockCallArg(dispatchReplyWithBufferedBlockDispatcher) as {
+      replyOptions?: { reasoningPayloadsEnabled?: boolean };
+    };
+    expect(dispatchParams.replyOptions?.reasoningPayloadsEnabled).toBe(true);
+  });
+
+  it("keeps shared durable reasoning payloads disabled in progress stream mode", async () => {
+    setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    });
+
+    await dispatchWithContext({
+      context: createReasoningStreamContext(),
+      streamMode: "progress",
+    });
+
+    const dispatchParams = mockCallArg(dispatchReplyWithBufferedBlockDispatcher) as {
+      replyOptions?: { reasoningPayloadsEnabled?: boolean };
+    };
+    expect(dispatchParams.replyOptions?.reasoningPayloadsEnabled).toBe(false);
+  });
+
   it("suppresses typed reasoning-only finals without raw text fallback", async () => {
     setupDraftStreams({ answerMessageId: 2001, reasoningMessageId: 3001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
@@ -3622,6 +3754,66 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(editMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("routes typed reasoning-only finals to the reasoning lane when reasoning streams", async () => {
+    const { reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "<think>hidden</think>", isReasoning: true },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createReasoningStreamContext() });
+
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith("Thinking\n\n_hidden_");
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("routes typed reasoning-only finals to durable delivery when reasoning is persistent", async () => {
+    loadSessionStore.mockReturnValue({
+      s1: { reasoningLevel: "on" },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "<think>hidden</think>", isReasoning: true },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+    });
+
+    const delivered = expectDeliveredReply(0, { text: "Thinking\n\n_hidden_" });
+    expect(delivered).not.toHaveProperty("isReasoning");
+  });
+
+  it("does not persist typed reasoning-only finals in progress stream mode", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "<think>hidden</think>", isReasoning: true },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createReasoningStreamContext(),
+      streamMode: "progress",
+    });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(answerDraftStream.update).not.toHaveBeenCalled();
   });
 
   it("keeps unflagged angle-bracket text visible on the answer lane", async () => {
