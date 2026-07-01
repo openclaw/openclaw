@@ -256,6 +256,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       ],
       supportsBrowserSession: true,
       supportsBargeIn: true,
+      emitsSpeechStartedEvent: true,
       supportsToolCalls: true,
     });
   });
