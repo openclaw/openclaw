@@ -50,6 +50,7 @@ const loadSessionsMock = vi.hoisted(() =>
     }
   }),
 );
+const patchSessionMock = vi.hoisted(() => vi.fn(async () => true));
 const buildChatItemsMock = vi.hoisted(() =>
   vi.fn((props: { messages: unknown[]; stream: string | null; streamStartedAt: number | null }) => {
     if (
@@ -190,6 +191,7 @@ vi.mock("../controllers/agents.ts", () => ({
 
 vi.mock("../controllers/sessions.ts", () => ({
   loadSessions: loadSessionsMock,
+  patchSession: patchSessionMock,
   syncSelectedSessionMessageSubscription: vi.fn(async () => undefined),
 }));
 
@@ -1151,6 +1153,7 @@ afterEach(() => {
   renderMessageGroupMock.mockClear();
   assistantAttachmentRenderVersionMock.value = 0;
   loadSessionsMock.mockClear();
+  patchSessionMock.mockClear();
   refreshVisibleToolsEffectiveForCurrentSessionMock.mockClear();
   resetChatViewState();
   resetChatAttachmentPayloadStoreForTest();
@@ -3095,6 +3098,26 @@ describe("chat session controls", () => {
     target.click();
 
     expect(onSwitchSession).toHaveBeenCalledWith(state, targetSessionKey);
+  });
+
+  it("pins sessions from the chat session picker", async () => {
+    const { state } = createChatHeaderState();
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    container.querySelector<HTMLButtonElement>('button[data-chat-session-select="true"]')!.click();
+    await vi.waitFor(() => expect(state.chatSessionPickerResult).not.toBeNull());
+    render(renderChatSessionSelect(state), container);
+    container.querySelector<HTMLButtonElement>('button[data-chat-session-pin="true"]')!.click();
+
+    await vi.waitFor(() =>
+      expect(patchSessionMock).toHaveBeenCalledWith(
+        state,
+        "main",
+        { pinned: true },
+        { showArchived: false },
+      ),
+    );
   });
 
   it("clears applied chat session picker search when the input is cleared", async () => {

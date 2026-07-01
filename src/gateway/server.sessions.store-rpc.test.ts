@@ -241,6 +241,61 @@ test("lists and patches session store via sessions.* RPC", async () => {
   });
   expect(labelPatchedDuplicate.ok).toBe(false);
 
+  const mainArchive = await directSessionReq("sessions.patch", {
+    key: "agent:main:main",
+    archived: true,
+  });
+  expect(mainArchive.ok).toBe(false);
+
+  const pinned = await directSessionReq<{
+    entry: { pinnedAt?: number };
+  }>("sessions.patch", {
+    key: "agent:main:subagent:one",
+    pinned: true,
+  });
+  expect(pinned.ok).toBe(true);
+  expect(pinned.payload?.entry.pinnedAt).toEqual(expect.any(Number));
+
+  const pinnedList = await directSessionReq<{
+    sessions: Array<{ key: string; pinned?: boolean }>;
+  }>("sessions.list", {});
+  expect(pinnedList.payload?.sessions[0]).toMatchObject({
+    key: "agent:main:subagent:one",
+    pinned: true,
+  });
+
+  const archived = await directSessionReq<{
+    entry: { archivedAt?: number; pinnedAt?: number };
+  }>("sessions.patch", {
+    key: "agent:main:subagent:one",
+    archived: true,
+  });
+  expect(archived.ok).toBe(true);
+  expect(archived.payload?.entry.archivedAt).toEqual(expect.any(Number));
+  expect(archived.payload?.entry.pinnedAt).toBeUndefined();
+
+  const activeAfterArchive = await directSessionReq<{
+    sessions: Array<{ key: string }>;
+  }>("sessions.list", {});
+  expect(activeAfterArchive.payload?.sessions.map((session) => session.key)).not.toContain(
+    "agent:main:subagent:one",
+  );
+  const archivedList = await directSessionReq<{
+    sessions: Array<{ key: string; archived?: boolean }>;
+  }>("sessions.list", { archived: true });
+  expect(archivedList.payload?.sessions).toMatchObject([
+    { key: "agent:main:subagent:one", archived: true },
+  ]);
+
+  const restored = await directSessionReq<{
+    entry: { archivedAt?: number };
+  }>("sessions.patch", {
+    key: "agent:main:subagent:one",
+    archived: false,
+  });
+  expect(restored.ok).toBe(true);
+  expect(restored.payload?.entry.archivedAt).toBeUndefined();
+
   const list2 = await directSessionReq<{
     sessions: Array<{
       key: string;

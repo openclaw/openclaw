@@ -2862,6 +2862,7 @@ export function renderApp(state: AppViewState) {
                 includeGlobal: state.sessionsIncludeGlobal,
                 includeUnknown: state.sessionsIncludeUnknown,
                 showArchived: state.sessionsShowArchived,
+                mainKey: state.agentsList?.mainKey ?? "main",
                 filtersCollapsed: state.sessionsFiltersCollapsed,
                 basePath: state.basePath,
                 searchQuery: state.sessionsSearchQuery,
@@ -2906,7 +2907,7 @@ export function renderApp(state: AppViewState) {
                   state.sessionsFilterLimit = "";
                   state.sessionsIncludeGlobal = true;
                   state.sessionsIncludeUnknown = true;
-                  state.sessionsShowArchived = true;
+                  state.sessionsShowArchived = false;
                   state.sessionsSearchQuery = "";
                   state.sessionsSelectedKeys = new Set();
                   state.sessionsPage = 0;
@@ -2915,7 +2916,7 @@ export function renderApp(state: AppViewState) {
                     limit: 0,
                     includeGlobal: true,
                     includeUnknown: true,
-                    showArchived: true,
+                    showArchived: false,
                   });
                 },
                 onSearchChange: (q) => {

@@ -14,7 +14,7 @@ import {
   resolveChatModelSelectState,
 } from "../chat-model-select-state.ts";
 import { refreshVisibleToolsEffectiveForCurrentSession } from "../controllers/agents.ts";
-import { loadSessions } from "../controllers/sessions.ts";
+import { loadSessions, patchSession } from "../controllers/sessions.ts";
 import { formatDateTimeMs } from "../format.ts";
 import { icons } from "../icons.ts";
 import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
@@ -28,6 +28,7 @@ import {
   isSubagentSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveUiConfiguredMainKey,
 } from "../session-key.ts";
 import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
@@ -321,13 +322,7 @@ function createChatSessionPickerRequestParams(
   return params;
 }
 
-function projectChatSessionPickerResult(
-  state: AppViewState,
-  result: SessionsListResult,
-): SessionsListResult {
-  if (state.sessionsShowArchived) {
-    return result;
-  }
+function projectChatSessionPickerResult(result: SessionsListResult): SessionsListResult {
   const sessions = result.sessions.filter((row) => row.key && row.archived !== true);
   return {
     ...result,
@@ -381,7 +376,6 @@ async function loadChatSessionPickerPage(
   requestHostUpdate(state);
   try {
     const page = projectChatSessionPickerResult(
-      state,
       await state.client.request<SessionsListResult>(
         "sessions.list",
         createChatSessionPickerRequestParams(state, { query, offset: options.offset }),
@@ -556,6 +550,33 @@ function formatChatSessionPickerMeta(row: SessionsListResult["sessions"][number]
   return parts.join(" · ");
 }
 
+async function patchChatSessionFromPicker(params: {
+  state: AppViewState;
+  row: SessionsListResult["sessions"][number];
+  patch: { label?: string | null; archived?: boolean; pinned?: boolean };
+  onSwitchSession: ChatSessionSwitchHandler;
+}) {
+  const { state, row, patch, onSwitchSession } = params;
+  const patched = await patchSession(state, row.key, patch, { showArchived: false });
+  if (!patched) {
+    state.chatSessionPickerError = state.sessionsError ?? "Failed to update session";
+    return;
+  }
+  if (patch.archived === true && row.key === state.sessionKey) {
+    const parsed = parseAgentSessionKey(row.key);
+    const fallbackKey = buildAgentMainSessionKey({
+      agentId: parsed?.agentId ?? state.agentsList?.defaultId ?? "main",
+      mainKey: state.agentsList?.mainKey ?? undefined,
+    });
+    closeChatSessionPicker(state);
+    onSwitchSession(state, fallbackKey);
+    return;
+  }
+  await loadChatSessionPickerPage(state, {
+    query: state.chatSessionPickerAppliedQuery,
+  });
+}
+
 function renderChatSessionPicker(params: {
   state: AppViewState;
   onSwitchSession: ChatSessionSwitchHandler;
@@ -708,34 +729,111 @@ function renderChatSessionPickerPopover(
             const { row, label } = entry;
             const meta = formatChatSessionPickerMeta(row);
             const selected = row.key === state.sessionKey;
+            const parsedSessionKey = parseAgentSessionKey(row.key);
+            const isMainSession =
+              row.key === "main" || parsedSessionKey?.rest === resolveUiConfiguredMainKey(state);
+            const archiveDisabled =
+              isMainSession ||
+              row.hasActiveRun === true ||
+              row.kind === "global" ||
+              row.kind === "unknown";
             return html`
-              <button
-                class="chat-session-picker__option ${selected
-                  ? "chat-session-picker__option--selected"
-                  : ""}"
-                data-chat-session-picker-option="true"
-                data-session-key=${row.key}
-                role="option"
-                aria-selected=${selected ? "true" : "false"}
-                title=${label}
-                type="button"
-                @click=${() => {
-                  closeChatSessionPicker(state);
-                  if (row.key !== state.sessionKey) {
-                    onSwitchSession(state, row.key);
-                  }
-                }}
-              >
-                <span class="chat-session-picker__option-main">
-                  <span class="chat-session-picker__option-label">${label}</span>
-                  ${meta ? html`<span class="chat-session-picker__option-meta">${meta}</span>` : ""}
-                </span>
-                ${selected
-                  ? html`<span class="chat-session-picker__option-check" aria-hidden="true">
-                      ${icons.check}
-                    </span>`
-                  : ""}
-              </button>
+              <div class="chat-session-picker__option-row">
+                <button
+                  class="chat-session-picker__option ${selected
+                    ? "chat-session-picker__option--selected"
+                    : ""}"
+                  data-chat-session-picker-option="true"
+                  data-session-key=${row.key}
+                  role="option"
+                  aria-selected=${selected ? "true" : "false"}
+                  title=${label}
+                  type="button"
+                  @click=${() => {
+                    closeChatSessionPicker(state);
+                    if (row.key !== state.sessionKey) {
+                      onSwitchSession(state, row.key);
+                    }
+                  }}
+                >
+                  <span class="chat-session-picker__option-main">
+                    <span class="chat-session-picker__option-label">${label}</span>
+                    ${meta
+                      ? html`<span class="chat-session-picker__option-meta">${meta}</span>`
+                      : ""}
+                  </span>
+                  ${selected
+                    ? html`<span class="chat-session-picker__option-check" aria-hidden="true">
+                        ${icons.check}
+                      </span>`
+                    : ""}
+                </button>
+                <div class="chat-session-picker__option-actions">
+                  <button
+                    class="btn btn--ghost btn--icon"
+                    data-chat-session-rename="true"
+                    type="button"
+                    title=${t("sessionsView.renameSession")}
+                    aria-label=${t("sessionsView.renameSession")}
+                    ?disabled=${controlsDisabled}
+                    @click=${() => {
+                      const nextLabel = window.prompt(
+                        t("sessionsView.renameSessionPrompt"),
+                        row.label ?? label,
+                      );
+                      if (nextLabel === null) {
+                        return;
+                      }
+                      void patchChatSessionFromPicker({
+                        state,
+                        row,
+                        patch: { label: normalizeOptionalString(nextLabel) ?? null },
+                        onSwitchSession,
+                      });
+                    }}
+                  >
+                    ${icons.edit}
+                  </button>
+                  <button
+                    class="btn btn--ghost btn--icon"
+                    data-chat-session-pin="true"
+                    type="button"
+                    title=${row.pinned
+                      ? t("sessionsView.unpinSession")
+                      : t("sessionsView.pinSession")}
+                    aria-label=${row.pinned
+                      ? t("sessionsView.unpinSession")
+                      : t("sessionsView.pinSession")}
+                    ?disabled=${controlsDisabled}
+                    @click=${() =>
+                      void patchChatSessionFromPicker({
+                        state,
+                        row,
+                        patch: { pinned: row.pinned !== true },
+                        onSwitchSession,
+                      })}
+                  >
+                    ${row.pinned ? icons.pinOff : icons.pin}
+                  </button>
+                  <button
+                    class="btn btn--ghost btn--icon"
+                    data-chat-session-archive="true"
+                    type="button"
+                    title=${t("sessionsView.archiveSession")}
+                    aria-label=${t("sessionsView.archiveSession")}
+                    ?disabled=${controlsDisabled || archiveDisabled}
+                    @click=${() =>
+                      void patchChatSessionFromPicker({
+                        state,
+                        row,
+                        patch: { archived: true },
+                        onSwitchSession,
+                      })}
+                  >
+                    ${icons.archive}
+                  </button>
+                </div>
+              </div>
             `;
           },
         )}

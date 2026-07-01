@@ -2162,6 +2162,10 @@ export function buildGatewaySessionRow(params: {
     chatType: entry?.chatType,
     origin,
     updatedAt,
+    archived: entry?.archivedAt !== undefined,
+    archivedAt: entry?.archivedAt,
+    pinned: entry?.pinnedAt !== undefined,
+    pinnedAt: entry?.pinnedAt,
     sessionId: entry?.sessionId,
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
@@ -2420,7 +2424,12 @@ type SessionEntrySelection = {
   hasMore: boolean;
 };
 
-function compareSessionEntryPairsByUpdatedAt(a: SessionEntryPair, b: SessionEntryPair): number {
+function compareSessionEntryPairs(a: SessionEntryPair, b: SessionEntryPair): number {
+  const aPinnedAt = a[1]?.pinnedAt ?? 0;
+  const bPinnedAt = b[1]?.pinnedAt ?? 0;
+  if (aPinnedAt !== bPinnedAt) {
+    return bPinnedAt - aPinnedAt;
+  }
   return (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0);
 }
 
@@ -2456,7 +2465,7 @@ function selectNewestLimitedEntries(
   const selected: SessionEntryPair[] = [];
   for (const entry of entries) {
     const insertAt = selected.findIndex(
-      (candidate) => compareSessionEntryPairsByUpdatedAt(entry, candidate) < 0,
+      (candidate) => compareSessionEntryPairs(entry, candidate) < 0,
     );
     if (insertAt >= 0) {
       selected.splice(insertAt, 0, entry);
@@ -2477,7 +2486,7 @@ function sortAndLimitSessionEntries(
   if (limit !== undefined && limit <= SESSIONS_LIST_TOP_N_LIMIT) {
     return selectNewestLimitedEntries(entries, limit);
   }
-  const sorted = entries.toSorted(compareSessionEntryPairsByUpdatedAt);
+  const sorted = entries.toSorted(compareSessionEntryPairs);
   return limit === undefined ? sorted : sorted.slice(0, limit);
 }
 
@@ -2559,6 +2568,10 @@ function filterSessionEntries(params: {
         shouldKeepStoreOnlyChildLink(entry, now) &&
         (entry?.spawnedBy === spawnedBy || entry?.parentSessionKey === spawnedBy)
       );
+    })
+    .filter(([, entry]) => {
+      const archived = entry?.archivedAt !== undefined;
+      return opts.archived === true ? archived : !archived;
     })
     .filter(([, entry]) => {
       if (!label) {

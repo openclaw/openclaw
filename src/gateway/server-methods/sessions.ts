@@ -2019,6 +2019,34 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg, {
       agentId: requestedAgentId,
     });
+    const canonicalKey = target.canonicalKey ?? key;
+    if (p.archived === true) {
+      if (canonicalKey === "global" || isAgentMainSessionKey(cfg, canonicalKey)) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "Cannot archive an agent's main session."),
+        );
+        return;
+      }
+      const { entry } = loadSessionEntry(key, { agentId: requestedAgentId });
+      if (
+        hasVisibleActiveSessionRun({
+          context,
+          requestedKey: key,
+          canonicalKey,
+          sessionId: entry?.sessionId,
+          defaultAgentId: resolveDefaultAgentId(cfg),
+        })
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "Cannot archive a session with an active run."),
+        );
+        return;
+      }
+    }
     const applied = await applySessionPatchProjection({
       storePath,
       resolveTarget: ({ entries }) => {

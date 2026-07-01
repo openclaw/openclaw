@@ -590,7 +590,7 @@ describe("loadSessions", () => {
     expect(state.sessionsResult?.count).toBe(1);
   });
 
-  it("includes explicitly archived sessions when explicitly shown", async () => {
+  it("shows only archived sessions in the archived view", async () => {
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {
         throw new Error(`unexpected method: ${method}`);
@@ -617,10 +617,9 @@ describe("loadSessions", () => {
     await loadSessions(state);
 
     expect(state.sessionsResult?.sessions.map((session) => session.key)).toEqual([
-      "agent:main:main",
       "agent:main:subagent:archived",
     ]);
-    expect(state.sessionsResult?.count).toBe(2);
+    expect(state.sessionsResult?.count).toBe(1);
   });
 
   it("keeps terminal non-archived sessions visible by default", async () => {
@@ -803,6 +802,7 @@ describe("loadSessions", () => {
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
+      archived: true,
     });
   });
 
@@ -1551,6 +1551,38 @@ describe("applySessionsChangedEvent", () => {
 
     expect(applied).toEqual({ applied: true, change: "deleted" });
     expect(state.sessionsResult?.sessions).toStrictEqual([]);
+  });
+
+  it("clears pin timestamps from unpin events", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          {
+            key: "agent:main:project",
+            kind: "direct",
+            updatedAt: 1,
+            pinned: true,
+            pinnedAt: 2,
+          },
+        ],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:project",
+      sessionId: "sess-project",
+      pinned: false,
+      pinnedAt: null,
+      ts: 3,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({ pinned: false });
+    expect(state.sessionsResult?.sessions[0]?.pinnedAt).toBeUndefined();
   });
 
   it("keeps terminal status updates visible while archived sessions are hidden", () => {

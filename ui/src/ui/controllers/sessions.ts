@@ -320,6 +320,9 @@ const SESSION_EVENT_ROW_FIELDS = [
   "startedAt",
   "status",
   "archived",
+  "archivedAt",
+  "pinned",
+  "pinnedAt",
   "subject",
   "surface",
   "systemSent",
@@ -407,7 +410,7 @@ function filterAvailableSessionRows(
   rows: GatewaySessionRow[],
   options: { showArchived: boolean },
 ): GatewaySessionRow[] {
-  return rows.filter((row) => row.key && (options.showArchived || !isArchivedSessionRow(row)));
+  return rows.filter((row) => row.key && isArchivedSessionRow(row) === options.showArchived);
 }
 
 function projectSessionsResultForAvailability(
@@ -454,6 +457,10 @@ function appendSessionsResult(
 }
 
 function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySessionRow): number {
+  const pinnedDiff = (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0);
+  if (pinnedDiff !== 0) {
+    return pinnedDiff;
+  }
   return (b.updatedAt ?? 0) - (a.updatedAt ?? 0);
 }
 
@@ -600,7 +607,7 @@ function resolveCachedChatAgentSessionRowAgentId(
 }
 
 function upsertCachedChatAgentSessionRow(state: SessionsState, row: GatewaySessionRow): boolean {
-  if (!state.sessionsShowArchived && isArchivedSessionRow(row)) {
+  if (isArchivedSessionRow(row)) {
     return invalidateCachedChatAgentSessionRow(state, row.key);
   }
   const agentId = resolveCachedChatAgentSessionRowAgentId(state, row);
@@ -777,7 +784,9 @@ export function applySessionsChangedEvent(
       continue;
     }
     const value = hasTopLevelGoalClear ? null : source[field];
-    if (value === undefined || (field === "goal" && value === null)) {
+    const clearsManagementTimestamp =
+      (field === "archivedAt" || field === "pinnedAt") && value === null;
+    if (value === undefined || (field === "goal" && value === null) || clearsManagementTimestamp) {
       delete mutableNext[field];
     } else {
       mutableNext[field] = value;
@@ -800,7 +809,7 @@ export function applySessionsChangedEvent(
       ? { applied: true, change: existingIndex >= 0 ? "updated" : "inserted" }
       : { applied: false };
   }
-  if (!state.sessionsShowArchived && isArchivedSessionRow(nextRow)) {
+  if (isArchivedSessionRow(nextRow) !== state.sessionsShowArchived) {
     const removedCachedRow = invalidateCachedChatAgentSessionRow(state, key);
     if (existingIndex < 0) {
       return removedCachedRow ? { applied: true, change: "deleted" } : { applied: false };
@@ -888,7 +897,7 @@ export function applyChatHistorySessionInfo(
       };
       return true;
     }
-    const sessions = state.sessionsShowArchived || !isArchivedSessionRow(session) ? [session] : [];
+    const sessions = isArchivedSessionRow(session) === state.sessionsShowArchived ? [session] : [];
     state.sessionsResult = {
       ts: Date.now(),
       path: "",
@@ -1128,6 +1137,9 @@ async function loadSessionsOnce(
       includeUnknown,
       configuredAgentsOnly,
     };
+    if (showArchived) {
+      params.archived = true;
+    }
     const agentId = overrides?.agentId?.trim();
     const resultAgentId = agentId ? normalizeAgentId(agentId) : null;
     if (agentId) {
@@ -1203,14 +1215,17 @@ export async function patchSession(
   key: string,
   patch: {
     label?: string | null;
+    archived?: boolean;
+    pinned?: boolean;
     thinkingLevel?: string | null;
     fastMode?: FastMode | null;
     verboseLevel?: string | null;
     reasoningLevel?: string | null;
   },
-) {
+  refreshOverrides?: LoadSessionsOverrides,
+): Promise<boolean> {
   if (!state.client || !state.connected) {
-    return;
+    return false;
   }
   const params: Record<string, unknown> = {
     key,
@@ -1218,6 +1233,8 @@ export async function patchSession(
   };
   for (const field of [
     "label",
+    "archived",
+    "pinned",
     "thinkingLevel",
     "fastMode",
     "verboseLevel",
@@ -1229,12 +1246,15 @@ export async function patchSession(
   }
   try {
     await state.client.request("sessions.patch", params);
-    await loadSessions(
-      state,
-      isUiGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : undefined,
-    );
+    await loadSessions(state, {
+      ...refreshOverrides,
+      ...(isUiGlobalSessionKey(key) ? { agentId: resolveSelectedGlobalAgentId(state) } : {}),
+      showArchived: refreshOverrides?.showArchived ?? state.sessionsShowArchived,
+    });
+    return true;
   } catch (err) {
     state.sessionsError = String(err);
+    return false;
   }
 }
 

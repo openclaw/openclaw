@@ -2095,6 +2095,29 @@
   cursor: pointer;
 }
 
+.chat-session-picker__option-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.chat-session-picker__option-row .chat-session-picker__option {
+  min-width: 0;
+}
+
+.chat-session-picker__option-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+.chat-session-picker__option-actions .btn {
+  width: 28px;
+  height: 28px;
+  padding: 5px;
+}
+
 .chat-session-picker__option:hover,
 .chat-session-picker__option:focus-visible {
   background: var(--bg-hover);
