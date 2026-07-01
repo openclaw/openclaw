@@ -431,16 +431,16 @@ function escapeUnsupportedTelegramHtml(
 ): string {
   // Strip model-generated tool-call XML wrappers before any tag processing
   // so they do not appear as escaped text in either rich or legacy output.
-  text = stripModelParameterWrappers(text);
+  const sanitized = stripModelParameterWrappers(text);
   let result = "";
   let index = 0;
   const openTags: string[] = [];
-  while (index < text.length) {
-    const char = text[index];
+  while (index < sanitized.length) {
+    const char = sanitized[index];
     if (char === "&") {
-      const entityEnd = findTelegramHtmlEntityEnd(text, index);
+      const entityEnd = findTelegramHtmlEntityEnd(sanitized, index);
       if (entityEnd !== -1) {
-        result += text.slice(index, entityEnd + 1);
+        result += sanitized.slice(index, entityEnd + 1);
         index = entityEnd + 1;
       } else {
         result += "&amp;";
