@@ -73,10 +73,9 @@ export async function sendLineReplyChunks(
 
       for (let i = 0; i < remaining.length; i += 5) {
         const batch = remaining.slice(i, Math.min(i + 5, remaining.length));
-        const lastGlobalIdx = remaining.length - 1;
-        const hasLastChunk = batch.includes(remaining[lastGlobalIdx]);
+        const isLastBatch = i + batch.length >= remaining.length;
 
-        if (hasLastChunk && hasQuickReplies) {
+        if (isLastBatch && hasQuickReplies) {
           const nonLast = batch.slice(0, -1);
           if (nonLast.length > 0) {
             await params.pushMessagesLine(
@@ -109,10 +108,9 @@ export async function sendLineReplyChunks(
 
   for (let i = 0; i < params.chunks.length; i += 5) {
     const batch = params.chunks.slice(i, Math.min(i + 5, params.chunks.length));
-    const lastGlobalIdx = params.chunks.length - 1;
-    const hasLastChunk = batch.includes(params.chunks[lastGlobalIdx]);
+    const isLastBatch = i + batch.length >= params.chunks.length;
 
-    if (hasLastChunk && hasQuickReplies) {
+    if (isLastBatch && hasQuickReplies) {
       const nonLast = batch.slice(0, -1);
       if (nonLast.length > 0) {
         await params.pushMessagesLine(
