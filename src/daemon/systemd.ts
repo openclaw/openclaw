@@ -274,6 +274,11 @@ function collectSystemdInlineManagedKeys(params: {
   environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
 }): Set<string> {
   const keys = readManagedServiceEnvKeysFromEnvironment(params.environment);
+  for (const key of collectSystemdFileManagedKeys({
+    environmentValueSources: params.environmentValueSources,
+  })) {
+    keys.delete(key);
+  }
   for (const [rawKey, value] of Object.entries(params.environment ?? {})) {
     if (typeof value !== "string" || !value.trim()) {
       continue;
