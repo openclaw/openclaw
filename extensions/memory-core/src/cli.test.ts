@@ -1527,6 +1527,114 @@ describe("memory cli", () => {
     });
   });
 
+  it("relaxes promote maxAgeDays only for explicit non-apply inspection", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const oldRecallMs = Date.now() - 45 * 24 * 60 * 60 * 1000;
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "router notes",
+        nowMs: oldRecallMs,
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 4,
+            endLine: 8,
+            score: 0.86,
+            snippet: "Configured VLAN 10 for IoT on router",
+            source: "memory",
+          },
+        ],
+      });
+
+      getRuntimeConfig.mockReturnValue({
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  phases: {
+                    deep: {
+                      maxAgeDays: 7,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const conservativeClose = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close: conservativeClose,
+      });
+      const conservativeJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli([
+        "promote",
+        "--json",
+        "--limit",
+        "10",
+        "--min-score",
+        "0",
+        "--min-recall-count",
+        "0",
+        "--min-unique-queries",
+        "1",
+      ]);
+      const conservativePayload = firstWrittenJsonArg<{ candidates: unknown[] }>(conservativeJson);
+      expect(conservativePayload?.candidates).toHaveLength(0);
+      conservativeJson.mockRestore();
+
+      const inspectionClose = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close: inspectionClose,
+      });
+      const inspectionJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli([
+        "promote",
+        "--json",
+        "--limit",
+        "10",
+        "--min-score",
+        "0",
+        "--min-recall-count",
+        "1",
+        "--min-unique-queries",
+        "1",
+      ]);
+      const inspectionPayload = firstWrittenJsonArg<{ candidates: unknown[] }>(inspectionJson);
+      expect(inspectionPayload?.candidates).toHaveLength(1);
+      inspectionJson.mockRestore();
+
+      const applyClose = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close: applyClose,
+      });
+      const applyJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli([
+        "promote",
+        "--json",
+        "--apply",
+        "--limit",
+        "10",
+        "--min-score",
+        "0",
+        "--min-recall-count",
+        "1",
+        "--min-unique-queries",
+        "1",
+      ]);
+      const applyPayload = firstWrittenJsonArg<{ candidates: unknown[] }>(applyJson);
+      expect(applyPayload?.candidates).toHaveLength(0);
+      expect(conservativeClose).toHaveBeenCalled();
+      expect(inspectionClose).toHaveBeenCalled();
+      expect(applyClose).toHaveBeenCalled();
+    });
+  });
+
   it("explains a specific promote candidate as json", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await recordShortTermRecalls({

@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isUsageCountedSessionTranscriptFileName } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   resolveMemoryDreamingConfig,
@@ -10,7 +11,6 @@ import {
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
-import { isUsageCountedSessionTranscriptFileName } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
   colorize,
@@ -1357,6 +1357,11 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
         return;
       }
 
+      const relaxedInspectionMode =
+        opts.apply !== true &&
+        opts.minScore === 0 &&
+        opts.minRecallCount === 1 &&
+        opts.minUniqueQueries === 1;
       let candidates: Awaited<ReturnType<typeof rankShortTermPromotionCandidates>>;
       try {
         candidates = await rankShortTermPromotionCandidates({
@@ -1366,7 +1371,7 @@ export async function runMemoryPromote(opts: MemoryPromoteCommandOptions) {
           minRecallCount: opts.minRecallCount ?? dreaming.minRecallCount,
           minUniqueQueries: opts.minUniqueQueries ?? dreaming.minUniqueQueries,
           recencyHalfLifeDays: dreaming.recencyHalfLifeDays,
-          maxAgeDays: dreaming.maxAgeDays,
+          ...(relaxedInspectionMode ? {} : { maxAgeDays: dreaming.maxAgeDays }),
           includePromoted: Boolean(opts.includePromoted),
         });
       } catch (err) {
