@@ -12,6 +12,7 @@ import { ensureDebugProxyCa } from "../proxy-capture/ca.js";
 import { buildDebugProxyCoverageReport } from "../proxy-capture/coverage.js";
 import { resolveDebugProxySettings, applyDebugProxyEnv } from "../proxy-capture/env.js";
 import { startDebugProxyServer } from "../proxy-capture/proxy-server.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import {
   finalizeDebugProxyCapture,
   initializeDebugProxyCapture,
@@ -287,7 +288,7 @@ export async function runProxyValidateCommand(opts: {
 
 export async function runDebugProxySessionsCommand(opts: { limit?: number }) {
   const sessions = getDebugProxyCaptureStore().listSessions(opts.limit ?? 20);
-  process.stdout.write(`${JSON.stringify(sessions, null, 2)}\n`);
+  process.stdout.write(`${redactSensitiveText(JSON.stringify(sessions, null, 2))}\n`);
   closeDebugProxyCaptureStore();
 }
 
@@ -296,18 +297,20 @@ export async function runDebugProxyQueryCommand(opts: {
   sessionId?: string;
 }) {
   const rows = getDebugProxyCaptureStore().queryPreset(opts.preset, opts.sessionId);
-  process.stdout.write(`${JSON.stringify(rows, null, 2)}\n`);
+  process.stdout.write(`${redactSensitiveText(JSON.stringify(rows, null, 2))}\n`);
   closeDebugProxyCaptureStore();
 }
 
 export async function runDebugProxyCoverageCommand() {
-  process.stdout.write(`${JSON.stringify(buildDebugProxyCoverageReport(), null, 2)}\n`);
+  process.stdout.write(
+    `${redactSensitiveText(JSON.stringify(buildDebugProxyCoverageReport(), null, 2))}\n`,
+  );
   closeDebugProxyCaptureStore();
 }
 
 export async function runDebugProxyPurgeCommand() {
   const result = getDebugProxyCaptureStore().purgeAll();
-  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  process.stdout.write(`${redactSensitiveText(JSON.stringify(result, null, 2))}\n`);
   closeDebugProxyCaptureStore();
 }
 
