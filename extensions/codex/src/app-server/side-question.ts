@@ -18,6 +18,7 @@ import {
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { readCodexSupportedReasoningEfforts } from "../../provider.js";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";
@@ -325,7 +326,11 @@ export async function runCodexAppServerSideQuestion(
           execPolicy,
           execReviewerAgentId: sessionAgentId,
           internalExecAutoReview: modelScopedAppServer.approvalsReviewer === "user",
-          autoApprove: shouldAutoApproveCodexAppServerApprovals({ approvalPolicy, sandbox }),
+          autoApprove: shouldAutoApproveCodexAppServerApprovals({
+            approvalPolicy,
+            networkProxy: modelScopedAppServer.networkProxy,
+            sandbox,
+          }),
           signal: runAbortController.signal,
         });
       }
@@ -416,7 +421,11 @@ export async function runCodexAppServerSideQuestion(
       nativeCodeModeOnlyEnabled: appServer.codeModeOnly,
     });
     const threadConfig =
-      mergeCodexThreadConfigs(nativeHookRelayConfig, runtimeThreadConfig) ?? runtimeThreadConfig;
+      mergeCodexThreadConfigs(
+        nativeHookRelayConfig,
+        runtimeThreadConfig,
+        modelScopedAppServer.networkProxy?.configPatch,
+      ) ?? runtimeThreadConfig;
     const forkResponse = assertCodexThreadForkResponse(
       await forkCodexSideThread(
         client,
@@ -428,7 +437,7 @@ export async function runCodexAppServerSideQuestion(
           cwd,
           approvalPolicy,
           approvalsReviewer: modelScopedAppServer.approvalsReviewer,
-          sandbox,
+          ...(modelScopedAppServer.networkProxy ? {} : { sandbox }),
           ...(serviceTier ? { serviceTier } : {}),
           config: threadConfig,
           developerInstructions: SIDE_DEVELOPER_INSTRUCTIONS,
@@ -449,7 +458,11 @@ export async function runCodexAppServerSideQuestion(
       { timeoutMs: appServer.requestTimeoutMs, signal: params.opts?.abortSignal },
     );
 
-    const effort = resolveReasoningEffort(params.resolvedThinkLevel ?? "off", modelSelection.model);
+    const effort = resolveReasoningEffort(
+      params.resolvedThinkLevel ?? "off",
+      modelSelection.model,
+      readCodexSupportedReasoningEfforts(params.runtimeModel?.compat),
+    );
     const turnResponse = assertCodexTurnStartResponse(
       await client.request(
         "turn/start",

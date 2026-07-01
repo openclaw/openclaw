@@ -48,6 +48,9 @@ export type CodexInitializeResponse = {
   };
   protocolVersion?: string;
   userAgent?: string;
+  codexHome?: string;
+  platformFamily?: string;
+  platformOs?: string;
 };
 
 export type CodexUserInput =
@@ -394,6 +397,7 @@ export type CodexLoginAccountParams =
 
 export type CodexPluginSummary = {
   id: string;
+  remotePluginId?: string;
   name: string;
   source?: JsonObject;
   installed: boolean;
@@ -572,6 +576,8 @@ type CodexAppServerRequestResultMap = {
   "account/read": CodexGetAccountResponse;
   "app/list": CodexAppsListResponse;
   "config/mcpServer/reload": JsonValue;
+  "config/read": JsonValue;
+  "config/value/write": JsonValue;
   "environment/add": JsonValue;
   "experimentalFeature/enablement/set": JsonValue;
   "feedback/upload": JsonValue;

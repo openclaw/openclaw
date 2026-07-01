@@ -4,7 +4,7 @@
  * Live profile tests use these fixtures to verify text, file-label, and image
  * turn behavior without coupling probe construction to the large live suite.
  */
-import type { AssistantMessage, Context, Model } from "../llm/types.js";
+import type { Context, Model } from "../llm/types.js";
 
 /** Stable token embedded in file-style live probe prompts. */
 export const LIVE_MODEL_FILE_PROBE_TOKEN = "opal";
@@ -67,15 +67,6 @@ export function isLiveModelProbeEnabled(
     return true;
   }
   return !["0", "false", "no", "off"].includes(raw);
-}
-
-/** Extracts assistant text blocks into the probe result string. */
-export function extractAssistantText(message: Pick<AssistantMessage, "content">): string {
-  return message.content
-    .filter((block) => block.type === "text")
-    .map((block) => block.text.trim())
-    .filter(Boolean)
-    .join(" ");
 }
 
 /** Returns whether model metadata advertises image input support. */

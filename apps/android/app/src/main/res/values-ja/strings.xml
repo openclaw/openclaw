@@ -1,0 +1,37 @@
+<resources>
+    <string name="app_name">OpenClaw Node</string>
+    <string name="gateway_connection">ゲートウェイ接続</string>
+    <string name="connect_gateway">ゲートウェイに接続</string>
+    <string name="disconnect">切断</string>
+    <string name="trust_this_gateway">このゲートウェイを信頼しますか？</string>
+    <string name="trust_and_continue">信頼して続行</string>
+    <string name="cancel">キャンセル</string>
+    <string name="endpoint">エンドポイント</string>
+    <string name="status">ステータス</string>
+    <string name="connected_gateway_ready">ゲートウェイはアクティブで準備完了です。</string>
+    <string name="connect_gateway_get_started">開始するにはゲートウェイに接続してください。</string>
+    <string name="copy_report_for_claw">Claw 用レポートをコピー</string>
+    <string name="advanced_controls">詳細コントロール</string>
+    <string name="connection_method">接続方法</string>
+    <string name="setup_code">セットアップコード</string>
+    <string name="manual">手動</string>
+    <string name="paste_setup_code">セットアップコードを貼り付け</string>
+    <string name="host">ホスト</string>
+    <string name="use_tls">TLS を使用</string>
+    <string name="token_optional">トークン（任意）</string>
+    <string name="password">パスワード</string>
+    <string name="run_onboarding_again">オンボーディングを再実行</string>
+    <string name="resolved_endpoint">解決済みエンドポイント</string>
+    <string name="gateway_setup">ゲートウェイ設定</string>
+    <string name="connect_to_gateway">ゲートウェイに接続</string>
+    <string name="scan_setup_code">セットアップコードをスキャン</string>
+    <string name="use_gateway_qr">ゲートウェイの QR またはセットアップコードを使用</string>
+    <string name="nearby_gateway">近くのゲートウェイ</string>
+    <string name="enter_gateway_url">ゲートウェイ URL を入力</string>
+    <string name="connect_manual_url">手動 URL で接続</string>
+    <string name="permissions">権限</string>
+    <string name="done">完了</string>
+    <string name="gateway_trust_first_seen">このゲートウェイを信頼する前に、証明書のフィンガープリントを確認してください。\n\n%1$s</string>
+    <string name="gateway_trust_changed">ゲートウェイの証明書が変更されました。想定した変更である場合のみ続行してください。\n\n以前の SHA-256:\n%1$s\n\n新しい SHA-256:\n%2$s</string>
+    <string name="gateway_recovery">ゲートウェイの復旧</string>
+</resources>

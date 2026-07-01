@@ -42,6 +42,7 @@ vi.mock("./api.js", () => {
     renderQrPngDataUrl: pluginApiMocks.renderQrPngDataUrl,
     revokeDeviceBootstrapToken: pluginApiMocks.revokeDeviceBootstrapToken,
     resolvePreferredOpenClawTmpDir: pluginApiMocks.resolvePreferredOpenClawTmpDir,
+    resolveAdvertisedLanHost: vi.fn(async () => null),
     resolveGatewayBindUrl: vi.fn(),
     resolveGatewayPort: pluginApiMocks.resolveGatewayPort,
     resolveTailnetHostWithRunner: vi.fn(),
@@ -54,12 +55,12 @@ vi.mock("./notify.js", () => ({
   armPairNotifyOnce: vi.fn(async () => false),
   formatPendingRequests: vi.fn(() => "No pending device pairing requests."),
   handleNotifyCommand: vi.fn(async () => ({ text: "notify" })),
-  registerPairingNotifierService: vi.fn(),
 }));
 
 import {
   approveDevicePairing,
   listDevicePairing,
+  resolveAdvertisedLanHost,
   resolveGatewayBindUrl,
   resolveTailnetHostWithRunner,
 } from "./api.js";
@@ -291,7 +292,12 @@ describe("device-pair /pair qr", () => {
         gatewayClientScopes: INTERNAL_SETUP_SCOPES,
       }),
     );
-    const payload = result as { text?: string; mediaUrl?: string; sensitiveMedia?: boolean };
+    const payload = result as {
+      text?: string;
+      mediaUrl?: string;
+      channelData?: Record<string, unknown>;
+      sensitiveMedia?: boolean;
+    };
     const text = requireText(result);
 
     expect(pluginApiMocks.renderQrPngDataUrl).toHaveBeenCalledTimes(1);
@@ -302,7 +308,11 @@ describe("device-pair /pair qr", () => {
       },
     });
     expect(text).toContain("Scan this QR code with the OpenClaw iOS app:");
-    expect(payload.mediaUrl).toBe("data:image/png;base64,ZmFrZXBuZw==");
+    expect(payload.mediaUrl).toBeUndefined();
+    expect(payload.channelData?.openclawPairingQr).toEqual({
+      setupCode: expect.any(String),
+      expiresAtMs: expect.any(Number),
+    });
     expect(payload.sensitiveMedia).toBe(true);
     expect(text).toContain("- Security: single-use bootstrap token");
     expect(text).toContain("**Important:** Run `/pair cleanup` after pairing finishes.");
@@ -850,6 +860,40 @@ describe("device-pair /pair default setup code", () => {
 
     expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
     expect(requireText(result)).toContain("Gateway: ws://openclaw.local:18789");
+  });
+
+  it("uses the advertised LAN helper for bind-derived setup urls", async () => {
+    vi.mocked(resolveAdvertisedLanHost).mockResolvedValueOnce("10.211.55.3");
+    vi.mocked(resolveGatewayBindUrl).mockImplementationOnce((params) => ({
+      url: `ws://${params.pickLanHost()}:18789`,
+      source: "gateway.bind=lan",
+    }));
+    const command = registerPairCommand({
+      config: {
+        gateway: {
+          bind: "lan",
+          auth: {
+            mode: "token",
+            token: "gateway-token",
+          },
+        },
+      },
+      pluginConfig: {
+        publicUrl: undefined,
+      },
+    });
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: INTERNAL_SETUP_SCOPES,
+      }),
+    );
+
+    expect(resolveAdvertisedLanHost).toHaveBeenCalledTimes(1);
+    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
+    expect(requireText(result)).toContain("Gateway: ws://10.211.55.3:18789");
   });
 
   it("rejects public cleartext setup urls before issuing setup codes", async () => {

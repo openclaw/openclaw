@@ -22,7 +22,8 @@ import { getOptionalTelegramRuntime } from "./runtime.js";
 
 export type TelegramReplyChainEntry = NonNullable<MsgContext["ReplyChain"]>[number];
 
-export type TelegramCachedMessageNode = TelegramReplyChainEntry & {
+export type TelegramCachedMessageNode = Omit<TelegramReplyChainEntry, "messageId"> & {
+  messageId: string;
   sourceMessage: Message;
 };
 
@@ -777,11 +778,15 @@ function compareCachedMessageNodes(
 const SESSION_BOUNDARY_COMMAND_RE = /^\/(?:new|reset)(?:@[A-Za-z0-9_]+)?(?:\s|$)/i;
 const SOFT_RESET_COMMAND_RE = /^\/reset(?:@[A-Za-z0-9_]+)?\s+soft(?:\s|$)/i;
 
-function isSessionBoundaryCommandNode(node: TelegramCachedMessageNode): boolean {
-  const body = node.body?.trim();
+export function isTelegramSessionBoundaryCommandText(text: string | undefined): boolean {
+  const body = text?.trim();
   return Boolean(
     body && SESSION_BOUNDARY_COMMAND_RE.test(body) && !SOFT_RESET_COMMAND_RE.test(body),
   );
+}
+
+function isSessionBoundaryCommandNode(node: TelegramCachedMessageNode): boolean {
+  return isTelegramSessionBoundaryCommandText(node.body);
 }
 
 function isAfterSessionBoundary(

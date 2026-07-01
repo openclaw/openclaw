@@ -6,9 +6,11 @@ import path from "node:path";
 import type { MemoryEmbeddingProbeResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   resolveMemoryDreamingConfig,
+  resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { isUsageCountedSessionTranscriptFileName } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
   colorize,
@@ -223,12 +225,23 @@ async function createHistoricalRemHarnessWorkspace(params: {
 
 function formatDreamingSummary(cfg: OpenClawConfig): string {
   const pluginConfig = resolveMemoryPluginConfig(cfg);
-  const dreaming = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
-  if (!dreaming.enabled) {
-    return "off";
-  }
-  const timezone = dreaming.timezone ? ` (${dreaming.timezone})` : "";
-  return `${dreaming.cron}${timezone} · limit=${dreaming.limit} · minScore=${dreaming.minScore} · minRecallCount=${dreaming.minRecallCount} · minUniqueQueries=${dreaming.minUniqueQueries} · recencyHalfLifeDays=${dreaming.recencyHalfLifeDays} · maxAgeDays=${dreaming.maxAgeDays ?? "none"} · maxPromotedSnippetTokens=${dreaming.maxPromotedSnippetTokens}`;
+  const light = resolveMemoryLightDreamingConfig({ pluginConfig, cfg });
+  const deep = resolveShortTermPromotionDreamingConfig({ pluginConfig, cfg });
+  const rem = resolveMemoryRemDreamingConfig({ pluginConfig, cfg });
+  const timezone = deep.timezone ?? light.timezone ?? rem.timezone;
+  const formatCron = (cron: string) => (timezone ? `${cron} (${timezone})` : cron);
+  const lightSummary = light.enabled
+    ? `light=${formatCron(light.cron)} · limit=${light.limit} · lookbackDays=${light.lookbackDays}`
+    : null;
+  const remSummary = rem.enabled
+    ? `rem=${formatCron(rem.cron)} · limit=${rem.limit} · lookbackDays=${rem.lookbackDays} · minPatternStrength=${rem.minPatternStrength}`
+    : null;
+  const hasLighterPhase = light.enabled || rem.enabled;
+  const deepLabel = hasLighterPhase ? "deep=" : "";
+  const deepDetails = `${formatCron(deep.cron)} · limit=${deep.limit} · minScore=${deep.minScore} · minRecallCount=${deep.minRecallCount} · minUniqueQueries=${deep.minUniqueQueries} · recencyHalfLifeDays=${deep.recencyHalfLifeDays} · maxAgeDays=${deep.maxAgeDays ?? "none"} · maxPromotedSnippetTokens=${deep.maxPromotedSnippetTokens}`;
+  const deepSummary = deep.enabled ? `${deepLabel}${deepDetails}` : null;
+  const phases = [lightSummary, remSummary, deepSummary].filter(Boolean);
+  return phases.length > 0 ? phases.join(" · ") : "off";
 }
 
 function formatAuditCounts(audit: ShortTermAuditSummary): string {
@@ -526,7 +539,7 @@ async function scanSessionFiles(agentId: string): Promise<SourceScan> {
   try {
     const entries = await fs.readdir(sessionsDir, { withFileTypes: true });
     const totalFiles = entries.filter(
-      (entry) => entry.isFile() && entry.name.endsWith(".jsonl"),
+      (entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name),
     ).length;
     return { source: "sessions", totalFiles, issues };
   } catch (err) {

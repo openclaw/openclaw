@@ -9,7 +9,7 @@ import {
   currentRunningSnapshotInfo,
   makeTempDir,
   parseMode,
-  parsePositiveInt,
+  parseTcpPort,
   parseProvider,
   readPositiveIntEnv,
   resolveLatestVersion,
@@ -94,6 +94,9 @@ interface WindowsSummary {
   };
 }
 
+const WINDOWS_PACKAGE_INSTALL_TIMEOUT_SECONDS = 900;
+const WINDOWS_PACKAGE_INSTALL_TIMEOUT_MS = WINDOWS_PACKAGE_INSTALL_TIMEOUT_SECONDS * 1000;
+
 const defaultOptions = (): WindowsOptions => ({
   hostIp: undefined,
   hostPort: 18426,
@@ -157,7 +160,7 @@ export function parseArgs(argv: string[]): WindowsOptions {
       options.hostIp = value;
     },
     "--host-port": (value) => {
-      options.hostPort = parsePositiveInt(value, "--host-port");
+      options.hostPort = parseTcpPort(value, "--host-port");
       options.hostPortExplicit = true;
     },
     "--install-url": (value) => {
@@ -362,7 +365,9 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
       ensureGuestGit({ guest: this.guest, minGitZipPath: this.minGitZipPath, server: this.server }),
     );
     await this.phase("fresh.preflight", 120, () => this.logGuestPreflight(true));
-    await this.phase("fresh.install-main", 420, () => this.installMain("openclaw-main-fresh.tgz"));
+    await this.phase("fresh.install-main", WINDOWS_PACKAGE_INSTALL_TIMEOUT_SECONDS, () =>
+      this.installMain("openclaw-main-fresh.tgz"),
+    );
     this.status.freshVersion = await this.extractLastVersion("fresh.install-main");
     await this.phase("fresh.verify-main-version", 120, () => this.verifyTargetVersion());
     await this.phase("fresh.onboard-ref", 720, () => this.runRefOnboard());
@@ -381,8 +386,10 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
     );
     await this.phase("upgrade.preflight", 120, () => this.logGuestPreflight(false));
     if (this.options.targetPackageSpec || this.options.upgradeFromPackedMain) {
-      await this.phase("upgrade.install-baseline-package", 420, () =>
-        this.installMain("openclaw-main-upgrade.tgz"),
+      await this.phase(
+        "upgrade.install-baseline-package",
+        WINDOWS_PACKAGE_INSTALL_TIMEOUT_SECONDS,
+        () => this.installMain("openclaw-main-upgrade.tgz"),
       );
       this.status.latestInstalledVersion = await this.extractLastVersion(
         "upgrade.install-baseline-package",
@@ -391,7 +398,9 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
         this.verifyTargetVersion(),
       );
     } else {
-      await this.phase("upgrade.install-baseline", 420, () => this.installLatestRelease());
+      await this.phase("upgrade.install-baseline", WINDOWS_PACKAGE_INSTALL_TIMEOUT_SECONDS, () =>
+        this.installLatestRelease(),
+      );
       this.status.latestInstalledVersion = await this.extractLastVersion(
         "upgrade.install-baseline",
       );
@@ -438,11 +447,6 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
   ): Promise<boolean> => await this.phases.phaseReturns(name, timeoutSeconds, fn);
 
   private log = (text: string): void => this.phases.append(text);
-
-  private guestExec = (
-    args: string[],
-    options: { check?: boolean; timeoutMs?: number } = {},
-  ): string => this.guest.exec(args, options);
 
   private guestPowerShell(
     script: string,
@@ -543,33 +547,37 @@ ${cleanScript}`,
     );
   }
 
-  private installLatestRelease(): void {
+  private installLatestRelease(): Promise<void> {
     const versionArg = this.installVersion ? ` -Tag ${psSingleQuote(this.installVersion)}` : "";
-    this.guestPowerShell(
+    return this.guestPowerShellBackground(
+      "install-latest",
       `$ErrorActionPreference = 'Stop'
-$script = Invoke-RestMethod -Uri ${psSingleQuote(this.options.installUrl)}
+$script = Invoke-RestMethod -Uri ${psSingleQuote(this.options.installUrl)} -TimeoutSec 120
 & ([scriptblock]::Create($script))${versionArg} -NoOnboard
 if ($LASTEXITCODE -ne 0) { throw "installer failed with exit code $LASTEXITCODE" }
 Invoke-OpenClaw --version
-if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with exit code $LASTEXITCODE" }`,
-      { timeoutMs: 420_000 },
+      if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with exit code $LASTEXITCODE" }`,
+      this.remainingPhaseTimeoutMs(WINDOWS_PACKAGE_INSTALL_TIMEOUT_MS) ??
+        WINDOWS_PACKAGE_INSTALL_TIMEOUT_MS,
     );
   }
 
-  private installMain(tempName: string): void {
+  private installMain(tempName: string): Promise<void> {
     if (!this.artifact || !this.server) {
       die("package artifact/server missing");
     }
     const tgzUrl = this.server.urlFor(this.artifact.path);
-    this.guestPowerShell(
+    return this.guestPowerShellBackground(
+      `install-main-${tempName.replaceAll(/[^A-Za-z0-9_-]/g, "-")}`,
       `$ErrorActionPreference = 'Stop'
 $tgz = Join-Path $env:TEMP ${psSingleQuote(tempName)}
-curl.exe -fsSL ${psSingleQuote(tgzUrl)} -o $tgz
+curl.exe -fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2 ${psSingleQuote(tgzUrl)} -o $tgz
 npm.cmd install -g $tgz --no-fund --no-audit --loglevel=error
 if ($LASTEXITCODE -ne 0) { throw "npm install failed with exit code $LASTEXITCODE" }
 Invoke-OpenClaw --version
-if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with exit code $LASTEXITCODE" }`,
-      { timeoutMs: 420_000 },
+      if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with exit code $LASTEXITCODE" }`,
+      this.remainingPhaseTimeoutMs(WINDOWS_PACKAGE_INSTALL_TIMEOUT_MS) ??
+        WINDOWS_PACKAGE_INSTALL_TIMEOUT_MS,
     );
   }
 
@@ -627,11 +635,14 @@ ${this.windowsPluginIsolationScript()}`,
     await runWindowsBackgroundPowerShell({
       append: (chunk) =>
         this.log(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8")),
-      beforeLaunchAttempt: () => this.waitForGuestReady(120),
+      beforeLaunchAttempt: () => {
+        ensureVmRunning(this.options.vmName, 120);
+        this.waitForGuestReady(120);
+      },
       label,
       onLaunchRetry: warn,
       script: `${windowsOpenClawResolver}\n${script}`,
-      timeoutMs,
+      timeoutMs: this.remainingPhaseTimeoutMs(timeoutMs) ?? timeoutMs,
       vmName: this.options.vmName,
     });
   }

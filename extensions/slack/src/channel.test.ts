@@ -874,6 +874,33 @@ describe("slackPlugin outbound", () => {
     });
   });
 
+  it.each([
+    {
+      name: "inherited",
+      replyToIsExplicit: false,
+      expectedReplyToId: "1712345678.123456",
+    },
+    { name: "explicit", replyToIsExplicit: true, expectedReplyToId: "1712345688.654321" },
+    { name: "unknown", replyToIsExplicit: undefined, expectedReplyToId: "1712345688.654321" },
+  ])(
+    "routes $name child replies to $expectedReplyToId",
+    ({ replyToIsExplicit, expectedReplyToId }) => {
+      const resolveReplyTransport = slackPlugin.threading?.resolveReplyTransport;
+      if (!resolveReplyTransport) {
+        throw new Error("slack threading.resolveReplyTransport unavailable");
+      }
+
+      expect(
+        resolveReplyTransport({
+          cfg,
+          replyToId: "1712345688.654321",
+          threadId: "1712345678.123456",
+          replyToIsExplicit,
+        }),
+      ).toEqual({ replyToId: expectedReplyToId, threadId: null });
+    },
+  );
+
   it("ignores explicit reply targets for off-mode final delivery", () => {
     const resolveReplyTransport = slackPlugin.threading?.resolveReplyTransport;
     if (!resolveReplyTransport) {

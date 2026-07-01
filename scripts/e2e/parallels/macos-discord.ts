@@ -1,4 +1,5 @@
 // Macos Discord script supports OpenClaw repository automation.
+import { randomUUID } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { MacosGuest } from "./guest-transports.ts";
@@ -58,7 +59,7 @@ ${this.input.guestNode} ${this.input.guestOpenClawEntry} channels status --probe
   }
 
   async runRoundtrip(phase: DiscordSmokePhase): Promise<void> {
-    const nonce = `${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+    const nonce = randomUUID();
     const outboundNonce = `${phase}-out-${nonce}`;
     const inboundNonce = `${phase}-in-${nonce}`;
     const outboundLog = path.join(this.input.runDir, `${phase}.discord-send.json`);

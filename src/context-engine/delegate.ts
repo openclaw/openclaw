@@ -60,6 +60,7 @@ export async function delegateCompactionToRuntime(
     ...(currentTokenCount !== undefined ? { currentTokenCount } : {}),
     force: params.force,
     customInstructions: params.customInstructions,
+    abortSignal: params.abortSignal,
     workspaceDir:
       typeof runtimeContext.workspaceDir === "string" ? runtimeContext.workspaceDir : process.cwd(),
   });

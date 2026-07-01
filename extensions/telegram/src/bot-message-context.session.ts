@@ -1,5 +1,4 @@
 // Telegram plugin module implements bot message context.session behavior.
-import path from "node:path";
 import {
   type BuildChannelInboundEventContextParams,
   type BuildChannelInboundEventContextAsyncParams,
@@ -34,6 +33,7 @@ import type {
   TelegramMessageContextSessionRuntimeOverrides,
   TelegramPromptContextEntry,
 } from "./bot-message-context.types.js";
+import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
 
 type TelegramMentionFacts = NonNullable<
   NonNullable<BuildChannelInboundEventContextParams["access"]>["mentions"]
@@ -113,6 +113,10 @@ export async function resolveTelegramMessageContextStorePath(params: {
   });
 }
 
+function isTelegramChatWindowPromptContext(entry: TelegramPromptContextEntry): boolean {
+  return entry.source === "telegram" && entry.type === "chat_window";
+}
+
 function replyTargetToChainEntry(replyTarget: TelegramReplyTarget): TelegramReplyChainEntry {
   return {
     ...(replyTarget.id ? { messageId: replyTarget.id } : {}),
@@ -143,39 +147,6 @@ function stripReplyChainForwarded(entry: TelegramReplyChainEntry): TelegramReply
     ...withoutForwarded
   } = entry;
   return withoutForwarded;
-}
-
-function resolveTelegramPromptMediaPath(mediaPath: string): string | undefined {
-  const toInboundMediaPath = (id: string): string | undefined => {
-    if (
-      !id ||
-      id === "." ||
-      id === ".." ||
-      id.includes("/") ||
-      id.includes("\\") ||
-      id.includes("\0")
-    ) {
-      return undefined;
-    }
-    return `media://inbound/${encodeURIComponent(id)}`;
-  };
-  const decodeInboundMediaId = (id: string): string | undefined => {
-    try {
-      return decodeURIComponent(id);
-    } catch {
-      return undefined;
-    }
-  };
-  const canonicalMatch = /^media:\/\/inbound\/([^/\\]+)$/i.exec(mediaPath);
-  if (canonicalMatch?.[1]) {
-    const id = decodeInboundMediaId(canonicalMatch[1]);
-    return id ? toInboundMediaPath(id) : undefined;
-  }
-  const normalized = mediaPath.replace(/\\/g, "/");
-  if (!normalized.includes("/media/inbound/")) {
-    return undefined;
-  }
-  return toInboundMediaPath(path.posix.basename(normalized));
 }
 
 function formatReplyChainEntry(entry: TelegramReplyChainEntry, index: number): string {
@@ -411,6 +382,17 @@ export async function buildTelegramInboundContextPayload(params: {
     storePath,
     sessionKey: route.sessionKey,
   });
+  const shouldSuppressPersistedDmChatWindowContext =
+    !isGroup &&
+    previousTimestamp !== undefined &&
+    dmThreadId == null &&
+    visibleReplyChain.length === 0 &&
+    !visibleReplyTarget;
+  // Existing plain DMs already carry their history through the persistent
+  // transcript. Keep chat windows for fresh DMs, topics, replies, and groups.
+  const visiblePromptContext = shouldSuppressPersistedDmChatWindowContext
+    ? promptContext.filter((entry) => !isTelegramChatWindowPromptContext(entry))
+    : promptContext;
   const body = formatInboundEnvelope({
     channel: "Telegram",
     from: conversationLabel,
@@ -521,6 +503,7 @@ export async function buildTelegramInboundContextPayload(params: {
       ...(senderId ? { id: senderId } : {}),
       name: senderName,
       username: senderUsername || undefined,
+      isBot: msg.from?.is_bot,
     },
     conversation: {
       kind: conversationKind,
@@ -592,7 +575,7 @@ export async function buildTelegramInboundContextPayload(params: {
           }
         : undefined,
       groupSystemPrompt: isGroup || (!isGroup && groupConfig) ? groupSystemPrompt : undefined,
-      untrustedContext: promptContext.length > 0 ? promptContext : undefined,
+      untrustedContext: visiblePromptContext.length > 0 ? visiblePromptContext : undefined,
     },
     contextVisibility: contextVisibilityMode,
     extra: {

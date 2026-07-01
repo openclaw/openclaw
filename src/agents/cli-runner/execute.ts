@@ -33,6 +33,7 @@ import {
   extractCliErrorMessage,
   parseCliOutput,
   type CliOutput,
+  type CliStreamingDelta,
 } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import {
@@ -676,6 +677,7 @@ export async function executePreparedCliRun(
           : buildCliMcpCaptureKey(context);
         const mcpCaptureAttempt = await prepareCliBundleMcpCaptureAttempt({
           mode: context.backendResolved.bundleMcpMode,
+          backend,
           env: context.preparedBackend.env,
           captureKey: initialGatewayCaptureKey,
         });
@@ -992,6 +994,28 @@ export async function executePreparedCliRun(
             },
           });
         };
+        const emitCliAssistantDelta = ({ text, delta }: CliStreamingDelta) => {
+          if (text || delta) {
+            observedCliActivity = true;
+          }
+          if (!emitLiveEvents) {
+            return;
+          }
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "assistant",
+            data: {
+              text: applyPluginTextReplacements(
+                text,
+                context.backendResolved.textTransforms?.output,
+              ),
+              delta: applyPluginTextReplacements(
+                delta,
+                context.backendResolved.textTransforms?.output,
+              ),
+            },
+          });
+        };
         if (shouldUseClaudeLiveSession(context)) {
           if (!hasJsonlOutput) {
             throw new Error("Claude live session requires JSONL streaming parser");
@@ -1018,28 +1042,7 @@ export async function executePreparedCliRun(
             useResume,
             noOutputTimeoutMs,
             getProcessSupervisor: executeDeps.getProcessSupervisor,
-            onAssistantDelta: ({ text, delta }) => {
-              if (text || delta) {
-                observedCliActivity = true;
-              }
-              if (!emitLiveEvents) {
-                return;
-              }
-              emitAgentEvent({
-                runId: params.runId,
-                stream: "assistant",
-                data: {
-                  text: applyPluginTextReplacements(
-                    text,
-                    context.backendResolved.textTransforms?.output,
-                  ),
-                  delta: applyPluginTextReplacements(
-                    delta,
-                    context.backendResolved.textTransforms?.output,
-                  ),
-                },
-              });
-            },
+            onAssistantDelta: emitCliAssistantDelta,
             onToolUseStart: emitCliToolUseStart,
             onToolResult: emitCliToolResult,
             onCommentaryText:
@@ -1072,28 +1075,7 @@ export async function executePreparedCliRun(
             ? createCliJsonlStreamingParser({
                 backend,
                 providerId: context.backendResolved.id,
-                onAssistantDelta: ({ text, delta }) => {
-                  if (text || delta) {
-                    observedCliActivity = true;
-                  }
-                  if (!emitLiveEvents) {
-                    return;
-                  }
-                  emitAgentEvent({
-                    runId: params.runId,
-                    stream: "assistant",
-                    data: {
-                      text: applyPluginTextReplacements(
-                        text,
-                        context.backendResolved.textTransforms?.output,
-                      ),
-                      delta: applyPluginTextReplacements(
-                        delta,
-                        context.backendResolved.textTransforms?.output,
-                      ),
-                    },
-                  });
-                },
+                onAssistantDelta: emitCliAssistantDelta,
                 onToolUseStart: emitCliToolUseStart,
                 onToolResult: emitCliToolResult,
                 onCommentaryText:

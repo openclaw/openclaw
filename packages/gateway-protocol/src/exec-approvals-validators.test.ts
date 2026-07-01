@@ -106,4 +106,27 @@ describe("exec approvals protocol validators", () => {
       }),
     ).toBe(false);
   });
+
+  it("accepts only optional unavailable approval decisions", () => {
+    expect(
+      validateExecApprovalRequestParams({
+        command: "echo hi",
+        unavailableDecisions: ["allow-always"],
+      }),
+    ).toBe(true);
+
+    for (const unavailableDecisions of [
+      [],
+      ["allow-always", "allow-always"],
+      ["allow-once"],
+      ["deny"],
+    ]) {
+      expect(
+        validateExecApprovalRequestParams({
+          command: "echo hi",
+          unavailableDecisions,
+        }),
+      ).toBe(false);
+    }
+  });
 });

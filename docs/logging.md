@@ -210,6 +210,12 @@ These flags log through normal OpenClaw logging, so `openclaw logs --follow`
 and the Control UI Logs tab show them. Without the flags, the same diagnostics
 remain available at `debug` level.
 
+`[model-fetch]` start and response metadata (provider, API, model, status,
+latency, and request fields such as method, URL, timeout, proxy, and policy)
+is always emitted at `info` level regardless of
+`OPENCLAW_DEBUG_MODEL_TRANSPORT`, so basic model transport hygiene is visible
+without debug flags.
+
 ### Trace correlation
 
 File logs are JSONL. When a log call carries a valid diagnostic trace context,
@@ -224,8 +230,10 @@ model-call traces become children of the active request trace, so local logs,
 diagnostic snapshots, OTEL spans, and trusted provider `traceparent` headers can
 be joined by `traceId` without logging raw request or model content.
 
-Talk lifecycle log records also flow to OTLP logs when OpenTelemetry log export
-is enabled, using the same bounded attributes as file logs.
+Talk lifecycle log records also flow to diagnostics-otel log export when
+OpenTelemetry log export is enabled, using the same bounded attributes as file
+logs. Configure `diagnostics.otel.logsExporter` to choose OTLP, stdout JSONL, or
+both sinks.
 
 ### Model call size and timing
 

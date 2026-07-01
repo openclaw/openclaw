@@ -158,6 +158,31 @@ type ExecuteJobCoreOptions = {
   onLaneWait?: (info?: { waiting?: boolean }) => void;
 };
 
+/**
+ * Carries the already-resolved run attribution from watchdog-visible execution
+ * state into a timer-built error outcome. The wall-clock/cancel paths return
+ * their own outcome (the inner run result loses the Promise.race), so without
+ * this the persisted cron_run_logs row drops provider/model/session for a
+ * post-runner timeout or cancel even though they were already known. Stays
+ * empty before the runner starts, so pre-execution setup timeouts read blank.
+ */
+function cronRunAttributionFromExecution(execution?: CronAgentExecutionStarted): {
+  provider?: string;
+  model?: string;
+  sessionId?: string;
+  sessionKey?: string;
+} {
+  if (!execution) {
+    return {};
+  }
+  return {
+    provider: execution.provider,
+    model: execution.model,
+    sessionId: execution.sessionId,
+    sessionKey: execution.sessionKey,
+  };
+}
+
 /** Executes cron job core logic with the configured wall-clock timeout and watchdog cleanup. */
 export async function executeJobCoreWithTimeout(
   state: CronServiceState,
@@ -170,11 +195,12 @@ export async function executeJobCoreWithTimeout(
   const operatorCancellationPromise = new Promise<typeof operatorCancellationMarker>((resolve) => {
     resolveOperatorCancellation = resolve;
   });
-  const createOperatorCancellationOutcome = () => {
+  const createOperatorCancellationOutcome = (execution?: CronAgentExecutionStarted) => {
     const error = abortErrorMessage(runAbortController.signal);
     return {
       status: "error" as const,
       error,
+      ...cronRunAttributionFromExecution(execution),
       diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
         nowMs: state.deps.nowMs,
       }),
@@ -195,7 +221,20 @@ export async function executeJobCoreWithTimeout(
   const jobTimeoutMs = resolveCronJobTimeoutMs(job);
   try {
     if (typeof jobTimeoutMs !== "number") {
-      const corePromise = executeJobCore(state, job, runAbortController.signal);
+      // No wall-clock timeout means no watchdog to accumulate the resolved run
+      // identity, so track it locally from the same execution callbacks. Without
+      // this, an operator-cancel row for a timeout-disabled isolated run drops
+      // provider/model/session even though they were already known.
+      let activeExecution: CronAgentExecutionStarted | undefined;
+      const accumulateExecution = (info?: CronAgentExecutionStarted) => {
+        if (info) {
+          activeExecution = { ...activeExecution, ...info };
+        }
+      };
+      const corePromise = executeJobCore(state, job, runAbortController.signal, {
+        onExecutionStarted: accumulateExecution,
+        onExecutionPhase: accumulateExecution,
+      });
       trackActiveCronTaskRunSettlement(corePromise);
       void corePromise.catch((err: unknown) => {
         if (runAbortController.signal.aborted) {
@@ -210,7 +249,7 @@ export async function executeJobCoreWithTimeout(
         return first;
       }
       startActiveCronTaskRunSettlementGrace();
-      return createOperatorCancellationOutcome();
+      return createOperatorCancellationOutcome(activeExecution);
     }
 
     let timeoutReason: string | undefined;
@@ -264,7 +303,7 @@ export async function executeJobCoreWithTimeout(
       const first = await Promise.race([corePromise, timeoutPromise, operatorCancellationPromise]);
       if (first === operatorCancellationMarker) {
         startActiveCronTaskRunSettlementGrace();
-        return createOperatorCancellationOutcome();
+        return createOperatorCancellationOutcome(watchdog.activeExecution());
       }
       if (first !== timeoutMarker) {
         return first;
@@ -285,6 +324,7 @@ export async function executeJobCoreWithTimeout(
       return {
         status: "error",
         error,
+        ...cronRunAttributionFromExecution(activeExecution),
         diagnostics: createCronRunDiagnosticsFromError("cron-setup", error, {
           nowMs: state.deps.nowMs,
         }),
@@ -344,7 +384,6 @@ export function maybeNotifyIsolatedAgentSetupTimeout(
   if (!notified) {
     return false;
   }
-  state.restartRecoveryPending = true;
   return true;
 }
 
@@ -893,7 +932,10 @@ export function applyJobResult(
         }
       }
       // Apply exponential backoff for errored jobs to prevent retry storms.
-      const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
+      const backoff = errorBackoffMs(
+        job.state.consecutiveErrors ?? 1,
+        state.deps.cronConfig?.retry?.backoffMs ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+      );
       normalNext = computeNormalNext();
       const backoffNext = result.endedAt + backoff;
       // Use whichever is later: the natural next run or the backoff delay.
@@ -2161,56 +2203,6 @@ async function executeDetachedCronJob(
     provider: res.provider,
     usage: res.usage,
   };
-}
-
-/** Executes a cron job and applies the resulting state transitions in memory. */
-export async function executeJob(
-  state: CronServiceState,
-  job: CronJob,
-  _nowMs: number,
-  _opts: { forced: boolean },
-) {
-  if (!job.state) {
-    job.state = {};
-  }
-  const startedAt = state.deps.nowMs();
-  job.state.runningAtMs = startedAt;
-  job.state.lastError = undefined;
-  const activeJobMarker = markCronJobActive(job.id, {
-    preserveAcrossGenerationAdvance: job.sessionTarget === "main",
-  });
-  emit(state, { jobId: job.id, action: "started", job, runAtMs: startedAt });
-
-  let coreResult: {
-    status: CronRunStatus;
-    delivered?: boolean;
-    delivery?: CronDeliveryTrace;
-  } & CronRunOutcome &
-    CronRunTelemetry;
-  try {
-    coreResult = await executeJobCoreWithTimeout(state, job, { activeJobMarker });
-  } catch (err) {
-    coreResult = { status: "error", error: String(err) };
-  }
-
-  const endedAt = state.deps.nowMs();
-  const shouldDelete = applyJobResult(state, job, {
-    status: coreResult.status,
-    error: coreResult.error,
-    diagnostics: coreResult.diagnostics,
-    delivered: coreResult.delivered,
-    provider: coreResult.provider,
-    startedAt,
-    endedAt,
-  });
-
-  emitJobFinished(state, job, coreResult, startedAt);
-
-  if (shouldDelete && state.store) {
-    state.store.jobs = state.store.jobs.filter((j) => j.id !== job.id);
-    emit(state, { jobId: job.id, action: "removed", job });
-  }
-  clearCronJobActive(job.id, activeJobMarker);
 }
 
 function emitJobFinished(

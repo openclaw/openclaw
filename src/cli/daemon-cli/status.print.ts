@@ -10,6 +10,7 @@ import {
   resolveGatewayRestartLogPath,
   resolveGatewaySupervisorLogPaths,
 } from "../../daemon/restart-logs.js";
+import { isSystemdStartLimitHit } from "../../daemon/service-runtime.js";
 import {
   isSystemdUnavailableDetail,
   renderSystemdUnavailableHints,
@@ -18,6 +19,7 @@ import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailab
 import { resolveControlUiLinks } from "../../gateway/control-ui-links.js";
 import { formatGatewayRestartHandoffDiagnostic } from "../../infra/restart-handoff.js";
 import { isWSLEnv } from "../../infra/wsl.js";
+import { resolvePluginVersionDriftUpdateCommand } from "../../plugins/plugin-version-drift.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
 import { formatCliCommand } from "../command-format.js";
@@ -207,13 +209,15 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     if (!controlUiEnabled) {
       defaultRuntime.log(`${label("Dashboard:")} ${warnText("disabled")}`);
     } else {
-      const links = resolveControlUiLinks({
-        port: status.gateway.port,
-        bind: status.gateway.bindMode,
-        customBindHost: status.gateway.customBindHost,
-        basePath: status.config?.daemon?.controlUi?.basePath,
-        tlsEnabled: status.gateway.tlsEnabled === true,
-      });
+      const links =
+        status.gateway.controlUiLinks ??
+        resolveControlUiLinks({
+          port: status.gateway.port,
+          bind: status.gateway.bindMode,
+          customBindHost: status.gateway.customBindHost,
+          basePath: status.config?.daemon?.controlUi?.basePath,
+          tlsEnabled: status.gateway.tlsEnabled === true,
+        });
       defaultRuntime.log(`${label("Dashboard:")} ${infoText(links.httpUrl)}`);
     }
     if (status.gateway.probeNote) {
@@ -326,12 +330,11 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     rpc?.ok !== true &&
     isSystemdUnavailableDetail(service.runtime?.detail);
   if (systemdUnavailable) {
-    const container = Boolean(
-      resolveDaemonContainerContext(service.command?.environment ?? process.env),
-    );
+    const serviceEnv = service.command?.environment ?? process.env;
+    const container = Boolean(resolveDaemonContainerContext(serviceEnv));
     defaultRuntime.error(errorText("systemd user services unavailable."));
     for (const hint of renderSystemdUnavailableHints({
-      wsl: isWSLEnv(),
+      wsl: isWSLEnv(serviceEnv),
       kind: classifySystemdUnavailableDetail(service.runtime?.detail),
       container,
     })) {
@@ -366,8 +369,17 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       defaultRuntime.error(errorText(hint));
     }
   } else if (service.loaded && service.runtime?.status === "stopped") {
+    const startLimitHit = process.platform === "linux" && isSystemdStartLimitHit(service.runtime);
     defaultRuntime.error(
-      errorText("Service is loaded but not running (likely exited immediately)."),
+      errorText(
+        startLimitHit
+          ? // systemd gave up restarting after repeated crashes; sending the operator
+            // to restart (which now clears the failed latch) beats "exited immediately".
+            `systemd stopped restarting the gateway after repeated crashes; run ${formatCliCommand(
+              "openclaw gateway restart",
+            )} or inspect logs.`
+          : "Service is loaded but not running (likely exited immediately).",
+      ),
     );
     for (const hint of renderRuntimeHints(
       service.runtime,
@@ -482,9 +494,20 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
           `- ${warnText(entry.pluginId)}: ${entry.installedVersion} (${sourceLabel}) → expected ${drift.gatewayVersion}`,
         );
       }
-      defaultRuntime.log(
-        `${label("Fix:")} ${formatCliCommand("openclaw plugins update <plugin-id>")} for each drifted plugin, then ${formatCliCommand("openclaw gateway restart")}.`,
+      const updateCommands = drift.drifts.map((entry) =>
+        formatCliCommand(resolvePluginVersionDriftUpdateCommand(entry)),
       );
+      if (updateCommands.length === 1) {
+        defaultRuntime.log(
+          `${label("Fix:")} ${updateCommands[0]} && ${formatCliCommand("openclaw gateway restart")}.`,
+        );
+      } else {
+        defaultRuntime.log(`${label("Fix:")} update each drifted plugin:`);
+        for (const command of updateCommands) {
+          defaultRuntime.log(`- ${command}`);
+        }
+        defaultRuntime.log(`Then run ${formatCliCommand("openclaw gateway restart")}.`);
+      }
     } else {
       defaultRuntime.log(
         infoText(

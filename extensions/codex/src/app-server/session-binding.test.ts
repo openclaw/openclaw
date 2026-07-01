@@ -60,10 +60,13 @@ describe("codex app-server session binding", () => {
       cwd: tempDir,
       model: "gpt-5.4-codex",
       modelProvider: "openai",
+      networkProxyProfileName: "openclaw-network",
+      networkProxyConfigFingerprint: "network-proxy-v1",
       dynamicToolsFingerprint: "tools-v1",
       webSearchThreadConfigFingerprint: "web-search-v1",
       userMcpServersFingerprint: "user-mcp-v1",
       nativeHookRelayGeneration: "generation-v1",
+      appServerRuntimeFingerprint: "remote-runtime-v1",
     });
 
     const binding = await readCodexAppServerBinding(sessionFile);
@@ -74,10 +77,13 @@ describe("codex app-server session binding", () => {
     expect(binding?.cwd).toBe(tempDir);
     expect(binding?.model).toBe("gpt-5.4-codex");
     expect(binding?.modelProvider).toBe("openai");
+    expect(binding?.networkProxyProfileName).toBe("openclaw-network");
+    expect(binding?.networkProxyConfigFingerprint).toBe("network-proxy-v1");
     expect(binding?.dynamicToolsFingerprint).toBe("tools-v1");
     expect(binding?.webSearchThreadConfigFingerprint).toBe("web-search-v1");
     expect(binding?.userMcpServersFingerprint).toBe("user-mcp-v1");
     expect(binding?.nativeHookRelayGeneration).toBe("generation-v1");
+    expect(binding?.appServerRuntimeFingerprint).toBe("remote-runtime-v1");
     const bindingStat = await fs.stat(resolveCodexAppServerBindingPath(sessionFile));
     expect(bindingStat.isFile()).toBe(true);
   });
@@ -121,6 +127,35 @@ describe("codex app-server session binding", () => {
           pluginName: "google-calendar",
           allowDestructiveActions: true,
           destructiveApprovalMode: "auto" as const,
+          mcpServerNames: ["google-calendar"],
+        },
+      },
+      pluginAppIds: {
+        "google-calendar": ["google-calendar-app"],
+      },
+    };
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-123",
+      cwd: tempDir,
+      pluginAppPolicyContext,
+    });
+
+    const binding = await readCodexAppServerBinding(sessionFile);
+
+    expect(binding?.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
+  });
+
+  it("round-trips always plugin app policy context destructive approval mode", async () => {
+    const sessionFile = path.join(tempDir, "session.json");
+    const pluginAppPolicyContext = {
+      fingerprint: "plugin-policy-always",
+      apps: {
+        "google-calendar-app": {
+          configKey: "google-calendar",
+          marketplaceName: "openai-curated" as const,
+          pluginName: "google-calendar",
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "always" as const,
           mcpServerNames: ["google-calendar"],
         },
       },

@@ -1,0 +1,37 @@
+<resources>
+    <string name="app_name">OpenClaw Node</string>
+    <string name="gateway_connection">网关连接</string>
+    <string name="connect_gateway">连接网关</string>
+    <string name="disconnect">断开连接</string>
+    <string name="trust_this_gateway">信任此网关？</string>
+    <string name="trust_and_continue">信任并继续</string>
+    <string name="cancel">取消</string>
+    <string name="endpoint">端点</string>
+    <string name="status">状态</string>
+    <string name="connected_gateway_ready">你的网关已激活并准备就绪。</string>
+    <string name="connect_gateway_get_started">连接到你的网关以开始使用。</string>
+    <string name="copy_report_for_claw">复制 Claw 报告</string>
+    <string name="advanced_controls">高级控制</string>
+    <string name="connection_method">连接方式</string>
+    <string name="setup_code">设置代码</string>
+    <string name="manual">手动</string>
+    <string name="paste_setup_code">粘贴设置代码</string>
+    <string name="host">主机</string>
+    <string name="use_tls">使用 TLS</string>
+    <string name="token_optional">令牌（可选）</string>
+    <string name="password">密码</string>
+    <string name="run_onboarding_again">再次运行引导流程</string>
+    <string name="resolved_endpoint">已解析的端点</string>
+    <string name="gateway_setup">网关设置</string>
+    <string name="connect_to_gateway">连接到你的网关</string>
+    <string name="scan_setup_code">扫描设置代码</string>
+    <string name="use_gateway_qr">使用你的网关 QR 码或设置代码</string>
+    <string name="nearby_gateway">附近的网关</string>
+    <string name="enter_gateway_url">输入网关 URL</string>
+    <string name="connect_manual_url">使用手动 URL 连接</string>
+    <string name="permissions">权限</string>
+    <string name="done">完成</string>
+    <string name="gateway_trust_first_seen">验证证书指纹后再信任此网关。\n\n%1$s</string>
+    <string name="gateway_trust_changed">网关证书已更改。仅当这是您预期的更改时才继续。\n\n旧 SHA-256：\n%1$s\n\n新 SHA-256：\n%2$s</string>
+    <string name="gateway_recovery">网关恢复</string>
+</resources>

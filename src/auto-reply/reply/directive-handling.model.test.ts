@@ -308,10 +308,6 @@ beforeAll(async () => {
   ({ parseInlineDirectives } = await import("./directive-handling.parse.js"));
   ({ persistInlineDirectives } = await import("./directive-handling.persist.js"));
 });
-
-const liveModelSwitchMocks = vi.hoisted(() => ({
-  requestLiveSessionModelSwitch: vi.fn(),
-}));
 const queueMocks = vi.hoisted(() => ({
   refreshQueuedFollowupSession: vi.fn(),
 }));
@@ -345,11 +341,6 @@ vi.mock("../../config/sessions.js", () => ({
 
 vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: vi.fn(),
-}));
-
-vi.mock("../../agents/live-model-switch.js", () => ({
-  requestLiveSessionModelSwitch: (...args: unknown[]) =>
-    liveModelSwitchMocks.requestLiveSessionModelSwitch(...args),
 }));
 
 vi.mock("./queue.js", () => ({
@@ -439,7 +430,6 @@ beforeEach(() => {
   vi.mocked(resolveAgentDir).mockReset().mockReturnValue(TEST_AGENT_DIR);
   vi.mocked(resolveSessionAgentId).mockReset().mockReturnValue("main");
   vi.mocked(enqueueSystemEvent).mockClear();
-  liveModelSwitchMocks.requestLiveSessionModelSwitch.mockReset().mockReturnValue(false);
   queueMocks.refreshQueuedFollowupSession.mockReset();
   clearInternalHooks();
 });
@@ -1600,21 +1590,6 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(result?.text ?? "").not.toContain("xhigh not supported");
     expect(sessionEntry.thinkingLevel).toBe("xhigh");
   });
-
-  it("does not request a live restart when /model mutates an active session", async () => {
-    const directives = parseInlineDirectives("/model openai/gpt-4o");
-    const sessionEntry = createSessionEntry();
-
-    await handleDirectiveOnly(
-      createHandleParams({
-        directives,
-        sessionEntry,
-      }),
-    );
-
-    expect(liveModelSwitchMocks.requestLiveSessionModelSwitch).not.toHaveBeenCalled();
-  });
-
   it("retargets queued followups when /model mutates session state", async () => {
     const directives = parseInlineDirectives("/model openai/gpt-4o");
     const sessionEntry = createSessionEntry();

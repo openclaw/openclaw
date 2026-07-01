@@ -344,6 +344,50 @@ describe("lookupContextTokens", () => {
     expect(lookupContextTokens("anthropic/claude-opus-4.7-20260219")).toBe(1_048_576);
   });
 
+  it("uses caller config when gateway startup starts cache warming", async () => {
+    const config = createContextOverrideConfig("anthropic", "claude-opus-4.7-20260219", 200_000);
+    mockDiscoveryDeps([
+      {
+        id: "anthropic/claude-opus-4.7-20260219",
+        provider: "anthropic",
+        contextWindow: 200_000,
+      },
+    ]);
+
+    const { ensureContextWindowCacheLoaded, lookupContextTokens } = await importContextModule();
+    await ensureContextWindowCacheLoaded(config);
+
+    expect(contextTestState.loadModelCatalog).toHaveBeenCalledWith({
+      config,
+      readOnly: true,
+    });
+    expect(
+      lookupContextTokens("anthropic/claude-opus-4.7-20260219", { allowAsyncLoad: false }),
+    ).toBe(1_048_576);
+  });
+
+  it("status waits for pending context warmup but releases on timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      contextTestState.loadModelCatalog.mockImplementationOnce(
+        () => new Promise<DiscoveredModel[]>(() => {}),
+      );
+
+      const { ensureContextWindowCacheLoaded, waitForContextWindowCacheLoad } =
+        await importContextModule();
+      void ensureContextWindowCacheLoaded(
+        createContextOverrideConfig("anthropic", "claude", 200_000),
+      );
+
+      const waitResult = waitForContextWindowCacheLoad({ timeoutMs: 5 });
+      await vi.advanceTimersByTimeAsync(5);
+
+      await expect(waitResult).resolves.toBe("timeout");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("warms context metadata from bundled provider static catalogs", async () => {
     contextTestState.staticCatalogModels = [
       {

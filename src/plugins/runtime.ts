@@ -123,7 +123,15 @@ function retirePluginRegistryIfUnused(registry: PluginRegistry | null): boolean 
   return true;
 }
 
-function collectLivePluginAgentEventRegistries(): PluginRegistry[] {
+/**
+ * Returns the distinct live plugin registries in precedence order: the active
+ * registry first, then the pinned http-route and channel surfaces. Uses the
+ * raw pinned registries (not channel-presentation selection) so a pinned
+ * registry stays visible to runtime dispatch even with zero channels. Shared
+ * by the agent-event bridge and the global hook runner so both dispatch
+ * surfaces agree on what "live" means.
+ */
+export function collectLivePluginRegistries(): PluginRegistry[] {
   const registries: PluginRegistry[] = [];
   const seen = new Set<PluginRegistry>();
   const addRegistry = (registry: PluginRegistry | null) => {
@@ -143,11 +151,11 @@ function collectLivePluginAgentEventRegistries(): PluginRegistry[] {
 function syncPluginAgentEventBridge(): void {
   state.agentEventBridgeUnsubscribe?.();
   state.agentEventBridgeUnsubscribe = undefined;
-  if (collectLivePluginAgentEventRegistries().length === 0) {
+  if (collectLivePluginRegistries().length === 0) {
     return;
   }
   state.agentEventBridgeUnsubscribe = onAgentEvent((event) => {
-    for (const registry of collectLivePluginAgentEventRegistries()) {
+    for (const registry of collectLivePluginRegistries()) {
       dispatchPluginAgentEventSubscriptions({ registry, event });
     }
   });

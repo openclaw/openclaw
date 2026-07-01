@@ -3,11 +3,11 @@
  *
  * Identifies mutating tool calls and file targets so retry/recovery logic can reason about side effects.
  */
+import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import { asRecord } from "./tool-display-record.js";
 
 const MUTATING_TOOL_NAMES = new Set([
   "write",

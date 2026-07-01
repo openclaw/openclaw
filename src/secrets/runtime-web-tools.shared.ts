@@ -404,7 +404,8 @@ export async function resolveRuntimeWebProviderSelection<
     let keylessFallbackProvider: TProvider | undefined;
 
     for (const provider of candidates) {
-      if (provider.requiresCredential === false) {
+      const isKeyless = provider.requiresCredential === false;
+      if (isKeyless) {
         if (!params.configuredProvider && !params.allowKeylessAutoSelect) {
           continue;
         }
@@ -412,13 +413,6 @@ export async function resolveRuntimeWebProviderSelection<
           keylessFallbackProvider ||= provider;
           continue;
         }
-        selectedProvider = provider.id;
-        selectedResolution = {
-          source: "missing" as TSource,
-          secretRefConfigured: false,
-          fallbackUsedAfterRefFailure: false,
-        };
-        break;
       }
 
       const path = params.inactivePathsForProvider(provider)[0] ?? "";
@@ -507,7 +501,37 @@ export async function resolveRuntimeWebProviderSelection<
         });
       }
 
+      if (
+        isKeyless &&
+        selectedCandidateResolution.secretRefConfigured &&
+        !selectedCandidateResolution.value
+      ) {
+        continue;
+      }
+
+      if (isKeyless && !params.configuredProvider && !selectedCandidateResolution.value) {
+        continue;
+      }
+
       if (params.configuredProvider) {
+        selectedProvider = provider.id;
+        selectedResolution = selectedCandidateResolution;
+        if (selectedCandidateResolution.value) {
+          setResolvedCredentialPath({
+            resolvedConfig: params.resolvedConfig,
+            path: selectedCandidatePath,
+            value: selectedCandidateResolution.value,
+          });
+          params.setResolvedCredential({
+            resolvedConfig: params.resolvedConfig,
+            provider,
+            value: selectedCandidateResolution.value,
+          });
+        }
+        break;
+      }
+
+      if (isKeyless) {
         selectedProvider = provider.id;
         selectedResolution = selectedCandidateResolution;
         if (selectedCandidateResolution.value) {

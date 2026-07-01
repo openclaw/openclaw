@@ -14,6 +14,7 @@ export {
   resolveGatewayPort,
   resolveTailnetHostWithRunner,
 } from "openclaw/plugin-sdk/core";
+export { resolveAdvertisedLanHost } from "openclaw/plugin-sdk/gateway-runtime";
 export {
   resolvePreferredOpenClawTmpDir,
   runPluginCommandWithTimeout,

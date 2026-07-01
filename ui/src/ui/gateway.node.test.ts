@@ -682,6 +682,160 @@ describe("GatewayBrowserClient", () => {
     client.stop();
   });
 
+  it("keeps hello callback errors inside connect dispatch", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const onHello = vi.fn(() => {
+      throw new Error("hello callback failed");
+    });
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      onHello,
+    });
+
+    try {
+      const { ws, connectFrame } = await startConnect(client);
+      ws.emitMessage({
+        type: "res",
+        id: connectFrame.id,
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          protocol: 4,
+          auth: { role: "operator", scopes: [] },
+        },
+      });
+
+      await vi.waitFor(() => expect(onHello).toHaveBeenCalledOnce());
+      await Promise.resolve();
+      expect(ws.lastClose).toBeNull();
+      expect(consoleError).toHaveBeenCalledWith(
+        "[gateway] hello handler error:",
+        expect.any(Error),
+      );
+    } finally {
+      client.stop();
+      consoleError.mockRestore();
+    }
+  });
+
+  it("keeps close callback errors from blocking reconnect scheduling", async () => {
+    useNodeFakeTimers();
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const onClose = vi.fn(() => {
+      throw new Error("close callback failed");
+    });
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      onClose,
+    });
+
+    try {
+      const { ws } = await startConnect(client);
+
+      expect(() => ws.emitClose(1006, "socket lost")).not.toThrow();
+      await vi.advanceTimersByTimeAsync(800);
+
+      expect(onClose).toHaveBeenCalledWith({
+        code: 1006,
+        reason: "socket lost",
+        error: undefined,
+      });
+      expect(consoleError).toHaveBeenCalledWith(
+        "[gateway] close handler error:",
+        expect.any(Error),
+      );
+      expect(wsInstances).toHaveLength(2);
+    } finally {
+      client.stop();
+      consoleError.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps gap callback errors from blocking event delivery", () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const onGap = vi.fn(() => {
+      throw new Error("gap callback failed");
+    });
+    const onEvent = vi.fn();
+    const listener = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      onGap,
+      onEvent,
+    });
+
+    try {
+      client.addEventListener(listener);
+      client.start();
+      const ws = getLatestWebSocket();
+
+      ws.emitMessage({ type: "event", event: "session.updated", seq: 1 });
+      onEvent.mockClear();
+      listener.mockClear();
+
+      expect(() =>
+        ws.emitMessage({ type: "event", event: "session.updated", seq: 3 }),
+      ).not.toThrow();
+
+      expect(onGap).toHaveBeenCalledWith({ expected: 2, received: 3 });
+      expect(onEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ event: "session.updated", seq: 3 }),
+      );
+      expect(listener).toHaveBeenCalledWith(
+        expect.objectContaining({ event: "session.updated", seq: 3 }),
+      );
+      expect(consoleError).toHaveBeenCalledWith("[gateway] gap handler error:", expect.any(Error));
+
+      onGap.mockClear();
+      ws.emitMessage({ type: "event", event: "session.updated", seq: 4 });
+      expect(onGap).not.toHaveBeenCalled();
+    } finally {
+      client.stop();
+      consoleError.mockRestore();
+    }
+  });
+
+  it("keeps event callback errors from blocking event listeners", () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const onEvent = vi.fn(() => {
+      throw new Error("event callback failed");
+    });
+    const listener = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      onEvent,
+    });
+
+    try {
+      client.addEventListener(listener);
+      client.start();
+      const ws = getLatestWebSocket();
+
+      expect(() =>
+        ws.emitMessage({ type: "event", event: "session.updated", seq: 1 }),
+      ).not.toThrow();
+
+      expect(onEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ event: "session.updated", seq: 1 }),
+      );
+      expect(listener).toHaveBeenCalledWith(
+        expect.objectContaining({ event: "session.updated", seq: 1 }),
+      );
+      expect(consoleError).toHaveBeenCalledWith(
+        "[gateway] event handler error:",
+        expect.any(Error),
+      );
+    } finally {
+      client.stop();
+      consoleError.mockRestore();
+    }
+  });
+
   it("prefers explicit shared auth over cached device tokens", async () => {
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",

@@ -142,23 +142,71 @@ describe("collectTestEnvMutationReport", () => {
     expect(report.summary.allowedFindingCount).toBe(2);
   });
 
-  it("rejects missing CLI repo roots instead of scanning zero files", () => {
+  it("prints CLI help without scanning the repository", () => {
     const result = spawnSync(
       process.execPath,
       [
         "--import",
         "tsx",
         path.join(process.cwd(), "scripts/test-env-mutation-report.ts"),
-        "--",
-        "--repo-root",
-        "--json",
+        "--help",
       ],
       {
         encoding: "utf8",
       },
     );
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("--repo-root expects a path");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Usage:");
+    expect(result.stdout).toContain("pnpm test:env-mutations:report");
+    expect(result.stdout).not.toContain("Scanned files:");
+    expect(result.stderr).toBe("");
+  });
+
+  it("rejects missing or flag-shaped CLI repo roots instead of scanning zero files", () => {
+    for (const value of ["--json", "-h"]) {
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          path.join(process.cwd(), "scripts/test-env-mutation-report.ts"),
+          "--",
+          "--repo-root",
+          value,
+        ],
+        {
+          encoding: "utf8",
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("--repo-root expects a path");
+    }
+  });
+
+  it("rejects loose CLI limits before scanning the repository", () => {
+    for (const limit of ["1e3", ""]) {
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          path.join(process.cwd(), "scripts/test-env-mutation-report.ts"),
+          "--",
+          "--limit",
+          limit,
+          "--repo-root",
+          createTempDir("openclaw-env-limit-"),
+        ],
+        {
+          encoding: "utf8",
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("--limit expects a non-negative integer");
+      expect(result.stdout).not.toContain("Scanned files:");
+    }
   });
 });

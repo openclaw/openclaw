@@ -29,8 +29,21 @@ describe("telegramPlugin outbound", () => {
     expect(telegramOutbound.presentationCapabilities?.limits?.text?.markdownDialect).toBe(
       "markdown",
     );
-    expect(telegramOutbound.sanitizeText).toBeUndefined();
     expect(telegramOutbound.pollMaxOptions).toBe(10);
+  });
+
+  it("strips assistant-visible tool traces before outbound delivery", () => {
+    clearTelegramRuntime();
+    const text = 'Done.\n⚠️ 🛠️ `search "Pipeline" in ~/.openclaw/workspace-* (agent)` failed';
+
+    expect(telegramOutbound.sanitizeText?.({ text, payload: { text } })).toBe("Done.");
+  });
+
+  it("preserves ordinary outbound text while sanitizing", () => {
+    clearTelegramRuntime();
+    const text = "The pipeline has 3 deals.";
+
+    expect(telegramOutbound.sanitizeText?.({ text, payload: { text } })).toBe(text);
   });
 
   it("preserves explicit HTML parse mode before chunking", () => {
@@ -41,6 +54,17 @@ describe("telegramPlugin outbound", () => {
       splitTelegramHtmlChunks(text, 4000),
     );
     expect(telegramOutbound.chunker?.(text, 4000)).toEqual([text]);
+  });
+
+  it("keeps astral characters whole at positive configured chunk limits", () => {
+    clearTelegramRuntime();
+
+    expect(telegramOutbound.chunker?.("A😀B", 1)).toEqual(["A", "😀", "B"]);
+    expect(telegramOutbound.chunker?.("A😀B", 1, { formatting: { parseMode: "HTML" } })).toEqual([
+      "A",
+      "😀",
+      "B",
+    ]);
   });
 
   it("preserves markdown tables for the configured delivery renderer", () => {

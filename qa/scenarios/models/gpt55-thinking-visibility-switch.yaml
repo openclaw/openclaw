@@ -122,7 +122,7 @@ flow:
             message:
               expr: "`missing off marker; saw ${offMessages.map((message) => message.text).join(' | ')}`"
         - assert:
-            expr: "!offMessages.some((candidate) => candidate.text.trimStart().startsWith('Reasoning:') && !candidate.text.includes('Native reasoning was produced; no summary text was returned.'))"
+            expr: "!offMessages.some((candidate) => candidate.text.trimStart().startsWith('Reasoning:'))"
             message:
               expr: "`disabled thinking unexpectedly emitted reasoning: ${offMessages.map((message) => message.text).join(' | ')}`"
         - if:
@@ -208,7 +208,7 @@ flow:
                   message:
                     expr: "`expected medium OpenAI reasoning payload, got ${JSON.stringify(maxRequest?.body?.reasoning ?? null)}`"
         - if:
-            expr: "env.transport.id !== 'qa-channel'"
+            expr: "env.transport.id !== 'qa-channel' && env.transport.id !== 'crabline'"
             then:
               - call: waitForCondition
                 saveAs: maxReasoning
@@ -220,4 +220,4 @@ flow:
                   expr: "maxReasoning.text.trimStart().startsWith('Reasoning:')"
                   message:
                     expr: "`missing max reasoning message near answer: ${recentOutboundSummary(state, 6)}`"
-      detailsExpr: "env.transport.id === 'qa-channel' ? `answer=${maxAnswer.text}; medium reasoning=${env.mock ? String(maxRequest?.body?.reasoning?.effort ?? '') : 'live'}; qa-channel suppresses reasoning delivery` : `answer=${maxAnswer.text}; reasoning=${maxReasoning.text}`"
+      detailsExpr: "env.transport.id === 'qa-channel' || env.transport.id === 'crabline' ? `answer=${maxAnswer.text}; medium reasoning=${env.mock ? String(maxRequest?.body?.reasoning?.effort ?? '') : 'live'}; ${env.transport.id} suppresses reasoning delivery` : `answer=${maxAnswer.text}; reasoning=${maxReasoning.text}`"

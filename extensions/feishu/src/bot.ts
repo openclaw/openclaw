@@ -28,6 +28,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import {
   checkBotMentioned,
@@ -336,7 +337,7 @@ function formatMentionNameForAgentContext(name: string): string {
   const normalized = stripped.replace(/\s+/g, " ").trim();
   const bounded =
     normalized.length > MAX_MENTION_CONTEXT_NAME_LENGTH
-      ? `${normalized.slice(0, MAX_MENTION_CONTEXT_NAME_LENGTH - 3)}...`
+      ? `${truncateUtf16Safe(normalized, MAX_MENTION_CONTEXT_NAME_LENGTH - 3)}...`
       : normalized;
   return JSON.stringify(bounded || "unknown");
 }
@@ -1000,7 +1001,7 @@ export async function handleFeishuMessage(params: {
       }
     }
 
-    const preview = ctx.content.replace(/\s+/g, " ").slice(0, 160);
+    const preview = truncateUtf16Safe(ctx.content.replace(/\s+/g, " "), 160);
     const inboundLabel = isGroup
       ? `Feishu[${account.accountId}] message in group ${ctx.chatId}`
       : `Feishu[${account.accountId}] DM from ${ctx.senderOpenId}`;
@@ -1054,7 +1055,7 @@ export async function handleFeishuMessage(params: {
         ) {
           quotedContent = quotedMessageInfo.content;
           log(
-            `feishu[${account.accountId}]: fetched quoted message: ${quotedContent?.slice(0, 100)}`,
+            `feishu[${account.accountId}]: fetched quoted message: ${truncateUtf16Safe(quotedContent, 100)}`,
           );
         } else if (quotedMessageInfo) {
           log(
@@ -1599,6 +1600,7 @@ export async function handleFeishuMessage(params: {
               agentId,
               runtime: runtime as RuntimeEnv,
               chatId: ctx.chatId,
+              sendTarget: feishuTo,
               allowReasoningPreview,
               replyToMessageId: replyTargetMessageId,
               typingTargetMessageId,
@@ -1777,6 +1779,7 @@ export async function handleFeishuMessage(params: {
           agentId: route.agentId,
           runtime: runtime as RuntimeEnv,
           chatId: ctx.chatId,
+          sendTarget: feishuTo,
           allowReasoningPreview,
           replyToMessageId: replyTargetMessageId,
           typingTargetMessageId,

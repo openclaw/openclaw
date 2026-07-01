@@ -1,5 +1,5 @@
 // Installs plugins from package specs, local paths, and catalogs.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -55,6 +55,8 @@ import {
   matchesExpectedPluginId,
   resolveDefaultPluginExtensionsDir,
   resolveDefaultPluginNpmDir,
+  resolvePluginNpmGenerationProjectDir,
+  resolvePluginNpmGenerationProjectDirPrefix,
   resolvePluginNpmProjectDir,
   safePluginInstallFileName,
   validatePluginId,
@@ -64,6 +66,7 @@ import {
   type InstallSecurityScanResult,
   type InstallSafetyOverrides,
 } from "./install-security-scan.js";
+import { hasRetainedManagedNpmInstallMarker } from "./managed-npm-retention.js";
 import {
   resolvePackageExtensionEntries,
   type OpenClawPackageManifest,
@@ -75,6 +78,12 @@ import {
   linkOpenClawPeerDependencies,
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "./plugin-peer-link.js";
+import {
+  emitPluginAuditSecurityEvent,
+  emitPluginInstallSecurityEvent,
+  pluginAuditOutcomeForReason,
+  type PluginSecuritySourceFamily,
+} from "./security-events.js";
 
 export { resolvePluginInstallDir } from "./install-paths.js";
 
@@ -548,6 +557,28 @@ function buildDirectoryInstallResult(params: {
     version: params.version,
     extensions: params.extensions,
   };
+}
+
+function emitSuccessfulPluginInstallSecurityEvent(
+  result: InstallPluginResult,
+  params: {
+    dryRun?: boolean;
+    mode: "install" | "update";
+    sourceFamily: PluginSecuritySourceFamily;
+    trustedSourceLinkedOfficialInstall?: boolean;
+  },
+) {
+  if (params.dryRun || !result.ok) {
+    return;
+  }
+  emitPluginInstallSecurityEvent({
+    pluginId: result.pluginId,
+    mode: params.mode,
+    sourceFamily: params.sourceFamily,
+    extensionCount: result.extensions.length,
+    hasVersion: Boolean(result.version),
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+  });
 }
 
 function hasPackageRuntimeDependencies(manifest: PackageManifest): boolean {
@@ -1071,6 +1102,143 @@ function resolveManagedNpmRootPackageDir(npmRoot: string, packageName: string): 
   return path.join(npmRoot, "node_modules", ...packageName.split("/"));
 }
 
+function resolveManagedNpmRootGenerationKey(params: {
+  packageName: string;
+  npmResolution: NpmSpecResolution;
+}): string {
+  return [
+    params.npmResolution.name ?? params.packageName,
+    params.npmResolution.version ?? "",
+    params.npmResolution.resolvedSpec ?? "",
+    params.npmResolution.integrity ?? "",
+    params.npmResolution.shasum ?? "",
+  ].join("\n");
+}
+
+function resolveManagedNpmRootForInstall(params: {
+  npmBaseDir: string;
+  packageName: string;
+  npmResolution: NpmSpecResolution;
+  useGeneration: boolean;
+}): string {
+  if (!params.useGeneration) {
+    return resolvePluginNpmProjectDir({
+      npmDir: params.npmBaseDir,
+      packageName: params.packageName,
+    });
+  }
+  return resolvePluginNpmGenerationProjectDir({
+    npmDir: params.npmBaseDir,
+    packageName: params.packageName,
+    generationKey: resolveManagedNpmRootGenerationKey({
+      packageName: params.packageName,
+      npmResolution: params.npmResolution,
+    }),
+  });
+}
+
+function resolveManagedNpmInstallRoot(params: {
+  npmBaseDir: string;
+  packageName: string;
+  npmResolution: NpmSpecResolution;
+  useGeneration: boolean;
+}): string {
+  const generationKey = resolveManagedNpmRootGenerationKey({
+    packageName: params.packageName,
+    npmResolution: params.npmResolution,
+  });
+  const npmRoot = resolveManagedNpmRootForInstall(params);
+  const installRoot = resolveManagedNpmRootPackageDir(npmRoot, params.packageName);
+  if (!hasRetainedManagedNpmInstallMarker(installRoot)) {
+    return npmRoot;
+  }
+  // Never mutate a retained tree: an older process may still hold lazy imports
+  // rooted there. A fresh activation root keeps that module graph importable.
+  return resolvePluginNpmGenerationProjectDir({
+    npmDir: params.npmBaseDir,
+    packageName: params.packageName,
+    generationKey: `${generationKey}\nactivation\n${randomUUID()}`,
+  });
+}
+
+async function listManagedNpmPackageDirsForPackage(params: {
+  runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
+  npmBaseDir: string;
+  packageName: string;
+}): Promise<string[]> {
+  const packageDirs: string[] = [];
+  const legacyProjectRoot = resolvePluginNpmProjectDir({
+    npmDir: params.npmBaseDir,
+    packageName: params.packageName,
+  });
+  const legacyPackageDir = resolveManagedNpmRootPackageDir(legacyProjectRoot, params.packageName);
+  if (await params.runtime.fileExists(legacyPackageDir)) {
+    packageDirs.push(legacyPackageDir);
+  }
+  const projectsDir = path.dirname(legacyProjectRoot);
+  const generationPrefix = resolvePluginNpmGenerationProjectDirPrefix(params.packageName);
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(projectsDir, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return packageDirs;
+    }
+    throw error;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith(generationPrefix)) {
+      continue;
+    }
+    const packageDir = resolveManagedNpmRootPackageDir(
+      path.join(projectsDir, entry.name),
+      params.packageName,
+    );
+    if (await params.runtime.fileExists(packageDir)) {
+      packageDirs.push(packageDir);
+    }
+  }
+  return packageDirs;
+}
+
+async function resolveManagedNpmGenerationUseForInstall(params: {
+  runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
+  npmBaseDir: string;
+  packageName: string;
+  requestedMode: "install" | "update";
+  npmResolution?: NpmSpecResolution;
+}): Promise<"none" | "update" | "retained-install"> {
+  const packageDirs = await listManagedNpmPackageDirsForPackage({
+    runtime: params.runtime,
+    npmBaseDir: params.npmBaseDir,
+    packageName: params.packageName,
+  });
+  const hasNonRetainedPackageDir = packageDirs.some(
+    (packageDir) => !hasRetainedManagedNpmInstallMarker(packageDir),
+  );
+  if (packageDirs.length > 0 && !hasNonRetainedPackageDir) {
+    return "retained-install";
+  }
+  const generationUse =
+    params.requestedMode === "update" && hasNonRetainedPackageDir ? "update" : "none";
+  if (params.npmResolution) {
+    const candidateRoot = resolveManagedNpmRootForInstall({
+      npmBaseDir: params.npmBaseDir,
+      packageName: params.packageName,
+      npmResolution: params.npmResolution,
+      useGeneration: generationUse !== "none",
+    });
+    const candidatePackageDir = resolveManagedNpmRootPackageDir(candidateRoot, params.packageName);
+    if (hasRetainedManagedNpmInstallMarker(candidatePackageDir)) {
+      return "retained-install";
+    }
+  }
+  if (params.requestedMode === "update") {
+    return hasNonRetainedPackageDir ? "update" : "none";
+  }
+  return "none";
+}
+
 function resolveRequiredPlatformPackageNames(
   packageMetadata?: OpenClawPackageManifest,
 ): { ok: true; packageNames: string[] } | { ok: false; error: string } {
@@ -1174,20 +1342,38 @@ async function installPluginFromManagedNpmRoot(
   );
   const expectedPluginId = params.expectedPluginId;
   const npmBaseDir = params.npmDir ? resolveUserPath(params.npmDir) : resolveDefaultPluginNpmDir();
-  const npmRoot = resolvePluginNpmProjectDir({
-    npmDir: npmBaseDir,
+  const generationUse = await resolveManagedNpmGenerationUseForInstall({
+    runtime,
+    npmBaseDir,
     packageName: params.packageName,
+    requestedMode: mode,
+    npmResolution: params.npmResolution,
+  });
+  const npmRoot = resolveManagedNpmInstallRoot({
+    npmBaseDir,
+    packageName: params.packageName,
+    npmResolution: params.npmResolution,
+    useGeneration: generationUse !== "none",
   });
   const installRoot = resolveManagedNpmRootPackageDir(npmRoot, params.packageName);
-  const effectiveMode = await resolveEffectiveInstallMode({
-    runtime,
-    requestedMode: mode,
-    targetPath: installRoot,
-  });
+  const targetMode =
+    generationUse === "retained-install" && hasRetainedManagedNpmInstallMarker(installRoot)
+      ? "update"
+      : await resolveEffectiveInstallMode({
+          runtime,
+          requestedMode: mode,
+          targetPath: installRoot,
+        });
+  const policyMode =
+    generationUse === "update"
+      ? "update"
+      : generationUse === "retained-install"
+        ? "install"
+        : targetMode;
   const availability = await ensureInstallTargetAvailableForMode({
     runtime,
     targetPath: installRoot,
-    mode: effectiveMode,
+    mode: targetMode,
   });
   if (!availability.ok) {
     return availability;
@@ -1196,11 +1382,14 @@ async function installPluginFromManagedNpmRoot(
   if (!params.skipPolicyPreflight) {
     const preflightPolicyResult = await runInstallSourceScan({
       subject: `Plugin "${expectedPluginId ?? params.packageName}"`,
+      pluginId: expectedPluginId ?? params.packageName,
+      mode: policyMode,
+      sourceFamily: sourceFamilyForInstallPolicySource(params.installPolicyRequest.source, "npm"),
       scan: async () =>
         await preflightPluginNpmInstallPolicy({
           config: params.config,
           logger,
-          mode: effectiveMode,
+          mode: policyMode,
           packageName: params.packageName,
           ...(expectedPluginId ? { pluginId: expectedPluginId } : {}),
           requestedSpecifier: params.installPolicyRequest.requestedSpecifier ?? params.displaySpec,
@@ -1586,7 +1775,7 @@ async function installPluginFromManagedNpmRoot(
       beforeInstallPackageNames: preInstallRootPackageNames,
       npmRoot,
     });
-    const result = await installPluginFromInstalledPackageDir({
+    const result = await installPluginFromInstalledPackageDirInternal({
       dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
       config: params.config,
       additionalDependencyPackageDirs: newRootPackageDirs,
@@ -1595,8 +1784,9 @@ async function installPluginFromManagedNpmRoot(
       logger,
       expectedPluginId,
       trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-      mode: effectiveMode,
+      mode: policyMode,
       installPolicyRequest: params.installPolicyRequest,
+      emitSuccessSecurityEvent: false,
     });
     if (!result.ok) {
       return await rollbackFailedManagedNpmInstall(result);
@@ -1736,9 +1926,13 @@ type PackageInstallCommonParams = InstallSafetyOverrides & {
   installPolicyRequest?: PluginInstallPolicyRequest;
 };
 
+type InternalPackageInstallCommonParams = PackageInstallCommonParams & {
+  onEffectiveMode?: (mode: "install" | "update") => void;
+};
+
 function pickPackageInstallCommonParams(
-  params: PackageInstallCommonParams,
-): PackageInstallCommonParams {
+  params: InternalPackageInstallCommonParams,
+): InternalPackageInstallCommonParams {
   return {
     config: params.config,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
@@ -1753,6 +1947,7 @@ function pickPackageInstallCommonParams(
     requirePluginManifest: params.requirePluginManifest,
     allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
     installPolicyRequest: params.installPolicyRequest,
+    onEffectiveMode: params.onEffectiveMode,
   };
 }
 
@@ -1778,7 +1973,56 @@ function localPluginInstallPolicySource(kind: PluginInstallPolicyRequest["kind"]
   if (kind === "plugin-file") {
     return { kind: "file", authority: "user", mutable: true, network: false } as const;
   }
+  if (kind === "plugin-git") {
+    return { kind: "git", authority: "third-party", mutable: true, network: true } as const;
+  }
   return { kind: "local-path", authority: "user", mutable: true, network: false } as const;
+}
+
+function sourceFamilyForInstallPolicyKind(
+  kind: PluginInstallPolicyRequest["kind"] | undefined,
+  fallback: PluginSecuritySourceFamily,
+): PluginSecuritySourceFamily {
+  switch (kind) {
+    case "plugin-archive":
+      return "archive";
+    case "plugin-dir":
+      return "directory";
+    case "plugin-file":
+      return "file";
+    case "plugin-git":
+      return "git";
+    case "plugin-npm":
+      return "npm";
+    case undefined:
+      return fallback;
+  }
+  return fallback;
+}
+
+function sourceFamilyForInstallPolicySource(
+  source: InstallPolicySource | undefined,
+  fallback: PluginSecuritySourceFamily,
+): PluginSecuritySourceFamily {
+  switch (source?.kind) {
+    case "archive":
+      return "archive";
+    case "file":
+      return "file";
+    case "git":
+      return "git";
+    case "npm":
+      return "npm";
+    case "bundled":
+    case "clawhub":
+    case "local-path":
+    case "managed":
+    case "upload":
+    case "workspace":
+    case undefined:
+      return fallback;
+  }
+  return fallback;
 }
 
 type PreparedInstallTarget = {
@@ -1829,15 +2073,36 @@ async function resolvePreparedDirectoryInstallTarget(params: {
 
 async function runInstallSourceScan(params: {
   subject: string;
+  pluginId?: string;
+  mode?: "install" | "update";
+  sourceFamily?: PluginSecuritySourceFamily;
   scan: () => Promise<InstallSecurityScanResult | undefined>;
 }): Promise<Extract<InstallPluginResult, { ok: false }> | null> {
   try {
     const scanResult = await params.scan();
     if (scanResult?.blocked) {
+      const reason =
+        scanResult.blocked.code === "security_scan_failed"
+          ? "security_scan_failed"
+          : "security_scan_blocked";
+      emitPluginAuditSecurityEvent({
+        outcome: pluginAuditOutcomeForReason(reason),
+        reason,
+        pluginId: params.pluginId,
+        mode: params.mode,
+        sourceFamily: params.sourceFamily,
+      });
       return buildBlockedInstallResult({ blocked: scanResult.blocked });
     }
     return null;
   } catch (err) {
+    emitPluginAuditSecurityEvent({
+      outcome: "error",
+      reason: "security_scan_failed",
+      pluginId: params.pluginId,
+      mode: params.mode,
+      sourceFamily: params.sourceFamily,
+    });
     return {
       ok: false,
       error: `${params.subject} installation blocked: code safety scan failed (${String(err)}). Run "openclaw security audit --deep" for details.`,
@@ -1973,7 +2238,7 @@ async function resolveEffectiveInstallMode(params: {
 async function installBundleFromSourceDir(
   params: {
     sourceDir: string;
-  } & PackageInstallCommonParams,
+  } & InternalPackageInstallCommonParams,
 ): Promise<InstallPluginResult | null> {
   const runtime = await loadPluginInstallRuntime();
   const bundleFormat = runtime.detectBundleManifestFormat(params.sourceDir);
@@ -2034,9 +2299,13 @@ async function installBundleFromSourceDir(
   if (!targetResult.ok) {
     return { ok: false, error: targetResult.error };
   }
+  params.onEffectiveMode?.(targetResult.target.effectiveMode);
 
   const scanResult = await runInstallSourceScan({
     subject: `Bundle "${pluginId}"`,
+    pluginId,
+    mode: targetResult.target.effectiveMode,
+    sourceFamily: sourceFamilyForInstallPolicyKind(params.installPolicyRequest?.kind, "archive"),
     scan: async () =>
       await runtime.scanBundleInstallSource({
         dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
@@ -2076,7 +2345,7 @@ async function installBundleFromSourceDir(
 async function installPluginFromSourceDir(
   params: {
     sourceDir: string;
-  } & PackageInstallCommonParams,
+  } & InternalPackageInstallCommonParams,
 ): Promise<InstallPluginResult> {
   const nativePackageDetected = await detectNativePackageInstallSource(params.sourceDir);
   if (nativePackageDetected) {
@@ -2237,6 +2506,12 @@ async function validatePackagePluginInstallSource(params: {
     : params.mode;
   const scanResult = await runInstallSourceScan({
     subject: `Plugin "${pluginId}"`,
+    pluginId,
+    mode: scanMode,
+    sourceFamily: sourceFamilyForInstallPolicySource(
+      params.installPolicyRequest?.source,
+      sourceFamilyForInstallPolicyKind(params.installPolicyRequest?.kind, "installed-package"),
+    ),
     scan: async () =>
       await params.runtime.scanPackageInstallSource({
         dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
@@ -2292,6 +2567,12 @@ async function scanAndLinkInstalledPackage(params: {
 }): Promise<Extract<InstallPluginResult, { ok: false }> | null> {
   const scanResult = await runInstallSourceScan({
     subject: `Plugin "${params.pluginId}"`,
+    pluginId: params.pluginId,
+    mode: params.mode,
+    sourceFamily: sourceFamilyForInstallPolicySource(
+      params.source,
+      sourceFamilyForInstallPolicyKind(params.requestKind, "installed-package"),
+    ),
     scan: async () =>
       await params.runtime.scanInstalledPackageDependencyTree({
         ...(params.additionalDependencyPackageDirs
@@ -2333,6 +2614,18 @@ async function scanAndLinkInstalledPackage(params: {
 export async function installPluginFromInstalledPackageDir(
   params: {
     additionalDependencyPackageDirs?: string[];
+    emitSuccessSecurityEvent?: boolean;
+    packageDir: string;
+    dependencyScanRootDir?: string;
+  } & PackageInstallCommonParams,
+): Promise<InstallPluginResult> {
+  return await installPluginFromInstalledPackageDirInternal(params);
+}
+
+async function installPluginFromInstalledPackageDirInternal(
+  params: {
+    additionalDependencyPackageDirs?: string[];
+    emitSuccessSecurityEvent?: boolean;
     packageDir: string;
     dependencyScanRootDir?: string;
   } & PackageInstallCommonParams,
@@ -2376,42 +2669,31 @@ export async function installPluginFromInstalledPackageDir(
   if (postInstallError) {
     return postInstallError;
   }
-  return buildDirectoryInstallResult({
+  const result = buildDirectoryInstallResult({
     pluginId: validated.plugin.pluginId,
     targetDir: params.packageDir,
     manifestName: validated.plugin.manifestName,
     version: validated.plugin.version,
     extensions: validated.plugin.extensions,
   });
-}
-
-export async function preflightPluginPackageInstallSource(
-  params: {
-    packageDir: string;
-  } & PackageInstallCommonParams,
-): Promise<PluginInstallFailureResult | null> {
-  const runtime = await loadPluginInstallRuntime();
-  const { logger } = runtime.resolveTimedInstallModeOptions(params, defaultLogger);
-  const validated = await validatePackagePluginInstallSource({
-    runtime,
-    packageDir: params.packageDir,
-    expectedPluginId: params.expectedPluginId,
-    requirePluginManifest: params.requirePluginManifest,
-    allowSourceTypeScriptEntries: params.allowSourceTypeScriptEntries,
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-    config: params.config,
-    installPolicyRequest: params.installPolicyRequest,
-    logger,
-    mode: params.mode ?? "install",
-  });
-  return validated.ok ? null : validated;
+  if (params.emitSuccessSecurityEvent !== false) {
+    emitSuccessfulPluginInstallSecurityEvent(result, {
+      dryRun: params.dryRun,
+      mode: params.mode ?? "install",
+      sourceFamily: sourceFamilyForInstallPolicyKind(
+        params.installPolicyRequest?.kind,
+        "installed-package",
+      ),
+      trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+    });
+  }
+  return result;
 }
 
 async function installPluginFromPackageDir(
   params: {
     packageDir: string;
-  } & PackageInstallCommonParams,
+  } & InternalPackageInstallCommonParams,
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
   const { logger, timeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
@@ -2458,6 +2740,7 @@ async function installPluginFromPackageDir(
 
   preparedTarget = await resolvePreparedTargetForPluginId(plugin.pluginId);
   const effectiveMode = preparedTarget.effectiveMode;
+  params.onEffectiveMode?.(effectiveMode);
   const hasBundleManifest = Boolean(runtime.detectBundleManifestFormat(params.packageDir));
   const shouldInstallRuntimeDeps =
     plugin.hasRuntimeDependencies &&
@@ -2521,8 +2804,9 @@ export async function installPluginFromArchive(
     return archivePathResult;
   }
   const archivePath = archivePathResult.path;
+  let effectiveMode = mode;
 
-  return await runtime.withExtractedArchiveRoot({
+  const result = await runtime.withExtractedArchiveRoot({
     archivePath,
     tempDirPrefix: "openclaw-plugin-",
     timeoutMs,
@@ -2543,9 +2827,19 @@ export async function installPluginFromArchive(
           trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
           requirePluginManifest: true,
           installPolicyRequest,
+          onEffectiveMode: (resolvedMode) => {
+            effectiveMode = resolvedMode;
+          },
         }),
       }),
   });
+  emitSuccessfulPluginInstallSecurityEvent(result, {
+    dryRun: params.dryRun,
+    mode: effectiveMode,
+    sourceFamily: "archive",
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+  });
+  return result;
 }
 
 export async function installPluginFromDir(
@@ -2568,13 +2862,24 @@ export async function installPluginFromDir(
     return { ok: false, error: `not a directory: ${dirPath}` };
   }
 
-  return await installPluginFromSourceDir({
+  let effectiveMode = params.mode ?? "install";
+  const result = await installPluginFromSourceDir({
     sourceDir: dirPath,
     ...pickPackageInstallCommonParams({
       ...params,
       installPolicyRequest,
+      onEffectiveMode: (resolvedMode) => {
+        effectiveMode = resolvedMode;
+      },
     }),
   });
+  emitSuccessfulPluginInstallSecurityEvent(result, {
+    dryRun: params.dryRun,
+    mode: effectiveMode,
+    sourceFamily: sourceFamilyForInstallPolicyKind(installPolicyRequest.kind, "directory"),
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+  });
+  return result;
 }
 
 export async function installPluginFromFile(params: {
@@ -2635,6 +2940,9 @@ export async function installPluginFromFile(params: {
 
   const scanResult = await runInstallSourceScan({
     subject: `Plugin file "${pluginId}"`,
+    pluginId,
+    mode: preparedTarget.effectiveMode,
+    sourceFamily: "file",
     scan: async () =>
       await runtime.scanFileInstallSource({
         config: params.config,
@@ -2662,7 +2970,13 @@ export async function installPluginFromFile(params: {
     return { ok: false, error: String(err) };
   }
 
-  return buildFileInstallResult(pluginId, preparedTarget.targetPath);
+  const result = buildFileInstallResult(pluginId, preparedTarget.targetPath);
+  emitSuccessfulPluginInstallSecurityEvent(result, {
+    dryRun,
+    mode: preparedTarget.effectiveMode,
+    sourceFamily: "file",
+  });
+  return result;
 }
 
 export async function installPluginFromNpmSpec(
@@ -2703,18 +3017,6 @@ export async function installPluginFromNpmSpec(
       code: PLUGIN_INSTALL_ERROR_CODE.INVALID_NPM_SPEC,
     };
   }
-
-  const npmBaseDir = params.npmDir ? resolveUserPath(params.npmDir) : resolveDefaultPluginNpmDir();
-  const npmRoot = resolvePluginNpmProjectDir({
-    npmDir: npmBaseDir,
-    packageName: parsedSpec.name,
-  });
-  const installRoot = resolveManagedNpmRootPackageDir(npmRoot, parsedSpec.name);
-  const effectiveMode = await resolveEffectiveInstallMode({
-    runtime,
-    requestedMode: mode,
-    targetPath: installRoot,
-  });
 
   const metadataResult = await resolveNpmSpecMetadata({ spec, timeoutMs });
   if (!metadataResult.ok) {
@@ -2791,6 +3093,12 @@ export async function installPluginFromNpmSpec(
   if (compatibilityError) {
     return compatibilityError;
   }
+  const npmInstallPolicySource = {
+    kind: "npm",
+    authority: params.trustedSourceLinkedOfficialInstall ? "official" : "third-party",
+    mutable: false,
+    network: true,
+  } as const;
   const driftResult = await resolveNpmIntegrityDriftWithDefaultMessage({
     spec,
     expectedIntegrity: params.expectedIntegrity,
@@ -2801,6 +3109,35 @@ export async function installPluginFromNpmSpec(
   if (driftResult.error) {
     return { ok: false, error: driftResult.error };
   }
+  const npmBaseDir = params.npmDir ? resolveUserPath(params.npmDir) : resolveDefaultPluginNpmDir();
+  const generationUse = await resolveManagedNpmGenerationUseForInstall({
+    runtime,
+    npmBaseDir,
+    packageName: parsedSpec.name,
+    requestedMode: mode,
+    npmResolution,
+  });
+  const npmRoot = resolveManagedNpmRootForInstall({
+    npmBaseDir,
+    packageName: parsedSpec.name,
+    npmResolution,
+    useGeneration: generationUse !== "none",
+  });
+  const installRoot = resolveManagedNpmRootPackageDir(npmRoot, parsedSpec.name);
+  const targetMode =
+    generationUse === "retained-install" && hasRetainedManagedNpmInstallMarker(installRoot)
+      ? "update"
+      : await resolveEffectiveInstallMode({
+          runtime,
+          requestedMode: mode,
+          targetPath: installRoot,
+        });
+  const policyMode =
+    generationUse === "update"
+      ? "update"
+      : generationUse === "retained-install"
+        ? "install"
+        : targetMode;
 
   const policyTempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-policy-"));
   try {
@@ -2820,15 +3157,18 @@ export async function installPluginFromNpmSpec(
     );
     const preflightPolicyResult = await runInstallSourceScan({
       subject: `Plugin "${expectedPluginId ?? parsedSpec.name}"`,
+      pluginId: expectedPluginId ?? parsedSpec.name,
+      mode: policyMode,
+      sourceFamily: "npm",
       scan: async () =>
         await preflightPluginNpmInstallPolicy({
           config: params.config,
           logger,
-          mode: effectiveMode,
+          mode: policyMode,
           packageName: parsedSpec.name,
           ...(expectedPluginId ? { pluginId: expectedPluginId } : {}),
           requestedSpecifier: spec,
-          source: { kind: "npm", authority: "third-party", mutable: false, network: true },
+          source: npmInstallPolicySource,
           sourcePath: policyMetadataPath,
           sourcePathKind: "file",
         }),
@@ -2840,7 +3180,7 @@ export async function installPluginFromNpmSpec(
     await fs.rm(policyTempDir, { recursive: true, force: true });
   }
 
-  return await installPluginFromManagedNpmRoot({
+  const result = await installPluginFromManagedNpmRoot({
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     config: params.config,
@@ -2853,7 +3193,7 @@ export async function installPluginFromNpmSpec(
     installPolicyRequest: {
       kind: "plugin-npm",
       requestedSpecifier: spec,
-      source: { kind: "npm", authority: "third-party", mutable: false, network: true },
+      source: npmInstallPolicySource,
     },
     extensionsDir: params.extensionsDir,
     npmDir: params.npmDir,
@@ -2866,6 +3206,13 @@ export async function installPluginFromNpmSpec(
     npmResolution,
     ...(driftResult.integrityDrift ? { integrityDrift: driftResult.integrityDrift } : {}),
   });
+  emitSuccessfulPluginInstallSecurityEvent(result, {
+    dryRun,
+    mode: policyMode,
+    sourceFamily: "npm",
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+  });
+  return result;
 }
 
 export async function installPluginFromNpmPackArchive(
@@ -2914,6 +3261,34 @@ export async function installPluginFromNpmPackArchive(
   }
   const packageName = packageNameResult.packageName;
   const npmBaseDir = params.npmDir ? resolveUserPath(params.npmDir) : resolveDefaultPluginNpmDir();
+  const generationUse = await resolveManagedNpmGenerationUseForInstall({
+    runtime,
+    npmBaseDir,
+    packageName,
+    requestedMode: mode,
+    npmResolution,
+  });
+  const npmProjectRoot = resolveManagedNpmRootForInstall({
+    npmBaseDir,
+    packageName,
+    npmResolution,
+    useGeneration: generationUse !== "none",
+  });
+  const installRoot = resolveManagedNpmRootPackageDir(npmProjectRoot, packageName);
+  const targetMode =
+    generationUse === "retained-install" && hasRetainedManagedNpmInstallMarker(installRoot)
+      ? "update"
+      : await resolveEffectiveInstallMode({
+          runtime,
+          requestedMode: mode,
+          targetPath: installRoot,
+        });
+  const policyMode =
+    generationUse === "update"
+      ? "update"
+      : generationUse === "retained-install"
+        ? "install"
+        : targetMode;
 
   const result = await installPluginFromManagedNpmRoot({
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
@@ -2958,6 +3333,12 @@ export async function installPluginFromNpmPackArchive(
     expectedPluginId: params.expectedPluginId,
     npmResolution,
     ...(driftResult.integrityDrift ? { integrityDrift: driftResult.integrityDrift } : {}),
+  });
+  emitSuccessfulPluginInstallSecurityEvent(result, {
+    dryRun,
+    mode: policyMode,
+    sourceFamily: "archive",
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
   });
   return {
     ...result,

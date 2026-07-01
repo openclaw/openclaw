@@ -238,6 +238,7 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
                 api,
                 executeParams: p,
                 defaultAccountId,
+                requiredTool: { family: "wiki", label: "Wiki" },
               });
             switch (p.action) {
               case "spaces":

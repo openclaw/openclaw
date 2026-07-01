@@ -1,4 +1,5 @@
 // Qa Lab plugin module implements QA evidence summary behavior.
+import { execFileSync } from "node:child_process";
 import { z } from "zod";
 import { splitQaModelRef } from "./model-selection.js";
 import { getQaProvider, type QaProviderMode } from "./providers/index.js";
@@ -116,15 +117,18 @@ const qaEvidenceScorecardCountSchema = z
   })
   .strict();
 
+const qaEvidenceScorecardCoverageCountSchema = qaEvidenceScorecardCountSchema.extend({
+  secondaryOnly: z.number().int().nonnegative(),
+});
+
 const qaEvidenceScorecardCategorySchema = z
   .object({
     id: nonEmptyStringSchema,
     surfaceId: nonEmptyStringSchema,
     name: nonEmptyStringSchema,
     status: z.enum(["fulfilled", "partial", "missing"]),
-    features: qaEvidenceScorecardCountSchema.extend({
-      secondaryOnly: z.number().int().nonnegative(),
-    }),
+    features: qaEvidenceScorecardCountSchema,
+    coverageIds: qaEvidenceScorecardCoverageCountSchema,
     missingCoverageIds: z.array(nonEmptyStringSchema),
   })
   .strict();
@@ -144,6 +148,7 @@ const qaEvidenceScorecardSchema = z
       .strict(),
     categories: qaEvidenceScorecardCountSchema,
     features: qaEvidenceScorecardCountSchema,
+    coverageIds: qaEvidenceScorecardCountSchema,
     categoryReports: z.array(qaEvidenceScorecardCategorySchema),
   })
   .strict();
@@ -175,10 +180,13 @@ const qaEvidenceResultSchema = z
   })
   .strict();
 
+const qaEvidencePostureSchema = z.enum(["direct-gateway", "native-approval", "user-path"]);
+
 export const qaEvidenceSummaryEntrySchema = z
   .object({
     test: qaEvidenceTestSchema,
     coverage: z.array(qaEvidenceCoverageSchema),
+    posture: qaEvidencePostureSchema.optional(),
     refs: z.array(qaEvidenceRefSchema).optional(),
     runtimeParityTier: nonEmptyStringSchema.optional(),
     execution: qaEvidenceExecutionSchema.optional(),
@@ -240,6 +248,7 @@ type QaEvidenceLiveTransportCheckInput = {
   title: string;
   status: QaEvidenceStatusInput;
   details: string;
+  posture?: z.infer<typeof qaEvidencePostureSchema>;
   timing?: QaEvidenceTiming;
   rttMs?: number;
   rttMeasurement?: {
@@ -288,6 +297,7 @@ type QaEvidenceBuildBase = {
   channelDriver?: string;
   packageSource?: QaEvidencePackageSource;
   profile?: QaEvidenceProfile;
+  repoRoot?: string;
   runner?: string;
 };
 
@@ -349,7 +359,7 @@ function uniqueSortedStrings(values: readonly (string | undefined)[]) {
   );
 }
 
-function resolveQaEvidenceProfile(params: {
+export function resolveQaEvidenceProfile(params: {
   env?: NodeJS.ProcessEnv;
   explicit?: QaEvidenceProfile;
 }) {
@@ -388,9 +398,31 @@ function resolveQaEvidenceChannelDriver(params: { env?: NodeJS.ProcessEnv; fallb
   return id ? { id } : undefined;
 }
 
-function resolveQaEvidenceEnvironment(env: NodeJS.ProcessEnv | undefined) {
+function resolveQaEvidenceCheckoutRef(repoRoot?: string) {
+  try {
+    const ref = execFileSync("git", ["rev-parse", "--verify", "HEAD"], {
+      cwd: repoRoot ?? process.cwd(),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return ref || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function resolveQaEvidenceEnvironment(params: {
+  env?: NodeJS.ProcessEnv;
+  repoRoot?: string;
+}) {
   return {
-    ref: env?.OPENCLAW_QA_REF?.trim() || env?.GITHUB_SHA?.trim() || null,
+    // GitHub's GITHUB_SHA describes the workflow event, not necessarily the
+    // checked-out ref selected by a manual or remote QA run.
+    ref:
+      params.env?.OPENCLAW_QA_REF?.trim() ||
+      resolveQaEvidenceCheckoutRef(params.repoRoot) ||
+      params.env?.GITHUB_SHA?.trim() ||
+      null,
     os: process.platform,
     nodeVersion: process.version,
   };
@@ -550,7 +582,10 @@ export function buildQaSuiteEvidenceSummary(
   },
 ): QaEvidenceSummaryJson {
   const provider = buildQaEvidenceProvider(params);
-  const environment = resolveQaEvidenceEnvironment(params.env);
+  const environment = resolveQaEvidenceEnvironment({
+    env: params.env,
+    repoRoot: params.repoRoot,
+  });
   const packageSource = resolveQaEvidenceBuildPackageSource(params);
   const runner = resolveQaEvidenceRunner({ env: params.env, fallback: params.runner });
   const profile = resolveQaEvidenceProfile({
@@ -622,7 +657,10 @@ function buildTestRunnerEvidenceSummary(
   },
 ): QaEvidenceSummaryJson {
   const provider = buildQaEvidenceProvider(params);
-  const environment = resolveQaEvidenceEnvironment(params.env);
+  const environment = resolveQaEvidenceEnvironment({
+    env: params.env,
+    repoRoot: params.repoRoot,
+  });
   const packageSource = resolveQaEvidenceBuildPackageSource(params);
   const runner = resolveQaEvidenceRunner({
     env: params.env,
@@ -705,6 +743,20 @@ export function buildPlaywrightEvidenceSummary(
   });
 }
 
+export function buildScriptEvidenceSummary(
+  params: QaEvidenceBuildBase & {
+    targets: readonly QaEvidenceTestTargetInput[];
+    results: readonly QaEvidenceTestResultInput[];
+  },
+): QaEvidenceSummaryJson {
+  return buildTestRunnerEvidenceSummary({
+    ...params,
+    defaultRunner: "script",
+    testKind: "script-test",
+    runner: params.runner ?? "script",
+  });
+}
+
 export function buildLiveTransportEvidenceSummary(
   params: QaEvidenceBuildBase & {
     checks: readonly QaEvidenceLiveTransportCheckInput[];
@@ -712,7 +764,10 @@ export function buildLiveTransportEvidenceSummary(
   },
 ): QaEvidenceSummaryJson {
   const provider = buildQaEvidenceProvider(params);
-  const environment = resolveQaEvidenceEnvironment(params.env);
+  const environment = resolveQaEvidenceEnvironment({
+    env: params.env,
+    repoRoot: params.repoRoot,
+  });
   const packageSource = resolveQaEvidenceBuildPackageSource(params);
   const runner = resolveQaEvidenceRunner({ env: params.env, fallback: params.runner });
   const profile = resolveQaEvidenceProfile({
@@ -746,6 +801,7 @@ export function buildLiveTransportEvidenceSummary(
         title: check.title,
       },
       coverage,
+      posture: check.posture,
       execution: {
         runner,
         environment,

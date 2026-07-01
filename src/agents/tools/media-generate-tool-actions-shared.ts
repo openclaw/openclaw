@@ -123,7 +123,7 @@ export function createMediaGenerateProviderListActionResult<
   };
 }
 
-/** Creates status and duplicate-guard action helpers for a media generation task type. */
+/** Creates status action helpers for a media generation task type. */
 export function createMediaGenerateTaskStatusActions<Task>(params: {
   inactiveText: string;
   findActiveTask: (sessionKey?: string) => Task | undefined;
@@ -140,14 +140,39 @@ export function createMediaGenerateTaskStatusActions<Task>(params: {
         buildStatusDetails: params.buildStatusDetails,
       });
     },
+  };
+}
 
-    createDuplicateGuardResult(sessionKey?: string): MediaGenerateActionResult | undefined {
-      return createMediaGenerateDuplicateGuardResult({
-        sessionKey,
-        findActiveTask: params.findActiveTask,
-        buildStatusText: params.buildStatusText,
-        buildStatusDetails: params.buildStatusDetails,
-      });
+/** Builds duplicate-guard status output for a media generation task type. */
+export function createMediaGenerateDuplicateGuardResult<Task>(params: {
+  sessionKey?: string;
+  prompt?: string;
+  requestKey?: string;
+  findDuplicateTask: (
+    sessionKey?: string,
+    params?: { prompt?: string; requestKey?: string },
+  ) => Task | undefined;
+  buildStatusText: TaskStatusTextBuilder<Task>;
+  buildStatusDetails: (task: Task) => Record<string, unknown>;
+}): MediaGenerateActionResult | undefined {
+  const blockingTask = params.findDuplicateTask(params.sessionKey, {
+    prompt: params.prompt,
+    requestKey: params.requestKey,
+  });
+  if (!blockingTask) {
+    return undefined;
+  }
+  return {
+    content: [
+      {
+        type: "text",
+        text: params.buildStatusText(blockingTask, { duplicateGuard: true }),
+      },
+    ],
+    details: {
+      action: "status",
+      duplicateGuard: true,
+      ...params.buildStatusDetails(blockingTask),
     },
   };
 }
@@ -173,32 +198,6 @@ function createMediaGenerateStatusActionResult<Task>(params: {
     content: [{ type: "text", text: params.buildStatusText(activeTask) }],
     details: {
       action: "status",
-      ...params.buildStatusDetails(activeTask),
-    },
-  };
-}
-
-function createMediaGenerateDuplicateGuardResult<Task>(params: {
-  sessionKey?: string;
-  findActiveTask: (sessionKey?: string) => Task | undefined;
-  buildStatusText: TaskStatusTextBuilder<Task>;
-  buildStatusDetails: (task: Task) => Record<string, unknown>;
-}): MediaGenerateActionResult | undefined {
-  const activeTask = params.findActiveTask(params.sessionKey);
-  if (!activeTask) {
-    return undefined;
-  }
-  // Duplicate guard returns the active status payload so callers can show current progress.
-  return {
-    content: [
-      {
-        type: "text",
-        text: params.buildStatusText(activeTask, { duplicateGuard: true }),
-      },
-    ],
-    details: {
-      action: "status",
-      duplicateGuard: true,
       ...params.buildStatusDetails(activeTask),
     },
   };

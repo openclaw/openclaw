@@ -12,10 +12,7 @@ import {
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveClaudeCliAnthropicModelRefs } from "./claude-model-refs.js";
-import {
-  readClaudeCliCredentialsForSetup,
-  readClaudeCliCredentialsForSetupNonInteractive,
-} from "./cli-auth-seam.js";
+import type { readClaudeCliCredentialsForSetup } from "./cli-auth-seam.js";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-shared.js";
 
 type AgentDefaultsModel = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["model"];
@@ -170,15 +167,6 @@ function modelEntryWithClaudeCliRuntime(entry: unknown): Record<string, unknown>
     id: CLAUDE_CLI_BACKEND_ID,
   };
   return base;
-}
-
-/** Return whether Claude CLI credentials are available for setup migration. */
-export function hasClaudeCliAuth(options?: { allowKeychainPrompt?: boolean }): boolean {
-  return Boolean(
-    options?.allowKeychainPrompt === false
-      ? readClaudeCliCredentialsForSetupNonInteractive()
-      : readClaudeCliCredentialsForSetup(),
-  );
 }
 
 function buildClaudeCliAuthProfiles(

@@ -157,11 +157,20 @@ If stdout is non-empty, that text is the delivered result. If stdout is empty an
 <ParamField path="--model" type="string">
   Model override; uses the selected allowed model for the job.
 </ParamField>
+<ParamField path="--fallbacks" type="string">
+  Per-job fallback model list, for example `--fallbacks openrouter/gpt-4.1-mini,openai/gpt-5`. Pass `--fallbacks ""` for a strict run with no fallbacks.
+</ParamField>
+<ParamField path="--clear-fallbacks" type="boolean">
+  On `cron edit`, removes the per-job fallback override so the job follows configured fallback precedence. Cannot be combined with `--fallbacks`.
+</ParamField>
 <ParamField path="--clear-model" type="boolean">
   On `cron edit`, removes the per-job model override so the job follows normal cron model-selection precedence (a stored cron-session override if set, otherwise the agent/default model). Cannot be combined with `--model`.
 </ParamField>
 <ParamField path="--thinking" type="string">
   Thinking level override.
+</ParamField>
+<ParamField path="--clear-thinking" type="boolean">
+  On `cron edit`, removes the per-job thinking override so the job follows normal cron thinking precedence. Cannot be combined with `--thinking`.
 </ParamField>
 <ParamField path="--light-context" type="boolean">
   Skip workspace bootstrap file injection.
@@ -183,7 +192,7 @@ Model-selection precedence for isolated jobs is:
 3. User-selected stored cron session model override
 4. Agent/default model selection
 
-Fast mode follows the resolved live selection too. If the selected model config has `params.fastMode`, isolated cron uses that by default. A stored session `fastMode` override still wins over config in either direction.
+Fast mode follows the resolved live selection too. If the selected model config has `params.fastMode`, isolated cron uses that by default. A stored session `fastMode` override still wins over config in either direction. Auto mode uses the selected model's `params.fastAutoOnSeconds` cutoff when present, defaulting to 60 seconds.
 
 If an isolated run hits a live model-switch handoff, cron retries with the switched provider/model and persists that live selection for the active run before retrying. When the switch also carries a new auth profile, cron persists that auth profile override for the active run too. Retries are bounded: after the initial attempt plus 2 switch retries, cron aborts instead of looping forever.
 
@@ -478,7 +487,7 @@ Model override note:
 - API `cron.update` payload patches can set `model: null` to clear a stored job model override.
 - `openclaw cron edit <job-id> --clear-model` clears that override from the CLI (same effect as the `model: null` patch) and cannot be combined with `--model`.
 - Configured fallback chains still apply because cron `--model` is a job primary, not a session `/model` override.
-- Payload `fallbacks` replaces configured fallbacks for that job; `fallbacks: []` disables fallback and makes the run strict.
+- `openclaw cron add|edit --fallbacks ...` sets payload `fallbacks`, replacing configured fallbacks for that job; `--fallbacks ""` disables fallback and makes the run strict. `openclaw cron edit <job-id> --clear-fallbacks` clears the per-job override.
 - A plain `--model` with no explicit or configured fallback list does not fall through to the agent primary as a silent extra retry target.
 
 </Note>

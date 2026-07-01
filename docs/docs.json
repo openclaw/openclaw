@@ -69,6 +69,14 @@
       "destination": "/gateway/external-apps"
     },
     {
+      "source": "/reference/maturity-scorecard",
+      "destination": "/maturity/scorecard"
+    },
+    {
+      "source": "/reference/maturity-taxonomy",
+      "destination": "/maturity/taxonomy"
+    },
+    {
       "source": "/mcp",
       "destination": "/cli/mcp"
     },
@@ -315,6 +323,10 @@
     {
       "source": "/providers/zalo",
       "destination": "/channels/zalo"
+    },
+    {
+      "source": "/channels/openclaw-zaloclawbot",
+      "destination": "/channels/zaloclawbot"
     },
     {
       "source": "/providers/whatsapp",
@@ -1118,6 +1130,7 @@
                   "channels/mattermost",
                   "channels/nextcloud-talk",
                   "channels/nostr",
+                  "channels/raft",
                   "channels/tlon",
                   "channels/synology-chat",
                   "channels/twitch"
@@ -1132,6 +1145,7 @@
                   "channels/feishu",
                   "channels/yuanbao",
                   "channels/zalo",
+                  "channels/zaloclawbot",
                   "channels/zalouser"
                 ]
               },
@@ -1387,10 +1401,7 @@
                   "clawhub/http-api",
                   "clawhub/acceptable-usage",
                   "clawhub/moderation",
-                  "clawhub/security",
-                  "clawhub/security-audits",
-                  "clawhub/content-rights",
-                  "clawhub/plugin-validation-fixes"
+                  "clawhub/security-audits"
                 ]
               }
             ]
@@ -1417,6 +1428,7 @@
                   "providers/azure-speech",
                   "providers/cerebras",
                   "providers/chutes",
+                  "providers/cohere",
                   "providers/claude-max-api-proxy",
                   "providers/cloudflare-ai-gateway",
                   "providers/comfy",
@@ -1848,6 +1860,12 @@
               {
                 "group": "Release and CI",
                 "pages": [
+                  {
+                    "group": "Release notes",
+                    "pages": ["releases/index", "releases/2026.6.11"]
+                  },
+                  "maturity/scorecard",
+                  "maturity/taxonomy",
                   "reference/RELEASING",
                   "reference/full-release-validation",
                   "reference/release-performance-sweep",

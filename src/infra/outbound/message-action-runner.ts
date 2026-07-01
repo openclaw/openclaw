@@ -7,6 +7,7 @@ import {
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { resolveAgentIdentity, resolveResponsePrefix } from "../../agents/identity.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import {
   readPositiveIntegerParam,
@@ -15,6 +16,7 @@ import {
 } from "../../agents/tools/common.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { resolveResponsePrefixTemplate } from "../../auto-reply/reply/response-prefix-template.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -36,6 +38,7 @@ import {
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
+import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { hasPollCreationParams } from "../../poll-params.js";
 import { resolvePollMaxSelections } from "../../polls.js";
 import { resolveFirstBoundAccountId } from "../../routing/bound-account-read.js";
@@ -57,6 +60,7 @@ import {
 import type { OutboundSendDeps } from "./deliver.js";
 import { shouldUseInternalSourceReplySink } from "./internal-source-reply.js";
 import { normalizeMessageActionInput } from "./message-action-normalization.js";
+import { hasPotentialPluginActionParam } from "./message-action-param-keys.js";
 import {
   collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
@@ -68,6 +72,7 @@ import {
   resolveAttachmentMediaPolicy,
   resolveExtraActionMediaSourceParamKeys,
 } from "./message-action-params.js";
+import { actionRequiresTarget } from "./message-action-spec.js";
 import {
   prepareOutboundMirrorRoute,
   resolveAndApplyOutboundReplyToId,
@@ -89,7 +94,6 @@ import { executePollAction, executeSendAction } from "./outbound-send-service.js
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
 import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-resolver.js";
-import { extractToolPayload } from "./tool-payload.js";
 
 export type MessageActionRunnerGateway = {
   url?: string;
@@ -525,14 +529,32 @@ function collectMessageAttachmentMediaHints(value: unknown): string[] {
   return mediaUrls;
 }
 
-function hasExplicitTargetParam(params: Record<string, unknown>): boolean {
+function hasExplicitSingularTargetParam(params: Record<string, unknown>): boolean {
   for (const key of ["target", "to", "channelId"]) {
     if (normalizeOptionalString(params[key])) {
       return true;
     }
   }
+  return false;
+}
+
+function hasExplicitTargetParam(params: Record<string, unknown>): boolean {
   return (
-    Array.isArray(params.targets) && params.targets.some((value) => normalizeOptionalString(value))
+    hasExplicitSingularTargetParam(params) ||
+    (Array.isArray(params.targets) &&
+      params.targets.some((value) => normalizeOptionalString(value)))
+  );
+}
+
+function hasPotentialActionTargetInput(
+  input: RunMessageActionParams,
+  params: Record<string, unknown>,
+): boolean {
+  return Boolean(
+    hasExplicitSingularTargetParam(params) ||
+    normalizeOptionalString(input.toolContext?.currentChannelId) ||
+    normalizeOptionalString(input.toolContext?.currentMessagingTarget) ||
+    hasPotentialPluginActionParam(params),
   );
 }
 
@@ -647,6 +669,7 @@ async function runGatewayPluginMessageActionOrNull(params: {
       action: params.action,
       params: params.params,
       accountId: params.accountId ?? undefined,
+      requesterAccountId: params.input.requesterAccountId ?? undefined,
       requesterSenderId: params.input.requesterSenderId ?? undefined,
       senderIsOwner: params.input.senderIsOwner,
       sessionKey: params.input.sessionKey,
@@ -1023,6 +1046,10 @@ async function buildSendPayloadParts(params: {
   };
 }
 
+// Detects leftover `{variable}` placeholders after prefix interpolation. Non-global so
+// `.test()` stays stateless; mirrors the variable shape in response-prefix-template.ts.
+const UNRESOLVED_PREFIX_VAR_PATTERN = /\{[a-zA-Z][a-zA-Z0-9.]*\}/;
+
 async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActionRunResult> {
   const {
     cfg,
@@ -1048,6 +1075,37 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     accountId,
     agentId,
   });
+
+  // `message(action=send)` crosses into other conversations, so mirror the direct-reply
+  // egress and prepend messages.responsePrefix here too; otherwise the disambiguation
+  // prefix is silently dropped on tool sends while replies keep it. Interpolate the
+  // template like normalize-reply.ts so identity tokens render. model/provider/thinking
+  // tokens need the live model selection that a tool send never performs, so when any
+  // placeholder stays unresolved we skip prefixing instead of leaking a literal `{model}`.
+  // The startsWith guard matches normalize-reply.ts and keeps re-runs idempotent.
+  const responsePrefix = resolveResponsePrefixTemplate(
+    resolveResponsePrefix(cfg, agentId ?? "", {
+      channel,
+      accountId: accountId ?? undefined,
+    }),
+    { identityName: normalizeOptionalString(resolveAgentIdentity(cfg, agentId ?? "")?.name) },
+  );
+  const prefixHasUnresolvedVar =
+    responsePrefix !== undefined && UNRESOLVED_PREFIX_VAR_PATTERN.test(responsePrefix);
+  if (
+    responsePrefix &&
+    !prefixHasUnresolvedVar &&
+    sendPayload.message &&
+    !sendPayload.message.startsWith(responsePrefix)
+  ) {
+    const prefixedMessage = `${responsePrefix} ${sendPayload.message}`;
+    sendPayload = {
+      ...sendPayload,
+      message: prefixedMessage,
+      payload: { ...sendPayload.payload, text: prefixedMessage },
+    };
+    applySendPayloadPartsToActionParams(params, sendPayload);
+  }
 
   const replyToIsExplicit = Boolean(readStringParam(params, "replyTo"));
   resolveAndApplyOutboundReplyToId(params, {
@@ -1252,6 +1310,7 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
       params,
       accountId: accountId ?? undefined,
       agentId,
+      requesterAccountId: input.requesterAccountId ?? undefined,
       requesterSenderId: input.requesterSenderId ?? undefined,
       sessionKey: input.sessionKey,
       sessionId: input.sessionId,
@@ -1361,6 +1420,7 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
     mediaLocalRoots: mediaAccess.localRoots,
     mediaReadFile: mediaAccess.readFile,
     accountId: accountId ?? undefined,
+    requesterAccountId: input.requesterAccountId ?? undefined,
     requesterSenderId: input.requesterSenderId ?? undefined,
     senderIsOwner: input.senderIsOwner,
     sessionKey: input.sessionKey,
@@ -1415,13 +1475,19 @@ export async function runMessageAction(
     return handleInternalSourceReplySendAction({ ...input, agentId: resolvedAgentId }, params);
   }
   applyImplicitSourceReplySendPolicy(input, params);
+  // Missing targets must fail before channel discovery, which can bootstrap or
+  // probe configured plugins. Non-standard params may still be owner aliases.
+  if (actionRequiresTarget(action) && !hasPotentialActionTargetInput(input, params)) {
+    throw new Error(`Action ${action} requires a target.`);
+  }
+  const channel = await resolveChannel(cfg, params, input.toolContext);
+  params.channel = channel;
   params = normalizeMessageActionInput({
     action,
     args: params,
     toolContext: input.toolContext,
+    targetAliasSpec: getChannelPlugin(channel)?.actions?.messageActionTargetAliases?.[action],
   });
-
-  const channel = await resolveChannel(cfg, params, input.toolContext);
   let accountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
   if (!accountId && resolvedAgentId) {
     accountId = resolveTargetBoundAccountId({

@@ -1,6 +1,5 @@
 // Telegram plugin module implements bot handlers behavior.
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import type { Message, ReactionTypeEmoji } from "grammy/types";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-helpers";
@@ -140,6 +139,7 @@ import {
   buildTelegramConversationContext,
   buildTelegramReplyChain,
   createTelegramMessageCache,
+  isTelegramSessionBoundaryCommandText,
   resolveTelegramMessageCacheScope,
   type TelegramCachedMessageNode,
   type TelegramReplyChainEntry,
@@ -165,39 +165,25 @@ import {
   isTelegramEditTargetMissingError,
   isTelegramMessageHasNoTextError,
 } from "./network-errors.js";
+import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
 import { buildInlineKeyboard } from "./send.js";
+import { buildTelegramSessionTranscriptPromptMessages } from "./session-transcript-context.js";
 
-function resolveTelegramPromptMediaPath(mediaPath: string): string | undefined {
-  const toInboundMediaPath = (id: string): string | undefined => {
-    if (
-      !id ||
-      id === "." ||
-      id === ".." ||
-      id.includes("/") ||
-      id.includes("\\") ||
-      id.includes("\0")
-    ) {
-      return undefined;
-    }
-    return `media://inbound/${encodeURIComponent(id)}`;
-  };
-  const decodeInboundMediaId = (id: string): string | undefined => {
-    try {
-      return decodeURIComponent(id);
-    } catch {
-      return undefined;
-    }
-  };
-  const canonicalMatch = /^media:\/\/inbound\/([^/\\]+)$/i.exec(mediaPath);
-  if (canonicalMatch?.[1]) {
-    const id = decodeInboundMediaId(canonicalMatch[1]);
-    return id ? toInboundMediaPath(id) : undefined;
-  }
-  const normalized = mediaPath.replace(/\\/g, "/");
-  if (!normalized.includes("/media/inbound/")) {
+type TelegramPromptContextMessageForDedupe = {
+  body?: unknown;
+  timestamp_ms?: unknown;
+};
+
+function resolvePromptContextTextDedupeKey(
+  message: TelegramPromptContextMessageForDedupe,
+): string | undefined {
+  if (typeof message.body !== "string" || !message.body.trim()) {
     return undefined;
   }
-  return toInboundMediaPath(path.posix.basename(normalized));
+  if (typeof message.timestamp_ms !== "number" || !Number.isFinite(message.timestamp_ms)) {
+    return undefined;
+  }
+  return `${message.timestamp_ms}:${message.body.trim()}`;
 }
 
 export const registerTelegramHandlers = ({
@@ -259,6 +245,7 @@ export const registerTelegramHandlers = ({
     dispatchDedupeKeys: string[];
     spooledReplayParticipants: TelegramSpooledReplayDeferredParticipant[];
   };
+  type PromptContextMessageSelection = ReadonlyMap<string, "include" | "exclude">;
 
   const mediaGroupBuffer = new Map<string, BufferedMediaGroupEntry>();
   const mediaGroupProcessingByKey = new Map<string, Promise<void>>();
@@ -709,6 +696,7 @@ export const registerTelegramHandlers = ({
     agentId: string;
     sessionEntry: ReturnType<typeof getSessionEntry>;
     sessionKey: string;
+    storePath: string;
     model?: string;
   } => {
     const runtimeCfg = params.runtimeCfg ?? telegramDeps.getRuntimeConfig();
@@ -769,6 +757,7 @@ export const registerTelegramHandlers = ({
         agentId: route.agentId,
         sessionEntry: entry,
         sessionKey,
+        storePath,
         model: storedOverride.provider
           ? `${storedOverride.provider}/${storedOverride.model}`
           : storedOverride.model,
@@ -781,6 +770,7 @@ export const registerTelegramHandlers = ({
         agentId: route.agentId,
         sessionEntry: entry,
         sessionKey,
+        storePath,
         model: `${provider}/${model}`,
       };
     }
@@ -789,6 +779,7 @@ export const registerTelegramHandlers = ({
       agentId: route.agentId,
       sessionEntry: entry,
       sessionKey,
+      storePath,
       model: typeof modelCfg === "string" ? modelCfg : modelCfg?.primary,
     };
   };
@@ -960,8 +951,10 @@ export const registerTelegramHandlers = ({
       }
 
       const allMedia: TelegramMediaRef[] = [];
+      const promptContextMessageSelection = new Map<string, "include" | "exclude">();
       let skippedCount = 0;
-      for (const { ctx } of entry.messages) {
+      for (const { ctx, msg } of entry.messages) {
+        const sourceMessageId = String(msg.message_id);
         let media;
         try {
           media = await resolveMedia({
@@ -976,6 +969,7 @@ export const registerTelegramHandlers = ({
           runtime.log?.(
             warn(`media group: skipping photo that failed to fetch: ${String(mediaErr)}`),
           );
+          promptContextMessageSelection.set(sourceMessageId, "exclude");
           skippedCount++;
           continue;
         }
@@ -984,8 +978,11 @@ export const registerTelegramHandlers = ({
             path: media.path,
             contentType: media.contentType,
             stickerMetadata: media.stickerMetadata,
+            sourceMessageId,
           });
+          promptContextMessageSelection.set(sourceMessageId, "include");
         } else {
+          promptContextMessageSelection.set(sourceMessageId, "exclude");
           skippedCount++;
         }
       }
@@ -1014,6 +1011,7 @@ export const registerTelegramHandlers = ({
         ctx: primaryEntry.ctx,
         msg: primaryEntry.msg,
         allMedia,
+        promptContextMessageSelection,
         storeAllowFrom: entry.storeAllowFrom,
         options: {
           ...promptContextBoundaryOptions(entry.promptContextMinTimestampMs),
@@ -1241,6 +1239,7 @@ export const registerTelegramHandlers = ({
     replyChainNodes: TelegramCachedMessageNode[],
     options?: TelegramMessageContextOptions,
     mediaByMessageId?: ReadonlyMap<string, TelegramMediaRef>,
+    selectedMessageIds?: PromptContextMessageSelection,
   ): Promise<TelegramPromptContextEntry[]> => {
     const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
     const groupHistoryContextMode = isGroup
@@ -1256,6 +1255,31 @@ export const registerTelegramHandlers = ({
       messageId,
     });
     const threadId = currentNode?.threadId ? Number(currentNode.threadId) : undefined;
+    const sessionBeforeTimestampMs =
+      options?.receivedAtMs ?? (msg.date ? msg.date * 1000 : undefined);
+    const isSessionBoundaryMessage = isTelegramSessionBoundaryCommandText(
+      getTelegramTextParts(msg).text,
+    );
+    const sessionPromptMessages =
+      isGroup || isSessionBoundaryMessage
+        ? []
+        : await buildTelegramSessionTranscriptPromptMessages({
+            ...resolveTelegramSessionState({
+              chatId: msg.chat.id,
+              isGroup: false,
+              isForum: false,
+              messageThreadId: msg.message_thread_id,
+              botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
+              senderId: msg.from?.id,
+            }),
+            limit: 10,
+            ...(sessionBeforeTimestampMs !== undefined
+              ? { beforeTimestampMs: sessionBeforeTimestampMs }
+              : {}),
+            ...(options?.promptContextMinTimestampMs !== undefined
+              ? { minTimestampMs: options.promptContextMinTimestampMs }
+              : {}),
+          });
     const conversationContext = await buildTelegramConversationContext({
       cache: messageCache,
       messageId,
@@ -1272,22 +1296,57 @@ export const registerTelegramHandlers = ({
         ? { includeNode: buildMentionOnlyGroupHistoryPredicate({ ctx, msg, threadId }) }
         : {}),
     });
-    return conversationContext.length > 0
+    const conversationContextById = new Map(
+      conversationContext.flatMap((entry) =>
+        entry.node.messageId ? [[entry.node.messageId, entry] as const] : [],
+      ),
+    );
+    for (const [selectedMessageId, selection] of selectedMessageIds ?? []) {
+      if (selection === "exclude") {
+        conversationContextById.delete(selectedMessageId);
+        continue;
+      }
+      if (selectedMessageId === messageId || conversationContextById.has(selectedMessageId)) {
+        continue;
+      }
+      const node = await messageCache.get({
+        accountId,
+        chatId: msg.chat.id,
+        messageId: selectedMessageId,
+      });
+      if (node?.messageId) {
+        conversationContextById.set(node.messageId, { node });
+      }
+    }
+    const cachePromptMessages = Array.from(conversationContextById.values()).map((entry) =>
+      toPromptContextMessage(
+        entry.node,
+        { replyTarget: entry.isReplyTarget },
+        entry.node.messageId ? mediaByMessageId?.get(entry.node.messageId) : undefined,
+      ),
+    );
+    const cacheTextKeys = new Set(
+      cachePromptMessages
+        .map((message) => resolvePromptContextTextDedupeKey(message))
+        .filter((key) => key !== undefined),
+    );
+    const sessionOnlyPromptMessages = sessionPromptMessages.filter((message) => {
+      const key = resolvePromptContextTextDedupeKey(message);
+      return key === undefined || !cacheTextKeys.has(key);
+    });
+    const promptMessages = [...sessionOnlyPromptMessages, ...cachePromptMessages].toSorted(
+      (left, right) => (left.timestamp_ms ?? 0) - (right.timestamp_ms ?? 0),
+    );
+    return promptMessages.length > 0
       ? [
           {
             label: "Conversation context",
-            source: "telegram",
+            source: sessionOnlyPromptMessages.length > 0 ? "session" : "telegram",
             type: "chat_window",
             payload: {
               order: "chronological",
               relation: "selected_for_current_message",
-              messages: conversationContext.map((entry) =>
-                toPromptContextMessage(
-                  entry.node,
-                  { replyTarget: entry.isReplyTarget },
-                  entry.node.messageId ? mediaByMessageId?.get(entry.node.messageId) : undefined,
-                ),
-              ),
+              messages: promptMessages,
             },
           },
         ]
@@ -1345,6 +1404,7 @@ export const registerTelegramHandlers = ({
     ctx: TelegramContext;
     msg: Message;
     allMedia: TelegramMediaRef[];
+    promptContextMessageSelection?: PromptContextMessageSelection;
     storeAllowFrom: string[];
     options?: TelegramMessageContextOptions;
     dispatchDedupeKeys?: string[];
@@ -1422,15 +1482,15 @@ export const registerTelegramHandlers = ({
       const promptContextMediaByMessageId = new Map<string, TelegramMediaRef>();
       const currentMessageId =
         typeof params.msg.message_id === "number" ? String(params.msg.message_id) : undefined;
-      const currentMedia = params.allMedia[0];
-      const currentPromptMediaPath = currentMedia?.path
-        ? resolveTelegramPromptMediaPath(currentMedia.path)
-        : undefined;
-      if (currentMessageId && currentMedia && currentPromptMediaPath) {
-        promptContextMediaByMessageId.set(currentMessageId, {
-          ...currentMedia,
-          path: currentPromptMediaPath,
-        });
+      for (const [index, media] of params.allMedia.entries()) {
+        const messageId = media.sourceMessageId ?? (index === 0 ? currentMessageId : undefined);
+        const promptMediaPath = media.path ? resolveTelegramPromptMediaPath(media.path) : undefined;
+        if (messageId && promptMediaPath) {
+          promptContextMediaByMessageId.set(messageId, {
+            ...media,
+            path: promptMediaPath,
+          });
+        }
       }
       for (const entry of replyChain) {
         const promptMediaPath = entry.mediaPath
@@ -1449,6 +1509,7 @@ export const registerTelegramHandlers = ({
         replyChainNodes,
         params.options,
         promptContextMediaByMessageId,
+        params.promptContextMessageSelection,
       );
       const result = await processMessage(
         params.ctx,
@@ -2768,7 +2829,12 @@ export const registerTelegramHandlers = ({
         } catch (err) {
           throw new TelegramRetryableCallbackError(err);
         }
-        const { byProvider, providers, modelNames } = modelData;
+        const {
+          byProvider,
+          providers,
+          modelNames,
+          resolvedDefault: activeResolvedDefault,
+        } = modelData;
 
         const editMessageWithButtons = async (
           text: string,
@@ -2842,8 +2908,10 @@ export const registerTelegramHandlers = ({
           const totalPages = calculateTotalPages(models.length, pageSize);
           const safePage = Math.max(1, Math.min(page, totalPages));
 
-          // Resolve current model from session (prefer overrides)
-          const currentModel = sessionState.model;
+          // Resolve current model from session (prefer overrides), then the active default.
+          const currentModel =
+            sessionState.model ||
+            `${activeResolvedDefault.provider}/${activeResolvedDefault.model}`;
 
           const buttons = buildModelsKeyboard({
             provider,

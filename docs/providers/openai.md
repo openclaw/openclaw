@@ -35,6 +35,7 @@ changing config.
 | Goal                                                 | Use                                                      | Notes                                                                 |
 | ---------------------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------- |
 | ChatGPT/Codex subscription with native Codex runtime | `openai/gpt-5.5`                                         | Default OpenAI agent setup. Sign in with Codex auth.                  |
+| GPT-5.6 limited preview                              | `openai/gpt-5.6-sol`, `-terra`, or `-luna`               | Requires an OpenAI-approved API organization or Codex workspace.      |
 | Direct API-key billing for agent models              | `openai/gpt-5.5` plus a Codex-compatible API-key profile | Use `auth.order.openai` to place the backup after subscription auth.  |
 | Direct API-key billing through explicit OpenClaw     | `openai/gpt-5.5` plus provider/model runtime `openclaw`  | Select a normal `openai` API-key profile.                             |
 | Latest ChatGPT Instant API alias                     | `openai/chat-latest`                                     | Direct API-key only. Moving alias for experiments, not the default.   |
@@ -68,6 +69,25 @@ execution, use `openai/gpt-5.5`; unset runtime config now selects the Codex
 harness for OpenAI agent turns. Use OpenAI API-key profiles only when you want
 direct API-key auth for an OpenAI agent model.
 </Note>
+
+## GPT-5.6 limited preview
+
+OpenClaw recognizes the three public GPT-5.6 model ids:
+
+- `openai/gpt-5.6-sol`
+- `openai/gpt-5.6-terra`
+- `openai/gpt-5.6-luna`
+
+All three expose `max` reasoning in the current Codex app-server catalog. The
+OpenAI launch announcement describes Sol as the flagship tier, Terra as the
+balanced tier, and Luna as the fast, lower-cost tier. See the
+[GPT-5.6 launch announcement](https://openai.com/index/previewing-gpt-5-6-sol/)
+and [preview access guide](https://help.openai.com/en/articles/20001325-a-preview-of-gpt-5-6-sol-terra-and-luna).
+
+Access is allowlisted during the preview and can be granted separately for the
+API and Codex. A paid ChatGPT plan alone does not grant access. OpenClaw keeps
+`openai/gpt-5.5` as the default; selecting a GPT-5.6 ref without access returns
+the upstream access error instead of falling back silently.
 
 <Note>
 OpenAI agent model turns require the bundled Codex app-server plugin. Explicit
@@ -506,6 +526,9 @@ openclaw infer image generate \
 Use the same `--output-format` and `--background` flags with
 `openclaw infer image edit` when starting from an input file.
 `--openai-background` remains available as an OpenAI-specific alias.
+Use `--quality low|medium|high|auto` when you need to control OpenAI Images
+quality and cost. Use `--openai-moderation low|auto` to pass OpenAI's
+provider-specific moderation hint from either `image generate` or `image edit`.
 
 For ChatGPT/Codex OAuth installs, keep the same `openai/gpt-image-2` ref. When an
 `openai` OAuth profile is configured, OpenClaw resolves that stored OAuth
@@ -912,17 +935,17 @@ the Server-side compaction accordion below.
   <Accordion title="Fast mode">
     OpenClaw exposes a shared fast-mode toggle for `openai/*`:
 
-    - **Chat/UI:** `/fast status|on|off`
+    - **Chat/UI:** `/fast status|auto|on|off`
     - **Config:** `agents.defaults.models["<provider>/<model>"].params.fastMode`
 
-    When enabled, OpenClaw maps fast mode to OpenAI priority processing (`service_tier = "priority"`). Existing `service_tier` values are preserved, and fast mode does not rewrite `reasoning` or `text.verbosity`.
+    When enabled, OpenClaw maps fast mode to OpenAI priority processing (`service_tier = "priority"`). Existing `service_tier` values are preserved, and fast mode does not rewrite `reasoning` or `text.verbosity`. `fastMode: "auto"` starts new model calls fast until the auto cutoff, then starts later retry, fallback, tool-result, or continuation calls without fast mode. The cutoff defaults to 60 seconds; set `params.fastAutoOnSeconds` on the active model to change it.
 
     ```json5
     {
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.5": { params: { fastMode: true } },
+            "openai/gpt-5.5": { params: { fastMode: "auto", fastAutoOnSeconds: 30 } },
           },
         },
       },

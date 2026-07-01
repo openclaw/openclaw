@@ -66,12 +66,15 @@ export type CodexAppServerThreadBinding = {
   approvalPolicy?: CodexAppServerApprovalPolicy;
   sandbox?: CodexAppServerSandboxMode;
   serviceTier?: CodexServiceTier;
+  networkProxyProfileName?: string;
+  networkProxyConfigFingerprint?: string;
   dynamicToolsFingerprint?: string;
   dynamicToolsContainDeferred?: boolean;
   webSearchThreadConfigFingerprint?: string;
   userMcpServersFingerprint?: string;
   mcpServersFingerprint?: string;
   nativeHookRelayGeneration?: string;
+  appServerRuntimeFingerprint?: string;
   pluginAppsFingerprint?: string;
   pluginAppsInputFingerprint?: string;
   pluginAppPolicyContext?: PluginAppPolicyContext;
@@ -181,6 +184,14 @@ export async function readCodexAppServerBinding(
       approvalPolicy: readApprovalPolicy(parsed.approvalPolicy),
       sandbox: readSandboxMode(parsed.sandbox),
       serviceTier: readServiceTier(parsed.serviceTier),
+      networkProxyProfileName:
+        typeof parsed.networkProxyProfileName === "string"
+          ? parsed.networkProxyProfileName
+          : undefined,
+      networkProxyConfigFingerprint:
+        typeof parsed.networkProxyConfigFingerprint === "string"
+          ? parsed.networkProxyConfigFingerprint
+          : undefined,
       dynamicToolsFingerprint:
         typeof parsed.dynamicToolsFingerprint === "string"
           ? parsed.dynamicToolsFingerprint
@@ -203,6 +214,11 @@ export async function readCodexAppServerBinding(
         typeof parsed.nativeHookRelayGeneration === "string" &&
         parsed.nativeHookRelayGeneration.trim()
           ? parsed.nativeHookRelayGeneration
+          : undefined,
+      appServerRuntimeFingerprint:
+        typeof parsed.appServerRuntimeFingerprint === "string" &&
+        parsed.appServerRuntimeFingerprint.trim()
+          ? parsed.appServerRuntimeFingerprint
           : undefined,
       pluginAppsFingerprint:
         typeof parsed.pluginAppsFingerprint === "string" ? parsed.pluginAppsFingerprint : undefined,
@@ -256,12 +272,15 @@ export async function writeCodexAppServerBinding(
       approvalPolicy: binding.approvalPolicy,
       sandbox: binding.sandbox,
       serviceTier: binding.serviceTier,
+      networkProxyProfileName: binding.networkProxyProfileName,
+      networkProxyConfigFingerprint: binding.networkProxyConfigFingerprint,
       dynamicToolsFingerprint: binding.dynamicToolsFingerprint,
       dynamicToolsContainDeferred: binding.dynamicToolsContainDeferred,
       webSearchThreadConfigFingerprint: binding.webSearchThreadConfigFingerprint,
       userMcpServersFingerprint: binding.userMcpServersFingerprint,
       mcpServersFingerprint: binding.mcpServersFingerprint,
       nativeHookRelayGeneration: binding.nativeHookRelayGeneration,
+      appServerRuntimeFingerprint: binding.appServerRuntimeFingerprint,
       pluginAppsFingerprint: binding.pluginAppsFingerprint,
       pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
       pluginAppPolicyContext: binding.pluginAppPolicyContext,
@@ -401,6 +420,9 @@ function readDestructiveApprovalMode(
   }
   if (value === "auto") {
     return bindingSchemaVersion === 1 ? "allow" : "auto";
+  }
+  if (value === "always" && bindingSchemaVersion === 2) {
+    return "always";
   }
   if (value === "on-request" && bindingSchemaVersion === 1) {
     return "auto";

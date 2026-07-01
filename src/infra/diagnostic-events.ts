@@ -1,4 +1,5 @@
 // Defines and sanitizes runtime diagnostic event payloads.
+import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
 import {
@@ -59,6 +60,73 @@ export type DiagnosticFailoverEvent = DiagnosticBaseEvent & {
   reason: string;
   cascadeDepth?: number;
   suspended?: boolean;
+};
+
+export type DiagnosticSecurityEventActor = {
+  kind: "operator" | "node" | "agent" | "plugin" | "channel_sender" | "system";
+  idHash?: string;
+  deviceIdHash?: string;
+  channel?: string;
+  role?: string;
+  scopes?: string[];
+};
+
+export type DiagnosticSecurityEventTarget = {
+  kind:
+    | "gateway"
+    | "device"
+    | "node"
+    | "tool"
+    | "plugin"
+    | "secret_ref"
+    | "channel"
+    | "config"
+    | "session";
+  idHash?: string;
+  name?: string;
+  owner?: string;
+};
+
+export type DiagnosticSecurityEventPolicy = {
+  id?: string;
+  decision?: "allow" | "deny" | "ask" | "auto" | "full" | "not_applicable";
+  reason?: string;
+};
+
+export type DiagnosticSecurityEventControl = {
+  id?: string;
+  family?: "auth" | "authorization" | "approval" | "sandbox" | "secret" | "supply_chain";
+};
+
+export type DiagnosticSecurityEvent = DiagnosticBaseEvent & {
+  type: "security.event";
+  eventId: string;
+  category:
+    | "auth"
+    | "approval"
+    | "tool"
+    | "plugin"
+    | "secret"
+    | "channel"
+    | "config"
+    | "audit"
+    | "telemetry";
+  action: string;
+  outcome: "success" | "failure" | "denied" | "error";
+  severity: "info" | "low" | "medium" | "high" | "critical";
+  actor?: DiagnosticSecurityEventActor;
+  target?: DiagnosticSecurityEventTarget;
+  policy?: DiagnosticSecurityEventPolicy;
+  control?: DiagnosticSecurityEventControl;
+  reason?: string;
+  attributes?: Record<string, string | number | boolean>;
+};
+
+export type DiagnosticSecurityEventInput = Omit<
+  DiagnosticSecurityEvent,
+  "eventId" | "seq" | "ts" | "type"
+> & {
+  eventId?: string;
 };
 
 export type DiagnosticWebhookReceivedEvent = DiagnosticBaseEvent & {
@@ -446,6 +514,13 @@ export type DiagnosticExecProcessCompletedEvent = DiagnosticBaseEvent & {
     | "runtime-error";
 };
 
+export type DiagnosticExecApprovalFollowupSuppressedEvent = DiagnosticBaseEvent & {
+  type: "exec.approval.followup_suppressed";
+  approvalId: string;
+  reason: "session_rebound";
+  phase: "direct_delivery" | "gateway_preflight";
+};
+
 type DiagnosticRunBaseEvent = DiagnosticBaseEvent & {
   runId: string;
   sessionKey?: string;
@@ -523,6 +598,7 @@ type DiagnosticModelCallBaseEvent = DiagnosticBaseEvent & {
   contextWindowSource?: "model" | "modelsConfig" | "agentContextTokens" | "default";
   contextWindowReferenceTokens?: number;
   upstreamRequestIdHash?: string;
+  promptStats?: DiagnosticModelCallPromptStats;
 };
 
 export type DiagnosticModelCallStartedEvent = DiagnosticModelCallBaseEvent & {
@@ -535,6 +611,7 @@ export type DiagnosticModelCallCompletedEvent = DiagnosticModelCallBaseEvent & {
   requestPayloadBytes?: number;
   responseStreamBytes?: number;
   timeToFirstByteMs?: number;
+  usage?: DiagnosticModelCallUsage;
 };
 
 export type DiagnosticModelCallErrorEvent = DiagnosticModelCallBaseEvent & {
@@ -546,7 +623,27 @@ export type DiagnosticModelCallErrorEvent = DiagnosticModelCallBaseEvent & {
   requestPayloadBytes?: number;
   responseStreamBytes?: number;
   timeToFirstByteMs?: number;
+  usage?: DiagnosticModelCallUsage;
 };
+
+type DiagnosticModelCallPromptStats = Readonly<{
+  inputMessagesCount?: number;
+  inputMessagesChars?: number;
+  systemPromptChars?: number;
+  toolDefinitionsCount?: number;
+  toolDefinitionsChars?: number;
+  totalChars?: number;
+}>;
+
+type DiagnosticModelCallUsage = Readonly<{
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  reasoningTokens?: number;
+  promptTokens?: number;
+  total?: number;
+}>;
 
 export type DiagnosticContextAssembledEvent = DiagnosticBaseEvent & {
   type: "context.assembled";
@@ -679,6 +776,7 @@ export type DiagnosticEventPayload =
   | DiagnosticToolExecutionBlockedEvent
   | DiagnosticSkillUsedEvent
   | DiagnosticExecProcessCompletedEvent
+  | DiagnosticExecApprovalFollowupSuppressedEvent
   | DiagnosticRunStartedEvent
   | DiagnosticRunCompletedEvent
   | DiagnosticHarnessRunStartedEvent
@@ -692,15 +790,20 @@ export type DiagnosticEventPayload =
   | DiagnosticMemoryPressureEvent
   | DiagnosticPayloadLargeEvent
   | DiagnosticLogRecordEvent
+  | DiagnosticSecurityEvent
   | DiagnosticTelemetryExporterEvent
   | DiagnosticAsyncQueueDroppedEvent
   | DiagnosticFailoverEvent;
 
-export type DiagnosticEventInput = DiagnosticEventPayload extends infer Event
+type DiagnosticNonSecurityEventPayload = Exclude<DiagnosticEventPayload, DiagnosticSecurityEvent>;
+
+export type DiagnosticEventInput = DiagnosticNonSecurityEventPayload extends infer Event
   ? Event extends DiagnosticEventPayload
     ? Omit<Event, "seq" | "ts">
     : never
   : never;
+
+type DiagnosticDispatchInput = DiagnosticEventInput | Omit<DiagnosticSecurityEvent, "seq" | "ts">;
 
 export type DiagnosticEventMetadata = Readonly<{
   internal?: boolean;
@@ -768,6 +871,7 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "tool.execution.blocked",
   "skill.used",
   "exec.process.completed",
+  "exec.approval.followup_suppressed",
   "message.delivery.started",
   "message.delivery.completed",
   "message.delivery.error",
@@ -1046,7 +1150,7 @@ export async function waitForDiagnosticEventsDrained(): Promise<void> {
 
 function enrichDiagnosticEvent(
   state: DiagnosticEventsGlobalState,
-  event: DiagnosticEventInput,
+  event: DiagnosticDispatchInput,
 ): DiagnosticEventPayload {
   const enriched = {} as DiagnosticEventPayload & Record<string, unknown>;
   for (const [key, value] of Object.entries(event as Record<string, unknown>)) {
@@ -1067,18 +1171,22 @@ function createInternalDiagnosticMetadata(trusted: boolean): DiagnosticEventMeta
 }
 
 type EmitDiagnosticEventOptions = {
+  allowSecurityEvent?: boolean;
   internal?: boolean;
   privateData?: DiagnosticEventPrivateData;
   trustedTraceContext?: boolean;
 };
 
 function emitDiagnosticEventWithTrust(
-  event: DiagnosticEventInput,
+  event: DiagnosticDispatchInput,
   trusted: boolean,
   options: EmitDiagnosticEventOptions = {},
 ) {
   const state = getDiagnosticEventsState();
   if (!state.enabled) {
+    return;
+  }
+  if (event.type === "security.event" && options.allowSecurityEvent !== true) {
     return;
   }
 
@@ -1140,6 +1248,19 @@ export function emitTrustedDiagnosticEventWithPrivateData(
   privateData?: DiagnosticEventPrivateData,
 ) {
   emitDiagnosticEventWithTrust(event, true, { privateData });
+}
+
+/** Emits a trusted canonical security event from core-owned enforcement boundaries. */
+export function emitTrustedSecurityEvent(event: DiagnosticSecurityEventInput) {
+  emitDiagnosticEventWithTrust(
+    {
+      type: "security.event",
+      ...event,
+      eventId: event.eventId ?? randomUUID(),
+    },
+    true,
+    { allowSecurityEvent: true },
+  );
 }
 
 /** Emits a trusted model failover diagnostic event. */

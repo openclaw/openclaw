@@ -69,6 +69,11 @@ describe("wsl detection", () => {
     expect(isWSLEnv()).toBe(true);
   });
 
+  it("detects WSL from an explicit env map", () => {
+    expect(isWSLEnv({ WSL_DISTRO_NAME: "Ubuntu" })).toBe(true);
+    expect(isWSLEnv({})).toBe(false);
+  });
+
   it("reads /proc/version for sync WSL detection when env vars are absent", () => {
     readFileSyncMock.mockReturnValueOnce("Linux version 6.6.0-1-microsoft-standard-WSL2");
     expect(isWSLSync()).toBe(true);

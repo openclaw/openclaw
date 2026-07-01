@@ -392,7 +392,9 @@ const McpServerSchema = z
     cwd: z.string().optional(),
     workingDirectory: z.string().optional(),
     url: HttpUrlSchema.optional(),
-    transport: z.union([z.literal("sse"), z.literal("streamable-http")]).optional(),
+    transport: z
+      .union([z.literal("stdio"), z.literal("sse"), z.literal("streamable-http")])
+      .optional(),
     headers: z
       .record(
         z.string(),
@@ -445,6 +447,19 @@ const McpServerSchema = z
       .strict()
       .optional(),
   })
+  .superRefine((data, ctx) => {
+    // transport "stdio" requires a non-empty command — URL-only servers must use "sse" or "streamable-http"
+    if (
+      data.transport === "stdio" &&
+      (typeof data.command !== "string" || data.command.trim().length === 0)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: '"stdio" transport requires a non-empty command',
+        path: ["transport"],
+      });
+    }
+  })
   .catchall(z.unknown());
 
 const McpConfigSchema = z
@@ -465,6 +480,48 @@ const CrestodianSchema = z
       })
       .strict()
       .optional(),
+  })
+  .strict()
+  .optional();
+
+function isPlainHttpsUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash;
+  } catch {
+    return false;
+  }
+}
+
+const MarketplaceVerificationSchema = z
+  .object({
+    mode: z.literal("unsigned"),
+  })
+  .strict();
+
+const MarketplaceFeedProfileSchema = z
+  .object({
+    url: z
+      .string()
+      .url()
+      .refine(
+        (value) => isPlainHttpsUrl(value),
+        "Expected https:// URL without credentials, query, or fragment",
+      ),
+    verification: MarketplaceVerificationSchema.optional(),
+  })
+  .strict();
+
+const MarketplaceSourceProfileSchema = z.union([
+  z.object({ type: z.literal("npm") }).strict(),
+  z.object({ type: z.literal("clawhub") }).strict(),
+  z.object({ type: z.literal("git") }).strict(),
+]);
+
+const MarketplacesSchema = z
+  .object({
+    feeds: z.record(z.string().min(1), MarketplaceFeedProfileSchema).optional(),
+    sources: z.record(z.string().min(1), MarketplaceSourceProfileSchema).optional(),
   })
   .strict()
   .optional();
@@ -524,6 +581,7 @@ export const OpenClawSchema = z
         lastRunCommit: z.string().optional(),
         lastRunCommand: z.string().optional(),
         lastRunMode: z.union([z.literal("local"), z.literal("remote")]).optional(),
+        securityAcknowledgedAt: z.string().optional(),
       })
       .strict()
       .optional(),
@@ -547,6 +605,9 @@ export const OpenClawSchema = z
             traces: z.boolean().optional(),
             metrics: z.boolean().optional(),
             logs: z.boolean().optional(),
+            logsExporter: z
+              .union([z.literal("otlp"), z.literal("stdout"), z.literal("both")])
+              .optional(),
             sampleRate: z.number().min(0).max(1).optional(),
             flushIntervalMs: z.number().int().nonnegative().optional(),
             captureContent: z
@@ -721,6 +782,7 @@ export const OpenClawSchema = z
       .strict()
       .optional(),
     secrets: SecretsConfigSchema,
+    marketplaces: MarketplacesSchema,
     auth: z
       .object({
         profiles: z
@@ -1105,8 +1167,18 @@ export const OpenClawSchema = z
           .object({
             enabled: z.boolean().optional(),
             autoGenerate: z.boolean().optional(),
-            certPath: z.string().optional(),
-            keyPath: z.string().optional(),
+            // Reject blank values without transforming the string. Trimming here would
+            // silently rewrite a legitimate filesystem path that contains leading or
+            // trailing spaces and persist the trimmed value into validated config;
+            // runtime path resolution (resolveUserPath) owns all normalization.
+            certPath: z
+              .string()
+              .optional()
+              .refine((v) => v === undefined || v.trim().length > 0, "certPath must not be blank"),
+            keyPath: z
+              .string()
+              .optional()
+              .refine((v) => v === undefined || v.trim().length > 0, "keyPath must not be blank"),
             caPath: z.string().optional(),
           })
           .optional(),

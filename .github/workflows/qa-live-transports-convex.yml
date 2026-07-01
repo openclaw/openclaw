@@ -65,7 +65,7 @@ jobs:
     steps:
       - name: Require maintainer-level repository access
         id: permission
-        uses: actions/github-script@v9
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
             if (context.eventName === "schedule") {
@@ -101,7 +101,7 @@ jobs:
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
@@ -172,7 +172,7 @@ jobs:
       OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ""
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
@@ -221,12 +221,12 @@ jobs:
 
       - name: Upload parity artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: qa-parity-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/qa-e2e/
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
   run_live_runtime_token_efficiency:
     name: Run live runtime token-efficiency lane
@@ -241,7 +241,7 @@ jobs:
       OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
@@ -310,12 +310,12 @@ jobs:
 
       - name: Upload live runtime token-efficiency artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: qa-live-runtime-token-efficiency-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_lane.outputs.output_dir }}
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
   run_live_matrix:
     name: Run Matrix live QA lane
@@ -326,7 +326,7 @@ jobs:
     environment: qa-live-shared
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
@@ -386,12 +386,12 @@ jobs:
 
       - name: Upload Matrix QA artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: qa-live-matrix-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_lane.outputs.output_dir }}
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
   run_live_matrix_sharded:
     name: Run Matrix live QA lane (${{ matrix.profile }})
@@ -411,7 +411,7 @@ jobs:
           - e2ee-cli
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
@@ -470,12 +470,12 @@ jobs:
 
       - name: Upload Matrix QA shard artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: qa-live-matrix-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_lane.outputs.output_dir }}
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
   run_live_telegram:
     name: Run Telegram live QA lane with Convex leases
@@ -485,7 +485,7 @@ jobs:
     environment: qa-live-shared
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
@@ -497,7 +497,8 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
-      - name: Validate required QA credential env
+      - &qa_live_required_credentials_step
+        name: Validate required QA credential env
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
@@ -532,6 +533,7 @@ jobs:
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+          OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000"
           INPUT_SCENARIO: ${{ github.event_name == 'workflow_dispatch' && inputs.scenario || '' }}
         run: |
           set -euo pipefail
@@ -564,12 +566,12 @@ jobs:
 
       - name: Upload Telegram QA artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: qa-live-telegram-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_lane.outputs.output_dir }}
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
   run_live_discord:
     name: Run Discord live QA lane with Convex leases
@@ -579,7 +581,7 @@ jobs:
     environment: qa-live-shared
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
@@ -591,27 +593,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
-      - name: Validate required QA credential env
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
-          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          require_var() {
-            local key="$1"
-            if [[ -z "${!key:-}" ]]; then
-              echo "Missing required ${key}." >&2
-              exit 1
-            fi
-          }
-
-          require_var OPENAI_API_KEY
-          require_var OPENCLAW_QA_CONVEX_SITE_URL
-          require_var OPENCLAW_QA_CONVEX_SECRET_CI
-
+      - *qa_live_required_credentials_step
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=12288
@@ -624,6 +606,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           OPENCLAW_QA_DISCORD_CAPTURE_CONTENT: "1"
           INPUT_SCENARIO: ${{ github.event_name == 'workflow_dispatch' && inputs.discord_scenario || '' }}
@@ -658,12 +641,12 @@ jobs:
 
       - name: Upload Discord QA artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: qa-live-discord-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_lane.outputs.output_dir }}
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
   run_live_whatsapp:
     name: Run WhatsApp live QA lane with Convex leases
@@ -676,7 +659,7 @@ jobs:
     environment: qa-live-shared
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
@@ -688,27 +671,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
-      - name: Validate required QA credential env
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
-          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          require_var() {
-            local key="$1"
-            if [[ -z "${!key:-}" ]]; then
-              echo "Missing required ${key}." >&2
-              exit 1
-            fi
-          }
-
-          require_var OPENAI_API_KEY
-          require_var OPENCLAW_QA_CONVEX_SITE_URL
-          require_var OPENCLAW_QA_CONVEX_SECRET_CI
-
+      - *qa_live_required_credentials_step
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=12288
@@ -721,6 +684,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT: "1"
           INPUT_SCENARIO: ${{ github.event_name == 'workflow_dispatch' && inputs.whatsapp_scenario || '' }}
@@ -755,12 +719,12 @@ jobs:
 
       - name: Upload WhatsApp QA artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: qa-live-whatsapp-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_lane.outputs.output_dir }}
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error
 
   run_live_slack:
     name: Run Slack live QA lane with Convex leases
@@ -770,7 +734,7 @@ jobs:
     environment: qa-live-shared
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
@@ -782,27 +746,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
-      - name: Validate required QA credential env
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
-          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          require_var() {
-            local key="$1"
-            if [[ -z "${!key:-}" ]]; then
-              echo "Missing required ${key}." >&2
-              exit 1
-            fi
-          }
-
-          require_var OPENAI_API_KEY
-          require_var OPENCLAW_QA_CONVEX_SITE_URL
-          require_var OPENCLAW_QA_CONVEX_SECRET_CI
-
+      - *qa_live_required_credentials_step
       - name: Build private QA runtime
         env:
           NODE_OPTIONS: --max-old-space-size=12288
@@ -815,6 +759,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
           OPENCLAW_QA_SLACK_CAPTURE_CONTENT: "1"
           OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000"
@@ -850,9 +795,9 @@ jobs:
 
       - name: Upload Slack QA artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: qa-live-slack-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_lane.outputs.output_dir }}
           retention-days: 14
-          if-no-files-found: warn
+          if-no-files-found: error

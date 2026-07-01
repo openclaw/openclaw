@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const enqueueMock = vi.fn(async (_entry: unknown) => {});
 const flushKeyMock = vi.fn(async (_key: string) => {});
+const onFlushCallbacks: Array<(entries: Array<Record<string, unknown>>) => Promise<void>> = [];
+const prepareSlackMessageMock = vi.fn(async () => ({ ctxPayload: {} }));
+const dispatchPreparedSlackMessageMock = vi.fn(async () => {});
 const resolveThreadTsMock = vi.fn(async ({ message }: { message: Record<string, unknown> }) => ({
   ...message,
 }));
@@ -14,13 +17,18 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
   );
   return {
     ...actual,
-    createChannelInboundDebouncer: () => ({
-      debounceMs: 10,
-      debouncer: {
-        enqueue: (entry: unknown) => enqueueMock(entry),
-        flushKey: (key: string) => flushKeyMock(key),
-      },
-    }),
+    createChannelInboundDebouncer: (params: {
+      onFlush: (entries: Array<Record<string, unknown>>) => Promise<void>;
+    }) => {
+      onFlushCallbacks.push(params.onFlush);
+      return {
+        debounceMs: 10,
+        debouncer: {
+          enqueue: (entry: unknown) => enqueueMock(entry),
+          flushKey: (key: string) => flushKeyMock(key),
+        },
+      };
+    },
     shouldDebounceTextInbound: ({ hasMedia }: { hasMedia?: boolean }) => !hasMedia,
   };
 });
@@ -29,6 +37,16 @@ vi.mock("./thread-resolution.js", () => ({
   createSlackThreadTsResolver: () => ({
     resolve: (entry: { message: Record<string, unknown> }) => resolveThreadTsMock(entry),
   }),
+}));
+
+vi.mock("./message-handler/pipeline.runtime.js", () => ({
+  prepareSlackMessage: prepareSlackMessageMock,
+  dispatchPreparedSlackMessage: dispatchPreparedSlackMessageMock,
+}));
+
+vi.mock("./inbound-delivery-state.js", () => ({
+  hasSlackInboundMessageDelivery: vi.fn(async () => false),
+  recordSlackInboundMessageDeliveries: vi.fn(async () => {}),
 }));
 
 function createContext(overrides?: {
@@ -80,6 +98,9 @@ describe("createSlackMessageHandler", () => {
   beforeEach(() => {
     enqueueMock.mockClear();
     flushKeyMock.mockClear();
+    onFlushCallbacks.length = 0;
+    prepareSlackMessageMock.mockClear();
+    dispatchPreparedSlackMessageMock.mockClear();
     resolveThreadTsMock.mockClear();
   });
 
@@ -200,5 +221,53 @@ describe("createSlackMessageHandler", () => {
     );
 
     expect(flushKeyMock).toHaveBeenCalledWith("slack:default:C111:1709000000.000100:U111");
+  });
+
+  it("waits for debounced dispatch completion when requested by relay delivery", async () => {
+    const { handler } = createHandlerWithTracker();
+    const handled = handler(
+      {
+        type: "message",
+        channel: "C111",
+        user: "U111",
+        ts: "1709000000.000500",
+        text: "relay message",
+      } as never,
+      { source: "message", awaitDispatch: true },
+    );
+
+    await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(1));
+    const entry = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    let settled = false;
+    void handled.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    await onFlushCallbacks[0]?.([entry]);
+    await expect(handled).resolves.toBeUndefined();
+    expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("propagates debounced dispatch failures to relay delivery", async () => {
+    dispatchPreparedSlackMessageMock.mockRejectedValueOnce(new Error("dispatch failed"));
+    const { handler } = createHandlerWithTracker();
+    const handled = handler(
+      {
+        type: "message",
+        channel: "C111",
+        user: "U111",
+        ts: "1709000000.000600",
+        text: "relay message",
+      } as never,
+      { source: "message", awaitDispatch: true },
+    );
+
+    await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(1));
+    const entry = enqueueMock.mock.calls[0]?.[0] as Record<string, unknown>;
+    const handledFailure = expect(handled).rejects.toThrow("dispatch failed");
+    const flushFailure = expect(onFlushCallbacks[0]?.([entry])).rejects.toThrow("dispatch failed");
+    await Promise.all([handledFailure, flushFailure]);
   });
 });

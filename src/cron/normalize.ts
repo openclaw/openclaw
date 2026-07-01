@@ -194,11 +194,17 @@ function coercePayload(payload: UnknownRecord) {
     }
   }
   if ("thinking" in next) {
-    const thinking = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.thinking);
-    if (thinking !== undefined) {
-      next.thinking = thinking;
+    // Preserve an explicit null so patches can clear a stored thinking override,
+    // matching the model/fallbacks/toolsAllow clear paths.
+    if (next.thinking === null) {
+      next.thinking = null;
     } else {
-      delete next.thinking;
+      const thinking = parseOptionalField(TrimmedNonEmptyStringFieldSchema, next.thinking);
+      if (thinking !== undefined) {
+        next.thinking = thinking;
+      } else {
+        delete next.thinking;
+      }
     }
   }
   if ("timeoutSeconds" in next) {
@@ -210,7 +216,7 @@ function coercePayload(payload: UnknownRecord) {
     }
   }
   if ("fallbacks" in next) {
-    const fallbacks = normalizeTrimmedStringArray(next.fallbacks);
+    const fallbacks = normalizeTrimmedStringArray(next.fallbacks, { allowNull: true });
     if (fallbacks !== undefined) {
       next.fallbacks = fallbacks;
     } else {

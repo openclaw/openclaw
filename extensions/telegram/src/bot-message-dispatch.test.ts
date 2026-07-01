@@ -69,23 +69,26 @@ const createChannelMessageReplyPipeline = vi.hoisted(() =>
   })),
 );
 const wasSentByBot = vi.hoisted(() => vi.fn(() => false));
-const appendSessionTranscriptMessage = vi.hoisted(() =>
-  vi.fn(async ({ message }: { message?: unknown }) => ({
+const appendAssistantMirrorMessageByIdentity = vi.hoisted(() =>
+  vi.fn<
+    (
+      params?: unknown,
+    ) => Promise<
+      | { ok: true; sessionFile: string; messageId: string }
+      | { ok: false; reason: string; code?: "blocked" | "session-rebound" }
+    >
+  >(async () => ({
+    ok: true,
+    sessionFile: "/tmp/sessions/s1.jsonl",
     messageId: "m1",
-    message,
-    appended: true,
   })),
 );
-const emitSessionTranscriptUpdate = vi.hoisted(() => vi.fn());
+const getSessionEntry = vi.hoisted(() => vi.fn());
 const loadSessionStore = vi.hoisted(() => vi.fn());
-const readLatestAssistantTextFromSessionTranscript = vi.hoisted(() => vi.fn());
-const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
-const resolveAndPersistSessionFile = vi.hoisted(() =>
-  vi.fn(async () => ({
-    sessionFile: "/tmp/session.jsonl",
-    sessionEntry: { sessionId: "s1", sessionFile: "/tmp/session.jsonl" },
-  })),
+const readLatestAssistantTextByIdentity = vi.hoisted(() =>
+  vi.fn<() => Promise<{ text: string; timestamp?: number } | undefined>>(async () => undefined),
 );
+const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
 const generateTopicLabel = vi.hoisted(() => vi.fn());
 const describeStickerImage = vi.hoisted(() => vi.fn(async (): Promise<string | null> => null));
 const loadModelCatalog = vi.hoisted(() => vi.fn(async () => ({})));
@@ -100,12 +103,6 @@ const getAgentScopedMediaLocalRoots = vi.hoisted(() =>
 );
 const resolveChunkMode = vi.hoisted(() => vi.fn(() => undefined));
 const resolveMarkdownTableMode = vi.hoisted(() => vi.fn(() => "preserve"));
-const resolveSessionStoreEntry = vi.hoisted(() =>
-  vi.fn(({ store, sessionKey }: { store: Record<string, unknown>; sessionKey: string }) => ({
-    existing: store[sessionKey],
-  })),
-);
-const updateSessionStoreEntry = vi.hoisted(() => vi.fn(async () => null));
 
 vi.mock("./draft-stream.js", () => ({
   createTelegramDraftStream,
@@ -119,12 +116,13 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>();
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-runtime")>();
   return {
     ...actual,
-    appendSessionTranscriptMessage,
-    emitSessionTranscriptUpdate,
+    appendAssistantMirrorMessageByIdentity,
+    readLatestAssistantTextByIdentity,
   };
 });
 
@@ -151,16 +149,12 @@ vi.mock("./send.js", () => ({
 
 vi.mock("./bot-message-dispatch.runtime.js", () => ({
   generateTopicLabel,
+  getSessionEntry,
   getAgentScopedMediaLocalRoots,
-  loadSessionStore,
-  readLatestAssistantTextFromSessionTranscript,
-  resolveAndPersistSessionFile,
   resolveAutoTopicLabelConfig: resolveAutoTopicLabelConfigRuntime,
   resolveChunkMode,
   resolveMarkdownTableMode,
-  resolveSessionStoreEntry,
   resolveStorePath,
-  updateSessionStoreEntry,
 }));
 
 vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
@@ -204,6 +198,7 @@ function installTelegramStateRuntimeForTest(): void {
 const telegramDepsForTest: TelegramBotDeps = {
   getRuntimeConfig: loadConfig as TelegramBotDeps["getRuntimeConfig"],
   resolveStorePath: resolveStorePath as TelegramBotDeps["resolveStorePath"],
+  getSessionEntry: getSessionEntry as TelegramBotDeps["getSessionEntry"],
   loadSessionStore: loadSessionStore as TelegramBotDeps["loadSessionStore"],
   readChannelAllowFromStore:
     readChannelAllowFromStore as TelegramBotDeps["readChannelAllowFromStore"],
@@ -265,19 +260,15 @@ describe("dispatchTelegramMessage draft streaming", () => {
     listSkillCommandsForAgents.mockReset();
     createChannelMessageReplyPipeline.mockReset();
     wasSentByBot.mockReset();
-    appendSessionTranscriptMessage.mockReset();
-    emitSessionTranscriptUpdate.mockReset();
-    readLatestAssistantTextFromSessionTranscript.mockReset();
+    appendAssistantMirrorMessageByIdentity.mockReset();
+    readLatestAssistantTextByIdentity.mockReset();
+    getSessionEntry.mockReset();
     loadSessionStore.mockReset();
     resolveStorePath.mockReset();
-    resolveAndPersistSessionFile.mockReset();
-    updateSessionStoreEntry.mockReset();
     generateTopicLabel.mockReset();
     getAgentScopedMediaLocalRoots.mockClear();
     resolveChunkMode.mockClear();
     resolveMarkdownTableMode.mockClear();
-    resolveSessionStoreEntry.mockClear();
-    updateSessionStoreEntry.mockClear();
     describeStickerImage.mockReset();
     loadModelCatalog.mockReset();
     findModelInCatalog.mockReset();
@@ -323,11 +314,17 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
     wasSentByBot.mockReturnValue(false);
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
-    resolveAndPersistSessionFile.mockResolvedValue({
-      sessionFile: "/tmp/session.jsonl",
-      sessionEntry: { sessionId: "s1", sessionFile: "/tmp/session.jsonl" },
+    readLatestAssistantTextByIdentity.mockResolvedValue(undefined);
+    appendAssistantMirrorMessageByIdentity.mockResolvedValue({
+      ok: true,
+      sessionFile: "/tmp/sessions/s1.jsonl",
+      messageId: "m1",
     });
     loadSessionStore.mockReturnValue({});
+    getSessionEntry.mockImplementation(
+      ({ sessionKey }: { sessionKey: string }) =>
+        (loadSessionStore() as Record<string, unknown>)[sessionKey],
+    );
     generateTopicLabel.mockResolvedValue("Topic label");
     describeStickerImage.mockResolvedValue(null);
     loadModelCatalog.mockResolvedValue({});
@@ -358,6 +355,15 @@ describe("dispatchTelegramMessage draft streaming", () => {
     return { answerDraftStream, reasoningDraftStream };
   }
 
+  function mockDefaultSessionEntry(entry: Record<string, unknown> = { sessionId: "s1" }) {
+    loadSessionStore.mockReturnValue({
+      "agent:default:telegram:direct:123": {
+        updatedAt: 1,
+        ...entry,
+      },
+    });
+  }
+
   function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
     if (!record || typeof record !== "object") {
       throw new Error("Expected record");
@@ -379,6 +385,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
   function expectDraftStreamParams(expected: Record<string, unknown>) {
     return expectRecordFields(mockCallArg(createTelegramDraftStream), expected);
+  }
+
+  function telegramProgressPreview(_plainText: string, html: string) {
+    return {
+      text: html.replaceAll("\n", "<br>"),
+      parseMode: "HTML" as const,
+    };
   }
 
   function expectDeliverRepliesParams(expected: Record<string, unknown>, callIndex = 0) {
@@ -555,6 +568,23 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
   }
 
+  function createReasoningForumTopicContext(): TelegramMessageContext {
+    loadSessionStore.mockReturnValue({
+      s1: { reasoningLevel: "stream" },
+    });
+    return createContext({
+      ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      msg: {
+        chat: { id: -100123, type: "supergroup", is_forum: true },
+        message_id: 456,
+        message_thread_id: 88,
+      } as unknown as TelegramMessageContext["msg"],
+      chatId: -100123,
+      isGroup: true,
+      threadSpec: { id: 88, scope: "forum" },
+    });
+  }
+
   it("skips general understanding after describing a first-seen non-vision sticker", async () => {
     describeStickerImage.mockResolvedValueOnce("A curious sticker");
     const ctxPayload = {
@@ -699,7 +729,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const preview = renderText?.("| A | B |\n| --- | --- |\n| 1 | 2 |");
     expect(preview?.richMessage).toEqual(
       expect.objectContaining({
-        html: expect.stringContaining("<table>"),
+        html: expect.stringContaining("<table bordered striped>"),
       }),
     );
   });
@@ -1277,6 +1307,39 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expectRecordFields((delivery.replies as Array<unknown>)[0], { replyToId: "9001" });
   });
 
+  it("keeps bot-reply answers anchored to the current user message", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello", replyToId: "1001" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        msg: {
+          message_id: 1001,
+          reply_to_message: {
+            message_id: 9001,
+            from: { is_bot: true },
+          },
+        } as unknown as TelegramMessageContext["msg"],
+        ctxPayload: {
+          MessageSid: "1001",
+          ReplyToId: "9001",
+          ReplyToBody: "quoted bot reply",
+          ReplyToQuoteText: " quoted bot reply\n",
+          ReplyToIsQuote: true,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+    });
+
+    const delivery = expectDeliverRepliesParams({
+      replyQuoteMessageId: 9001,
+      replyQuoteText: " quoted bot reply\n",
+    });
+    expectRecordFields((delivery.replies as Array<unknown>)[0], { replyToId: "1001" });
+  });
+
   it("keeps answer draft stream for current message replies with native quote candidates", async () => {
     const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);
@@ -1680,9 +1743,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     setupDraftStreams({ answerMessageId: 2001 });
     const context = createContext();
     context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
-    loadSessionStore.mockReturnValue({
-      "agent:default:telegram:direct:123": { sessionId: "s1" },
-    });
+    mockDefaultSessionEntry();
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
       return { queuedFinal: true };
@@ -1690,29 +1751,73 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context });
 
-    const transcriptCall = expectRecordFields(mockCallArg(appendSessionTranscriptMessage), {
-      transcriptPath: "/tmp/session.jsonl",
-    });
-    expectRecordFields(transcriptCall.message, {
-      role: "assistant",
-      provider: "openclaw",
-      model: "delivery-mirror",
-      content: [{ type: "text", text: "Final answer" }],
-    });
-    expectRecordFields(mockCallArg(emitSessionTranscriptUpdate), {
-      sessionFile: "/tmp/session.jsonl",
+    const mirrorCall = expectRecordFields(mockCallArg(appendAssistantMirrorMessageByIdentity), {
+      agentId: "default",
+      sessionId: "s1",
+      idempotencyKey: expect.stringContaining("telegram-final:agent:default:telegram:direct:123:"),
       sessionKey: "agent:default:telegram:direct:123",
-      messageId: "m1",
+      storePath: "/tmp/sessions.json",
+      text: "Final answer",
+    });
+    expect(mirrorCall.deliveryMirror).toEqual({
+      kind: "channel-final",
+      sourceMessageId: mirrorCall.idempotencyKey,
     });
   });
 
-  it("advances the session marker after mirroring preview-finalized finals", async () => {
+  it("keeps same-millisecond transcript mirror keys distinct per inbound message", async () => {
+    createTelegramDraftStream.mockImplementation(() => createDraftStream(2001));
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(1234567890);
+    const firstContext = createContext({
+      ctxPayload: {
+        MessageSid: "456",
+        SessionKey: "agent:default:telegram:direct:123",
+      } as TelegramMessageContext["ctxPayload"],
+    });
+    const secondContext = createContext({
+      ctxPayload: {
+        MessageSid: "457",
+        SessionKey: "agent:default:telegram:direct:123",
+      } as TelegramMessageContext["ctxPayload"],
+      msg: { message_id: 457 } as TelegramMessageContext["msg"],
+    });
+    mockDefaultSessionEntry();
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    try {
+      await dispatchWithContext({ context: firstContext });
+      await dispatchWithContext({ context: secondContext });
+    } finally {
+      dateNow.mockRestore();
+    }
+
+    const firstMirrorCall = expectRecordFields(
+      mockCallArg(appendAssistantMirrorMessageByIdentity),
+      {
+        idempotencyKey: expect.stringContaining(
+          "telegram-final:agent:default:telegram:direct:123:123:456:",
+        ),
+      },
+    );
+    const secondMirrorCall = expectRecordFields(
+      mockCallArg(appendAssistantMirrorMessageByIdentity, 1),
+      {
+        idempotencyKey: expect.stringContaining(
+          "telegram-final:agent:default:telegram:direct:123:123:457:",
+        ),
+      },
+    );
+    expect(firstMirrorCall.idempotencyKey).not.toBe(secondMirrorCall.idempotencyKey);
+  });
+
+  it("skips transcript mirroring when the scoped session is absent", async () => {
     setupDraftStreams({ answerMessageId: 2001 });
     const context = createContext();
     context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
-    loadSessionStore.mockReturnValue({
-      "agent:default:telegram:direct:123": { sessionId: "s1" },
-    });
+    loadSessionStore.mockReturnValue({});
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
       return { queuedFinal: true };
@@ -1720,21 +1825,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context });
 
-    const markerUpdateCall = expectRecordFields(mockCallArg(updateSessionStoreEntry), {
-      storePath: "/tmp/sessions.json",
-      sessionKey: "agent:default:telegram:direct:123",
-    });
-    const update = markerUpdateCall.update as (entry: { sessionId?: string }) => unknown;
-    expect(update({ sessionId: "s1" })).toEqual({ updatedAt: expect.any(Number) });
-    expect(update({ sessionId: "new-session" })).toBeNull();
+    expect(appendAssistantMirrorMessageByIdentity).not.toHaveBeenCalled();
   });
 
   it("does not mirror non-final tool progress into the session transcript", async () => {
     const context = createContext();
     context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
-    loadSessionStore.mockReturnValue({
-      "agent:default:telegram:direct:123": { sessionId: "s1" },
-    });
+    mockDefaultSessionEntry();
     deliverReplies.mockImplementation(
       async (params: {
         replies?: Array<{ text?: string }>;
@@ -1766,15 +1863,50 @@ describe("dispatchTelegramMessage draft streaming", () => {
       transcriptMirror: undefined,
     });
     expect(typeof mockCallArg(deliverReplies, 1).transcriptMirror).toBe("function");
-    expect(appendSessionTranscriptMessage).toHaveBeenCalledTimes(1);
-    const transcriptCall = expectRecordFields(mockCallArg(appendSessionTranscriptMessage), {
-      transcriptPath: "/tmp/session.jsonl",
+    expect(appendAssistantMirrorMessageByIdentity).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(appendAssistantMirrorMessageByIdentity), {
+      agentId: "default",
+      sessionId: "s1",
+      sessionKey: "agent:default:telegram:direct:123",
+      storePath: "/tmp/sessions.json",
+      text: "Final answer",
     });
-    expectRecordFields(transcriptCall.message, {
-      role: "assistant",
-      provider: "openclaw",
-      model: "delivery-mirror",
-      content: [{ type: "text", text: "Final answer" }],
+  });
+
+  it("mirrors a legitimate repeat after a new user turn instead of skipping it", async () => {
+    const repeatedText = "Final answer";
+    const context = createContext();
+    context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
+    mockDefaultSessionEntry();
+    readLatestAssistantTextByIdentity.mockResolvedValue({ text: repeatedText, timestamp: 1 });
+    deliverReplies.mockImplementation(
+      async (params: {
+        replies?: Array<{ text?: string }>;
+        transcriptMirror?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void>;
+      }) => {
+        const text = params.replies
+          ?.map((reply) => reply.text)
+          .filter(Boolean)
+          .join("\n\n");
+        await params.transcriptMirror?.({ text });
+        return { delivered: true };
+      },
+    );
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: repeatedText }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context });
+
+    expect(appendAssistantMirrorMessageByIdentity).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(appendAssistantMirrorMessageByIdentity), {
+      agentId: "default",
+      sessionId: "s1",
+      idempotencyKey: expect.stringContaining("telegram-final:agent:default:telegram:direct:123:"),
+      sessionKey: "agent:default:telegram:direct:123",
+      storePath: "/tmp/sessions.json",
+      text: repeatedText,
     });
   });
 
@@ -1786,10 +1918,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
       "Ja. Hier nochmal sauber Schritt fuer Schritt. Einen API Key kopiert man...";
     const context = createContext();
     context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
-    loadSessionStore.mockReturnValue({
-      "agent:default:telegram:direct:123": { sessionId: "s1" },
-    });
-    readLatestAssistantTextFromSessionTranscript.mockResolvedValue({
+    mockDefaultSessionEntry();
+    readLatestAssistantTextByIdentity.mockResolvedValue({
       text: fullAnswer,
       timestamp: Date.now() + 1_000,
     });
@@ -1809,67 +1939,38 @@ describe("dispatchTelegramMessage draft streaming", () => {
       content: fullAnswer,
       messageId: 2001,
     });
-    const transcriptCall = expectRecordFields(mockCallArg(appendSessionTranscriptMessage), {
-      transcriptPath: "/tmp/session.jsonl",
-    });
-    expectRecordFields(transcriptCall.message, {
-      role: "assistant",
-      provider: "openclaw",
-      model: "delivery-mirror",
-      content: [{ type: "text", text: fullAnswer }],
+    expectRecordFields(mockCallArg(appendAssistantMirrorMessageByIdentity), {
+      agentId: "default",
+      sessionId: "s1",
+      sessionKey: "agent:default:telegram:direct:123",
+      storePath: "/tmp/sessions.json",
+      text: fullAnswer,
     });
   });
 
-  it("emits the redacted appended message in transcript updates", async () => {
+  it("treats session rebound mirror skips as non-fatal", async () => {
     setupDraftStreams({ answerMessageId: 2001 });
     const context = createContext();
     context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
-    loadSessionStore.mockReturnValue({
-      "agent:default:telegram:direct:123": { sessionId: "s1" },
+    mockDefaultSessionEntry();
+    appendAssistantMirrorMessageByIdentity.mockResolvedValueOnce({
+      ok: false,
+      code: "session-rebound",
+      reason: "session rebound for sessionKey: agent:default:telegram:direct:123",
     });
-    appendSessionTranscriptMessage.mockImplementationOnce(async ({ message }) => ({
-      messageId: "m1",
-      appended: true,
-      message: {
-        ...(message as Record<string, unknown>),
-        content: [{ type: "text", text: "Final sk-abc…0xyz" }],
-      },
-    }));
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver({ text: "Final sk-abcdef1234567890xyz" }, { kind: "final" });
+      await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
       return { queuedFinal: true };
     });
 
     await dispatchWithContext({ context });
 
-    expectRecordFields(mockCallArg(emitSessionTranscriptUpdate), {
-      sessionFile: "/tmp/session.jsonl",
+    expectRecordFields(mockCallArg(appendAssistantMirrorMessageByIdentity), {
+      agentId: "default",
+      sessionId: "s1",
       sessionKey: "agent:default:telegram:direct:123",
-      messageId: "m1",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Final sk-abc…0xyz" }],
-        api: "openai-responses",
-        provider: "openclaw",
-        model: "delivery-mirror",
-        usage: {
-          input: 0,
-          output: 0,
-          total: 0,
-          prompt_tokens: 0,
-          completion_tokens: 0,
-          total_tokens: 0,
-          cache: {
-            read: 0,
-            write: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            total: 0,
-          },
-        },
-        stopReason: "stop",
-        timestamp: expect.any(Number),
-      },
+      storePath: "/tmp/sessions.json",
+      text: "Final answer",
     });
   });
 
@@ -2435,7 +2536,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Site A shows X.");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site A shows X.");
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringMatching(/`🛠️ Exec`$/) }),
+      expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b>$/) }),
     );
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(3, "Final answer");
     expect(answerDraftStream.clear).toHaveBeenCalledTimes(1);
@@ -2462,7 +2563,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Site A shows X.");
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringMatching(/`🛠️ Exec`$/) }),
+      expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b>$/) }),
     );
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Site B shows Y.");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(3, "Final answer");
@@ -2504,7 +2605,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({ context: createContext() });
 
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringMatching(/`🛠️ Exec`$/) }),
+      expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b>$/) }),
     );
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Branch is up to date");
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
@@ -2530,7 +2631,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({ context: createContext() });
 
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringMatching(/`🛠️ Exec`$/) }),
+      expect.objectContaining({ text: expect.stringMatching(/🛠️ Exec<\/b>$/) }),
     );
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Branch is up to date");
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
@@ -2584,13 +2685,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
       telegramCfg: { streaming: { mode: "progress" } },
     });
 
-    expect(answerDraftStream.updatePreview).toHaveBeenCalledWith({
-      text: "Cracking\n\n`🛠️ Exec`\n`🛠️ git rev-parse --abbrev-ref HEAD`",
-      richMessage: {
-        html: "<b>Cracking</b><br><b>🛠️ Exec</b><br><b>🛠️ Exec</b> <code>git rev-parse --abbrev-ref HEAD</code>",
-        skip_entity_detection: true,
-      },
-    });
+    expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
+      telegramProgressPreview(
+        "Cracking\n\n🛠️ Exec\n🛠️ git rev-parse --abbrev-ref HEAD",
+        "<b>Cracking</b>\n<b>🛠️ Exec</b>\n<b>🛠️ Exec</b> <code>git rev-parse --abbrev-ref HEAD</code>",
+      ),
+    );
     expect(answerDraftStream.update).not.toHaveBeenCalledWith("Branch is up to date");
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     expect(answerDraftStream.clear).toHaveBeenCalledTimes(1);
@@ -2627,10 +2727,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const lastUpdate = answerDraftStream.updatePreview.mock.calls.at(-1)?.[0];
     expect(lastUpdate?.text).toContain("install dependencies");
     expect(lastUpdate?.text).not.toContain("completed");
-    expect(lastUpdate?.richMessage).toEqual({
-      html: "<b>Shelling</b><br><b>🛠️ Exec</b> <code>install dependencies</code>",
-      skip_entity_detection: true,
-    });
+    expect(lastUpdate).toEqual(
+      telegramProgressPreview(
+        "Shelling\n\n🛠️ install dependencies",
+        "<b>Shelling</b>\n<b>🛠️ Exec</b> <code>install dependencies</code>",
+      ),
+    );
   });
 
   it("sends trailing verbose status after a progress-mode final answer", async () => {
@@ -2650,13 +2752,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
       telegramCfg: { streaming: { mode: "progress" } },
     });
 
-    expect(answerDraftStream.updatePreview).toHaveBeenCalledWith({
-      text: "Cracking\n\n`🛠️ Exec`",
-      richMessage: {
-        html: "<b>Cracking</b><br><b>🛠️ Exec</b>",
-        skip_entity_detection: true,
-      },
-    });
+    expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
+      telegramProgressPreview("Cracking\n\n🛠️ Exec", "<b>Cracking</b>\n<b>🛠️ Exec</b>"),
+    );
     expect(answerDraftStream.update).toHaveBeenCalledTimes(1);
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, trailingFinalStatusText);
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(2);
@@ -2690,9 +2788,37 @@ describe("dispatchTelegramMessage draft streaming", () => {
       expect.objectContaining({ text: expect.stringContaining("stdout line one") }),
     );
     expect(answerDraftStream.updatePreview).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        text: "Shelling\n\n`🛠️ Exec`\n`🔎 Web Search: docs lookup`",
-      }),
+      telegramProgressPreview(
+        "Shelling\n\n🛠️ Exec\n🔎 Web Search: docs lookup",
+        "<b>Shelling</b>\n<b>🛠️ Exec</b>\n<b>🔎 Web Search</b> <code>docs lookup</code>",
+      ),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("renders api progress item edge cases as HTML transport previews", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onItemEvent?.({ kind: "api", progressText: "GET /v1/users" });
+      await replyOptions?.onItemEvent?.({
+        kind: "api",
+        name: "api",
+        progressText: "POST /v1/jobs",
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+    });
+
+    expect(answerDraftStream.updatePreview).toHaveBeenLastCalledWith(
+      telegramProgressPreview(
+        "Shelling\n\n🌐 API: GET /v1/users\n🌐 API: POST /v1/jobs",
+        "<b>Shelling</b>\n<b>🌐 API</b> <code>GET /v1/users</code>\n<b>🌐 API</b> <code>POST /v1/jobs</code>",
+      ),
     );
     expect(deliverReplies).not.toHaveBeenCalled();
   });
@@ -2716,7 +2842,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(answerDraftStream.updatePreview).toHaveBeenCalledTimes(1);
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "Shelling\n\n`🛠️ Exec`" }),
+      telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
     );
     expectDeliveredReply(0, { text: "Branch is up to date" });
   });
@@ -2746,7 +2872,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(answerDraftStream.updatePreview).toHaveBeenCalledTimes(1);
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "Shelling\n\n`🛠️ Exec`" }),
+      telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
     );
     expectDeliveredReply(0, { text: "Branch is up to date" });
   });
@@ -2780,7 +2906,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(answerDraftStream.updatePreview).toHaveBeenCalledTimes(1);
     expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "Shelling\n\n`🛠️ Exec`" }),
+      telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
     );
     expectDeliveredReply(0, { text: "Branch is up to date" });
   });
@@ -2793,10 +2919,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
       "Ja. Hier nochmal sauber Schritt fuer Schritt. Einen API Key kopiert man...";
     const context = createContext();
     context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
-    loadSessionStore.mockReturnValue({
-      "agent:default:telegram:direct:123": { sessionId: "s1" },
-    });
-    readLatestAssistantTextFromSessionTranscript.mockResolvedValue({
+    mockDefaultSessionEntry();
+    readLatestAssistantTextByIdentity.mockResolvedValue({
       text: fullAnswer,
       timestamp: Date.now() + 1_000,
     });
@@ -2929,13 +3053,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
       telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
     });
 
-    expect(draftStream.updatePreview).toHaveBeenCalledWith({
-      text: "Shelling\n\n`🛠️ Exec`",
-      richMessage: {
-        html: "<b>Shelling</b><br><b>🛠️ Exec</b>",
-        skip_entity_detection: true,
-      },
-    });
+    expect(draftStream.updatePreview).toHaveBeenCalledWith(
+      telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
+    );
     expect(draftStream.flush).toHaveBeenCalled();
   });
 
@@ -2973,13 +3093,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
       },
     });
 
-    expect(draftStream.updatePreview).toHaveBeenLastCalledWith({
-      text: "Shelling\n\n`🛠️ exit 2; command false`",
-      richMessage: {
-        html: "<b>Shelling</b><br><b>🛠️ Exec</b> <code>command false</code> <i>exit 2</i>",
-        skip_entity_detection: true,
-      },
-    });
+    expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
+      telegramProgressPreview(
+        "Shelling\n\n🛠️ exit 2; command false",
+        "<b>Shelling</b>\n<b>🛠️ Exec</b> <code>command false</code> <i>exit 2</i>",
+      ),
+    );
   });
 
   it("hides command titles in Telegram status-only progress draft previews", async () => {
@@ -3016,13 +3135,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
       },
     });
 
-    expect(draftStream.updatePreview).toHaveBeenLastCalledWith({
-      text: "Shelling\n\n`🛠️ exit 2`",
-      richMessage: {
-        html: "<b>Shelling</b><br><b>🛠️ Exec</b> <code>exit 2</code>",
-        skip_entity_detection: true,
-      },
-    });
+    expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
+      telegramProgressPreview(
+        "Shelling\n\n🛠️ exit 2",
+        "<b>Shelling</b>\n<b>🛠️ Exec</b> <code>exit 2</code>",
+      ),
+    );
   });
 
   it("composes streamed reasoning with tool progress in Telegram progress drafts", async () => {
@@ -3043,13 +3161,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     expect(createTelegramDraftStream).toHaveBeenCalledTimes(1);
-    expect(draftStream.updatePreview).toHaveBeenCalledWith({
-      text: "Shelling\n\n`🛠️ Exec`\n• _Checking files_",
-      richMessage: {
-        html: "<b>Shelling</b><br><b>🛠️ Exec</b><br><i>Checking files</i>",
-        skip_entity_detection: true,
-      },
-    });
+    expect(draftStream.updatePreview).toHaveBeenCalledWith(
+      telegramProgressPreview(
+        "Shelling\n\n🛠️ Exec\n• Checking files",
+        "<b>Shelling</b>\n<b>🛠️ Exec</b>\n<i>Checking files</i>",
+      ),
+    );
   });
 
   it("renders configured Telegram commentary progress from preamble item events", async () => {
@@ -3076,13 +3193,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
       },
     });
 
-    expect(draftStream.updatePreview).toHaveBeenCalledWith({
-      text: "Shelling\n\n_Checking recent context_",
-      richMessage: {
-        html: "<b>Shelling</b><br><i>Checking recent context</i>",
-        skip_entity_detection: true,
-      },
-    });
+    expect(draftStream.updatePreview).toHaveBeenCalledWith(
+      telegramProgressPreview(
+        "Shelling\n\nChecking recent context",
+        "<b>Shelling</b>\n<i>Checking recent context</i>",
+      ),
+    );
   });
 
   it("suppresses Telegram preamble progress when commentary is disabled", async () => {
@@ -3137,12 +3253,70 @@ describe("dispatchTelegramMessage draft streaming", () => {
       },
     });
 
-    expect(draftStream.updatePreview).toHaveBeenCalledWith({
-      text: "Shelling",
-      richMessage: { html: "<b>Shelling</b>", skip_entity_detection: true },
-    });
+    expect(draftStream.updatePreview).toHaveBeenCalledWith(
+      telegramProgressPreview("Shelling", "<b>Shelling</b>"),
+    );
     expect(draftStream.flush).toHaveBeenCalled();
   });
+
+  it("keeps streamed reasoning visible when tool progress lines are hidden", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onAssistantMessageStart?.();
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await replyOptions?.onReasoningStream?.({ text: "<think>Checking files</think>" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createReasoningStreamContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: {
+          mode: "progress",
+          progress: { label: "Shelling", toolProgress: false },
+        },
+      },
+    });
+
+    expect(draftStream.updatePreview).toHaveBeenCalledWith(
+      telegramProgressPreview(
+        "Shelling\n\n• Checking files",
+        "<b>Shelling</b>\n<i>Checking files</i>",
+      ),
+    );
+  });
+
+  it.each([{ label: false }, { label: "Shelling", maxLines: 1 }] as const)(
+    "does not duplicate Telegram progress HTML rows without a visible label",
+    async (progress) => {
+      const draftStream = createSequencedDraftStream(2001);
+      createTelegramDraftStream.mockReturnValue(draftStream);
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+        await replyOptions?.onReplyStart?.();
+        await replyOptions?.onAssistantMessageStart?.();
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        return { queuedFinal: false };
+      });
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "progress",
+        telegramCfg: {
+          streaming: {
+            mode: "progress",
+            progress,
+          },
+        },
+      });
+
+      expect(draftStream.updatePreview).toHaveBeenCalledWith(
+        telegramProgressPreview("🛠️ Exec", "<b>🛠️ Exec</b>"),
+      );
+    },
+  );
 
   it("keeps progress draft labels static while the draft is active", async () => {
     const draftStream = createSequencedDraftStream(2001);
@@ -3171,18 +3345,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await vi.waitFor(() =>
       expect(draftStream.updatePreview).toHaveBeenCalledWith(
-        expect.objectContaining({ text: "Working" }),
+        telegramProgressPreview("Working", "<b>Working</b>"),
       ),
     );
-    expect(draftStream.updatePreview).not.toHaveBeenCalledWith(
-      expect.objectContaining({ text: "Working." }),
-    );
-    expect(draftStream.updatePreview).not.toHaveBeenCalledWith(
-      expect.objectContaining({ text: "Working.." }),
-    );
-    expect(draftStream.updatePreview).not.toHaveBeenCalledWith(
-      expect.objectContaining({ text: "Working..." }),
-    );
+    expect(draftStream.updatePreview).not.toHaveBeenCalledWith({ text: "Working." });
+    expect(draftStream.updatePreview).not.toHaveBeenCalledWith({ text: "Working.." });
+    expect(draftStream.updatePreview).not.toHaveBeenCalledWith({ text: "Working..." });
     finishRun?.();
     await run;
   });
@@ -3205,7 +3373,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       const updateBeforeStatusReaction = draftStream.updatePreview.mock.calls.at(-1)?.[0]?.text;
       releaseSetTool?.();
       await pendingToolStart;
-      expect(updateBeforeStatusReaction).toBe("Shelling\n\n`🛠️ Exec`");
+      expect(updateBeforeStatusReaction).toBe("<b>Shelling</b><br><b>🛠️ Exec</b>");
       return { queuedFinal: false };
     });
 
@@ -3241,13 +3409,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
       telegramCfg: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
     });
 
-    expect(draftStream.updatePreview).toHaveBeenCalledWith({
-      text: "Shelling\n\n`🔎 Web Search: docs lookup`\n• `tests passed`",
-      richMessage: {
-        html: "<b>Shelling</b><br><b>🔎 Web Search</b> <code>docs lookup</code><br><b>Update</b> <code>tests passed</code>",
-        skip_entity_detection: true,
-      },
-    });
+    expect(draftStream.updatePreview).toHaveBeenCalledWith(
+      telegramProgressPreview(
+        "Shelling\n\n🔎 Web Search: docs lookup\n• tests passed",
+        "<b>Shelling</b>\n<b>🔎 Web Search</b> <code>docs lookup</code>\n<b>Update</b> <code>tests passed</code>",
+      ),
+    );
     expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     expect(draftStream.materialize).not.toHaveBeenCalled();
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
@@ -3400,6 +3567,41 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("preserves forum topic message_thread_id across streamed reasoning and final answer", async () => {
+    const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onReasoningStream?.({ text: "<think>Thinking</think>" });
+        await dispatcherOptions.deliver({ text: "Answer" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createReasoningForumTopicContext() });
+
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith("Thinking\n\n_Thinking_");
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Answer");
+    expect(answerDraftStream.stop).toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expectRecordFields(mockCallArg(emitInternalMessageSentHook), {
+      content: "Answer",
+      messageId: 2001,
+    });
+    expectRecordFields(mockCallArg(recordOutboundMessageForPromptContext), {
+      chatId: "-100123",
+      messageId: 2001,
+      text: "Answer",
+      messageThreadId: 88,
+    });
+    expectDraftStreamParams({ thread: { id: 88, scope: "forum" } });
+    expectRecordFields(mockCallArg(createTelegramDraftStream, 1), {
+      thread: { id: 88, scope: "forum" },
+    });
+  });
+
   it("replaces reasoning snapshots on the reasoning lane", async () => {
     const { reasoningDraftStream } = setupDraftStreams({
       answerMessageId: 2001,
@@ -3488,10 +3690,63 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await run;
   });
 
-  it("suppresses reasoning-only finals without raw text fallback", async () => {
+  it("keeps shared durable reasoning payloads disabled when reasoning is off", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    });
+
+    await dispatchWithContext({ context: createContext() });
+
+    const dispatchParams = mockCallArg(dispatchReplyWithBufferedBlockDispatcher) as {
+      replyOptions?: { reasoningPayloadsEnabled?: boolean };
+    };
+    expect(dispatchParams.replyOptions?.reasoningPayloadsEnabled).toBe(false);
+  });
+
+  it("opts shared dispatch into durable reasoning payload delivery when reasoning streams", async () => {
+    setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    });
+
+    await dispatchWithContext({ context: createReasoningStreamContext() });
+
+    const dispatchParams = mockCallArg(dispatchReplyWithBufferedBlockDispatcher) as {
+      replyOptions?: { reasoningPayloadsEnabled?: boolean };
+    };
+    expect(dispatchParams.replyOptions?.reasoningPayloadsEnabled).toBe(true);
+  });
+
+  it("keeps shared durable reasoning payloads disabled in progress stream mode", async () => {
+    setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    });
+
+    await dispatchWithContext({
+      context: createReasoningStreamContext(),
+      streamMode: "progress",
+    });
+
+    const dispatchParams = mockCallArg(dispatchReplyWithBufferedBlockDispatcher) as {
+      replyOptions?: { reasoningPayloadsEnabled?: boolean };
+    };
+    expect(dispatchParams.replyOptions?.reasoningPayloadsEnabled).toBe(false);
+  });
+
+  it("suppresses typed reasoning-only finals without raw text fallback", async () => {
     setupDraftStreams({ answerMessageId: 2001, reasoningMessageId: 3001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver({ text: "<think>hidden</think>" }, { kind: "final" });
+      await dispatcherOptions.deliver(
+        { text: "<think>hidden</think>", isReasoning: true },
+        { kind: "final" },
+      );
       return { queuedFinal: true };
     });
 
@@ -3499,6 +3754,85 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(deliverReplies).not.toHaveBeenCalled();
     expect(editMessageTelegram).not.toHaveBeenCalled();
+  });
+
+  it("routes typed reasoning-only finals to the reasoning lane when reasoning streams", async () => {
+    const { reasoningDraftStream } = setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "<think>hidden</think>", isReasoning: true },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createReasoningStreamContext() });
+
+    expect(reasoningDraftStream.update).toHaveBeenCalledWith("Thinking\n\n_hidden_");
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("routes typed reasoning-only finals to durable delivery when reasoning is persistent", async () => {
+    loadSessionStore.mockReturnValue({
+      s1: { reasoningLevel: "on" },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "<think>hidden</think>", isReasoning: true },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: { SessionKey: "s1" } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+    });
+
+    const delivered = expectDeliveredReply(0, { text: "Thinking\n\n_hidden_" });
+    expect(delivered).not.toHaveProperty("isReasoning");
+  });
+
+  it("does not persist typed reasoning-only finals in progress stream mode", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "<think>hidden</think>", isReasoning: true },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createReasoningStreamContext(),
+      streamMode: "progress",
+    });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(answerDraftStream.update).not.toHaveBeenCalled();
+  });
+
+  it("keeps unflagged angle-bracket text visible on the answer lane", async () => {
+    const { answerDraftStream } = setupDraftStreams({
+      answerMessageId: 2001,
+      reasoningMessageId: 3001,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "Before <think>literal tag text after" },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Before <think>literal tag text after");
+    expect(deliverReplies).not.toHaveBeenCalled();
   });
 
   it("does not add silent fallback when source delivery is message-tool-only", async () => {

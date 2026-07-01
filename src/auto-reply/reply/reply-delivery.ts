@@ -6,11 +6,11 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { BlockReplyContext, ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
-import { parseReplyDirectives } from "./reply-directives.js";
+import { mergeReactionDirectiveChannelData, parseReplyDirectives } from "./reply-directives.js";
 import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
-export type ReplyDirectiveParseMode = "always" | "auto" | "never";
+type ReplyDirectiveParseMode = "always" | "auto" | "never";
 
 /** Parses inline reply directives into payload fields and silent-reply state. */
 export function normalizeReplyPayloadDirectives(params: {
@@ -51,6 +51,10 @@ export function normalizeReplyPayloadDirectives(params: {
   const mediaUrls = params.payload.mediaUrls ?? parsed?.mediaUrls;
   const mediaUrl = params.payload.mediaUrl ?? parsed?.mediaUrl ?? mediaUrls?.[0];
 
+  const channelData = mergeReactionDirectiveChannelData(
+    params.payload.channelData,
+    parsed?.reaction,
+  );
   return {
     payload: copyReplyPayloadMetadata(params.payload, {
       ...params.payload,
@@ -61,6 +65,7 @@ export function normalizeReplyPayloadDirectives(params: {
       replyToTag: params.payload.replyToTag || parsed?.replyToTag,
       replyToCurrent: params.payload.replyToCurrent || parsed?.replyToCurrent,
       audioAsVoice: Boolean(params.payload.audioAsVoice || parsed?.audioAsVoice),
+      ...(channelData ? { channelData } : {}),
     }),
     isSilent: parsed?.isSilent ?? false,
   };
@@ -175,7 +180,14 @@ export function createBlockReplyDeliveryHandler(params: {
         trackingPayload: blockPayload,
         payload: blockPayload,
       });
-    } else if (blockHasNonTextContent) {
+    } else if (
+      blockHasNonTextContent ||
+      blockPayload.isReasoning === true ||
+      blockPayload.isCommentary === true
+    ) {
+      // Reasoning and commentary are separate display lanes that never merge into
+      // the assistant's final text, so they must be delivered directly even when
+      // block streaming is off; presentation gating stays downstream (dispatch gate).
       await sendDirectBlockReply({
         onBlockReply: params.onBlockReply,
         directlySentBlockKeys: params.directlySentBlockKeys,

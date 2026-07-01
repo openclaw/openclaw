@@ -288,6 +288,7 @@ export interface CronJobs {
   payload_model: string | null;
   payload_thinking: string | null;
   payload_timeout_seconds: number | null;
+  payload_tools_allow_is_default: number | null;
   payload_tools_allow_json: string | null;
   running_at_ms: number | null;
   runtime_updated_at_ms: number | null;
@@ -697,6 +698,17 @@ export interface NodePairingPending {
   version: string | null;
 }
 
+export interface OfficialExternalPluginCatalogSnapshots {
+  body: string;
+  checksum: string;
+  etag: string | null;
+  feed_url: string;
+  last_modified: string | null;
+  saved_at: string;
+  status: number;
+  updated_at_ms: number;
+}
+
 export interface PluginBindingApprovals {
   account_id: string;
   approved_at: number;
@@ -988,6 +1000,7 @@ export interface DB {
   node_host_config: NodeHostConfig;
   node_pairing_paired: NodePairingPaired;
   node_pairing_pending: NodePairingPending;
+  official_external_plugin_catalog_snapshots: OfficialExternalPluginCatalogSnapshots;
   plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;

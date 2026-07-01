@@ -26,6 +26,11 @@ import { calculateCost } from "../llm/model-utils.js";
 import { resolveAzureDeploymentNameFromMap } from "../llm/providers/azure-deployment-map.js";
 import { convertMessages } from "../llm/providers/openai-completions.js";
 import { clampOpenAIPromptCacheKey } from "../llm/providers/openai-prompt-cache.js";
+import { mapOpenAIStopReason } from "../llm/providers/openai-stop-reason.js";
+import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
+} from "../llm/providers/tool-result-text.js";
 import type { Api, Context, Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { parseStreamingJson } from "../llm/utils/json-parse.js";
@@ -38,6 +43,7 @@ import { isOpenAICompatibleAzureResponsesBaseUrl } from "../shared/azure-openai-
 import {
   isResponsesTextContentPartType,
   isResponsesTextDeltaEventType,
+  resolveResponsesMessageSnapshotCollapse,
 } from "../shared/openai-responses-stream-compat.js";
 import { createReasoningTagTextPartitioner } from "../shared/text/reasoning-tag-text-partitioner.js";
 import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../utils/cjk-chars.js";
@@ -82,7 +88,7 @@ import {
 import {
   findOpenAIStrictToolProjectionDiagnostics,
   normalizeOpenAIStrictToolParameters,
-  resolveOpenAIStrictToolFlagForProjection,
+  resolveOpenAIProjectedToolsStrictToolFlag,
 } from "./openai-tool-schema.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "./provider-request-config.js";
@@ -96,7 +102,10 @@ import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.j
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
   assignTransportErrorDetails,
+  failTransportStream,
+  finalizeTransportStream,
   mergeTransportMetadata,
+  sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
 
@@ -1269,10 +1278,10 @@ function convertResponsesMessages(
         messages.push(...output);
       }
     } else if (msg.role === "toolResult") {
-      const textResult = msg.content
-        .filter((item) => item.type === "text")
-        .map((item) => item.text)
-        .join("\n");
+      const textResult = extractToolResultText(msg.content);
+      const sanitizedTextResult = sanitizeTransportPayloadText(textResult);
+      const hasText = sanitizedTextResult.trim().length > 0;
+      const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const hasImages = msg.content.some((item) => item.type === "image");
       const [callId] = msg.toolCallId.split("|");
       messages.push({
@@ -1281,9 +1290,11 @@ function convertResponsesMessages(
         output:
           hasImages && model.input.includes("image")
             ? ([
-                ...(textResult
-                  ? [{ type: "input_text", text: sanitizeTransportPayloadText(textResult) }]
-                  : []),
+                ...(hasText
+                  ? [{ type: "input_text", text: sanitizedTextResult }]
+                  : mediaPlaceholder === "(see attached media)"
+                    ? [{ type: "input_text", text: mediaPlaceholder }]
+                    : []),
                 ...msg.content
                   .filter((item) => item.type === "image")
                   .map((item) => ({
@@ -1292,7 +1303,7 @@ function convertResponsesMessages(
                     image_url: `data:${item.mimeType};base64,${item.data}`,
                   })),
               ] as ResponseFunctionCallOutputItemList)
-            : sanitizeTransportPayloadText(textResult || "(see attached image)"),
+            : sanitizeNonEmptyTransportPayloadText(textResult, mediaPlaceholder ?? "(no output)"),
       });
     }
     msgIndex += 1;
@@ -1336,7 +1347,7 @@ function resolveOpenAIStrictToolFlagWithDiagnostics(
   strictSetting: boolean | null | undefined,
   context: { transport: "responses" | "completions"; model: OpenAIModeModel },
 ): boolean | undefined {
-  const strict = resolveOpenAIStrictToolFlagForProjection(projection, strictSetting);
+  const strict = resolveOpenAIProjectedToolsStrictToolFlag(projection, strictSetting);
   if (strictSetting === true && strict === false && log.isEnabled("debug", "any")) {
     const diagnostics = findOpenAIStrictToolProjectionDiagnostics(projection);
     if (!shouldLogOpenAIStrictToolDowngradeDiagnostic(diagnostics, context)) {
@@ -1474,25 +1485,68 @@ async function processResponsesStream(
 ) {
   let currentItem: Record<string, unknown> | null = null;
   let currentBlock: Record<string, unknown> | null = null;
+  let lastTextBlock: {
+    block: Record<string, unknown>;
+    index: number;
+    phase: "commentary" | "final_answer" | undefined;
+  } | null = null;
+  // While a message item may still be a cumulative snapshot of lastTextBlock,
+  // its public block is deferred so a collapsed item never leaves an
+  // unbalanced text_start behind (#91959). null = no deferral in progress.
+  let pendingMessageText: string | null = null;
   const streamStartedAt = Date.now();
   let eventCount = 0;
   const eventTypes = new Map<string, number>();
   const sseDebugMode = resolveModelSseDebugMode();
   const blockIndex = () => output.content.length - 1;
+  const appendPendingMessageDelta = (delta: string) => {
+    pendingMessageText = `${pendingMessageText ?? ""}${delta}`;
+    const priorText = stringifyUnknown(lastTextBlock?.block.text);
+    if (priorText.startsWith(pendingMessageText) || pendingMessageText.startsWith(priorText)) {
+      return;
+    }
+    // Diverged from the prior text: this is a distinct message, so open its
+    // block now and replay the withheld text as one delta.
+    currentBlock = { type: "text", text: pendingMessageText };
+    output.content.push(currentBlock);
+    stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+    stream.push({ type: "text_delta", contentIndex: blockIndex(), delta: pendingMessageText });
+    pendingMessageText = null;
+  };
   const appendCompletedResponseTextItem = (item: Record<string, unknown>) => {
     const text = readResponsesOutputMessageText(item);
     if (!text) {
       return;
     }
+    const phase = (item.phase as "commentary" | "final_answer" | undefined) ?? undefined;
+    const collapse = resolveResponsesMessageSnapshotCollapse({
+      prior: lastTextBlock && {
+        text: stringifyUnknown(lastTextBlock.block.text),
+        phase: lastTextBlock.phase,
+      },
+      nextText: text,
+      nextPhase: phase,
+    });
+    if (collapse.kind === "extend" && lastTextBlock) {
+      // Cumulative snapshot of the prior message item: replace, don't append;
+      // the newest item's signature carries the content for replay (#91959).
+      lastTextBlock.block.text = collapse.text;
+      lastTextBlock.block.textSignature = encodeTextSignatureV1(stringifyUnknown(item.id), phase);
+      stream.push({
+        type: "text_end",
+        contentIndex: lastTextBlock.index,
+        content: collapse.text,
+        partial: output,
+      });
+      return;
+    }
     const block: Record<string, unknown> = {
       type: "text",
       text,
-      textSignature: encodeTextSignatureV1(
-        stringifyUnknown(item.id),
-        (item.phase as "commentary" | "final_answer" | undefined) ?? undefined,
-      ),
+      textSignature: encodeTextSignatureV1(stringifyUnknown(item.id), phase),
     };
     output.content.push(block);
+    lastTextBlock = { block, index: blockIndex(), phase };
     stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
     stream.push({
       type: "text_end",
@@ -1534,7 +1588,12 @@ async function processResponsesStream(
       }
       if (rawItem.type === "message") {
         appendCompletedResponseTextItem(rawItem);
-      } else if (rawItem.type === "function_call") {
+        continue;
+      }
+      // Any non-message item (reasoning, tool call) is a real boundary; a later
+      // message must not collapse across it, mirroring the streaming path.
+      lastTextBlock = null;
+      if (rawItem.type === "function_call") {
         appendCompletedResponseToolCallItem(rawItem);
       }
     }
@@ -1569,6 +1628,12 @@ async function processResponsesStream(
       output.responseId = stringifyUnknown((event.response as { id?: string } | undefined)?.id);
     } else if (type === "response.output_item.added") {
       const item = event.item as Record<string, unknown>;
+      if (item.type !== "message") {
+        // Snapshot collapse only applies to back-to-back message items; any
+        // other item is a real boundary (see resolveResponsesMessageSnapshotCollapse).
+        lastTextBlock = null;
+        pendingMessageText = null;
+      }
       if (item.type === "reasoning") {
         currentItem = item;
         currentBlock = { type: "thinking", thinking: "" };
@@ -1576,9 +1641,14 @@ async function processResponsesStream(
         stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
       } else if (item.type === "message") {
         currentItem = item;
-        currentBlock = { type: "text", text: "" };
-        output.content.push(currentBlock);
-        stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+        if (lastTextBlock) {
+          currentBlock = null;
+          pendingMessageText = "";
+        } else {
+          currentBlock = { type: "text", text: "" };
+          output.content.push(currentBlock);
+          stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+        }
       } else if (item.type === "function_call") {
         currentItem = item;
         currentBlock = {
@@ -1602,13 +1672,17 @@ async function processResponsesStream(
         });
       }
     } else if (isResponsesTextDeltaEventType(type) || type === "response.refusal.delta") {
-      if (currentItem?.type === "message" && currentBlock?.type === "text") {
-        currentBlock.text = `${stringifyUnknown(currentBlock.text)}${stringifyUnknown(event.delta)}`;
-        stream.push({
-          type: "text_delta",
-          contentIndex: blockIndex(),
-          delta: stringifyUnknown(event.delta),
-        });
+      if (currentItem?.type === "message") {
+        if (pendingMessageText !== null) {
+          appendPendingMessageDelta(stringifyUnknown(event.delta));
+        } else if (currentBlock?.type === "text") {
+          currentBlock.text = `${stringifyUnknown(currentBlock.text)}${stringifyUnknown(event.delta)}`;
+          stream.push({
+            type: "text_delta",
+            contentIndex: blockIndex(),
+            delta: stringifyUnknown(event.delta),
+          });
+        }
       }
     } else if (type === "response.function_call_arguments.delta") {
       if (currentItem?.type === "function_call" && currentBlock?.type === "toolCall") {
@@ -1623,6 +1697,10 @@ async function processResponsesStream(
       }
     } else if (type === "response.output_item.done") {
       const item = event.item as Record<string, unknown>;
+      if (item.type !== "message") {
+        lastTextBlock = null;
+        pendingMessageText = null;
+      }
       if (item.type === "reasoning" && currentBlock?.type === "thinking") {
         const summary = Array.isArray(item.summary)
           ? item.summary
@@ -1648,9 +1726,12 @@ async function processResponsesStream(
           partial: output,
         });
         currentBlock = null;
-      } else if (item.type === "message" && currentBlock?.type === "text") {
+      } else if (
+        item.type === "message" &&
+        (currentBlock?.type === "text" || pendingMessageText !== null)
+      ) {
         const content = Array.isArray(item.content) ? item.content : [];
-        currentBlock.text = content
+        const finalText = content
           .map((part) => {
             const contentPart = part as { type?: string; text?: string; refusal?: string };
             return isResponsesTextContentPartType(contentPart.type)
@@ -1658,16 +1739,53 @@ async function processResponsesStream(
               : (contentPart.refusal ?? "");
           })
           .join("");
-        currentBlock.textSignature = encodeTextSignatureV1(
-          stringifyUnknown(item.id),
-          (item.phase as "commentary" | "final_answer" | undefined) ?? undefined,
-        );
-        stream.push({
-          type: "text_end",
-          contentIndex: blockIndex(),
-          content: stringifyUnknown(currentBlock.text),
-          partial: output,
-        });
+        const phase = (item.phase as "commentary" | "final_answer" | undefined) ?? undefined;
+        const collapse =
+          pendingMessageText !== null
+            ? resolveResponsesMessageSnapshotCollapse({
+                prior: lastTextBlock && {
+                  text: stringifyUnknown(lastTextBlock.block.text),
+                  phase: lastTextBlock.phase,
+                },
+                nextText: finalText,
+                nextPhase: phase,
+              })
+            : ({ kind: "keep" } as const);
+        pendingMessageText = null;
+        if (collapse.kind === "extend" && lastTextBlock) {
+          // Cumulative snapshot of the prior message item: replace its text
+          // instead of appending another copy. The deferred block was never
+          // started publicly, and the newest item's signature is kept so
+          // replay carries the item that produced this content (#91959).
+          lastTextBlock.block.text = collapse.text;
+          lastTextBlock.block.textSignature = encodeTextSignatureV1(
+            stringifyUnknown(item.id),
+            phase,
+          );
+          stream.push({
+            type: "text_end",
+            contentIndex: lastTextBlock.index,
+            content: collapse.text,
+            partial: output,
+          });
+        } else {
+          if (currentBlock?.type !== "text") {
+            // Deferred distinct message: open its block now, balanced with the
+            // text_end below.
+            currentBlock = { type: "text", text: "" };
+            output.content.push(currentBlock);
+            stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+          }
+          currentBlock.text = finalText;
+          currentBlock.textSignature = encodeTextSignatureV1(stringifyUnknown(item.id), phase);
+          lastTextBlock = { block: currentBlock, index: blockIndex(), phase };
+          stream.push({
+            type: "text_end",
+            contentIndex: blockIndex(),
+            content: stringifyUnknown(currentBlock.text),
+            partial: output,
+          });
+        }
         currentBlock = null;
       } else if (item.type === "function_call") {
         const args =
@@ -1698,7 +1816,7 @@ async function processResponsesStream(
             input_tokens?: number;
             output_tokens?: number;
             total_tokens?: number;
-            input_tokens_details?: { cached_tokens?: number };
+            input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
             output_tokens_details?: { reasoning_tokens?: number };
             service_tier?: ResponseCreateParamsStreaming["service_tier"];
             status?: string;
@@ -1706,19 +1824,20 @@ async function processResponsesStream(
         | undefined;
       if (usage) {
         const cachedTokens = usage.input_tokens_details?.cached_tokens || 0;
+        const cacheWriteTokens = usage.input_tokens_details?.cache_write_tokens || 0;
         const inputTokens = usage.input_tokens || 0;
         const outputTokens = usage.output_tokens || 0;
         const reasoningTokens = usage.output_tokens_details?.reasoning_tokens;
-        const input = Math.max(0, inputTokens - cachedTokens);
+        const input = Math.max(0, inputTokens - cachedTokens - cacheWriteTokens);
         output.usage = {
           input,
           output: outputTokens,
           cacheRead: cachedTokens,
-          cacheWrite: 0,
+          cacheWrite: cacheWriteTokens,
           ...(typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)
             ? { reasoningTokens }
             : {}),
-          totalTokens: input + outputTokens + cachedTokens,
+          totalTokens: input + outputTokens + cachedTokens + cacheWriteTokens,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         };
       }
@@ -2692,15 +2811,9 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           signal: options?.signal,
           emitReasoning,
         });
-        if (options?.signal?.aborted) {
-          throw new Error("Request was aborted");
-        }
-        stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
-        stream.end();
+        finalizeTransportStream({ stream, output, signal: options?.signal });
       } catch (error) {
-        assignTransportErrorDetails(output, error, options?.signal);
-        stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
-        stream.end();
+        failTransportStream({ stream, output, signal: options?.signal, error });
       }
     })();
     return eventStream as unknown as ReturnType<StreamFn>;
@@ -2745,6 +2858,7 @@ async function processOpenAICompletionsStream(
   const toolCallBlocksByIndex = new Map<number, ToolCallBlock>();
   const toolCallBlocksById = new Map<string, ToolCallBlock>();
   const toolCallBlockBytes = new WeakMap<ToolCallBlock, number>();
+  const toolCallBlockIndices = new WeakMap<ToolCallBlock, number>();
   let sawStopFinishReason = false;
   const blockIndex = () => output.content.length - 1;
   const measureUtf8Bytes = (text: string) => Buffer.byteLength(text, "utf8");
@@ -2866,7 +2980,6 @@ async function processOpenAICompletionsStream(
       currentBlock = null;
       flushPendingPostToolCallDeltas();
     }
-    output.stopReason = "toolUse";
     recoveredDeepSeekToolCallIndex += 1;
     const block: ToolCallBlock = {
       type: "toolCall",
@@ -2877,14 +2990,15 @@ async function processOpenAICompletionsStream(
     };
     currentBlock = block;
     output.content.push(block);
+    toolCallBlockIndices.set(block, output.content.length - 1);
     pushStreamEvent({
       type: "toolcall_start",
-      contentIndex: output.content.indexOf(block),
+      contentIndex: toolCallBlockIndices.get(block) ?? -1,
       partial: output,
     });
     pushStreamEvent({
       type: "toolcall_delta",
-      contentIndex: output.content.indexOf(block),
+      contentIndex: toolCallBlockIndices.get(block) ?? -1,
       delta: toolCall.partialArgs,
       partial: output,
     });
@@ -2993,7 +3107,9 @@ async function processOpenAICompletionsStream(
       hasReasoningUsageActivity = hasOpenAICompletionsReasoningUsageActivity(choiceUsage);
     }
     if (choice.finish_reason) {
-      const finishReasonResult = mapStopReason(choice.finish_reason);
+      const finishReasonResult = mapOpenAIStopReason(choice.finish_reason, {
+        allowSingularToolCall: true,
+      });
       output.stopReason = finishReasonResult.stopReason;
       if (finishReasonResult.stopReason === "stop") {
         sawStopFinishReason = true;
@@ -3075,9 +3191,10 @@ async function processOpenAICompletionsStream(
             ...(initialSig ? { thoughtSignature: initialSig } : {}),
           };
           output.content.push(block);
+          toolCallBlockIndices.set(block, output.content.length - 1);
           pushStreamEvent({
             type: "toolcall_start",
-            contentIndex: output.content.indexOf(block),
+            contentIndex: toolCallBlockIndices.get(block) ?? -1,
             partial: output,
           });
         }
@@ -3107,7 +3224,7 @@ async function processOpenAICompletionsStream(
           block.arguments = parseStreamingJson(block.partialArgs);
           pushStreamEvent({
             type: "toolcall_delta",
-            contentIndex: output.content.indexOf(block),
+            contentIndex: toolCallBlockIndices.get(block) ?? -1,
             delta: toolCall.function.arguments,
             partial: output,
           });
@@ -3132,6 +3249,8 @@ async function processOpenAICompletionsStream(
   if (output.stopReason === "toolUse" && !hasToolCalls) {
     output.stopReason = "stop";
   }
+  // Tool-call recovery is executable only after an explicit provider terminal.
+  // EOF alone can mean transport truncation, even when the recovered call parses.
   if (sawStopFinishReason && output.stopReason === "stop" && hasToolCalls && !hasVisibleText) {
     output.stopReason = "toolUse";
   }
@@ -4368,32 +4487,6 @@ function hasOpenAICompletionsReasoningUsageActivity(
   return (
     typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens) && reasoningTokens > 0
   );
-}
-
-function mapStopReason(reason: string | null) {
-  if (reason === null) {
-    return { stopReason: "stop" };
-  }
-  switch (reason) {
-    case "stop":
-    case "end":
-      return { stopReason: "stop" };
-    case "length":
-      return { stopReason: "length" };
-    case "function_call":
-    case "tool_call":
-    case "tool_calls":
-      return { stopReason: "toolUse" };
-    case "content_filter":
-      return { stopReason: "error", errorMessage: "Provider finish_reason: content_filter" };
-    case "network_error":
-      return { stopReason: "error", errorMessage: "Provider finish_reason: network_error" };
-    default:
-      return {
-        stopReason: "error",
-        errorMessage: `Provider finish_reason: ${reason}`,
-      };
-  }
 }
 
 export const testing = {

@@ -1,0 +1,37 @@
+<resources>
+    <string name="app_name">OpenClaw Node</string>
+    <string name="gateway_connection">Ağ Geçidi Bağlantısı</string>
+    <string name="connect_gateway">Ağ Geçidine Bağlan</string>
+    <string name="disconnect">Bağlantıyı Kes</string>
+    <string name="trust_this_gateway">Bu ağ geçidine güvenilsin mi?</string>
+    <string name="trust_and_continue">Güven ve devam et</string>
+    <string name="cancel">İptal</string>
+    <string name="endpoint">Uç nokta</string>
+    <string name="status">Durum</string>
+    <string name="connected_gateway_ready">Ağ geçidiniz etkin ve hazır.</string>
+    <string name="connect_gateway_get_started">Başlamak için ağ geçidinize bağlanın.</string>
+    <string name="copy_report_for_claw">Claw için Raporu Kopyala</string>
+    <string name="advanced_controls">Gelişmiş kontroller</string>
+    <string name="connection_method">Bağlantı yöntemi</string>
+    <string name="setup_code">Kurulum Kodu</string>
+    <string name="manual">Manuel</string>
+    <string name="paste_setup_code">Kurulum kodunu yapıştır</string>
+    <string name="host">Ana makine</string>
+    <string name="use_tls">TLS kullan</string>
+    <string name="token_optional">Token (isteğe bağlı)</string>
+    <string name="password">Parola</string>
+    <string name="run_onboarding_again">Başlangıç sürecini tekrar çalıştır</string>
+    <string name="resolved_endpoint">Çözümlenen uç nokta</string>
+    <string name="gateway_setup">Ağ Geçidi Kurulumu</string>
+    <string name="connect_to_gateway">Ağ Geçidinize Bağlanın</string>
+    <string name="scan_setup_code">Kurulum kodunu tara</string>
+    <string name="use_gateway_qr">Gateway QR kodunuzu veya kurulum kodunuzu kullanın</string>
+    <string name="nearby_gateway">Yakındaki ağ geçidi</string>
+    <string name="enter_gateway_url">Ağ geçidi URL’sini girin</string>
+    <string name="connect_manual_url">Manuel URL kullanarak bağlan</string>
+    <string name="permissions">İzinler</string>
+    <string name="done">Bitti</string>
+    <string name="gateway_trust_first_seen">Bu ağ geçidine güvenmeden önce sertifika parmak izini doğrulayın.\n\n%1$s</string>
+    <string name="gateway_trust_changed">Ağ geçidi sertifikası değişti. Yalnızca bu değişikliği bekliyorsanız devam edin.\n\nEski SHA-256:\n%1$s\n\nYeni SHA-256:\n%2$s</string>
+    <string name="gateway_recovery">Ağ geçidi kurtarma</string>
+</resources>
