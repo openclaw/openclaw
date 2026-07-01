@@ -1729,6 +1729,7 @@ final class TalkModeManager: NSObject {
                 NSLocalizedDescriptionKey: "Gateway talk.speak returned unsupported raw audio codec '\(codec)'",
             ])
         }
+        guard generation == self.speechGeneration, self.isSpeaking else { return }
         GatewayDiagnostics.log(
             "talk tts: provider=\(audio.provider) outputFormat=\(audio.outputFormat ?? "unknown") " +
                 "finished=\(result.finished)")
@@ -2788,7 +2789,7 @@ extension TalkModeManager {
         let gatewayOwnedVoiceProvider = self.applyTalkConfigCredentials(
             parsed: parsed,
             activeProvider: routing.activeProvider,
-            gatewayOwnsCredentials: routing.route.usesGatewayTalkSpeak,
+            gatewayOwnsCredentials: routing.route.gatewayOwnsCredentials,
             credentialProvider: credentialProvider)
         self.applyTalkModeDescriptor(
             routing: routing,
@@ -3201,8 +3202,12 @@ extension TalkModeManager {
         await self.playAssistant(text: text)
     }
 
-    func _test_stopSpeaking() {
-        self.stopSpeaking()
+    func _test_stopSpeaking(storeInterruption: Bool = true) {
+        self.stopSpeaking(storeInterruption: storeInterruption)
+    }
+
+    func _test_lastInterruptedAtSeconds() -> Double? {
+        self.lastInterruptedAtSeconds
     }
 
     func _test_hasRecognitionRequest() -> Bool {

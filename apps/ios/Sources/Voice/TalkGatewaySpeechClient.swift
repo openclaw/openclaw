@@ -47,6 +47,7 @@ struct TalkGatewaySpeechAudio: Equatable {
 
 struct TalkGatewaySpeechRequest {
     let text: String
+    // These are talk.speak protocol inputs; each Gateway speech provider owns which overrides it honors.
     let voiceId: String?
     let modelId: String?
     let outputFormat: String?

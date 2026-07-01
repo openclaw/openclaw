@@ -231,6 +231,10 @@ enum TalkModeRuntimeRoute: Equatable {
     }
 
     var usesGatewayTalkSpeak: Bool {
+        self == .gatewayTalkSpeak
+    }
+
+    var gatewayOwnsCredentials: Bool {
         self != .localElevenLabs
     }
 }

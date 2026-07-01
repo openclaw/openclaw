@@ -279,10 +279,11 @@ private final class InterruptibleBufferedAudioPlayer: TalkBufferedAudioPlaying {
         }
         #expect(manager._test_hasRecognitionRequest())
 
-        manager._test_stopSpeaking()
+        manager._test_stopSpeaking(storeInterruption: false)
         await playback.value
 
         #expect(!manager._test_hasRecognitionRequest())
+        #expect(manager._test_lastInterruptedAtSeconds() == nil)
     }
 
     @Test func openAISpeechProviderWithoutRealtimeConfigUsesTalkSpeak() {
@@ -337,6 +338,8 @@ private final class InterruptibleBufferedAudioPlayer: TalkBufferedAudioPlaying {
 
         #expect(routing.executionMode == .realtimeRelay)
         #expect(routing.route == .realtimeRelay)
+        #expect(!routing.route.usesGatewayTalkSpeak)
+        #expect(routing.route.gatewayOwnsCredentials)
     }
 
     private static func parseSpeechProvider(
