@@ -4,6 +4,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { isRecord } from "../utils.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   resolveNonEnvSecretRefApiKeyMarker,
   resolveNonEnvSecretRefHeaderValueMarker,
@@ -27,7 +28,10 @@ function normalizeSourceProviderLookup(
   }
   const out: Record<string, ProviderConfig> = {};
   for (const [key, provider] of Object.entries(providers)) {
-    const normalizedKey = key.trim();
+    // Canonicalize source provider ids the same way the merge boundary does, so a source
+    // config keyed as "OpenAI" still matches a generated "openai" provider. A trim-only lookup
+    // here would let resolved runtime secret values leak into generated models.json.
+    const normalizedKey = normalizeProviderId(key);
     if (!normalizedKey || !isRecord(provider)) {
       continue;
     }
@@ -100,7 +104,8 @@ export function enforceSourceManagedProviderSecrets(params: {
     if (!isRecord(provider)) {
       continue;
     }
-    const sourceProvider = sourceProvidersByKey[providerKey.trim()];
+    const canonicalProviderKey = normalizeProviderId(providerKey);
+    const sourceProvider = sourceProvidersByKey[canonicalProviderKey];
     if (!sourceProvider) {
       continue;
     }
@@ -112,7 +117,7 @@ export function enforceSourceManagedProviderSecrets(params: {
       sourceSecretDefaults: params.sourceSecretDefaults,
     });
     if (sourceApiKeyMarker) {
-      params.secretRefManagedProviders?.add(providerKey.trim());
+      params.secretRefManagedProviders?.add(canonicalProviderKey);
       if (nextProvider.apiKey !== sourceApiKeyMarker) {
         providerMutated = true;
         nextProvider = {
