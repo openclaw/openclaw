@@ -3,8 +3,8 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { killProcessTreeMock, spawnMock, waitForChildProcessMock } = vi.hoisted(() => ({
-  killProcessTreeMock: vi.fn(),
+const { killProcessTreeAndWaitMock, spawnMock, waitForChildProcessMock } = vi.hoisted(() => ({
+  killProcessTreeAndWaitMock: vi.fn(),
   spawnMock: vi.fn(),
   waitForChildProcessMock: vi.fn(),
 }));
@@ -18,7 +18,7 @@ vi.mock("../utils/child-process.js", () => ({
 }));
 
 vi.mock("../../process/kill-tree.js", () => ({
-  killProcessTree: killProcessTreeMock,
+  killProcessTreeAndWait: killProcessTreeAndWaitMock,
 }));
 
 type StubChild = EventEmitter & {
@@ -49,7 +49,8 @@ function createDeferred<T>() {
 
 describe("execCommand", () => {
   beforeEach(() => {
-    killProcessTreeMock.mockReset();
+    killProcessTreeAndWaitMock.mockReset();
+    killProcessTreeAndWaitMock.mockResolvedValue(undefined);
     spawnMock.mockReset();
     waitForChildProcessMock.mockReset();
     vi.useRealTimers();
@@ -133,7 +134,7 @@ describe("execCommand", () => {
     wait.resolve(0);
 
     const result = await resultPromise;
-    expect(killProcessTreeMock).toHaveBeenCalledWith(1234, {
+    expect(killProcessTreeAndWaitMock).toHaveBeenCalledWith(1234, {
       detached: process.platform !== "win32",
       graceMs: 5000,
     });
@@ -158,7 +159,7 @@ describe("execCommand", () => {
 
     const resultPromise = execCommand("cmd", [], "/tmp", { timeout: 10 });
     await vi.advanceTimersByTimeAsync(10);
-    expect(killProcessTreeMock).toHaveBeenCalledWith(1234, {
+    expect(killProcessTreeAndWaitMock).toHaveBeenCalledWith(1234, {
       detached: process.platform !== "win32",
       graceMs: 5000,
     });
@@ -167,5 +168,90 @@ describe("execCommand", () => {
     wait.resolve(null);
     const result = await resultPromise;
     expect(result.killed).toBe(true);
+  });
+
+  it("waits for process-tree cleanup before resolving killed output-limit results", async () => {
+    const child = createStubChild();
+    const wait = createDeferred<number | null>();
+    const cleanup = createDeferred<void>();
+    spawnMock.mockReturnValue(child);
+    waitForChildProcessMock.mockReturnValue(wait.promise);
+    killProcessTreeAndWaitMock.mockReturnValue(cleanup.promise);
+    const { execCommand } = await import("./exec.js");
+
+    const resultPromise = execCommand("cmd", [], "/tmp");
+    child.stdout.emit("data", Buffer.from("x".repeat(16 * 1024 * 1024 + 1)));
+    wait.resolve(0);
+    let resolved = false;
+    void resultPromise.then(() => {
+      resolved = true;
+    });
+    await Promise.resolve();
+
+    expect(resolved).toBe(false);
+    cleanup.resolve();
+    const result = await resultPromise;
+    expect(result.killed).toBe(true);
+    expect(result.outputLimitExceeded).toBe("stdout");
+  });
+
+  it("terminates aborted commands through the process-tree killer", async () => {
+    const child = createStubChild();
+    const wait = createDeferred<number | null>();
+    const controller = new AbortController();
+    spawnMock.mockReturnValue(child);
+    waitForChildProcessMock.mockReturnValue(wait.promise);
+    const { execCommand } = await import("./exec.js");
+
+    const resultPromise = execCommand("cmd", [], "/tmp", { signal: controller.signal });
+    controller.abort();
+    wait.resolve(null);
+
+    const result = await resultPromise;
+    expect(killProcessTreeAndWaitMock).toHaveBeenCalledWith(1234, {
+      detached: process.platform !== "win32",
+      graceMs: 5000,
+    });
+    expect(result.killed).toBe(true);
+  });
+
+  it("falls back to direct child kill when abort races a pid-less spawn failure", async () => {
+    const child = createStubChild();
+    delete child.pid;
+    const controller = new AbortController();
+    controller.abort();
+    spawnMock.mockReturnValue(child);
+    waitForChildProcessMock.mockRejectedValue(new Error("spawn failed"));
+    const { execCommand } = await import("./exec.js");
+
+    const result = await execCommand("cmd", [], "/tmp", { signal: controller.signal });
+
+    expect(killProcessTreeAndWaitMock).not.toHaveBeenCalled();
+    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(result).toMatchObject({ code: 1, killed: true });
+  });
+
+  it("starts cleanup once when output overflow, abort, and timeout race", async () => {
+    vi.useFakeTimers();
+    const child = createStubChild();
+    const wait = createDeferred<number | null>();
+    const controller = new AbortController();
+    spawnMock.mockReturnValue(child);
+    waitForChildProcessMock.mockReturnValue(wait.promise);
+    const { execCommand } = await import("./exec.js");
+
+    const resultPromise = execCommand("cmd", [], "/tmp", {
+      signal: controller.signal,
+      timeout: 10,
+    });
+    child.stdout.emit("data", Buffer.from("x".repeat(16 * 1024 * 1024 + 1)));
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(10);
+    wait.resolve(null);
+
+    const result = await resultPromise;
+    expect(killProcessTreeAndWaitMock).toHaveBeenCalledTimes(1);
+    expect(result.killed).toBe(true);
+    expect(result.outputLimitExceeded).toBe("stdout");
   });
 });
