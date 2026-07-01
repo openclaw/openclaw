@@ -39,6 +39,7 @@ import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../process/comm
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
 import { resolveUserPath } from "../../utils.js";
+import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import {
   retireSessionMcpRuntime,
@@ -259,6 +260,7 @@ const NO_REAL_CONVERSATION_MESSAGES_REASON = "no real conversation messages";
 const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
   "Before accepting the previous final answer, apply this revision request and produce the revised final answer. Do not repeat completed work or rerun tools unless the request explicitly requires it.";
 const MAX_BEFORE_AGENT_FINALIZE_REVISIONS = 3;
+const POST_RUN_AUTH_PROFILE_SUCCESS_SLOW_MS = 1_000;
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
 type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentParams & { sessionFile: string };
 
@@ -600,7 +602,22 @@ function resolveInitialEmbeddedRunModel(params: {
   };
 }
 
-const POST_RUN_AUTH_PROFILE_SUCCESS_SLOW_MS = 1_000;
+function resolveEmbeddedTaskRuntimeRequesterOrigin(
+  params: Pick<
+    RunEmbeddedAgentParams,
+    "requesterOrigin" | "messageChannel" | "agentAccountId" | "messageTo" | "messageThreadId"
+  >,
+) {
+  return (
+    normalizeDeliveryContext(params.requesterOrigin) ??
+    normalizeDeliveryContext({
+      channel: params.messageChannel,
+      accountId: params.agentAccountId,
+      to: params.messageTo,
+      threadId: params.messageThreadId,
+    })
+  );
+}
 
 export function runEmbeddedAgent(
   paramsInput: RunEmbeddedAgentParams,
@@ -2090,6 +2107,7 @@ async function runEmbeddedAgentInternal(
             );
             timeoutReleaseTimer.unref?.();
           };
+          const taskRuntimeRequesterOrigin = resolveEmbeddedTaskRuntimeRequesterOrigin(params);
           const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
             sessionKey: resolvedSessionKey,
@@ -2155,6 +2173,9 @@ async function runEmbeddedAgentInternal(
               ? {
                   agentHarnessTaskRuntimeScope: createAgentHarnessTaskRuntimeScope({
                     requesterSessionKey: params.sessionKey,
+                    ...(taskRuntimeRequesterOrigin
+                      ? { requesterOrigin: taskRuntimeRequesterOrigin }
+                      : {}),
                   }),
                 }
               : {}),

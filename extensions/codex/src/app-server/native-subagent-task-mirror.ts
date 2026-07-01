@@ -2,7 +2,10 @@
  * Mirrors Codex native subagent thread lifecycle events into OpenClaw task
  * runtime rows so parent sessions can observe child progress.
  */
-import type { AgentHarnessTaskRuntime } from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import type {
+  AgentHarnessTaskRuntime,
+  AgentHarnessTaskRuntimeScope,
+} from "openclaw/plugin-sdk/agent-harness-task-runtime";
 import { CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX } from "./native-subagent-task-ids.js";
 import type {
   CodexServerNotification,
@@ -27,6 +30,7 @@ export type TaskLifecycleRuntime = Pick<
 export type CodexNativeSubagentTaskMirrorParams = {
   parentThreadId: string;
   requesterSessionKey?: string;
+  requesterOrigin?: AgentHarnessTaskRuntimeScope["requesterOrigin"];
   agentId?: string;
   now?: () => number;
 };
@@ -111,8 +115,7 @@ export class CodexNativeSubagentTaskMirror {
       runId,
       label,
       task,
-      notifyPolicy: "silent",
-      deliveryStatus: "not_applicable",
+      ...resolveNativeSubagentTaskDeliveryFields(this.params.requesterOrigin),
       preferMetadata: true,
       startedAt: createdAt,
       lastEventAt: this.now(),
@@ -126,6 +129,7 @@ export class CodexNativeSubagentTaskMirror {
     this.failedMirrorThreadIds.delete(threadId);
     this.terminalRunIds.delete(runId);
     this.authoritativeRunIds.delete(runId);
+    this.recordProgress(runId, this.now(), "Codex native subagent started.");
     this.applyStatus(threadId, thread.status);
   }
 
@@ -154,20 +158,12 @@ export class CodexNativeSubagentTaskMirror {
     }
     const eventAt = this.now();
     if (statusType === "active") {
-      this.runtime.recordTaskRunProgressByRunId({
-        runId,
-        lastEventAt: eventAt,
-        progressSummary: "Codex native subagent is active.",
-      });
+      this.recordProgress(runId, eventAt, "Codex native subagent is active.");
       return;
     }
     if (statusType === "idle") {
       this.terminalRunIds.add(runId);
-      this.runtime.recordTaskRunProgressByRunId({
-        runId,
-        lastEventAt: eventAt,
-        progressSummary: "Codex native subagent is idle.",
-      });
+      this.recordProgress(runId, eventAt, "Codex native subagent is idle.");
       return;
     }
     if (statusType === "systemError") {
@@ -184,11 +180,7 @@ export class CodexNativeSubagentTaskMirror {
       return;
     }
     if (statusType === "notLoaded") {
-      this.runtime.recordTaskRunProgressByRunId({
-        runId,
-        lastEventAt: eventAt,
-        progressSummary: "Codex native subagent is not loaded.",
-      });
+      this.recordProgress(runId, eventAt, "Codex native subagent is not loaded.");
     }
   }
 
@@ -260,8 +252,7 @@ export class CodexNativeSubagentTaskMirror {
       runId,
       label: "Codex subagent",
       task: prompt ?? "Codex native subagent",
-      notifyPolicy: "silent",
-      deliveryStatus: "not_applicable",
+      ...resolveNativeSubagentTaskDeliveryFields(this.params.requesterOrigin),
       preferMetadata: true,
       startedAt: createdAt,
       lastEventAt: createdAt,
@@ -275,6 +266,7 @@ export class CodexNativeSubagentTaskMirror {
     this.failedMirrorThreadIds.delete(normalizedThreadId);
     this.terminalRunIds.delete(runId);
     this.authoritativeRunIds.delete(runId);
+    this.recordProgress(runId, createdAt, "Codex native subagent spawned.");
   }
 
   private applyCollabAgentStatus(
@@ -298,26 +290,19 @@ export class CodexNativeSubagentTaskMirror {
     }
     const eventAt = this.now();
     if (normalizedStatus === "pendingInit" || normalizedStatus === "running") {
-      this.runtime.recordTaskRunProgressByRunId({
-        runId,
-        lastEventAt: eventAt,
-        progressSummary:
-          trimOptional(message) ??
-          (normalizedStatus === "pendingInit"
-            ? "Codex native subagent is initializing."
-            : "Codex native subagent is running."),
-      });
+      const summary =
+        trimOptional(message) ??
+        (normalizedStatus === "pendingInit"
+          ? "Codex native subagent is initializing."
+          : "Codex native subagent is running.");
+      this.recordProgress(runId, eventAt, summary);
       return;
     }
     if (normalizedStatus === "completed") {
       this.terminalRunIds.add(runId);
       const summary = trimOptional(message) ?? "Codex native subagent completed.";
       if (this.expectedAuthoritativeRunIds.has(runId)) {
-        this.runtime.recordTaskRunProgressByRunId({
-          runId,
-          lastEventAt: eventAt,
-          progressSummary: summary,
-        });
+        this.recordProgress(runId, eventAt, summary);
       } else {
         // Remote V1 has no trusted completion envelope or local transcript.
         // Its collab-completed state is therefore the terminal fallback.
@@ -359,11 +344,48 @@ export class CodexNativeSubagentTaskMirror {
       terminalSummary: trimOptional(message) ?? "Codex native subagent did not complete.",
     });
   }
+
+  private recordProgress(runId: string, lastEventAt: number, summary: string): void {
+    this.runtime.recordTaskRunProgressByRunId({
+      runId,
+      lastEventAt,
+      progressSummary: summary,
+      eventSummary: summary,
+    });
+  }
 }
 
 /** Converts a Codex child thread id into the OpenClaw task-runtime run id. */
 export function codexNativeSubagentRunId(threadId: string): string {
   return `${CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX}${threadId.trim()}`;
+}
+
+type NativeSubagentTaskDeliveryFields = {
+  notifyPolicy: "silent" | "state_changes";
+  deliveryStatus: "not_applicable" | "pending";
+  requesterOrigin?: AgentHarnessTaskRuntimeScope["requesterOrigin"];
+};
+
+function resolveNativeSubagentTaskDeliveryFields(
+  requesterOrigin: AgentHarnessTaskRuntimeScope["requesterOrigin"],
+): NativeSubagentTaskDeliveryFields {
+  if (!hasRequesterDeliveryOrigin(requesterOrigin)) {
+    return {
+      notifyPolicy: "silent",
+      deliveryStatus: "not_applicable",
+    };
+  }
+  return {
+    requesterOrigin,
+    notifyPolicy: "state_changes",
+    deliveryStatus: "pending",
+  };
+}
+
+function hasRequesterDeliveryOrigin(
+  requesterOrigin: AgentHarnessTaskRuntimeScope["requesterOrigin"],
+): boolean {
+  return Boolean(requesterOrigin?.channel?.trim() && requesterOrigin.to?.trim());
 }
 
 /** Reads a subagent thread-spawn source only when it belongs to the expected parent thread. */
