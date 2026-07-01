@@ -15,7 +15,8 @@ import type { GoogleChatCardV2, GoogleChatReaction } from "./types.js";
 
 const CHAT_API_BASE = "https://chat.googleapis.com/v1";
 const CHAT_UPLOAD_BASE = "https://chat.googleapis.com/upload/v1";
-const GOOGLE_CHAT_MEDIA_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+const GOOGLE_CHAT_DEFAULT_MEDIA_MAX_MB = 20;
+const GOOGLE_CHAT_MEDIA_RESPONSE_MAX_BYTES = GOOGLE_CHAT_DEFAULT_MEDIA_MAX_MB * 1024 * 1024;
 
 async function readGoogleChatJsonResponse<T>(response: Response, label: string): Promise<T> {
   return readProviderJsonResponse<T>(response, label);
