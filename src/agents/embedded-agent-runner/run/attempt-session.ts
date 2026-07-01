@@ -20,6 +20,8 @@ type EmbeddedAgentSessionOptions = {
   resourceLoader: unknown;
   resolveDeferredTool?: CreateAgentSessionOptions["resolveDeferredTool"];
   withSessionWriteLock?: CreateAgentSessionOptions["withSessionWriteLock"];
+  storePath?: string;
+  sessionKey?: string;
 };
 
 /** Invokes the supplied session factory with the prepared embedded-agent session options. */
