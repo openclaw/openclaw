@@ -239,6 +239,30 @@ describe("OpenAI-compatible image provider helper", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("preserves OpenAI-compatible usage metadata when the provider returns it", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: jsonResponse({
+        data: [{ b64_json: Buffer.from("image-bytes").toString("base64") }],
+        usage: { input_tokens: 12, output_tokens: 345, total_tokens: 357 },
+      }),
+      release,
+    });
+    const provider = createProvider();
+
+    const result = await provider.generateImage({
+      provider: "sample",
+      model: "sample-image",
+      prompt: "usage please",
+      cfg: {} as never,
+    });
+
+    expect(result.metadata).toEqual({
+      usage: { input_tokens: 12, output_tokens: 345, total_tokens: 357 },
+    });
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("accepts valid multi-image JSON above the generic provider JSON cap", async () => {
     const imageBytes = Buffer.alloc(6 * 1024 * 1024, 1);
     postJsonRequestMock.mockResolvedValue({
