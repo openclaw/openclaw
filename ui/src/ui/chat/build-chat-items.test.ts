@@ -1153,7 +1153,7 @@ describe("tool turn outcome annotation (#89683)", () => {
     return { role: "user", content: text, timestamp };
   }
   function assistantReply(text: string, timestamp: number) {
-    return { role: "assistant", content: [{ type: "text", text }], timestamp };
+    return { role: "assistant", content: [{ type: "text", text }], stopReason: "stop", timestamp };
   }
   function toolGroups(messages: unknown[]): MessageGroup[] {
     return messageGroups({ messages }).filter((group) => group.role === "tool");
@@ -1193,5 +1193,68 @@ describe("tool turn outcome annotation (#89683)", () => {
       failedTool(5),
     ]);
     expect(tools.map((group) => group.turnSucceeded)).toEqual([true, false]);
+  });
+
+  it("keeps empty continuing assistant groups inside the same successful turn", () => {
+    const tools = toolGroups([
+      failedTool(1),
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "" }],
+        stopReason: "toolUse",
+        timestamp: 2,
+      },
+      failedTool(3),
+      assistantReply("done", 4),
+    ]);
+    expect(tools).toHaveLength(1);
+    expect(tools[0].messages).toHaveLength(2);
+    expect(tools[0].turnSucceeded).toBe(true);
+  });
+
+  it.each([
+    { name: "silent stop", stopReason: "stop", text: "" },
+    { name: "truncated reply", stopReason: "length", text: "" },
+    {
+      name: "projected error fallback",
+      stopReason: "error",
+      text: "The agent run failed before producing a reply.",
+    },
+    { name: "aborted reply", stopReason: "aborted", text: "" },
+  ])("scopes adjacent autonomous turns at a terminal $name (#97849)", ({ stopReason, text }) => {
+    const tools = toolGroups([
+      failedTool(1),
+      {
+        role: "assistant",
+        content: [{ type: "text", text }],
+        stopReason,
+        timestamp: 2,
+      },
+      failedTool(3),
+      assistantReply("done", 4),
+    ]);
+    expect(tools.map((group) => group.turnSucceeded)).toEqual([false, true]);
+  });
+
+  it.each([
+    {
+      name: "later error",
+      assistants: [
+        assistantReply("done", 2),
+        { role: "assistant", content: "failed", stopReason: "error", timestamp: 3 },
+      ],
+      expected: true,
+    },
+    {
+      name: "later success",
+      assistants: [
+        { role: "assistant", content: "failed", stopReason: "error", timestamp: 2 },
+        assistantReply("done", 3),
+      ],
+      expected: false,
+    },
+  ])("uses the earliest $name boundary after a tool when assistant groups coalesce", (testCase) => {
+    const tools = toolGroups([failedTool(1), ...testCase.assistants]);
+    expect(tools[0].turnSucceeded).toBe(testCase.expected);
   });
 });

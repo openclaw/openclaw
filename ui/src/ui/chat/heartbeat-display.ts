@@ -111,5 +111,14 @@ export function isAssistantHeartbeatAckForDisplay(message: unknown): boolean {
   if (hasVisibleNonTextContent) {
     return false;
   }
+  if (
+    !text.trim() &&
+    (entry.stopReason === "stop" ||
+      entry.stopReason === "length" ||
+      entry.stopReason === "error" ||
+      entry.stopReason === "aborted")
+  ) {
+    return false;
+  }
   return stripHeartbeatTokenForDisplay(text).shouldSkip;
 }
