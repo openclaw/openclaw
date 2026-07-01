@@ -24,7 +24,14 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { hasReplyPayloadContent } from "../../../interactive/payload.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { isCronSessionKey } from "../../../routing/session-key.js";
-import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
+import {
+  extractAssistantTextForPhase,
+  parseAssistantTextSignature,
+} from "../../../shared/chat-message-content.js";
+import {
+  sanitizeAssistantFinalAnswerText,
+  sanitizeAssistantVisibleText,
+} from "../../../shared/text/assistant-visible-text.js";
 import { parseInlineDirectives } from "../../../utils/directive-tags.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
@@ -112,14 +119,62 @@ function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
   return level === "full";
 }
 
+function isAssistantTextContentBlockType(value: unknown): boolean {
+  return value === "text" || value === "input_text" || value === "output_text";
+}
+
 function resolveRawAssistantAnswerText(lastAssistant: AssistantMessage | undefined): string {
   if (!lastAssistant) {
     return "";
   }
+  const finalAnswerText = extractAssistantTextForPhase(lastAssistant, {
+    phase: "final_answer",
+    sanitizeText: sanitizeAssistantFinalAnswerText,
+  });
+  if (finalAnswerText) {
+    return normalizeOptionalString(finalAnswerText) ?? "";
+  }
+  if (Array.isArray(lastAssistant.content)) {
+    const hasExplicitPhasedTextBlock = lastAssistant.content.some((block) => {
+      if (!block || typeof block !== "object") {
+        return false;
+      }
+      const record = block as { type?: unknown; textSignature?: unknown };
+      return (
+        isAssistantTextContentBlockType(record.type) &&
+        Boolean(parseAssistantTextSignature(record.textSignature)?.phase)
+      );
+    });
+    if (!hasExplicitPhasedTextBlock) {
+      const signedUnphasedParts = lastAssistant.content
+        .map((block) => {
+          if (!block || typeof block !== "object") {
+            return null;
+          }
+          const record = block as { type?: unknown; text?: unknown; textSignature?: unknown };
+          const signature = parseAssistantTextSignature(record.textSignature);
+          if (
+            !isAssistantTextContentBlockType(record.type) ||
+            typeof record.text !== "string" ||
+            !signature?.id ||
+            signature.phase
+          ) {
+            return null;
+          }
+          const text = sanitizeAssistantFinalAnswerText(record.text);
+          return text.trim() ? text : null;
+        })
+        .filter((value): value is string => typeof value === "string");
+      if (signedUnphasedParts.length) {
+        return normalizeOptionalString(signedUnphasedParts.join("\n")) ?? "";
+      }
+    }
+  }
   return (
     normalizeOptionalString(
-      extractAssistantTextForPhase(lastAssistant, { phase: "final_answer" }) ??
-        extractAssistantTextForPhase(lastAssistant),
+      extractAssistantTextForPhase(lastAssistant, {
+        sanitizeText: sanitizeAssistantVisibleText,
+      }),
     ) ?? ""
   );
 }
@@ -535,6 +590,8 @@ export function buildEmbeddedRunPayloads(params: {
     mediaUrl?: string;
     isError?: boolean;
     isReasoning?: boolean;
+    /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
+    isCommentary?: boolean;
     audioAsVoice?: boolean;
     replyToId?: string;
     replyToTag?: boolean;
@@ -548,10 +605,9 @@ export function buildEmbeddedRunPayloads(params: {
     };
   }> = [];
 
-  const sourceReplyPayloads =
-    params.sourceReplyDeliveryMode === "message_tool_only"
-      ? (params.messagingToolSourceReplyPayloads ?? [])
-      : [];
+  // Internal source replies always need transcript/UI mirror payloads. Only a
+  // message_tool_only run suppresses the separate automatic final answer.
+  const sourceReplyPayloads = params.messagingToolSourceReplyPayloads ?? [];
   const sourceReplyStartIndex = replyItems.length;
   sourceReplyPayloads.forEach((payload, index) => {
     const text = normalizeOptionalString(payload.text) ?? "";
@@ -592,7 +648,7 @@ export function buildEmbeddedRunPayloads(params: {
   const useMarkdown = params.toolResultFormat === "markdown";
   const suppressAssistantArtifacts =
     params.didSendDeterministicApprovalPrompt === true ||
-    hasSourceReplyPayload ||
+    (params.sourceReplyDeliveryMode === "message_tool_only" && hasSourceReplyPayload) ||
     deliveredSourceReplyViaMessageTool;
   const nonEmptyAssistantTexts = params.assistantTexts.filter((text) => text.trim().length > 0);
   const currentAssistant = params.currentAssistant ?? undefined;

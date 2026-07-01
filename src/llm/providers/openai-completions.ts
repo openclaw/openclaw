@@ -17,6 +17,13 @@ import {
   type OpenAICompletionsToolChoice,
   type OpenAIToolProjection,
 } from "../../agents/openai-tool-projection.js";
+import { buildGuardedModelFetch } from "../../agents/provider-transport-fetch.js";
+import {
+  createFirstStreamEventAbortController,
+  getFirstStreamEventTimeoutHandler,
+  getFirstStreamEventTimeoutMs,
+  withFirstStreamEventTimeout,
+} from "../../agents/stream-first-event-timeout.js";
 import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
@@ -51,6 +58,7 @@ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copi
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { mapOpenAIStopReason } from "./openai-stop-reason.js";
 import { buildBaseOptions } from "./simple-options.js";
+import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 /**
@@ -91,7 +99,6 @@ function isImageContentBlock(block: { type: string }): block is ImageContent {
 }
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
-const IMAGE_TOOL_RESULT_TEXT = "(see attached image)";
 
 function sanitizeToolResultText(text: string, fallback: string): string {
   const sanitized = sanitizeSurrogates(text);
@@ -152,6 +159,7 @@ export const streamOpenAICompletions: StreamFunction<
       timestamp: Date.now(),
     };
 
+    let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
     try {
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
       const compat = getCompat(model);
@@ -163,8 +171,9 @@ export const streamOpenAICompletions: StreamFunction<
       if (nextParams !== undefined) {
         params = nextParams as typeof params;
       }
+      firstEventAbort = createFirstStreamEventAbortController(options?.signal);
       const requestOptions = {
-        ...(options?.signal ? { signal: options.signal } : {}),
+        signal: firstEventAbort.signal,
         ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
         ...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
       };
@@ -362,7 +371,18 @@ export const streamOpenAICompletions: StreamFunction<
         }
       };
 
-      for await (const chunk of openaiStream) {
+      const guardedOpenaiStream = withFirstStreamEventTimeout(openaiStream, {
+        provider: model.provider,
+        api: model.api,
+        model: model.id,
+        timeoutMs: getFirstStreamEventTimeoutMs(options) ?? 0,
+        stage: "completions",
+        abort: firstEventAbort.abort,
+        onTimeout: getFirstStreamEventTimeoutHandler(options),
+        hint: "The provider may be stalled while parsing the tool payload; retry with a smaller tool surface or enable OPENCLAW_DEBUG_MODEL_PAYLOAD=tools to inspect exposed tools.",
+      });
+
+      for await (const chunk of guardedOpenaiStream) {
         if (!chunk || typeof chunk !== "object") {
           continue;
         }
@@ -535,6 +555,8 @@ export const streamOpenAICompletions: StreamFunction<
       }
       stream.push({ type: "error", reason: output.stopReason, error: output });
       stream.end();
+    } finally {
+      firstEventAbort?.dispose();
     }
   })();
 
@@ -616,6 +638,7 @@ function createClient(
     baseURL: isCloudflareProvider(model.provider) ? resolveCloudflareBaseUrl(model) : model.baseUrl,
     dangerouslyAllowBrowser: true,
     defaultHeaders,
+    fetch: buildGuardedModelFetch(model),
   });
 }
 
@@ -1136,16 +1159,14 @@ export function convertMessages(
         const toolMsg = transformedMessages[j] as ToolResultMessage;
 
         // Extract text and image content
-        const textResult = toolMsg.content
-          .filter(isTextContentBlock)
-          .map((block) => block.text)
-          .join("\n");
+        const textResult = extractToolResultText(toolMsg.content);
+        const mediaPlaceholder = describeToolResultMediaPlaceholder(toolMsg.content);
         const hasImages = toolMsg.content.some((c) => c.type === "image");
 
         // Always send tool result with text (or placeholder if only images)
         const content = sanitizeToolResultText(
           textResult,
-          hasImages ? IMAGE_TOOL_RESULT_TEXT : EMPTY_TOOL_RESULT_TEXT,
+          mediaPlaceholder ?? EMPTY_TOOL_RESULT_TEXT,
         );
         // Some providers require the 'name' field in tool results
         const toolResultMsg: ChatCompletionToolMessageParam = {

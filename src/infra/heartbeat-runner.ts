@@ -121,6 +121,7 @@ import {
   isRelayableExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
+import { HEARTBEAT_RUN_SCOPE, type HeartbeatRunScope } from "./heartbeat-run-scope.js";
 import {
   computeNextHeartbeatPhaseDueMs,
   resolveHeartbeatPhaseMs,
@@ -1015,6 +1016,7 @@ async function resolveHeartbeatPreflight(params: {
   cfg: OpenClawConfig;
   agentId: string;
   heartbeat?: HeartbeatConfig;
+  runScope: HeartbeatRunScope;
   forcedSessionKey?: string;
   reason?: string;
   source?: HeartbeatWakeSource;
@@ -1030,7 +1032,8 @@ async function resolveHeartbeatPreflight(params: {
     params.heartbeat,
     params.forcedSessionKey,
   );
-  const pendingEventEntries = peekSystemEventEntries(session.sessionKey);
+  const pendingEventEntries =
+    params.runScope === "commitment-only" ? [] : peekSystemEventEntries(session.sessionKey);
   const dueCommitments = canHeartbeatDeliverCommitments(params.heartbeat)
     ? selectCommitmentDeliveryBatch(
         await listDueCommitmentsForSession({
@@ -1068,6 +1071,7 @@ async function resolveHeartbeatPreflight(params: {
     shouldInspectWakePendingEvents ||
     hasTaggedCronEvents;
   const shouldBypassFileGates =
+    params.runScope === "commitment-only" ||
     wakeFlags.isExecEventWake ||
     wakeFlags.isCronWake ||
     wakeFlags.isWakePayload ||
@@ -1221,6 +1225,7 @@ function resolveHeartbeatRunPrompt(params: {
   dueTasks: HeartbeatTask[];
   heartbeatFileContent?: string;
   useHeartbeatResponseTool: boolean;
+  runScope: HeartbeatRunScope;
 }): HeartbeatPromptResolution {
   const pendingEventEntries = params.preflight.pendingEventEntries;
   const cronEvents = pendingEventEntries
@@ -1244,6 +1249,26 @@ function resolveHeartbeatRunPrompt(params: {
     useHeartbeatResponseTool: false,
   });
   const hasDueCommitments = Boolean(commitmentPrompt);
+  if (params.runScope === "commitment-only") {
+    if (commitmentPrompt) {
+      return {
+        prompt: commitmentPrompt,
+        hasExecCompletion: false,
+        hasRelayableExecCompletion: false,
+        hasCronEvents: false,
+        hasDueCommitments,
+        usesHeartbeatResponseTool: false,
+      };
+    }
+    return {
+      prompt: null,
+      hasExecCompletion: false,
+      hasRelayableExecCompletion: false,
+      hasCronEvents: false,
+      hasDueCommitments: false,
+      usesHeartbeatResponseTool: false,
+    };
+  }
 
   if (params.preflight.tasks && params.preflight.tasks.length > 0) {
     const dueTasks = params.dueTasks;
@@ -1343,6 +1368,32 @@ function selectSystemEventsConsumedByHeartbeat(params: {
   return preflight.pendingEventEntries;
 }
 
+// Recovery fields a completed heartbeat delivery must clear. Mirrors the
+// canonical clearPendingFinalDeliveryAfterSuccess in dispatch-from-config.ts so
+// the send-success and duplicate-skip paths drop the exact same set; leaving any
+// behind keeps the session stuck on a delivery that already happened.
+const CLEARED_PENDING_FINAL_DELIVERY_FIELDS = {
+  pendingFinalDelivery: undefined,
+  pendingFinalDeliveryText: undefined,
+  pendingFinalDeliveryCreatedAt: undefined,
+  pendingFinalDeliveryLastAttemptAt: undefined,
+  pendingFinalDeliveryAttemptCount: undefined,
+  pendingFinalDeliveryLastError: undefined,
+  pendingFinalDeliveryContext: undefined,
+  pendingFinalDeliveryIntentId: undefined,
+} as const;
+
+// Clear pending-final only when this run produced it: the agent run stamps
+// createdAt during the run, so createdAt >= run start means we own it. An older
+// final (e.g. one a message_tool_only run never refreshed) must keep its recovery path.
+function heartbeatRunOwnsPendingFinalDelivery(
+  entry: SessionEntry | undefined,
+  runStartedAt: number,
+): boolean {
+  const createdAt = entry?.pendingFinalDeliveryCreatedAt;
+  return typeof createdAt === "number" && createdAt >= runStartedAt;
+}
+
 export async function runHeartbeatOnce(opts: {
   cfg?: OpenClawConfig;
   agentId?: string;
@@ -1351,6 +1402,7 @@ export async function runHeartbeatOnce(opts: {
   source?: HeartbeatWakeSource;
   intent?: HeartbeatWakeIntent;
   reason?: string;
+  runScope?: HeartbeatRunScope;
   deps?: HeartbeatDeps;
 }): Promise<HeartbeatRunResult> {
   const cfg = opts.cfg ?? getRuntimeConfig();
@@ -1367,6 +1419,7 @@ export async function runHeartbeatOnce(opts: {
     source: opts.source,
     mergeRequestedHeartbeat: opts.source === "cron",
   });
+  const runScope = opts.runScope ?? "global";
   if (!areHeartbeatsEnabled()) {
     return { status: "skipped", reason: "disabled" };
   }
@@ -1458,6 +1511,7 @@ export async function runHeartbeatOnce(opts: {
     cfg,
     agentId,
     heartbeat,
+    runScope,
     forcedSessionKey: opts.sessionKey,
     source: opts.source,
     reason: opts.reason,
@@ -1497,7 +1551,8 @@ export async function runHeartbeatOnce(opts: {
   }
 
   const previousUpdatedAt = entry?.updatedAt;
-  const dueHeartbeatTasks = resolveDueHeartbeatTasks(preflight, startedAt);
+  const dueHeartbeatTasks =
+    runScope === "commitment-only" ? [] : resolveDueHeartbeatTasks(preflight, startedAt);
 
   // When isolatedSession is enabled, create a fresh session via the same
   // pattern as cron sessionTarget: "isolated". This gives the heartbeat
@@ -1593,6 +1648,7 @@ export async function runHeartbeatOnce(opts: {
     dueTasks: dueHeartbeatTasks,
     heartbeatFileContent: preflight.heartbeatFileContent,
     useHeartbeatResponseTool: useHeartbeatResponseToolPrompt,
+    runScope,
   });
   const dueCommitmentIds = hasDueCommitments
     ? preflight.dueCommitments.map((commitment) => commitment.id)
@@ -1696,10 +1752,11 @@ export async function runHeartbeatOnce(opts: {
   }
   // Update task last run times AFTER successful heartbeat completion
   const updateTaskTimestamps = async () => {
-    if (!preflight.tasks || preflight.tasks.length === 0) {
+    if (!preflight.tasks || preflight.tasks.length === 0 || dueHeartbeatTasks.length === 0) {
       return;
     }
     const tasks = preflight.tasks;
+    const dueTaskNames = new Set(dueHeartbeatTasks.map((task) => task.name));
 
     await updateSessionStore(storePath, (store) => {
       const current = store[sessionKey];
@@ -1716,13 +1773,40 @@ export async function runHeartbeatOnce(opts: {
       const taskState = { ...base.heartbeatTaskState };
 
       for (const task of tasks) {
-        if (isTaskDue(taskState[task.name], task.interval, startedAt)) {
+        if (dueTaskNames.has(task.name)) {
           taskState[task.name] = startedAt;
         }
       }
 
       store[sessionKey] = { ...base, heartbeatTaskState: taskState };
     });
+  };
+
+  // The duplicate-suppression branch returns before any send, so it never hits
+  // the send-success clear. A duplicate means this run's own output was already
+  // delivered within the dedupe window, so this run's pending-final is satisfied
+  // and gets cleared the same way the send-success path does. We must not
+  // text-match the pending against the delivered text: agent-runner stores it
+  // pre-normalization (no responsePrefix), so a byte compare would leave
+  // prefixed agents permanently stuck. Ownership is gated on createdAt instead,
+  // so an older final this run did not produce is preserved, not erased.
+  const clearSatisfiedPendingFinalDelivery = async () => {
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        const current = store[sessionKey];
+        if (current?.pendingFinalDelivery !== true && !current?.pendingFinalDeliveryText) {
+          return false;
+        }
+        if (!heartbeatRunOwnsPendingFinalDelivery(current, startedAt)) {
+          return false;
+        }
+        store[sessionKey] = { ...current, ...CLEARED_PENDING_FINAL_DELIVERY_FIELDS };
+        return true;
+      },
+      // No pending to clear is the common case; avoid rewriting the store then.
+      { skipSaveWhenResult: (cleared) => !cleared },
+    );
   };
 
   const consumeInspectedSystemEvents = () => {
@@ -1847,6 +1931,7 @@ export async function runHeartbeatOnce(opts: {
     const replyOperationRunState: ReplyOperationRunState = {};
     const replyOpts = {
       isHeartbeat: true,
+      [HEARTBEAT_RUN_SCOPE]: runScope,
       [REPLY_OPERATION_RUN_STATE]: replyOperationRunState,
       ...(heartbeatModelOverride ? { heartbeatModelOverride } : {}),
       suppressToolErrorWarnings,
@@ -2041,6 +2126,7 @@ export async function runHeartbeatOnce(opts: {
         sessionKey,
         updatedAt: previousUpdatedAt,
       });
+      await clearSatisfiedPendingFinalDelivery();
 
       emitHeartbeatEvent({
         status: "skipped",
@@ -2173,10 +2259,18 @@ export async function runHeartbeatOnce(opts: {
         if (!current) {
           return;
         }
+        // A heartbeat-driven agent run can leave its own pendingFinalDelivery
+        // set; a successful send completes it, so clear the recovery fields.
+        // Only clear the pending-final this run owns — an older final the run
+        // did not produce keeps its own recovery path.
+        const clearedRecoveryFields = heartbeatRunOwnsPendingFinalDelivery(current, startedAt)
+          ? CLEARED_PENDING_FINAL_DELIVERY_FIELDS
+          : {};
         store[sessionKey] = {
           ...current,
           lastHeartbeatText: normalized.text,
           lastHeartbeatSentAt: startedAt,
+          ...clearedRecoveryFields,
         };
       });
     }
@@ -2506,6 +2600,7 @@ export function startHeartbeatRunner(opts: {
             source: params.source,
             intent,
             reason,
+            runScope: "global",
             sessionKey: requestedSessionKey,
             deps: { runtime: state.runtime },
           });
@@ -2563,6 +2658,7 @@ export function startHeartbeatRunner(opts: {
             source: params.source,
             intent,
             reason,
+            runScope: "global",
             deps: { runtime: state.runtime },
           });
         } catch (err) {
@@ -2611,7 +2707,7 @@ export function startHeartbeatRunner(opts: {
               cfg: state.cfg,
               agentId: agent.agentId,
               heartbeat: agent.heartbeat,
-              reason: "commitment",
+              runScope: "commitment-only",
               sessionKey: dueSessionKey,
               deps: { runtime: state.runtime },
             });

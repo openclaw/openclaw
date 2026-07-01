@@ -87,6 +87,10 @@ const serviceReadCommand = vi.fn<
 const resolveGatewayBindHost = vi.fn(
   async (_bindMode?: string, _customBindHost?: string) => "0.0.0.0",
 );
+const resolveAdvertisedControlUiLinks = vi.fn(async (_opts?: unknown) => ({
+  httpUrl: "https://10.211.55.3:19001/",
+  wsUrl: "wss://10.211.55.3:19001",
+}));
 const pickPrimaryTailnetIPv4 = vi.fn(() => "100.64.0.9");
 const resolveGatewayPort = vi.fn((_cfg?: unknown, _env?: unknown) => 18789);
 const resolveStateDir = vi.fn(
@@ -185,6 +189,10 @@ vi.mock("../../gateway/net.js", () => ({
     resolveGatewayBindHost(bindMode, customBindHost),
 }));
 
+vi.mock("../../gateway/control-ui-links.js", () => ({
+  resolveAdvertisedControlUiLinks: (opts?: unknown) => resolveAdvertisedControlUiLinks(opts),
+}));
+
 vi.mock("../../gateway/probe-auth.js", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
@@ -259,6 +267,11 @@ describe("gatherDaemonStatus", () => {
     deleteTestEnvValue("DAEMON_GATEWAY_TOKEN");
     deleteTestEnvValue("DAEMON_GATEWAY_PASSWORD");
     callGatewayStatusProbe.mockClear();
+    resolveAdvertisedControlUiLinks.mockClear();
+    resolveAdvertisedControlUiLinks.mockResolvedValue({
+      httpUrl: "https://10.211.55.3:19001/",
+      wsUrl: "wss://10.211.55.3:19001",
+    });
     resolveGatewayProbeAuthSafeWithSecretInputsCalls.mockClear();
     createConfigIOCalls.mockClear();
     findStaleOpenClawUpdateLaunchdJobs.mockReset();
@@ -308,6 +321,10 @@ describe("gatherDaemonStatus", () => {
     expect(probeInput.tlsFingerprint).toBe("sha256:11:22:33:44");
     expect(probeInput.token).toBe("daemon-token");
     expect(status.gateway?.probeUrl).toBe("wss://127.0.0.1:19001");
+    expect(status.gateway?.controlUiLinks).toEqual({
+      httpUrl: "https://10.211.55.3:19001/",
+      wsUrl: "wss://10.211.55.3:19001",
+    });
     expect(status.gateway?.tlsEnabled).toBe(true);
     expect(status.gateway?.version).toBe("2026.5.6");
     expect(status.rpc?.url).toBe("wss://127.0.0.1:19001");

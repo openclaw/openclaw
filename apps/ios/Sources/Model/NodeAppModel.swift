@@ -2209,6 +2209,14 @@ extension NodeAppModel {
         self.gatewayPairingRequestId = nil
     }
 
+    func beginGatewayPreconnectVerification(statusText: String) {
+        self.lastGatewayProblem = nil
+        self.operatorGatewayProblem = nil
+        self.gatewayPairingPaused = false
+        self.gatewayPairingRequestId = nil
+        self.gatewayStatusText = statusText
+    }
+
     private func applyGatewayConnectionProblem(_ problem: GatewayConnectionProblem) {
         guard !self.isLocalGatewayFixtureEnabled else { return }
         self.lastGatewayProblem = problem

@@ -14,6 +14,18 @@ const probeGatewayReachable = vi.hoisted(() =>
 const waitForGatewayReachable = vi.hoisted(() =>
   vi.fn<() => Promise<{ ok: boolean; detail?: string }>>(async () => ({ ok: true })),
 );
+const resolveAdvertisedControlUiLinks = vi.hoisted(() =>
+  vi.fn(async () => ({
+    httpUrl: "http://127.0.0.1:18789",
+    wsUrl: "ws://127.0.0.1:18789",
+  })),
+);
+const resolveLocalControlUiProbeLinks = vi.hoisted(() =>
+  vi.fn(() => ({
+    httpUrl: "http://127.0.0.1:18789",
+    wsUrl: "ws://127.0.0.1:18789",
+  })),
+);
 const setupWizardShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const buildGatewayInstallPlan = vi.hoisted(() =>
@@ -67,16 +79,24 @@ const hasAuthProfileForProvider = vi.hoisted(() =>
     }) => boolean
   >(() => false),
 );
+const isContainerEnvironment = vi.hoisted(() => vi.fn(() => false));
+const startGatewayServer = vi.hoisted(() =>
+  vi.fn(async () => ({
+    close: vi.fn(async () => {}),
+  })),
+);
 
 vi.mock("../commands/onboard-helpers.js", () => ({
   detectBrowserOpenSupport: vi.fn(async () => ({ ok: false })),
   formatControlUiSshHint: vi.fn(() => "ssh hint"),
   openUrl: vi.fn(async () => false),
   probeGatewayReachable,
+  resolveAdvertisedControlUiLinks,
   resolveControlUiLinks: vi.fn(() => ({
     httpUrl: "http://127.0.0.1:18789",
     wsUrl: "ws://127.0.0.1:18789",
   })),
+  resolveLocalControlUiProbeLinks,
   waitForGatewayReachable,
 }));
 
@@ -149,6 +169,14 @@ vi.mock("../daemon/systemd.js", () => ({
 
 vi.mock("../infra/control-ui-assets.js", () => ({
   ensureControlUiAssetsBuilt: vi.fn(async () => ({ ok: true })),
+}));
+
+vi.mock("../infra/container-environment.js", () => ({
+  isContainerEnvironment,
+}));
+
+vi.mock("../gateway/server.js", () => ({
+  startGatewayServer,
 }));
 
 vi.mock("../../packages/terminal-core/src/restore.js", () => ({
@@ -288,13 +316,37 @@ function expectNoteTitleNotCalled(
   expect(calls.filter((call) => call[1] === title)).toEqual([]);
 }
 
+async function withPlatform<T>(platform: NodeJS.Platform, fn: () => Promise<T>): Promise<T> {
+  const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", {
+    configurable: true,
+    value: platform,
+  });
+  try {
+    return await fn();
+  } finally {
+    Object.defineProperty(process, "platform", originalPlatformDescriptor);
+  }
+}
+
 describe("finalizeSetupWizard", () => {
   beforeEach(() => {
     launchTuiCli.mockClear();
     restoreTerminalState.mockClear();
-    probeGatewayReachable.mockClear();
+    probeGatewayReachable.mockReset();
+    probeGatewayReachable.mockResolvedValue({ ok: false, detail: "offline" });
     waitForGatewayReachable.mockReset();
     waitForGatewayReachable.mockResolvedValue({ ok: true });
+    resolveAdvertisedControlUiLinks.mockReset();
+    resolveAdvertisedControlUiLinks.mockResolvedValue({
+      httpUrl: "http://127.0.0.1:18789",
+      wsUrl: "ws://127.0.0.1:18789",
+    });
+    resolveLocalControlUiProbeLinks.mockReset();
+    resolveLocalControlUiProbeLinks.mockReturnValue({
+      httpUrl: "http://127.0.0.1:18789",
+      wsUrl: "ws://127.0.0.1:18789",
+    });
     setupWizardShellCompletion.mockClear();
     healthCommand.mockReset();
     healthCommand.mockResolvedValue(undefined);
@@ -322,6 +374,10 @@ describe("finalizeSetupWizard", () => {
     listConfiguredWebSearchProviders.mockReturnValue([]);
     hasAuthProfileForProvider.mockReset();
     hasAuthProfileForProvider.mockReturnValue(false);
+    isContainerEnvironment.mockReset();
+    isContainerEnvironment.mockReturnValue(false);
+    startGatewayServer.mockReset();
+    startGatewayServer.mockResolvedValue({ close: vi.fn(async () => {}) });
   });
 
   it("resolves gateway password SecretRef for probe but omits auth from TUI hatch", async () => {
@@ -396,12 +452,57 @@ describe("finalizeSetupWizard", () => {
     };
     expect(probeParams.url).toBe("ws://127.0.0.1:18789");
     expect(probeParams.password).toBe("resolved-gateway-password"); // pragma: allowlist secret
-    expect(launchTuiCli).toHaveBeenCalledWith({
-      local: true,
-      deliver: false,
-      message: undefined,
-      timeoutMs: 300_000,
+    expect(launchTuiCli).toHaveBeenCalledWith(
+      {
+        local: true,
+        deliver: false,
+        message: undefined,
+        timeoutMs: 300_000,
+      },
+      {},
+    );
+  });
+
+  it("advertises LAN Control UI links while probing the local gateway", async () => {
+    resolveAdvertisedControlUiLinks.mockResolvedValueOnce({
+      httpUrl: "http://10.211.55.3:18789/",
+      wsUrl: "ws://10.211.55.3:18789",
     });
+    resolveLocalControlUiProbeLinks.mockReturnValue({
+      httpUrl: "http://127.0.0.1:18789/",
+      wsUrl: "ws://127.0.0.1:18789",
+    });
+    const prompter = createLaterPrompter();
+    const args = createAdvancedFinalizeArgs({
+      nextConfig: {
+        gateway: {
+          bind: "lan",
+        },
+      },
+      prompter,
+    });
+
+    await finalizeSetupWizard({
+      ...args,
+      opts: {
+        ...args.opts,
+        skipHealth: false,
+        skipUi: false,
+      },
+      settings: {
+        ...args.settings,
+        bind: "lan",
+      },
+    });
+
+    expect(resolveAdvertisedControlUiLinks).toHaveBeenCalledWith(
+      expect.objectContaining({ bind: "lan", port: 18789 }),
+    );
+    expect(waitForGatewayReachable).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
+    );
+    expectNoteContains(prompter, "http://10.211.55.3:18789/", "Control UI");
+    expectNoteContains(prompter, "ws://10.211.55.3:18789", "Control UI");
   });
 
   it("bounds the bootstrap hatch TUI run timeout", async () => {
@@ -441,12 +542,57 @@ describe("finalizeSetupWizard", () => {
       runtime: createRuntime(),
     });
 
-    expect(launchTuiCli).toHaveBeenCalledWith({
-      local: true,
-      deliver: false,
-      message: "Wake up, my friend!",
-      timeoutMs: 300_000,
+    expect(launchTuiCli).toHaveBeenCalledWith(
+      {
+        local: true,
+        deliver: false,
+        message: "Wake up, my friend!",
+        timeoutMs: 300_000,
+      },
+      {},
+    );
+  });
+
+  it("does not resend the bootstrap hatch message on setup reruns", async () => {
+    vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
+    const prompter = buildWizardPrompter({
+      confirm: vi.fn(async () => false),
     });
+
+    await finalizeSetupWizard({
+      flow: "quickstart",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipHealth: true,
+        skipUi: false,
+      },
+      baseConfig: {},
+      hadExistingConfig: true,
+      nextConfig: {},
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: undefined,
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(launchTuiCli).toHaveBeenCalledWith(
+      {
+        local: true,
+        deliver: false,
+        message: undefined,
+        timeoutMs: 300_000,
+      },
+      {},
+    );
   });
 
   it("localizes the bootstrap hatch TUI seed message", async () => {
@@ -489,12 +635,15 @@ describe("finalizeSetupWizard", () => {
         runtime: createRuntime(),
       });
 
-      expect(launchTuiCli).toHaveBeenCalledWith({
-        local: true,
-        deliver: false,
-        message: "醒醒，我的朋友！",
-        timeoutMs: 300_000,
-      });
+      expect(launchTuiCli).toHaveBeenCalledWith(
+        {
+          local: true,
+          deliver: false,
+          message: "醒醒，我的朋友！",
+          timeoutMs: 300_000,
+        },
+        {},
+      );
     } finally {
       if (previousLocale === undefined) {
         delete process.env.OPENCLAW_LOCALE;
@@ -502,6 +651,42 @@ describe("finalizeSetupWizard", () => {
         process.env.OPENCLAW_LOCALE = previousLocale;
       }
     }
+  });
+
+  it("prints completion before handing off to the TUI", async () => {
+    const prompter = createLaterPrompter();
+
+    await finalizeSetupWizard({
+      flow: "quickstart",
+      opts: {
+        acceptRisk: true,
+        authChoice: "skip",
+        installDaemon: false,
+        skipHealth: true,
+        skipUi: false,
+      },
+      baseConfig: {},
+      nextConfig: {},
+      workspaceDir: "/tmp",
+      settings: {
+        port: 18789,
+        bind: "loopback",
+        authMode: "token",
+        gatewayToken: undefined,
+        tailscaleMode: "off",
+        tailscaleResetOnExit: false,
+      },
+      prompter,
+      runtime: createRuntime(),
+    });
+
+    expect(prompter.outro).toHaveBeenCalledWith(
+      "Onboarding complete. Use the dashboard link above to control OpenClaw.",
+    );
+    expect(launchTuiCli).toHaveBeenCalledOnce();
+    expect(vi.mocked(prompter.outro).mock.invocationCallOrder[0]).toBeLessThan(
+      launchTuiCli.mock.invocationCallOrder[0],
+    );
   });
 
   it("restores terminal state after failed TUI hatch", async () => {
@@ -930,6 +1115,134 @@ describe("finalizeSetupWizard", () => {
     expect(healthArgs.config?.gateway?.auth?.mode).toBe("token");
     expect(healthArgs.config?.gateway?.auth?.token).toBe("session-token");
     expect(requireMockArg(healthCommand, 0, 1)).toBeTypeOf("object");
+  });
+
+  it("labels unavailable systemd as container runtime information in containers", async () => {
+    await withPlatform("linux", async () => {
+      isSystemdUserServiceAvailable.mockResolvedValue(false);
+      isContainerEnvironment.mockReturnValue(true);
+      const prompter = createLaterPrompter();
+
+      await finalizeSetupWizard(createAdvancedFinalizeArgs({ prompter }));
+
+      expectNoteContains(
+        prompter,
+        "Systemd user services are not available inside this container.",
+        "Container runtime",
+      );
+      expectNoteTitleNotCalled(prompter, "Systemd");
+      expect(gatewayServiceInstall).not.toHaveBeenCalled();
+    });
+  });
+
+  it("starts a session gateway and launches gateway-backed TUI in containers without systemd", async () => {
+    await withPlatform("linux", async () => {
+      isSystemdUserServiceAvailable.mockResolvedValue(false);
+      isContainerEnvironment.mockReturnValue(true);
+      waitForGatewayReachable.mockResolvedValue({ ok: true });
+      probeGatewayReachable.mockResolvedValue({ ok: true });
+      const sessionGateway = { close: vi.fn(async () => {}) };
+      startGatewayServer.mockResolvedValueOnce(sessionGateway);
+      const prompter = createLaterPrompter();
+
+      await finalizeSetupWizard({
+        flow: "quickstart",
+        opts: {
+          acceptRisk: true,
+          authChoice: "skip",
+          installDaemon: undefined,
+          skipHealth: false,
+          skipUi: false,
+        },
+        baseConfig: {},
+        nextConfig: {
+          gateway: {
+            auth: {
+              mode: "token",
+              token: "test-token",
+            },
+          },
+        },
+        workspaceDir: "/tmp",
+        settings: {
+          port: 18789,
+          bind: "loopback",
+          authMode: "token",
+          gatewayToken: "test-token",
+          tailscaleMode: "off",
+          tailscaleResetOnExit: false,
+        },
+        prompter,
+        runtime: createRuntime(),
+      });
+
+      expect(startGatewayServer).toHaveBeenCalledWith(
+        18789,
+        expect.objectContaining({
+          bind: "loopback",
+          auth: expect.objectContaining({
+            mode: "token",
+            token: "test-token",
+          }),
+        }),
+      );
+      expect(launchTuiCli).toHaveBeenCalledWith(
+        {
+          deliver: false,
+          message: undefined,
+          timeoutMs: 300_000,
+        },
+        { gatewayUrl: "ws://127.0.0.1:18789", authSource: "config" },
+      );
+      expect(sessionGateway.close).toHaveBeenCalledWith({ reason: "onboarding tui exited" });
+    });
+  });
+
+  it("closes a session gateway when finalize fails before TUI launch", async () => {
+    await withPlatform("linux", async () => {
+      isSystemdUserServiceAvailable.mockResolvedValue(false);
+      isContainerEnvironment.mockReturnValue(true);
+      waitForGatewayReachable.mockRejectedValueOnce(new Error("probe failed"));
+      const sessionGateway = { close: vi.fn(async () => {}) };
+      startGatewayServer.mockResolvedValueOnce(sessionGateway);
+      const prompter = createLaterPrompter();
+
+      await expect(
+        finalizeSetupWizard({
+          flow: "quickstart",
+          opts: {
+            acceptRisk: true,
+            authChoice: "skip",
+            installDaemon: undefined,
+            skipHealth: false,
+            skipUi: false,
+          },
+          baseConfig: {},
+          nextConfig: {
+            gateway: {
+              auth: {
+                mode: "token",
+                token: "test-token",
+              },
+            },
+          },
+          workspaceDir: "/tmp",
+          settings: {
+            port: 18789,
+            bind: "loopback",
+            authMode: "token",
+            gatewayToken: "test-token",
+            tailscaleMode: "off",
+            tailscaleResetOnExit: false,
+          },
+          prompter,
+          runtime: createRuntime(),
+        }),
+      ).rejects.toThrow("probe failed");
+
+      expect(launchTuiCli).not.toHaveBeenCalled();
+      expect(sessionGateway.close).toHaveBeenCalledWith({ reason: "onboarding finalize exited" });
+    });
   });
 
   it("uses the resolved setup password for health checks", async () => {
