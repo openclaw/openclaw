@@ -826,10 +826,11 @@ type FallbackRunnerParams = {
 };
 
 type ModelSwitchOptions = ConstructorParameters<typeof LiveSessionModelSwitchError>[0];
+type TestPayload = { text: string; isError?: boolean; isReasoning?: boolean };
 
 function makeSuccessResult(provider: string, model: string) {
   return {
-    payloads: [{ text: "ok" }],
+    payloads: [{ text: "ok" }] as TestPayload[],
     meta: {
       durationMs: 100,
       aborted: false,
@@ -841,7 +842,7 @@ function makeSuccessResult(provider: string, model: string) {
 
 function makeEmptyResult(provider: string, model: string) {
   return {
-    payloads: [],
+    payloads: [] as TestPayload[],
     meta: {
       durationMs: 30_000,
       aborted: false,
@@ -1850,6 +1851,112 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expectRecordFields(mockCallArg(state.deliverAgentCommandResultMock), {
       expectedSessionIdForFreshDelivery: "rotated-session",
     });
+  });
+
+  it("still delivers a persisted CLI reply when post-turn compaction fails", async () => {
+    setupSingleAttemptFallback();
+    setupSessionTouchStore();
+    const result = makeSuccessResult("openai", "gpt-5.4") as ReturnType<
+      typeof makeSuccessResult
+    > & {
+      meta: Record<string, unknown> & { executionTrace: Record<string, unknown> };
+    };
+    result.meta.executionTrace = {
+      runner: "cli",
+      fallbackUsed: false,
+      winnerProvider: "openai",
+      winnerModel: "gpt-5.4",
+    };
+    state.runAgentAttemptMock.mockResolvedValue(result);
+    state.runCliTurnCompactionLifecycleMock.mockRejectedValue(
+      new Error("Summarization failed: Connection error"),
+    );
+
+    await runBasicAgentCommand();
+
+    expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledTimes(1);
+    expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledTimes(1);
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
+    expect(state.emitAgentEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "lifecycle",
+        data: expect.objectContaining({ phase: "end" }),
+      }),
+    );
+  });
+
+  it("rethrows post-turn compaction failures when no CLI reply is deliverable", async () => {
+    setupSingleAttemptFallback();
+    setupSessionTouchStore();
+    const result = makeEmptyResult("openai", "gpt-5.4") as ReturnType<typeof makeEmptyResult> & {
+      meta: Record<string, unknown> & { executionTrace: Record<string, unknown> };
+    };
+    result.meta.executionTrace = {
+      runner: "cli",
+      fallbackUsed: false,
+      winnerProvider: "openai",
+      winnerModel: "gpt-5.4",
+    };
+    state.runAgentAttemptMock.mockResolvedValue(result);
+    state.runCliTurnCompactionLifecycleMock.mockRejectedValue(
+      new Error("Summarization failed: Connection error"),
+    );
+
+    await expect(runBasicAgentCommand()).rejects.toThrow("Summarization failed");
+
+    expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledTimes(1);
+    expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledTimes(1);
+    expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
+  });
+
+  it("rethrows post-turn compaction failures for error-only CLI payload text", async () => {
+    setupSingleAttemptFallback();
+    setupSessionTouchStore();
+    const result = makeEmptyResult("openai", "gpt-5.4") as ReturnType<typeof makeEmptyResult> & {
+      meta: Record<string, unknown> & { executionTrace: Record<string, unknown> };
+    };
+    result.meta.executionTrace = {
+      runner: "cli",
+      fallbackUsed: false,
+      winnerProvider: "openai",
+      winnerModel: "gpt-5.4",
+    };
+    result.payloads = [{ text: "Command failed", isError: true }];
+    state.runAgentAttemptMock.mockResolvedValue(result);
+    state.runCliTurnCompactionLifecycleMock.mockRejectedValue(
+      new Error("Summarization failed: Connection error"),
+    );
+
+    await expect(runBasicAgentCommand()).rejects.toThrow("Summarization failed");
+
+    expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledTimes(1);
+    expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledTimes(1);
+    expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
+  });
+
+  it("rethrows post-turn compaction failures for reasoning-only CLI payload text", async () => {
+    setupSingleAttemptFallback();
+    setupSessionTouchStore();
+    const result = makeEmptyResult("openai", "gpt-5.4") as ReturnType<typeof makeEmptyResult> & {
+      meta: Record<string, unknown> & { executionTrace: Record<string, unknown> };
+    };
+    result.meta.executionTrace = {
+      runner: "cli",
+      fallbackUsed: false,
+      winnerProvider: "openai",
+      winnerModel: "gpt-5.4",
+    };
+    result.payloads = [{ text: "Thinking through the command", isReasoning: true }];
+    state.runAgentAttemptMock.mockResolvedValue(result);
+    state.runCliTurnCompactionLifecycleMock.mockRejectedValue(
+      new Error("Summarization failed: Connection error"),
+    );
+
+    await expect(runBasicAgentCommand()).rejects.toThrow("Summarization failed");
+
+    expect(state.persistCliTurnTranscriptMock).toHaveBeenCalledTimes(1);
+    expect(state.runCliTurnCompactionLifecycleMock).toHaveBeenCalledTimes(1);
+    expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
   });
 
   it("skips post-run persistence after the session is deleted", async () => {

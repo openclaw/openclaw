@@ -2180,6 +2180,16 @@ async function agentCommandInternal(
         sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
       }
 
+      const payloads = result.payloads ?? [];
+      const hasDeliverableCliReply =
+        Boolean(result.meta.finalAssistantVisibleText?.trim()) ||
+        payloads.some(
+          (payload) =>
+            !payload.isError &&
+            !payload.isReasoning &&
+            typeof payload.text === "string" &&
+            payload.text.trim().length > 0,
+        );
       const transcriptPersistenceRunner = result.meta.executionTrace?.runner;
       const embeddedAssistantGapFill =
         transcriptPersistenceRunner === "embedded" ||
@@ -2229,32 +2239,40 @@ async function agentCommandInternal(
           );
         }
         if (persistedCliTurnTranscript && !suppressVisibleSessionEffects) {
-          sessionEntry = await (
-            await loadCliCompactionRuntime()
-          ).runCliTurnCompactionLifecycle({
-            cfg,
-            sessionId: effectiveSessionId,
-            sessionKey: sessionKey ?? effectiveSessionId,
-            sessionEntry,
-            sessionStore,
-            storePath,
-            sessionAgentId,
-            workspaceDir,
-            cwd: effectiveCwd,
-            agentDir,
-            provider: result.meta.agentMeta?.provider ?? provider,
-            model: result.meta.agentMeta?.model ?? model,
-            skillsSnapshot,
-            messageChannel,
-            agentAccountId: runContext.accountId,
-            senderIsOwner: opts.senderIsOwner,
-            thinkLevel: resolvedThinkLevel,
-            extraSystemPrompt: opts.extraSystemPrompt,
-          });
+          try {
+            sessionEntry = await (
+              await loadCliCompactionRuntime()
+            ).runCliTurnCompactionLifecycle({
+              cfg,
+              sessionId: effectiveSessionId,
+              sessionKey: sessionKey ?? effectiveSessionId,
+              sessionEntry,
+              sessionStore,
+              storePath,
+              sessionAgentId,
+              workspaceDir,
+              cwd: effectiveCwd,
+              agentDir,
+              provider: result.meta.agentMeta?.provider ?? provider,
+              model: result.meta.agentMeta?.model ?? model,
+              skillsSnapshot,
+              messageChannel,
+              agentAccountId: runContext.accountId,
+              senderIsOwner: opts.senderIsOwner,
+              thinkLevel: resolvedThinkLevel,
+              extraSystemPrompt: opts.extraSystemPrompt,
+            });
+          } catch (error) {
+            if (!hasDeliverableCliReply) {
+              throw error;
+            }
+            log.warn(
+              `Post-turn CLI transcript compaction failed after reply persistence for ${sessionKey ?? effectiveSessionId}: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
         }
       }
 
-      const payloads = result.payloads ?? [];
       let pendingFinalDeliveryTextForThisRun: string | undefined;
 
       // Phase 2: Persist pending final delivery for main sessions before attempting delivery.
