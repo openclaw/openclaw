@@ -27,6 +27,7 @@ import {
 import { compileSlackInteractiveReplies } from "./interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "./limits.js";
 import type { SlackSendIdentity } from "./send.js";
+import { assertSlackThreadDeliveryResult } from "./thread-delivery-confirmation.js";
 import { resolveSlackThreadTsValue } from "./thread-ts.js";
 
 const SLACK_MAX_BLOCKS = 50;
@@ -108,6 +109,9 @@ async function sendSlackOutboundMessage(params: {
     ...(params.blocks ? { blocks: params.blocks } : {}),
     ...(slackIdentity ? { identity: slackIdentity } : {}),
   });
+  if (!params.mediaUrl) {
+    assertSlackThreadDeliveryResult({ result, to: params.to, threadTs });
+  }
   return result;
 }
 

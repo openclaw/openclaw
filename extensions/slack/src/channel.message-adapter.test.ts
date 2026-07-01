@@ -136,6 +136,12 @@ describe("slack channel message adapter", () => {
 
     const proveReplyThread = async () => {
       sendSlack.mockClear();
+      sendSlack.mockResolvedValueOnce({
+        messageId: "msg-1",
+        channelId: "C123",
+        threadTs: "1712000000.000001",
+        confirmedThreadTs: "1712000000.000001",
+      });
       const result = await sendText({
         cfg,
         to: "C123",
@@ -155,6 +161,12 @@ describe("slack channel message adapter", () => {
 
     const proveThreadFallback = async () => {
       sendSlack.mockClear();
+      sendSlack.mockResolvedValueOnce({
+        messageId: "msg-1",
+        channelId: "C123",
+        threadTs: "1712345678.123456",
+        confirmedThreadTs: "1712345678.123456",
+      });
       const result = await sendText({
         cfg,
         to: "C123",

@@ -677,7 +677,11 @@ describe("slackPlugin outbound", () => {
   });
 
   it("uses threadId as threadTs fallback for sendText", async () => {
-    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-text" });
+    const sendSlack = vi.fn().mockResolvedValue({
+      messageId: "m-text",
+      threadTs: "1712345678.123456",
+      confirmedThreadTs: "1712345678.123456",
+    });
     const sendText = requireSlackSendText();
 
     const result = await sendText({
@@ -692,7 +696,34 @@ describe("slackPlugin outbound", () => {
     expect(requireMockCallArgValue(sendSlack, 0, 0)).toBe("C123");
     expect(requireMockCallArgValue(sendSlack, 0, 1)).toBe("hello");
     expect(requireMockCallArg(sendSlack, 0, 2).threadTs).toBe("1712345678.123456");
-    expect(result).toEqual({ channel: "slack", messageId: "m-text" });
+    expect(result).toEqual({
+      channel: "slack",
+      messageId: "m-text",
+      threadTs: "1712345678.123456",
+      confirmedThreadTs: "1712345678.123456",
+    });
+  });
+
+  it("fails sendText when Slack does not confirm the requested thread", async () => {
+    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-text" });
+    const sendText = requireSlackSendText();
+
+    await expect(
+      sendText({
+        cfg,
+        to: "C123",
+        text: "hello",
+        accountId: "default",
+        threadId: "1712345678.123456",
+        deps: { sendSlack },
+      }),
+    ).rejects.toThrow(
+      "Slack delivery did not confirm thread 1712345678.123456 for C123; delivered message m-text",
+    );
+
+    expect(requireMockCallArgValue(sendSlack, 0, 0)).toBe("C123");
+    expect(requireMockCallArgValue(sendSlack, 0, 1)).toBe("hello");
+    expect(requireMockCallArg(sendSlack, 0, 2).threadTs).toBe("1712345678.123456");
   });
 
   it("prefers replyToId over threadId for sendMedia", async () => {
@@ -720,7 +751,11 @@ describe("slackPlugin outbound", () => {
   });
 
   it("falls back to threadId when replyToId is not a Slack thread timestamp", async () => {
-    const sendSlack = vi.fn().mockResolvedValue({ messageId: "m-text" });
+    const sendSlack = vi.fn().mockResolvedValue({
+      messageId: "m-text",
+      threadTs: "1712345678.123456",
+      confirmedThreadTs: "1712345678.123456",
+    });
     const sendText = requireSlackSendText();
 
     const result = await sendText({
@@ -736,7 +771,12 @@ describe("slackPlugin outbound", () => {
     expect(requireMockCallArgValue(sendSlack, 0, 0)).toBe("C123");
     expect(requireMockCallArgValue(sendSlack, 0, 1)).toBe("hello");
     expect(requireMockCallArg(sendSlack, 0, 2).threadTs).toBe("1712345678.123456");
-    expect(result).toEqual({ channel: "slack", messageId: "m-text" });
+    expect(result).toEqual({
+      channel: "slack",
+      messageId: "m-text",
+      threadTs: "1712345678.123456",
+      confirmedThreadTs: "1712345678.123456",
+    });
   });
 
   it("does not stringify numeric Slack thread ids", async () => {
