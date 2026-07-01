@@ -11,12 +11,20 @@ const gatewayCalls: Array<{
   mode?: string;
   hasDeviceIdentityKey: boolean;
 }> = [];
+
+function gatewayParams(params: unknown): Record<string, unknown> {
+  if (typeof params !== "object" || params === null || Array.isArray(params)) {
+    throw new TypeError("Expected gateway params to be an object");
+  }
+  return params as Record<string, unknown>;
+}
+
 vi.mock("../gateway/call.js", () => ({
   callGateway: vi.fn(
     async (p: { method: string; params: Record<string, unknown>; mode?: string }) => {
       gatewayCalls.push({
         method: p.method,
-        params: p.params,
+        params: gatewayParams(p.params),
         mode: p.mode,
         hasDeviceIdentityKey: "deviceIdentity" in p,
       });
@@ -156,7 +164,7 @@ describe("openclaw attach (action)", () => {
     vi.mocked(callGateway).mockImplementationOnce(async (p) => {
       gatewayCalls.push({
         method: p.method,
-        params: p.params,
+        params: gatewayParams(p.params),
         mode: p.mode,
         hasDeviceIdentityKey: "deviceIdentity" in p,
       });
@@ -171,7 +179,7 @@ describe("openclaw attach (action)", () => {
     vi.mocked(callGateway).mockImplementationOnce(async (p) => {
       gatewayCalls.push({
         method: p.method,
-        params: p.params,
+        params: gatewayParams(p.params),
         mode: p.mode,
         hasDeviceIdentityKey: "deviceIdentity" in p,
       });
