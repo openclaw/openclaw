@@ -49,7 +49,6 @@ import type {
   ImageContent,
   Message,
   Model,
-  ModelThinkingLevel,
   SimpleStreamOptions,
   StopReason,
   StreamFunction,
@@ -801,7 +800,7 @@ function mapThinkingLevelToEffort(
   model: Model<"anthropic-messages">,
   level: SimpleStreamOptions["reasoning"],
 ): AnthropicEffort {
-  const requestedLevel = level as ModelThinkingLevel | undefined;
+  const requestedLevel = level;
   const hasCanonicalAlias = typeof model.params?.canonicalModelId === "string";
   const thinkingLevelMap = resolveClaudeNativeThinkingLevelMap(model);
   const clampModel = {

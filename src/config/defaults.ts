@@ -5,6 +5,7 @@ import {
   normalizeConfiguredProviderCatalogModelId,
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
@@ -350,6 +351,15 @@ export function applyModelDefaults(
       continue;
     }
     if (entry.alias !== undefined) {
+      continue;
+    }
+    const normalizedAlias = normalizeLowercaseStringOrEmpty(alias);
+    const aliasAlreadyOwned = Object.entries(nextModels).some(
+      ([modelRef, candidate]) =>
+        modelRef !== target && normalizeLowercaseStringOrEmpty(candidate.alias) === normalizedAlias,
+    );
+    // Authored aliases own their shorthand; a newly backfilled model must not reroute it.
+    if (aliasAlreadyOwned) {
       continue;
     }
     nextModels[target] = { ...entry, alias };
