@@ -298,4 +298,3 @@ export const testing = {
     loggedChannelSelectionErrors.clear();
   },
 };
-export { testing as __testing };
