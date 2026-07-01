@@ -1297,6 +1297,13 @@ export async function runReplyAgent(params: {
   }
 
   const activeRunQueueAction = resolveActiveRunQueueAction({
+    // Trust the caller's isActive — it is already the dispatch-corrected
+    // liveness signal. runReplyAgent cannot distinguish a stale embedded handle
+    // from a genuinely active not-yet-streaming run from its (isActive,
+    // isStreaming) params alone, so staleness is resolved upstream in
+    // runPreparedReply and threaded via isActive; direct callers pass an
+    // authoritative isActive. Re-gating on isStreaming here would wrongly divert
+    // an active not-yet-streaming followup into preflight instead of enqueueing.
     isActive,
     isHeartbeat,
     shouldFollowup: effectiveShouldFollowup,

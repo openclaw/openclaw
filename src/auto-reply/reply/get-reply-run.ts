@@ -1131,28 +1131,47 @@ export async function runPreparedReply(
     const activeSessionId =
       embeddedActiveSessionId ?? replyOperationActiveSessionId ?? preparedSessionState.sessionId;
     if (!activeSessionId || (!embeddedAgentRuntime && !replyOperationActiveSessionId)) {
-      return { activeSessionId: undefined, isActive: false, isStreaming: false };
+      return {
+        activeSessionId: undefined,
+        isActive: false,
+        isStreaming: false,
+        hasLiveActiveRun: false,
+      };
     }
     if (isOwnPreDispatchOperationSession(activeSessionId)) {
-      return { activeSessionId, isActive: false, isStreaming: false };
+      return { activeSessionId, isActive: false, isStreaming: false, hasLiveActiveRun: false };
     }
     const replyOperationActive =
       replyOperationActiveSessionId != null &&
       isReplyRunActiveForSessionId(replyOperationActiveSessionId);
+    const embeddedActive =
+      embeddedActiveSessionId != null &&
+      (embeddedAgentRuntime?.isEmbeddedAgentRunActive(embeddedActiveSessionId) ?? false);
+    const embeddedStreaming =
+      embeddedActiveSessionId != null &&
+      (embeddedAgentRuntime?.isEmbeddedAgentRunStreaming(embeddedActiveSessionId) ?? false);
+    const replyOperationStreaming =
+      replyOperationActiveSessionId != null &&
+      isReplyRunStreamingForSessionId(replyOperationActiveSessionId);
     return {
       activeSessionId,
-      isActive:
-        (embeddedActiveSessionId != null &&
-          (embeddedAgentRuntime?.isEmbeddedAgentRunActive(embeddedActiveSessionId) ?? false)) ||
-        replyOperationActive,
-      isStreaming:
-        (embeddedActiveSessionId != null &&
-          (embeddedAgentRuntime?.isEmbeddedAgentRunStreaming(embeddedActiveSessionId) ?? false)) ||
-        (replyOperationActiveSessionId != null &&
-          isReplyRunStreamingForSessionId(replyOperationActiveSessionId)),
+      isActive: embeddedActive || replyOperationActive,
+      isStreaming: embeddedStreaming || replyOperationStreaming,
+      // A present-but-non-streaming handle is a stale/ended run (finishRun
+      // cleared isStreaming but the entry was never removed from
+      // ACTIVE_EMBEDDED_RUNS), not a live one — but only the embedded handle
+      // goes stale this way. A reply operation's activity is lifecycle-tracked
+      // and reliable, so trust it fully; require streaming only for the embedded
+      // handle. This routes a stale-handle inbound run-now instead of into a
+      // followup queue whose drain never fires (silent blackhole until restart),
+      // while preserving the wait / abort / enqueue contracts for a genuinely
+      // active but not-yet-streaming reply operation (reset interrupt,
+      // still-shutting-down handoff window) whose isStreaming is false until a
+      // backend attaches.
+      hasLiveActiveRun: replyOperationActive || (embeddedActive && embeddedStreaming),
     };
   };
-  const { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
+  const { activeSessionId, isActive, isStreaming, hasLiveActiveRun } = resolveQueueBusyState();
   const activeRunAcceptsCurrentThread = resolveActiveRunAcceptsCurrentThread({ isActive });
   const isHeartbeatRun = opts?.isHeartbeat === true;
   const shouldSteer =
@@ -1168,13 +1187,13 @@ export async function runPreparedReply(
       resolvedQueue.mode === "followup" ||
       resolvedQueue.mode === "collect");
   const activeRunQueueAction = resolveActiveRunQueueAction({
-    isActive,
+    isActive: hasLiveActiveRun,
     isHeartbeat: isHeartbeatRun,
     shouldFollowup,
     queueMode: activeRunQueueMode,
     resetTriggered: effectiveResetTriggered,
   });
-  if (isActive && activeRunQueueAction === "run-now") {
+  if (hasLiveActiveRun && activeRunQueueAction === "run-now") {
     const queueState = await resolvePreparedReplyQueueState({
       activeRunQueueAction,
       activeSessionId: activeSessionId ?? resolveActiveQueueSessionId(),
@@ -1458,7 +1477,11 @@ export async function runPreparedReply(
     resolvedQueue,
     shouldSteer,
     shouldFollowup,
-    isActive,
+    // Pass the dispatch-corrected liveness, not bare handle presence.
+    // runReplyAgent's followup-queue decision cannot tell a stale embedded
+    // handle from a genuinely active not-yet-streaming run apart from its
+    // params, so the staleness correction has to be resolved here and threaded.
+    isActive: hasLiveActiveRun,
     isRunActive: () => {
       const latestSessionState = resolvePreparedSessionState();
       const latestActiveSessionId =
