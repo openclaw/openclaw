@@ -338,9 +338,19 @@ function isSameSourceRelayNativeDuplicate(previousMessage: unknown, nextMessage:
   );
 }
 
-function assistantGroupHasReplyText(group: MessageGroup): boolean {
-  // A real reply is assistant text; a tool-only assistant group does not count.
-  return group.messages.some(({ message }) => Boolean(extractTextCached(message)?.trim()));
+function assistantMessageTurnSucceeded(message: unknown): boolean | undefined {
+  const record = asRecord(message);
+  if (!record) {
+    return undefined;
+  }
+  const stopReason = record.stopReason;
+  if (stopReason === "error" || stopReason === "aborted") {
+    return false;
+  }
+  if (extractTextCached(message)?.trim()) {
+    return true;
+  }
+  return stopReason === "stop" || stopReason === "length" ? false : undefined;
 }
 
 // Stamp each tool group with whether its turn ended in a successful assistant
@@ -348,8 +358,8 @@ function assistantGroupHasReplyText(group: MessageGroup): boolean {
 // failure (e.g. a no-match search) must not render as a primary error banner
 // once a clean reply exists. Backward pass: a user group ends the turn
 // downstream; an assistant reply marks success for earlier tool groups in the
-// same turn. turnSucceeded stays undefined for terminal or in-progress failures,
-// preserving the existing error banner.
+// same turn. Explicit terminal state marks failure even when gateway projection
+// adds fallback text; toolUse and unkeyed empty groups keep walking within the turn.
 function annotateToolTurnOutcome(
   items: Array<ChatItem | MessageGroup>,
 ): Array<ChatItem | MessageGroup> {
@@ -363,14 +373,24 @@ function annotateToolTurnOutcome(
     if (role === "user") {
       sawAssistantReply = false;
     } else if (role === "assistant") {
-      if (assistantGroupHasReplyText(item)) {
-        sawAssistantReply = true;
-      } else {
-        // Agent-initiated turns (cron/scheduled/autonomous) have no user
-        // message separating them. An assistant group without reply text
-        // marks a failed turn boundary — reset the flag so the reply from
-        // a later turn does not leak backward onto this turn's tool errors.
-        sawAssistantReply = false;
+      // Groups are presentation-only and can span adjacent autonomous turns.
+      // Walk backward so the first terminal state after an earlier tool wins.
+      for (let j = item.messages.length - 1; j >= 0; j -= 1) {
+        const turnSucceeded = assistantMessageTurnSucceeded(item.messages[j].message);
+        if (turnSucceeded !== undefined) {
+          sawAssistantReply = turnSucceeded;
+        }
+      }
+      const visibleMessages = item.messages.filter(({ message }) =>
+        hasRenderableNormalizedMessage(message),
+      );
+      if (visibleMessages.length === 0) {
+        items.splice(i, 1);
+      } else if (visibleMessages.length !== item.messages.length) {
+        item.messages = visibleMessages;
+        item.key = `group:${item.role}:${visibleMessages[0].key}`;
+        item.timestamp =
+          safeNormalizeMessage(visibleMessages[0].message)?.timestamp ?? item.timestamp;
       }
     } else if (role === "tool") {
       item.turnSucceeded = sawAssistantReply;
@@ -806,9 +826,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       ),
     };
   }
-  items = items.filter(
-    (item) => item.kind !== "message" || hasRenderableNormalizedMessage(item.message),
-  );
   const segments = props.streamSegments ?? [];
   const maxLen = Math.max(segments.length, tools.length);
   let previousAccumulatedStreamText: string | null = null;

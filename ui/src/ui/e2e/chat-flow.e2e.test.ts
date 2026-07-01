@@ -271,6 +271,90 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
     }
   });
 
+  it("shows only the terminal autonomous turn as a Tool error", async () => {
+    const context = await newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      historyMessages: [
+        {
+          role: "toolResult",
+          toolCallId: "call-first",
+          toolName: "first_step",
+          content: JSON.stringify({ status: "failed", exitCode: 1 }),
+          isError: true,
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "" }],
+          stopReason: "toolUse",
+          timestamp: 2,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-second",
+          toolName: "second_step",
+          content: JSON.stringify({ status: "failed", exitCode: 1 }),
+          isError: true,
+          timestamp: 3,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Recovered within the same turn." }],
+          stopReason: "stop",
+          timestamp: 4,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-terminal",
+          toolName: "terminal_step",
+          content: JSON.stringify({ status: "failed", exitCode: 1 }),
+          isError: true,
+          timestamp: 5,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "" }],
+          stopReason: "error",
+          errorMessage: "run failed",
+          timestamp: 6,
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-later",
+          toolName: "later_step",
+          content: JSON.stringify({ status: "failed", exitCode: 1 }),
+          isError: true,
+          timestamp: 7,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Later autonomous turn succeeded." }],
+          stopReason: "stop",
+          timestamp: 8,
+        },
+      ],
+    });
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+      await page.getByText("Later autonomous turn succeeded.").waitFor({ timeout: 10_000 });
+
+      const errorSummaries = page.locator(".chat-tool-msg-summary--error");
+      await expect.poll(() => errorSummaries.count(), { timeout: 10_000 }).toBe(1);
+      await expect
+        .poll(() => errorSummaries.locator(".chat-tool-msg-summary__names").textContent())
+        .toBe("Terminal Step");
+      expect(await page.getByText("Tool error", { exact: true }).count()).toBe(1);
+    } finally {
+      await closeBrowserContext(context);
+    }
+  });
+
   it("keeps the composer clear when a stale native input replay arrives after send", async () => {
     const context = await newBrowserContext({
       locale: "en-US",
