@@ -4064,6 +4064,178 @@ describe("createTelegramBot", () => {
     }
   });
 
+  it("registers message_reaction_count handler", () => {
+    onSpy.mockClear();
+    createTelegramBot({ token: "tok" });
+    const reactionCountHandler = onSpy.mock.calls.find(
+      (call) => call[0] === "message_reaction_count",
+    );
+    expect(reactionCountHandler?.[0]).toBe("message_reaction_count");
+    if (typeof reactionCountHandler?.[1] !== "function") {
+      throw new Error("expected message_reaction_count handler");
+    }
+  });
+
+  it("enqueues system event for anonymous reaction counts", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", groupPolicy: "open", reactionNotifications: "all" },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message_reaction_count") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: 550 },
+      messageReactionCount: {
+        chat: { id: 9999, type: "supergroup" },
+        message_id: 42,
+        date: 1736380800,
+        reactions: [
+          { type: { type: "emoji", emoji: THUMBS_UP_EMOJI }, total_count: 3 },
+          { type: { type: "emoji", emoji: FIRE_EMOJI }, total_count: 2 },
+        ],
+      },
+    });
+
+    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
+    expect(firstSystemEventArg(0)).toBe(
+      `Telegram reaction counts changed: ${THUMBS_UP_EMOJI} x3, ${FIRE_EMOJI} x2 on msg 42`,
+    );
+    expect(String(systemEventOptions().sessionKey)).toContain("telegram:group:9999");
+    expect(String(systemEventOptions().contextKey)).toContain(
+      "telegram:reaction:count:9999:42:1736380800",
+    );
+  });
+
+  it("routes forum anonymous reaction counts to the general topic", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", groupPolicy: "open", reactionNotifications: "all" },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message_reaction_count") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: 551 },
+      messageReactionCount: {
+        chat: { id: 5678, type: "supergroup", is_forum: true },
+        message_id: 100,
+        date: 1736380801,
+        reactions: [{ type: { type: "emoji", emoji: EYES_EMOJI }, total_count: 1 }],
+      },
+    });
+
+    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
+    expect(firstSystemEventArg(0)).toBe(
+      `Telegram reaction counts changed: ${EYES_EMOJI} x1 on msg 100`,
+    );
+    expect(String(systemEventOptions().sessionKey)).toContain("telegram:group:5678:topic:1");
+  });
+
+  it("skips anonymous reaction counts in private chats", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "all" },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message_reaction_count") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: 552 },
+      messageReactionCount: {
+        chat: { id: 1234, type: "private" },
+        message_id: 42,
+        date: 1736380802,
+        reactions: [{ type: { type: "emoji", emoji: THUMBS_UP_EMOJI }, total_count: 1 }],
+      },
+    });
+
+    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+  });
+
+  it("skips anonymous reaction counts in own mode when message is not sent by bot", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+    wasSentByBot.mockReturnValue(false);
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", groupPolicy: "open", reactionNotifications: "own" },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message_reaction_count") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: 553 },
+      messageReactionCount: {
+        chat: { id: 9999, type: "supergroup" },
+        message_id: 42,
+        date: 1736380803,
+        reactions: [{ type: { type: "emoji", emoji: THUMBS_UP_EMOJI }, total_count: 1 }],
+      },
+    });
+
+    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+  });
+
+  it("skips anonymous reaction counts in unauthorized allowlist groups", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["12345"],
+          reactionNotifications: "all",
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message_reaction_count") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: 554 },
+      messageReactionCount: {
+        chat: { id: 9999, type: "supergroup" },
+        message_id: 42,
+        date: 1736380804,
+        reactions: [{ type: { type: "emoji", emoji: THUMBS_UP_EMOJI }, total_count: 1 }],
+      },
+    });
+
+    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+  });
+
   it("enqueues system event for reaction", async () => {
     onSpy.mockClear();
     enqueueSystemEventSpy.mockClear();
