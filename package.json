@@ -53,6 +53,8 @@
     "!dist/plugin-sdk/plugin-test-runtime.d.ts",
     "!dist/plugin-sdk/provider-http-test-mocks.js",
     "!dist/plugin-sdk/provider-http-test-mocks.d.ts",
+    "!dist/plugin-sdk/provider-transport-replay-runtime.js",
+    "!dist/plugin-sdk/provider-transport-replay-runtime.d.ts",
     "!dist/plugin-sdk/provider-test-contracts.js",
     "!dist/plugin-sdk/provider-test-contracts.d.ts",
     "!dist/plugin-sdk/reply-payload-testing.js",

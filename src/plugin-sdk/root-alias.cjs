@@ -11,7 +11,10 @@ const moduleLoaders = new Map();
 const pluginSdkSubpathsCache = new Map();
 const pluginSdkPackageNames = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"];
 const pluginSdkSourceExtensions = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"];
-const privateQaExcludedPluginSdkSubpaths = new Set(["ssrf-runtime-internal"]);
+const privateQaExcludedPluginSdkSubpaths = new Set([
+  "provider-transport-replay-runtime",
+  "ssrf-runtime-internal",
+]);
 const workspacePackageAliases = [
   {
     name: "@openclaw/llm-core",

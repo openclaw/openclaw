@@ -266,7 +266,7 @@ export function sanitizeToolResult(result: unknown): unknown {
   }
   // Deep-redact the entire result so any top-level or nested string is
   // protected, not just `details` and text content blocks.
-  const baseline = redactSecrets(preCleaned) as Record<string, unknown>;
+  const baseline = redactSecrets(preCleaned);
   const out: Record<string, unknown> = { ...baseline };
   const content = Array.isArray(baseline.content) ? baseline.content : null;
   if (content) {

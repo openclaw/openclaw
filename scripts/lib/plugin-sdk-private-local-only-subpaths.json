@@ -10,6 +10,7 @@
   "plugin-test-runtime",
   "provider-http-test-mocks",
   "provider-test-contracts",
+  "provider-transport-replay-runtime",
   "qa-channel",
   "qa-channel-protocol",
   "qa-lab",

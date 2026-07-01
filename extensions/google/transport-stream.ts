@@ -11,12 +11,14 @@ import {
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import {
+  describeToolResultMediaPlaceholder,
+  extractToolResultText,
+} from "openclaw/plugin-sdk/provider-transport-replay-runtime";
+import {
   buildGuardedModelFetch,
   coerceTransportToolCallArguments,
   createEmptyTransportUsage,
   createWritableTransportEventStream,
-  describeToolResultMediaPlaceholder,
-  extractToolResultText,
   failTransportStream,
   finalizeTransportStream,
   mergeTransportHeaders,
