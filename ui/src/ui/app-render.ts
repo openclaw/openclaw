@@ -1442,10 +1442,8 @@ export function renderApp(state: AppViewState) {
       : state.assistantAvatar);
   const configAssistantAvatarUrl =
     localAssistantAvatarOverride ??
-    (configAssistantAvatarStatus === "local" && state.assistantAgentId
-      ? buildAssistantAvatarRoute(state.basePath, state.assistantAgentId)
-      : (state.chatAvatarUrl ??
-        (configAssistantAvatarMissing ? null : (assistantAvatarUrl ?? null))));
+    (state.chatAvatarUrl ??
+      (configAssistantAvatarMissing ? null : (assistantAvatarUrl ?? null)));
   const configValue =
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
   const configuredDreaming = resolveConfiguredDreaming(configValue);
