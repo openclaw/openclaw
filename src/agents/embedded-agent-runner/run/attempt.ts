@@ -116,12 +116,6 @@ import {
   resolveProcessToolScopeKey,
   resolveToolLoopDetectionConfig,
 } from "../../agent-tools.js";
-import {
-  resolveEffectiveToolPolicy,
-  resolveGroupToolPolicy,
-  resolveInheritedToolPolicyForSession,
-  resolveSubagentToolPolicyForSession,
-} from "../../agent-tools.policy.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import {
@@ -155,6 +149,10 @@ import {
   createCodeModeTools,
   resolveCodeModeConfig,
 } from "../../code-mode.js";
+import {
+  resolveConversationCapabilityProfile,
+  type ResolvedConversationCapabilityProfile,
+} from "../../conversation-capability-profile.js";
 import { resolveUserTimezone } from "../../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawReferencePaths } from "../../docs-path.js";
@@ -208,10 +206,6 @@ import { createAgentSession, SessionManager } from "../../sessions/index.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { detectRuntimeShell } from "../../shell-utils.js";
 import { buildActiveSubagentSystemPromptAddition } from "../../subagent-active-context.js";
-import {
-  isSubagentEnvelopeSession,
-  resolveSubagentCapabilityStore,
-} from "../../subagent-capabilities.js";
 import {
   ackPendingAgentSteeringItems,
   leasePendingAgentSteeringItems,
@@ -743,49 +737,40 @@ function collectAttemptExplicitToolAllowlistSources(params: {
   senderE164?: string | null;
   sandboxToolPolicy?: { allow?: string[]; deny?: string[] };
   toolsAllow?: string[];
+  conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
 }) {
-  const { agentId, globalPolicy, globalProviderPolicy, agentPolicy, agentProviderPolicy } =
-    resolveEffectiveToolPolicy({
+  const capabilityProfile =
+    params.conversationCapabilityProfile ??
+    resolveConversationCapabilityProfile({
       config: params.config,
       sessionKey: params.sessionKey,
+      sandboxSessionKey: params.sandboxSessionKey,
       agentId: params.agentId,
       modelProvider: params.modelProvider,
       modelId: params.modelId,
+      messageProvider: params.messageProvider,
+      agentAccountId: params.agentAccountId,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      sandboxToolPolicy: params.sandboxToolPolicy,
+      runtimeToolAllowlist: params.toolsAllow,
     });
-  const groupPolicy = resolveGroupToolPolicy({
-    config: params.config,
-    sessionKey: params.sessionKey,
-    spawnedBy: params.spawnedBy,
-    messageProvider: params.messageProvider,
-    groupId: params.groupId,
-    groupChannel: params.groupChannel,
-    groupSpace: params.groupSpace,
-    accountId: params.agentAccountId,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  });
-  const subagentStore = resolveSubagentCapabilityStore(params.sandboxSessionKey, {
-    cfg: params.config,
-  });
-  const subagentPolicy =
-    params.sandboxSessionKey &&
-    isSubagentEnvelopeSession(params.sandboxSessionKey, {
-      cfg: params.config,
-      store: subagentStore,
-    })
-      ? resolveSubagentToolPolicyForSession(params.config, params.sandboxSessionKey, {
-          store: subagentStore,
-        })
-      : undefined;
-  const inheritedToolPolicy = resolveInheritedToolPolicyForSession(
-    params.config,
-    params.sandboxSessionKey,
-    {
-      store: subagentStore,
-    },
-  );
+  const {
+    agentId,
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    groupPolicy,
+    subagentPolicy,
+    inheritedToolPolicy,
+  } = capabilityProfile.policy;
   return collectExplicitToolAllowlistSources([
     { label: "tools.allow", allow: globalPolicy?.allow },
     { label: "tools.byProvider.allow", allow: globalProviderPolicy?.allow },
@@ -1254,6 +1239,58 @@ export async function runEmbeddedAttempt(
         : undefined;
     const toolSearchTargetTranscriptProjections: ToolSearchTargetTranscriptProjection[] = [];
     const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
+    const spawnWorkspaceDir =
+      effectiveCwd !== effectiveWorkspace
+        ? resolvedWorkspace
+        : resolveAttemptSpawnWorkspaceDir({
+            sandbox,
+            resolvedWorkspace,
+          });
+    const runtimeCapabilityProfile = resolveConversationCapabilityProfile({
+      config: toolSearchRuntimeConfig,
+      sessionKey: sandboxSessionKey,
+      runSessionKey:
+        params.sessionKey && params.sessionKey !== sandboxSessionKey
+          ? params.sessionKey
+          : undefined,
+      sessionId: params.sessionId,
+      runId: params.runId,
+      agentId: sessionAgentId,
+      agentDir,
+      agentAccountId: params.agentAccountId,
+      messageProvider: resolveAttemptToolPolicyMessageProvider(params),
+      messageChannel: params.messageChannel,
+      chatType: params.chatType,
+      messageTo: params.messageTo,
+      messageThreadId: params.messageThreadId,
+      currentChannelId: params.currentChannelId,
+      currentMessagingTarget: params.currentMessagingTarget,
+      currentThreadTs: params.currentThreadTs,
+      currentMessageId: params.currentMessageId,
+      groupId: params.groupId,
+      groupChannel: params.groupChannel,
+      groupSpace: params.groupSpace,
+      memberRoleIds: params.memberRoleIds,
+      spawnedBy: params.spawnedBy,
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+      senderE164: params.senderE164,
+      senderIsOwner: params.senderIsOwner,
+      modelProvider: params.provider,
+      modelId: params.modelId,
+      modelApi: params.model.api,
+      modelContextWindowTokens: params.model.contextWindow,
+      modelHasVision: params.model.input?.includes("image") ?? false,
+      workspaceDir: effectiveWorkspace,
+      cwd: effectiveCwd,
+      spawnWorkspaceDir,
+      isCanonicalWorkspace: params.isCanonicalWorkspace,
+      promptMode: params.promptMode,
+      skillsSnapshot: skillsSnapshotForRun,
+      sandboxToolPolicy: sandbox?.tools,
+      runtimeToolAllowlist: effectiveToolsAllow,
+    });
     const toolsRaw = !shouldConstructTools
       ? []
       : (() => {
@@ -1261,6 +1298,7 @@ export async function runEmbeddedAttempt(
             agentId: sessionAgentId,
             ...buildEmbeddedAttemptToolRunContext({ ...params, trace: runTrace }),
             messageChannel: params.messageChannel,
+            chatType: params.chatType,
             exec: {
               ...params.execOverrides,
               config: params.config,
@@ -1301,13 +1339,7 @@ export async function runEmbeddedAttempt(
             workspaceDir: effectiveWorkspace,
             // Runtime cwd can point at a task repo while bootstrap/persona files stay in the
             // agent workspace. Spawned subagents inherit the real agent workspace, not task cwd.
-            spawnWorkspaceDir:
-              effectiveCwd !== effectiveWorkspace
-                ? resolvedWorkspace
-                : resolveAttemptSpawnWorkspaceDir({
-                    sandbox,
-                    resolvedWorkspace,
-                  }),
+            spawnWorkspaceDir,
             config: toolSearchRuntimeConfig,
             abortSignal: runAbortController.signal,
             modelProvider: params.provider,
@@ -1350,6 +1382,7 @@ export async function runEmbeddedAttempt(
             onToolOutcome: params.onToolOutcome,
             allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
             skillsSnapshot: skillsSnapshotForRun,
+            conversationCapabilityProfile: runtimeCapabilityProfile,
             onYield: (message) => {
               yieldDetected = true;
               yieldMessage = message;
@@ -1608,6 +1641,8 @@ export async function runEmbeddedAttempt(
       senderName: params.senderName,
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
+      senderIsOwner: params.senderIsOwner,
+      conversationCapabilityProfile: runtimeCapabilityProfile,
       warn: (message) => log.warn(message),
     });
     const normalizedBundledTools =
