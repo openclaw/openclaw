@@ -140,6 +140,22 @@ describe("native app i18n inventory", () => {
         source: "Request ID: \\(requestId)",
         surface: "apple",
       },
+      {
+        id: "native.android.count",
+        kind: "ui-call",
+        line: 3,
+        path: "apps/android/example.kt",
+        source: "Showing ${visibleApps.size} of ${apps.size}",
+        surface: "android",
+      },
+      {
+        id: "native.apple.permissions",
+        kind: "ui-call",
+        line: 4,
+        path: "apps/ios/example.swift",
+        source: "\\(granted) of \\(total) permissions granted",
+        surface: "apple",
+      },
     ];
 
     try {
@@ -148,13 +164,18 @@ describe("native app i18n inventory", () => {
         translationsDir,
         translate: async (pending) =>
           new Map(
-            pending.map((entry) => [
-              entry.id,
-              entry.id.endsWith("hello") ? "Hej" : "Begärans-ID: \\(requestId)",
-            ]),
+            pending.map((entry) => {
+              const translated = {
+                "native.android.hello": "Hej",
+                "native.apple.request": "Begärans-ID: \\(requestId)",
+                "native.android.count": "${apps.size} totalt, ${visibleApps.size} visas",
+                "native.apple.permissions": "Av \\(total) behörigheter har \\(granted) beviljats",
+              }[entry.id];
+              return [entry.id, translated ?? entry.source];
+            }),
           ),
       });
-      expect(first).toEqual({ changed: true, translated: 2 });
+      expect(first).toEqual({ changed: true, translated: 4 });
 
       const artifactPath = path.join(translationsDir, "sv.json");
       const firstContents = await readFile(artifactPath, "utf8");

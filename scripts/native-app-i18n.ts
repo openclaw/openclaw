@@ -523,29 +523,11 @@ function enclosingCallName(source: string, offset: number): string | null {
 }
 
 function structuralTokenSignature(source: string): string {
-  const swift = extractSwiftInterpolations(source);
-  const kotlin = extractKotlinInterpolations(source);
-  const buildSettings = source.match(BUILD_SETTING_RE) ?? [];
+  const swift = extractSwiftInterpolations(source)?.toSorted();
+  const kotlin = extractKotlinInterpolations(source)?.toSorted();
+  const buildSettings = (source.match(BUILD_SETTING_RE) ?? []).toSorted();
   const lineBreaks = (source.match(/\n/gu) ?? []).length;
   return JSON.stringify({ swift, kotlin, buildSettings, lineBreaks });
-}
-
-function isTranslatableCandidate(source: string, kind: string): boolean {
-  if (BUILD_SETTING_RE.test(source)) {
-    BUILD_SETTING_RE.lastIndex = 0;
-    return false;
-  }
-  BUILD_SETTING_RE.lastIndex = 0;
-  if (/^[a-z0-9_.:/$-]+$/u.test(source) || /^[A-Z0-9_.:/$-]+$/u.test(source)) {
-    return false;
-  }
-  if (kind === "conditional-branch" && /^[a-z]+(?:[A-Z][A-Za-z0-9]*)+$/u.test(source)) {
-    return false;
-  }
-  if (/[{}[\]]/u.test(source) && !/(?:\\\(|\$\{)/u.test(source)) {
-    return false;
-  }
-  return kind !== "plist-string" || /\s/u.test(source);
 }
 
 function addCandidate(
