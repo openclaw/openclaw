@@ -59,7 +59,8 @@ function duplicateSignature(message: unknown): { key: string; timestamp: number 
   const record = message as Record<string, unknown>;
   // eslint-disable-next-line no-underscore-dangle — field name from gateway message schema
   const openclaw = isRecord(record.__openclaw)
-    ? (record.__openclaw as Record<string, unknown>)
+    ? // eslint-disable-next-line no-underscore-dangle
+      (record.__openclaw as Record<string, unknown>)
     : {};
   const senderIsOwner =
     typeof openclaw.senderIsOwner === "boolean" ? String(openclaw.senderIsOwner) : "";
