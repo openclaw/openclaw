@@ -65,6 +65,15 @@ describe("usage-bar verbs", () => {
     expect(render([{ text: "{m|alias:models}" }], { m: "some-new-model" })).toBe("some-new-model");
   });
 
+  it("alias — prototype keys do not match inherited properties", () => {
+    const t = tpl([{ text: "{m|alias:models}" }]);
+    // "toString" with explicit alias entry → returns the aliased value
+    t.aliases.models["toString"] = "aliased";
+    expect(renderUsageBar(t, { surface: "discord", m: "toString" })).toBe("aliased");
+    // "constructor" without alias entry → passes through, does not hit Object.prototype
+    expect(renderUsageBar(t, { surface: "discord", m: "constructor" })).toBe("constructor");
+  });
+
   it("fallback when path is missing/empty", () => {
     expect(render([{ text: "{identity.emoji|🤖} hi" }], {})).toBe("🤖 hi");
     expect(render([{ text: "{identity.emoji|🤖} hi" }], { identity: { emoji: "🩺" } })).toBe(
@@ -78,6 +87,22 @@ describe("usage-bar segment forms", () => {
     const seg = [{ when: "u.cache_hit_pct", text: "🗄 {u.cache_hit_pct|pct}" }];
     expect(render(seg, { u: {} })).toBe("");
     expect(render(seg, { u: { cache_hit_pct: 0 } })).toBe("🗄 0%");
+  });
+
+  it("map — prototype keys do not match inherited properties, fallback to _default", () => {
+    const seg = [
+      {
+        map: "key",
+        cases: { true: "yes", false: "no", _default: "fallback" },
+      },
+    ];
+    // "toString" is an Object.prototype property — should NOT match, fallback to _default
+    expect(render(seg, { key: "toString" })).toBe("fallback");
+    // "constructor" is also inherited — should NOT match
+    expect(render(seg, { key: "constructor" })).toBe("fallback");
+    // Normal values still match correctly
+    expect(render(seg, { key: "true" })).toBe("yes");
+    expect(render(seg, { key: "other" })).toBe("fallback");
   });
 
   it("map resolves enum/bool, drops on no match", () => {
