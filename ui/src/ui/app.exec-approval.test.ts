@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
+let OpenClawApp: typeof import("./app.ts").OpenClawApp;
 
 function createExecApproval(overrides: Partial<ExecApprovalRequest> = {}): ExecApprovalRequest {
   return {
@@ -34,7 +35,6 @@ async function createApp(
   request: RequestFn,
   queue: ExecApprovalRequest[] = [createExecApproval()],
 ) {
-  const { OpenClawApp } = await import("./app.ts");
   const app = Object.create(OpenClawApp.prototype) as InstanceType<typeof OpenClawApp>;
   Object.defineProperties(app, {
     client: { value: { request }, writable: true },
@@ -46,6 +46,10 @@ async function createApp(
 }
 
 describe("OpenClawApp exec approval decisions", () => {
+  beforeAll(async () => {
+    ({ OpenClawApp } = await import("./app.ts"));
+  }, 60_000);
+
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
   });
@@ -68,6 +72,46 @@ describe("OpenClawApp exec approval decisions", () => {
     expect(app.execApprovalQueue).toEqual([]);
     expect(app.execApprovalError).toBeNull();
     expect(app.execApprovalBusy).toBe(false);
+  });
+
+  it("keeps the approval prompt on the next queued item after resolving the active item", async () => {
+    const request = vi.fn<RequestFn>(async () => ({ ok: true }));
+    const active = createExecApproval({ id: "approval-active", createdAtMs: 2000 });
+    const queued = createExecApproval({
+      id: "approval-queued",
+      request: { command: "pnpm test:changed" },
+      createdAtMs: 1000,
+    });
+    const app = await createApp(request, [active, queued]);
+
+    await app.handleExecApprovalDecision("allow-once");
+
+    expect(request).toHaveBeenCalledWith("exec.approval.resolve", {
+      id: "approval-active",
+      decision: "allow-once",
+    });
+    expect(app.execApprovalQueue).toEqual([queued]);
+    expect(app.execApprovalError).toBeNull();
+    expect(app.execApprovalBusy).toBe(false);
+  });
+
+  it("resolves plugin approvals through the plugin approval method", async () => {
+    const request = vi.fn<RequestFn>(async () => ({ ok: true }));
+    const pluginApproval = createExecApproval({
+      id: "plugin-approval-1",
+      kind: "plugin",
+      pluginTitle: "Plugin approval",
+      request: { command: "Plugin approval" },
+    });
+    const app = await createApp(request, [pluginApproval]);
+
+    await app.handleExecApprovalDecision("allow-once");
+
+    expect(request).toHaveBeenCalledWith("plugin.approval.resolve", {
+      id: "plugin-approval-1",
+      decision: "allow-once",
+    });
+    expect(app.execApprovalQueue).toEqual([]);
   });
 
   it("dismisses and refreshes when the backend reports an already resolved approval", async () => {

@@ -13,18 +13,24 @@ import "./modal-dialog.ts";
 let container: HTMLDivElement;
 let restoreDialogPolyfill: () => void;
 
-async function renderModal() {
+async function renderModal(
+  options: {
+    label?: string;
+    description?: string;
+    firstAction?: string;
+    lastAction?: string;
+  } = {},
+) {
+  const label = options.label ?? "Confirm action";
+  const description = options.description ?? "Review the operation before continuing.";
   render(
     html`
-      <openclaw-modal-dialog
-        label="Confirm action"
-        description="Review the operation before continuing."
-      >
+      <openclaw-modal-dialog label=${label} description=${description}>
         <section>
-          <h2 id="modal-title">Confirm action</h2>
-          <p id="modal-description">Review the operation before continuing.</p>
-          <button id="first-action">First</button>
-          <button id="last-action">Last</button>
+          <h2 id="modal-title">${label}</h2>
+          <p id="modal-description">${description}</p>
+          <button id="first-action">${options.firstAction ?? "First"}</button>
+          <button id="last-action">${options.lastAction ?? "Last"}</button>
         </section>
       </openclaw-modal-dialog>
     `,
@@ -132,6 +138,23 @@ describe("openclaw-modal-dialog", () => {
     );
 
     expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("reopens the same dialog instance after content changes while closed", async () => {
+    const { modal, dialog } = await renderModal();
+    dialog.close();
+    expect(dialog.open).toBe(false);
+
+    await renderModal({
+      label: "Next approval",
+      description: "Another item is pending.",
+      firstAction: "Next",
+    });
+
+    const { modal: updatedModal, dialog: updatedDialog } = await getRenderedModalDialog(container);
+    expect(updatedModal).toBe(modal);
+    expect(updatedDialog).toBe(dialog);
+    expect(dialog.open).toBe(true);
   });
 
   it("restores focus when closed and removed", async () => {

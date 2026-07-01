@@ -205,6 +205,7 @@ export function renderExecApprovalPrompt(state: AppViewState) {
           ${decisions.map(
             (decision) => html`
               <button
+                type="button"
                 class=${approvalDecisionClass(decision)}
                 ?disabled=${state.execApprovalBusy}
                 @click=${() => state.handleExecApprovalDecision(decision)}

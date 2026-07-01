@@ -371,6 +371,42 @@ describe("connectGateway", () => {
     expect(host.chatComposerProvisionalRestore).toBeNull();
   });
 
+  it("loads pending plugin approvals from approval lists on hello", async () => {
+    const { host, client } = connectHostGateway();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "exec.approval.list") {
+        return [];
+      }
+      if (method === "plugin.approval.list") {
+        return [
+          {
+            id: "plugin-approval-from-list",
+            createdAtMs: Date.now(),
+            expiresAtMs: Date.now() + 120_000,
+            request: {
+              title: "Review plugin action",
+              description: "The plugin wants to run a sensitive action.",
+              severity: "high",
+              pluginId: "sage",
+              agentId: "agent-1",
+              sessionKey: "main",
+            },
+          },
+        ];
+      }
+      return {};
+    });
+
+    client.emitHello();
+
+    await vi.waitFor(() => {
+      expect(client.request).toHaveBeenCalledWith("exec.approval.list", {});
+      expect(client.request).toHaveBeenCalledWith("plugin.approval.list", {});
+      expect(host.execApprovalQueue[0]?.id).toBe("plugin-approval-from-list");
+    });
+    expect(host.execApprovalQueue[0]?.kind).toBe("plugin");
+  });
+
   it("ignores stale client onEvent callbacks after reconnect", () => {
     const host = createHost();
 
