@@ -1,8 +1,14 @@
 // Telegram tests cover delivery.resolve media retry plugin behavior.
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { Message } from "grammy/types";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveMedia } from "./delivery.resolve-media.js";
+import {
+  resetTelegramMediaResolutionCacheForTest,
+  resolveMedia,
+} from "./delivery.resolve-media.js";
 import type { TelegramContext } from "./types.js";
 
 const saveMediaBuffer = vi.fn();
@@ -175,14 +181,14 @@ function setupTransientGetFileRetry() {
   return getFile;
 }
 
-function mockPdfFetchAndSave(fileName: string | undefined) {
+function mockPdfFetchAndSave(fileName: string | undefined, savedPath = "/tmp/file_42---uuid.pdf") {
   readRemoteMediaBuffer.mockResolvedValueOnce({
     buffer: Buffer.from("pdf-data"),
     contentType: "application/pdf",
     fileName,
   });
   saveMediaBuffer.mockResolvedValueOnce({
-    path: "/tmp/file_42---uuid.pdf",
+    path: savedPath,
     contentType: "application/pdf",
   });
 }
@@ -306,10 +312,58 @@ describe("resolveMedia getFile retry", () => {
     saveMediaBuffer.mockReset();
     saveRemoteMedia.mockClear();
     rootRead.mockReset();
+    resetTelegramMediaResolutionCacheForTest();
   });
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("reuses successful media resolutions for the same Telegram file while the saved path exists", async () => {
+    vi.useRealTimers();
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-media-cache-"));
+    const savedPath = path.join(tempDir, "file_42---uuid.pdf");
+    await writeFile(savedPath, "pdf-data");
+    const firstGetFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
+    const secondGetFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
+    mockPdfFetchAndSave("file_42.pdf", savedPath);
+
+    try {
+      const first = await resolveMediaWithDefaults(makeCtx("document", firstGetFile));
+      const second = await resolveMediaWithDefaults(makeCtx("document", secondGetFile));
+
+      expect(firstGetFile).toHaveBeenCalledTimes(1);
+      expect(secondGetFile).not.toHaveBeenCalled();
+      expect(readRemoteMediaBuffer).toHaveBeenCalledTimes(1);
+      expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
+      expect(second).toEqual(first);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("evicts cached media resolutions when media cleanup removed the saved path", async () => {
+    vi.useRealTimers();
+    const stalePath = path.join(
+      os.tmpdir(),
+      `openclaw-telegram-stale-media-${process.pid}-${Math.random()}.pdf`,
+    );
+    await rm(stalePath, { force: true });
+    const freshPath = "/tmp/file_42---fresh.pdf";
+    const firstGetFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
+    const secondGetFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
+    mockPdfFetchAndSave("file_42.pdf", stalePath);
+    mockPdfFetchAndSave("file_42.pdf", freshPath);
+
+    const first = await resolveMediaWithDefaults(makeCtx("document", firstGetFile));
+    const second = await resolveMediaWithDefaults(makeCtx("document", secondGetFile));
+
+    expect(first?.path).toBe(stalePath);
+    expect(second?.path).toBe(freshPath);
+    expect(firstGetFile).toHaveBeenCalledTimes(1);
+    expect(secondGetFile).toHaveBeenCalledTimes(1);
+    expect(readRemoteMediaBuffer).toHaveBeenCalledTimes(2);
+    expect(saveMediaBuffer).toHaveBeenCalledTimes(2);
   });
 
   it("retries getFile on transient failure and succeeds on second attempt", async () => {
@@ -696,6 +750,7 @@ describe("resolveMedia original filename preservation", () => {
     vi.useFakeTimers();
     readRemoteMediaBuffer.mockClear();
     saveMediaBuffer.mockClear();
+    resetTelegramMediaResolutionCacheForTest();
   });
 
   afterEach(() => {

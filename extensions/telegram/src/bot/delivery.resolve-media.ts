@@ -1,4 +1,5 @@
 // Telegram plugin module implements delivery.resolve media behavior.
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import { GrammyError } from "grammy";
 import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
@@ -108,6 +109,91 @@ function resolveMediaMetadata(msg: TelegramContext["message"]): MediaMetadata {
       msg.document?.mime_type ??
       msg.animation?.mime_type,
   };
+}
+
+type ResolvedTelegramMedia = {
+  path: string;
+  contentType?: string;
+  placeholder: string;
+  stickerMetadata?: StickerMetadata;
+};
+
+const TELEGRAM_MEDIA_RESOLUTION_CACHE_MAX = 512;
+const telegramMediaResolutionCache = new Map<string, ResolvedTelegramMedia>();
+
+function rememberTelegramMediaResolution(
+  key: string | null,
+  media: ResolvedTelegramMedia,
+): ResolvedTelegramMedia {
+  if (!key) {
+    return media;
+  }
+  telegramMediaResolutionCache.set(key, media);
+  if (telegramMediaResolutionCache.size > TELEGRAM_MEDIA_RESOLUTION_CACHE_MAX) {
+    const oldestKey = telegramMediaResolutionCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      telegramMediaResolutionCache.delete(oldestKey);
+    }
+  }
+  return media;
+}
+
+async function cachedTelegramMediaPathExists(media: ResolvedTelegramMedia): Promise<boolean> {
+  try {
+    return (await stat(media.path)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function readCachedTelegramMediaResolution(
+  key: string | null,
+): Promise<ResolvedTelegramMedia | undefined> {
+  if (!key) {
+    return undefined;
+  }
+  const cached = telegramMediaResolutionCache.get(key);
+  if (!cached) {
+    return undefined;
+  }
+  if (!(await cachedTelegramMediaPathExists(cached))) {
+    telegramMediaResolutionCache.delete(key);
+    return undefined;
+  }
+  telegramMediaResolutionCache.delete(key);
+  telegramMediaResolutionCache.set(key, cached);
+  return cached;
+}
+
+function buildTelegramMediaResolutionCacheKey(params: {
+  metadata: MediaMetadata;
+  token: string;
+  maxBytes: number;
+  apiRoot?: string;
+  trustedLocalFileRoots?: readonly string[];
+  dangerouslyAllowPrivateNetwork?: boolean;
+}): string | null {
+  const fileRef = params.metadata.fileRef;
+  const fileId = fileRef?.file_id;
+  if (!fileId) {
+    return null;
+  }
+  const fileUniqueId = "file_unique_id" in fileRef ? fileRef.file_unique_id : undefined;
+  return JSON.stringify({
+    token: params.token,
+    file_id: fileId,
+    file_unique_id: fileUniqueId,
+    max_bytes: params.maxBytes,
+    api_root: params.apiRoot?.trim() ?? "",
+    roots: params.trustedLocalFileRoots ?? [],
+    allow_private: params.dangerouslyAllowPrivateNetwork === true,
+    name: params.metadata.fileName ?? "",
+    mime: params.metadata.mimeType ?? "",
+  });
+}
+
+export function resetTelegramMediaResolutionCacheForTest(): void {
+  telegramMediaResolutionCache.clear();
 }
 
 async function resolveTelegramFileWithRetry(
@@ -401,6 +487,18 @@ export async function resolveMedia(params: {
   if (!m?.file_id) {
     return null;
   }
+  const cacheKey = buildTelegramMediaResolutionCacheKey({
+    metadata,
+    token,
+    maxBytes,
+    apiRoot,
+    trustedLocalFileRoots,
+    dangerouslyAllowPrivateNetwork,
+  });
+  const cached = await readCachedTelegramMediaResolution(cacheKey);
+  if (cached) {
+    return cached;
+  }
 
   const file = await resolveTelegramFileWithRetry(ctx);
   if (!file) {
@@ -421,5 +519,9 @@ export async function resolveMedia(params: {
     dangerouslyAllowPrivateNetwork,
   });
   const placeholder = resolveTelegramMediaPlaceholder(msg) ?? "<media:document>";
-  return { path: saved.path, contentType: saved.contentType, placeholder };
+  return rememberTelegramMediaResolution(cacheKey, {
+    path: saved.path,
+    ...(saved.contentType ? { contentType: saved.contentType } : {}),
+    placeholder,
+  });
 }
