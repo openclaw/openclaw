@@ -180,6 +180,11 @@ final class TalkRealtimeWebRTCSession: NSObject {
         }
     }
 
+    func applyAudioRoutePreferenceChanged() throws {
+        try Self.configureAudioSession()
+        self.trace("audio route preference reapplied")
+    }
+
     private func checkNotStopped() throws {
         if self.stopped {
             throw CancellationError()
@@ -895,13 +900,15 @@ final class TalkRealtimeWebRTCSession: NSObject {
     }
 
     private static func configureAudioSession() throws {
+        let forceSpeaker = TalkDefaults.speakerphoneEnabled()
         let config = RTCAudioSessionConfiguration.webRTC()
         config.category = AVAudioSession.Category.playAndRecord.rawValue
         config.mode = AVAudioSession.Mode.default.rawValue
-        config.categoryOptions = [
-            .allowBluetoothHFP,
-            .defaultToSpeaker,
-        ]
+        var options: AVAudioSession.CategoryOptions = [.allowBluetoothHFP]
+        if forceSpeaker {
+            options.insert(.defaultToSpeaker)
+        }
+        config.categoryOptions = options
         config.sampleRate = 48000
         config.ioBufferDuration = 0.01
         RTCAudioSessionConfiguration.setWebRTC(config)
@@ -912,7 +919,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
 
         session.ignoresPreferredAttributeConfigurationErrors = true
         try session.setConfiguration(config, active: true)
-        try? session.overrideOutputAudioPort(.speaker)
+        try? session.overrideOutputAudioPort(forceSpeaker ? .speaker : .none)
     }
 }
 
