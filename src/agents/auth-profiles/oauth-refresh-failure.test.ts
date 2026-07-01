@@ -51,8 +51,27 @@ describe("oauth refresh failure hints", () => {
     });
     expect(
       classifyProviderOAuthAuthenticationFailure({
+        provider: "claude-cli",
+        reason: "auth",
+        status: 401,
+        message: "Invalid authentication credentials",
+      }),
+    ).toEqual({
+      provider: "claude-cli",
+      reason: "sign_in_again",
+    });
+    expect(
+      classifyProviderOAuthAuthenticationFailure({
         provider: "anthropic",
+        reason: "auth",
+        status: 401,
         message: "Failed to authenticate. API Error: 401 Invalid authentication credentials",
+      }),
+    ).toBeNull();
+    expect(
+      classifyProviderOAuthAuthenticationFailure({
+        provider: "claude-cli",
+        message: "Invalid authentication credentials",
       }),
     ).toBeNull();
   });

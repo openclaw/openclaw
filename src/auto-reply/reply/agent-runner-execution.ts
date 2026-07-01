@@ -946,6 +946,8 @@ function buildOAuthFailureReplyForError(
     (isFailoverError(error)
       ? classifyProviderOAuthAuthenticationFailure({
           provider: error.provider,
+          reason: error.reason,
+          status: error.status,
           message: error.rawError ?? formatErrorMessage(error),
         })
       : null) ??

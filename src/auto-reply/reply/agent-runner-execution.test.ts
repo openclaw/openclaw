@@ -7128,14 +7128,11 @@ describe("runAgentTurnWithFallback", () => {
 
   it("surfaces Claude CLI OAuth reauth guidance for typed 401 auth failures", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
-      new FailoverError(
-        "Failed to authenticate. API Error: 401 Invalid authentication credentials",
-        {
-          reason: "auth",
-          provider: "claude-cli",
-          status: 401,
-        },
-      ),
+      new FailoverError("Invalid authentication credentials", {
+        reason: "auth",
+        provider: "claude-cli",
+        status: 401,
+      }),
     );
 
     const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
