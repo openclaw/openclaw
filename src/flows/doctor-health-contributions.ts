@@ -1444,6 +1444,25 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runLegacyPluginManifestHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:legacy-plugin-dependencies",
+      label: "Legacy plugin dependencies",
+      healthChecks: {
+        id: "core/doctor/legacy-plugin-dependencies",
+        description: "Legacy plugin dependency state roots are represented as findings.",
+        defaultEnabled: false,
+        async detect() {
+          const {
+            detectLegacyPluginDependencyStateIssues,
+            legacyPluginDependencyStateIssueToHealthFinding,
+          } = await import("../commands/doctor/shared/plugin-dependency-cleanup.js");
+          return (await detectLegacyPluginDependencyStateIssues({ env: process.env })).map(
+            legacyPluginDependencyStateIssueToHealthFinding,
+          );
+        },
+      },
+      run: async () => {},
+    }),
+    createDoctorHealthContribution({
       id: "doctor:release-configured-plugin-installs",
       label: "Configured plugin repair",
       healthChecks: {

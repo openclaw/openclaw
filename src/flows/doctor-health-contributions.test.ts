@@ -1348,6 +1348,7 @@ describe("doctor health contributions", () => {
     expect(contributionIds).toContain("core/doctor/session-snapshots");
     expect(contributionIds).toContain("core/doctor/plugin-registry");
     expect(contributionIds).toContain("core/doctor/configured-plugin-installs");
+    expect(contributionIds).toContain("core/doctor/legacy-plugin-dependencies");
     expect(contributionIds).toContain("core/doctor/disk-space");
     expect(contributionIds).toContain("core/doctor/heartbeat-template");
     expect(contributionIds).toContain("core/doctor/disk-space");
@@ -1448,6 +1449,58 @@ describe("doctor health contributions", () => {
         }),
       ]),
     });
+  });
+
+  it("keeps legacy plugin dependency lint opt-in and read-only", async () => {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const tempDir = fs.mkdtempSync("/tmp/openclaw-legacy-plugin-deps-lint-");
+    const stateDir = `${tempDir}/state`;
+    const legacyRuntimeRoot = `${stateDir}/plugin-runtime-deps`;
+    fs.mkdirSync(legacyRuntimeRoot, { recursive: true });
+    process.env.OPENCLAW_STATE_DIR = stateDir;
+    try {
+      const contributionChecks = await resolveDoctorContributionHealthChecks();
+      const check = contributionChecks.find(
+        (entry) => entry.id === "core/doctor/legacy-plugin-dependencies",
+      );
+      expect(check).toMatchObject({ defaultEnabled: false });
+      expect(check).toBeDefined();
+
+      const ctx = {
+        cfg: {},
+        mode: "lint",
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      } as const;
+
+      await expect(runDoctorLintChecks(ctx, { checks: [check!] })).resolves.toMatchObject({
+        checksRun: 0,
+        checksSkipped: 1,
+      });
+      await expect(
+        runDoctorLintChecks(ctx, {
+          checks: [check!],
+          onlyIds: ["core/doctor/legacy-plugin-dependencies"],
+        }),
+      ).resolves.toMatchObject({
+        checksRun: 1,
+        checksSkipped: 0,
+        findings: [
+          expect.objectContaining({
+            checkId: "core/doctor/legacy-plugin-dependencies",
+            severity: "warning",
+            path: legacyRuntimeRoot,
+          }),
+        ],
+      });
+      expect(fs.existsSync(legacyRuntimeRoot)).toBe(true);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("keeps state integrity opt-in for default lint selection", async () => {
