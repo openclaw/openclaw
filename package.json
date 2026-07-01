@@ -1959,6 +1959,7 @@
     "native:i18n:check": "node --import tsx scripts/native-app-i18n.ts check",
     "native:i18n:sync": "node --import tsx scripts/native-app-i18n.ts sync --write",
     "android:i18n:check": "node --import tsx scripts/android-app-i18n.ts check",
+    "apple:i18n:check": "node --import tsx scripts/apple-app-i18n.ts check",
     "ui:install": "node scripts/ui.js install",
     "verify": "node scripts/verify.mjs"
   },
