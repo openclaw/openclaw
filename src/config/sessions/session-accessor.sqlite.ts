@@ -1909,6 +1909,14 @@ function collectSqliteSessionMaintenanceBaseKeys(
   return keys;
 }
 
+function sumTranscriptEventJsonBytes() {
+  return (
+    // kysely-allow-raw: SQLite byte accounting needs LENGTH(CAST(... AS BLOB)),
+    // which Kysely does not expose as a typed aggregate helper.
+    sql<number | bigint>`COALESCE(SUM(length(CAST(event_json AS BLOB))), 0)`.as("event_json_bytes")
+  );
+}
+
 function readSqliteSessionRowBytes(database: OpenClawAgentDatabase): {
   entryBytesByKey: Map<string, number>;
   transcriptBytesBySessionId: Map<string, number>;
@@ -1922,12 +1930,8 @@ function readSqliteSessionRowBytes(database: OpenClawAgentDatabase): {
     database.db,
     db
       .selectFrom("transcript_events")
-      .select(() => [
-        "session_id",
-        sql<number | bigint>`COALESCE(SUM(length(CAST(event_json AS BLOB))), 0)`.as(
-          "event_json_bytes",
-        ),
-      ])
+      .select(["session_id"])
+      .select(sumTranscriptEventJsonBytes())
       .groupBy("session_id"),
   ).rows;
   const entryBytesByKey = new Map<string, number>();
@@ -2183,9 +2187,10 @@ function applySqliteSessionEntryMaintenance(
       removedSessionIds.add(sessionId);
     }
   };
-  const preserveKeys = collectSessionMaintenancePreserveKeys(
-    collectSqliteSessionMaintenanceBaseKeys(store, params.activeSessionKey),
-  );
+  const preserveKeys =
+    collectSessionMaintenancePreserveKeys(
+      collectSqliteSessionMaintenanceBaseKeys(store, params.activeSessionKey),
+    ) ?? new Set<string>();
   if (
     shouldRunModelRunPrune({
       maintenance,

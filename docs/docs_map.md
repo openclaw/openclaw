@@ -1478,6 +1478,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Check Selection
   - H2: Post-upgrade mode
   - H2: Session SQLite migration
+  - H3: Downgrading After Session SQLite Migration
   - H2: macOS: launchctl env overrides
   - H2: Related
 
@@ -8288,6 +8289,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Two persistence layers
   - H2: On-disk locations
   - H2: Store maintenance and disk controls
+  - H3: Downgrading After The SQLite Flip
   - H2: Cron sessions and run logs
   - H2: Session keys (sessionKey)
   - H2: Session ids (sessionId)

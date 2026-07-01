@@ -176,7 +176,7 @@ const removedSessionTranscriptFileApiMarkers = [
 ] as const;
 
 function usesRemovedSessionTranscriptFileApi(
-  inspect: Pick<PluginInspectReport, "plugin" | "diagnostics">,
+  inspect: Pick<PluginInspectReport, "plugin"> & { diagnostics: readonly PluginDiagnostic[] },
 ): boolean {
   if (inspect.plugin.origin === "bundled") {
     return false;
