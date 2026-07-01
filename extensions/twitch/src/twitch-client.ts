@@ -1,7 +1,9 @@
+// Twitch plugin module implements twitch client behavior.
 import { RefreshingAuthProvider, StaticAuthProvider } from "@twurple/auth";
 import { ChatClient, LogLevel } from "@twurple/chat";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveTwitchToken } from "./token.js";
 import type { ChannelLogSink, TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 import { normalizeToken } from "./utils/twitch.js";
@@ -200,7 +202,6 @@ export class TwitchClientManager {
       let settled = false;
       let authRetryPending = false;
       const listeners: Array<{ unbind: () => void }> = [];
-      let timeout: NodeJS.Timeout | undefined;
       const finish = (error?: Error) => {
         if (settled) {
           return;
@@ -248,7 +249,7 @@ export class TwitchClientManager {
           );
         }),
       );
-      timeout = setTimeout(
+      const timeout: NodeJS.Timeout | undefined = setTimeout(
         () => finish(new Error(`Timed out connecting to Twitch as ${account.username}`)),
         connectTimeoutMs,
       );
@@ -273,7 +274,7 @@ export class TwitchClientManager {
       if (handler) {
         const normalizedChannel = channelName.startsWith("#") ? channelName.slice(1) : channelName;
         const from = `twitch:${msg.userInfo.userName}`;
-        const preview = messageText.slice(0, 100).replace(/\n/g, "\\n");
+        const preview = sliceUtf16Safe(messageText, 0, 100).replace(/\n/g, "\\n");
         this.logger.debug?.(
           `twitch inbound: channel=${normalizedChannel} from=${from} len=${messageText.length} preview="${preview}"`,
         );

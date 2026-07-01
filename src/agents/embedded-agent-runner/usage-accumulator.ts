@@ -1,4 +1,7 @@
-import { normalizeUsage, type NormalizedUsage, type UsageLike } from "../usage.js";
+/**
+ * Accumulates and normalizes per-call token usage across embedded runs.
+ */
+import type { NormalizedUsage } from "../usage.js";
 
 export type UsageAccumulator = {
   input: number;
@@ -33,9 +36,11 @@ export const createUsageAccumulator = (): UsageAccumulator => ({
 
 type MaybeUsage = NormalizedUsage | undefined;
 
-const hasUsageValues = (usage: MaybeUsage): usage is NormalizedUsage =>
-  !!usage &&
-  [
+const hasUsageValues = (usage: MaybeUsage): usage is NormalizedUsage => {
+  if (!usage) {
+    return false;
+  }
+  return [
     usage.input,
     usage.output,
     usage.cacheRead,
@@ -43,6 +48,7 @@ const hasUsageValues = (usage: MaybeUsage): usage is NormalizedUsage =>
     usage.reasoningTokens,
     usage.total,
   ].some((value) => typeof value === "number" && Number.isFinite(value) && value > 0);
+};
 
 export const mergeUsageIntoAccumulator = (target: UsageAccumulator, usage: MaybeUsage) => {
   if (!hasUsageValues(usage)) {
@@ -106,8 +112,3 @@ export const toLastCallUsage = (usage: UsageAccumulator): NormalizedUsage | unde
     total: usage.lastTotal || undefined,
   };
 };
-
-export const resolveLastCallUsage = (
-  rawUsage: UsageLike | null | undefined,
-  usageAccumulator: UsageAccumulator,
-): NormalizedUsage | undefined => normalizeUsage(rawUsage) ?? toLastCallUsage(usageAccumulator);

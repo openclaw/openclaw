@@ -1,16 +1,27 @@
 /**
- * Wait for compaction retry completion with an aggregate timeout to avoid
- * holding a session lane indefinitely when retry resolution is lost.
+ * Caps compaction retry waits against the aggregate run timeout.
+ */
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+
+export function hasActiveCompactionRetryWork(params: {
+  isCompactionInFlight: boolean;
+  isSessionStreaming: boolean;
+}): boolean {
+  return params.isCompactionInFlight || params.isSessionStreaming;
+}
+
+/**
+ * Waits for compaction retry completion with an aggregate timeout so a lost
+ * retry resolution cannot hold the session lane indefinitely.
  */
 export async function waitForCompactionRetryWithAggregateTimeout(params: {
   waitForCompactionRetry: () => Promise<void>;
   abortable: <T>(promise: Promise<T>) => Promise<T>;
   aggregateTimeoutMs: number;
   onTimeout?: () => void;
-  isCompactionStillInFlight?: () => boolean;
+  isCompactionRetryStillActive?: () => boolean;
 }): Promise<{ timedOut: boolean }> {
-  const timeoutMsRaw = params.aggregateTimeoutMs;
-  const timeoutMs = Number.isFinite(timeoutMsRaw) ? Math.max(1, Math.floor(timeoutMsRaw)) : 1;
+  const timeoutMs = resolveTimerTimeoutMs(params.aggregateTimeoutMs, 1);
 
   let timedOut = false;
   // Reflect the retry promise so late rejections after a timeout stay handled
@@ -39,9 +50,10 @@ export async function waitForCompactionRetryWithAggregateTimeout(params: {
         throw result.error;
       }
 
-      // Keep extending the timeout window while compaction is actively running.
-      // We only trigger the fallback timeout once compaction appears idle.
-      if (params.isCompactionStillInFlight?.()) {
+      // A post-compaction retry is a normal model run, so compaction itself is
+      // already idle while the provider request is still active. Only start
+      // deadlock recovery after both phases are idle.
+      if (params.isCompactionRetryStillActive?.()) {
         continue;
       }
 

@@ -1,4 +1,7 @@
+// Commander registration for onboard setup flags and lazy onboard runtime execution.
 import type { Command } from "commander";
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
 import type { GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
 import { CORE_ONBOARD_AUTH_FLAGS } from "../../commands/onboard-core-auth-flags.js";
@@ -7,13 +10,12 @@ import type {
   GatewayAuthChoice,
   GatewayBind,
   NodeManagerChoice,
+  OnboardOptions,
   ResetScope,
   SecretInputMode,
   TailscaleMode,
 } from "../../commands/onboard-types.js";
-import { resolveManifestProviderOnboardAuthFlags } from "../../plugins/provider-auth-choices.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
+import { resolveProviderOnboardAuthFlags } from "../../plugins/provider-auth-choices.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { parsePort } from "../shared/parse-port.js";
 
@@ -63,9 +65,10 @@ function extractCliFlags(cliOption: string): string[] {
 }
 
 function resolveOnboardAuthFlags(): OnboardAuthFlag[] {
+  // Provider manifests can add auth flags; keep duplicate CLI aliases out of Commander.
   const seenCliFlags = new Set<string>();
   const flags: OnboardAuthFlag[] = [];
-  for (const flag of [...CORE_ONBOARD_AUTH_FLAGS, ...resolveManifestProviderOnboardAuthFlags()]) {
+  for (const flag of [...CORE_ONBOARD_AUTH_FLAGS, ...resolveProviderOnboardAuthFlags()]) {
     const cliFlags = extractCliFlags(flag.cliOption);
     if (cliFlags.some((cliFlag) => seenCliFlags.has(cliFlag))) {
       continue;
@@ -86,6 +89,70 @@ function pickOnboardProviderAuthOptionValues(
   return Object.fromEntries(
     ONBOARD_AUTH_FLAGS.map((flag) => [flag.optionKey, opts[flag.optionKey] as string | undefined]),
   );
+}
+
+export function registerOnboardAuthOptions(command: Command): Command {
+  command
+    .option("--auth-choice <choice>", `Auth: ${AUTH_CHOICE_HELP}`)
+    .option(
+      "--token-provider <id>",
+      "Token provider id (non-interactive; used with --auth-choice token)",
+    )
+    .option("--token <token>", "Token value (non-interactive; used with --auth-choice token)")
+    .option(
+      "--token-profile-id <id>",
+      "Auth profile id (non-interactive; default: <provider>:manual)",
+    )
+    .option("--token-expires-in <duration>", "Optional token expiry duration (e.g. 365d, 12h)")
+    .option(
+      "--secret-input-mode <mode>",
+      "API key persistence mode: plaintext|ref (default: plaintext)",
+    )
+    .option("--cloudflare-ai-gateway-account-id <id>", "Cloudflare Account ID")
+    .option("--cloudflare-ai-gateway-gateway-id <id>", "Cloudflare AI Gateway ID");
+
+  for (const providerFlag of ONBOARD_AUTH_FLAGS) {
+    command.option(providerFlag.cliOption, providerFlag.description);
+  }
+
+  return command
+    .option("--custom-base-url <url>", "Custom provider base URL")
+    .option("--custom-api-key <key>", "Custom provider API key (optional)")
+    .option("--custom-model-id <id>", "Custom provider model ID")
+    .option("--custom-provider-id <id>", "Custom provider ID (optional; auto-derived by default)")
+    .option(
+      "--custom-compatibility <mode>",
+      "Custom provider API compatibility: openai|openai-responses|anthropic (default: openai)",
+    )
+    .option("--custom-image-input", "Mark the custom provider model as image-capable")
+    .option("--custom-text-input", "Mark the custom provider model as text-only");
+}
+
+export function pickOnboardAuthOptionValues(
+  opts: Record<string, unknown>,
+): Partial<OnboardOptions> {
+  const customTextInput = opts.customTextInput === true;
+  return {
+    authChoice: opts.authChoice as AuthChoice | undefined,
+    tokenProvider: opts.tokenProvider as string | undefined,
+    token: opts.token as string | undefined,
+    tokenProfileId: opts.tokenProfileId as string | undefined,
+    tokenExpiresIn: opts.tokenExpiresIn as string | undefined,
+    secretInputMode: opts.secretInputMode as SecretInputMode | undefined,
+    ...pickOnboardProviderAuthOptionValues(opts),
+    cloudflareAiGatewayAccountId: opts.cloudflareAiGatewayAccountId as string | undefined,
+    cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId as string | undefined,
+    customBaseUrl: opts.customBaseUrl as string | undefined,
+    customApiKey: opts.customApiKey as string | undefined,
+    customModelId: opts.customModelId as string | undefined,
+    customProviderId: opts.customProviderId as string | undefined,
+    customCompatibility: opts.customCompatibility as
+      | "openai"
+      | "openai-responses"
+      | "anthropic"
+      | undefined,
+    customImageInput: customTextInput ? false : opts.customImageInput === true ? true : undefined,
+  };
 }
 
 export function registerOnboardCommand(program: Command): void {
@@ -111,40 +178,11 @@ export function registerOnboardCommand(program: Command): void {
       false,
     )
     .option("--flow <flow>", "Onboard flow: quickstart|advanced|manual|import")
-    .option("--mode <mode>", "Onboard mode: local|remote")
-    .option("--auth-choice <choice>", `Auth: ${AUTH_CHOICE_HELP}`)
-    .option(
-      "--token-provider <id>",
-      "Token provider id (non-interactive; used with --auth-choice token)",
-    )
-    .option("--token <token>", "Token value (non-interactive; used with --auth-choice token)")
-    .option(
-      "--token-profile-id <id>",
-      "Auth profile id (non-interactive; default: <provider>:manual)",
-    )
-    .option("--token-expires-in <duration>", "Optional token expiry duration (e.g. 365d, 12h)")
-    .option(
-      "--secret-input-mode <mode>",
-      "API key persistence mode: plaintext|ref (default: plaintext)",
-    )
-    .option("--cloudflare-ai-gateway-account-id <id>", "Cloudflare Account ID")
-    .option("--cloudflare-ai-gateway-gateway-id <id>", "Cloudflare AI Gateway ID");
+    .option("--mode <mode>", "Onboard mode: local|remote");
 
-  for (const providerFlag of ONBOARD_AUTH_FLAGS) {
-    command.option(providerFlag.cliOption, providerFlag.description);
-  }
+  registerOnboardAuthOptions(command);
 
   command
-    .option("--custom-base-url <url>", "Custom provider base URL")
-    .option("--custom-api-key <key>", "Custom provider API key (optional)")
-    .option("--custom-model-id <id>", "Custom provider model ID")
-    .option("--custom-provider-id <id>", "Custom provider ID (optional; auto-derived by default)")
-    .option(
-      "--custom-compatibility <mode>",
-      "Custom provider API compatibility: openai|anthropic (default: openai)",
-    )
-    .option("--custom-image-input", "Mark the custom provider model as image-capable")
-    .option("--custom-text-input", "Mark the custom provider model as text-only")
     .option("--gateway-port <port>", "Gateway port")
     .option("--gateway-bind <mode>", "Gateway bind: loopback|tailnet|lan|auto|custom")
     .option("--gateway-auth <mode>", "Gateway auth: token|password")
@@ -193,9 +231,6 @@ export function registerOnboardCommand(program: Command): void {
         installDaemon: Boolean(opts.installDaemon),
       });
       const gatewayPort = parsePort(opts.gatewayPort);
-      const providerAuthOptionValues = pickOnboardProviderAuthOptionValues(
-        opts as Record<string, unknown>,
-      );
       const { setupWizardCommand } = await import("../../commands/onboard.js");
       await setupWizardCommand(
         {
@@ -204,26 +239,7 @@ export function registerOnboardCommand(program: Command): void {
           acceptRisk: Boolean(opts.acceptRisk),
           flow: opts.flow as "quickstart" | "advanced" | "manual" | "import" | undefined,
           mode: opts.mode as "local" | "remote" | undefined,
-          authChoice: opts.authChoice as AuthChoice | undefined,
-          tokenProvider: opts.tokenProvider as string | undefined,
-          token: opts.token as string | undefined,
-          tokenProfileId: opts.tokenProfileId as string | undefined,
-          tokenExpiresIn: opts.tokenExpiresIn as string | undefined,
-          secretInputMode: opts.secretInputMode as SecretInputMode | undefined,
-          ...providerAuthOptionValues,
-          cloudflareAiGatewayAccountId: opts.cloudflareAiGatewayAccountId as string | undefined,
-          cloudflareAiGatewayGatewayId: opts.cloudflareAiGatewayGatewayId as string | undefined,
-          customBaseUrl: opts.customBaseUrl as string | undefined,
-          customApiKey: opts.customApiKey as string | undefined,
-          customModelId: opts.customModelId as string | undefined,
-          customProviderId: opts.customProviderId as string | undefined,
-          customCompatibility: opts.customCompatibility as "openai" | "anthropic" | undefined,
-          customImageInput:
-            opts.customTextInput === true
-              ? false
-              : opts.customImageInput === true
-                ? true
-                : undefined,
+          ...pickOnboardAuthOptionValues(opts as Record<string, unknown>),
           gatewayPort: gatewayPort ?? undefined,
           gatewayBind: opts.gatewayBind as GatewayBind | undefined,
           gatewayAuth: opts.gatewayAuth as GatewayAuthChoice | undefined,

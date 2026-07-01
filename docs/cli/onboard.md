@@ -93,6 +93,7 @@ openclaw onboard --non-interactive \
 
 `--custom-api-key` is optional in non-interactive mode. If omitted, onboarding checks `CUSTOM_API_KEY`.
 OpenClaw marks common vision model IDs as image-capable automatically. Pass `--custom-image-input` for unknown custom vision IDs, or `--custom-text-input` to force text-only metadata.
+Use `--custom-compatibility openai-responses` for OpenAI-compatible endpoints that support `/v1/responses` but not `/v1/chat/completions`.
 
 LM Studio also supports a provider-specific key flag in non-interactive mode:
 
@@ -181,7 +182,10 @@ Interactive onboarding behavior with reference mode:
 ### Non-interactive Z.AI endpoint choices
 
 <Note>
-`--auth-choice zai-api-key` auto-detects the best Z.AI endpoint for your key (prefers the general API with `zai/glm-5.1`). If you specifically want the GLM Coding Plan endpoints, pick `zai-coding-global` or `zai-coding-cn`.
+`--auth-choice zai-api-key` auto-detects the best Z.AI endpoint and model for
+your key. Coding Plan endpoints prefer `zai/glm-5.2`; general API endpoints use
+`zai/glm-5.1`. To force a Coding Plan endpoint, pick `zai-coding-global` or
+`zai-coding-cn`.
 </Note>
 
 ```bash
@@ -243,7 +247,7 @@ openclaw configure
 openclaw agents add <name>
 ```
 
-Use `openclaw setup` instead when you only need the baseline config/workspace. Use `openclaw configure` later for targeted changes and `openclaw channels add` for channel-only setup.
+Use `openclaw setup` as the same guided onboarding entry point. Use `openclaw setup --baseline` when you only need the baseline config/workspace, `openclaw configure` later for targeted changes, and `openclaw channels add` for channel-only setup.
 
 <Note>
 `--json` does not imply non-interactive mode. Use `--non-interactive` for scripts.

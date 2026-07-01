@@ -1,5 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { note } from "../../terminal/note.js";
+// Config guard tests cover program-level config checks before command execution.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { note } from "../../../packages/terminal-core/src/note.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { formatCliCommand } from "../command-format.js";
 import { ensureConfigReady, testApi } from "./config-guard.js";
 
@@ -68,6 +73,8 @@ async function withCapturedStdout(run: () => Promise<void>): Promise<string> {
 
 describe("ensureConfigReady", () => {
   const resetConfigGuardStateForTests = testApi.resetConfigGuardStateForTests;
+  const tempRoots: string[] = [];
+  let envSnapshot: ReturnType<typeof captureEnv> | undefined;
 
   async function runEnsureConfigReady(commandPath: string[], suppressDoctorStdout = false) {
     const runtime = makeRuntime();
@@ -90,9 +97,41 @@ describe("ensureConfigReady", () => {
     });
   }
 
+  function useTempOpenClawHome(): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-guard-"));
+    tempRoots.push(root);
+    setTestEnvValue("OPENCLAW_HOME", root);
+    deleteTestEnvValue("OPENCLAW_STATE_DIR");
+    return root;
+  }
+
+  function writeLegacyTaskSidecarMarker(root: string): void {
+    const markerPath = path.join(root, ".openclaw", "tasks", "runs.sqlite");
+    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+    fs.writeFileSync(markerPath, "");
+  }
+
+  function writePendingTaskSidecarArchiveMarker(root: string): void {
+    const markerPath = path.join(root, ".openclaw", "tasks", "runs.sqlite");
+    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+    fs.writeFileSync(`${markerPath}.migrated`, "");
+    fs.writeFileSync(`${markerPath}-wal`, "");
+  }
+
+  function writeStateMarker(root: string, relativePath: string): void {
+    const markerPath = path.join(root, ".openclaw", relativePath);
+    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+    fs.writeFileSync(markerPath, "{}");
+  }
+
   beforeEach(() => {
+    envSnapshot = captureEnv(["HOME", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
     vi.clearAllMocks();
     resetConfigGuardStateForTests();
+    for (const root of tempRoots.splice(0)) {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+    useTempOpenClawHome();
     readConfigFileSnapshotMock.mockResolvedValue(makeSnapshot());
     loadAndMaybeMigrateDoctorConfigMock.mockImplementation(async () => ({
       snapshot: makeSnapshot(),
@@ -100,9 +139,17 @@ describe("ensureConfigReady", () => {
     }));
   });
 
+  afterEach(() => {
+    envSnapshot?.restore();
+    envSnapshot = undefined;
+    for (const root of tempRoots.splice(0)) {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     {
-      name: "skips doctor flow for read-only fast path commands",
+      name: "skips doctor flow for status task reads without legacy state",
       commandPath: ["status"],
       expectedDoctorCalls: 0,
     },
@@ -112,7 +159,12 @@ describe("ensureConfigReady", () => {
       expectedDoctorCalls: 0,
     },
     {
-      name: "runs doctor flow for commands that may mutate state",
+      name: "skips doctor flow for agent without legacy state",
+      commandPath: ["agent"],
+      expectedDoctorCalls: 0,
+    },
+    {
+      name: "runs doctor flow for commands that may mutate state without legacy state",
       commandPath: ["message"],
       expectedDoctorCalls: 1,
     },
@@ -121,11 +173,130 @@ describe("ensureConfigReady", () => {
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(expectedDoctorCalls);
     if (expectedDoctorCalls > 0) {
       expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
-        migrateState: false,
+        migrateState: true,
         migrateLegacyConfig: false,
         invalidConfigNote: false,
       });
     }
+  });
+
+  it("runs doctor flow when lightweight startup detection finds legacy state", async () => {
+    const root = useTempOpenClawHome();
+    writeLegacyTaskSidecarMarker(root);
+
+    await runEnsureConfigReady(["status"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
+      migrateState: true,
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+    });
+  });
+
+  it("runs doctor flow when lightweight startup detection finds a pending SQLite archive", async () => {
+    const root = useTempOpenClawHome();
+    writePendingTaskSidecarArchiveMarker(root);
+
+    await runEnsureConfigReady(["status"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
+      migrateState: true,
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+    });
+  });
+
+  it("runs doctor flow for legacy sessions without task sidecars", async () => {
+    const root = useTempOpenClawHome();
+    fs.mkdirSync(path.join(root, ".openclaw", "sessions"), { recursive: true });
+
+    await runEnsureConfigReady(["status"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
+  });
+
+  it("runs doctor flow before agent commands when the legacy plugin install index exists", async () => {
+    const root = useTempOpenClawHome();
+    writeStateMarker(root, "plugins/installs.json");
+
+    await runEnsureConfigReady(["agent"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
+      migrateState: true,
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+    });
+  });
+
+  it("runs doctor flow before agent commands when default exec approvals must move to a custom state dir", async () => {
+    const root = useTempOpenClawHome();
+    const stateDir = path.join(root, "custom-state");
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    writeStateMarker(root, "exec-approvals.json");
+
+    await runEnsureConfigReady(["agent"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledWith({
+      migrateState: true,
+      migrateLegacyConfig: false,
+      invalidConfigNote: false,
+    });
+  });
+
+  it.each([
+    ["Discord model picker preferences", "discord/model-picker-preferences.json"],
+    ["Discord thread bindings", "discord/thread-bindings.json"],
+    ["Feishu dedupe sidecar", "feishu/dedup/default.json"],
+    ["Telegram bot info cache", "telegram/bot-info-default.json"],
+    ["Telegram update offset", "telegram/update-offset-default.json"],
+    ["Telegram sticker cache", "telegram/sticker-cache.json"],
+    ["Telegram thread bindings", "telegram/thread-bindings-default.json"],
+    ["Telegram pairing allowFrom", "credentials/telegram-allowFrom.json"],
+    ["iMessage reply short-id cache", "imessage/reply-cache.jsonl"],
+    ["iMessage sent echo cache", "imessage/sent-echoes.jsonl"],
+    ["iMessage catchup cursor", "imessage/catchup/default__37a8eec1ce19.json"],
+    ["WhatsApp root auth", "credentials/creds.json"],
+  ])("runs doctor flow for bundled channel legacy state: %s", async (_label, relativePath) => {
+    const root = useTempOpenClawHome();
+    writeStateMarker(root, relativePath);
+
+    await runEnsureConfigReady(["status"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
+  });
+
+  it("uses shared tilde expansion for OPENCLAW_HOME in the startup detector", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-guard-home-"));
+    tempRoots.push(root);
+    setTestEnvValue("HOME", root);
+    setTestEnvValue("OPENCLAW_HOME", "~/svc");
+    deleteTestEnvValue("OPENCLAW_STATE_DIR");
+    writeLegacyTaskSidecarMarker(path.join(root, "svc"));
+
+    await runEnsureConfigReady(["status"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
+  });
+
+  it("runs doctor flow for read-only commands with configured custom session stores", async () => {
+    const root = useTempOpenClawHome();
+    const customStore = path.join(root, "sessions", "sessions.json");
+    const snapshot = {
+      ...makeSnapshot(),
+      config: { session: { store: customStore } },
+      runtimeConfig: { session: { store: customStore } },
+    };
+    readConfigFileSnapshotMock.mockResolvedValue(snapshot);
+    loadAndMaybeMigrateDoctorConfigMock.mockResolvedValue({
+      snapshot,
+      baseConfig: {},
+    });
+
+    await runEnsureConfigReady(["status"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
   });
 
   it("pins a valid preflight snapshot for command code reuse", async () => {
@@ -137,7 +308,7 @@ describe("ensureConfigReady", () => {
     };
     readConfigFileSnapshotMock.mockResolvedValue(snapshot);
 
-    await runEnsureConfigReady(["status"]);
+    await runEnsureConfigReady(["health"]);
 
     expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(
       snapshot.runtimeConfig,
@@ -155,9 +326,9 @@ describe("ensureConfigReady", () => {
       .mockResolvedValueOnce(recoveredSnapshot);
 
     try {
-      await expect(runEnsureConfigReady(["status"])).rejects.toThrow(transientError);
-      await expect(runEnsureConfigReady(["status"])).resolves.toBeDefined();
-      await expect(runEnsureConfigReady(["status"])).resolves.toBeDefined();
+      await expect(runEnsureConfigReady(["health"])).rejects.toThrow(transientError);
+      await expect(runEnsureConfigReady(["health"])).resolves.toBeDefined();
+      await expect(runEnsureConfigReady(["health"])).resolves.toBeDefined();
     } finally {
       if (originalVitest === undefined) {
         delete process.env.VITEST;
@@ -182,7 +353,7 @@ describe("ensureConfigReady", () => {
       "",
       `Fix: ${formatCliCommand("openclaw doctor --fix")}`,
       `Inspect: ${formatCliCommand("openclaw config validate")}`,
-      "Status, health, logs, and doctor commands still run with invalid config.",
+      "Status, health, logs, tasks list/audit, and doctor commands still run with invalid config.",
     ]);
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
@@ -227,6 +398,18 @@ describe("ensureConfigReady", () => {
     const gatewayRuntime = await runEnsureConfigReady(["gateway", "health"]);
     expect(gatewayRuntime.exit).not.toHaveBeenCalled();
 
+    const tasksListRuntime = await runEnsureConfigReady(["tasks", "list"]);
+    expect(tasksListRuntime.exit).not.toHaveBeenCalled();
+
+    const tasksParentRuntime = await runEnsureConfigReady(["tasks"]);
+    expect(tasksParentRuntime.exit).not.toHaveBeenCalled();
+
+    const tasksAuditRuntime = await runEnsureConfigReady(["tasks", "audit"]);
+    expect(tasksAuditRuntime.exit).not.toHaveBeenCalled();
+
+    const tasksRunRuntime = await runEnsureConfigReady(["tasks", "run"]);
+    expect(tasksRunRuntime.exit).toHaveBeenCalledWith(1);
+
     const doctorRuntime = await runEnsureConfigReady(["doctor", "fix"]);
     expect(doctorRuntime.exit).not.toHaveBeenCalled();
     expect(doctorRuntime.error).toHaveBeenCalledWith(expect.stringContaining("agentRuntime"));
@@ -244,6 +427,7 @@ describe("ensureConfigReady", () => {
   });
 
   it("runs doctor migration flow only once per module instance", async () => {
+    writeLegacyTaskSidecarMarker(useTempOpenClawHome());
     const runtimeA = makeRuntime();
     const runtimeB = makeRuntime();
 
@@ -253,11 +437,13 @@ describe("ensureConfigReady", () => {
   });
 
   it("still runs doctor flow when stdout suppression is enabled", async () => {
+    writeLegacyTaskSidecarMarker(useTempOpenClawHome());
     await runEnsureConfigReady(["message"], true);
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledTimes(1);
   });
 
   it("prevents preflight note noise when suppression is enabled", async () => {
+    writeLegacyTaskSidecarMarker(useTempOpenClawHome());
     loadAndMaybeMigrateDoctorConfigMock.mockImplementation(async () => {
       note("Doctor warnings", "Config warnings");
       return {
@@ -272,6 +458,7 @@ describe("ensureConfigReady", () => {
   });
 
   it("allows preflight note noise when suppression is not enabled", async () => {
+    writeLegacyTaskSidecarMarker(useTempOpenClawHome());
     loadAndMaybeMigrateDoctorConfigMock.mockImplementation(async () => {
       note("Doctor warnings", "Config warnings");
       return {
@@ -286,6 +473,7 @@ describe("ensureConfigReady", () => {
   });
 
   it("does not suppress unrelated concurrent stdout writes while suppressing preflight notes", async () => {
+    writeLegacyTaskSidecarMarker(useTempOpenClawHome());
     let releasePreflight: (() => void) | undefined;
     let preflightStarted: (() => void) | undefined;
     const preflightStartedPromise = new Promise<void>((resolve) => {

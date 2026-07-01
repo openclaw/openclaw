@@ -1,3 +1,4 @@
+// Copilot tests cover dual write transcripts plugin behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -85,6 +86,7 @@ describe("mirrorCopilotTranscript", () => {
 
     await mirrorCopilotTranscript({
       sessionFile,
+      sessionId: "session-1",
       sessionKey: "session-1",
       messages: [userMessage, assistantMessage, toolResultMessage],
       idempotencyScope: "copilot:session-1",
@@ -112,6 +114,7 @@ describe("mirrorCopilotTranscript", () => {
 
     await mirrorCopilotTranscript({
       sessionFile,
+      sessionId: "session-1",
       sessionKey: "session-1",
       messages: [
         makeAgentAssistantMessage({
@@ -142,12 +145,14 @@ describe("mirrorCopilotTranscript", () => {
 
     await mirrorCopilotTranscript({
       sessionFile,
+      sessionId: "session-1",
       sessionKey: "session-1",
       messages: [...messages],
       idempotencyScope: "copilot:session-1",
     });
     await mirrorCopilotTranscript({
       sessionFile,
+      sessionId: "session-1",
       sessionKey: "session-1",
       messages: [...messages],
       idempotencyScope: "copilot:session-1",
@@ -184,6 +189,7 @@ describe("mirrorCopilotTranscript", () => {
 
     await mirrorCopilotTranscript({
       sessionFile,
+      sessionId: "session-1",
       sessionKey: "session-1",
       messages: [sourceMessage],
       idempotencyScope: "copilot:session-1",
@@ -209,6 +215,7 @@ describe("mirrorCopilotTranscript", () => {
 
     await mirrorCopilotTranscript({
       sessionFile,
+      sessionId: "session-1",
       sessionKey: "session-1",
       messages: [
         makeAgentAssistantMessage({
@@ -227,6 +234,7 @@ describe("mirrorCopilotTranscript", () => {
 
     await mirrorCopilotTranscript({
       sessionFile,
+      sessionId: "session-1",
       sessionKey: "session-1",
       messages: [],
       idempotencyScope: "copilot:session-1",
@@ -244,6 +252,7 @@ describe("mirrorCopilotTranscript", () => {
 
     await mirrorCopilotTranscript({
       sessionFile,
+      sessionId: "session-1",
       messages: [message],
       idempotencyScope: "scope-fp",
     });
@@ -262,6 +271,7 @@ describe("mirrorCopilotTranscript", () => {
 
     await mirrorCopilotTranscript({
       sessionFile,
+      sessionId: "session-1",
       messages: [tagged],
       idempotencyScope: "copilot:openclaw-session-1",
     });
@@ -278,6 +288,7 @@ describe("mirrorCopilotTranscript", () => {
 
     await mirrorCopilotTranscript({
       sessionFile,
+      sessionId: "session-1",
       messages: [
         makeAgentAssistantMessage({
           content: [{ type: "text", text: "no scope" }],
@@ -305,6 +316,7 @@ describe("mirrorCopilotTranscript", () => {
 
     await mirrorCopilotTranscript({
       sessionFile,
+      sessionId: "session-1",
       messages: [userMessage, systemLike],
       idempotencyScope: "scope",
     });
@@ -325,6 +337,7 @@ describe("mirrorCopilotTranscript", () => {
 
     await mirrorCopilotTranscript({
       sessionFile,
+      sessionId: "session-1",
       messages: [second],
       idempotencyScope: "scope",
     });
@@ -341,6 +354,7 @@ describe("dualWriteCopilotTranscriptBestEffort", () => {
     await expect(
       dualWriteCopilotTranscriptBestEffort({
         sessionFile,
+        sessionId: "session-1",
         messages: [
           makeAgentAssistantMessage({
             content: [{ type: "text", text: "ok" }],
@@ -355,22 +369,34 @@ describe("dualWriteCopilotTranscriptBestEffort", () => {
   });
 
   it("swallows infrastructure failures and never rejects", async () => {
-    // Pointing sessionFile at a path under a non-existent root with an
-    // empty-string segment can fail differently on different platforms;
-    // instead force failure by passing an invalid type and asserting
-    // that the wrapper itself does not reject. Use any-cast for the
-    // bad input shape since we are testing the wrapper's catch.
-    await expect(
-      dualWriteCopilotTranscriptBestEffort({
-        sessionFile: "" as unknown as string,
-        messages: [
-          makeAgentAssistantMessage({
-            content: [{ type: "text", text: "should-not-throw" }],
-            timestamp: Date.now(),
-          }),
-        ],
-        idempotencyScope: "scope",
-      }),
-    ).resolves.toBeUndefined();
+    const root = await makeRoot("openclaw-copilot-mirror-invalid-");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = root;
+    try {
+      await expect(
+        dualWriteCopilotTranscriptBestEffort({
+          agentId: "main",
+          sessionFile: "",
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          messages: [
+            makeAgentAssistantMessage({
+              content: [{ type: "text", text: "should-not-throw" }],
+              timestamp: Date.now(),
+            }),
+          ],
+          idempotencyScope: "scope",
+        }),
+      ).resolves.toBeUndefined();
+      await expect(
+        fs.access(path.join(root, "agents", "main", "sessions", "session-1.jsonl")),
+      ).rejects.toHaveProperty("code", "ENOENT");
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+    }
   });
 });

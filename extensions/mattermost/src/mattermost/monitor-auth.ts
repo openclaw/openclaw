@@ -1,3 +1,4 @@
+// Mattermost plugin module implements monitor auth behavior.
 import { parseAccessGroupAllowFromEntry } from "openclaw/plugin-sdk/access-groups";
 import {
   type ChannelIngressDecision,
@@ -58,6 +59,19 @@ export function normalizeMattermostAllowList(entries: Array<string | number>): s
     .map((entry) => normalizeMattermostAllowEntry(String(entry)))
     .filter(Boolean);
   return uniqueStrings(normalized);
+}
+
+export function formatMattermostDirectMessageDropLog(params: {
+  senderId: string;
+  dmPolicy: string;
+  reasonCode?: string;
+}): string {
+  const reason = params.reasonCode ? ` reason=${params.reasonCode}` : "";
+  const hint =
+    params.dmPolicy === "open" && params.reasonCode === "dm_policy_not_allowlisted"
+      ? " hint=add-allowFrom-wildcard"
+      : "";
+  return `mattermost: drop dm sender=${params.senderId} (dmPolicy=${params.dmPolicy}${reason}${hint})`;
 }
 
 export function isMattermostSenderAllowed(params: {

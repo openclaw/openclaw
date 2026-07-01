@@ -1,7 +1,21 @@
+/**
+ * Executes prepared CLI backend runs, including env isolation, streaming parse,
+ * live-session routing, and diagnostics.
+ */
 import crypto from "node:crypto";
+import {
+  beginMcpLoopbackToolCallCapture,
+  clearMcpLoopbackToolCallCapture,
+  type McpLoopbackToolCallStart,
+  waitForMcpLoopbackToolCallCaptureIdle,
+} from "../../gateway/mcp-http.loopback-runtime.js";
 import { shouldLogVerbose } from "../../globals.js";
-import { emitAgentEvent } from "../../infra/agent-events.js";
+import {
+  assertAgentRunLifecycleGenerationCurrent,
+  emitAgentEvent,
+} from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   resolveEventSessionKeyForPolicy,
   resolveEventSessionRoutingPolicy,
@@ -9,29 +23,61 @@ import {
 } from "../../infra/event-session-routing.js";
 import { requestHeartbeat as requestHeartbeatImpl } from "../../infra/heartbeat-wake.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
+import { shouldUseInternalSourceReplySink } from "../../infra/outbound/internal-source-reply.js";
 import { enqueueSystemEvent as enqueueSystemEventImpl } from "../../infra/system-events.js";
 import { getProcessSupervisor as getProcessSupervisorImpl } from "../../process/supervisor/index.js";
+import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
 import { appendBootstrapPromptWarning } from "../bootstrap-budget.js";
 import {
   createCliJsonlStreamingParser,
   extractCliErrorMessage,
   parseCliOutput,
   type CliOutput,
+  type CliStreamingDelta,
 } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
-import { sanitizeToolArgs, sanitizeToolResult } from "../embedded-agent-subscribe.tools.js";
+import {
+  isDeliveredMessageToolOnlySourceReplyResult,
+  isDeliveredMessagingToolResult,
+} from "../embedded-agent-message-tool-source-reply.js";
+import {
+  isMessagingTool,
+  isMessagingToolDeliveryAction,
+  isMessagingToolSendAction,
+  isMessagingToolTargetEvidenceAction,
+} from "../embedded-agent-messaging.js";
+import type {
+  MessagingToolSend,
+  MessagingToolSourceReplyPayload,
+} from "../embedded-agent-messaging.types.js";
+import {
+  collectMessagingMediaUrlsFromRecord,
+  collectMessagingMediaUrlsFromToolResult,
+  extractMessagingToolSend,
+  extractMessagingToolSendResult,
+  extractMessagingToolSourceReplyPayload,
+  sanitizeToolArgs,
+  sanitizeToolResult,
+} from "../embedded-agent-subscribe.tools.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
-import { applySkillEnvOverridesFromSnapshot } from "../skills.js";
-import { runClaudeLiveSessionTurn, shouldUseClaudeLiveSession } from "./claude-live-session.js";
+import { prepareCliBundleMcpCaptureAttempt } from "./bundle-mcp.js";
+import {
+  rotateClaudeLiveMcpCaptureKeyForContext,
+  runClaudeLiveSessionTurn,
+  shouldUseClaudeLiveSession,
+} from "./claude-live-session.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
+import { attachCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import {
   buildCliSupervisorScopeKey,
+  buildClaudeOwnerKey,
   buildCliArgs,
   resolveCliRunQueueKey,
   enqueueCliRun,
   prepareCliPromptImagePayload,
   resolveCliNoOutputTimeoutMs,
+  resolveCliRunTimeoutOverrideMs,
   resolvePromptInput,
   resolveSessionIdToSend,
   resolveSystemPromptUsage,
@@ -49,10 +95,109 @@ const executeDeps = {
   getProcessSupervisor: getProcessSupervisorImpl,
   enqueueSystemEvent: enqueueSystemEventImpl,
   requestHeartbeat: requestHeartbeatImpl,
+  writeCliSystemPromptFile,
 };
 
 const CLI_RUNNER_OUTPUT_TAIL_BYTES = 64 * 1024;
 const CLI_RUNNER_OUTPUT_PARSE_BYTES = 1024 * 1024;
+const CLI_MESSAGING_EVIDENCE_MAX_CALLS = 64;
+const CLI_MCP_DELIVERY_DRAIN_GRACE_MS = 5_000;
+const CLI_MCP_REQUEST_ADMISSION_GRACE_MS = 250;
+const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";
+
+function normalizeCliMessagingToolName(toolName: string): string {
+  return toolName.startsWith(OPENCLAW_MCP_TOOL_PREFIX)
+    ? toolName.slice(OPENCLAW_MCP_TOOL_PREFIX.length)
+    : toolName;
+}
+
+function extractCliMessagingTarget(
+  context: PreparedCliRunContext,
+  toolName: string,
+  args: Record<string, unknown>,
+): MessagingToolSend | undefined {
+  const normalizedToolName = normalizeCliMessagingToolName(toolName);
+  const currentProvider = context.params.messageChannel ?? context.params.messageProvider;
+  const hasExplicitProvider =
+    (typeof args.provider === "string" && args.provider.trim().length > 0) ||
+    (typeof args.channel === "string" && args.channel.trim().length > 0);
+  const targetArgs =
+    normalizedToolName === "message" && currentProvider && !hasExplicitProvider
+      ? { ...args, provider: currentProvider }
+      : args;
+  if (!isMessagingToolTargetEvidenceAction(normalizedToolName, targetArgs)) {
+    return undefined;
+  }
+  return extractMessagingToolSend(normalizedToolName, targetArgs, {
+    config: context.params.config,
+    currentChannelId: context.params.currentChannelId,
+    currentThreadId: context.params.currentThreadTs,
+    currentMessageId: context.params.currentMessageId,
+  });
+}
+
+function buildMessagingToolSendEvidenceKey(send: MessagingToolSend): string {
+  return crypto
+    .createHash("sha256")
+    .update(
+      JSON.stringify([
+        send.tool,
+        send.provider,
+        send.accountId,
+        send.to,
+        send.threadId,
+        send.threadImplicit,
+        send.threadSuppressed,
+        send.text,
+        send.mediaUrls,
+      ]),
+    )
+    .digest("hex");
+}
+
+function buildCliMcpCaptureKey(context: PreparedCliRunContext): string | undefined {
+  if (!context.mcpDeliveryCapture) {
+    return undefined;
+  }
+  return crypto.randomUUID();
+}
+
+function extractCliMessagingContent(
+  args: Record<string, unknown>,
+  result: unknown,
+): Pick<MessagingToolSend, "text" | "mediaUrls"> {
+  const text = ["message", "SendMessage", "content", "text", "caption"]
+    .map((key) => args[key])
+    .find((value): value is string => typeof value === "string" && value.trim().length > 0);
+  const mediaUrls = [
+    ...collectMessagingMediaUrlsFromRecord(args),
+    ...collectMessagingMediaUrlsFromToolResult(result),
+  ].filter((url, index, all) => all.indexOf(url) === index);
+  return {
+    ...(text ? { text } : {}),
+    ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
+  };
+}
+
+function appendUniqueCliMessagingEvidence(
+  values: string[],
+  valueKeys: Set<string>,
+  additions: readonly string[],
+): void {
+  for (const addition of additions) {
+    if (!addition || valueKeys.has(addition)) {
+      continue;
+    }
+    if (values.length >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
+      const removed = values.shift();
+      if (removed) {
+        valueKeys.delete(removed);
+      }
+    }
+    values.push(addition);
+    valueKeys.add(addition);
+  }
+}
 
 function appendCliOutputTail(tail: Buffer, chunk: string): Buffer {
   if (!chunk) {
@@ -96,6 +241,7 @@ function appendCliOutputParseBuffer(
   };
 }
 
+/** Overrides process/event dependencies for CLI runner execution tests. */
 export function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDeps>): void {
   Object.assign(executeDeps, overrides);
 }
@@ -167,6 +313,8 @@ const CLI_ENV_AUTH_LOG_KEYS = [
   "OPENROUTER_API_KEY",
 ] as const;
 
+const CLI_ENV_RUNTIME_LOG_KEYS = ["GEMINI_CLI_HOME", "GEMINI_CLI_SYSTEM_SETTINGS_PATH"] as const;
+
 const CLI_BACKEND_PRESERVE_ENV = "OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV";
 
 function parseCliBackendPreserveEnv(raw: string | undefined): Set<string> {
@@ -201,6 +349,13 @@ function listPresentCliAuthEnvKeys(env: Record<string, string | undefined>): str
   });
 }
 
+function listPresentCliRuntimeEnvKeys(env: Record<string, string | undefined>): string[] {
+  return CLI_ENV_RUNTIME_LOG_KEYS.filter((key) => {
+    const value = env[key];
+    return typeof value === "string" && value.length > 0;
+  });
+}
+
 function formatCliEnvKeyList(keys: readonly string[]): string {
   return keys.length > 0 ? keys.join(",") : "none";
 }
@@ -223,6 +378,7 @@ function fingerprintCliSessionId(sessionId?: string): string {
   return crypto.createHash("sha256").update(trimmed).digest("hex").slice(0, 12);
 }
 
+/** Builds the compact execution summary logged before a CLI backend run. */
 export function buildCliExecLogLine(params: {
   provider: string;
   model: string;
@@ -253,18 +409,27 @@ export function buildCliExecLogLine(params: {
   ].join(" ");
 }
 
+/** Summarizes auth-related env keys preserved or cleared for a CLI child process. */
 export function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
   const hostKeys = listPresentCliAuthEnvKeys(process.env);
   const childKeys = listPresentCliAuthEnvKeys(childEnv);
   const childKeySet = new Set(childKeys);
   const clearedKeys = hostKeys.filter((key) => !childKeySet.has(key));
+  const runtimeHostKeys = listPresentCliRuntimeEnvKeys(process.env);
+  const runtimeChildKeys = listPresentCliRuntimeEnvKeys(childEnv);
+  const runtimeChildKeySet = new Set(runtimeChildKeys);
+  const runtimeClearedKeys = runtimeHostKeys.filter((key) => !runtimeChildKeySet.has(key));
   return [
     `host=${formatCliEnvKeyList(hostKeys)}`,
     `child=${formatCliEnvKeyList(childKeys)}`,
     `cleared=${formatCliEnvKeyList(clearedKeys)}`,
+    `runtimeHost=${formatCliEnvKeyList(runtimeHostKeys)}`,
+    `runtimeChild=${formatCliEnvKeyList(runtimeChildKeys)}`,
+    `runtimeCleared=${formatCliEnvKeyList(runtimeClearedKeys)}`,
   ].join(" ");
 }
 
+/** Executes a prepared CLI run context and returns normalized CLI output. */
 export async function executePreparedCliRun(
   context: PreparedCliRunContext,
   cliSessionIdToUse?: string,
@@ -288,7 +453,7 @@ export async function executePreparedCliRun(
   });
   const systemPromptFile =
     systemPromptArg && (!useResume || backend.systemPromptWhen === "always")
-      ? await writeCliSystemPromptFile({
+      ? await executeDeps.writeCliSystemPromptFile({
           backend,
           systemPrompt: systemPromptArg,
         })
@@ -344,6 +509,7 @@ export async function executePreparedCliRun(
       modelId: context.modelId,
       authProfileId: context.effectiveAuthProfileId,
       thinkingLevel: params.thinkLevel,
+      executionMode: params.executionMode ?? "agent",
       useResume,
       baseArgs: baseArgsWithSkills,
     }) ?? baseArgsWithSkills;
@@ -359,16 +525,49 @@ export async function executePreparedCliRun(
     useResume,
   });
 
+  const claudeOwnerKey = buildClaudeOwnerKey({
+    agentAccountId: params.agentAccountId,
+    agentId: params.agentId,
+    authProfileId: context.effectiveAuthProfileId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+  });
   const queueKey = resolveCliRunQueueKey({
     backendId: context.backendResolved.id,
+    liveSession: backend.liveSession,
     serialize: backend.serialize,
     runId: params.runId,
     workspaceDir: context.workspaceDir,
     cliSessionId: useResume ? resolvedSessionId : undefined,
+    ownerKey: claudeOwnerKey,
   });
 
+  let completedOutput: CliOutput | undefined;
+  let executionError: unknown;
+  const cleanupOuterResource = async (cleanup: (() => Promise<void>) | undefined) => {
+    try {
+      await cleanup?.();
+    } catch (error) {
+      if (completedOutput?.didSendViaMessagingTool === true) {
+        cliBackendLog.warn(
+          `CLI outer resource cleanup failed after confirmed message delivery: ${formatErrorMessage(error)}`,
+        );
+        return;
+      }
+      if (executionError !== undefined) {
+        cliBackendLog.warn(
+          `CLI outer resource cleanup also failed after run error: ${formatErrorMessage(error)}`,
+        );
+        return;
+      }
+      throw error;
+    }
+  };
   try {
-    return await enqueueCliRun(queueKey, async () => {
+    completedOutput = await enqueueCliRun(queueKey, async () => {
+      if (params.lifecycleGeneration) {
+        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+      }
       const cliTurnStartedAt = Date.now();
       const restoreSkillEnv = params.skillsSnapshot
         ? applySkillEnvOverridesFromSnapshot({
@@ -376,6 +575,83 @@ export async function executePreparedCliRun(
             config: params.config,
           })
         : undefined;
+      let gatewayCaptureKey: string | undefined;
+      let cleanupMcpCaptureAttempt: (() => Promise<void>) | undefined;
+      let yielded = false;
+      let didSendViaMessagingTool = false;
+      let didDeliverSourceReplyViaMessageTool = false;
+      let inFlightUnclassifiedMcpRequests = 0;
+      let inFlightMessagingToolCalls = 0;
+      const inFlightPreparedMessagingCalls = new Set<McpLoopbackToolCallStart>();
+      const pendingMessagingCalls = new Map<
+        string,
+        { toolName: string; args: Record<string, unknown>; target?: MessagingToolSend }
+      >();
+      const messagingToolSentTexts: string[] = [];
+      const messagingToolSentTextKeys = new Set<string>();
+      const messagingToolSentMediaUrls: string[] = [];
+      const messagingToolSentMediaUrlKeys = new Set<string>();
+      const messagingToolSentTargets: MessagingToolSend[] = [];
+      const messagingToolSentTargetKeys = new Set<string>();
+      const messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[] = [];
+      const isPreparedInternalSourceReply = async (call: McpLoopbackToolCallStart) => {
+        if (
+          context.params.sourceReplyDeliveryMode !== "message_tool_only" ||
+          normalizeCliMessagingToolName(call.toolName) !== "message" ||
+          call.args.action !== "send" ||
+          !context.params.config
+        ) {
+          return false;
+        }
+        return await shouldUseInternalSourceReplySink(
+          {
+            cfg: context.params.config,
+            action: "send",
+            sessionKey: context.params.sessionKey,
+            sourceReplyDeliveryMode: context.params.sourceReplyDeliveryMode,
+            toolContext: {
+              currentChannelProvider:
+                context.params.messageChannel ?? context.params.messageProvider,
+              currentChannelId: context.params.currentChannelId,
+              currentThreadTs: context.params.currentThreadTs,
+              currentMessageId: context.params.currentMessageId,
+            },
+          },
+          call.args,
+        );
+      };
+      let runOutput: CliOutput | undefined;
+      let runError: unknown;
+      let runFailed = false;
+      const recordRunError = (error: unknown) => {
+        if (runFailed) {
+          return;
+        }
+        runFailed = true;
+        runError = error;
+      };
+      const withExecutionEvidence = (output: CliOutput): CliOutput => {
+        return {
+          ...output,
+          ...(yielded ? { yielded: true as const } : {}),
+          ...(didSendViaMessagingTool ? { didSendViaMessagingTool: true } : {}),
+          ...(didDeliverSourceReplyViaMessageTool
+            ? { didDeliverSourceReplyViaMessageTool: true }
+            : {}),
+          ...(messagingToolSentTexts.length > 0
+            ? { messagingToolSentTexts: messagingToolSentTexts.slice() }
+            : {}),
+          ...(messagingToolSentMediaUrls.length > 0
+            ? { messagingToolSentMediaUrls: messagingToolSentMediaUrls.slice() }
+            : {}),
+          ...(messagingToolSentTargets.length > 0
+            ? { messagingToolSentTargets: messagingToolSentTargets.slice() }
+            : {}),
+          ...(messagingToolSourceReplyPayloads.length > 0
+            ? { messagingToolSourceReplyPayloads: messagingToolSourceReplyPayloads.slice() }
+            : {}),
+        };
+      };
       try {
         cliBackendLog.info(
           buildCliExecLogLine({
@@ -394,6 +670,18 @@ export async function executePreparedCliRun(
         const logOutputText =
           isTruthyEnvValue(process.env[CLI_BACKEND_LOG_OUTPUT_ENV]) ||
           isTruthyEnvValue(process.env[LEGACY_CLAUDE_CLI_LOG_OUTPUT_ENV]);
+        const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
+        const hasJsonlOutput = outputMode === "jsonl";
+        const initialGatewayCaptureKey = shouldUseClaudeLiveSession(context)
+          ? undefined
+          : buildCliMcpCaptureKey(context);
+        const mcpCaptureAttempt = await prepareCliBundleMcpCaptureAttempt({
+          mode: context.backendResolved.bundleMcpMode,
+          backend,
+          env: context.preparedBackend.env,
+          captureKey: initialGatewayCaptureKey,
+        });
+        cleanupMcpCaptureAttempt = mcpCaptureAttempt.cleanup;
         const env = (() => {
           const next = sanitizeHostExecEnv({
             baseEnv: process.env,
@@ -406,17 +694,21 @@ export async function executePreparedCliRun(
             }
             delete next[key];
           }
-          if (backend.env && Object.keys(backend.env).length > 0) {
+          const backendEnv = {
+            ...backend.env,
+            ...context.preparedBackend.env,
+          };
+          if (Object.keys(backendEnv).length > 0) {
             Object.assign(
               next,
               sanitizeHostExecEnv({
                 baseEnv: {},
-                overrides: backend.env,
+                overrides: backendEnv,
                 blockPathOverrides: true,
               }),
             );
           }
-          Object.assign(next, context.preparedBackend.env);
+          Object.assign(next, mcpCaptureAttempt.env);
 
           // Never mark Claude CLI as host-managed. That marker routes runs into
           // Anthropic's separate host-managed usage tier instead of normal CLI
@@ -441,19 +733,200 @@ export async function executePreparedCliRun(
           }
         }
 
+        const runTimeoutOverrideMs = resolveCliRunTimeoutOverrideMs({
+          config: params.config,
+          lane: params.lane,
+          timeoutMs: params.timeoutMs,
+          runTimeoutOverrideMs: params.runTimeoutOverrideMs,
+        });
         const noOutputTimeoutMs = resolveCliNoOutputTimeoutMs({
           backend,
           timeoutMs: params.timeoutMs,
+          runTimeoutOverrideMs,
           useResume,
           trigger: params.trigger,
         });
-        const outputMode = useResume ? (backend.resumeOutput ?? backend.output) : backend.output;
-        const hasJsonlOutput = outputMode === "jsonl";
+        const commitMessagingToolResult = (paramsLocal: {
+          toolName: string;
+          target?: MessagingToolSend;
+          args?: Record<string, unknown>;
+          result?: unknown;
+          isError?: boolean;
+        }) => {
+          if (!isDeliveredMessagingToolResult(paramsLocal)) {
+            return;
+          }
+          didSendViaMessagingTool = true;
+          const toolArgs = paramsLocal.args ?? {};
+          const isMessagingSend = isMessagingToolSendAction(paramsLocal.toolName, toolArgs);
+          const content = isMessagingSend
+            ? extractCliMessagingContent(toolArgs, paramsLocal.result)
+            : {};
+          if (isMessagingSend) {
+            appendUniqueCliMessagingEvidence(
+              messagingToolSentTexts,
+              messagingToolSentTextKeys,
+              content.text ? [content.text] : [],
+            );
+            appendUniqueCliMessagingEvidence(
+              messagingToolSentMediaUrls,
+              messagingToolSentMediaUrlKeys,
+              content.mediaUrls ?? [],
+            );
+            if (
+              isDeliveredMessageToolOnlySourceReplyResult({
+                sourceReplyDeliveryMode: context.params.sourceReplyDeliveryMode,
+                toolName: paramsLocal.toolName,
+                args: paramsLocal.args,
+                result: paramsLocal.result,
+                isError: paramsLocal.isError,
+              })
+            ) {
+              didDeliverSourceReplyViaMessageTool = true;
+              const sourceReplyPayload = extractMessagingToolSourceReplyPayload(paramsLocal.result);
+              if (sourceReplyPayload) {
+                if (messagingToolSourceReplyPayloads.length >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
+                  messagingToolSourceReplyPayloads.shift();
+                }
+                // Each internal source-reply send is a distinct delivery, even when
+                // two intentional sends have identical text or media.
+                messagingToolSourceReplyPayloads.push(sourceReplyPayload);
+              }
+            }
+          }
+          if (paramsLocal.target) {
+            const confirmedTarget = extractMessagingToolSendResult(
+              paramsLocal.target,
+              paramsLocal.result,
+            );
+            const targetWithContent = {
+              ...confirmedTarget,
+              ...content,
+            };
+            const evidenceKey = buildMessagingToolSendEvidenceKey(targetWithContent);
+            if (messagingToolSentTargetKeys.has(evidenceKey)) {
+              return;
+            }
+            if (messagingToolSentTargets.length >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
+              const removed = messagingToolSentTargets.shift();
+              if (removed) {
+                messagingToolSentTargetKeys.delete(buildMessagingToolSendEvidenceKey(removed));
+              }
+            }
+            messagingToolSentTargets.push(targetWithContent);
+            messagingToolSentTargetKeys.add(evidenceKey);
+          }
+        };
+        const beginGatewayCapture = (captureKey: string | undefined) => {
+          if (!captureKey) {
+            return;
+          }
+          if (gatewayCaptureKey === captureKey) {
+            return;
+          }
+          if (gatewayCaptureKey) {
+            throw new Error("CLI MCP capture key changed during an active attempt");
+          }
+          gatewayCaptureKey = captureKey;
+          const isAdmittedPotentialMessagingDelivery = (toolName: string) => {
+            return isMessagingTool(normalizeCliMessagingToolName(toolName));
+          };
+          const isPreparedMessagingDelivery = (
+            toolName: string,
+            toolArgs: Record<string, unknown>,
+          ) => {
+            return (
+              toolArgs.dryRun !== true &&
+              isMessagingToolDeliveryAction(normalizeCliMessagingToolName(toolName), toolArgs)
+            );
+          };
+          beginMcpLoopbackToolCallCapture({
+            captureKey: gatewayCaptureKey,
+            onYield: () => {
+              yielded = true;
+            },
+            onRequestStart: () => {
+              inFlightUnclassifiedMcpRequests += 1;
+            },
+            onRequestClassified: () => {
+              inFlightUnclassifiedMcpRequests = Math.max(0, inFlightUnclassifiedMcpRequests - 1);
+            },
+            onToolCallStart: (call) => {
+              if (isAdmittedPotentialMessagingDelivery(call.toolName)) {
+                inFlightMessagingToolCalls += 1;
+              }
+            },
+            onToolCallUpdate: ({ previous, current }) => {
+              inFlightPreparedMessagingCalls.delete(previous);
+              const wasMessagingSend = isAdmittedPotentialMessagingDelivery(previous.toolName);
+              const isMessagingSend = isPreparedMessagingDelivery(current.toolName, current.args);
+              if (wasMessagingSend !== isMessagingSend) {
+                inFlightMessagingToolCalls = Math.max(
+                  0,
+                  inFlightMessagingToolCalls + (isMessagingSend ? 1 : -1),
+                );
+              }
+              if (isMessagingSend) {
+                inFlightPreparedMessagingCalls.add(current);
+              }
+            },
+            onToolCallFinish: (call, { prepared }) => {
+              const isMessagingSend = prepared
+                ? isPreparedMessagingDelivery(call.toolName, call.args)
+                : isAdmittedPotentialMessagingDelivery(call.toolName);
+              if (isMessagingSend) {
+                inFlightMessagingToolCalls = Math.max(0, inFlightMessagingToolCalls - 1);
+              }
+              inFlightPreparedMessagingCalls.delete(call);
+            },
+            onToolCallResult: ({ toolName, args: toolArgs, result, isError }) => {
+              const normalizedToolName = normalizeCliMessagingToolName(toolName);
+              if (!isMessagingToolDeliveryAction(normalizedToolName, toolArgs)) {
+                return;
+              }
+              commitMessagingToolResult({
+                toolName: normalizedToolName,
+                target: extractCliMessagingTarget(context, normalizedToolName, toolArgs),
+                args: toolArgs,
+                result,
+                isError,
+              });
+            },
+          });
+        };
+        beginGatewayCapture(initialGatewayCaptureKey);
+        let observedCliActivity = false;
+        const emitLiveEvents = params.executionMode !== "side-question";
         const emitCliToolUseStart = (event: {
           toolCallId: string;
           name: string;
           args: Record<string, unknown>;
         }) => {
+          observedCliActivity = true;
+          const toolName = normalizeCliMessagingToolName(event.name);
+          if (
+            !gatewayCaptureKey &&
+            event.args.dryRun !== true &&
+            isMessagingToolDeliveryAction(toolName, event.args)
+          ) {
+            if (pendingMessagingCalls.size >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
+              const oldestToolCallId = pendingMessagingCalls.keys().next().value;
+              if (oldestToolCallId !== undefined) {
+                pendingMessagingCalls.delete(oldestToolCallId);
+                // Once an unresolved send is evicted, its later result cannot be
+                // correlated. Fail closed so a failed turn cannot duplicate it.
+                didSendViaMessagingTool = true;
+              }
+            }
+            pendingMessagingCalls.set(event.toolCallId, {
+              toolName,
+              args: event.args,
+              target: extractCliMessagingTarget(context, toolName, event.args),
+            });
+          }
+          if (!emitLiveEvents) {
+            return;
+          }
           emitAgentEvent({
             runId: params.runId,
             stream: "tool",
@@ -471,6 +944,21 @@ export async function executePreparedCliRun(
           isError: boolean;
           result?: unknown;
         }) => {
+          observedCliActivity = true;
+          const pending = pendingMessagingCalls.get(event.toolCallId);
+          if (pending) {
+            pendingMessagingCalls.delete(event.toolCallId);
+            commitMessagingToolResult({
+              toolName: pending.toolName,
+              target: pending.target,
+              args: pending.args,
+              result: event.result,
+              isError: event.isError,
+            });
+          }
+          if (!emitLiveEvents) {
+            return;
+          }
           emitAgentEvent({
             runId: params.runId,
             stream: "tool",
@@ -480,6 +968,51 @@ export async function executePreparedCliRun(
               toolCallId: event.toolCallId,
               isError: event.isError,
               result: sanitizeToolResult(event.result),
+            },
+          });
+        };
+        let commentaryCounter = 0;
+        const emitCliCommentaryText = (text: string) => {
+          if (!emitLiveEvents) {
+            return;
+          }
+          commentaryCounter += 1;
+          const transformedText = applyPluginTextReplacements(
+            text,
+            context.backendResolved.textTransforms?.output,
+          );
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "item",
+            data: {
+              kind: "preamble",
+              itemId: `commentary-${params.runId}-${commentaryCounter}`,
+              phase: "update",
+              title: "commentary",
+              status: "running",
+              progressText: transformedText,
+            },
+          });
+        };
+        const emitCliAssistantDelta = ({ text, delta }: CliStreamingDelta) => {
+          if (text || delta) {
+            observedCliActivity = true;
+          }
+          if (!emitLiveEvents) {
+            return;
+          }
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "assistant",
+            data: {
+              text: applyPluginTextReplacements(
+                text,
+                context.backendResolved.textTransforms?.output,
+              ),
+              delta: applyPluginTextReplacements(
+                delta,
+                context.backendResolved.textTransforms?.output,
+              ),
             },
           });
         };
@@ -493,9 +1026,14 @@ export async function executePreparedCliRun(
             model: context.modelId,
             backend: context.backendResolved.id,
           });
-          fallbackClaudeSkillsPluginCleanupOwned = true;
-          const ownedPreparedBackendCleanup = context.preparedBackend.cleanup;
-          context.preparedBackend.cleanup = undefined;
+          const liveSessionOwnsRunArtifacts = context.mcpDeliveryCapture !== true;
+          fallbackClaudeSkillsPluginCleanupOwned = liveSessionOwnsRunArtifacts;
+          const ownedPreparedBackendCleanup = liveSessionOwnsRunArtifacts
+            ? context.preparedBackend.cleanup
+            : undefined;
+          if (liveSessionOwnsRunArtifacts) {
+            context.preparedBackend.cleanup = undefined;
+          }
           const liveResult = await runClaudeLiveSessionTurn({
             context,
             args,
@@ -504,34 +1042,26 @@ export async function executePreparedCliRun(
             useResume,
             noOutputTimeoutMs,
             getProcessSupervisor: executeDeps.getProcessSupervisor,
-            onAssistantDelta: ({ text, delta }) => {
-              emitAgentEvent({
-                runId: params.runId,
-                stream: "assistant",
-                data: {
-                  text: applyPluginTextReplacements(
-                    text,
-                    context.backendResolved.textTransforms?.output,
-                  ),
-                  delta: applyPluginTextReplacements(
-                    delta,
-                    context.backendResolved.textTransforms?.output,
-                  ),
-                },
-              });
-            },
+            onAssistantDelta: emitCliAssistantDelta,
             onToolUseStart: emitCliToolUseStart,
             onToolResult: emitCliToolResult,
-            cleanup: async () => {
-              try {
-                await fallbackClaudeSkillsPlugin?.cleanup();
-              } finally {
-                await ownedPreparedBackendCleanup?.();
-              }
-            },
+            onCommentaryText:
+              emitLiveEvents && context.params.emitCommentaryText
+                ? emitCliCommentaryText
+                : undefined,
+            onMcpCaptureReady: beginGatewayCapture,
+            cleanup: liveSessionOwnsRunArtifacts
+              ? async () => {
+                  try {
+                    await fallbackClaudeSkillsPlugin?.cleanup();
+                  } finally {
+                    await ownedPreparedBackendCleanup?.();
+                  }
+                }
+              : async () => {},
           });
           const rawText = liveResult.output.text;
-          return {
+          runOutput = {
             ...liveResult.output,
             rawText,
             finalPromptText: prompt,
@@ -540,274 +1070,418 @@ export async function executePreparedCliRun(
               context.backendResolved.textTransforms?.output,
             ),
           };
-        }
-        const streamingParser = hasJsonlOutput
-          ? createCliJsonlStreamingParser({
+        } else {
+          const streamingParser = hasJsonlOutput
+            ? createCliJsonlStreamingParser({
+                backend,
+                providerId: context.backendResolved.id,
+                onAssistantDelta: emitCliAssistantDelta,
+                onToolUseStart: emitCliToolUseStart,
+                onToolResult: emitCliToolResult,
+                onCommentaryText:
+                  emitLiveEvents && context.params.emitCommentaryText
+                    ? emitCliCommentaryText
+                    : undefined,
+              })
+            : null;
+          const supervisor = executeDeps.getProcessSupervisor();
+          const scopeKey = buildCliSupervisorScopeKey({
+            backend,
+            backendId: context.backendResolved.id,
+            cliSessionId: useResume ? resolvedSessionId : undefined,
+          });
+          let stdoutTail: Buffer = Buffer.alloc(0);
+          let stdoutParseBuffer: Buffer = Buffer.alloc(0);
+          let stdoutBytes = 0;
+          const stdoutHash = crypto.createHash("sha256");
+          let stdoutParseExceeded = false;
+          let stderrTail: Buffer = Buffer.alloc(0);
+          let stderrParseBuffer: Buffer = Buffer.alloc(0);
+          let stderrBytes = 0;
+          const stderrHash = crypto.createHash("sha256");
+          let stderrParseExceeded = false;
+
+          params.onExecutionPhase?.({
+            phase: "process_spawned",
+            provider: params.provider,
+            model: context.modelId,
+            backend: context.backendResolved.id,
+          });
+          const managedRun = await supervisor.spawn({
+            sessionId: params.sessionId,
+            backendId: context.backendResolved.id,
+            scopeKey,
+            replaceExistingScope: Boolean(useResume && scopeKey),
+            mode: "child",
+            argv: [backend.command, ...args],
+            timeoutMs: params.timeoutMs,
+            noOutputTimeoutMs,
+            cwd: context.cwd ?? context.workspaceDir,
+            env,
+            input: stdinPayload,
+            captureOutput: false,
+            onStdout: (chunk: string) => {
+              stdoutBytes += Buffer.byteLength(chunk);
+              stdoutHash.update(chunk);
+              stdoutTail = appendCliOutputTail(stdoutTail, chunk);
+              if (!stdoutParseExceeded) {
+                const nextStdoutParse = appendCliOutputParseBuffer(stdoutParseBuffer, chunk);
+                stdoutParseBuffer = nextStdoutParse.buffer;
+                stdoutParseExceeded = nextStdoutParse.exceeded;
+              }
+              streamingParser?.push(chunk);
+            },
+            onStderr: (chunk: string) => {
+              stderrBytes += Buffer.byteLength(chunk);
+              stderrHash.update(chunk);
+              stderrTail = appendCliOutputTail(stderrTail, chunk);
+              if (!stderrParseExceeded) {
+                const nextStderrParse = appendCliOutputParseBuffer(stderrParseBuffer, chunk);
+                stderrParseBuffer = nextStderrParse.buffer;
+                stderrParseExceeded = nextStderrParse.exceeded;
+              }
+            },
+          });
+          let replyBackendCompleted = false;
+          const replyBackendHandle = params.replyOperation
+            ? {
+                kind: "cli" as const,
+                cancel: () => {
+                  managedRun.cancel("manual-cancel");
+                },
+                isStreaming: () => !replyBackendCompleted,
+              }
+            : undefined;
+          if (replyBackendHandle) {
+            params.replyOperation?.attachBackend(replyBackendHandle);
+          }
+          const abortManagedRun = () => {
+            managedRun.cancel("manual-cancel");
+          };
+          params.abortSignal?.addEventListener("abort", abortManagedRun, { once: true });
+          if (params.abortSignal?.aborted) {
+            abortManagedRun();
+          }
+          let result: Awaited<ReturnType<typeof managedRun.wait>>;
+          try {
+            result = await managedRun.wait();
+          } finally {
+            replyBackendCompleted = true;
+            if (replyBackendHandle) {
+              params.replyOperation?.detachBackend(replyBackendHandle);
+            }
+            params.abortSignal?.removeEventListener("abort", abortManagedRun);
+          }
+          streamingParser?.finish();
+          if (params.abortSignal?.aborted && result.reason === "manual-cancel") {
+            throw createCliAbortError();
+          }
+
+          const stdout = stdoutParseBuffer.toString("utf8").trim();
+          const stdoutDiagnostic = stdoutTail.toString("utf8").trim();
+          const stderr = stderrParseBuffer.toString("utf8").trim();
+          const stderrDiagnostic = stderrTail.toString("utf8").trim();
+          const processDiagnostics = {
+            backendId: context.backendResolved.id,
+            processReason: result.reason,
+            exitCode: result.exitCode,
+            exitSignal: result.exitSignal,
+            durationMs: result.durationMs,
+            stdoutBytes,
+            stdoutHash: stdoutHash.digest("hex").slice(0, 12),
+            stderrBytes,
+            stderrHash: stderrHash.digest("hex").slice(0, 12),
+            useResume,
+          };
+          if (logOutputText) {
+            if (stdoutDiagnostic) {
+              cliBackendLog.info(`cli stdout:\n${stdoutDiagnostic}`);
+            }
+            if (stderrDiagnostic) {
+              cliBackendLog.info(`cli stderr:\n${stderrDiagnostic}`);
+            }
+          }
+          if (shouldLogVerbose()) {
+            if (stdoutDiagnostic) {
+              cliBackendLog.debug(`cli stdout:\n${stdoutDiagnostic}`);
+            }
+            if (stderrDiagnostic) {
+              cliBackendLog.debug(`cli stderr:\n${stderrDiagnostic}`);
+            }
+          }
+
+          if (result.exitCode !== 0 || result.reason !== "exit") {
+            if (result.reason === "no-output-timeout" || result.noOutputTimedOut) {
+              const timeoutReason = `CLI produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`;
+              cliBackendLog.warn(
+                `cli watchdog timeout: provider=${params.provider} model=${context.modelId} session=${resolvedSessionId ?? params.sessionId} noOutputTimeoutMs=${noOutputTimeoutMs} pid=${managedRun.pid ?? "unknown"}`,
+              );
+              const retryableNoOutputTimeout =
+                !observedCliActivity &&
+                stdoutDiagnostic.length === 0 &&
+                stderrDiagnostic.length === 0;
+              const deferWatchdogNoticeForFreshRetry =
+                retryableNoOutputTimeout &&
+                Boolean(cliSessionIdToUse) &&
+                Boolean(resolvedSessionId) &&
+                Boolean(context.openClawHistoryPrompt) &&
+                Boolean(params.sessionKey) &&
+                params.timeoutMs - (Date.now() - context.started) > 0;
+              if (params.sessionKey && emitLiveEvents && !deferWatchdogNoticeForFreshRetry) {
+                const stallNotice = [
+                  `CLI agent (${params.provider}) produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`,
+                  "It may have been waiting for interactive input or an approval prompt.",
+                  "For Claude Code, prefer --permission-mode bypassPermissions --print.",
+                ].join(" ");
+                const eventRouting = resolveEventSessionRoutingPolicy({
+                  cfg: params.config,
+                  sessionKey: params.sessionKey,
+                  channel: params.messageProvider,
+                  accountId: params.agentAccountId,
+                });
+                executeDeps.enqueueSystemEvent(stallNotice, {
+                  sessionKey: resolveEventSessionKeyForPolicy(params.sessionKey, eventRouting),
+                });
+                executeDeps.requestHeartbeat(
+                  scopedHeartbeatWakeOptionsForPolicy(
+                    params.sessionKey,
+                    {
+                      source: "cli-watchdog",
+                      intent: "event",
+                      reason: "cli:watchdog:stall",
+                    },
+                    eventRouting,
+                  ),
+                );
+              }
+              throw new FailoverError(timeoutReason, {
+                reason: "timeout",
+                provider: params.provider,
+                model: context.modelId,
+                sessionId: params.sessionId,
+                lane: params.lane,
+                status: resolveFailoverStatus("timeout"),
+                code: retryableNoOutputTimeout ? "cli_no_output_timeout" : undefined,
+              });
+            }
+            if (result.reason === "overall-timeout") {
+              const timeoutReason = `CLI exceeded timeout (${Math.round(params.timeoutMs / 1000)}s) and was terminated.`;
+              throw new FailoverError(timeoutReason, {
+                reason: "timeout",
+                provider: params.provider,
+                model: context.modelId,
+                sessionId: params.sessionId,
+                lane: params.lane,
+                status: resolveFailoverStatus("timeout"),
+                code: "cli_overall_timeout",
+              });
+            }
+            const errorCandidates = [stderr, stdout, stderrDiagnostic, stdoutDiagnostic].filter(
+              (candidate) => candidate.length > 0,
+            );
+            const structuredError =
+              errorCandidates.map((candidate) => extractCliErrorMessage(candidate)).find(Boolean) ??
+              null;
+            let classifiedErrorText = structuredError;
+            let reason = structuredError
+              ? classifyFailoverReason(structuredError, { provider: params.provider })
+              : null;
+            if (!reason) {
+              for (const candidate of errorCandidates) {
+                reason = classifyFailoverReason(candidate, { provider: params.provider });
+                if (reason) {
+                  classifiedErrorText = candidate;
+                  break;
+                }
+              }
+            }
+            const err =
+              structuredError || classifiedErrorText || errorCandidates[0] || "CLI failed.";
+            reason = reason ?? "unknown";
+            const status = resolveFailoverStatus(reason);
+            const retryCode =
+              reason === "unknown" &&
+              result.reason === "exit" &&
+              errorCandidates.length === 0 &&
+              !observedCliActivity
+                ? "cli_unknown_empty_failure"
+                : undefined;
+            throw new FailoverError(err, {
+              reason,
+              provider: params.provider,
+              model: context.modelId,
+              sessionId: params.sessionId,
+              lane: params.lane,
+              status,
+              code: retryCode,
+            });
+          }
+
+          const streamedJsonlOutput =
+            outputMode === "jsonl" ? (streamingParser?.getOutput() ?? null) : null;
+
+          if (stdoutParseExceeded && !streamedJsonlOutput) {
+            throw new FailoverError(
+              `CLI stdout exceeded ${CLI_RUNNER_OUTPUT_PARSE_BYTES} bytes; refusing to parse truncated output.`,
+              {
+                reason: "format",
+                provider: params.provider,
+                model: context.modelId,
+                sessionId: params.sessionId,
+                lane: params.lane,
+                status: resolveFailoverStatus("format"),
+              },
+            );
+          }
+
+          const parsed =
+            streamedJsonlOutput ??
+            parseCliOutput({
+              raw: stdout,
               backend,
               providerId: context.backendResolved.id,
-              onAssistantDelta: ({ text, delta }) => {
-                emitAgentEvent({
-                  runId: params.runId,
-                  stream: "assistant",
-                  data: {
-                    text: applyPluginTextReplacements(
-                      text,
-                      context.backendResolved.textTransforms?.output,
-                    ),
-                    delta: applyPluginTextReplacements(
-                      delta,
-                      context.backendResolved.textTransforms?.output,
-                    ),
-                  },
-                });
-              },
-              onToolUseStart: emitCliToolUseStart,
-              onToolResult: emitCliToolResult,
-            })
-          : null;
-        const supervisor = executeDeps.getProcessSupervisor();
-        const scopeKey = buildCliSupervisorScopeKey({
-          backend,
-          backendId: context.backendResolved.id,
-          cliSessionId: useResume ? resolvedSessionId : undefined,
-        });
-        let stdoutTail: Buffer = Buffer.alloc(0);
-        let stdoutParseBuffer: Buffer = Buffer.alloc(0);
-        let stdoutParseExceeded = false;
-        let stderrTail: Buffer = Buffer.alloc(0);
-        let stderrParseBuffer: Buffer = Buffer.alloc(0);
-        let stderrParseExceeded = false;
-
-        params.onExecutionPhase?.({
-          phase: "process_spawned",
-          provider: params.provider,
-          model: context.modelId,
-          backend: context.backendResolved.id,
-        });
-        const managedRun = await supervisor.spawn({
-          sessionId: params.sessionId,
-          backendId: context.backendResolved.id,
-          scopeKey,
-          replaceExistingScope: Boolean(useResume && scopeKey),
-          mode: "child",
-          argv: [backend.command, ...args],
-          timeoutMs: params.timeoutMs,
-          noOutputTimeoutMs,
-          cwd: context.cwd ?? context.workspaceDir,
-          env,
-          input: stdinPayload,
-          captureOutput: false,
-          onStdout: (chunk: string) => {
-            stdoutTail = appendCliOutputTail(stdoutTail, chunk);
-            if (!stdoutParseExceeded) {
-              const nextStdoutParse = appendCliOutputParseBuffer(stdoutParseBuffer, chunk);
-              stdoutParseBuffer = nextStdoutParse.buffer;
-              stdoutParseExceeded = nextStdoutParse.exceeded;
-            }
-            streamingParser?.push(chunk);
-          },
-          onStderr: (chunk: string) => {
-            stderrTail = appendCliOutputTail(stderrTail, chunk);
-            if (!stderrParseExceeded) {
-              const nextStderrParse = appendCliOutputParseBuffer(stderrParseBuffer, chunk);
-              stderrParseBuffer = nextStderrParse.buffer;
-              stderrParseExceeded = nextStderrParse.exceeded;
-            }
-          },
-        });
-        let replyBackendCompleted = false;
-        const replyBackendHandle = params.replyOperation
-          ? {
-              kind: "cli" as const,
-              cancel: () => {
-                managedRun.cancel("manual-cancel");
-              },
-              isStreaming: () => !replyBackendCompleted,
-            }
-          : undefined;
-        if (replyBackendHandle) {
-          params.replyOperation?.attachBackend(replyBackendHandle);
+              outputMode,
+              fallbackSessionId: resolvedSessionId,
+            });
+          if (parsed.errorText) {
+            const reason =
+              classifyFailoverReason(parsed.errorText, { provider: params.provider }) ?? "unknown";
+            throw new FailoverError(parsed.errorText, {
+              reason,
+              provider: params.provider,
+              model: context.modelId,
+              sessionId: params.sessionId,
+              lane: params.lane,
+              status: resolveFailoverStatus(reason),
+            });
+          }
+          const rawText = parsed.text;
+          cliBackendLog.info(
+            `cli turn: provider=${params.provider} model=${context.modelId} durationMs=${Date.now() - cliTurnStartedAt} ${formatCliBackendOutputDigest(rawText)}`,
+          );
+          runOutput = {
+            ...parsed,
+            diagnostics: {
+              ...parsed.diagnostics,
+              process: processDiagnostics,
+            },
+            rawText,
+            finalPromptText: prompt,
+            text: applyPluginTextReplacements(
+              rawText,
+              context.backendResolved.textTransforms?.output,
+            ),
+          };
         }
-        const abortManagedRun = () => {
-          managedRun.cancel("manual-cancel");
-        };
-        params.abortSignal?.addEventListener("abort", abortManagedRun, { once: true });
-        if (params.abortSignal?.aborted) {
-          abortManagedRun();
-        }
-        let result: Awaited<ReturnType<typeof managedRun.wait>>;
+      } catch (error) {
+        recordRunError(error);
+      } finally {
         try {
-          result = await managedRun.wait();
-        } finally {
-          replyBackendCompleted = true;
-          if (replyBackendHandle) {
-            params.replyOperation?.detachBackend(replyBackendHandle);
-          }
-          params.abortSignal?.removeEventListener("abort", abortManagedRun);
-        }
-        streamingParser?.finish();
-        if (params.abortSignal?.aborted && result.reason === "manual-cancel") {
-          throw createCliAbortError();
-        }
-
-        const stdout = stdoutParseBuffer.toString("utf8").trim();
-        const stdoutDiagnostic = stdoutTail.toString("utf8").trim();
-        const stderr = stderrParseBuffer.toString("utf8").trim();
-        const stderrDiagnostic = stderrTail.toString("utf8").trim();
-        if (logOutputText) {
-          if (stdoutDiagnostic) {
-            cliBackendLog.info(`cli stdout:\n${stdoutDiagnostic}`);
-          }
-          if (stderrDiagnostic) {
-            cliBackendLog.info(`cli stderr:\n${stderrDiagnostic}`);
-          }
-        }
-        if (shouldLogVerbose()) {
-          if (stdoutDiagnostic) {
-            cliBackendLog.debug(`cli stdout:\n${stdoutDiagnostic}`);
-          }
-          if (stderrDiagnostic) {
-            cliBackendLog.debug(`cli stderr:\n${stderrDiagnostic}`);
-          }
-        }
-
-        if (result.exitCode !== 0 || result.reason !== "exit") {
-          if (result.reason === "no-output-timeout" || result.noOutputTimedOut) {
-            const timeoutReason = `CLI produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`;
-            cliBackendLog.warn(
-              `cli watchdog timeout: provider=${params.provider} model=${context.modelId} session=${resolvedSessionId ?? params.sessionId} noOutputTimeoutMs=${noOutputTimeoutMs} pid=${managedRun.pid ?? "unknown"}`,
+          if (!gatewayCaptureKey && pendingMessagingCalls.size > 0) {
+            const unresolvedJsonlMessagingCalls = Array.from(pendingMessagingCalls.values());
+            const internalSourceReplyStates = await Promise.all(
+              unresolvedJsonlMessagingCalls.map(isPreparedInternalSourceReply),
             );
-            if (params.sessionKey) {
-              const stallNotice = [
-                `CLI agent (${params.provider}) produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated.`,
-                "It may have been waiting for interactive input or an approval prompt.",
-                "For Claude Code, prefer --permission-mode bypassPermissions --print.",
-              ].join(" ");
-              const eventRouting = resolveEventSessionRoutingPolicy({
-                cfg: params.config,
-                sessionKey: params.sessionKey,
-                channel: params.messageProvider,
-                accountId: params.agentAccountId,
-              });
-              executeDeps.enqueueSystemEvent(stallNotice, {
-                sessionKey: resolveEventSessionKeyForPolicy(params.sessionKey, eventRouting),
-              });
-              executeDeps.requestHeartbeat(
-                scopedHeartbeatWakeOptionsForPolicy(
-                  params.sessionKey,
-                  {
-                    source: "cli-watchdog",
-                    intent: "event",
-                    reason: "cli:watchdog:stall",
-                  },
-                  eventRouting,
-                ),
+            const hasPotentialVisibleSend = internalSourceReplyStates.some(
+              (isInternalSourceReply) => !isInternalSourceReply,
+            );
+            if (hasPotentialVisibleSend) {
+              // A JSONL start without a result may have delivered before the CLI exited.
+              // Fail closed so retry/failover cannot duplicate a late visible send.
+              didSendViaMessagingTool = true;
+              recordRunError(
+                new Error("CLI JSONL message tool call remained unresolved after exit"),
+              );
+            } else {
+              recordRunError(
+                new Error("CLI JSONL source reply call remained unresolved after exit"),
               );
             }
-            throw new FailoverError(timeoutReason, {
-              reason: "timeout",
-              provider: params.provider,
-              model: context.modelId,
-              sessionId: params.sessionId,
-              lane: params.lane,
-              status: resolveFailoverStatus("timeout"),
-            });
           }
-          if (result.reason === "overall-timeout") {
-            const timeoutReason = `CLI exceeded timeout (${Math.round(params.timeoutMs / 1000)}s) and was terminated.`;
-            throw new FailoverError(timeoutReason, {
-              reason: "timeout",
-              provider: params.provider,
-              model: context.modelId,
-              sessionId: params.sessionId,
-              lane: params.lane,
-              status: resolveFailoverStatus("timeout"),
-            });
-          }
-          const errorCandidates = [stderr, stdout, stderrDiagnostic, stdoutDiagnostic].filter(
-            (candidate) => candidate.length > 0,
-          );
-          const structuredError =
-            errorCandidates.map((candidate) => extractCliErrorMessage(candidate)).find(Boolean) ??
-            null;
-          let classifiedErrorText = structuredError;
-          let reason = structuredError
-            ? classifyFailoverReason(structuredError, { provider: params.provider })
-            : null;
-          if (!reason) {
-            for (const candidate of errorCandidates) {
-              reason = classifyFailoverReason(candidate, { provider: params.provider });
-              if (reason) {
-                classifiedErrorText = candidate;
-                break;
+          if (gatewayCaptureKey) {
+            const captureBecameIdle = await waitForMcpLoopbackToolCallCaptureIdle(
+              gatewayCaptureKey,
+              {
+                timeoutMs: CLI_MCP_DELIVERY_DRAIN_GRACE_MS,
+                admissionGraceMs: CLI_MCP_REQUEST_ADMISSION_GRACE_MS,
+              },
+            );
+            if (!captureBecameIdle) {
+              if (shouldUseClaudeLiveSession(context)) {
+                await rotateClaudeLiveMcpCaptureKeyForContext(context);
+              }
+              const unresolvedPreparedMessagingCalls = Array.from(inFlightPreparedMessagingCalls);
+              const internalSourceReplyStates = await Promise.all(
+                unresolvedPreparedMessagingCalls.map(isPreparedInternalSourceReply),
+              );
+              const internalSourceReplyCount = internalSourceReplyStates.filter(Boolean).length;
+              const hasPotentialVisibleSend = inFlightMessagingToolCalls > internalSourceReplyCount;
+              if (inFlightUnclassifiedMcpRequests > 0 || hasPotentialVisibleSend) {
+                // An admitted request or send may complete after its CLI process exits.
+                // Fail closed so retry/failover cannot duplicate a late visible send.
+                didSendViaMessagingTool = true;
+                recordRunError(new Error("CLI message tool call remained in flight after exit"));
+              } else if (inFlightMessagingToolCalls > 0) {
+                // Internal source replies are only result payloads; they have no external
+                // side effect, so keep the failed turn retryable instead of dropping them.
+                recordRunError(new Error("CLI source reply call remained in flight after exit"));
               }
             }
           }
-          const err = structuredError || classifiedErrorText || errorCandidates[0] || "CLI failed.";
-          reason = reason ?? "unknown";
-          const status = resolveFailoverStatus(reason);
-          throw new FailoverError(err, {
-            reason,
-            provider: params.provider,
-            model: context.modelId,
-            sessionId: params.sessionId,
-            lane: params.lane,
-            status,
-          });
+        } catch (error) {
+          if (
+            pendingMessagingCalls.size > 0 ||
+            inFlightUnclassifiedMcpRequests > 0 ||
+            inFlightMessagingToolCalls > 0
+          ) {
+            // A failed drain/classification cannot prove an admitted messaging request harmless.
+            didSendViaMessagingTool = true;
+          }
+          recordRunError(error);
+        } finally {
+          if (gatewayCaptureKey) {
+            clearMcpLoopbackToolCallCapture(gatewayCaptureKey);
+          }
         }
-
-        const streamedJsonlOutput =
-          outputMode === "jsonl" ? (streamingParser?.getOutput() ?? null) : null;
-
-        if (stdoutParseExceeded && !streamedJsonlOutput) {
-          throw new FailoverError(
-            `CLI stdout exceeded ${CLI_RUNNER_OUTPUT_PARSE_BYTES} bytes; refusing to parse truncated output.`,
-            {
-              reason: "format",
-              provider: params.provider,
-              model: context.modelId,
-              sessionId: params.sessionId,
-              lane: params.lane,
-              status: resolveFailoverStatus("format"),
-            },
-          );
+        try {
+          await cleanupMcpCaptureAttempt?.();
+        } catch (error) {
+          recordRunError(error);
         }
-
-        const parsed =
-          streamedJsonlOutput ??
-          parseCliOutput({
-            raw: stdout,
-            backend,
-            providerId: context.backendResolved.id,
-            outputMode,
-            fallbackSessionId: resolvedSessionId,
-          });
-        const rawText = parsed.text;
-        cliBackendLog.info(
-          `cli turn: provider=${params.provider} model=${context.modelId} durationMs=${Date.now() - cliTurnStartedAt} ${formatCliBackendOutputDigest(rawText)}`,
-        );
-        return {
-          ...parsed,
-          rawText,
-          finalPromptText: prompt,
-          text: applyPluginTextReplacements(
-            rawText,
-            context.backendResolved.textTransforms?.output,
-          ),
-        };
-      } finally {
-        restoreSkillEnv?.();
+        try {
+          restoreSkillEnv?.();
+        } catch (error) {
+          recordRunError(error);
+        }
       }
+      if (runFailed) {
+        throw attachCliMessagingDeliveryEvidence(runError, {
+          didSendViaMessagingTool,
+          didDeliverSourceReplyViaMessageTool,
+          messagingToolSentTexts,
+          messagingToolSentMediaUrls,
+          messagingToolSentTargets,
+          messagingToolSourceReplyPayloads,
+        });
+      }
+      if (!runOutput) {
+        throw new Error("CLI run completed without output");
+      }
+      return withExecutionEvidence(runOutput);
     });
+    return completedOutput;
+  } catch (error) {
+    executionError = error;
+    throw error;
   } finally {
     if (!fallbackClaudeSkillsPluginCleanupOwned) {
-      await fallbackClaudeSkillsPlugin?.cleanup();
+      await cleanupOuterResource(fallbackClaudeSkillsPlugin?.cleanup);
     }
     if (systemPromptFile) {
-      await systemPromptFile.cleanup();
+      await cleanupOuterResource(systemPromptFile.cleanup);
     }
     if (cleanupImages) {
-      await cleanupImages();
+      await cleanupOuterResource(cleanupImages);
     }
   }
 }

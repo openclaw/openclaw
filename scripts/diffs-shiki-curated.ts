@@ -1,3 +1,4 @@
+// Diffs Shiki Curated script supports OpenClaw repository automation.
 import {
   createBundledHighlighter,
   createCssVariablesTheme,
@@ -22,9 +23,6 @@ export {
 } from "../extensions/diffs/src/shiki-curated-languages.js";
 export { bundledThemes, bundledThemesInfo } from "shiki/themes";
 import { bundledThemes } from "shiki/themes";
-
-export type BundledLanguage = keyof typeof bundledLanguages;
-export type BundledTheme = keyof typeof bundledThemes;
 
 export const createHighlighter = createBundledHighlighter({
   langs: bundledLanguages,

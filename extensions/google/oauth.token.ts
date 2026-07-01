@@ -1,8 +1,15 @@
+// Google plugin module implements oauth.token behavior.
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationSeconds,
+} from "openclaw/plugin-sdk/number-runtime";
 import { resolveOAuthClientConfig } from "./oauth.credentials.js";
 import { fetchWithTimeout } from "./oauth.http.js";
 import { resolveGoogleOAuthIdentity, resolveGooglePersonalOAuthIdentity } from "./oauth.project.js";
 import { isGeminiCliPersonalOAuth } from "./oauth.settings.js";
 import { REDIRECT_URI, TOKEN_URL, type GeminiCliOAuthCredentials } from "./oauth.shared.js";
+
+const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
 
 async function requestTokenGrant(body: URLSearchParams): Promise<{
   access_token?: string;
@@ -31,11 +38,19 @@ async function requestTokenGrant(body: URLSearchParams): Promise<{
   };
 }
 
-function resolveExpiresInMs(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+function resolveExpiredTokenTimestampMs(nowMs: number): number {
+  return asDateTimestampMs(nowMs - TOKEN_EXPIRY_BUFFER_MS) ?? nowMs;
+}
+
+function resolveTokenExpiresAt(value: unknown): number {
+  const nowMs = asDateTimestampMs(Date.now());
+  if (nowMs === undefined) {
     return 0;
   }
-  return Math.trunc(value * 1000);
+  return (
+    resolveExpiresAtMsFromDurationSeconds(value, { nowMs, bufferMs: TOKEN_EXPIRY_BUFFER_MS }) ??
+    resolveExpiredTokenTimestampMs(nowMs)
+  );
 }
 
 async function buildGeminiCliCredentials(params: {
@@ -70,8 +85,7 @@ async function buildGeminiCliCredentials(params: {
     // already-stored identity binding instead of failing token renewal.
   }
 
-  const expiresInMs = resolveExpiresInMs(params.tokenResponse.expires_in);
-  const expiresAt = Date.now() + expiresInMs - 5 * 60 * 1000;
+  const expiresAt = resolveTokenExpiresAt(params.tokenResponse.expires_in);
 
   return {
     refresh: params.tokenResponse.refresh_token ?? params.refreshTokenFallback ?? "",

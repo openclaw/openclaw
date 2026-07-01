@@ -13,6 +13,32 @@ openclaw_e2e_eval_test_state_from_b64() {
   fi
   eval "$decoded"
 }
+openclaw_e2e_read_positive_int_env() {
+  local name="${1:?missing environment variable name}"
+  local fallback="${2:?missing fallback value}"
+  local value="${!name-}"
+  if [ -z "${!name+x}" ]; then
+    value="$fallback"
+  fi
+  if [[ ! "$value" =~ ^[0-9]+$ ]] || (( 10#$value < 1 )); then
+    echo "invalid $name: $value" >&2
+    return 2
+  fi
+  printf '%s\n' "$value"
+}
+openclaw_e2e_read_nonnegative_int_env() {
+  local name="${1:?missing environment variable name}"
+  local fallback="${2:?missing fallback value}"
+  local value="${!name-}"
+  if [ -z "${!name+x}" ]; then
+    value="$fallback"
+  fi
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    echo "invalid $name: $value" >&2
+    return 2
+  fi
+  printf '%s\n' "$value"
+}
 openclaw_e2e_resolve_entrypoint() {
   local entry
   for entry in dist/index.mjs dist/index.js; do
@@ -137,6 +163,7 @@ const forwardSignal = (signal) => {
 };
 process.once("SIGINT", forwardSignal);
 process.once("SIGTERM", forwardSignal);
+process.once("SIGHUP", forwardSignal);
 child.on("close", (code, signal) => {
   clearTimeout(timer);
   if (parentSignalTimer) {
@@ -173,6 +200,15 @@ NODE
     "$timeout_bin" "$timeout_value" "$@"
   fi
 }
+openclaw_e2e_print_log() {
+  local path="$1"
+  local max_bytes max_lines
+  max_bytes="$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_E2E_LOG_TAIL_BYTES 262144)" || return $?
+  max_lines="$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_E2E_LOG_TAIL_LINES 120)" || return $?
+  [ -f "$path" ] || return 0
+  echo "--- $path ---"
+  tail -c "$max_bytes" "$path" 2>/dev/null | tail -n "$max_lines" || tail -n "$max_lines" "$path" || true
+}
 openclaw_e2e_install_package() {
   local log_file="$1"
   local label="${2:-mounted OpenClaw package}"
@@ -202,23 +238,10 @@ openclaw_e2e_install_package() {
     fi
     echo "npm install failed for $label" >&2
     if [ -f "$log_file" ]; then
-      while IFS= read -r line || [ -n "$line" ]; do
-        printf '%s\n' "$line" >&2
-      done <"$log_file"
+      openclaw_e2e_print_log "$log_file" >&2
     fi
     exit 1
   fi
-}
-openclaw_e2e_assert_package_extensions() {
-  local root="$1"
-  shift
-  local extension
-  for extension in "$@"; do
-    [ -d "$root/dist/extensions/$extension" ] || {
-      echo "Missing packaged extension: $extension" >&2
-      exit 1
-    }
-  done
 }
 openclaw_e2e_find_dep_package() {
   local dep_path="$1"
@@ -255,9 +278,22 @@ openclaw_e2e_write_state_env() {
   } >"$target"
 }
 openclaw_e2e_install_trash_shim() {
-  export PATH="/tmp/openclaw-bin:$PATH"
-  mkdir -p /tmp/openclaw-bin
-  cat >/tmp/openclaw-bin/trash <<'TRASH'
+  local shim_dir="${OPENCLAW_E2E_BIN_DIR:-}"
+  if [ -z "$shim_dir" ]; then
+    if [ -n "${OPENCLAW_STATE_DIR:-}" ]; then
+      shim_dir="$OPENCLAW_STATE_DIR/e2e-bin"
+    else
+      shim_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-bin.XXXXXX")"
+    fi
+    OPENCLAW_E2E_BIN_DIR="$shim_dir"
+    export OPENCLAW_E2E_BIN_DIR
+  fi
+  case ":$PATH:" in
+    *":$shim_dir:"*) ;;
+    *) export PATH="$shim_dir:$PATH" ;;
+  esac
+  mkdir -p "$shim_dir"
+  cat >"$shim_dir/trash" <<'TRASH'
 #!/usr/bin/env bash
 set -euo pipefail
 trash_dir="$HOME/.Trash"
@@ -270,7 +306,7 @@ for target in "$@"; do
   mv "$target" "$dest"
 done
 TRASH
-  chmod +x /tmp/openclaw-bin/trash
+  chmod +x "$shim_dir/trash"
 }
 openclaw_e2e_run_script_with_pty() {
   local command="$1"
@@ -284,47 +320,63 @@ openclaw_e2e_run_script_with_pty() {
     openclaw_e2e_maybe_timeout "$timeout_value" script -q -F "$log_path" /bin/bash -lc "$command"
   fi
 }
+openclaw_e2e_start_tracked_process() {
+  local log_path="${1:?missing OpenClaw E2E process log path}"
+  shift
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$@" >"$log_path" 2>&1 &
+    printf '%s\n' "$!"
+    return
+  fi
+  node --input-type=module - "$log_path" "$@" <<'NODE'
+import { closeSync, openSync } from "node:fs";
+import { spawn } from "node:child_process";
+
+const [logPath, command, ...args] = process.argv.slice(2);
+if (!command) {
+  console.error("missing command for OpenClaw E2E tracked process");
+  process.exit(1);
+}
+const logFd = openSync(logPath, "a");
+const child = spawn(command, args, {
+  detached: process.platform !== "win32",
+  env: process.env,
+  stdio: ["ignore", logFd, logFd],
+});
+closeSync(logFd);
+child.unref();
+console.log(child.pid);
+NODE
+}
+openclaw_e2e_signal_process() {
+  local pid="${1:-}" signal="${2:-TERM}"
+  [ -n "$pid" ] || return 0
+  if kill -0 -- "-$pid" >/dev/null 2>&1; then
+    kill "-$signal" -- "-$pid" >/dev/null 2>&1 || true
+    return 0
+  fi
+  kill "-$signal" "$pid" >/dev/null 2>&1 || true
+}
+openclaw_e2e_process_alive() {
+  local pid="${1:-}"
+  [ -n "$pid" ] || return 1
+  kill -0 "$pid" >/dev/null 2>&1 || kill -0 -- "-$pid" >/dev/null 2>&1
+}
 openclaw_e2e_stop_process() {
   local pid="${1:-}" _
   [ -n "$pid" ] || return 0
-  kill "$pid" >/dev/null 2>&1 || true
+  openclaw_e2e_signal_process "$pid" TERM
   for _ in $(seq 1 40); do
-    ! kill -0 "$pid" >/dev/null 2>&1 && { wait "$pid" >/dev/null 2>&1 || true; return 0; }
+    ! openclaw_e2e_process_alive "$pid" && { wait "$pid" >/dev/null 2>&1 || true; return 0; }
     sleep 0.25
   done
-  kill -9 "$pid" >/dev/null 2>&1 || true
+  openclaw_e2e_signal_process "$pid" KILL
   wait "$pid" >/dev/null 2>&1 || true
 }
 openclaw_e2e_terminate_gateways() {
-  local pid="${1:-}" _
-  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-    kill "$pid" 2>/dev/null || true
-  fi
-  if command -v pkill >/dev/null 2>&1; then
-    pkill -TERM -f "[o]penclaw-gateway" 2>/dev/null || true
-  fi
-  for _ in $(seq 1 100); do
-    local alive=0
-    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-      alive=1
-    fi
-    if command -v pgrep >/dev/null 2>&1 && pgrep -f "[o]penclaw-gateway" >/dev/null 2>&1; then
-      alive=1
-    fi
-    [ "$alive" = "0" ] && break
-    sleep 0.1
-  done
-  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-    kill -KILL "$pid" 2>/dev/null || true
-  fi
-  if command -v pkill >/dev/null 2>&1; then
-    pkill -KILL -f "[o]penclaw-gateway" 2>/dev/null || true
-  fi
-  if [ -n "$pid" ]; then
-    wait "$pid" 2>/dev/null || true
-  fi
+  openclaw_e2e_stop_process "${1:-}"
 }
-openclaw_e2e_start_mock_openai() { MOCK_PORT="$1" node scripts/e2e/mock-openai-server.mjs >"$2" 2>&1 & printf '%s\n' "$!"; }
+openclaw_e2e_start_mock_openai() { openclaw_e2e_start_tracked_process "$2" env "MOCK_PORT=$1" node scripts/e2e/mock-openai-server.mjs; }
 openclaw_e2e_wait_mock_openai() {
   local port="$1" attempts="${2:-80}" timeout_ms="${3:-400}" _
   for _ in $(seq 1 "$attempts"); do
@@ -333,10 +385,14 @@ openclaw_e2e_wait_mock_openai() {
   done
   openclaw_e2e_probe_http "http://127.0.0.1:${port}/health" ok "$timeout_ms"
 }
-openclaw_e2e_start_gateway() { node "$1" gateway --port "$2" --bind loopback --allow-unconfigured >"$3" 2>&1 & printf '%s\n' "$!"; }
+openclaw_e2e_start_gateway() { openclaw_e2e_start_tracked_process "$3" node "$1" gateway --port "$2" --bind loopback --allow-unconfigured; }
 openclaw_e2e_exec_gateway() { exec node "$1" gateway --port "$2" --bind "${3:-loopback}" --allow-unconfigured >"$4" 2>&1; }
+openclaw_e2e_gateway_log_port_from_text() {
+  sed -nE 's/.*(127\.0\.0\.1|localhost):([0-9]+).*/\2/p' | tail -n 1
+}
 openclaw_e2e_wait_gateway_ready() {
-  local pid="$1" log="$2" attempts="${3:-300}" _
+  local pid="$1" log="$2" attempts="${3:-300}" ready_port="${4:-}" readiness_mode="${5:-strict}" _ saw_ready_log=false
+  local ready_scan_offset=0 ready_scan_carry="" ready_scan_carry_chars=256
   for _ in $(seq 1 "$attempts"); do
     ! kill -0 "$pid" >/dev/null 2>&1 && {
       echo "Gateway exited before becoming ready"
@@ -344,10 +400,47 @@ openclaw_e2e_wait_gateway_ready() {
       tail -n 120 "$log" 2>/dev/null || true
       return 1
     }
-    grep -q '\[gateway\] ready' "$log" 2>/dev/null && return 0
+    if [ "$saw_ready_log" != "true" ] && [ -f "$log" ]; then
+      local log_bytes="0"
+      log_bytes="$(wc -c <"$log" 2>/dev/null || echo 0)"
+      log_bytes="${log_bytes//[[:space:]]/}"
+      if ! [[ "$log_bytes" =~ ^[0-9]+$ ]]; then
+        log_bytes="0"
+      fi
+      if [ "$log_bytes" -lt "$ready_scan_offset" ]; then
+        ready_scan_offset=0
+        ready_scan_carry=""
+      fi
+      if [ "$log_bytes" -gt "$ready_scan_offset" ]; then
+        local new_log_text scan_text
+        new_log_text="$(tail -c +"$((ready_scan_offset + 1))" "$log" 2>/dev/null || true)"
+        ready_scan_offset="$log_bytes"
+        scan_text="${ready_scan_carry}${new_log_text}"
+        if [ "${#scan_text}" -gt "$ready_scan_carry_chars" ]; then
+          ready_scan_carry="${scan_text: -$ready_scan_carry_chars}"
+        else
+          ready_scan_carry="$scan_text"
+        fi
+        local ready_log_lines
+        ready_log_lines="$(printf "%s" "$scan_text" | grep '\[gateway\] ready' || true)"
+        if [ -n "$ready_log_lines" ]; then
+          saw_ready_log=true
+          [ -n "$ready_port" ] || ready_port="$(printf "%s" "$ready_log_lines" | openclaw_e2e_gateway_log_port_from_text)"
+        fi
+      fi
+    fi
+    if [ "$saw_ready_log" = "true" ]; then
+      [ "$readiness_mode" = "legacy-ready-log-ok" ] && return 0
+      [ -n "$ready_port" ] || ready_port="${OPENCLAW_E2E_GATEWAY_READY_PORT:-18789}"
+      openclaw_e2e_probe_http "http://127.0.0.1:${ready_port}/readyz" ok 400 && return 0
+    fi
     sleep 0.25
   done
-  echo "Gateway did not become ready"
+  if [ "$saw_ready_log" = "true" ]; then
+    echo "Gateway log reported ready, but /readyz probe never succeeded"
+  else
+    echo "Gateway did not become ready"
+  fi
   tail -n 120 "$log" 2>/dev/null || true
   return 1
 }
@@ -367,14 +460,16 @@ openclaw_e2e_probe_http() {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let exitCode = 1;
+    let response;
     try {
-      const response = await fetch(process.argv[1], { signal: controller.signal });
+      response = await fetch(process.argv[1], { signal: controller.signal });
       const passed = expected === "ok" ? response.ok : response.status === Number(expected);
       exitCode = passed ? 0 : 1;
     } catch {
       exitCode = 1;
     } finally {
       clearTimeout(timer);
+      await response?.body?.cancel?.().catch(() => undefined);
     }
     process.exit(exitCode);
   ' "$1" "${2:-ok}" "${3:-400}"
@@ -388,9 +483,15 @@ openclaw_e2e_assert_log_not_contains() {
   ! grep -q "$2" "$1" || { echo "Unexpected log output: $2"; exit 1; }
 }
 openclaw_e2e_run_logged() {
-  local label="$1" log_path="/tmp/openclaw-onboard-${1}.log"
+  local label="$1" log_root="${OPENCLAW_E2E_LOG_DIR:-${TMPDIR:-/tmp}}" log_path safe_label
   shift
-  openclaw_e2e_run_command "$@" >"$log_path" 2>&1 || { cat "$log_path"; exit 1; }
+  safe_label="${label//[^A-Za-z0-9_.-]/-}"
+  [ -n "$safe_label" ] || safe_label="command"
+  mkdir -p "$log_root"
+  log_path="$(mktemp "$log_root/openclaw-${safe_label}.XXXXXX.log")"
+  OPENCLAW_E2E_LAST_LOG_PATH="$log_path"
+  export OPENCLAW_E2E_LAST_LOG_PATH
+  openclaw_e2e_run_command "$@" >"$log_path" 2>&1 || { openclaw_e2e_print_log "$log_path"; exit 1; }
 }
 openclaw_e2e_run_command() {
   local timeout_value="${OPENCLAW_E2E_COMMAND_TIMEOUT:-300s}"
@@ -410,7 +511,6 @@ openclaw_e2e_enable_openclaw_cli_timeout() {
 openclaw_e2e_dump_logs() {
   local path
   for path in "$@"; do
-    [ -f "$path" ] || continue
-    echo "--- $path ---"; tail -n "${OPENCLAW_E2E_LOG_TAIL_LINES:-120}" "$path" || true
+    openclaw_e2e_print_log "$path"
   done
 }

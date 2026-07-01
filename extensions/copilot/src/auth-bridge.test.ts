@@ -1,10 +1,10 @@
+// Copilot tests cover auth bridge plugin behavior.
 import { createHash } from "node:crypto";
-import { resolve, join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { join, resolve } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   COPILOT_DEFAULT_AGENT_ID,
   COPILOT_TOKEN_PROFILE_ERROR,
-  normalizeCopilotHomePath,
   resolveCopilotAuth,
   sanitizeAgentId,
   tokenFingerprint,
@@ -505,20 +505,5 @@ describe("resolveCopilotAuth - defaults wiring", () => {
     expect(result.copilotHome.includes(join(".openclaw", "agents", "agent-1", "copilot"))).toBe(
       true,
     );
-  });
-});
-
-describe("normalizeCopilotHomePath", () => {
-  it("resolves to absolute and strips trailing separators", () => {
-    const normalized = normalizeCopilotHomePath("./foo/bar/");
-    expect(normalized).toBe(resolve("./foo/bar"));
-    expect(normalized.endsWith("/")).toBe(false);
-    expect(normalized.endsWith("\\")).toBe(false);
-  });
-
-  it("is idempotent", () => {
-    const once = normalizeCopilotHomePath("/some/path/");
-    const twice = normalizeCopilotHomePath(once);
-    expect(twice).toBe(once);
   });
 });

@@ -1,9 +1,11 @@
+// Gateway connection detail builder for CLI/user-facing target diagnostics.
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveConfigPath, resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { isSecureWebSocketUrl } from "./net.js";
 
+/** Resolved gateway target plus redacted display text for diagnostics. */
 export type GatewayConnectionDetails = {
   url: string;
   urlSource: string;
@@ -18,6 +20,7 @@ type GatewayConnectionDetailResolvers = {
   resolveGatewayPort?: (cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) => number;
 };
 
+/** Build gateway target details and reject unsafe remote plaintext websocket URLs. */
 export function buildGatewayConnectionDetailsWithResolvers(
   options: {
     config?: OpenClawConfig;
@@ -25,6 +28,7 @@ export function buildGatewayConnectionDetailsWithResolvers(
     configPath?: string;
     urlSource?: "cli" | "env";
     ignoreEnvUrlOverride?: boolean;
+    localPortOverride?: number;
   } = {},
   resolvers: GatewayConnectionDetailResolvers = {},
 ): GatewayConnectionDetails {
@@ -37,13 +41,15 @@ export function buildGatewayConnectionDetailsWithResolvers(
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
   const tlsEnabled = config.gateway?.tls?.enabled === true;
   const localPort =
-    resolvers.resolveGatewayPort?.(config, process.env) ?? resolveGatewayPort(config);
+    options.localPortOverride ??
+    resolvers.resolveGatewayPort?.(config, process.env) ??
+    resolveGatewayPort(config);
   const bindMode = config.gateway?.bind ?? "loopback";
   const scheme = tlsEnabled ? "wss" : "ws";
   const localUrl = `${scheme}://127.0.0.1:${localPort}`;
   const cliUrlOverride = normalizeOptionalString(options.url);
   const envUrlOverride =
-    cliUrlOverride || options.ignoreEnvUrlOverride
+    cliUrlOverride || options.ignoreEnvUrlOverride || options.localPortOverride !== undefined
       ? undefined
       : normalizeOptionalString(process.env.OPENCLAW_GATEWAY_URL);
   const urlOverride = cliUrlOverride ?? envUrlOverride;

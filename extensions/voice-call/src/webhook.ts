@@ -1,6 +1,11 @@
+// Voice Call plugin module implements webhook behavior.
 import http from "node:http";
 import { URL } from "node:url";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { resolveConfiguredCapabilityProvider } from "openclaw/plugin-sdk/provider-selection-runtime";
 import type { TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
 import {
@@ -20,6 +25,7 @@ import { isAllowlistedCaller, normalizePhoneNumber } from "./allowlist.js";
 import {
   normalizeVoiceCallConfig,
   resolveVoiceCallEffectiveConfig,
+  resolveVoiceCallNumberRouteKeyForCall,
   type VoiceCallConfig,
 } from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
@@ -86,7 +92,7 @@ function appendRecentTalkEventMetadata(call: CallRecord, event: TalkEvent): void
   const recent = Array.isArray(metadata.recentTalkEvents)
     ? metadata.recentTalkEvents.filter(
         (entry): entry is { at: string; type: string; sessionId: string; turnId?: string } =>
-          !!entry && typeof entry === "object" && !Array.isArray(entry),
+          Boolean(entry) && typeof entry === "object" && !Array.isArray(entry),
       )
     : [];
   recent.push({
@@ -428,7 +434,7 @@ export class VoiceCallWebhookServer {
         const callMode = call.metadata?.mode as string | undefined;
         const shouldRespond = call.direction === "inbound" || callMode === "conversation";
         if (shouldRespond) {
-          this.handleInboundResponse(call.callId, transcript).catch((err) => {
+          this.handleInboundResponse(call.callId, transcript).catch((err: unknown) => {
             console.warn(`[voice-call] Failed to auto-respond:`, err);
           });
         }
@@ -463,7 +469,7 @@ export class VoiceCallWebhookServer {
         }
       },
       onTranscriptionReady: (callId) => {
-        this.manager.speakInitialMessage(callId).catch((err) => {
+        this.manager.speakInitialMessage(callId).catch((err: unknown) => {
           console.warn(`[voice-call] Failed to speak initial message:`, err);
         });
       },
@@ -491,7 +497,7 @@ export class VoiceCallWebhookServer {
           console.log(
             `[voice-call] Auto-ending call ${disconnectedCall.callId} after stream disconnect grace`,
           );
-          void this.manager.endCall(disconnectedCall.callId).catch((err) => {
+          void this.manager.endCall(disconnectedCall.callId).catch((err: unknown) => {
             console.warn(`[voice-call] Failed to auto-end call ${disconnectedCall.callId}:`, err);
           });
         }, STREAM_DISCONNECT_HANGUP_GRACE_MS);
@@ -529,7 +535,7 @@ export class VoiceCallWebhookServer {
 
     this.startPromise = new Promise((resolve, reject) => {
       this.server = http.createServer((req, res) => {
-        this.handleRequest(req, res, webhookPath).catch((err) => {
+        this.handleRequest(req, res, webhookPath).catch((err: unknown) => {
           console.error("[voice-call] Webhook error:", err);
           res.statusCode = 500;
           res.end("Internal Server Error");
@@ -810,10 +816,13 @@ export class VoiceCallWebhookServer {
     }
   }
 
-  private pruneReplayResponses(now: number): void {
-    for (const [key, entry] of this.replayResponses) {
-      if (entry.expiresAt <= now) {
-        this.replayResponses.delete(key);
+  private pruneReplayResponses(rawNow: number): void {
+    const now = asDateTimestampMs(rawNow);
+    if (now !== undefined) {
+      for (const [key, entry] of this.replayResponses) {
+        if (entry.expiresAt <= now) {
+          this.replayResponses.delete(key);
+        }
       }
     }
     while (this.replayResponses.size > WEBHOOK_REPLAY_RESPONSE_MAX_ENTRIES) {
@@ -826,9 +835,9 @@ export class VoiceCallWebhookServer {
   }
 
   private async getCachedReplayResponse(key: string): Promise<WebhookResponsePayload | null> {
-    const now = Date.now();
+    const now = asDateTimestampMs(Date.now());
     const entry = this.replayResponses.get(key);
-    if (!entry) {
+    if (!entry || now === undefined) {
       return null;
     }
     if (entry.expiresAt <= now) {
@@ -843,6 +852,9 @@ export class VoiceCallWebhookServer {
     buildResponse: () => Promise<WebhookResponsePayload>,
   ): Promise<WebhookResponsePayload> {
     const now = Date.now();
+    const expiresAt = resolveExpiresAtMsFromDurationMs(WEBHOOK_REPLAY_RESPONSE_TTL_MS, {
+      nowMs: now,
+    });
     this.replayResponseCacheCalls += 1;
     if (this.replayResponseCacheCalls % WEBHOOK_REPLAY_RESPONSE_PRUNE_INTERVAL === 0) {
       this.pruneReplayResponses(now);
@@ -850,14 +862,16 @@ export class VoiceCallWebhookServer {
 
     const response = buildResponse()
       .then(cloneWebhookResponsePayload)
-      .catch((err) => {
+      .catch((err: unknown) => {
         this.replayResponses.delete(key);
         throw err;
       });
-    this.replayResponses.set(key, {
-      expiresAt: now + WEBHOOK_REPLAY_RESPONSE_TTL_MS,
-      response,
-    });
+    if (expiresAt !== undefined) {
+      this.replayResponses.set(key, {
+        expiresAt,
+        response,
+      });
+    }
     if (this.replayResponses.size > WEBHOOK_REPLAY_RESPONSE_MAX_ENTRIES) {
       this.pruneReplayResponses(now);
     }
@@ -903,7 +917,18 @@ export class VoiceCallWebhookServer {
     try {
       const pathname = buildRequestUrl(req.url).pathname;
       const pattern = this.realtimeHandler?.getStreamPathPattern();
-      return Boolean(pattern && pathname.startsWith(pattern));
+      if (!pattern) {
+        return false;
+      }
+      const normalizedPattern = this.normalizeWebhookPathForMatch(pattern);
+      const normalizedPathname = this.normalizeWebhookPathForMatch(pathname);
+      if (normalizedPattern === "/") {
+        return true;
+      }
+      return (
+        normalizedPathname === normalizedPattern ||
+        normalizedPathname.startsWith(`${normalizedPattern}/`)
+      );
     } catch {
       return false;
     }
@@ -946,7 +971,6 @@ export class VoiceCallWebhookServer {
           normalizePhoneNumber(params.get("From") ?? undefined),
           this.config.allowFrom,
         );
-      case "disabled":
       default:
         return false;
     }
@@ -1008,8 +1032,7 @@ export class VoiceCallWebhookServer {
 
     try {
       const { generateVoiceResponse } = await loadResponseGeneratorModule();
-      const numberRouteKey =
-        typeof call.metadata?.numberRouteKey === "string" ? call.metadata.numberRouteKey : call.to;
+      const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
       const effectiveConfig = resolveVoiceCallEffectiveConfig(this.config, numberRouteKey).config;
 
       const result = await generateVoiceResponse({

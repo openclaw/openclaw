@@ -1,3 +1,4 @@
+// Memory Wiki tests cover cli plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +10,7 @@ import {
   runWikiChatGptImport,
   runWikiChatGptRollback,
   runWikiDoctor,
+  runWikiOkfImport,
   runWikiStatus,
 } from "./cli.js";
 import type { MemoryWikiPluginConfig } from "./config.js";
@@ -25,6 +27,11 @@ vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
 const { createVault } = createMemoryWikiTestHarness();
 let suiteRoot = "";
 let caseIndex = 0;
+let stdoutWriteMock: ReturnType<typeof vi.fn>;
+
+function resolveLegacyImportRunRecordPath(vaultRoot: string, runId: string): string {
+  return path.join(vaultRoot, ".openclaw-wiki", "import-runs", `${runId}.json`);
+}
 
 describe("memory-wiki cli", () => {
   beforeAll(async () => {
@@ -39,8 +46,9 @@ describe("memory-wiki cli", () => {
 
   beforeEach(() => {
     callGatewayFromCliMock.mockReset();
+    stdoutWriteMock = vi.fn(() => true);
     vi.spyOn(process.stdout, "write").mockImplementation(
-      (() => true) as typeof process.stdout.write,
+      stdoutWriteMock as unknown as typeof process.stdout.write,
     );
     process.exitCode = undefined;
   });
@@ -169,6 +177,65 @@ describe("memory-wiki cli", () => {
     expect(page).toContain("source.alpha");
     await expect(fs.readFile(path.join(rootDir, "index.md"), "utf8")).resolves.toContain(
       "[CLI Alpha](syntheses/cli-alpha.md)",
+    );
+  });
+
+  it("registers OKF import and searches imported concepts", async () => {
+    const { rootDir, config } = await createCliVault();
+    const bundlePath = path.join(rootDir, "okf-bundle");
+    await fs.mkdir(path.join(bundlePath, "tables"), { recursive: true });
+    await fs.writeFile(path.join(bundlePath, "index.md"), "# Sales OKF\n", "utf8");
+    await fs.writeFile(
+      path.join(bundlePath, "tables", "customers.md"),
+      `---
+type: BigQuery Table
+title: Customers
+---
+
+Customer rows.
+`,
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(bundlePath, "tables", "orders.md"),
+      `---
+type: BigQuery Table
+title: Orders
+description: One row per completed order.
+---
+
+Orders join to [customers](/tables/customers.md).
+`,
+      "utf8",
+    );
+
+    const program = new Command();
+    program.name("test");
+    registerWikiCli(program, config);
+
+    await program.parseAsync(["wiki", "okf", "import", bundlePath, "--json"], { from: "user" });
+
+    const importOutput = String(stdoutWriteMock.mock.calls.at(-1)?.[0] ?? "");
+    const importResult = JSON.parse(importOutput) as Awaited<ReturnType<typeof runWikiOkfImport>>;
+    expect(importResult.importedCount).toBe(2);
+    expect(importResult.pagePaths).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^concepts\/okf-okf-bundle-[0-9a-f]{8}-tables-orders-/),
+      ]),
+    );
+
+    stdoutWriteMock.mockClear();
+    await program.parseAsync(["wiki", "search", "completed order", "--json"], { from: "user" });
+
+    const searchOutput = String(stdoutWriteMock.mock.calls.at(-1)?.[0] ?? "");
+    const searchResults = JSON.parse(searchOutput) as Array<{ path: string; title: string }>;
+    expect(searchResults).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          title: "Orders",
+          path: expect.stringMatching(/^concepts\/okf-okf-bundle-[0-9a-f]{8}-tables-orders-/),
+        }),
+      ]),
     );
   });
 
@@ -571,6 +638,9 @@ cli note
     });
     expect(applied.runId).toMatch(/^chatgpt-[a-f0-9]{12}$/u);
     expect(applied.createdCount).toBe(1);
+    await expect(
+      fs.stat(resolveLegacyImportRunRecordPath(rootDir, applied.runId ?? "")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
     const sourceFiles = (await fs.readdir(path.join(rootDir, "sources"))).filter(
       (entry) => entry !== "index.md",
     );
@@ -604,5 +674,31 @@ cli note
         .readdir(path.join(rootDir, "sources"))
         .then((entries) => entries.filter((entry) => entry !== "index.md")),
     ).resolves.toStrictEqual([]);
+  });
+
+  it("imports ChatGPT exports with out-of-range Unix timestamps", async () => {
+    const { rootDir, config } = await createCliVault({ initialize: true });
+    const exportDir = await createChatGptExport(rootDir);
+    const conversationsPath = path.join(exportDir, "conversations.json");
+    const conversations = JSON.parse(await fs.readFile(conversationsPath, "utf8")) as Array<
+      Record<string, unknown>
+    >;
+    conversations[0].update_time = 9_000_000_000_000;
+    await fs.writeFile(conversationsPath, `${JSON.stringify(conversations, null, 2)}\n`, "utf8");
+
+    const result = await runWikiChatGptImport({
+      config,
+      exportPath: exportDir,
+      json: true,
+    });
+
+    expect(result.createdCount).toBe(1);
+    const sourceFile = (await fs.readdir(path.join(rootDir, "sources"))).find(
+      (entry) => entry !== "index.md",
+    );
+    expect(sourceFile).toBeDefined();
+    const pageContent = await fs.readFile(path.join(rootDir, "sources", sourceFile ?? ""), "utf8");
+    expect(pageContent).toContain("- Created: 2024-04-06T00:26:40.000Z");
+    expect(pageContent).toContain("- Updated: 2024-04-06T00:26:40.000Z");
   });
 });

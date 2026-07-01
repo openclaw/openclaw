@@ -1,8 +1,17 @@
+/**
+ * Simple completion runtime preparation.
+ *
+ * Resolves agent model selection, auth, runtime policy, and missing-auth errors before simple completions run.
+ */
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { completeSimple } from "../llm/stream.js";
-import type { Model, ThinkingLevel as SimpleCompletionThinkingLevel } from "../llm/types.js";
+import type {
+  AssistantMessage,
+  Model,
+  ThinkingLevel as SimpleCompletionThinkingLevel,
+} from "../llm/types.js";
 import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
 import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
@@ -20,7 +29,8 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "./model-selection.js";
-import { OPENAI_CODEX_PROVIDER_ID, isOpenAIProvider } from "./openai-codex-routing.js";
+import { OPENAI_PROVIDER_ID, isOpenAIProvider } from "./openai-routing.js";
+import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 
 type SimpleCompletionAuthStorage = {
@@ -29,7 +39,7 @@ type SimpleCompletionAuthStorage = {
 
 type CompletionRuntimeCredential = {
   apiKey: string;
-  baseUrl?: string;
+  model: Model;
 };
 
 type AllowedMissingApiKeyMode = ResolvedProviderAuth["mode"];
@@ -129,7 +139,7 @@ function resolveSimpleCompletionRuntimeProvider(params: {
     config: params.cfg,
     agentId: params.agentId,
   });
-  return policy.runtime === "codex" ? { runtimeProvider: OPENAI_CODEX_PROVIDER_ID } : {};
+  return policy.runtime === "codex" ? { runtimeProvider: OPENAI_PROVIDER_ID } : {};
 }
 
 async function setRuntimeApiKeyForCompletion(params: {
@@ -142,14 +152,14 @@ async function setRuntimeApiKeyForCompletion(params: {
   profileId?: string;
 }): Promise<CompletionRuntimeCredential> {
   if (params.model.provider === "github-copilot") {
-    const { resolveCopilotApiToken } = await import("./github-copilot-token.js");
+    const { resolveCopilotApiToken } = await import("../plugin-sdk/provider-auth.js");
     const copilotToken = await resolveCopilotApiToken({
       githubToken: params.apiKey,
     });
     params.authStorage.setRuntimeApiKey(params.model.provider, copilotToken.token);
     return {
       apiKey: copilotToken.token,
-      baseUrl: copilotToken.baseUrl,
+      model: { ...params.model, baseUrl: copilotToken.baseUrl },
     };
   }
   const preparedAuth = await prepareProviderRuntimeAuth({
@@ -173,7 +183,7 @@ async function setRuntimeApiKeyForCompletion(params: {
   params.authStorage.setRuntimeApiKey(params.model.provider, runtimeApiKey);
   return {
     apiKey: runtimeApiKey,
-    baseUrl: preparedAuth?.baseUrl,
+    model: applyPreparedRuntimeAuthToModel(params.model, preparedAuth),
   };
 }
 
@@ -193,23 +203,30 @@ export async function prepareSimpleCompletionModel(params: {
   preferredProfile?: string;
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
   allowBundledStaticCatalogFallback?: boolean;
+  useAsyncModelResolution?: boolean;
   skipAgentDiscovery?: boolean;
   modelResolver?: typeof resolveModelAsync;
 }): Promise<PreparedSimpleCompletionModel> {
-  const resolved = params.skipAgentDiscovery
-    ? await (params.modelResolver ?? resolveModelAsync)(
-        params.provider,
-        params.modelId,
-        params.agentDir,
-        params.cfg,
-        {
-          ...(params.allowBundledStaticCatalogFallback !== undefined
-            ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
-            : {}),
-          skipAgentDiscovery: true,
-        },
-      )
-    : resolveModel(params.provider, params.modelId, params.agentDir, params.cfg);
+  const resolved =
+    params.useAsyncModelResolution || params.skipAgentDiscovery
+      ? await (params.modelResolver ?? resolveModelAsync)(
+          params.provider,
+          params.modelId,
+          params.agentDir,
+          params.cfg,
+          {
+            ...(params.allowBundledStaticCatalogFallback !== undefined
+              ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
+              : {}),
+            ...(params.skipAgentDiscovery ? { skipAgentDiscovery: true } : {}),
+            authProfileId: params.profileId,
+            preferredProfile: params.preferredProfile,
+          },
+        )
+      : resolveModel(params.provider, params.modelId, params.agentDir, params.cfg, {
+          authProfileId: params.profileId,
+          preferredProfile: params.preferredProfile,
+        });
   if (!resolved.model) {
     return {
       error: resolved.error ?? `Unknown model: ${params.provider}/${params.modelId}`,
@@ -257,13 +274,7 @@ export async function prepareSimpleCompletionModel(params: {
       profileId: auth.profileId,
     });
     resolvedApiKey = runtimeCredential.apiKey;
-    const runtimeBaseUrl = runtimeCredential.baseUrl?.trim();
-    if (runtimeBaseUrl) {
-      resolvedModel = {
-        ...resolvedModel,
-        baseUrl: runtimeBaseUrl,
-      };
-    }
+    resolvedModel = runtimeCredential.model;
   }
 
   const resolvedAuth: ResolvedProviderAuth = {
@@ -284,6 +295,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
   preferredProfile?: string;
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
   allowBundledStaticCatalogFallback?: boolean;
+  useAsyncModelResolution?: boolean;
   skipAgentDiscovery?: boolean;
   modelResolver?: typeof resolveModelAsync;
 }): Promise<PreparedSimpleCompletionModelForAgent> {
@@ -308,6 +320,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
     ...(params.allowBundledStaticCatalogFallback !== undefined
       ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
       : {}),
+    useAsyncModelResolution: params.useAsyncModelResolution,
     skipAgentDiscovery: params.skipAgentDiscovery,
     modelResolver: params.modelResolver,
   });
@@ -330,7 +343,7 @@ export async function completeWithPreparedSimpleCompletionModel(params: {
   context: Parameters<typeof completeSimple>[1];
   cfg?: OpenClawConfig;
   options?: SimpleCompletionModelOptions;
-}) {
+}): Promise<AssistantMessage> {
   const completionModel = prepareModelForSimpleCompletion({ model: params.model, cfg: params.cfg });
   const { reasoning: rawReasoning, ...options } = params.options ?? {};
   const reasoning = normalizeSimpleCompletionReasoning(rawReasoning);

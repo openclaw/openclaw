@@ -1,3 +1,4 @@
+// Models list e2e tests cover model listing command output with local auth/config fixtures.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,7 +7,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 
 let modelsListCommand: typeof import("./models/list.list-command.js").modelsListCommand;
 let loadModelRegistry: typeof import("./models/list.registry.js").loadModelRegistry;
-let toModelRow: typeof import("./models/list.registry.js").toModelRow;
+let toModelRow: typeof import("./models/list.model-row.js").toModelRow;
 
 const getRuntimeConfig = vi.fn();
 const readConfigFileSnapshotForWrite = vi.fn().mockResolvedValue({
@@ -102,7 +103,7 @@ vi.mock("../agents/agent-model-discovery.js", () => {
   class MockModelRegistry {
     find(provider: string, id: string) {
       if (modelRegistryState.findError !== undefined) {
-        throw modelRegistryState.findError;
+        throw toLintErrorObject(modelRegistryState.findError, "Non-Error thrown");
       }
       return (
         modelRegistryState.models.find((model) => model.provider === provider && model.id === id) ??
@@ -112,14 +113,14 @@ vi.mock("../agents/agent-model-discovery.js", () => {
 
     getAll() {
       if (modelRegistryState.getAllError !== undefined) {
-        throw modelRegistryState.getAllError;
+        throw toLintErrorObject(modelRegistryState.getAllError, "Non-Error thrown");
       }
       return modelRegistryState.models;
     }
 
     getAvailable() {
       if (modelRegistryState.getAvailableError !== undefined) {
-        throw modelRegistryState.getAvailableError;
+        throw toLintErrorObject(modelRegistryState.getAvailableError, "Non-Error thrown");
       }
       return modelRegistryState.available;
     }
@@ -412,7 +413,8 @@ describe("models list/status", () => {
 
   beforeAll(async () => {
     ({ modelsListCommand } = await import("./models/list.list-command.js"));
-    ({ loadModelRegistry, toModelRow } = await import("./models/list.registry.js"));
+    ({ loadModelRegistry } = await import("./models/list.registry.js"));
+    ({ toModelRow } = await import("./models/list.model-row.js"));
   });
 
   it("models list runs model discovery without auth.json sync", async () => {
@@ -673,9 +675,7 @@ describe("models list/status", () => {
   it("filters stale spark rows from models list and registry views", async () => {
     const suppressSpark = ({ provider, id }: { provider?: string | null; id?: string | null }) =>
       id === "gpt-5.3-codex-spark" &&
-      (provider === "openai" ||
-        provider === "azure-openai-responses" ||
-        provider === "openai-codex");
+      (provider === "openai" || provider === "azure-openai-responses" || provider === "openai");
     shouldSuppressBuiltInModel.mockImplementation(suppressSpark);
     shouldSuppressBuiltInModelFromManifest.mockImplementation(suppressSpark);
     setDefaultModel("openai/gpt-5.5");
@@ -770,3 +770,17 @@ describe("models list/status", () => {
     expect(row.available).toBe(false);
   });
 });
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

@@ -1,11 +1,19 @@
+// Covers plugin trust audit findings and remediation hints.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
-import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
+import {
+  captureEnv,
+  createPathResolutionEnv,
+  deleteTestEnvValue,
+  setTestEnvValue,
+  withEnvAsync,
+} from "../test-utils/env.js";
 
 type CollectPluginsTrustFindings =
   typeof import("./audit-plugins-trust.js").collectPluginsTrustFindings;
@@ -147,7 +155,7 @@ vi.mock("../agents/tool-policy.js", () => ({
     profile === "coding" || profile === "minimal" ? {} : undefined,
 }));
 
-vi.mock("./audit-tool-policy.js", () => ({
+vi.mock("../agents/sandbox-tool-policy.js", () => ({
   pickSandboxToolPolicy: () => undefined,
 }));
 
@@ -205,9 +213,7 @@ describe("security audit install metadata findings", () => {
       })),
       diagnostics: [],
     };
-    const filePath = path.join(stateDir, "plugins", "installs.json");
-    await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
-    await fs.writeFile(filePath, `${JSON.stringify(index, null, 2)}\n`, { mode: 0o600 });
+    await writePersistedInstalledPluginIndex(index, { stateDir });
   };
 
   beforeAll(async () => {
@@ -489,8 +495,7 @@ describe("security audit extension tool reachability findings", () => {
     "OPENCLAW_STATE_DIR",
     "OPENCLAW_BUNDLED_PLUGINS_DIR",
   ] as const;
-  const previousPathResolutionEnv: Partial<Record<(typeof pathResolutionEnvKeys)[number], string>> =
-    {};
+  let pathResolutionEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 
   const runSharedExtensionsAudit = async (config: OpenClawConfig) => {
     return await collectPluginsTrustFindingsForTest({
@@ -505,13 +510,13 @@ describe("security audit extension tool reachability findings", () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-extensions-"));
     isolatedHome = path.join(fixtureRoot, "home");
     const isolatedEnv = createPathResolutionEnv(isolatedHome, { OPENCLAW_HOME: isolatedHome });
+    pathResolutionEnvSnapshot = captureEnv([...pathResolutionEnvKeys]);
     for (const key of pathResolutionEnvKeys) {
-      previousPathResolutionEnv[key] = process.env[key];
       const value = isolatedEnv[key];
       if (value === undefined) {
-        delete process.env[key];
+        deleteTestEnvValue(key);
       } else {
-        process.env[key] = value;
+        setTestEnvValue(key, value);
       }
     }
     homedirSpy = vitestModule.vi
@@ -527,14 +532,7 @@ describe("security audit extension tool reachability findings", () => {
 
   afterAll(async () => {
     homedirSpy?.mockRestore();
-    for (const key of pathResolutionEnvKeys) {
-      const value = previousPathResolutionEnv[key];
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
+    pathResolutionEnvSnapshot?.restore();
     if (fixtureRoot) {
       await fs.rm(fixtureRoot, { recursive: true, force: true }).catch(() => undefined);
     }

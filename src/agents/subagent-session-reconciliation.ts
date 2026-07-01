@@ -1,4 +1,11 @@
+/**
+ * Subagent session-store reconciliation.
+ *
+ * Infers child completion from persisted session entries when registry updates arrive late.
+ */
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { getRuntimeConfig } from "../config/config.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   loadSessionStore,
   resolveAgentIdFromSessionKey,
@@ -6,7 +13,6 @@ import {
   type SessionEntry,
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { asFiniteNumber } from "../shared/number-coercion.js";
 import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -14,9 +20,16 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
 
 export type SubagentSessionStoreCache = Map<string, Record<string, SessionEntry>>;
+export type SubagentRunOrphanReason =
+  | "missing-session-entry"
+  | "missing-session-id"
+  | "stale-unended-run";
 
+/** Completion inferred from the child session store. */
 export type SubagentSessionCompletion = {
   startedAt?: number;
   endedAt: number;
@@ -68,6 +81,7 @@ function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: 
   return undefined;
 }
 
+/** Load a child session entry using the agent-specific session store path. */
 export function loadSubagentSessionEntry(params: {
   childSessionKey: string;
   storeCache?: SubagentSessionStoreCache;
@@ -88,6 +102,62 @@ export function loadSubagentSessionEntry(params: {
   return findSessionEntryByKey(store, key);
 }
 
+/** Resolve a child session entry without depending on the file-backed store shape. */
+function loadSubagentSessionEntryForAccessor(params: {
+  childSessionKey: string;
+  cfg?: OpenClawConfig;
+}): SessionEntry | undefined {
+  const key = params.childSessionKey.trim();
+  if (!key) {
+    return undefined;
+  }
+  const agentId = resolveAgentIdFromSessionKey(key);
+  const cfg = params.cfg ?? getRuntimeConfig();
+  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  return loadSessionEntry({
+    storePath,
+    sessionKey: key,
+    clone: false,
+  });
+}
+
+/** Resolves whether a registry row is orphaned from its child session entry. */
+export function resolveSubagentRunOrphanReason(params: {
+  entry: SubagentRunRecord;
+  includeStaleUnended?: boolean;
+  now?: number;
+  cfg?: OpenClawConfig;
+}): SubagentRunOrphanReason | null {
+  const childSessionKey = params.entry.childSessionKey?.trim();
+  if (!childSessionKey) {
+    return "missing-session-entry";
+  }
+  try {
+    const sessionEntry = loadSubagentSessionEntryForAccessor({
+      childSessionKey,
+      cfg: params.cfg,
+    });
+    if (!sessionEntry) {
+      return "missing-session-entry";
+    }
+    if (typeof sessionEntry.sessionId !== "string" || !sessionEntry.sessionId.trim()) {
+      return "missing-session-id";
+    }
+    if (
+      params.includeStaleUnended === true &&
+      sessionEntry.abortedLastRun !== true &&
+      isStaleUnendedSubagentRun(params.entry, params.now)
+    ) {
+      return "stale-unended-run";
+    }
+    return null;
+  } catch {
+    // Best-effort guard: avoid false orphan pruning on transient read/config failures.
+    return null;
+  }
+}
+
+/** Convert persisted session status into a subagent completion outcome. */
 export function resolveCompletionFromSessionEntry(
   sessionEntry: SessionEntry | undefined,
   fallbackEndedAt: number,
@@ -158,6 +228,7 @@ export function resolveCompletionFromSessionEntry(
   return null;
 }
 
+/** Resolve child completion by reading its persisted session entry. */
 export function resolveSubagentSessionCompletion(params: {
   childSessionKey: string;
   fallbackEndedAt: number;
@@ -176,6 +247,7 @@ export function resolveSubagentSessionCompletion(params: {
   );
 }
 
+/** Resolve a fresh child session start time for lifecycle reconciliation. */
 export function resolveSubagentSessionStartedAt(params: {
   childSessionKey: string;
   notBeforeMs?: number;

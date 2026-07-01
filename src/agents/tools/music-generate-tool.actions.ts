@@ -1,3 +1,8 @@
+/**
+ * music_generate action helpers.
+ *
+ * Handles provider listing, task status, and duplicate-guard output for the music generation tool.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listSupportedMusicGenerationModes } from "../../music-generation/capabilities.js";
 import { listRuntimeMusicGenerationProviders } from "../../music-generation/runtime.js";
@@ -9,6 +14,7 @@ import {
   findDuplicateGuardMusicGenerationTaskForSession,
 } from "../music-generation-task-status.js";
 import {
+  createMediaGenerateDuplicateGuardResult,
   createMediaGenerateProviderListActionResult,
   createMediaGenerateTaskStatusActions,
   type MediaGenerateActionResult,
@@ -16,6 +22,7 @@ import {
 
 type MusicGenerateActionResult = MediaGenerateActionResult;
 
+/** Formats provider capability details for the music generation `list` action. */
 function summarizeMusicGenerationCapabilities(
   provider: ReturnType<typeof listRuntimeMusicGenerationProviders>[number],
 ): string {
@@ -56,6 +63,7 @@ function summarizeMusicGenerationCapabilities(
   return capabilities;
 }
 
+/** Builds the music-generation provider listing result shown to the agent. */
 export function createMusicGenerateListActionResult(
   config?: OpenClawConfig,
   options?: { workspaceDir?: string; agentDir?: string; authStore?: AuthProfileStore },
@@ -81,34 +89,24 @@ const musicGenerateTaskStatusActions = createMediaGenerateTaskStatusActions({
   buildStatusDetails: buildMusicGenerationTaskStatusDetails,
 });
 
+/** Builds status output for the active music-generation task in the current session. */
 export function createMusicGenerateStatusActionResult(
   sessionKey?: string,
 ): MusicGenerateActionResult {
   return musicGenerateTaskStatusActions.createStatusActionResult(sessionKey);
 }
 
+/** Returns duplicate-guard status output when a matching music task is already active. */
 export function createMusicGenerateDuplicateGuardResult(
   sessionKey?: string,
   params?: { prompt?: string; requestKey?: string },
 ): MusicGenerateActionResult | undefined {
-  const blockingTask = findDuplicateGuardMusicGenerationTaskForSession(sessionKey, {
+  return createMediaGenerateDuplicateGuardResult({
+    sessionKey,
     prompt: params?.prompt,
     requestKey: params?.requestKey,
+    findDuplicateTask: findDuplicateGuardMusicGenerationTaskForSession,
+    buildStatusText: buildMusicGenerationTaskStatusText,
+    buildStatusDetails: buildMusicGenerationTaskStatusDetails,
   });
-  if (!blockingTask) {
-    return undefined;
-  }
-  return {
-    content: [
-      {
-        type: "text",
-        text: buildMusicGenerationTaskStatusText(blockingTask, { duplicateGuard: true }),
-      },
-    ],
-    details: {
-      action: "status",
-      duplicateGuard: true,
-      ...buildMusicGenerationTaskStatusDetails(blockingTask),
-    },
-  };
 }

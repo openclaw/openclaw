@@ -1,6 +1,9 @@
+/** Builds bounded, redacted diagnostics for cron run logs and UI surfaces. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isToolAllowedByPolicyName } from "../agents/tool-policy-match.js";
+import { normalizeToolName as normalizePolicyToolName } from "../agents/tool-policy.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type {
   CronRunDiagnostic,
   CronRunDiagnostics,
@@ -12,6 +15,20 @@ const MAX_ENTRIES = 10;
 const MAX_ENTRY_CHARS = 1_000;
 const MAX_SUMMARY_CHARS = 2_000;
 const EXEC_DIAGNOSTIC_TAIL_CHARS = 2_000;
+const WEB_SEARCH_TOOL_NAME = "web_search";
+
+export const MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE =
+  "web_search tool requested in toolsAllow but no web search provider is selected. Configure one with: openclaw configure --section web, or set tools.web.search.provider.";
+
+export function toolsAllowRequestsWebSearch(toolsAllow?: string[]): boolean {
+  const explicitAllow = (toolsAllow ?? []).filter(
+    (entry) => normalizePolicyToolName(entry) !== "*",
+  );
+  return (
+    explicitAllow.length > 0 &&
+    isToolAllowedByPolicyName(WEB_SEARCH_TOOL_NAME, { allow: explicitAllow })
+  );
+}
 
 function normalizeSeverity(value: unknown): CronRunDiagnosticSeverity {
   return value === "info" || value === "warn" || value === "error" ? value : "error";
@@ -67,6 +84,8 @@ function tailText(value: string, maxChars: number): string {
   if (value.length <= maxChars) {
     return value;
   }
+  // Exec output often ends with the actionable failure; keep the tail when
+  // bounding diagnostic text for run logs and control surfaces.
   return value.slice(value.length - maxChars);
 }
 
@@ -96,6 +115,7 @@ function trimSummary(value: string | undefined): string | undefined {
   return `${normalized.slice(0, MAX_SUMMARY_CHARS - 1)}…`;
 }
 
+/** Returns the operator-facing summary for persisted cron diagnostics. */
 export function summarizeCronRunDiagnostics(
   diagnostics: CronRunDiagnostics | undefined,
 ): string | undefined {
@@ -105,6 +125,7 @@ export function summarizeCronRunDiagnostics(
   return trimSummary(diagnostics.summary ?? diagnostics.entries[0]?.message);
 }
 
+/** Normalizes untrusted cron diagnostic payloads into bounded, redacted entries. */
 export function normalizeCronRunDiagnostics(
   value: unknown,
   opts?: { nowMs?: () => number },
@@ -141,6 +162,8 @@ export function normalizeCronRunDiagnostics(
       ...(entry.truncated === true || normalized.truncated ? { truncated: true } : {}),
     });
     if (entries.length > MAX_ENTRIES) {
+      // Keep the latest diagnostics because late tool/exec failures usually
+      // explain the final cron result better than setup noise.
       entries.shift();
     }
   }
@@ -155,6 +178,7 @@ export function normalizeCronRunDiagnostics(
   return { ...(summary ? { summary } : {}), entries };
 }
 
+/** Merges cron diagnostics while choosing the highest-severity latest summary. */
 export function mergeCronRunDiagnostics(
   ...values: Array<CronRunDiagnostics | undefined>
 ): CronRunDiagnostics | undefined {
@@ -174,6 +198,8 @@ export function mergeCronRunDiagnostics(
       const severity =
         entryCandidate?.severity === "error" ? 2 : entryCandidate?.severity === "warn" ? 1 : 0;
       const order = entries.length + normalized.entries.length;
+      // Summary text is operator-facing; prefer severe diagnostics, then the
+      // newest diagnostic at the same severity so retries surface current cause.
       if (
         !summaryCandidate ||
         severity > summaryCandidate.severity ||
@@ -190,6 +216,7 @@ export function mergeCronRunDiagnostics(
   });
 }
 
+/** Converts an arbitrary thrown cron error into a redacted diagnostic entry. */
 export function createCronRunDiagnosticsFromError(
   source: CronRunDiagnosticSource,
   error: unknown,
@@ -219,6 +246,36 @@ export function createCronRunDiagnosticsFromError(
   );
 }
 
+/** Reports a cron preflight warning for an explicitly allowed web_search with no provider. */
+export function createCronRunDiagnosticsFromMissingWebSearchProvider(params: {
+  toolsAllow?: string[];
+  hasWebSearchProvider: boolean;
+  nowMs?: () => number;
+}): CronRunDiagnostics | undefined {
+  if (params.hasWebSearchProvider || !params.toolsAllow || params.toolsAllow.length === 0) {
+    return undefined;
+  }
+  if (!toolsAllowRequestsWebSearch(params.toolsAllow)) {
+    return undefined;
+  }
+  return normalizeCronRunDiagnostics(
+    {
+      summary: MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE,
+      entries: [
+        {
+          ts: params.nowMs?.() ?? Date.now(),
+          source: "cron-preflight",
+          severity: "warn",
+          message: MISSING_WEB_SEARCH_PROVIDER_DIAGNOSTIC_MESSAGE,
+          toolName: WEB_SEARCH_TOOL_NAME,
+        },
+      ],
+    },
+    { nowMs: params.nowMs },
+  );
+}
+
+/** Extracts failed exec details from tool metadata into cron diagnostics. */
 export function createCronRunDiagnosticsFromExecDetails(
   details: unknown,
   opts?: {
@@ -260,6 +317,7 @@ export function createCronRunDiagnosticsFromExecDetails(
   );
 }
 
+/** Extracts tool-call failure diagnostics from an agent reply payload. */
 export function createCronRunDiagnosticsFromToolPayload(
   payload: unknown,
   opts?: { nowMs?: () => number; finalStatus?: "ok" | "error" | "skipped" },
@@ -289,6 +347,7 @@ export function createCronRunDiagnosticsFromToolPayload(
   return mergeCronRunDiagnostics(detailsDiagnostics, textDiagnostics);
 }
 
+/** Extracts cron run diagnostics from agent result payloads and metadata. */
 export function createCronRunDiagnosticsFromAgentResult(
   result: unknown,
   opts?: { nowMs?: () => number; finalStatus?: "ok" | "error" | "skipped" },

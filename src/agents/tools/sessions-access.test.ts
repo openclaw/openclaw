@@ -1,3 +1,5 @@
+// Sessions access tests cover session-tool visibility policy, sandbox clamps,
+// and agent-to-agent allow rules.
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -168,6 +170,8 @@ describe("createAgentToAgentPolicy", () => {
   });
 
   it("handles multiple wildcards without polynomial backtracking", () => {
+    // Allow patterns use segment matching rather than a greedy regex so
+    // adversarial agent ids cannot cause slow policy checks.
     const policy = createAgentToAgentPolicy({
       tools: {
         agentToAgent: {
@@ -274,7 +278,7 @@ describe("createSessionVisibilityGuard", () => {
       allowed: false,
       status: "forbidden",
       error:
-        "Session list visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.",
+        "Session list visibility is restricted. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access; use tools.agentToAgent.allow to restrict permitted agent pairs.",
     });
   });
 
@@ -336,7 +340,7 @@ describe("createSessionVisibilityGuard", () => {
       allowed: false,
       status: "forbidden",
       error:
-        "Session history visibility is restricted. Set tools.sessions.visibility=all to allow cross-agent access.",
+        "Session history visibility is restricted. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access; use tools.agentToAgent.allow to restrict permitted agent pairs.",
     });
   });
 

@@ -1,23 +1,23 @@
+// Agent and agents command registration with lazy command-module loading for startup speed.
 import type { Command } from "commander";
-import { defaultRuntime } from "../../runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
-import { runCommandWithRuntime } from "../cli-utils.js";
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { hasExplicitOptions } from "../command-options.js";
 import { formatHelpExamples } from "../help-format.js";
 import { collectOption } from "./helpers.js";
 
-type AgentViaGatewayModule = typeof import("../../commands/agent-via-gateway.js");
 type AgentsAddModule = typeof import("../../commands/agents.commands.add.js");
 type AgentsBindModule = typeof import("../../commands/agents.commands.bind.js");
 type AgentsDeleteModule = typeof import("../../commands/agents.commands.delete.js");
 type AgentsIdentityModule = typeof import("../../commands/agents.commands.identity.js");
 type AgentsListModule = typeof import("../../commands/agents.commands.list.js");
-type GlobalStateModule = typeof import("../../global-state.js");
+type CliUtilsModule = typeof import("../cli-utils.js");
+type RuntimeModule = typeof import("../../runtime.js");
 
-async function loadAgentCliCommand(): Promise<AgentViaGatewayModule["agentCliCommand"]> {
-  return (await import("../../commands/agent-via-gateway.js")).agentCliCommand;
+let agentsBindModulePromise: Promise<AgentsBindModule> | undefined;
+
+function loadAgentsBindModule(): Promise<AgentsBindModule> {
+  return (agentsBindModulePromise ??= import("../../commands/agents.commands.bind.js"));
 }
 
 async function loadAgentsAddCommand(): Promise<AgentsAddModule["agentsAddCommand"]> {
@@ -25,15 +25,15 @@ async function loadAgentsAddCommand(): Promise<AgentsAddModule["agentsAddCommand
 }
 
 async function loadAgentsBindCommand(): Promise<AgentsBindModule["agentsBindCommand"]> {
-  return (await import("../../commands/agents.commands.bind.js")).agentsBindCommand;
+  return (await loadAgentsBindModule()).agentsBindCommand;
 }
 
 async function loadAgentsBindingsCommand(): Promise<AgentsBindModule["agentsBindingsCommand"]> {
-  return (await import("../../commands/agents.commands.bind.js")).agentsBindingsCommand;
+  return (await loadAgentsBindModule()).agentsBindingsCommand;
 }
 
 async function loadAgentsUnbindCommand(): Promise<AgentsBindModule["agentsUnbindCommand"]> {
-  return (await import("../../commands/agents.commands.bind.js")).agentsUnbindCommand;
+  return (await loadAgentsBindModule()).agentsUnbindCommand;
 }
 
 async function loadAgentsDeleteCommand(): Promise<AgentsDeleteModule["agentsDeleteCommand"]> {
@@ -50,86 +50,28 @@ async function loadAgentsListCommand(): Promise<AgentsListModule["agentsListComm
   return (await import("../../commands/agents.commands.list.js")).agentsListCommand;
 }
 
-async function loadSetVerbose(): Promise<GlobalStateModule["setVerbose"]> {
-  return (await import("../../global-state.js")).setVerbose;
+async function loadAgentsActionRuntime(): Promise<{
+  defaultRuntime: RuntimeModule["defaultRuntime"];
+  runCommandWithRuntime: CliUtilsModule["runCommandWithRuntime"];
+}> {
+  const [{ defaultRuntime }, { runCommandWithRuntime }] = await Promise.all([
+    import("../../runtime.js"),
+    import("../cli-utils.js"),
+  ]);
+  return { defaultRuntime, runCommandWithRuntime };
 }
 
-export function registerAgentCommands(
-  program: Command,
-  args: { agentChannelOptions: string },
-): void {
-  program
-    .command("agent")
-    .description("Run an agent turn via the Gateway (use --local for embedded)")
-    .requiredOption("-m, --message <text>", "Message body for the agent")
-    .option("-t, --to <number>", "Recipient number in E.164 used to derive the session key")
-    .option("--session-key <key>", "Explicit session key (agent:<id>:<key>, or scoped to --agent)")
-    .option("--session-id <id>", "Use an explicit session id")
-    .option("--agent <id>", "Agent id (overrides routing bindings)")
-    .option("--model <id>", "Model override for this run (provider/model or model id)")
-    .option(
-      "--thinking <level>",
-      "Thinking level: off | minimal | low | medium | high | xhigh | adaptive | max where supported",
-    )
-    .option("--verbose <on|off>", "Persist agent verbose level for the session")
-    .option(
-      "--channel <channel>",
-      `Delivery channel: ${args.agentChannelOptions} (omit to use the main session channel)`,
-    )
-    .option("--reply-to <target>", "Delivery target override (separate from session routing)")
-    .option("--reply-channel <channel>", "Delivery channel override (separate from routing)")
-    .option("--reply-account <id>", "Delivery account id override")
-    .option(
-      "--local",
-      "Run the embedded agent locally (requires model provider API keys in your shell)",
-      false,
-    )
-    .option("--deliver", "Send the agent's reply back to the selected channel", false)
-    .option("--json", "Output result as JSON", false)
-    .option(
-      "--timeout <seconds>",
-      "Override agent command timeout (seconds, default 600 or config value)",
-    )
-    .addHelpText(
-      "after",
-      () =>
-        `
-${theme.heading("Examples:")}
-${formatHelpExamples([
-  ['openclaw agent --to +15555550123 --message "status update"', "Start a new session."],
-  ['openclaw agent --agent ops --message "Summarize logs"', "Use a specific agent."],
-  [
-    'openclaw agent --session-key agent:ops:incident-42 --message "Summarize status"',
-    "Target an exact session key.",
-  ],
-  [
-    'openclaw agent --session-id 1234 --message "Summarize inbox" --thinking medium',
-    "Target a session with explicit thinking level.",
-  ],
-  [
-    'openclaw agent --to +15555550123 --message "Trace logs" --verbose on --json',
-    "Enable verbose logging and JSON output.",
-  ],
-  ['openclaw agent --to +15555550123 --message "Summon reply" --deliver', "Deliver reply."],
-  [
-    'openclaw agent --agent ops --message "Generate report" --deliver --reply-channel slack --reply-to "#reports"',
-    "Send reply to a different channel/target.",
-  ],
-])}
+async function runAgentsCommandAction(
+  action: (runtime: RuntimeModule["defaultRuntime"]) => Promise<void>,
+): Promise<void> {
+  const { defaultRuntime, runCommandWithRuntime } = await loadAgentsActionRuntime();
+  await runCommandWithRuntime(defaultRuntime, async () => {
+    await action(defaultRuntime);
+  });
+}
 
-${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/agent")}`,
-    )
-    .action(async (opts): Promise<void> => {
-      const verboseLevel =
-        typeof opts.verbose === "string" ? normalizeLowercaseStringOrEmpty(opts.verbose) : "";
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const setVerbose = await loadSetVerbose();
-        setVerbose(verboseLevel === "on");
-        const agentCliCommand = await loadAgentCliCommand();
-        await agentCliCommand(opts, defaultRuntime);
-      });
-    });
-
+/** Register `agents` management subcommands for config, bindings, identity, and deletion. */
+export function registerAgentsCommands(program: Command): void {
   const agents = program
     .command("agents")
     .description("Manage isolated agents (workspaces + auth + routing)")
@@ -145,11 +87,11 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
     .option("--json", "Output JSON instead of text", false)
     .option("--bindings", "Include routing bindings", false)
     .action(async (opts): Promise<void> => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
+      await runAgentsCommandAction(async (runtime) => {
         const agentsListCommand = await loadAgentsListCommand();
         await agentsListCommand(
           { json: Boolean(opts.json), bindings: Boolean(opts.bindings) },
-          defaultRuntime,
+          runtime,
         );
       });
     });
@@ -160,14 +102,14 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
     .option("--agent <id>", "Filter by agent id")
     .option("--json", "Output JSON instead of text", false)
     .action(async (opts): Promise<void> => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
+      await runAgentsCommandAction(async (runtime) => {
         const agentsBindingsCommand = await loadAgentsBindingsCommand();
         await agentsBindingsCommand(
           {
             agent: opts.agent as string | undefined,
             json: Boolean(opts.json),
           },
-          defaultRuntime,
+          runtime,
         );
       });
     });
@@ -184,7 +126,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
     )
     .option("--json", "Output JSON summary", false)
     .action(async (opts): Promise<void> => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
+      await runAgentsCommandAction(async (runtime) => {
         const agentsBindCommand = await loadAgentsBindCommand();
         await agentsBindCommand(
           {
@@ -192,7 +134,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
             bind: Array.isArray(opts.bind) ? (opts.bind as string[]) : undefined,
             json: Boolean(opts.json),
           },
-          defaultRuntime,
+          runtime,
         );
       });
     });
@@ -205,7 +147,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
     .option("--all", "Remove all bindings for this agent", false)
     .option("--json", "Output JSON summary", false)
     .action(async (opts): Promise<void> => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
+      await runAgentsCommandAction(async (runtime) => {
         const agentsUnbindCommand = await loadAgentsUnbindCommand();
         await agentsUnbindCommand(
           {
@@ -214,7 +156,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
             all: Boolean(opts.all),
             json: Boolean(opts.json),
           },
-          defaultRuntime,
+          runtime,
         );
       });
     });
@@ -229,7 +171,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
     .option("--non-interactive", "Disable prompts; requires --workspace", false)
     .option("--json", "Output JSON summary", false)
     .action(async (name, opts, command): Promise<void> => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
+      await runAgentsCommandAction(async (runtime) => {
         const hasFlags = hasExplicitOptions(command, [
           "workspace",
           "model",
@@ -248,7 +190,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
             nonInteractive: Boolean(opts.nonInteractive),
             json: Boolean(opts.json),
           },
-          defaultRuntime,
+          runtime,
           { hasFlags },
         );
       });
@@ -286,7 +228,7 @@ ${formatHelpExamples([
 `,
     )
     .action(async (opts): Promise<void> => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
+      await runAgentsCommandAction(async (runtime) => {
         const agentsSetIdentityCommand = await loadAgentsSetIdentityCommand();
         await agentsSetIdentityCommand(
           {
@@ -300,7 +242,7 @@ ${formatHelpExamples([
             avatar: opts.avatar as string | undefined,
             json: Boolean(opts.json),
           },
-          defaultRuntime,
+          runtime,
         );
       });
     });
@@ -311,7 +253,7 @@ ${formatHelpExamples([
     .option("--force", "Skip confirmation", false)
     .option("--json", "Output JSON summary", false)
     .action(async (id, opts): Promise<void> => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
+      await runAgentsCommandAction(async (runtime) => {
         const agentsDeleteCommand = await loadAgentsDeleteCommand();
         await agentsDeleteCommand(
           {
@@ -319,15 +261,15 @@ ${formatHelpExamples([
             force: Boolean(opts.force),
             json: Boolean(opts.json),
           },
-          defaultRuntime,
+          runtime,
         );
       });
     });
 
   agents.action(async (): Promise<void> => {
-    await runCommandWithRuntime(defaultRuntime, async () => {
+    await runAgentsCommandAction(async (runtime) => {
       const agentsListCommand = await loadAgentsListCommand();
-      await agentsListCommand({}, defaultRuntime);
+      await agentsListCommand({}, runtime);
     });
   });
 }

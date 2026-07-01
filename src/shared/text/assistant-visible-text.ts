@@ -1,16 +1,28 @@
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.js";
+// Assistant visible text helpers strip hidden reasoning and control marker text.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
-import { stripPlainTextToolCallBlocks } from "./plain-text-tool-call-blocks.js";
 import {
   stripReasoningTagsFromText,
   type ReasoningTagMode,
+  type ReasoningTagScope,
   type ReasoningTagTrim,
 } from "./reasoning-tags.js";
 
 const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
 const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
 const LEGACY_BRACKET_TOOL_BLOCK_QUICK_RE = /\[\s*\/?\s*TOOL_(?:CALL|RESULT)\s*\]/i;
+const INTERNAL_TRACE_LINE_QUICK_RE =
+  /(?:📊|🛠️|📖|📝|🔍|🔎|⚙️|tool[-_ ]?call|tool[-_ ]?result|function[-_ ]?call)/i;
+const INTERNAL_TRACE_LINE_RE =
+  /^(?:>\s*)?(?:⚠️\s*)?(?:📊|🛠️|📖|📝|🔍|🔎|⚙️)\s*(?:Session Status|Exec|Read|Edit|Write|Patch|Search|Open|Click|Find|Screenshot|Update Plan|Tool Call|Tool Result|Function Call|Shell|Command)\s*:/i;
+const INTERNAL_COMPACT_FAILURE_TRACE_LINE_RE =
+  /^(?:>\s*)?⚠️\s*🛠️\s+\S[\s\S]*\s+\(agent\)`{0,2}\s+failed(?:\s*:.*)?\s*$/i;
+const INTERNAL_COMPACT_COMMAND_TRACE_LINE_RE =
+  /^(?:>\s*)?🛠️\s*(?:(?:(?:elevated|pty)\b\s*(?:·|,)\s*)+)?(?:`{1,2}\s*\S|(?:run|check|fetch|pull|push|view|show|list|switch|create|merge|rebase|stage|restore|reset|stash|search|find|print|copy|move|remove|install|start|cd|git|pnpm|npm|yarn|bun|node|python|python3|bash|sh)\b)/i;
+const INTERNAL_CHANNEL_TRACE_LINE_RE =
+  /^(?:>\s*)?(?:tool[-_ ]?call|tool[-_ ]?result|function[-_ ]?call)\s*[:=]/i;
 
 /**
  * Strip XML-style tool call tags that models sometimes emit as plain text.
@@ -18,7 +30,7 @@ const LEGACY_BRACKET_TOOL_BLOCK_QUICK_RE = /\[\s*\/?\s*TOOL_(?:CALL|RESULT)\s*\]
  * closing tag, or to end-of-string if the stream was truncated mid-tag.
  */
 const TOOL_CALL_QUICK_RE =
-  /<\s*\/?\s*(?:tool_call|tool_result|function_calls?|function_response|function|tool_calls)\b/i;
+  /<\s*\/?\s*(?:antml:)?(?:tool_call|tool_result|function_calls?|function_response|function|tool_calls|invoke|parameter)\b/i;
 const TOOL_CALL_TAG_NAMES = new Set([
   "tool_call",
   "tool_result",
@@ -27,11 +39,13 @@ const TOOL_CALL_TAG_NAMES = new Set([
   "function_response",
   "function",
   "tool_calls",
+  "antml:invoke",
+  "antml:parameter",
 ]);
 const TOOL_CALL_JSON_PAYLOAD_START_RE =
   /^(?:\s+[A-Za-z_:][-A-Za-z0-9_:.]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>`]+))*\s*(?:\r?\n\s*)?[[{]/;
 const TOOL_CALL_XML_PAYLOAD_START_RE =
-  /^\s*(?:\r?\n\s*)?<(?:function_call|tool_call|function|invoke|parameters?|arguments?)\b/i;
+  /^\s*(?:\r?\n\s*)?<(?:antml:)?(?:function_call|tool_call|function|invoke|parameters?|arguments?)\b/i;
 const NESTED_JSON_TOOL_CALL_PAYLOAD_START_RE = /^\s*(?:\r?\n\s*)?<(?:function_call|tool_call)\b/i;
 
 type ToolCallPayloadKind = "json" | "xml" | null;
@@ -284,7 +298,7 @@ function parseToolCallTagAt(text: string, start: number): ParsedToolCallTag | nu
   }
 
   const nameStart = cursor;
-  while (cursor < text.length && /[A-Za-z_]/.test(text[cursor])) {
+  while (cursor < text.length && /[A-Za-z_:]/.test(text[cursor])) {
     cursor += 1;
   }
 
@@ -392,6 +406,7 @@ export function stripToolCallXmlTags(
       const shouldDetectXmlPayload =
         tag.tagName === "tool_call" ||
         tag.tagName === "function" ||
+        tag.tagName === "antml:invoke" ||
         ((options.stripFunctionCallsXmlPayloads === true ||
           shouldStripPluralWrapperBeforeResponse) &&
           isPluralToolCallWrapper);
@@ -760,7 +775,40 @@ function stripRelevantMemoriesTags(text: string): string {
   return result;
 }
 
-export type AssistantVisibleTextSanitizerProfile = "delivery" | "history" | "internal-scaffolding";
+export function stripAssistantInternalTraceLines(text: string): string {
+  if (!text || !INTERNAL_TRACE_LINE_QUICK_RE.test(text)) {
+    return text;
+  }
+
+  const codeRegions = findCodeRegions(text);
+  let result = "";
+  let lineStart = 0;
+  while (lineStart < text.length) {
+    const newlineIndex = text.indexOf("\n", lineStart);
+    const lineEnd = newlineIndex === -1 ? text.length : newlineIndex + 1;
+    const rawLine = text.slice(lineStart, lineEnd);
+    const line = rawLine.endsWith("\n") ? rawLine.slice(0, -1).replace(/\r$/, "") : rawLine;
+    const trimmed = line.trim();
+    const shouldStrip =
+      !isInsideCode(lineStart, codeRegions) &&
+      (INTERNAL_TRACE_LINE_RE.test(trimmed) ||
+        INTERNAL_COMPACT_FAILURE_TRACE_LINE_RE.test(trimmed) ||
+        INTERNAL_COMPACT_COMMAND_TRACE_LINE_RE.test(trimmed) ||
+        INTERNAL_CHANNEL_TRACE_LINE_RE.test(trimmed));
+    if (!shouldStrip) {
+      result += rawLine;
+    }
+    lineStart = lineEnd;
+  }
+  return result;
+}
+
+export type AssistantVisibleTextSanitizerProfile =
+  | "delivery"
+  | "final-answer-delivery"
+  | "history"
+  | "internal-scaffolding"
+  | "tool-progress";
 
 type AssistantVisibleTextPipelineOptions = {
   finalTrim: ReasoningTagTrim;
@@ -768,7 +816,9 @@ type AssistantVisibleTextPipelineOptions = {
   preserveMinimaxToolXml?: boolean;
   stripFunctionCallsXmlPayloads?: boolean;
   stripFunctionResponseAfterPluralToolCalls?: boolean;
+  stripInternalTraceLines?: boolean;
   reasoningMode: ReasoningTagMode;
+  reasoningScope?: ReasoningTagScope;
   reasoningTrim: ReasoningTagTrim;
   stageOrder: "reasoning-first" | "reasoning-last";
 };
@@ -781,6 +831,14 @@ const ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS: Record<
     finalTrim: "both",
     stripFunctionResponseAfterPluralToolCalls: true,
     reasoningMode: "strict",
+    reasoningTrim: "both",
+    stageOrder: "reasoning-last",
+  },
+  "final-answer-delivery": {
+    finalTrim: "both",
+    stripFunctionResponseAfterPluralToolCalls: true,
+    reasoningMode: "strict",
+    reasoningScope: "leading",
     reasoningTrim: "both",
     stageOrder: "reasoning-last",
   },
@@ -798,6 +856,14 @@ const ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS: Record<
     reasoningTrim: "start",
     stageOrder: "reasoning-first",
   },
+  "tool-progress": {
+    finalTrim: "both",
+    stripFunctionCallsXmlPayloads: true,
+    stripInternalTraceLines: false,
+    reasoningMode: "strict",
+    reasoningTrim: "both",
+    stageOrder: "reasoning-last",
+  },
 };
 
 function applyAssistantVisibleTextStagePipeline(
@@ -811,6 +877,7 @@ function applyAssistantVisibleTextStagePipeline(
   const stripReasoning = (value: string) =>
     stripReasoningTagsFromText(value, {
       mode: options.reasoningMode,
+      scope: options.reasoningScope,
       trim: options.reasoningTrim,
     });
   const applyFinalTrim = (value: string) => {
@@ -833,6 +900,9 @@ function applyAssistantVisibleTextStagePipeline(
       stripFunctionCallsXmlPayloads: options.stripFunctionCallsXmlPayloads,
       stripFunctionResponseAfterPluralToolCalls: options.stripFunctionResponseAfterPluralToolCalls,
     });
+    if (options.stripInternalTraceLines !== false) {
+      cleaned = stripAssistantInternalTraceLines(cleaned);
+    }
     cleaned = stripLegacyBracketToolCallBlocks(cleaned);
     cleaned = stripPlainTextToolCallBlocks(cleaned);
     if (!options.preserveDowngradedToolText) {
@@ -868,6 +938,11 @@ export function stripAssistantInternalScaffolding(text: string): string {
  */
 export function sanitizeAssistantVisibleText(text: string): string {
   return sanitizeAssistantVisibleTextWithProfile(text, "delivery");
+}
+
+/** Sanitizes text already marked as final-answer prose by the agent runtime. */
+export function sanitizeAssistantFinalAnswerText(text: string): string {
+  return sanitizeAssistantVisibleTextWithProfile(text, "final-answer-delivery");
 }
 
 /**

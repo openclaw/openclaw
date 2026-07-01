@@ -1,3 +1,4 @@
+// Discord tests cover outbound adapter plugin behavior.
 import { adaptMessagePresentationForChannel } from "openclaw/plugin-sdk/interactive-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -344,7 +345,7 @@ describe("discordOutbound", () => {
       2,
     );
     expect(messageOptions.accountId).toBe("default");
-    expect(messageOptions.replyTo).toBeUndefined();
+    expect(messageOptions.replyTo).toBe("reply-1");
 
     const mediaCall = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 1);
     expect(mediaCall[0]).toBe("channel:123456");
@@ -352,12 +353,37 @@ describe("discordOutbound", () => {
     const mediaOptions = mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 1, 2);
     expect(mediaOptions.accountId).toBe("default");
     expect(mediaOptions.mediaUrl).toBe("https://example.com/extra.png");
-    expect(mediaOptions.replyTo).toBeUndefined();
+    expect(mediaOptions.replyTo).toBe("reply-1");
     expect(result).toEqual({
       channel: "discord",
       messageId: "msg-1",
       channelId: "ch-1",
     });
+  });
+
+  it("keeps captured replyTo on audioAsVoice sends when replyToMode is batched", async () => {
+    await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      payload: {
+        text: "voice note",
+        mediaUrls: ["https://example.com/voice.ogg", "https://example.com/extra.png"],
+        audioAsVoice: true,
+      },
+      accountId: "default",
+      replyToId: "reply-1",
+      replyToMode: "batched",
+    });
+
+    expect(
+      mockObjectArg(hoisted.sendVoiceMessageDiscordMock, "sendVoiceMessageDiscord", 0, 2).replyTo,
+    ).toBe("reply-1");
+    expect(
+      hoisted.sendMessageDiscordMock.mock.calls.map(
+        (call) => (call[2] as { replyTo?: unknown } | undefined)?.replyTo,
+      ),
+    ).toEqual(["reply-1", "reply-1"]);
   });
 
   it("keeps replyToId on every internal audioAsVoice send when replyToMode is all", async () => {

@@ -1,3 +1,4 @@
+// Package Mac App tests cover package mac app script behavior.
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -47,6 +48,102 @@ function getPackageManagerHelperBlock(): string {
   return script.slice(start, end);
 }
 
+function getSparkleBuildHelperBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf("sparkle_canonical_build_from_version()");
+  const end = script.indexOf("build_path_for_arch()");
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return script.slice(start, end);
+}
+
+function getStopPackagedAppBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf("running_packaged_app_pids()");
+  const end = script.indexOf("\nstop_packaged_app_if_running\n");
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return script.slice(start, end);
+}
+
+function getSwiftCompatibilityBlock(): string {
+  const script = readFileSync(scriptPath, "utf8");
+  const start = script.indexOf('echo "📦 Copying Swift 6.2 compatibility libraries"');
+  const end = script.indexOf('echo "🖼  Copying app icon"');
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeGreaterThan(start);
+
+  return script.slice(start, end);
+}
+
+function runStopPackagedAppHarness(killZeroStatus: 0 | 1) {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-package-stop-root-"));
+  const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-stop-tools-"));
+  tempDirs.push(root, toolsDir);
+
+  const appRoot = path.join(root, "dist", "OpenClaw.app");
+  const appBinary = path.join(appRoot, "Contents", "MacOS", "OpenClaw");
+  const lsofPath = path.join(toolsDir, "lsof");
+  const pgrepPath = path.join(toolsDir, "pgrep");
+  const sleepPath = path.join(toolsDir, "sleep");
+
+  writeFileSync(
+    lsofPath,
+    ["#!/usr/bin/env bash", `printf 'n%s\\n' ${JSON.stringify(appBinary)}`].join("\n"),
+    "utf8",
+  );
+  writeFileSync(pgrepPath, "#!/usr/bin/env bash\nprintf '123\\n'\n", "utf8");
+  writeFileSync(sleepPath, "#!/usr/bin/env bash\nexit 0\n", "utf8");
+  chmodSync(lsofPath, 0o755);
+  chmodSync(pgrepPath, 0o755);
+  chmodSync(sleepPath, 0o755);
+
+  return runHelper(`
+    set -euo pipefail
+    APP_ROOT=${JSON.stringify(appRoot)}
+    PRODUCT=OpenClaw
+    PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+    kill() {
+      if [[ "\${1:-}" == "-0" ]]; then
+        return ${killZeroStatus}
+      fi
+      return 0
+    }
+    ${getStopPackagedAppBlock()}
+    stop_packaged_app_if_running
+  `);
+}
+
+function runSwiftCompatibilityHarness(buildConfig: "debug" | "release") {
+  const root = mkdtempSync(path.join(tmpdir(), "openclaw-package-swift-root-"));
+  const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-swift-tools-"));
+  const developerDir = path.join(root, "Xcode.app", "Contents", "Developer");
+  const appRoot = path.join(root, "OpenClaw.app");
+  const xcodeSelectPath = path.join(toolsDir, "xcode-select");
+  tempDirs.push(root, toolsDir);
+
+  writeFileSync(
+    xcodeSelectPath,
+    ["#!/usr/bin/env bash", `printf '%s\\n' ${JSON.stringify(developerDir)}`].join("\n"),
+    "utf8",
+  );
+  chmodSync(xcodeSelectPath, 0o755);
+
+  return runHelper(`
+    set -euo pipefail
+    APP_ROOT=${JSON.stringify(appRoot)}
+    BUILD_CONFIG=${JSON.stringify(buildConfig)}
+    PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+    mkdir -p "$APP_ROOT/Contents/Frameworks"
+    ${getSwiftCompatibilityBlock()}
+  `);
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -79,8 +176,8 @@ describe("package-mac-app plist stamping", () => {
       [
         "#!/usr/bin/env bash",
         "set -euo pipefail",
-        "printf '%s|%s\\n' \"$PWD\" \"$*\" >> \"$OPENCLAW_TEST_LOG\"",
-        "if [[ \"${1:-}\" == \"pnpm\" && \"${2:-}\" == \"--version\" ]]; then",
+        'printf \'%s|%s\\n\' "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"',
+        'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
         "  echo '11.2.2'",
         "fi",
         "",
@@ -108,6 +205,68 @@ describe("package-mac-app plist stamping", () => {
     ]);
   });
 
+  it("prefers repo Corepack pnpm over a global pnpm shim", () => {
+    const helperBlock = getPackageManagerHelperBlock();
+    const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-root-"));
+    const outerRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-outer-"));
+    const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-tools-"));
+    const logPath = path.join(tempRoot, "pnpm.log");
+    tempDirs.push(tempRoot, outerRoot, toolsDir);
+
+    writeFileSync(
+      path.join(tempRoot, "package.json"),
+      '{\n  "packageManager": "pnpm@11.2.2+sha512.test"\n}\n',
+    );
+    writeFileSync(
+      path.join(outerRoot, "package.json"),
+      '{\n  "packageManager": "pnpm@11.8.0+sha512.test"\n}\n',
+    );
+    writeFileSync(
+      path.join(toolsDir, "pnpm"),
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'printf "global|%s|%s\\n" "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"',
+        'if [[ "${1:-}" == "--version" ]]; then echo "11.8.0"; fi',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    writeFileSync(
+      path.join(toolsDir, "corepack"),
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'printf "corepack|%s|%s\\n" "$PWD" "$*" >> "$OPENCLAW_TEST_LOG"',
+        'if [[ "${1:-}" == "pnpm" && "${2:-}" == "--version" ]]; then',
+        '  if grep -q "pnpm@11.2.2" package.json 2>/dev/null; then echo "11.2.2"; else echo "11.8.0"; fi',
+        "fi",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    chmodSync(path.join(toolsDir, "pnpm"), 0o755);
+    chmodSync(path.join(toolsDir, "corepack"), 0o755);
+
+    const result = runHelper(`
+      set -euo pipefail
+      ROOT_DIR=${JSON.stringify(tempRoot)}
+      OPENCLAW_TEST_LOG=${JSON.stringify(logPath)}
+      export OPENCLAW_TEST_LOG
+      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+      cd ${JSON.stringify(outerRoot)}
+      ${helperBlock}
+      run_pnpm --version
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("11.2.2\n");
+    expect(readFileSync(logPath, "utf8").trim().split("\n")).toEqual([
+      `corepack|${tempRoot}|pnpm --version`,
+      `corepack|${tempRoot}|pnpm --version`,
+    ]);
+  });
+
   it("fails with an actionable error when neither pnpm nor corepack pnpm is available", () => {
     const helperBlock = getPackageManagerHelperBlock();
     const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-pnpm-root-"));
@@ -126,6 +285,45 @@ describe("package-mac-app plist stamping", () => {
     expect(result.stderr).toContain("pnpm is not on PATH and corepack pnpm is unavailable");
   });
 
+  it("runs Sparkle build metadata derivation from the repository root", () => {
+    const helperBlock = getSparkleBuildHelperBlock();
+    const tempRoot = mkdtempSync(path.join(tmpdir(), "openclaw-package-sparkle-root-"));
+    const toolsDir = mkdtempSync(path.join(tmpdir(), "openclaw-package-sparkle-tools-"));
+    tempDirs.push(tempRoot, toolsDir);
+
+    const nodePath = path.join(toolsDir, "node");
+    writeFileSync(
+      nodePath,
+      [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        'if [[ "$PWD" != "$OPENCLAW_ROOT" ]]; then',
+        '  echo "node ran outside repo root: $PWD" >&2',
+        "  exit 1",
+        "fi",
+        "echo 2026060290",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    chmodSync(nodePath, 0o755);
+
+    const result = runHelper(`
+      set -euo pipefail
+      ROOT_DIR=${JSON.stringify(tempRoot)}
+      OPENCLAW_ROOT=${JSON.stringify(tempRoot)}
+      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+      export OPENCLAW_ROOT PATH
+      cd /tmp
+      ${helperBlock}
+      sparkle_canonical_build_from_version 2026.6.2
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("2026060290\n");
+    expect(result.stderr).toBe("");
+  });
+
   it("does not kill unrelated OpenClaw processes during packaging", () => {
     const script = readFileSync(scriptPath, "utf8");
     const stopBlock = script.slice(
@@ -142,6 +340,34 @@ describe("package-mac-app plist stamping", () => {
     );
   });
 
+  it("fails when the packaged app survives forced shutdown", () => {
+    const result = runStopPackagedAppHarness(0);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("ERROR: Packaged OpenClaw bundle did not exit: 123");
+  });
+
+  it("fails release packaging when the Swift compatibility library is missing", () => {
+    const result = runSwiftCompatibilityHarness("release");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("ERROR: Swift compatibility library not found");
+  });
+
+  it("allows debug packaging to continue without the Swift compatibility library", () => {
+    const result = runSwiftCompatibilityHarness("debug");
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("WARN: Swift compatibility library not found");
+  });
+
+  it("passes when the packaged app exits after shutdown", () => {
+    const result = runStopPackagedAppHarness(1);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
   it("keeps mac packaging script checks in the macOS CI lane", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8")) as {
       scripts?: Record<string, string>;
@@ -151,6 +377,8 @@ describe("package-mac-app plist stamping", () => {
     expect(macosCi).toContain("test/scripts/package-mac-app.test.ts");
     expect(macosCi).toContain("test/scripts/package-mac-dist.test.ts");
     expect(macosCi).toContain("test/scripts/create-dmg.test.ts");
+    expect(macosCi).toContain("test/scripts/codesign-mac-app.test.ts");
+    expect(macosCi).toContain("test/scripts/notarize-mac-artifact.test.ts");
   });
 
   it("fails closed when required Swift resources are missing", () => {
@@ -159,13 +387,15 @@ describe("package-mac-app plist stamping", () => {
       script.indexOf(
         'OPENCLAWKIT_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/OpenClawKit_OpenClawKit.bundle"',
       ),
-      script.indexOf('echo "📦 Copying Textual resources"'),
+      script.indexOf("running_packaged_app_pids()"),
     );
 
     expect(openClawKitBlock).toContain("ERROR: OpenClawKit resource bundle not found");
     expect(openClawKitBlock).toContain("exit 1");
     expect(openClawKitBlock).not.toContain("WARN:");
     expect(openClawKitBlock).not.toContain("continuing");
+    expect(script).not.toContain("Textual resource bundle");
+    expect(script).not.toContain("ALLOW_MISSING_TEXTUAL_BUNDLE");
   });
 
   it("does not mask required Info.plist stamp failures", () => {

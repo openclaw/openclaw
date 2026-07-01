@@ -1,13 +1,18 @@
-import type { TSchema } from "typebox";
-import { readLocalFileSafely } from "../../infra/fs-safe.js";
-import { detectMime } from "../../media/mime.js";
-import { readSnakeCaseParamRaw } from "../../param-key.js";
+/**
+ * Shared built-in tool contracts and helpers.
+ *
+ * Defines erased tool types, parameter readers, JSON results, progress blocks, and media sanitization.
+ */
+import { detectMime } from "@openclaw/media-core/mime";
 import {
   asPositiveSafeInteger,
   asSafeIntegerInRange,
   parseStrictFiniteNumber,
-} from "../../shared/number-coercion.js";
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import type { TSchema } from "typebox";
+import { readLocalFileSafely } from "../../infra/fs-safe.js";
+import { readSnakeCaseParamRaw } from "../../param-key.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import type {
   AgentTool,
@@ -22,6 +27,11 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   TResult
 > & {
   displaySummary?: string;
+  prepareBeforeToolCallParams?: (
+    params: unknown,
+    ctx: { toolCallId?: string; hookContext?: unknown; signal?: AbortSignal },
+  ) => unknown;
+  finalizeBeforeToolCallParams?: (params: unknown, preparedParams: unknown) => unknown;
 };
 
 type ErasedAgentToolExecute = {
@@ -37,6 +47,14 @@ type ErasedAgentToolExecute = {
 export type AnyAgentTool = Omit<AgentTool, "execute"> &
   ErasedAgentToolExecute & {
     displaySummary?: string;
+    prepareBeforeToolCallParams?: AgentToolWithMeta<
+      TSchema,
+      unknown
+    >["prepareBeforeToolCallParams"];
+    finalizeBeforeToolCallParams?: AgentToolWithMeta<
+      TSchema,
+      unknown
+    >["finalizeBeforeToolCallParams"];
   };
 
 export function asToolParamsRecord(params: unknown): Record<string, unknown> {
@@ -444,7 +462,6 @@ export function scheduleToolProgress(
     return () => {};
   }
   let cleared = false;
-  let timer: ReturnType<typeof setTimeout>;
   const clear = () => {
     if (cleared) {
       return;
@@ -453,7 +470,7 @@ export function scheduleToolProgress(
     clearTimeout(timer);
     options.signal?.removeEventListener("abort", clear);
   };
-  timer = setTimeout(() => {
+  const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
     clear();
     emitToolProgress(onUpdate, progress);
   }, delayMs);

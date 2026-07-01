@@ -1,4 +1,12 @@
+// Pairing CLI for listing and approving channel DM pairing requests.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { listPairingChannels, notifyPairingApproved } from "../channels/plugins/pairing.js";
 import {
@@ -14,13 +22,6 @@ import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
 import { approveChannelPairingCode, listChannelPairingRequests } from "../pairing/pairing-store.js";
 import type { PairingChannel } from "../pairing/pairing-store.types.js";
 import { defaultRuntime } from "../runtime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
-import { theme } from "../terminal/theme.js";
 import { formatCliCommand } from "./command-format.js";
 
 /** Parse channel, allowing extension channels not in core registry. */
@@ -51,15 +52,16 @@ function parseChannel(raw: unknown, channels: PairingChannel[]): PairingChannel 
   );
 }
 
-async function notifyApproved(channel: PairingChannel, id: string) {
+async function notifyApproved(channel: PairingChannel, id: string, accountId?: string) {
   const cfg = getRuntimeConfig();
-  await notifyPairingApproved({ channelId: channel, id, cfg });
+  await notifyPairingApproved({ channelId: channel, id, cfg, ...(accountId ? { accountId } : {}) });
 }
 
 async function maybeBootstrapCommandOwnerFromPairing(params: {
   channel: PairingChannel;
   id: string;
 }): Promise<{ ownerEntry: string | null; bootstrapped: boolean }> {
+  // First approved pairing can seed ownerAllowFrom so command access is not left open-ended.
   const ownerEntry = formatCommandOwnerFromChannelSender(params);
   if (!ownerEntry) {
     return { ownerEntry: null, bootstrapped: false };
@@ -86,6 +88,8 @@ async function maybeBootstrapCommandOwnerFromPairing(params: {
 
 export function registerPairingCli(program: Command) {
   const channels = listPairingChannels();
+  // Avoid rendering a bare "()" enum when no channels are configured.
+  const channelHint = channels.length > 0 ? channels.join(", ") : "none configured";
   const pairing = program
     .command("pairing")
     .description("Secure DM pairing (approve inbound requests)")
@@ -98,16 +102,21 @@ export function registerPairingCli(program: Command) {
   pairing
     .command("list")
     .description("List pending pairing requests")
-    .option("--channel <channel>", `Channel (${channels.join(", ")})`)
+    .option("--channel <channel>", `Channel (${channelHint})`)
     .option("--account <accountId>", "Account id (for multi-account channels)")
-    .argument("[channel]", `Channel (${channels.join(", ")})`)
+    .argument("[channel]", `Channel (${channelHint})`)
     .option("--json", "Print JSON", false)
     .action(async (channelArg, opts) => {
       const channelRaw = opts.channel ?? channelArg ?? (channels.length === 1 ? channels[0] : "");
       if (!channelRaw) {
-        throw new Error(
-          `Channel required. Use --channel <channel> or pass it as the first argument (expected one of: ${channels.join(", ")})`,
-        );
+        if (channels.length === 0) {
+          // `pairing` is chat DM only; TUI/device approvals live under `openclaw devices`.
+          throw new Error(
+            `No chat DM pairing channels are configured. To approve a TUI or device request, ` +
+              `use ${formatCliCommand("openclaw devices approve")} instead.`,
+          );
+        }
+        throw new Error(`Channel required (expected one of: ${channelHint}).`);
       }
       const channel = parseChannel(channelRaw, channels);
       const accountId = normalizeStringifiedOptionalString(opts.account) ?? "";
@@ -149,7 +158,7 @@ export function registerPairingCli(program: Command) {
   pairing
     .command("approve")
     .description("Approve a pairing code and allow that sender")
-    .option("--channel <channel>", `Channel (${channels.join(", ")})`)
+    .option("--channel <channel>", `Channel (${channelHint})`)
     .option("--account <accountId>", "Account id (for multi-account channels)")
     .argument("<codeOrChannel>", "Pairing code (or channel when using 2 args)")
     .argument("[code]", "Pairing code (when channel is passed as the 1st arg)")
@@ -212,7 +221,9 @@ export function registerPairingCli(program: Command) {
       if (!opts.notify) {
         return;
       }
-      await notifyApproved(channel, approved.id).catch((err) => {
+      const approvedAccountId =
+        accountId || normalizeStringifiedOptionalString(approved.entry?.meta?.accountId);
+      await notifyApproved(channel, approved.id, approvedAccountId).catch((err: unknown) => {
         defaultRuntime.log(theme.warn(`Failed to notify requester: ${String(err)}`));
       });
     });

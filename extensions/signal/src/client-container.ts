@@ -10,7 +10,14 @@ import fs from "node:fs/promises";
 import nodePath from "node:path";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { detectMime, parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
-import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
+import {
+  parseStrictNonNegativeInteger,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import {
+  readProviderTextResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import WebSocket from "ws";
 
@@ -77,8 +84,9 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
   if (!fetchImpl) {
     throw new Error("fetch is not available");
   }
+  const safeTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer = setTimeout(() => controller.abort(), safeTimeoutMs);
   try {
     return await fetchImpl(url, { ...init, signal: controller.signal });
   } finally {
@@ -107,6 +115,12 @@ async function readCappedResponseBuffer(res: Response, maxResponseBytes: number)
   });
 }
 
+async function releaseUnreadResponseBody(res: Response | undefined): Promise<void> {
+  if (res?.bodyUsed !== true) {
+    await res?.body?.cancel().catch(() => undefined);
+  }
+}
+
 /**
  * Check if bbernhard container REST API is available.
  */
@@ -116,8 +130,9 @@ export async function containerCheck(
   account?: string,
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
   const normalized = normalizeBaseUrl(baseUrl);
+  let res: Response | undefined;
   try {
-    const res = await fetchWithTimeout(`${normalized}/v1/about`, { method: "GET" }, timeoutMs);
+    res = await fetchWithTimeout(`${normalized}/v1/about`, { method: "GET" }, timeoutMs);
     if (!res.ok) {
       return { ok: false, status: res.status, error: `HTTP ${res.status}` };
     }
@@ -132,6 +147,8 @@ export async function containerCheck(
       status: null,
       error: err instanceof Error ? err.message : String(err),
     };
+  } finally {
+    await releaseUnreadResponseBody(res);
   }
 }
 
@@ -142,12 +159,13 @@ function containerReceiveCheck(
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
   const wsUrl = `${normalizedBaseUrl.replace(/^http/, "ws")}/v1/receive/${encodeURIComponent(account)}`;
   return new Promise((resolve) => {
+    const safeTimeoutMs = resolveTimerTimeoutMs(timeoutMs, DEFAULT_TIMEOUT_MS);
     let settled = false;
     let ws: WebSocket | undefined;
     const timer = setTimeout(() => {
       settle({ ok: false, status: null, error: "Signal container receive WebSocket timed out" });
       ws?.terminate();
-    }, timeoutMs);
+    }, safeTimeoutMs);
     timer.unref?.();
     const settle = (result: { ok: boolean; status?: number | null; error?: string | null }) => {
       if (settled) {
@@ -188,6 +206,14 @@ function containerReceiveCheck(
         error: err instanceof Error ? err.message : String(err),
       });
     });
+    ws.once("close", (code, reason) => {
+      const reasonText = reason.length > 0 ? `: ${reason.toString("utf8")}` : "";
+      settle({
+        ok: false,
+        status: null,
+        error: `Signal container receive WebSocket closed before open (${code}${reasonText})`,
+      });
+    });
   });
 }
 
@@ -219,16 +245,25 @@ export async function containerRestRequest<T = unknown>(
   }
 
   if (!res.ok) {
-    const errorText = await res.text().catch(() => "");
+    // Bound the error body: signal-cli-rest-api is an untrusted external container,
+    // and a hostile/buggy response must not let an error path buffer an unbounded body.
+    const errorText = await readResponseTextLimited(res).catch(() => "");
     throw new Error(`Signal REST ${res.status}: ${errorText || res.statusText}`);
   }
 
-  const text = await res.text();
+  // Bound the success body under the shared 16 MiB provider cap before JSON.parse so a
+  // malicious/runaway container response cannot OOM the runtime (send/typing/version all
+  // funnel through here). Reuse the same bounded reader family as the attachment path.
+  const text = await readProviderTextResponse(res, "Signal REST");
   if (!text) {
     return undefined as T;
   }
 
-  return JSON.parse(text) as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error("Signal REST returned malformed JSON");
+  }
 }
 
 /**
@@ -240,14 +275,19 @@ export async function containerFetchAttachment(
 ): Promise<Buffer | null> {
   const baseUrl = normalizeBaseUrl(opts.baseUrl);
   const url = `${baseUrl}/v1/attachments/${encodeURIComponent(attachmentId)}`;
+  let res: Response | undefined;
 
-  const res = await fetchWithTimeout(url, { method: "GET" }, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  try {
+    res = await fetchWithTimeout(url, { method: "GET" }, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
 
-  if (!res.ok) {
-    return null;
+    if (!res.ok) {
+      return null;
+    }
+
+    return await readCappedResponseBuffer(res, normalizeMaxResponseBytes(opts.maxResponseBytes));
+  } finally {
+    await releaseUnreadResponseBody(res);
   }
-
-  return readCappedResponseBuffer(res, normalizeMaxResponseBytes(opts.maxResponseBytes));
 }
 
 /**
@@ -293,7 +333,7 @@ export async function streamContainerEvents(params: {
       logError(
         `[signal-ws] failed to create WebSocket: ${err instanceof Error ? err.message : String(err)}`,
       );
-      reject(err);
+      reject(toLintErrorObject(err, "Non-Error rejection"));
       return;
     }
 
@@ -711,4 +751,18 @@ export async function containerRpcRequest<T = unknown>(
     default:
       throw new Error(`Unsupported container RPC method: ${method}`);
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

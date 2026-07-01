@@ -1,3 +1,4 @@
+// Voice Call tests cover tunnel plugin behavior.
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -34,7 +35,7 @@ vi.mock("./webhook/tailscale.js", () => ({
   getTailscaleDnsName: mocks.getTailscaleDnsName,
 }));
 
-import { isNgrokAvailable, startNgrokTunnel, startTailscaleTunnel, startTunnel } from "./tunnel.js";
+import { startNgrokTunnel, startTailscaleTunnel, startTunnel } from "./tunnel.js";
 
 function nextProcess(): FakeChildProcess {
   const proc = new FakeChildProcess();
@@ -50,25 +51,6 @@ describe("voice-call tunnels", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getTailscaleDnsName.mockReset();
-  });
-
-  it("checks ngrok availability from the version command exit code", async () => {
-    const proc = nextProcess();
-    const result = isNgrokAvailable();
-    proc.close(0);
-
-    await expect(result).resolves.toBe(true);
-    expect(mocks.spawn).toHaveBeenCalledWith("ngrok", ["version"], {
-      stdio: "ignore",
-    });
-  });
-
-  it("treats ngrok spawn failures as unavailable", async () => {
-    const proc = nextProcess();
-    const result = isNgrokAvailable();
-    proc.fail(new Error("spawn ngrok ENOENT"));
-
-    await expect(result).resolves.toBe(false);
   });
 
   it("starts ngrok and appends the webhook path to the public URL", async () => {
@@ -103,7 +85,9 @@ describe("voice-call tunnels", () => {
 
     const settled = await Promise.race([
       result.then(() => true),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 20)),
+      new Promise<boolean>((resolve) => {
+        setTimeout(() => resolve(false), 20);
+      }),
     ]);
     expect(settled).toBe(true);
 

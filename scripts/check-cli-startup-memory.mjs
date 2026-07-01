@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 
+// Measures CLI startup memory with an isolated home and RSS hook.
 import { spawnSync as defaultSpawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const repoRoot = process.cwd();
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const tmpDir = process.env.TMPDIR || process.env.TEMP || process.env.TMP || os.tmpdir();
 const MAX_RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
 const DEFAULT_COMMAND_TIMEOUT_MS = 60_000;
@@ -19,7 +20,10 @@ let rssHookPath = null;
 
 function readPositiveIntEnv(name, fallback, env = process.env) {
   const value = readPositiveNumberEnv(name, fallback, env);
-  return Number.isInteger(value) ? value : fallback;
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return value;
 }
 
 function readPositiveNumberEnv(name, fallback, env = process.env) {
@@ -29,15 +33,26 @@ function readPositiveNumberEnv(name, fallback, env = process.env) {
   }
   const text = raw.trim();
   if (!/^(?:\d+(?:\.\d+)?|\.\d+)$/u.test(text)) {
-    return fallback;
+    throw new Error(`${name} must be a positive number`);
   }
   const value = Number(text);
-  return Number.isFinite(value) && value > 0 ? value : fallback;
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${name} must be a positive number`);
+  }
+  return value;
 }
 
 function readNonEmptyEnv(name) {
   const value = process.env[name];
   return value === undefined || value.length === 0 ? null : value;
+}
+
+function readRequiredPathOption(argv, index, flag) {
+  const value = argv[index + 1];
+  if (!value || value.startsWith("-")) {
+    throw new Error(`${flag} requires a path`);
+  }
+  return value;
 }
 
 function parseArgs(argv) {
@@ -52,19 +67,13 @@ function parseArgs(argv) {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--json") {
-      const value = argv[index + 1];
-      if (!value) {
-        throw new Error("--json requires a path");
-      }
+      const value = readRequiredPathOption(argv, index, "--json");
       options.jsonPath = path.resolve(value);
       index += 1;
       continue;
     }
     if (arg === "--summary") {
-      const value = argv[index + 1];
-      if (!value) {
-        throw new Error("--summary requires a path");
-      }
+      const value = readRequiredPathOption(argv, index, "--summary");
       options.summaryPath = path.resolve(value);
       index += 1;
       continue;
@@ -152,7 +161,8 @@ function parseMaxRssMb(stderr) {
   if (!lastMatch) {
     return null;
   }
-  return Number(lastMatch[1]) / 1024;
+  const maxRssKb = Number(lastMatch[1]);
+  return Number.isFinite(maxRssKb) && maxRssKb > 0 ? maxRssKb / 1024 : null;
 }
 
 function formatMb(value) {
@@ -161,6 +171,10 @@ function formatMb(value) {
 
 function formatCaseCommand(testCase) {
   return `node ${testCase.args.join(" ")}`;
+}
+
+function nodeImportSpecifierForPath(filePath) {
+  return pathToFileURL(filePath).href;
 }
 
 function buildBenchEnv() {
@@ -208,14 +222,18 @@ function runCase(testCase, params = {}) {
   const env = buildBenchEnv();
   const spawn = params.spawnSync ?? defaultSpawnSync;
   const timeoutMs = params.timeoutMs ?? COMMAND_TIMEOUT_MS;
-  const result = spawn(process.execPath, ["--import", rssHookPath, ...testCase.args], {
-    cwd: repoRoot,
-    env,
-    encoding: "utf8",
-    maxBuffer: 20 * 1024 * 1024,
-    timeout: timeoutMs,
-    killSignal: "SIGKILL",
-  });
+  const result = spawn(
+    process.execPath,
+    ["--import", nodeImportSpecifierForPath(rssHookPath), ...testCase.args],
+    {
+      cwd: repoRoot,
+      env,
+      encoding: "utf8",
+      maxBuffer: 20 * 1024 * 1024,
+      timeout: timeoutMs,
+      killSignal: "SIGKILL",
+    },
+  );
   const stderr = result.stderr ?? "";
   const maxRssMb = parseMaxRssMb(stderr);
   const matrixBootstrapWarning = /matrix: crypto runtime bootstrap failed/i.test(stderr);
@@ -358,11 +376,16 @@ function runStartupMemoryCheck(argv = process.argv.slice(2), params = {}) {
   return { skipped: false, results };
 }
 
+/**
+ * Test-only access to pure startup memory helper functions.
+ */
 export const testing = {
   cases,
+  nodeImportSpecifierForPath,
   parseArgs,
   readPositiveIntEnv,
   readPositiveNumberEnv,
+  repoRoot,
   resolveDefaultLimitsMb,
   runCase,
   runStartupMemoryCheck,
@@ -372,7 +395,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   try {
     runStartupMemoryCheck();
   } catch (error) {
-    console.error(error instanceof Error ? error.stack : String(error));
+    console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
   }
 }

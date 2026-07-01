@@ -1,3 +1,7 @@
+/**
+ * Builds Codex app-server prompt context, workspace bootstrap injections,
+ * system-prompt reports, and context-engine projection decisions.
+ */
 import { createHash } from "node:crypto";
 import path from "node:path";
 import {
@@ -11,7 +15,10 @@ import {
   type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
-import type { CodexDynamicToolSpec, JsonValue } from "./protocol.js";
+import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
+import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
+import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonValue } from "./protocol.js";
+import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
@@ -51,6 +58,7 @@ type CodexBootstrapContext = {
   bootstrapFiles: CodexBootstrapFile[];
   contextFiles: EmbeddedContextFile[];
 };
+/** System prompt accounting report attached to Codex attempt results. */
 export type CodexSystemPromptReport = NonNullable<EmbeddedRunAttemptResult["systemPromptReport"]>;
 type CodexToolReportEntry = CodexSystemPromptReport["tools"]["entries"][number];
 type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
@@ -65,88 +73,27 @@ type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
   promptContext?: string;
   developerInstructions?: string;
   turnScopedDeveloperInstructions?: string;
+  memoryCollaborationInstructions?: string;
   heartbeatCollaborationInstructions?: string;
 };
 
-export async function readMirroredSessionHistoryMessages(
-  sessionFile: string,
-): Promise<AgentMessage[] | undefined> {
-  const messages = await readCodexMirroredSessionHistoryMessages(sessionFile);
+/** Reads mirrored Codex session history for harness hooks. */
+export async function readMirroredSessionHistoryMessages(params: {
+  agentId?: string;
+  sessionFile: string;
+  sessionId: string;
+  sessionKey?: string;
+}): Promise<AgentMessage[] | undefined> {
+  const messages = await readCodexMirroredSessionHistoryMessages(params);
   if (!messages) {
     embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
-      sessionFile,
+      sessionFile: params.sessionFile,
     });
   }
   return messages;
 }
 
-export function shouldProjectMirroredHistoryForCodexStart(params: {
-  startupBinding: CodexAppServerThreadBinding | undefined;
-  dynamicToolsFingerprint: string;
-  historyMessages: AgentMessage[];
-  forceProject?: boolean;
-}): boolean {
-  if (!params.historyMessages.some((message) => message.role === "user")) {
-    return false;
-  }
-  if (params.forceProject) {
-    return true;
-  }
-  if (!params.startupBinding?.threadId) {
-    return true;
-  }
-  if (
-    hasUserVisibleHistoryAfterCodexBinding({
-      startupBinding: params.startupBinding,
-      historyMessages: params.historyMessages,
-    })
-  ) {
-    return true;
-  }
-  return !areCodexDynamicToolFingerprintsCompatible({
-    previous: params.startupBinding.dynamicToolsFingerprint,
-    next: params.dynamicToolsFingerprint,
-  });
-}
-
-export function hasUserVisibleHistoryAfterCodexBinding(params: {
-  startupBinding: CodexAppServerThreadBinding;
-  historyMessages: AgentMessage[];
-}): boolean {
-  const bindingUpdatedAt = Date.parse(params.startupBinding.updatedAt);
-  if (!Number.isFinite(bindingUpdatedAt)) {
-    return false;
-  }
-  return params.historyMessages.some((message) => {
-    if (message.role !== "user" && message.role !== "assistant") {
-      return false;
-    }
-    if (isCodexAppServerMirroredTranscriptMessage(message)) {
-      return false;
-    }
-    const timestamp =
-      typeof message.timestamp === "number"
-        ? message.timestamp
-        : typeof message.timestamp === "string"
-          ? Date.parse(message.timestamp)
-          : Number.NaN;
-    return Number.isFinite(timestamp) && timestamp > bindingUpdatedAt;
-  });
-}
-
-export function isCodexAppServerMirroredTranscriptMessage(message: AgentMessage): boolean {
-  const record = message as unknown as Record<string, unknown>;
-  const idempotencyKey = record.idempotencyKey;
-  if (typeof idempotencyKey === "string" && idempotencyKey.startsWith("codex-app-server:")) {
-    return true;
-  }
-  const meta = record["__openclaw"];
-  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
-    return false;
-  }
-  return typeof (meta as Record<string, unknown>).mirrorIdentity === "string";
-}
-
+/** Reads a valid thread-bootstrap projection request from context-engine output. */
 export function readContextEngineThreadBootstrapProjection(
   projection: ContextEngineProjection | undefined,
 ): CodexContextEngineThreadBootstrapProjection | undefined {
@@ -168,6 +115,10 @@ export function readContextEngineThreadBootstrapProjection(
   };
 }
 
+/**
+ * Decides whether an existing Codex thread can reuse its context-engine
+ * bootstrap projection or must be reprojected.
+ */
 export function resolveContextEngineBootstrapProjectionDecision(params: {
   startupBinding: CodexAppServerThreadBinding | undefined;
   expectedBinding: ReturnType<typeof buildContextEngineBinding>;
@@ -206,6 +157,10 @@ export function resolveContextEngineBootstrapProjectionDecision(params: {
     : { project: false, reason: "matching-thread-bootstrap-binding" };
 }
 
+/**
+ * Loads workspace bootstrap files and partitions them into Codex-native prompt,
+ * developer-instruction, heartbeat, and memory-tool contexts.
+ */
 export async function buildCodexWorkspaceBootstrapContext(params: {
   params: EmbeddedRunAttemptParams;
   resolvedWorkspace: string;
@@ -222,6 +177,8 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
         agentId: params.params.agentId ?? params.sessionAgentId,
         workspaceDir: params.effectiveWorkspace,
       });
+    // Native Codex turns should read workspace MEMORY.md through tools when
+    // possible; pasting it into every prompt turns durable memory into policy.
     const bootstrapFiles = await resolveBootstrapFilesForRun({
       workspaceDir: params.resolvedWorkspace,
       config: params.params.config,
@@ -297,6 +254,14 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       turnScopedDeveloperInstructions: renderCodexWorkspaceCollaborationDeveloperInstructions(
         turnScopedDeveloperInstructionFiles,
       ),
+      memoryCollaborationInstructions: shouldInjectCodexOpenClawPromptContext(params.params)
+        ? renderCodexWorkspaceMemoryCollaborationInstructions({
+            files: memoryReferenceFiles,
+            toolNames: params.memoryToolNames,
+            memoryToolRouted: memoryToolsAvailable,
+            citationsMode: params.params.config?.memory?.citations,
+          })
+        : undefined,
       heartbeatCollaborationInstructions:
         renderCodexWorkspaceHeartbeatReference(heartbeatReferenceFiles),
     };
@@ -306,6 +271,10 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
   }
 }
 
+/**
+ * Builds the prompt-size, bootstrap-file, skill, and tool-schema accounting
+ * report for a Codex run.
+ */
 export function buildCodexSystemPromptReport(params: {
   attempt: EmbeddedRunAttemptParams;
   sessionKey: string;
@@ -315,7 +284,7 @@ export function buildCodexSystemPromptReport(params: {
   skillsPrompt: string;
   tools: CodexDynamicToolSpec[];
 }): CodexSystemPromptReport {
-  const toolEntries = params.tools.map(buildCodexToolReportEntry);
+  const toolEntries = flattenCodexDynamicToolFunctions(params.tools).map(buildCodexToolReportEntry);
   const schemaChars = toolEntries.reduce((sum, tool) => sum + tool.schemaChars, 0);
   const skillsPrompt = params.skillsPrompt.trim();
   const bootstrapMaxChars = readPositiveNumber(
@@ -379,7 +348,7 @@ function buildCodexSkillReportEntries(
     .filter((entry) => entry.blockChars > 0);
 }
 
-function buildCodexToolReportEntry(tool: CodexDynamicToolSpec): CodexToolReportEntry {
+function buildCodexToolReportEntry(tool: CodexDynamicToolFunctionSpec): CodexToolReportEntry {
   const summary = tool.description.trim();
   if (tool.deferLoading === true) {
     return {
@@ -545,20 +514,17 @@ function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
+/**
+ * Builds OpenClaw-provided workspace prompt context for the current Codex turn.
+ */
 export function buildCodexOpenClawPromptContext(params: {
   params: EmbeddedRunAttemptParams;
-  skillsPrompt?: string;
   workspacePromptContext?: string;
-  workspaceMemoryReference?: string;
 }): string | undefined {
   if (!shouldInjectCodexOpenClawPromptContext(params.params)) {
     return undefined;
   }
   const sections = [
-    params.skillsPrompt?.trim()
-      ? ["## OpenClaw Skills", "", params.skillsPrompt.trim()].join("\n")
-      : undefined,
-    params.workspaceMemoryReference?.trim() ? params.workspaceMemoryReference.trim() : undefined,
     params.workspacePromptContext?.trim()
       ? ["## OpenClaw Workspace Context", "", params.workspacePromptContext.trim()].join("\n")
       : undefined,
@@ -582,14 +548,32 @@ function shouldInjectCodexOpenClawPromptContext(params: EmbeddedRunAttemptParams
   );
 }
 
+/** Renders loaded OpenClaw skill prompts as Codex collaboration instructions. */
+export function renderCodexSkillsCollaborationInstructions(params: {
+  attempt: EmbeddedRunAttemptParams;
+  skillsPrompt?: string;
+}): string | undefined {
+  if (!shouldInjectCodexOpenClawPromptContext(params.attempt)) {
+    return undefined;
+  }
+  return params.skillsPrompt?.trim()
+    ? ["## OpenClaw Skills", "", params.skillsPrompt.trim()].join("\n")
+    : undefined;
+}
+
+/**
+ * Prepends OpenClaw context while preserving leading delivery metadata as
+ * routing guidance instead of user request text.
+ */
 export function prependCodexOpenClawPromptContext(
   prompt: string,
   context: string | undefined,
+  options: { preservePromptWithoutContext?: boolean } = {},
 ): string {
-  if (!context?.trim()) {
+  const { deliveryHint, prompt: promptWithoutDeliveryHint } = splitLeadingCodexDeliveryHint(prompt);
+  if (!context?.trim() && (!deliveryHint || options.preservePromptWithoutContext)) {
     return prompt;
   }
-  const { deliveryHint, prompt: promptWithoutDeliveryHint } = splitLeadingCodexDeliveryHint(prompt);
   const promptSection = promptWithoutDeliveryHint.startsWith(
     "OpenClaw assembled context for this turn:",
   )
@@ -602,23 +586,65 @@ export function prependCodexOpenClawPromptContext(
         deliveryHint,
       ].join("\n")
     : undefined;
-  return [context.trim(), deliverySection, promptSection].filter(Boolean).join("\n\n");
+  return [context?.trim(), deliverySection, promptSection].filter(Boolean).join("\n\n");
 }
 
-const CODEX_DELIVERY_HINT_LINES = [
-  "Delivery: to send a message, use the `message` tool.",
-  "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
-] as const;
+/**
+ * Maps the surviving user-request portion of an input range after delivery
+ * metadata has been relocated before the request.
+ */
+export function resolveCodexDeliveryHintPreservedInputRange(params: {
+  prompt: string;
+  promptInputRange: { start: number; end: number } | undefined;
+  decoratedPrompt: string;
+}): { start: number; end: number } | undefined {
+  const { prompt, promptInputRange, decoratedPrompt } = params;
+  const { deliveryHint, prompt: promptWithoutDeliveryHint } = splitLeadingCodexDeliveryHint(prompt);
+  if (
+    !deliveryHint ||
+    !promptInputRange ||
+    promptInputRange.start < 0 ||
+    promptInputRange.end < promptInputRange.start ||
+    promptInputRange.end > prompt.length ||
+    !decoratedPrompt.endsWith(promptWithoutDeliveryHint)
+  ) {
+    return undefined;
+  }
+  const promptWithoutDeliveryHintStart = prompt.length - promptWithoutDeliveryHint.length;
+  const inputStart = Math.max(promptInputRange.start, promptWithoutDeliveryHintStart);
+  const inputEnd = Math.max(
+    inputStart,
+    Math.min(
+      promptInputRange.end,
+      promptWithoutDeliveryHint.length + promptWithoutDeliveryHintStart,
+    ),
+  );
+  const decoratedPromptSuffixStart = decoratedPrompt.length - promptWithoutDeliveryHint.length;
+  const requestHeader = "Current user request:\n";
+  const requestHeaderStart = decoratedPromptSuffixStart - requestHeader.length;
+  // Delivery metadata moves outside the request, so retain the remaining input
+  // span rather than treating the original, now non-contiguous range as valid.
+  return {
+    start:
+      inputStart === promptWithoutDeliveryHintStart &&
+      decoratedPrompt.slice(requestHeaderStart, decoratedPromptSuffixStart) === requestHeader
+        ? requestHeaderStart
+        : decoratedPromptSuffixStart + inputStart - promptWithoutDeliveryHintStart,
+    end: decoratedPromptSuffixStart + inputEnd - promptWithoutDeliveryHintStart,
+  };
+}
 
 function splitLeadingCodexDeliveryHint(prompt: string): {
   deliveryHint?: string;
   prompt: string;
 } {
   const trimmedStart = prompt.trimStart();
-  const matchedHint = CODEX_DELIVERY_HINT_LINES.find((hint) => trimmedStart.startsWith(hint));
+  const matchedHint = MESSAGE_TOOL_DELIVERY_HINTS.find((hint) => trimmedStart.startsWith(hint));
   if (!matchedHint) {
     return { prompt };
   }
+  // Delivery hints are runtime routing metadata; split them before wrapping the
+  // user prompt so Codex does not treat delivery policy as the request itself.
   const remainder = trimmedStart
     .slice(matchedHint.length)
     .replace(/^\s*\n/, "")
@@ -725,6 +751,7 @@ function renderCodexWorkspaceCollaborationDeveloperInstructions(
     header: "## OpenClaw Agent Soul",
     preamble:
       "OpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly.",
+    wrapperTag: "AGENT_SOUL",
   });
 }
 
@@ -732,14 +759,21 @@ function renderCodexWorkspaceDeveloperInstructions(params: {
   files: EmbeddedContextFile[];
   header: string;
   preamble: string;
+  wrapperTag?: string;
 }): string | undefined {
-  const { files, header, preamble } = params;
+  const { files, header, preamble, wrapperTag } = params;
   if (files.length === 0) {
     return undefined;
   }
   const lines = [header, "", preamble, ""];
+  if (wrapperTag) {
+    lines.push(`<${wrapperTag}>`, "");
+  }
   for (const file of files) {
     lines.push(`### ${file.path}`, "", file.content, "");
+  }
+  if (wrapperTag) {
+    lines.push(`</${wrapperTag}>`);
   }
   return lines.join("\n").trim();
 }
@@ -793,6 +827,10 @@ function selectCodexWorkspaceMemoryReferenceFiles(params: {
     .toSorted(compareCodexBootstrapFiles);
 }
 
+/**
+ * Renders a memory-file reference that points Codex at memory tools instead of
+ * embedding MEMORY.md contents.
+ */
 export function renderCodexWorkspaceMemoryReference(params: {
   files: EmbeddedContextFile[];
   toolNames?: readonly string[];
@@ -806,7 +844,7 @@ export function renderCodexWorkspaceMemoryReference(params: {
   const lines = [
     "## OpenClaw Workspace Memory",
     "",
-    `MEMORY.md exists in the active agent workspace. OpenClaw does not paste its contents into native Codex turns; use ${toolNames.join(" or ")} when durable memory is relevant and the tools are available.`,
+    `MEMORY.md exists in the active agent workspace as a memory file, not an instruction file. OpenClaw does not paste its contents into native Codex turns; use ${toolNames.join(" or ")} when durable memory is relevant and the tools are available.`,
     "",
   ];
   for (const file of params.files) {
@@ -815,12 +853,60 @@ export function renderCodexWorkspaceMemoryReference(params: {
   return lines.join("\n").trim();
 }
 
-export function hasCodexWorkspaceMemoryTools(tools: readonly { name: string }[]): boolean {
-  return getCodexWorkspaceMemoryToolNames(tools).length > 0;
+function renderCodexWorkspaceMemoryCollaborationInstructions(params: {
+  files: EmbeddedContextFile[];
+  toolNames: readonly string[];
+  memoryToolRouted: boolean;
+  citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
+}): string | undefined {
+  const memoryRecallInstructions = params.memoryToolRouted
+    ? renderCodexMemoryRecallInstructions({
+        toolNames: params.toolNames,
+        citationsMode: params.citationsMode,
+      })
+    : undefined;
+  const memoryReferenceInstructions = renderCodexWorkspaceMemoryReference({
+    files: params.files,
+    toolNames: params.toolNames,
+  });
+  const sections = [memoryRecallInstructions, memoryReferenceInstructions].filter(isNonEmptyString);
+  return sections.length > 0 ? sections.join("\n\n") : undefined;
 }
 
-export function getCodexWorkspaceMemoryToolNames(tools: readonly { name: string }[]): string[] {
-  const availableToolNames = new Set(tools.map((tool) => normalizeCodexDynamicToolName(tool.name)));
+function renderCodexMemoryRecallInstructions(params: {
+  toolNames: readonly string[];
+  citationsMode?: Parameters<typeof buildMemorySystemPromptAddition>[0]["citationsMode"];
+}): string | undefined {
+  const availableTools = new Set(params.toolNames);
+  const memoryPrompt = buildMemorySystemPromptAddition({
+    availableTools,
+    citationsMode: params.citationsMode,
+  });
+  if (!memoryPrompt) {
+    // Memory recall policy belongs to the active memory plugin.
+    // Codex-side fallback text can mask plugin lifecycle bugs or misdescribe third-party memory tools.
+    return undefined;
+  }
+  const toolSearchBridge = renderCodexMemoryToolSearchBridge(params.toolNames);
+  return [memoryPrompt, toolSearchBridge].filter(isNonEmptyString).join("\n").trim();
+}
+
+function renderCodexMemoryToolSearchBridge(toolNames: readonly string[]): string | undefined {
+  const memoryToolNames = toolNames
+    .map((name) => normalizeCodexDynamicToolName(name))
+    .filter((name) => CODEX_MEMORY_TOOL_NAMES.has(name))
+    .toSorted();
+  if (memoryToolNames.length === 0) {
+    return undefined;
+  }
+  return `Codex may expose ${memoryToolNames.join(" and ")} as deferred tools. When the memory guidance above calls for memory recall, use an already-loaded memory tool directly. If the needed memory tool is deferred and not currently callable, use \`tool_search\` to load it, then call that memory tool.`;
+}
+
+/** Lists available memory tool names understood by Codex workspace memory routing. */
+export function getCodexWorkspaceMemoryToolNames(tools: readonly CodexDynamicToolSpec[]): string[] {
+  const availableToolNames = new Set(
+    flattenCodexDynamicToolFunctions(tools).map((tool) => normalizeCodexDynamicToolName(tool.name)),
+  );
   return Array.from(CODEX_MEMORY_TOOL_NAMES).filter((name) => availableToolNames.has(name));
 }
 
@@ -890,6 +976,10 @@ function isSameCodexWorkspacePath(left: string, right: string): boolean {
   return path.resolve(left) === path.resolve(right);
 }
 
+/**
+ * Remaps bootstrap file paths from the resolved workspace to the effective Codex
+ * workspace while preserving platform path separators.
+ */
 export function remapCodexContextFilePath(params: {
   file: EmbeddedContextFile;
   sourceWorkspaceDir: string;

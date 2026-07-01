@@ -1,15 +1,27 @@
+// Defines base configuration types shared by multiple config sections.
 import type { ChatType } from "../channels/chat-type.js";
 
+/** Reply handling mode for chat command surfaces. */
 export type ReplyMode = "text" | "command";
+/** Typing indicator timing policy shared by channel configs. */
 export type TypingMode = "never" | "instant" | "thinking" | "message";
+/** Session-key ownership model for inbound messages. */
 export type SessionScope = "per-sender" | "global";
+/** DM session-key granularity across peers, channels, and accounts. */
 export type DmScope = "main" | "per-peer" | "per-channel-peer" | "per-account-channel-peer";
+/** Which source messages outbound replies should thread or quote against. */
 export type ReplyToMode = "off" | "first" | "all" | "batched";
+/** Group-chat admission policy for channels with allowlists. */
 export type GroupPolicy = "open" | "disabled" | "allowlist";
+/** Direct-message admission policy for channels with pairing/allowlists. */
 export type DmPolicy = "pairing" | "allowlist" | "open" | "disabled";
+/** How much non-allowlisted context is visible to an agent. */
 export type ContextVisibilityMode = "all" | "allowlist" | "allowlist_quote";
+/** Text splitting strategy for outbound channel delivery. */
 export type TextChunkMode = "length" | "newline";
+/** Preview/progress delivery mode while an agent response is still streaming. */
 export type StreamingMode = "off" | "partial" | "block" | "progress";
+/** How command text is represented in streaming progress previews. */
 export type ChannelStreamingCommandTextMode = "raw" | "status";
 
 export type OutboundRetryConfig = {
@@ -24,14 +36,20 @@ export type OutboundRetryConfig = {
 };
 
 export type BlockStreamingCoalesceConfig = {
+  /** Minimum buffered characters before coalesced block delivery. */
   minChars?: number;
+  /** Maximum buffered characters before a block must be flushed. */
   maxChars?: number;
+  /** Idle time in ms before flushing a partial coalesced block. */
   idleMs?: number;
 };
 
 export type BlockStreamingChunkConfig = {
+  /** Minimum preview chunk size before sending another draft update. */
   minChars?: number;
+  /** Maximum preview chunk size before forcing a draft update. */
   maxChars?: number;
+  /** Preferred natural boundary when splitting preview chunks. */
   breakPreference?: "paragraph" | "newline" | "sentence";
 };
 
@@ -50,6 +68,8 @@ export type ChannelStreamingProgressConfig = {
   toolProgress?: boolean;
   /** Command/exec progress detail in the draft. "raw" preserves released behavior; "status" shows only the tool label. Default: "raw". */
   commandText?: ChannelStreamingCommandTextMode;
+  /** Include assistant commentary/preamble text in the progress draft. Default: false. */
+  commentary?: boolean;
 };
 
 export type ChannelStreamingPreviewConfig = {
@@ -95,6 +115,7 @@ export type ChannelStreamingConfig = {
 
 export type ChannelDeliveryStreamingConfig = Pick<ChannelStreamingConfig, "chunkMode" | "block">;
 
+/** Streaming subset used by channels that render visible preview/progress replies. */
 export type ChannelPreviewStreamingConfig = Pick<
   ChannelStreamingConfig,
   "mode" | "chunkMode" | "preview" | "progress" | "block"
@@ -118,7 +139,9 @@ export type HumanDelayConfig = {
 
 export type SessionSendPolicyAction = "allow" | "deny";
 export type SessionSendPolicyMatch = {
+  /** Channel/provider id match. */
   channel?: string;
+  /** Direct/group/thread classification when the caller has channel metadata. */
   chatType?: ChatType;
   /**
    * Session key prefix match.
@@ -129,11 +152,15 @@ export type SessionSendPolicyMatch = {
   rawKeyPrefix?: string;
 };
 export type SessionSendPolicyRule = {
+  /** Action applied when match criteria select this rule. */
   action: SessionSendPolicyAction;
+  /** Optional match filter; omitted match behaves as a catch-all rule. */
   match?: SessionSendPolicyMatch;
 };
 export type SessionSendPolicyConfig = {
+  /** Fallback action when no send-policy rule matches. */
   default?: SessionSendPolicyAction;
+  /** Ordered allow/deny rules; first matching rule wins. */
   rules?: SessionSendPolicyRule[];
 };
 
@@ -222,6 +249,7 @@ export type SessionWriteLockConfig = {
 
 export type SessionMaintenanceMode = "enforce" | "warn";
 
+/** Session-store cleanup policy for transcript count, age, archives, and disk budget. */
 export type SessionMaintenanceConfig = {
   /** Whether to enforce maintenance or warn only. Default: "warn". */
   mode?: SessionMaintenanceMode;
@@ -275,6 +303,8 @@ export type DiagnosticsOtelConfig = {
   traces?: boolean;
   metrics?: boolean;
   logs?: boolean;
+  /** Log export sink: OTLP by default, stdout JSONL, or both. */
+  logsExporter?: "otlp" | "stdout" | "both";
   /** Trace sample rate (0.0 - 1.0). */
   sampleRate?: number;
   /** Metric export interval (ms). */
@@ -298,10 +328,15 @@ export type DiagnosticsOtelConfig = {
 };
 
 export type DiagnosticsCacheTraceConfig = {
+  /** Write prompt-cache trace artifacts for debugging deterministic cache input. */
   enabled?: boolean;
+  /** Optional output path for cache trace artifacts. */
   filePath?: string;
+  /** Include normalized messages in cache trace output. */
   includeMessages?: boolean;
+  /** Include prompt payload text in cache trace output. */
   includePrompt?: boolean;
+  /** Include system-message content in cache trace output. */
   includeSystem?: boolean;
 };
 
@@ -332,7 +367,7 @@ export type WebWhatsAppConfig = {
   keepAliveIntervalMs?: number;
   /** WebSocket opening handshake timeout in milliseconds. Default: 60000. */
   connectTimeoutMs?: number;
-  /** Baileys query timeout in milliseconds. Default: 60000. */
+  /** Baileys query and WhatsApp outbound/read-receipt operation timeout in milliseconds. Default: 60000. */
   defaultQueryTimeoutMs?: number;
 };
 

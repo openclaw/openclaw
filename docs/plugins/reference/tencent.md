@@ -12,7 +12,7 @@ Adds Tencent TokenHub model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/tencent-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/tencent-provider`
 
 ## Surface
 

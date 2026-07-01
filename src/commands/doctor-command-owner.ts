@@ -1,9 +1,10 @@
+/** Doctor warning for missing command owners on privileged channel commands. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PairingChannel } from "../pairing/pairing-store.types.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
-import { note } from "../terminal/note.js";
 
 function resolveConfiguredCommandOwners(cfg: OpenClawConfig): string[] {
   const owners = cfg.commands?.ownerAllowFrom;
@@ -13,10 +14,12 @@ function resolveConfiguredCommandOwners(cfg: OpenClawConfig): string[] {
   return normalizeStringEntries(owners.map((entry) => String(entry ?? "")));
 }
 
+/** Returns true when at least one owner sender id is configured. */
 export function hasConfiguredCommandOwners(cfg: OpenClawConfig): boolean {
   return resolveConfiguredCommandOwners(cfg).length > 0;
 }
 
+/** Formats a channel sender id into the commands.ownerAllowFrom entry shape. */
 export function formatCommandOwnerFromChannelSender(params: {
   channel: PairingChannel;
   id: string;
@@ -35,6 +38,7 @@ export function formatCommandOwnerFromChannelSender(params: {
   return `${params.channel}:${id}`;
 }
 
+/** Emits setup guidance when privileged command ownership is not configured. */
 export function noteCommandOwnerHealth(cfg: OpenClawConfig): void {
   if (hasConfiguredCommandOwners(cfg)) {
     return;

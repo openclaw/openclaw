@@ -1,3 +1,4 @@
+// Mattermost tests cover accounts plugin behavior.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import {
@@ -74,6 +75,32 @@ describe("resolveDefaultMattermostAccountId", () => {
 
     expect(listMattermostAccountIds(cfg)).toEqual(["default", "work"]);
     expect(resolveDefaultMattermostAccountId(cfg)).toBe("default");
+  });
+
+  it("inherits top-level access policy for named accounts before doctor migration", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          dmPolicy: "open",
+          groupPolicy: "open",
+          allowFrom: ["*"],
+          groupAllowFrom: ["*"],
+          accounts: {
+            tony: {
+              botToken: "tok-tony",
+              baseUrl: "https://chat.example.com",
+            },
+          },
+        },
+      },
+    };
+
+    const account = resolveMattermostAccount({ cfg, accountId: "tony" });
+
+    expect(account.config.dmPolicy).toBe("open");
+    expect(account.config.groupPolicy).toBe("open");
+    expect(account.config.allowFrom).toEqual(["*"]);
+    expect(account.config.groupAllowFrom).toEqual(["*"]);
   });
 });
 

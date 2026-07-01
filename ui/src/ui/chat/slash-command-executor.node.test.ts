@@ -104,6 +104,54 @@ describe("executeSlashCommand directives", () => {
     });
   });
 
+  it("passes selected-agent scope for global model changes", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.patch") {
+        return createResolvedModelPatch("gpt-5-mini", "openai");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "global",
+      "model",
+      "gpt-5-mini",
+      {
+        agentId: "work",
+        chatModelCatalog: [{ id: "gpt-5-mini", name: "gpt-5-mini", provider: "openai" }],
+      },
+    );
+
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "global",
+      agentId: "work",
+      model: "gpt-5-mini",
+    });
+  });
+
+  it("passes selected-agent scope for global compaction", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.compact") {
+        return { ok: true, compacted: false };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "global",
+      "compact",
+      "",
+      { agentId: "work" },
+    );
+
+    expect(request).toHaveBeenCalledWith("sessions.compact", {
+      key: "global",
+      agentId: "work",
+    });
+  });
+
   it("uses the local model catalog to qualify raw /model overrides when the patch response omits provider", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.patch") {
@@ -460,7 +508,7 @@ describe("executeSlashCommand directives", () => {
       if (method === "sessions.list") {
         return {
           defaults: {
-            modelProvider: "openai-codex",
+            modelProvider: "openai",
             model: "gpt-5.5",
             thinkingLevels: [
               { id: "off", label: "off" },
@@ -489,7 +537,7 @@ describe("executeSlashCommand directives", () => {
       }
       if (method === "models.list") {
         return {
-          models: [{ id: "gpt-5.5", provider: "openai-codex", reasoning: true }],
+          models: [{ id: "gpt-5.5", provider: "openai", reasoning: true }],
         };
       }
       if (method === "sessions.patch") {
@@ -609,7 +657,7 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(status.content).toBe(
-      "Current thinking level: off.\nOptions: default, off, minimal, low, medium, high, xhigh, max.",
+      "Current thinking level: low.\nOptions: default, off, minimal, low, medium, high, xhigh, max.",
     );
     expect(setMax.content).toBe("Thinking level set to **max**.");
   });
@@ -661,7 +709,44 @@ describe("executeSlashCommand directives", () => {
     );
 
     expect(status.content).toBe(
-      "Current thinking level: high.\nOptions: default, off, minimal, low, medium, high.",
+      "Current thinking level: low.\nOptions: default, off, minimal, low, medium, high.",
+    );
+  });
+
+  it("does not report global thinkingDefault for a session with a different model", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          defaults: {
+            modelProvider: "minimax",
+            model: "MiniMax-M2.7",
+            thinkingDefault: "off",
+          },
+          sessions: [
+            row("agent:main:main", {
+              modelProvider: "deepseek",
+              model: "deepseek-v4-flash",
+            }),
+          ],
+        };
+      }
+      if (method === "models.list") {
+        return {
+          models: [{ id: "deepseek-v4-flash", provider: "deepseek", reasoning: true }],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const status = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "think",
+      "",
+    );
+
+    expect(status.content).toBe(
+      "Current thinking level: low.\nOptions: default, off, minimal, low, medium, high.",
     );
   });
 
@@ -703,8 +788,60 @@ describe("executeSlashCommand directives", () => {
       "",
     );
 
-    expect(result.content).toBe("Current fast mode: on.\nOptions: status, on, off, default.");
+    expect(result.content).toBe(
+      "Current fast mode: on.\nOptions: on, off, auto (60 sec), default, status.",
+    );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
+  });
+
+  it("reports auto fast mode for bare /fast", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [row("agent:main:main", { fastMode: "auto" })],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "fast",
+      "",
+    );
+
+    expect(result.content).toBe(
+      "Current fast mode: auto (60 sec).\nOptions: on, off, auto (60 sec), default, status.",
+    );
+  });
+
+  it("reports effective model-default auto fast mode for bare /fast", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return {
+          sessions: [
+            row("agent:main:main", {
+              effectiveFastMode: "auto",
+              effectiveFastModeSource: "config",
+              fastAutoOnSeconds: 30,
+            }),
+          ],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "fast",
+      "",
+    );
+
+    expect(result.content).toBe(
+      "Current fast mode: auto (30 sec) (default: model).\nOptions: on, off, auto (30 sec), default, status.",
+    );
   });
 
   it("patches fast mode for /fast on", async () => {
@@ -721,6 +858,23 @@ describe("executeSlashCommand directives", () => {
     expect(request).toHaveBeenCalledWith("sessions.patch", {
       key: "agent:main:main",
       fastMode: true,
+    });
+  });
+
+  it("patches fast mode for /fast auto", async () => {
+    const request = vi.fn().mockResolvedValue({ ok: true });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "fast",
+      "auto",
+    );
+
+    expect(result.content).toBe("Fast mode set to auto.");
+    expect(request).toHaveBeenCalledWith("sessions.patch", {
+      key: "agent:main:main",
+      fastMode: "auto",
     });
   });
 
@@ -768,10 +922,125 @@ describe("executeSlashCommand /steer (soft inject)", () => {
     );
 
     expect(result.content).toBe("Steered.");
+    expect(result.pendingCurrentRun).toBe(true);
     const chatSend = requireRequestCall(request, "chat.send");
     expect(chatSend.payload.sessionKey).toBe("agent:main:main");
     expect(chatSend.payload.message).toBe("try a different approach");
     expect(chatSend.payload.deliver).toBe(false);
+  });
+
+  it("does not mark the current run pending when chat.send returns terminal ok", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return { sessions: [row("agent:main:main", { status: "running" })] };
+      }
+      if (method === "chat.send") {
+        return { status: "ok", runId: "run-ok", messageSeq: 2 };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "steer",
+      "try a different approach",
+    );
+
+    expect(result.content).toBe("Steered.");
+    expect(result.pendingCurrentRun).toBeUndefined();
+    const chatSend = requireRequestCall(request, "chat.send");
+    expect(chatSend.payload.deliver).toBe(false);
+  });
+
+  it.each([
+    ["timeout", "The active run ended before the steer message was accepted."],
+    ["error", "Steer failed before it reached the run; try again."],
+  ] as const)(
+    "reports terminal %s ACK without marking the current run pending",
+    async (status, expectedContent) => {
+      const request = vi.fn(async (method: string, _payload?: unknown) => {
+        if (method === "sessions.list") {
+          return { sessions: [row("agent:main:main", { status: "running" })] };
+        }
+        if (method === "chat.send") {
+          return { status, runId: `run-${status}`, summary: "aborted" };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      });
+
+      const result = await executeSlashCommand(
+        { request } as unknown as GatewayBrowserClient,
+        "agent:main:main",
+        "steer",
+        "try a different approach",
+      );
+
+      expect(result.content).toBe(expectedContent);
+      expect(result.content).not.toBe("Steered.");
+      expect(result.pendingCurrentRun).toBeUndefined();
+      const chatSend = requireRequestCall(request, "chat.send");
+      expect(chatSend.payload.deliver).toBe(false);
+    },
+  );
+
+  it("passes selected-agent scope when steering the selected global session", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return { sessions: [row("global", { status: "running" })] };
+      }
+      if (method === "chat.send") {
+        return { status: "started", runId: "run-global", messageSeq: 2 };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "global",
+      "steer",
+      "try a different approach",
+      { agentId: "work" },
+    );
+
+    expect(result.content).toBe("Steered.");
+    expect(request).toHaveBeenCalledWith("sessions.list", { agentId: "work" });
+    const chatSend = requireRequestCall(request, "chat.send");
+    expect(chatSend.payload).toMatchObject({
+      sessionKey: "global",
+      agentId: "work",
+      message: "try a different approach",
+      deliver: false,
+    });
+  });
+
+  it("passes selected-agent scope when steering a selected-global alias", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.list") {
+        return { sessions: [row("global", { status: "running" })] };
+      }
+      if (method === "chat.send") {
+        return { status: "started", runId: "run-global", messageSeq: 2 };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:work:main",
+      "steer",
+      "try the alias",
+    );
+
+    expect(result.content).toBe("Steered.");
+    expect(request).toHaveBeenCalledWith("sessions.list", { agentId: "work" });
+    const chatSend = requireRequestCall(request, "chat.send");
+    expect(chatSend.payload).toMatchObject({
+      sessionKey: "agent:work:main",
+      agentId: "work",
+      message: "try the alias",
+      deliver: false,
+    });
   });
 
   it("uses cached sessions to avoid an extra sessions.list round trip", async () => {
@@ -973,6 +1242,72 @@ describe("executeSlashCommand /redirect (hard kill-and-restart)", () => {
     expect(request).toHaveBeenCalledWith("sessions.steer", {
       key: "agent:main:main",
       message: "start over with a new plan",
+    });
+  });
+
+  it("does not track a pending run when sessions.steer returns terminal ok", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.steer") {
+        return { status: "ok", runId: "run-ok", messageSeq: 2 };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "redirect",
+      "start over with a new plan",
+    );
+
+    expect(result.content).toBe("Redirected.");
+    expect(result.trackRunId).toBeUndefined();
+  });
+
+  it.each([
+    ["timeout", "The active run ended before the redirect message was accepted."],
+    ["error", "Redirect failed before it reached the run; try again."],
+  ] as const)("reports terminal %s ACK from sessions.steer", async (status, expectedContent) => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.steer") {
+        return { status, runId: `run-${status}`, summary: "aborted" };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "agent:main:main",
+      "redirect",
+      "start over with a new plan",
+    );
+
+    expect(result.content).toBe(expectedContent);
+    expect(result.trackRunId).toBeUndefined();
+  });
+
+  it("passes selected-agent scope when redirecting the selected global session", async () => {
+    const request = vi.fn(async (method: string, _payload?: unknown) => {
+      if (method === "sessions.steer") {
+        return { status: "started", runId: "run-global", messageSeq: 2 };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const result = await executeSlashCommand(
+      { request } as unknown as GatewayBrowserClient,
+      "global",
+      "redirect",
+      "start over",
+      { agentId: "work" },
+    );
+
+    expect(result.content).toBe("Redirected.");
+    expect(result.trackRunId).toBe("run-global");
+    expect(request).toHaveBeenCalledWith("sessions.steer", {
+      key: "global",
+      agentId: "work",
+      message: "start over",
     });
   });
 

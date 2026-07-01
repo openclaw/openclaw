@@ -1,17 +1,21 @@
-import { describe, expect, it } from "vitest";
+// Qqbot tests cover remind logic plugin behavior.
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   parseRelativeTime,
   isCronExpression,
   formatDelay,
   generateJobName,
   buildReminderPrompt,
-  executeRemind,
   executeScheduledRemind,
   prepareRemindCronAction,
   type RemindCronAction,
 } from "./remind-logic.js";
 
 describe("engine/tools/remind-logic", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   describe("parseRelativeTime", () => {
     it("parses minutes shorthand", () => {
       expect(parseRelativeTime("5m")).toBe(5 * 60_000);
@@ -93,11 +97,45 @@ describe("engine/tools/remind-logic", () => {
       expect(generateJobName("drink water")).toBe("Reminder: drink water");
     });
 
-    it("truncates long content", () => {
-      const long = "a very long reminder content that exceeds twenty characters";
-      const name = generateJobName(long);
-      expect(name.length).toBeLessThan(40);
-      expect(name).toContain("…");
+    it("truncates long content to a 20 UTF-16-unit budget with an ellipsis", () => {
+      expect(generateJobName("a very long reminder content")).toBe(
+        "Reminder: a very long reminder…",
+      );
+    });
+
+    it("keeps an exactly-fitting all-emoji content unchanged", () => {
+      // 10 emoji = 20 UTF-16 units, exactly at the budget, so no truncation.
+      expect(generateJobName("😀".repeat(10))).toBe(`Reminder: ${"😀".repeat(10)}`);
+    });
+
+    it("does not split surrogate pairs when truncating", () => {
+      const hasLoneSurrogate = (value: string): boolean => {
+        for (let index = 0; index < value.length; index++) {
+          const code = value.charCodeAt(index);
+          if (code >= 0xd800 && code <= 0xdbff) {
+            const next = value.charCodeAt(index + 1);
+            if (!(next >= 0xdc00 && next <= 0xdfff)) {
+              return true;
+            }
+            index++;
+          } else if (code >= 0xdc00 && code <= 0xdfff) {
+            return true;
+          }
+        }
+        return false;
+      };
+
+      // 11 emoji = 22 UTF-16 units > 20; the 11th emoji straddles the cap and is
+      // dropped whole rather than split into a lone surrogate.
+      const allEmoji = generateJobName("😀".repeat(11));
+      expect(allEmoji).toBe(`Reminder: ${"😀".repeat(10)}…`);
+      expect(hasLoneSurrogate(allEmoji)).toBe(false);
+
+      // 19 ASCII + emoji: the emoji's high surrogate would land at unit 20, so the
+      // whole pair is dropped to stay within the 20-unit budget.
+      const name = generateJobName(`${"x".repeat(19)}😀tail`);
+      expect(name).toBe(`Reminder: ${"x".repeat(19)}…`);
+      expect(hasLoneSurrogate(name)).toBe(false);
     });
   });
 
@@ -105,21 +143,6 @@ describe("engine/tools/remind-logic", () => {
     it("includes the content in the prompt", () => {
       const prompt = buildReminderPrompt("drink water");
       expect(prompt).toContain("drink water");
-    });
-  });
-
-  describe("executeRemind", () => {
-    it("renders internal scheduling output without exposing cronParams", () => {
-      const result = executeRemind({ action: "list" });
-      expect(result.details).toEqual({
-        _instruction: "Gateway cron action prepared for internal QQ reminder scheduling.",
-        action: "list",
-        summary: undefined,
-      });
-      expect((result.details as { _instruction: string })["_instruction"]).not.toContain(
-        "Use the cron tool",
-      );
-      expect(result.details).not.toHaveProperty("cronParams");
     });
   });
 
@@ -297,6 +320,21 @@ describe("engine/tools/remind-logic", () => {
       expect(result.details).toEqual({
         error: "Failed to run Gateway cron action: gateway unavailable",
         action: "remove",
+      });
+    });
+
+    it("rejects relative reminders whose scheduled time exceeds the Date range", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date(8_640_000_000_000_000));
+
+      const plan = prepareRemindCronAction(
+        { action: "add", content: "test reminder", to: "qqbot:c2c:123", time: "5m" },
+        {},
+      );
+
+      expect(plan).toEqual({
+        ok: false,
+        error: "Reminder time is outside the supported Date range",
       });
     });
   });

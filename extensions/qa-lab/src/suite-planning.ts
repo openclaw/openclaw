@@ -1,37 +1,36 @@
+// Qa Lab plugin module implements suite planning behavior.
 import path from "node:path";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createQaArtifactRunId } from "./artifact-run-id.js";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
-import type { QaProviderMode } from "./model-selection.js";
+import { splitQaModelRef as splitModelRef, type QaProviderMode } from "./model-selection.js";
 import { getQaProvider } from "./providers/index.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
+import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 import { applyQaMergePatch, isQaMergePatchObject } from "./suite-merge-patch.js";
 
 const DEFAULT_QA_SUITE_CONCURRENCY = 64;
 const DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS = 1_500;
+const QA_IMPLICIT_ISOLATION_FLOW_CALLS = new Set([
+  "ensureImageGenerationConfigured",
+  "forceMemoryIndex",
+  "patchConfig",
+  "writeWorkspaceSkill",
+]);
 
 type QaSeedScenario = ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
-
-function splitModelRef(ref: string) {
-  const slash = ref.indexOf("/");
-  if (slash <= 0 || slash === ref.length - 1) {
-    return null;
-  }
-  return {
-    provider: ref.slice(0, slash),
-    model: ref.slice(slash + 1),
-  };
-}
 
 function normalizeQaConfigString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function scenarioMatchesLiveLane(params: {
+function scenarioMatchesQaProviderLane(params: {
   scenario: QaSeedScenario;
   primaryModel: string;
   providerMode: QaProviderMode;
+  channelDriver?: QaScorecardChannelDriver | null;
   claudeCliAuthMode?: QaCliBackendAuthMode;
 }) {
   const provider = getQaProvider(params.providerMode);
@@ -41,6 +40,11 @@ function scenarioMatchesLiveLane(params: {
   const config = params.scenario.execution.config ?? {};
   const requiredProviderMode = normalizeQaConfigString(config.requiredProviderMode);
   if (requiredProviderMode && params.providerMode !== requiredProviderMode) {
+    return false;
+  }
+  const requiredChannelDriver = normalizeQaConfigString(config.requiredChannelDriver);
+  const effectiveChannelDriver = params.channelDriver ?? "qa-channel";
+  if (requiredChannelDriver && effectiveChannelDriver !== requiredChannelDriver) {
     return false;
   }
   if (provider.kind !== "live") {
@@ -62,11 +66,12 @@ function scenarioMatchesLiveLane(params: {
   return true;
 }
 
-function selectQaSuiteScenarios(params: {
+function selectQaFlowSuiteScenarios(params: {
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
   scenarioIds?: string[];
   providerMode: QaProviderMode;
   primaryModel: string;
+  channelDriver?: QaScorecardChannelDriver | null;
   claudeCliAuthMode?: QaCliBackendAuthMode;
 }) {
   const requestedScenarioIds =
@@ -79,15 +84,71 @@ function selectQaSuiteScenarios(params: {
     if (missingScenarioIds.length > 0) {
       throw new Error(`unknown QA scenario id(s): ${missingScenarioIds.join(", ")}`);
     }
-    return [...requestedScenarioIds].map((scenarioId) => scenarioById.get(scenarioId)!);
+    const selectedScenarios = [...requestedScenarioIds].map(
+      (scenarioId) => scenarioById.get(scenarioId)!,
+    );
+    const nonFlowScenarios = selectedScenarios.filter(
+      (scenario) => scenario.execution.kind !== "flow",
+    );
+    if (nonFlowScenarios.length > 0) {
+      const scenarioList = nonFlowScenarios
+        .map((scenario) => `${scenario.id} (${scenario.execution.kind})`)
+        .join(", ");
+      throw new Error(
+        `flow execution requires execution.kind: flow; unsupported scenario(s): ${scenarioList}`,
+      );
+    }
+    return selectedScenarios;
   }
-  return params.scenarios.filter((scenario) =>
-    scenarioMatchesLiveLane({
-      scenario,
-      providerMode: params.providerMode,
-      primaryModel: params.primaryModel,
-      claudeCliAuthMode: params.claudeCliAuthMode,
-    }),
+  return params.scenarios.filter(
+    (scenario) =>
+      scenario.execution.kind === "flow" &&
+      scenarioMatchesQaProviderLane({
+        scenario,
+        providerMode: params.providerMode,
+        primaryModel: params.primaryModel,
+        channelDriver: params.channelDriver,
+        claudeCliAuthMode: params.claudeCliAuthMode,
+      }),
+  );
+}
+
+function listQaSuiteScenarioChannels(
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
+) {
+  return [
+    ...new Set(
+      scenarios
+        .map((scenario) => scenario.execution.channel?.trim().toLowerCase())
+        .filter((channel): channel is string => Boolean(channel)),
+    ),
+  ];
+}
+
+function resolveQaSuiteScenarioChannel(params: {
+  defaultChannel: string;
+  explicitChannel?: string | null;
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
+}) {
+  const scenarioChannels = listQaSuiteScenarioChannels(params.scenarios);
+  const explicitChannel = params.explicitChannel?.trim().toLowerCase();
+  if (explicitChannel) {
+    const conflictingChannels = scenarioChannels.filter((channel) => channel !== explicitChannel);
+    if (conflictingChannels.length > 0) {
+      throw new Error(
+        `--channel ${explicitChannel} conflicts with selected scenario execution.channel ${conflictingChannels.join(", ")}.`,
+      );
+    }
+    return explicitChannel;
+  }
+  if (scenarioChannels.length === 0) {
+    return params.defaultChannel;
+  }
+  if (scenarioChannels.length === 1) {
+    return scenarioChannels[0];
+  }
+  throw new Error(
+    `Selected QA scenarios require multiple channels (${scenarioChannels.join(", ")}); split the run by channel.`,
   );
 }
 
@@ -127,12 +188,21 @@ function collectQaSuiteGatewayRuntimeOptions(
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
 ) {
   let forwardHostHome = false;
+  let preserveDebugArtifacts = false;
   for (const scenario of scenarios) {
     if (scenario.gatewayRuntime?.forwardHostHome === true) {
       forwardHostHome = true;
     }
+    if (scenario.gatewayRuntime?.preserveDebugArtifacts === true) {
+      preserveDebugArtifacts = true;
+    }
   }
-  return forwardHostHome ? { forwardHostHome: true } : undefined;
+  return forwardHostHome || preserveDebugArtifacts
+    ? {
+        ...(forwardHostHome ? { forwardHostHome: true } : {}),
+        ...(preserveDebugArtifacts ? { preserveDebugArtifacts: true } : {}),
+      }
+    : undefined;
 }
 
 function shouldUseIsolatedQaSuiteScenarioWorkers(params: {
@@ -144,6 +214,35 @@ function shouldUseIsolatedQaSuiteScenarioWorkers(params: {
     (params.concurrency > 1 ||
       params.scenarios.some((scenario) => isQaMergePatchObject(scenario.gatewayConfigPatch)))
   );
+}
+
+function scenarioRequiresIsolatedQaSuiteWorker(scenario: QaSeedScenario) {
+  if (scenario.execution.kind !== "flow") {
+    return false;
+  }
+  return (
+    scenario.execution.suiteIsolation === "isolated" ||
+    isQaMergePatchObject(scenario.gatewayConfigPatch) ||
+    scenario.gatewayRuntime !== undefined ||
+    (Array.isArray(scenario.plugins) && scenario.plugins.length > 0) ||
+    normalizeLowercaseStringOrEmpty(scenario.surface) === "memory" ||
+    scenario.execution.config?.ensureImageGeneration === true ||
+    flowContainsImplicitIsolationCall(scenario.execution.flow)
+  );
+}
+
+function flowContainsImplicitIsolationCall(value: unknown): boolean {
+  if (Array.isArray(value)) {
+    return value.some(flowContainsImplicitIsolationCall);
+  }
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.call === "string" && QA_IMPLICIT_ISOLATION_FLOW_CALLS.has(record.call)) {
+    return true;
+  }
+  return Object.values(record).some(flowContainsImplicitIsolationCall);
 }
 
 function scenarioRequiresControlUi(scenario: QaSeedScenario) {
@@ -168,17 +267,18 @@ function normalizeQaSuiteConcurrency(
 function resolveQaSuiteWorkerStartStaggerMs(
   concurrency: number,
   env: NodeJS.ProcessEnv = process.env,
+  defaultStaggerMs = DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS,
 ) {
   if (concurrency <= 1) {
     return 0;
   }
   const raw = env.OPENCLAW_QA_SUITE_WORKER_START_STAGGER_MS;
   if (raw === undefined) {
-    return DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS;
+    return defaultStaggerMs;
   }
   const parsed = parseStrictNonNegativeInteger(raw);
   if (parsed === undefined) {
-    return DEFAULT_QA_SUITE_WORKER_START_STAGGER_MS;
+    return defaultStaggerMs;
   }
   return parsed;
 }
@@ -198,7 +298,11 @@ async function mapQaSuiteWithConcurrency<T, U>(
   const workerCount = Math.min(Math.max(1, Math.floor(concurrency)), items.length);
   const startStaggerMs = Math.max(0, Math.floor(opts?.startStaggerMs ?? 0));
   const sleepImpl =
-    opts?.sleepImpl ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    opts?.sleepImpl ??
+    ((ms: number) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }));
   async function waitForStartSlot(shouldReleaseNextSlot: boolean) {
     const currentGate = nextStartGate;
     let releaseNextSlot: (() => void) | undefined;
@@ -235,7 +339,7 @@ async function mapQaSuiteWithConcurrency<T, U>(
 
 async function resolveQaSuiteOutputDir(repoRoot: string, outputDir?: string) {
   const targetDir = !outputDir
-    ? path.join(repoRoot, ".artifacts", "qa-e2e", `suite-${Date.now().toString(36)}`)
+    ? path.join(repoRoot, ".artifacts", "qa-e2e", `suite-${createQaArtifactRunId()}`)
     : outputDir;
   if (!path.isAbsolute(targetDir)) {
     const resolved = resolveRepoRelativeOutputDir(repoRoot, targetDir);
@@ -258,10 +362,13 @@ export {
   collectQaSuitePluginIds,
   mapQaSuiteWithConcurrency,
   normalizeQaSuiteConcurrency,
+  resolveQaSuiteScenarioChannel,
   resolveQaSuiteWorkerStartStaggerMs,
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
-  selectQaSuiteScenarios,
+  scenarioRequiresIsolatedQaSuiteWorker,
+  scenarioMatchesQaProviderLane,
+  selectQaFlowSuiteScenarios,
   shouldUseIsolatedQaSuiteScenarioWorkers,
   splitModelRef,
 };

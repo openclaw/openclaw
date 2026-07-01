@@ -1,3 +1,4 @@
+// Groq tests cover index plugin behavior.
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
 import { resolveGroqReasoningCompatPatch } from "./api.js";
@@ -35,12 +36,21 @@ describe("groq provider compat", () => {
     if (!provider) {
       throw new Error("Expected Groq provider");
     }
-    expect(provider).toEqual({
-      auth: [],
+    expect(provider).toMatchObject({
       docsPath: "/providers/groq",
       envVars: ["GROQ_API_KEY"],
       id: "groq",
       label: "Groq",
+    });
+    expect(provider.auth).toHaveLength(1);
+    expect(provider.auth[0]).toMatchObject({
+      id: "api-key",
+      kind: "api_key",
+      label: "Groq API key",
+      wizard: {
+        choiceId: "groq-api-key",
+        groupId: "groq",
+      },
     });
     expect(captured.mediaUnderstandingProviders).toHaveLength(1);
     const [mediaProvider] = captured.mediaUnderstandingProviders;

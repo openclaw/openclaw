@@ -1,3 +1,4 @@
+// Openai provider module implements model/runtime integration.
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -11,6 +12,7 @@ import {
   pollProviderOperationJson,
   postJsonRequest,
   postMultipartRequest,
+  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
@@ -281,7 +283,6 @@ async function downloadOpenAIVideo(
 export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
   return {
     id: "openai",
-    aliases: ["openai-codex"],
     label: "OpenAI",
     defaultModel: DEFAULT_OPENAI_VIDEO_MODEL,
     models: [DEFAULT_OPENAI_VIDEO_MODEL, "sora-2-pro"],
@@ -289,6 +290,7 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
       isProviderApiKeyConfigured({
         provider: "openai",
         agentDir,
+        profileTypes: ["api_key"],
       }),
     capabilities: {
       generate: {
@@ -319,8 +321,9 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
         cfg: req.cfg,
         agentDir: req.agentDir,
         store: req.authStore,
+        modelApi: "openai-responses",
       });
-      if (!auth.apiKey) {
+      if (!auth.apiKey || (auth.mode !== undefined && auth.mode !== "api-key")) {
         throw new Error("OpenAI API key missing");
       }
 
@@ -422,7 +425,10 @@ export function buildOpenAIVideoGenerationProvider(): VideoGenerationProvider {
 
       try {
         await assertOkOrThrowHttpError(response, "OpenAI video generation failed");
-        const submitted = (await response.json()) as OpenAIVideoResponse;
+        const submitted = await readProviderJsonResponse<OpenAIVideoResponse>(
+          response,
+          "OpenAI video generation failed",
+        );
         const videoId = normalizeOptionalString(submitted.id);
         if (!videoId) {
           throw new Error("OpenAI video generation response missing video id");

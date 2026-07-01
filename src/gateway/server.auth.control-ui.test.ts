@@ -1,6 +1,9 @@
+/**
+ * Gateway Control UI auth pairing tests.
+ */
 import { describe } from "vitest";
 import { registerControlUiAndPairingSuite } from "./server.auth.control-ui.suite.js";
-import { installGatewayTestHooks } from "./server.auth.shared.js";
+import { installGatewayTestHooks } from "./server.auth.test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 

@@ -1,3 +1,4 @@
+// Control UI tests cover message normalizer behavior.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { normalizeMessage } from "./message-normalizer.ts";
 
@@ -87,6 +88,41 @@ describe("message-normalizer", () => {
         name: "bash",
         args: { command: "ls" },
       });
+    });
+
+    it("normalizes persisted Responses text blocks as renderable text", () => {
+      const user = normalizeMessage({
+        role: "user",
+        content: [{ type: "input_text", text: "Persisted user question" }],
+      });
+      const assistant = normalizeMessage({
+        role: "assistant",
+        content: [{ type: "output_text", text: "Persisted assistant answer" }],
+      });
+
+      expect(user.content).toEqual([
+        {
+          type: "text",
+          text: "Persisted user question",
+          name: undefined,
+          args: undefined,
+        },
+      ]);
+      expect(assistant.content).toEqual([{ type: "text", text: "Persisted assistant answer" }]);
+    });
+
+    it("accepts assistant Responses input blocks but rejects user output blocks", () => {
+      const user = normalizeMessage({
+        role: "user",
+        content: [{ type: "output_text", text: "Assistant-only block" }],
+      });
+      const assistant = normalizeMessage({
+        role: "assistant",
+        content: [{ type: "input_text", text: "User-only block" }],
+      });
+
+      expect(user.content).not.toContainEqual({ type: "text", text: "Assistant-only block" });
+      expect(assistant.content).toContainEqual({ type: "text", text: "User-only block" });
     });
 
     it("normalizes structured base64 audio content blocks as renderable attachments", () => {

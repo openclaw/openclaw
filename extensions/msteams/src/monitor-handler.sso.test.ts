@@ -1,15 +1,33 @@
+// Msteams tests cover monitor handler.sso plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import { createMSTeamsSsoTokenStoreMemory } from "./sso-token-store.js";
+import {
+  makeMSTeamsSsoTokenStoreKey,
+  type MSTeamsSsoStoredToken,
+  type MSTeamsSsoTokenStore,
+} from "./sso-token-store.js";
 import {
   type MSTeamsSsoFetch,
   handleSigninTokenExchangeInvoke,
   handleSigninVerifyStateInvoke,
-  parseSigninTokenExchangeValue,
-  parseSigninVerifyStateValue,
 } from "./sso.js";
 
+function createMemorySsoTokenStore(): MSTeamsSsoTokenStore {
+  const tokens = new Map<string, MSTeamsSsoStoredToken>();
+  return {
+    async get({ connectionName, userId }) {
+      return tokens.get(makeMSTeamsSsoTokenStoreKey(connectionName, userId)) ?? null;
+    },
+    async save(token) {
+      tokens.set(makeMSTeamsSsoTokenStoreKey(token.connectionName, token.userId), { ...token });
+    },
+    async remove({ connectionName, userId }) {
+      return tokens.delete(makeMSTeamsSsoTokenStoreKey(connectionName, userId));
+    },
+  };
+}
+
 function createSsoDeps(params: { fetchImpl: MSTeamsSsoFetch }) {
-  const tokenStore = createMSTeamsSsoTokenStoreMemory();
+  const tokenStore = createMemorySsoTokenStore();
   const tokenProvider = {
     getAccessToken: vi.fn(async () => "bf-service-token"),
   };
@@ -47,29 +65,6 @@ function createFakeFetch(handlers: Array<(url: string, init?: unknown) => unknow
   };
   return { fetchImpl, calls };
 }
-
-describe("msteams signin invoke value parsers", () => {
-  it("parses signin/tokenExchange values", () => {
-    expect(
-      parseSigninTokenExchangeValue({
-        id: "flow-1",
-        connectionName: "Graph",
-        token: "eyJ...",
-      }),
-    ).toEqual({ id: "flow-1", connectionName: "Graph", token: "eyJ..." });
-  });
-
-  it("rejects non-object signin/tokenExchange values", () => {
-    expect(parseSigninTokenExchangeValue(null)).toBeNull();
-    expect(parseSigninTokenExchangeValue("nope")).toBeNull();
-  });
-
-  it("parses signin/verifyState values", () => {
-    expect(parseSigninVerifyStateValue({ state: "123456" })).toEqual({ state: "123456" });
-    expect(parseSigninVerifyStateValue({})).toEqual({ state: undefined });
-    expect(parseSigninVerifyStateValue(null)).toBeNull();
-  });
-});
 
 describe("handleSigninTokenExchangeInvoke", () => {
   it("exchanges the Teams token and persists the result", async () => {

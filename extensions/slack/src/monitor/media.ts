@@ -1,3 +1,4 @@
+// Slack plugin module implements media behavior.
 import fs from "node:fs/promises";
 import type { WebClient as SlackWebClient } from "@slack/web-api";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -103,6 +104,12 @@ function resolveSlackFetchForRuntime(): typeof fetch {
   return isMockedFetch(globalThis.fetch) ? globalThis.fetch : fetchWithRuntimeDispatcher;
 }
 
+async function cancelUnreadResponseBody(response: Response): Promise<void> {
+  if (!response.bodyUsed) {
+    await response.body?.cancel().catch(() => undefined);
+  }
+}
+
 /**
  * Fetches a URL with Authorization header while keeping same-origin redirects
  * authenticated and dropping auth once the redirect crosses origins.
@@ -135,6 +142,7 @@ export async function fetchWithSlackAuth(url: string, token: string): Promise<Re
   if (resolvedUrl.protocol !== "https:") {
     return initialRes;
   }
+  await cancelUnreadResponseBody(initialRes);
   if (resolvedUrl.origin === parsed.origin) {
     return fetchImpl(resolvedUrl.toString(), {
       headers: authHeaders,
@@ -209,7 +217,7 @@ async function saveSlackMedia(params: {
           },
         }
       : {}),
-  }).catch((error) => {
+  }).catch((error: unknown) => {
     if (timedOut) {
       return new Promise<never>(() => {});
     }

@@ -1,3 +1,4 @@
+// Gateway Protocol tests cover connect error details behavior.
 import { describe, expect, it } from "vitest";
 import {
   buildPairingConnectCloseReason,
@@ -10,11 +11,18 @@ import {
   normalizePairingConnectRequestId,
   readConnectErrorDetailCode,
   readConnectErrorRecoveryAdvice,
-  readConnectPairingRequiredDetails,
   readConnectPairingRequiredMessage,
   readPairingConnectErrorDetails,
   resolveAuthConnectErrorDetailCode,
 } from "./connect-error-details.js";
+
+/**
+ * Connect error detail regressions for Gateway/WebSocket clients.
+ *
+ * These tests pin structured auth/pairing details, human-readable fallback
+ * formatting, and request-id sanitization because these strings surface in
+ * control UI reconnect flows and device pairing diagnostics.
+ */
 
 describe("readConnectErrorDetailCode", () => {
   it("reads structured detail codes", () => {
@@ -128,20 +136,6 @@ describe("pairing connect details", () => {
       code: "PAIRING_REQUIRED",
       reason: "scope-upgrade",
       remediationHint: "Review the requested scopes, then approve the pending upgrade.",
-    });
-  });
-
-  it("reads pairing details as compact connect details", () => {
-    expect(
-      readConnectPairingRequiredDetails({
-        code: "PAIRING_REQUIRED",
-        requestId: "req-123",
-        reason: "scope-upgrade",
-        remediationHint: "Review the requested scopes, then approve the pending upgrade.",
-      }),
-    ).toEqual({
-      requestId: "req-123",
-      reason: "scope-upgrade",
     });
   });
 

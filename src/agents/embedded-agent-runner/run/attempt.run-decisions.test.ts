@@ -1,3 +1,4 @@
+// Coverage for small run-attempt decision helpers.
 import { describe, expect, it } from "vitest";
 import {
   resolveAttemptStreamAuthProfileId,
@@ -9,6 +10,8 @@ import {
 
 describe("resolveEmbeddedAttemptSessionWriteLockOptions", () => {
   it("bounds post-prompt session lock max hold to compaction timeout instead of run timeout", () => {
+    // Cleanup writes should not inherit the full model run timeout; the
+    // compaction window is the larger session-write risk.
     const options = resolveEmbeddedAttemptSessionWriteLockOptions({
       config: {},
       compactionTimeoutMs: 600_000,
@@ -21,16 +24,18 @@ describe("resolveEmbeddedAttemptSessionWriteLockOptions", () => {
 
 describe("resolveAttemptStreamAuthProfileId", () => {
   it("uses only the runtime-forwarded auth profile for stream provenance", () => {
+    // Raw attempt authProfileId may be a session selection detail; stream
+    // provenance should only expose the runtime-forwarded profile.
     expect(
       resolveAttemptStreamAuthProfileId({
-        authProfileId: "openai-codex:raw-session-profile",
+        authProfileId: "openai:raw-session-profile",
         runtimePlan: {
           auth: {
-            forwardedAuthProfileId: "openai-codex:forwarded-profile",
+            forwardedAuthProfileId: "openai:forwarded-profile",
           },
         } as never,
       }),
-    ).toBe("openai-codex:forwarded-profile");
+    ).toBe("openai:forwarded-profile");
 
     expect(
       resolveAttemptStreamAuthProfileId({
@@ -75,6 +80,8 @@ describe("resolveUnknownToolGuardThreshold", () => {
   });
 
   it("stays on even when tools.loopDetection.enabled is false", () => {
+    // Unknown-tool guard is a model-safety circuit, separate from configurable
+    // repeated-tool loop detection.
     expect(resolveUnknownToolGuardThreshold({ enabled: false })).toBe(10);
     expect(resolveUnknownToolGuardThreshold({ enabled: false, unknownToolThreshold: 3 })).toBe(3);
   });

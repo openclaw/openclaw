@@ -1,15 +1,25 @@
+// Talk logging helpers write voice session logs and diagnostic entries.
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { getChildLogger } from "../logging/logger.js";
-import { firstFiniteTalkEventNumber, talkEventPayloadRecord } from "./event-metrics.js";
+import { firstFiniteTalkEventNumber } from "./event-metrics.js";
 import type { TalkEvent, TalkEventType } from "./talk-events.js";
 
+/**
+ * Log severity produced from Talk event envelopes.
+ */
 type TalkLogLevel = "info" | "warn";
 
+/**
+ * Compact structured log record for a non-noisy Talk event.
+ */
 type TalkLogRecord = {
   level: TalkLogLevel;
   message: string;
   attributes: Record<string, string | number | boolean>;
 };
 
+// Delta events can arrive at audio/text chunk cadence; omitting them keeps logs useful
+// without hiding lifecycle, error, usage, and latency events.
 const OMITTED_TALK_LOG_EVENT_TYPES = new Set<TalkEventType>([
   "input.audio.delta",
   "output.audio.delta",
@@ -20,12 +30,15 @@ const OMITTED_TALK_LOG_EVENT_TYPES = new Set<TalkEventType>([
 
 const TALK_LOGGER_BINDINGS = Object.freeze({ subsystem: "talk" });
 
+/**
+ * Converts high-level Talk events into compact structured log records, skipping noisy deltas.
+ */
 export function createTalkLogRecord(event: TalkEvent): TalkLogRecord | undefined {
   if (OMITTED_TALK_LOG_EVENT_TYPES.has(event.type)) {
     return undefined;
   }
 
-  const payload = talkEventPayloadRecord(event.payload);
+  const payload = asOptionalRecord(event.payload);
   const attributes: Record<string, string | number | boolean> = {
     sessionId: event.sessionId,
     talkEventType: event.type,
@@ -57,6 +70,9 @@ export function createTalkLogRecord(event: TalkEvent): TalkLogRecord | undefined
   };
 }
 
+/**
+ * Emits Talk logs best-effort so logging failures never break realtime audio handling.
+ */
 export function recordTalkLogEvent(event: TalkEvent): void {
   const record = createTalkLogRecord(event);
   if (!record) {

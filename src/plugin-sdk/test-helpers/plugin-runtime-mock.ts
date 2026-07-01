@@ -1,8 +1,10 @@
+// Plugin runtime mock helpers build minimal runtime doubles for plugin SDK tests.
 import { vi } from "vitest";
 import {
   normalizeInboundTextNewlines,
   sanitizeInboundSystemTags,
 } from "../../auto-reply/reply/inbound-text.js";
+import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
 import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
@@ -58,6 +60,7 @@ function createTaskFlowSessionMock() {
   return {
     sessionKey: "agent:main:main",
     createManaged: vi.fn(),
+    tryCreateManaged: vi.fn(),
     get: vi.fn(),
     list: vi.fn(() => []),
     findLatest: vi.fn(),
@@ -188,6 +191,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       onRecordError: record?.onRecordError ?? (() => undefined),
       trackSessionMetaTask: record?.trackSessionMetaTask,
     });
+    await (params.afterRecord as (() => void | Promise<void>) | undefined)?.();
     const dispatchResult = await dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
       cfg: params.cfg,
@@ -222,6 +226,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
           onRecordError: params.record?.onRecordError ?? (() => undefined),
           trackSessionMetaTask: params.record?.trackSessionMetaTask,
         });
+        await params.afterRecord?.();
       } catch (err) {
         try {
           await params.onPreDispatchFailure?.(err);
@@ -346,6 +351,20 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       UntrustedStructuredContext: untrustedStructuredContext,
     } as Awaited<BuildContextResult>;
   }) as unknown as PluginRuntime["channel"]["inbound"]["buildContext"];
+  const sessionRuntime = {
+    resolveStorePath: vi.fn(
+      () => "/tmp/sessions.json",
+    ) as unknown as PluginRuntime["channel"]["session"]["resolveStorePath"],
+    readSessionUpdatedAt: vi.fn(
+      () => undefined,
+    ) as unknown as PluginRuntime["channel"]["session"]["readSessionUpdatedAt"],
+    recordSessionMetaFromInbound:
+      vi.fn() as unknown as PluginRuntime["channel"]["session"]["recordSessionMetaFromInbound"],
+    recordInboundSession:
+      vi.fn() as unknown as PluginRuntime["channel"]["session"]["recordInboundSession"],
+    updateLastRoute: vi.fn() as unknown as PluginRuntime["channel"]["session"]["updateLastRoute"],
+    resolveEntryResetFreshness: vi.fn(resolveSessionEntryResetFreshness),
+  };
   const base: PluginRuntime = {
     version: "1.0.0-test",
     config: {
@@ -611,20 +630,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         }) as unknown as PluginRuntime["channel"]["pairing"]["upsertPairingRequest"],
       },
       media: createPluginRuntimeMediaMock(),
-      session: {
-        resolveStorePath: vi.fn(
-          () => "/tmp/sessions.json",
-        ) as unknown as PluginRuntime["channel"]["session"]["resolveStorePath"],
-        readSessionUpdatedAt: vi.fn(
-          () => undefined,
-        ) as unknown as PluginRuntime["channel"]["session"]["readSessionUpdatedAt"],
-        recordSessionMetaFromInbound:
-          vi.fn() as unknown as PluginRuntime["channel"]["session"]["recordSessionMetaFromInbound"],
-        recordInboundSession:
-          vi.fn() as unknown as PluginRuntime["channel"]["session"]["recordInboundSession"],
-        updateLastRoute:
-          vi.fn() as unknown as PluginRuntime["channel"]["session"]["updateLastRoute"],
-      },
+      session: sessionRuntime,
       mentions: {
         buildMentionRegexes: vi.fn(() => [
           /\bbert\b/i,
@@ -767,6 +773,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       openSyncKeyedStore: vi.fn(() => {
         throw new Error("openSyncKeyedStore mock is not configured");
       }) as unknown as PluginRuntime["state"]["openSyncKeyedStore"],
+      openChannelIngressQueue: vi.fn(() => {
+        throw new Error("openChannelIngressQueue mock is not configured");
+      }) as unknown as PluginRuntime["state"]["openChannelIngressQueue"],
     },
     tasks: {
       runs: {

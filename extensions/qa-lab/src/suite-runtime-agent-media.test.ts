@@ -1,3 +1,4 @@
+// Qa Lab tests cover suite runtime agent media plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -53,8 +54,19 @@ describe("qa suite runtime agent media helpers", () => {
     waitForTransportReadyMock.mockClear();
   });
 
-  it("extracts media paths from tool output text", () => {
-    expect(extractMediaPathFromText("done\nMEDIA:/tmp/image.png")).toBe("/tmp/image.png");
+  it("extracts media paths from structured tool output details", () => {
+    expect(
+      extractMediaPathFromText(
+        JSON.stringify({ details: { media: { mediaUrls: ["", "/tmp/image.png"] } } }),
+      ),
+    ).toBe("/tmp/image.png");
+    expect(
+      extractMediaPathFromText(
+        JSON.stringify({
+          details: { media: { attachments: [{ path: "/tmp/from-attachment.png" }] } },
+        }),
+      ),
+    ).toBe("/tmp/from-attachment.png");
     expect(extractMediaPathFromText("done")).toBeUndefined();
   });
 
@@ -62,11 +74,11 @@ describe("qa suite runtime agent media helpers", () => {
     fetchJsonMock.mockResolvedValue([
       {
         allInputText: "irrelevant",
-        toolOutput: "MEDIA:/tmp/other.png",
+        toolOutput: JSON.stringify({ details: { media: { mediaUrls: ["/tmp/other.png"] } } }),
       },
       {
         allInputText: "prompt snippet",
-        toolOutput: "done\nMEDIA:/tmp/generated.png",
+        toolOutput: JSON.stringify({ details: { media: { mediaUrls: ["/tmp/generated.png"] } } }),
       },
     ]);
 
@@ -97,6 +109,27 @@ describe("qa suite runtime agent media helpers", () => {
           gateway: { tempRoot },
         } as never,
         promptSnippet: "unused",
+        startedAtMs: Date.now(),
+        timeoutMs: 2_000,
+      }),
+    ).resolves.toBe(mediaPath);
+  });
+
+  it("falls back to generated image files when mock request logs are unavailable", async () => {
+    fetchJsonMock.mockRejectedValue(new Error("mock debug unavailable"));
+    const tempRoot = await makeTempDir("qa-generated-image-");
+    const mediaDir = path.join(tempRoot, "state", "media", "tool-image-generation");
+    await fs.mkdir(mediaDir, { recursive: true });
+    const mediaPath = path.join(mediaDir, "generated.png");
+    await fs.writeFile(mediaPath, "png", "utf8");
+
+    await expect(
+      resolveGeneratedImagePath({
+        env: {
+          mock: { baseUrl: "http://127.0.0.1:9999" },
+          gateway: { tempRoot },
+        } as never,
+        promptSnippet: "prompt snippet",
         startedAtMs: Date.now(),
         timeoutMs: 2_000,
       }),

@@ -1,5 +1,10 @@
+// Implements agent deletion with gateway delegation and local cleanup fallback.
 import { findOverlappingWorkspaceAgentIds } from "../agents/agent-delete-safety.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import {
+  resolveWorkspaceAttestationPaths,
+  shouldRemoveWorkspaceAttestation,
+} from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { replaceConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
@@ -56,6 +61,7 @@ async function maybeDeleteAgentThroughGateway(params: {
   }
 }
 
+/** Delete an agent, pruning config plus workspace/session state when it is safe to do so. */
 export async function agentsDeleteCommand(
   opts: AgentsDeleteOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -164,6 +170,13 @@ export async function agentsDeleteCommand(
     );
   } else {
     await moveToTrash(workspaceDir, quietRuntime);
+    for (const [index, attestationPath] of resolveWorkspaceAttestationPaths(
+      workspaceDir,
+    ).entries()) {
+      if (await shouldRemoveWorkspaceAttestation(attestationPath, { trustUnknown: index === 0 })) {
+        await moveToTrash(attestationPath, quietRuntime);
+      }
+    }
   }
   await moveToTrash(agentDir, quietRuntime);
   await moveToTrash(sessionsDir, quietRuntime);

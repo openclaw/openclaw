@@ -1,5 +1,17 @@
+// Web media helpers load local and remote media for web-facing surfaces.
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
+import { maxBytesForKind, type MediaKind } from "@openclaw/media-core/constants";
+import { basenameFromAnyPath, extnameFromAnyPath } from "@openclaw/media-core/file-name";
+import {
+  detectMime,
+  extensionForMime,
+  getFileExtension,
+  kindFromMime,
+  mimeTypeFromFilePath,
+  normalizeMimeType,
+} from "@openclaw/media-core/mime";
+import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { FsSafeError, readLocalFileSafely } from "../infra/fs-safe.js";
@@ -7,11 +19,8 @@ import { assertNoWindowsNetworkPath, safeFileURLToPath } from "../infra/local-fi
 import type { PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { uniqueValues } from "../shared/string-normalization.js";
 import { resolveUserPath } from "../utils.js";
-import { maxBytesForKind, type MediaKind } from "./constants.js";
 import { readRemoteMediaBuffer } from "./fetch.js";
-import { basenameFromAnyPath, extnameFromAnyPath } from "./file-name.js";
 import {
   assertLocalMediaAllowed,
   getDefaultLocalRoots,
@@ -24,18 +33,12 @@ import {
   readImageMetadataFromHeader,
   readImageProbeFromHeader,
 } from "./media-services.js";
-import {
-  detectMime,
-  extensionForMime,
-  getFileExtension,
-  kindFromMime,
-  mimeTypeFromFilePath,
-  normalizeMimeType,
-} from "./mime.js";
+import { extractOriginalFilename, getMediaDir } from "./store.js";
 
 export { getDefaultLocalRoots, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
 
+/** Loaded media bytes plus resolved MIME kind and filename metadata for outbound/plugin callers. */
 export type WebMediaResult = {
   buffer: Buffer;
   contentType?: string;
@@ -65,8 +68,10 @@ type WebMediaOptions = {
   hostReadCapability?: boolean;
 };
 
+/** Compression preference used to tune image size/quality search grids. */
 export type ImageQualityPreference = "auto" | "efficient" | "balanced" | "high";
 
+/** Per-model image compression constraints merged into outbound media policy. */
 export type ImageCompressionModelPolicy = {
   maxBytes?: number;
   maxPixels?: number;
@@ -74,6 +79,7 @@ export type ImageCompressionModelPolicy = {
   preferredSidePx?: number;
 };
 
+/** Image compression policy for model/tool callers that need bounded media payloads. */
 export type ImageCompressionPolicy = {
   quality?: ImageQualityPreference;
   models?: ImageCompressionModelPolicy[];
@@ -151,18 +157,38 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "application/zip",
   "text/csv",
   "text/markdown",
+  "text/plain",
+  "application/json",
+  "application/yaml",
 ]);
-// file-type returns undefined (no magic bytes) for plain-text formats like CSV
-// and Markdown, so host-read needs an explicit text validation fallback.
-const HOST_READ_TEXT_PLAIN_ALIASES = new Set(["text/csv", "text/markdown"]);
+// file-type returns undefined (no magic bytes) for plain-text formats like CSV,
+// Markdown, TXT, JSON, and YAML, so host-read needs an explicit "this really
+// decodes as text" fallback.
+const HOST_READ_TEXT_PLAIN_ALIASES = new Set([
+  "text/csv",
+  "text/markdown",
+  "text/plain",
+  "application/json",
+  "application/yaml",
+]);
 // HTML remains deliberately outside the host-read allowlist pending a separate
 // security-boundary review, but extension-declared .html files still need to
 // fail closed instead of falling through to binary/media sniffing.
 const HOST_READ_DECLARED_TEXT_MIMES = new Set([...HOST_READ_TEXT_PLAIN_ALIASES, "text/html"]);
 const HOST_READ_DECLARED_TEXT_ERROR =
-  "hostReadCapability permits only validated plain-text CSV/Markdown documents " +
+  "hostReadCapability permits only validated plain-text documents " +
   "and trusted generated HTML reports for local reads";
+const HOST_READ_TEXT_PLAIN_EXTENSION_BY_MIME: Record<string, readonly string[]> = {
+  "text/plain": [".txt"],
+};
 const MB = 1024 * 1024;
+
+function stripLegacyMediaDirectivePrefix(mediaUrl: string): string {
+  if (/^\s*media:\/\//i.test(mediaUrl)) {
+    return mediaUrl;
+  }
+  return mediaUrl.replace(/^\s*MEDIA\s*:\s*/i, "");
+}
 
 function getTextStats(text: string): { printableRatio: number } {
   if (!text) {
@@ -255,8 +281,15 @@ function isPathInsideRoot(filePath: string | undefined, root: string): boolean {
   }
   const relative = path.relative(path.resolve(root), path.resolve(filePath));
   return (
-    relative === "" || (!!relative && !relative.startsWith("..") && !path.isAbsolute(relative))
+    relative === "" || (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
   );
+}
+
+function resolveLocalMediaFileName(filePath: string): string | undefined {
+  const fileName = basenameFromAnyPath(filePath) || undefined;
+  return fileName && isPathInsideRoot(filePath, getMediaDir())
+    ? extractOriginalFilename(fileName)
+    : fileName;
 }
 
 function hasHtmlDocumentShape(text: string): boolean {
@@ -296,6 +329,18 @@ function isTrustedGeneratedHostReadHtml(params: {
   }
   const text = getValidatedHostReadText(params.buffer);
   return text !== undefined && hasHtmlDocumentShape(text);
+}
+
+function isAllowedHostReadTextAlias(mime: string | undefined, filePath?: string): boolean {
+  if (!mime || !HOST_READ_TEXT_PLAIN_ALIASES.has(mime)) {
+    return false;
+  }
+  const allowedExtensions = HOST_READ_TEXT_PLAIN_EXTENSION_BY_MIME[mime];
+  if (!allowedExtensions) {
+    return true;
+  }
+  const ext = getFileExtension(filePath);
+  return ext !== undefined && allowedExtensions.includes(ext);
 }
 
 function formatMb(bytes: number, digits = 2): string {
@@ -347,7 +392,7 @@ function assertHostReadMediaAllowed(params: {
       return;
     }
     if (
-      HOST_READ_TEXT_PLAIN_ALIASES.has(declaredMime) &&
+      isAllowedHostReadTextAlias(declaredMime, params.filePath) &&
       !params.sniffedContentType &&
       params.buffer &&
       isValidatedHostReadText(params.buffer)
@@ -374,15 +419,15 @@ function assertHostReadMediaAllowed(params: {
   ) {
     return;
   }
-  // CSV / Markdown exception: file-type v22 returns undefined (not "text/plain") for
-  // plain-text buffers that have no binary magic bytes. Allow these formats when:
+  // Plain-text document exception: file-type v22 returns undefined (not "text/plain")
+  // for text buffers that have no binary magic bytes. Allow these formats when:
   // - sniffedMime is undefined (no binary signature detected by file-type)
-  // - The extension-derived MIME is text/csv or text/markdown (operator intent)
+  // - The extension-derived MIME is an allowed text/document MIME (operator intent)
   // - The buffer decodes as actual text instead of opaque binary bytes
   if (
     !sniffedMime &&
     normalizedMime &&
-    HOST_READ_TEXT_PLAIN_ALIASES.has(normalizedMime) &&
+    isAllowedHostReadTextAlias(normalizedMime, params.filePath) &&
     params.buffer &&
     isValidatedHostReadText(params.buffer)
   ) {
@@ -400,7 +445,7 @@ function assertHostReadMediaAllowed(params: {
   }
   throw new LocalMediaAccessError(
     "path-not-allowed",
-    `Host-local media sends only allow buffer-verified images, audio, video, PDF, Office documents, archives, CSV, and Markdown (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
+    `Host-local media sends only allow buffer-verified images, audio, video, PDF, Office documents, archives, and validated plain-text documents (got ${sniffedMime ?? normalizedMime ?? "unknown"}).`,
   );
 }
 
@@ -628,6 +673,7 @@ function isPreservableImageMime(
   );
 }
 
+/** Returns the stricter byte cap between caller limits and image compression policy limits. */
 export function effectiveImageBytesCap(
   baseCap: number | undefined,
   policy?: ImageCompressionPolicy,
@@ -658,6 +704,7 @@ function buildDescendingLadder(maxSide: number, values: readonly number[]): numb
   return uniqueValues(fallbackLadder.filter((value) => value > 0)).toSorted((a, b) => b - a);
 }
 
+/** Resolves the ordered max-side and JPEG quality search grid for an image compression policy. */
 export function resolveImageCompressionGrid(policy?: ImageCompressionPolicy): {
   sides: number[];
   qualities: number[];
@@ -740,6 +787,7 @@ async function optimizeImageWithFallback(params: {
   };
 }
 
+/** Optimizes image bytes for web-media delivery while preserving accepted original formats when possible. */
 export async function optimizeImageBufferForWebMedia(params: {
   buffer: Buffer;
   contentType?: string;
@@ -799,9 +847,10 @@ export async function optimizeImageBufferForWebMedia(params: {
 }
 
 async function loadWebMediaInternal(
-  mediaUrl: string,
+  mediaUrlInput: string,
   options: WebMediaOptions = {},
 ): Promise<WebMediaResult> {
+  let mediaUrl = mediaUrlInput;
   const {
     maxBytes,
     optimizeImages = true,
@@ -819,11 +868,7 @@ async function loadWebMediaInternal(
     hostReadCapability = false,
     imageCompression,
   } = options;
-  // Strip MEDIA: prefix used by agent tools (e.g. TTS) to tag media paths.
-  // Be lenient: LLM output may add extra whitespace (e.g. "  MEDIA :  /tmp/x.png").
-  if (!/^\s*media:\/\//i.test(mediaUrl)) {
-    mediaUrl = mediaUrl.replace(/^\s*MEDIA\s*:\s*/i, "");
-  }
+  mediaUrl = stripLegacyMediaDirectivePrefix(mediaUrl);
   mediaUrl = (await resolveMediaStoreUriToPath(mediaUrl)) ?? mediaUrl;
   // Use fileURLToPath for proper handling of file:// URLs (handles file://localhost/path, etc.)
   if (mediaUrl.startsWith("file://")) {
@@ -834,6 +879,7 @@ async function loadWebMediaInternal(
     }
   }
   mediaUrl = (await resolveHostedPluginMediaUrl(mediaUrl)) ?? mediaUrl;
+  mediaUrl = stripLegacyMediaDirectivePrefix(mediaUrl);
 
   const optimizeAndClampImage = async (
     buffer: Buffer,
@@ -1036,7 +1082,7 @@ async function loadWebMediaInternal(
       trustedGeneratedHtmlPath,
     });
   }
-  let fileName = basenameFromAnyPath(mediaUrl) || undefined;
+  let fileName = resolveLocalMediaFileName(mediaUrl);
   if (fileName && !extnameFromAnyPath(fileName) && mime) {
     const ext = extensionForMime(mime);
     if (ext) {
@@ -1051,6 +1097,7 @@ async function loadWebMediaInternal(
   });
 }
 
+/** Loads local, remote, hosted, or media-store media and optimizes images by default. */
 export async function loadWebMedia(
   mediaUrl: string,
   maxBytesOrOptions?: number | WebMediaOptions,
@@ -1062,6 +1109,7 @@ export async function loadWebMedia(
   );
 }
 
+/** Loads local, remote, hosted, or media-store media without image optimization. */
 export async function loadWebMediaRaw(
   mediaUrl: string,
   maxBytesOrOptions?: number | WebMediaOptions,
@@ -1073,6 +1121,7 @@ export async function loadWebMediaRaw(
   );
 }
 
+/** Optimizes image bytes to JPEG under a target byte cap using the shared compression grid. */
 export async function optimizeImageToJpeg(
   buffer: Buffer,
   maxBytes: number,

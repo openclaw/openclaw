@@ -1,7 +1,5 @@
+// Feishu plugin module implements dedup behavior.
 import { createHash } from "node:crypto";
-import os from "node:os";
-import path from "node:path";
-import { loadJsonFile } from "openclaw/plugin-sdk/json-store";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   releaseFeishuMessageProcessing,
@@ -20,10 +18,7 @@ type FeishuDedupStoreEntry = {
 };
 
 const memory = new Map<string, number>();
-const importedLegacyNamespaces = new Set<string>();
 const cachedDedupStores = new Map<string, PluginStateSyncKeyedStore<FeishuDedupStoreEntry>>();
-
-type LegacyDedupeData = Record<string, number>;
 
 function normalizeMessageId(messageId: string | undefined | null): string | null {
   const trimmed = messageId?.trim();
@@ -32,22 +27,6 @@ function normalizeMessageId(messageId: string | undefined | null): string | null
 
 function normalizeNamespace(namespace?: string): string {
   return namespace?.trim() || "global";
-}
-
-function resolveLegacyStateDir(env: NodeJS.ProcessEnv = process.env): string {
-  const stateOverride = env.OPENCLAW_STATE_DIR?.trim();
-  if (stateOverride) {
-    return stateOverride;
-  }
-  if (env.VITEST || env.NODE_ENV === "test") {
-    return path.join(os.tmpdir(), ["openclaw-vitest", String(process.pid)].join("-"));
-  }
-  return path.join(os.homedir(), ".openclaw");
-}
-
-function resolveLegacyNamespaceFilePath(namespace: string): string {
-  const safe = namespace.replace(/[^a-zA-Z0-9_-]/g, "_");
-  return path.join(resolveLegacyStateDir(), "feishu", "dedup", `${safe}.json`);
 }
 
 function pluginStateNamespace(namespace: string): string {
@@ -116,52 +95,6 @@ function hasMemory(namespace: string, messageId: string, now = Date.now()): bool
   return false;
 }
 
-function sanitizeLegacyDedupeData(value: unknown): LegacyDedupeData {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-  const out: LegacyDedupeData = {};
-  for (const [key, seenAt] of Object.entries(value as Record<string, unknown>)) {
-    if (typeof seenAt === "number" && Number.isFinite(seenAt) && seenAt > 0) {
-      out[key] = seenAt;
-    }
-  }
-  return out;
-}
-
-function importLegacyDedupNamespace(
-  namespace: string,
-  now = Date.now(),
-  log?: (...args: unknown[]) => void,
-): void {
-  if (importedLegacyNamespaces.has(namespace)) {
-    return;
-  }
-
-  try {
-    const data = sanitizeLegacyDedupeData(loadJsonFile(resolveLegacyNamespaceFilePath(namespace)));
-    const store = openDedupStore(namespace);
-    for (const [messageId, seenAt] of Object.entries(data)) {
-      if (!isRecent(seenAt, now)) {
-        continue;
-      }
-      const key = dedupeStoreKey(namespace, messageId);
-      if (store.lookup(key) != null) {
-        continue;
-      }
-      store.register(
-        key,
-        { namespace, messageId, seenAt },
-        { ttlMs: Math.max(1, DEDUP_TTL_MS - (now - seenAt)) },
-      );
-    }
-    importedLegacyNamespaces.add(namespace);
-  } catch (error) {
-    importedLegacyNamespaces.delete(namespace);
-    log?.(`feishu-dedup: legacy state import failed: ${String(error)}`);
-  }
-}
-
 export { releaseFeishuMessageProcessing, tryBeginFeishuMessageProcessing };
 
 export async function claimUnprocessedFeishuMessage(params: {
@@ -216,6 +149,26 @@ export async function recordProcessedFeishuMessage(
   return await tryRecordMessagePersistent(normalizedMessageId, namespace, log);
 }
 
+export async function forgetProcessedFeishuMessage(
+  messageId: string | undefined | null,
+  namespace = "global",
+  log?: (...args: unknown[]) => void,
+): Promise<boolean> {
+  const normalizedNamespace = normalizeNamespace(namespace);
+  const normalizedMessageId = normalizeMessageId(messageId);
+  if (!normalizedMessageId) {
+    return false;
+  }
+  memory.delete(memoryKey(normalizedNamespace, normalizedMessageId));
+  const key = dedupeStoreKey(normalizedNamespace, normalizedMessageId);
+  try {
+    return openDedupStore(normalizedNamespace).delete(key);
+  } catch (error) {
+    log?.(`feishu-dedup: persistent delete failed: ${String(error)}`);
+    return false;
+  }
+}
+
 export async function hasProcessedFeishuMessage(
   messageId: string | undefined | null,
   namespace = "global",
@@ -239,7 +192,6 @@ export async function tryRecordMessagePersistent(
     return true;
   }
   const now = Date.now();
-  importLegacyDedupNamespace(normalizedNamespace, now, log);
   if (hasMemory(normalizedNamespace, normalizedMessageId, now)) {
     return false;
   }
@@ -298,7 +250,6 @@ async function hasRecordedMessagePersistent(
     return false;
   }
   const now = Date.now();
-  importLegacyDedupNamespace(normalizedNamespace, now, log);
   if (hasMemory(normalizedNamespace, normalizedMessageId, now)) {
     return true;
   }
@@ -317,7 +268,7 @@ async function hasRecordedMessagePersistent(
   }
 }
 
-export async function warmupDedupFromDisk(
+export async function warmupDedupFromPluginState(
   namespace: string,
   log?: (...args: unknown[]) => void,
 ): Promise<number> {
@@ -325,7 +276,6 @@ export async function warmupDedupFromDisk(
   try {
     let loaded = 0;
     const now = Date.now();
-    importLegacyDedupNamespace(normalizedNamespace, now, log);
     for (const entry of openDedupStore(normalizedNamespace).entries()) {
       if (entry.value.namespace !== normalizedNamespace || !isRecent(entry.value.seenAt, now)) {
         continue;
@@ -343,7 +293,6 @@ export async function warmupDedupFromDisk(
 export const testingHooks = {
   resetFeishuDedupForTests() {
     memory.clear();
-    importedLegacyNamespaces.clear();
     for (const store of cachedDedupStores.values()) {
       store.clear();
     }

@@ -17,9 +17,17 @@ is now:
   told us this usage is allowed again
 
 OpenAI Codex OAuth is explicitly supported for use in external tools like
-OpenClaw. This page explains:
+OpenClaw.
+
+OpenClaw stores both OpenAI API-key auth and ChatGPT/Codex OAuth under the
+canonical provider id `openai`. Older `openai-codex:*` profile ids and
+`auth.order.openai-codex` entries are legacy state repaired by
+`openclaw doctor --fix`; use `openai:*` profile ids and `auth.order.openai` for
+new config.
 
 For Anthropic in production, API key auth is the safer recommended path.
+
+This page explains:
 
 - how the OAuth **token exchange** works (PKCE)
 - where tokens are **stored** (and why)
@@ -45,7 +53,7 @@ To reduce that, OpenClaw treats `auth-profiles.json` as a **token sink**:
 - the runtime reads credentials from **one place**
 - we can keep multiple profiles and route them deterministically
 - external CLI reuse is provider-specific: Codex CLI can bootstrap an empty
-  `openai-codex:default` profile, but once OpenClaw has a local OAuth profile,
+  `openai:default` profile, but once OpenClaw has a local OAuth profile,
   the local refresh token is canonical. If that local refresh token is rejected,
   OpenClaw can use a usable same-account Codex CLI token as a runtime-only
   fallback; other integrations can remain externally managed and re-read their
@@ -122,6 +130,18 @@ Flow shape:
 
 OpenAI Codex OAuth is explicitly supported for use outside the Codex CLI, including OpenClaw workflows.
 
+The login command still uses the canonical OpenAI provider id:
+
+```bash
+openclaw models auth login --provider openai
+```
+
+Use `--profile-id openai:<name>` for multiple ChatGPT/Codex OAuth accounts in
+one agent. Do not use `openai-codex:<name>` for new profiles. Doctor migrates
+that older prefix to a collision-free `openai:*` profile id; run
+`openclaw models auth list --provider openai` after repair before copying
+profile ids into `auth.order` or `/model ...@<profileId>`.
+
 Flow shape (PKCE):
 
 1. generate PKCE verifier/challenge + random `state`
@@ -131,7 +151,7 @@ Flow shape (PKCE):
 5. exchange at `https://auth.openai.com/oauth/token`
 6. extract `accountId` from the access token and store `{ access, refresh, expires, accountId }`
 
-Wizard path is `openclaw onboard` → auth choice `openai-codex`.
+Wizard path is `openclaw onboard` → auth choice `openai`.
 
 ## Refresh + expiry
 
@@ -147,7 +167,7 @@ At runtime:
 - exception: some external CLI credentials stay externally managed; OpenClaw
   re-reads those CLI auth stores instead of spending copied refresh tokens.
   Codex CLI bootstrap is intentionally narrower: it seeds an empty
-  `openai-codex:default` profile, then OpenClaw-owned refreshes keep the local
+  `openai:default` profile, then OpenClaw-owned refreshes keep the local
   profile canonical. If the local Codex refresh fails and Codex CLI has a
   usable token for the same account, OpenClaw may use that token for the current
   runtime request without writing it back to `auth-profiles.json`.

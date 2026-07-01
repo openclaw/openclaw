@@ -1,3 +1,4 @@
+// Google Meet plugin module implements node host behavior.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -331,12 +332,11 @@ function startChrome(params: Record<string, unknown>) {
   }
 
   if (params.launch !== false) {
-    const argv = ["open", "-a", "Google Chrome"];
+    const argv = ["open", "-a", "Google Chrome", url];
     const browserProfile = readString(params.browserProfile);
     if (browserProfile) {
       argv.push("--args", `--profile-directory=${browserProfile}`);
     }
-    argv.push(url);
     const result = runCommandWithTimeout(argv, timeoutMs);
     if (result.code !== 0) {
       if (bridgeId) {

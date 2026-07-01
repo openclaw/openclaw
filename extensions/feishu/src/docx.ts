@@ -1,3 +1,4 @@
+// Feishu plugin module implements docx behavior.
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
@@ -1383,14 +1384,23 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
   type FeishuDocExecuteParams = FeishuDocParams & { accountId?: string };
 
   const getClient = (params: { accountId?: string } | undefined, defaultAccountId?: string) =>
-    createFeishuToolClient({ api, executeParams: params, defaultAccountId });
+    createFeishuToolClient({
+      api,
+      executeParams: params,
+      defaultAccountId,
+      requiredTool: { family: "doc", label: "Doc" },
+    });
 
   const getMediaMaxBytes = (
     params: { accountId?: string } | undefined,
     defaultAccountId?: string,
   ) =>
-    (resolveFeishuToolAccount({ api, executeParams: params, defaultAccountId }).config
-      ?.mediaMaxMb ?? 30) *
+    (resolveFeishuToolAccount({
+      api,
+      executeParams: params,
+      defaultAccountId,
+      requiredTool: { family: "doc", label: "Doc" },
+    }).config?.mediaMaxMb ?? 30) *
     1024 *
     1024;
 
@@ -1583,7 +1593,13 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
         parameters: Type.Object({}),
         async execute() {
           try {
-            const result = await listAppScopes(getClient(undefined, ctx.agentAccountId));
+            const result = await listAppScopes(
+              createFeishuToolClient({
+                api,
+                defaultAccountId: ctx.agentAccountId,
+                requiredTool: { family: "scopes", label: "App Scopes" },
+              }),
+            );
             return json(result);
           } catch (err) {
             return json({ error: formatErrorMessage(err) });

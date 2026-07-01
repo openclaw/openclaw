@@ -1,3 +1,4 @@
+// Telegram plugin module implements bot message context harness behavior.
 import { createHash } from "node:crypto";
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import type { BuildTelegramMessageContextParams, TelegramMediaRef } from "./bot-message-context.js";
@@ -22,6 +23,7 @@ type BuildTelegramMessageContextForTestParams = {
   message: Record<string, unknown>;
   me?: Record<string, unknown>;
   allMedia?: TelegramMediaRef[];
+  promptContext?: BuildTelegramMessageContextParams["promptContext"];
   options?: BuildTelegramMessageContextParams["options"];
   cfg?: Record<string, unknown>;
   accountId?: string;
@@ -111,6 +113,7 @@ export async function buildTelegramMessageContextForTest(
       me: { id: 7, username: "bot", ...params.me },
     } as never,
     allMedia: params.allMedia ?? [],
+    promptContext: params.promptContext ?? [],
     storeAllowFrom: [],
     options: params.options ?? {},
     bot: {

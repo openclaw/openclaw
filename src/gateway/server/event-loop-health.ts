@@ -1,3 +1,4 @@
+// Event-loop health monitor samples delay, utilization, and CPU pressure for gateway readiness snapshots.
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 
 const EVENT_LOOP_MONITOR_RESOLUTION_MS = 20;
@@ -12,7 +13,7 @@ type EventLoopDelayMonitor = ReturnType<typeof monitorEventLoopDelay>;
 type EventLoopUtilization = ReturnType<typeof performance.eventLoopUtilization>;
 type CpuUsage = ReturnType<typeof process.cpuUsage>;
 
-export type GatewayEventLoopHealthReason = "event_loop_delay" | "event_loop_utilization" | "cpu";
+type GatewayEventLoopHealthReason = "event_loop_delay" | "event_loop_utilization" | "cpu";
 
 export type GatewayEventLoopHealth = {
   degraded: boolean;
@@ -24,7 +25,7 @@ export type GatewayEventLoopHealth = {
   cpuCoreRatio: number;
 };
 
-export type GatewayEventLoopHealthMonitor = {
+type GatewayEventLoopHealthMonitor = {
   snapshot: () => GatewayEventLoopHealth | undefined;
   stop: () => void;
 };

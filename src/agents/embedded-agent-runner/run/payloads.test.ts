@@ -1,3 +1,5 @@
+// Payload tests cover successful embedded run replies, final-answer selection,
+// message-tool source replies, media directives, and tool-error warning policy.
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
@@ -10,6 +12,8 @@ import {
 
 describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   function expectNoPayloads(params: Parameters<typeof buildPayloads>[0]) {
+    // Many suppression cases should produce no channel reply at all; keep the
+    // assertion explicit so accidental fallback text is obvious.
     const payloads = buildPayloads(params);
     expect(payloads).toHaveLength(0);
   }
@@ -65,6 +69,91 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
 
     expectSinglePayloadText(payloads, "Done.");
+  });
+
+  it("does not revive signed unphased text when explicit final-answer text is empty", () => {
+    expectNoPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "MEDIA:/tmp/old.png",
+            textSignature: JSON.stringify({ v: 1, id: "item_old" }),
+          },
+          {
+            type: "text",
+            text: "   ",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+  });
+
+  it("does not revive signed unphased text when explicit output_text final-answer text is empty", () => {
+    expectNoPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "MEDIA:/tmp/old.png",
+            textSignature: JSON.stringify({ v: 1, id: "item_old" }),
+          },
+          {
+            type: "output_text",
+            text: "   ",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+  });
+
+  it("keeps literal mid-answer reasoning-looking tags in final-answer text", () => {
+    const text = "Before <think>literal tag text after";
+    const payloads = buildPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text,
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, text);
+  });
+
+  it("keeps strict reasoning-tag stripping for legacy string fallback text", () => {
+    const payloads = buildPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: "Visible prefix <think>private reasoning tail",
+      } as unknown as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "Visible prefix");
   });
 
   it("falls back to final-answer assistant text when streamed text only contains blanks", () => {
@@ -222,6 +311,8 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   });
 
   it("turns internal message-tool source replies into suppression-safe final payloads", () => {
+    // message_tool_only source replies are already delivered internally but
+    // still need mirror metadata so transcript/persistence can record them.
     const payloads = buildPayloads({
       assistantTexts: ["ordinary final should stay private"],
       didSendViaMessagingTool: true,
@@ -253,6 +344,20 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
         idempotencyKey: "run-1:internal-source-reply:0",
       },
     });
+  });
+
+  it("suppresses terminal assistant text after direct message-tool source replies", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["ordinary final should stay private"],
+      didSendViaMessagingTool: true,
+      didDeliverSourceReplyViaMessageTool: true,
+      sourceReplyDeliveryMode: "message_tool_only",
+      sessionKey: "agent:main",
+      agentId: "main",
+      runId: "run-1",
+    });
+
+    expect(payloads).toEqual([]);
   });
 
   it("preserves rich-only internal message-tool source replies", () => {
@@ -352,6 +457,8 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   });
 
   it("marks middleware tool-error warnings after assistant output as non-terminal", () => {
+    // Middleware failures after useful assistant output warn the user without
+    // replacing the successful answer as the terminal payload.
     const payloads = buildPayloads({
       assistantTexts: ["Queued 3 topics."],
       lastToolError: {
@@ -436,6 +543,24 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSingleToolErrorPayload(payloads, {
       title: "Exec",
       detail: "Command timed out after 1800 seconds.",
+    });
+  });
+
+  it("surfaces heartbeat exec tool output details when the task run fails", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "exec",
+        meta: "show last 20 lines of ~/.openclaw/workspace/memory/2026-06-04.md",
+        error:
+          "tail: cannot open '/home/user/.openclaw/workspace/memory/2026-06-04.md' for reading: No such file or directory",
+      },
+      isHeartbeatTrigger: true,
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "show last 20 lines",
+      detail: "No such file or directory",
     });
   });
 
@@ -638,6 +763,8 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   });
 
   it("uses raw final assistant text when visible-text extraction removed a media-only directive line", () => {
+    // Media directives are not visible text, but they still carry channel media
+    // attachments and must survive final-answer extraction.
     const payloads = buildPayloads({
       lastAssistant: {
         role: "assistant",

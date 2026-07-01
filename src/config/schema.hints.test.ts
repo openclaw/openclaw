@@ -1,3 +1,4 @@
+// Verifies schema hint metadata and sensitive path handling.
 import { isSensitiveUrlConfigPath } from "@openclaw/net-policy/redact-sensitive-url";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
@@ -155,6 +156,26 @@ describe("mapSensitivePaths", () => {
 
     const result = mapSensitivePaths(schema, "", {});
     expect(result["env.*"]?.sensitive).toBe(undefined);
+  });
+
+  it("returns a new hints map without mutating caller-owned entries", () => {
+    const schema = z.object({
+      apiKey: z.string().register(sensitive),
+    });
+    const hints = {
+      group: { label: "Group" },
+    };
+
+    const result = mapSensitivePaths(schema, "", hints);
+
+    expect(result).not.toBe(hints);
+    expect(hints).toEqual({
+      group: { label: "Group" },
+    });
+    expect(result).toEqual({
+      group: { label: "Group" },
+      apiKey: { sensitive: true },
+    });
   });
 
   it("main schema yields correct hints (samples)", () => {

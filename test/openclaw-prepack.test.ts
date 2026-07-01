@@ -1,6 +1,8 @@
+// OpenClaw prepack tests validate package prepack output.
 import { describe, expect, it } from "vitest";
 import {
   collectPreparedPrepackErrors,
+  resolvePrepackCommandStdio,
   resolvePrepackCommandTimeoutMs,
   runPrepackCommand,
 } from "../scripts/openclaw-prepack.ts";
@@ -25,6 +27,20 @@ describe("collectPreparedPrepackErrors", () => {
 });
 
 describe("runPrepackCommand", () => {
+  it("keeps prepack child stdout off npm pack JSON stdout", () => {
+    expect(resolvePrepackCommandStdio({ stdio: "inherit" }, { npm_config_json: "true" })).toEqual([
+      "inherit",
+      2,
+      "inherit",
+    ]);
+    expect(
+      resolvePrepackCommandStdio(
+        { stdio: ["ignore", "pipe", "pipe"] },
+        { npm_config_json: "true" },
+      ),
+    ).toEqual(["ignore", "pipe", "pipe"]);
+  });
+
   it("returns captured output for successful commands", () => {
     const result = runPrepackCommand(process.execPath, ["--eval", "process.stdout.write('ok')"], {
       encoding: "utf8",
@@ -53,21 +69,19 @@ describe("runPrepackCommand", () => {
 });
 
 describe("resolvePrepackCommandTimeoutMs", () => {
-  it("uses a positive environment timeout", () => {
+  it("parses only positive integer environment timeouts", () => {
+    expect(resolvePrepackCommandTimeoutMs({})).toBe(30 * 60 * 1000);
+    expect(resolvePrepackCommandTimeoutMs({ OPENCLAW_PREPACK_COMMAND_TIMEOUT_MS: "" })).toBe(
+      30 * 60 * 1000,
+    );
     expect(resolvePrepackCommandTimeoutMs({ OPENCLAW_PREPACK_COMMAND_TIMEOUT_MS: "1234" })).toBe(
       1234,
     );
-  });
 
-  it("falls back when the environment timeout is invalid", () => {
-    expect(resolvePrepackCommandTimeoutMs({ OPENCLAW_PREPACK_COMMAND_TIMEOUT_MS: "nope" })).toBe(
-      30 * 60 * 1000,
-    );
-  });
-
-  it("falls back when the environment timeout has a numeric prefix", () => {
-    expect(resolvePrepackCommandTimeoutMs({ OPENCLAW_PREPACK_COMMAND_TIMEOUT_MS: "10m" })).toBe(
-      30 * 60 * 1000,
-    );
+    for (const raw of ["nope", "10m", "1e3", "0", "-1", "9007199254740992"]) {
+      expect(() =>
+        resolvePrepackCommandTimeoutMs({ OPENCLAW_PREPACK_COMMAND_TIMEOUT_MS: raw }),
+      ).toThrow(`invalid OPENCLAW_PREPACK_COMMAND_TIMEOUT_MS: ${raw}`);
+    }
   });
 });

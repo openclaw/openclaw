@@ -1,4 +1,9 @@
-import { asOptionalRecord } from "../shared/record-coerce.js";
+/**
+ * sessions_yield transcript detectors.
+ *
+ * Accepts provider-specific tool-call and tool-result shapes used by transcript repair and announce capture.
+ */
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 
 function readToolName(value: unknown): string | undefined {
   const record = asOptionalRecord(value);
@@ -28,6 +33,7 @@ function isToolCallBlock(value: unknown): boolean {
   );
 }
 
+/** Returns true when an assistant message requested the sessions_yield tool. */
 export function assistantCallsSessionsYield(message: unknown): boolean {
   const record = asOptionalRecord(message);
   if (!record || record.role !== "assistant" || !Array.isArray(record.content)) {
@@ -78,6 +84,7 @@ function readStructuredToolPayload(content: unknown): Record<string, unknown> | 
   return undefined;
 }
 
+/** Returns true when a tool result represents a completed sessions_yield handoff. */
 export function isSessionsYieldToolResult(
   message: unknown,
   previousAssistantCalledYield: boolean,
@@ -93,6 +100,7 @@ export function isSessionsYieldToolResult(
   if (!previousAssistantCalledYield) {
     return false;
   }
+  // Some providers omit the tool name on results; use adjacency plus yielded status as fallback.
   const details = asOptionalRecord(record.details);
   if (details?.status === "yielded") {
     return true;

@@ -1,9 +1,11 @@
+// Vllm plugin module implements stream behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createPayloadPatchStreamWrapper,
   isOpenAICompatibleThinkingEnabled,
+  setQwenChatTemplateThinking,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   resolveVllmQwenThinkingFormatFromCompat,
@@ -20,25 +22,6 @@ function resolveVllmQwenThinkingFormat(
   ctx: Pick<ProviderWrapStreamFnContext, "model">,
 ): VllmQwenThinkingFormat | undefined {
   return resolveVllmQwenThinkingFormatFromCompat(ctx.model?.compat);
-}
-
-function setQwenChatTemplateThinking(payload: Record<string, unknown>, enabled: boolean): void {
-  const existing = payload.chat_template_kwargs;
-  if (existing && typeof existing === "object" && !Array.isArray(existing)) {
-    const next: Record<string, unknown> = {
-      ...(existing as Record<string, unknown>),
-      enable_thinking: enabled,
-    };
-    if (!Object.hasOwn(next, "preserve_thinking")) {
-      next.preserve_thinking = true;
-    }
-    payload.chat_template_kwargs = next;
-    return;
-  }
-  payload.chat_template_kwargs = {
-    enable_thinking: enabled,
-    preserve_thinking: true,
-  };
 }
 
 function isVllmNemotronModel(model: { api?: unknown; provider?: unknown; id?: unknown }): boolean {

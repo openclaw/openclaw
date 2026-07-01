@@ -1,3 +1,4 @@
+// Zai tests cover index plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -88,8 +89,21 @@ describe("zai provider plugin", () => {
 
     const cases = [
       {
-        modelId: "glm-5.1",
+        modelId: "glm-5.2",
+        providerBaseUrl: "https://api.z.ai/api/coding/paas/v4",
         expected: {
+          baseUrl: "https://api.z.ai/api/coding/paas/v4",
+          input: ["text"],
+          reasoning: true,
+          contextWindow: 1_000_000,
+          maxTokens: 131_072,
+        },
+      },
+      {
+        modelId: "glm-5.1",
+        providerBaseUrl: "https://api.z.ai/api/paas/v4",
+        expected: {
+          baseUrl: "https://api.z.ai/api/paas/v4",
           input: ["text"],
           reasoning: true,
           contextWindow: 202800,
@@ -98,7 +112,9 @@ describe("zai provider plugin", () => {
       },
       {
         modelId: "glm-5v-turbo",
+        providerBaseUrl: "https://api.z.ai/api/paas/v4",
         expected: {
+          baseUrl: "https://api.z.ai/api/paas/v4",
           input: ["text", "image"],
           reasoning: true,
           contextWindow: 202800,
@@ -114,14 +130,34 @@ describe("zai provider plugin", () => {
         modelRegistry: {
           find: (_provider: string, modelId: string) => (modelId === "glm-4.7" ? template : null),
         },
+        providerConfig: { baseUrl: testCase.providerBaseUrl },
       } as never) as Record<string, unknown> | undefined;
       expectModelFields(resolved, {
         provider: "zai",
         api: "openai-completions",
-        baseUrl: "https://api.z.ai/api/paas/v4",
         id: testCase.modelId,
         ...testCase.expected,
       });
+    }
+  });
+
+  it("keeps selected Coding Plan and proxy endpoints for dynamic GLM-5 models", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const template = createGlm47Template();
+
+    for (const baseUrl of [
+      "https://open.bigmodel.cn/api/coding/paas/v4",
+      "https://proxy.example.test/zai",
+    ]) {
+      const resolved = provider.resolveDynamicModel?.({
+        provider: "zai",
+        modelId: "glm-5.2",
+        modelRegistry: {
+          find: (_provider: string, modelId: string) => (modelId === "glm-4.7" ? template : null),
+        },
+        providerConfig: { baseUrl },
+      } as never) as Record<string, unknown> | undefined;
+      expect(resolved?.baseUrl).toBe(baseUrl);
     }
   });
 
@@ -151,6 +187,26 @@ describe("zai provider plugin", () => {
         },
       } as never),
     ).toEqual(registered);
+  });
+
+  it("falls back to manifest baseUrl when both providerConfig and template model are unavailable", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    const resolved = provider.resolveDynamicModel?.({
+      provider: "zai",
+      modelId: "glm-5-turbo",
+      modelRegistry: {
+        find: () => null,
+      },
+    } as never) as Record<string, unknown> | undefined;
+    expectModelFields(resolved, {
+      id: "glm-5-turbo",
+      provider: "zai",
+      api: "openai-completions",
+      baseUrl: "https://api.z.ai/api/paas/v4",
+      reasoning: true,
+      input: ["text"],
+    });
   });
 
   it("still synthesizes unknown GLM-5 variants from the GLM-4.7 template", async () => {
@@ -224,6 +280,40 @@ describe("zai provider plugin", () => {
     expect(capturedPayload).not.toHaveProperty("tool_stream");
   });
 
+  it("exposes full GLM-5.2 thinking levels while keeping older GLM models binary", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "zai",
+        modelId: "glm-5.2",
+        reasoning: true,
+      } as never),
+    ).toEqual({
+      levels: [
+        { id: "off", label: "off" },
+        { id: "low", label: "low" },
+        { id: "high", label: "high" },
+        { id: "max", label: "max" },
+      ],
+      defaultLevel: "off",
+    });
+
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "zai",
+        modelId: "glm-5.1",
+        reasoning: true,
+      } as never),
+    ).toEqual({
+      levels: [
+        { id: "off", label: "off" },
+        { id: "low", label: "on" },
+      ],
+      defaultLevel: "off",
+    });
+  });
+
   it("maps thinking off to Z.AI thinking disabled", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     let capturedPayload: Record<string, unknown> | undefined;
@@ -254,6 +344,74 @@ describe("zai provider plugin", () => {
 
     expect(capturedPayload?.tool_stream).toBe(true);
     expect(capturedPayload?.thinking).toEqual({ type: "disabled" });
+  });
+
+  it("keeps minimal thinking enabled for binary GLM models", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    let capturedPayload: Record<string, unknown> | undefined;
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload as never, model as never);
+      capturedPayload = payload;
+      return {} as ReturnType<StreamFn>;
+    };
+
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "zai",
+      modelId: "glm-5.1",
+      extraParams: {},
+      thinkingLevel: "minimal",
+      streamFn: baseStreamFn,
+    } as never);
+
+    void wrapped?.(
+      {
+        api: "openai-completions",
+        provider: "zai",
+        id: "glm-5.1",
+      } as Model<"openai-completions">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(capturedPayload).not.toHaveProperty("thinking");
+  });
+
+  it("maps GLM-5.2 thinking levels to Z.AI reasoning effort", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = {};
+      options?.onPayload?.(payload as never, model as never);
+      return { payload } as never;
+    };
+
+    for (const [thinkingLevel, expectedEffort] of [
+      ["low", "high"],
+      ["high", "high"],
+      ["max", "max"],
+    ] as const) {
+      const wrapped = provider.wrapStreamFn?.({
+        provider: "zai",
+        modelId: "glm-5.2",
+        extraParams: {},
+        thinkingLevel,
+        streamFn: baseStreamFn,
+      } as never);
+
+      const result = wrapped?.(
+        {
+          api: "openai-completions",
+          provider: "zai",
+          id: "glm-5.2",
+        } as Model<"openai-completions">,
+        { messages: [] } as Context,
+        {},
+      ) as unknown as { payload: Record<string, unknown> };
+
+      expect(result.payload.reasoning_effort).toBe(expectedEffort);
+      expect(result.payload).not.toHaveProperty("thinking");
+      expect(result.payload.tool_stream).toBe(true);
+    }
   });
 
   it("enables Z.AI preserved thinking only when requested", async () => {
@@ -374,7 +532,7 @@ describe("zai provider plugin", () => {
     void wrapped?.(model, context, {});
 
     expect(capturedPayload?.thinking).toEqual({ type: "enabled", clear_thinking: false });
-    const assistantMessage = (capturedPayload?.messages as Array<Record<string, unknown>>)[1];
+    const assistantMessage = (capturedPayload!.messages as Array<Record<string, unknown>>)[1];
     expect(assistantMessage?.role).toBe("assistant");
     expect(assistantMessage?.content).toBe("visible reply");
     expect(assistantMessage?.reasoning_content).toBe("prior reasoning");

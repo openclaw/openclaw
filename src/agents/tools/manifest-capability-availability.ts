@@ -1,3 +1,8 @@
+/**
+ * Manifest capability availability checks.
+ *
+ * Combines plugin contracts, availability, config signals, auth profiles, env candidates, and base URL guards.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
@@ -14,7 +19,8 @@ import { getActivePluginRegistryWorkspaceDirFromState } from "../../plugins/runt
 import { listProfilesForProvider } from "../auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 
-export type CapabilityContractKey =
+/** Manifest contract keys that represent provider-backed tool capabilities. */
+type CapabilityContractKey =
   | "imageGenerationProviders"
   | "videoGenerationProviders"
   | "musicGenerationProviders"
@@ -24,6 +30,8 @@ type CapabilityProviderMetadataKey =
   | "imageGenerationProviderMetadata"
   | "videoGenerationProviderMetadata"
   | "musicGenerationProviderMetadata";
+
+type CapabilityMetadataSnapshot = Pick<PluginMetadataSnapshot, "index" | "plugins">;
 
 function metadataKeyForCapabilityContract(
   key: CapabilityContractKey,
@@ -56,11 +64,101 @@ function listCapabilityAuthSignals(params: {
   if (metadata?.authSignals?.length) {
     return metadata.authSignals;
   }
+  // Older manifests only declare provider ids; derive auth signals from aliases/providers.
   return [params.providerId, ...(metadata?.aliases ?? []), ...(metadata?.authProviders ?? [])].map(
     (provider) => ({ provider }),
   );
 }
 
+function isPluginAvailableForCapability(params: {
+  snapshot: CapabilityMetadataSnapshot;
+  plugin: PluginManifestRecord;
+  config?: OpenClawConfig;
+}): boolean {
+  return isManifestPluginAvailableForControlPlane({
+    snapshot: params.snapshot,
+    plugin: params.plugin,
+    config: params.config,
+  });
+}
+
+function hasAvailableCapabilityPlugin(
+  params: {
+    snapshot: CapabilityMetadataSnapshot;
+    config?: OpenClawConfig;
+  },
+  accepts: (plugin: PluginManifestRecord) => boolean,
+): boolean {
+  if (params.config?.plugins?.enabled === false) {
+    return false;
+  }
+  for (const plugin of params.snapshot.plugins) {
+    if (
+      !isPluginAvailableForCapability({
+        snapshot: params.snapshot,
+        plugin,
+        config: params.config,
+      })
+    ) {
+      continue;
+    }
+    if (accepts(plugin)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function hasConfiguredCapabilityProviderSignal(params: {
+  plugin: PluginManifestRecord;
+  key: CapabilityContractKey;
+  providerId: string;
+  config?: OpenClawConfig;
+  authStore?: AuthProfileStore;
+}): boolean {
+  const metadataKey = metadataKeyForCapabilityContract(params.key);
+  const metadata = metadataKey ? params.plugin[metadataKey]?.[params.providerId] : undefined;
+  if (
+    metadata?.configSignals?.some((signal) =>
+      manifestConfigSignalPasses({
+        config: params.config,
+        env: process.env,
+        signal,
+      }),
+    )
+  ) {
+    return true;
+  }
+  for (const signal of listCapabilityAuthSignals({
+    plugin: params.plugin,
+    key: params.key,
+    providerId: params.providerId,
+  })) {
+    if (
+      !manifestProviderBaseUrlGuardPasses({
+        config: params.config,
+        guard: signal.providerBaseUrl,
+      })
+    ) {
+      continue;
+    }
+    // A provider is available when either profile auth or a declared env candidate exists.
+    if (params.authStore && listProfilesForProvider(params.authStore, signal.provider).length > 0) {
+      return true;
+    }
+    if (
+      hasNonEmptyManifestEnvCandidate(
+        process.env,
+        manifestPluginSetupProviderEnvVars(params.plugin, signal.provider),
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Returns the active capability metadata snapshot when one is already loaded. */
 export function getCurrentCapabilityMetadataSnapshot(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -72,6 +170,7 @@ export function getCurrentCapabilityMetadataSnapshot(params: {
   });
 }
 
+/** Loads capability metadata from current config/workspace plugin state. */
 export function loadCapabilityMetadataSnapshot(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -85,166 +184,58 @@ export function loadCapabilityMetadataSnapshot(params: {
   });
 }
 
+/** Checks whether any available plugin has a configured provider for a capability contract. */
 export function hasSnapshotCapabilityAvailability(params: {
-  snapshot: Pick<PluginMetadataSnapshot, "index" | "plugins">;
+  snapshot: CapabilityMetadataSnapshot;
   key: CapabilityContractKey;
   config?: OpenClawConfig;
   authStore?: AuthProfileStore;
 }): boolean {
-  if (params.config?.plugins?.enabled === false) {
-    return false;
-  }
-  for (const plugin of params.snapshot.plugins) {
-    if (
-      !isManifestPluginAvailableForControlPlane({
-        snapshot: params.snapshot,
-        plugin,
-        config: params.config,
-      })
-    ) {
-      continue;
-    }
-    const metadataKey = metadataKeyForCapabilityContract(params.key);
-    for (const providerId of plugin.contracts?.[params.key] ?? []) {
-      const metadata = metadataKey ? plugin[metadataKey]?.[providerId] : undefined;
-      if (
-        metadata?.configSignals?.some((signal) =>
-          manifestConfigSignalPasses({
-            config: params.config,
-            env: process.env,
-            signal,
-          }),
-        )
-      ) {
-        return true;
-      }
-      for (const signal of listCapabilityAuthSignals({
+  return hasAvailableCapabilityPlugin(params, (plugin) =>
+    (plugin.contracts?.[params.key] ?? []).some((providerId) =>
+      hasConfiguredCapabilityProviderSignal({
         plugin,
         key: params.key,
         providerId,
-      })) {
-        if (
-          !manifestProviderBaseUrlGuardPasses({
-            config: params.config,
-            guard: signal.providerBaseUrl,
-          })
-        ) {
-          continue;
-        }
-        if (
-          params.authStore &&
-          listProfilesForProvider(params.authStore, signal.provider).length > 0
-        ) {
-          return true;
-        }
-        if (
-          hasNonEmptyManifestEnvCandidate(
-            process.env,
-            manifestPluginSetupProviderEnvVars(plugin, signal.provider),
-          )
-        ) {
-          return true;
-        }
-      }
-    }
-  }
-  return false;
+        config: params.config,
+        authStore: params.authStore,
+      }),
+    ),
+  );
 }
 
+/** Checks whether any available plugin exposes env-backed auth for a provider id. */
 export function hasSnapshotProviderEnvAvailability(params: {
-  snapshot: Pick<PluginMetadataSnapshot, "index" | "plugins">;
+  snapshot: CapabilityMetadataSnapshot;
   providerId: string;
   config?: OpenClawConfig;
 }): boolean {
-  if (params.config?.plugins?.enabled === false) {
-    return false;
-  }
-  for (const plugin of params.snapshot.plugins) {
-    if (
-      !isManifestPluginAvailableForControlPlane({
-        snapshot: params.snapshot,
-        plugin,
-        config: params.config,
-      })
-    ) {
-      continue;
-    }
-    if (
-      hasNonEmptyManifestEnvCandidate(
-        process.env,
-        manifestPluginSetupProviderEnvVars(plugin, params.providerId),
-      )
-    ) {
-      return true;
-    }
-  }
-  return false;
+  return hasAvailableCapabilityPlugin(params, (plugin) =>
+    hasNonEmptyManifestEnvCandidate(
+      process.env,
+      manifestPluginSetupProviderEnvVars(plugin, params.providerId),
+    ),
+  );
 }
 
+/** Checks whether a specific provider id is available for a capability contract. */
 export function hasSnapshotCapabilityProviderAvailability(params: {
-  snapshot: Pick<PluginMetadataSnapshot, "index" | "plugins">;
+  snapshot: CapabilityMetadataSnapshot;
   key: CapabilityContractKey;
   providerId: string;
   config?: OpenClawConfig;
   authStore?: AuthProfileStore;
 }): boolean {
-  if (params.config?.plugins?.enabled === false) {
-    return false;
-  }
-  for (const plugin of params.snapshot.plugins) {
-    if (
-      !isManifestPluginAvailableForControlPlane({
-        snapshot: params.snapshot,
-        plugin,
-        config: params.config,
-      })
-    ) {
-      continue;
-    }
+  return hasAvailableCapabilityPlugin(params, (plugin) => {
     if (!plugin.contracts?.[params.key]?.includes(params.providerId)) {
-      continue;
+      return false;
     }
-    const metadataKey = metadataKeyForCapabilityContract(params.key);
-    const metadata = metadataKey ? plugin[metadataKey]?.[params.providerId] : undefined;
-    if (
-      metadata?.configSignals?.some((signal) =>
-        manifestConfigSignalPasses({
-          config: params.config,
-          env: process.env,
-          signal,
-        }),
-      )
-    ) {
-      return true;
-    }
-    for (const signal of listCapabilityAuthSignals({
+    return hasConfiguredCapabilityProviderSignal({
       plugin,
       key: params.key,
       providerId: params.providerId,
-    })) {
-      if (
-        !manifestProviderBaseUrlGuardPasses({
-          config: params.config,
-          guard: signal.providerBaseUrl,
-        })
-      ) {
-        continue;
-      }
-      if (
-        params.authStore &&
-        listProfilesForProvider(params.authStore, signal.provider).length > 0
-      ) {
-        return true;
-      }
-      if (
-        hasNonEmptyManifestEnvCandidate(
-          process.env,
-          manifestPluginSetupProviderEnvVars(plugin, signal.provider),
-        )
-      ) {
-        return true;
-      }
-    }
-  }
-  return false;
+      config: params.config,
+      authStore: params.authStore,
+    });
+  });
 }

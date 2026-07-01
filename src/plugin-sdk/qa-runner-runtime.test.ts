@@ -1,3 +1,6 @@
+/**
+ * Tests QA runner runtime facade helpers.
+ */
 import path from "node:path";
 import type { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -47,8 +50,10 @@ function firstPublicSurfaceCall(): PublicSurfaceCall | undefined {
 describe("plugin-sdk qa-runner-runtime", () => {
   const tempDirs: string[] = [];
   const originalPrivateQaCli = process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
+  const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 
   beforeEach(() => {
+    vi.resetModules();
     loadPluginManifestRegistry.mockReset().mockReturnValue({
       plugins: [],
       diagnostics: [],
@@ -57,11 +62,17 @@ describe("plugin-sdk qa-runner-runtime", () => {
     tryLoadActivatedBundledPluginPublicSurfaceModuleSync.mockReset();
     resolveOpenClawPackageRootSync.mockReset().mockReturnValue(null);
     delete process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI;
+    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
   });
 
   afterEach(() => {
     cleanupTempDirs(tempDirs);
     restorePrivateQaCliEnv(originalPrivateQaCli);
+    if (originalBundledPluginsDir === undefined) {
+      delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    } else {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
+    }
   });
 
   it("stays cold until runner discovery is requested", async () => {

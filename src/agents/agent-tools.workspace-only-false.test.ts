@@ -1,3 +1,8 @@
+/**
+ * Tests filesystem tools when workspaceOnly is disabled.
+ * Confirms host read/write/edit and memory append wrappers allow intended
+ * outside-workspace paths.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -239,7 +244,6 @@ describe("FS tools with workspaceOnly=false", () => {
     await fs.writeFile(allowedAbsolutePath, "seed");
 
     const tools = [
-      createOpenClawReadTool(createReadTool(workspaceDir) as unknown as AnyAgentTool),
       wrapToolMemoryFlushAppendOnlyWrite(createHostWorkspaceWriteTool(workspaceDir), {
         root: workspaceDir,
         relativePath: allowedRelativePath,
@@ -247,7 +251,7 @@ describe("FS tools with workspaceOnly=false", () => {
     ];
 
     const writeTool = requireTool(tools, "write");
-    expect(tools.map((tool) => tool.name).toSorted()).toEqual(["read", "write"]);
+    expect(tools.map((tool) => tool.name)).toEqual(["write"]);
 
     await expect(
       writeTool.execute("test-call-memory-deny", {
@@ -269,5 +273,50 @@ describe("FS tools with workspaceOnly=false", () => {
       },
     });
     await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("seed\nnew note");
+  });
+
+  it("accepts memory-triggered append-only writes with malformed XML arg-value path suffixes", async () => {
+    const allowedRelativePath = "memory/2026-03-08.md";
+    const allowedAbsolutePath = path.join(workspaceDir, allowedRelativePath);
+
+    const writeTool = wrapToolMemoryFlushAppendOnlyWrite(
+      createHostWorkspaceWriteTool(workspaceDir),
+      {
+        root: workspaceDir,
+        relativePath: allowedRelativePath,
+      },
+    );
+
+    const result = await writeTool.execute("test-call-memory-suffix", {
+      path: `${allowedRelativePath}</arg_value>>`,
+      content: "new note",
+    });
+
+    expect(hasToolError(result)).toBe(false);
+    expect(result).toStrictEqual({
+      content: [{ type: "text", text: "Appended content to memory/2026-03-08.md." }],
+      details: {
+        path: "memory/2026-03-08.md",
+        appendOnly: true,
+      },
+    });
+    await expect(fs.readFile(allowedAbsolutePath, "utf-8")).resolves.toBe("new note");
+  });
+
+  it("rejects memory-triggered append-only paths that become empty after suffix stripping", async () => {
+    const writeTool = wrapToolMemoryFlushAppendOnlyWrite(
+      createHostWorkspaceWriteTool(workspaceDir),
+      {
+        root: workspaceDir,
+        relativePath: "memory/2026-03-09.md",
+      },
+    );
+
+    await expect(
+      writeTool.execute("test-call-memory-empty-suffix", {
+        path: "</arg_value>>",
+        content: "new note",
+      }),
+    ).rejects.toThrow(/Missing required parameter: path/);
   });
 });

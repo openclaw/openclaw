@@ -1,3 +1,4 @@
+// Covers miscellaneous config schema defaults and validation cases.
 import { describe, expect, it } from "vitest";
 import {
   getConfigValueAtPath,
@@ -73,6 +74,25 @@ describe("model provider localService config", () => {
     expect(result.success).toBe(true);
     if (result.success) {
       expect(result.data.models?.providers?.openai?.timeoutSeconds).toBe(600);
+    }
+  });
+
+  it("accepts standalone timeout overlays for Xiaomi Token Plan", () => {
+    const result = validateConfigObjectRaw({
+      models: {
+        providers: {
+          "xiaomi-token-plan": {
+            timeoutSeconds: 600,
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.models?.providers?.["xiaomi-token-plan"]?.timeoutSeconds).toBe(600);
+      expect(result.config.models?.providers?.["xiaomi-token-plan"]?.models).toEqual([]);
+      expect(result.config.models?.providers?.["xiaomi-token-plan"]?.baseUrl).toBe("");
     }
   });
 
@@ -161,34 +181,22 @@ describe("model provider localService config", () => {
   });
 
   it("accepts bundled provider timeout overlays without custom provider fields", () => {
-    const result = validateConfigObjectRaw({
-      models: {
-        providers: {
-          openai: {
-            timeoutSeconds: 600,
+    for (const provider of ["openai", "zai"] as const) {
+      const result = validateConfigObjectRaw({
+        models: {
+          providers: {
+            [provider]: {
+              timeoutSeconds: 600,
+            },
           },
         },
-      },
-    });
+      });
 
-    expect(result.ok).toBe(true);
-  });
-
-  it("accepts bundled provider timeout overlays without custom provider fields", () => {
-    const result = validateConfigObjectRaw({
-      models: {
-        providers: {
-          zai: {
-            timeoutSeconds: 600,
-          },
-        },
-      },
-    });
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.config.models?.providers?.zai?.models).toEqual([]);
-      expect(result.config.models?.providers?.zai?.baseUrl).toBe("");
+      expect(result.ok).toBe(true);
+      if (provider === "zai" && result.ok) {
+        expect(result.config.models?.providers?.zai?.models).toEqual([]);
+        expect(result.config.models?.providers?.zai?.baseUrl).toBe("");
+      }
     }
   });
 
@@ -414,6 +422,30 @@ describe("crestodian.rescue", () => {
 });
 
 describe("diagnostics.otel.captureContent", () => {
+  it("accepts supported OTEL log exporters and rejects unknown values", () => {
+    for (const logsExporter of ["otlp", "stdout", "both"]) {
+      const result = OpenClawSchema.safeParse({
+        diagnostics: {
+          otel: {
+            logs: true,
+            logsExporter,
+          },
+        },
+      });
+      expect(result.success).toBe(true);
+    }
+
+    const invalid = OpenClawSchema.safeParse({
+      diagnostics: {
+        otel: {
+          logs: true,
+          logsExporter: "stderr",
+        },
+      },
+    });
+    expect(invalid.success).toBe(false);
+  });
+
   it("accepts boolean and granular OTEL content capture config", () => {
     for (const captureContent of [
       true,
@@ -468,6 +500,32 @@ describe("ui.seamColor", () => {
   it("rejects invalid hex length", () => {
     const res = validateConfigObject({ ui: { seamColor: "#FF4500FF" } });
     expect(res.ok).toBe(false);
+  });
+});
+
+describe("tui.footer.showRemoteHost", () => {
+  it("accepts the TUI remote-host footer toggle", () => {
+    const result = OpenClawSchema.safeParse({
+      tui: {
+        footer: {
+          showRemoteHost: true,
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects unknown TUI footer keys", () => {
+    const result = OpenClawSchema.safeParse({
+      tui: {
+        footer: {
+          showLocalHost: true,
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
   });
 });
 

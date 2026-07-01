@@ -1,7 +1,9 @@
+// Voice Call plugin module implements outbound behavior.
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   resolveVoiceCallEffectiveConfig,
+  resolveVoiceCallNumberRouteKeyForCall,
   resolveVoiceCallSessionKey,
   type CallMode,
 } from "../config.js";
@@ -19,7 +21,12 @@ import { finalizeCall } from "./lifecycle.js";
 import { getCallByProviderCallId } from "./lookup.js";
 import { addTranscriptEntry, transitionState } from "./state.js";
 import { persistCallRecord } from "./store.js";
-import { clearTranscriptWaiter, waitForFinalTranscript } from "./timers.js";
+import { resolveVoiceCallSecondsTimerDelayMs } from "./timer-delays.js";
+import {
+  clearTranscriptWaiter,
+  ensureMaxDurationTimerForLiveCall,
+  waitForFinalTranscript,
+} from "./timers.js";
 import { generateDtmfRedirectTwiml, generateNotifyTwiml } from "./twiml.js";
 
 type InitiateContext = Pick<
@@ -28,6 +35,7 @@ type InitiateContext = Pick<
   | "providerCallIdMap"
   | "provider"
   | "config"
+  | "coreSession"
   | "storePath"
   | "webhookUrl"
   | "streamSessionIssuer"
@@ -35,7 +43,13 @@ type InitiateContext = Pick<
 
 type SpeakContext = Pick<
   CallManagerContext,
-  "activeCalls" | "providerCallIdMap" | "provider" | "config" | "storePath"
+  | "activeCalls"
+  | "providerCallIdMap"
+  | "provider"
+  | "config"
+  | "storePath"
+  | "transcriptWaiters"
+  | "maxDurationTimers"
 >;
 
 type ConversationContext = Pick<
@@ -178,6 +192,7 @@ export async function initiateCall(
       callId,
       phone: to,
       explicitSessionKey: sessionKey,
+      coreSession: ctx.coreSession,
     }),
     startedAt: Date.now(),
     transcript: [],
@@ -265,11 +280,18 @@ export async function speak(
   const { call, providerCallId, provider } = connected;
 
   try {
+    ensureMaxDurationTimerForLiveCall({
+      ctx,
+      call,
+      liveAt: Date.now(),
+      onTimeout: async (id) => {
+        await endCall(ctx, id, { reason: "timeout" });
+      },
+    });
     transitionState(call, "speaking");
     persistCallRecord(ctx.storePath, call);
 
-    const numberRouteKey =
-      typeof call.metadata?.numberRouteKey === "string" ? call.metadata.numberRouteKey : call.to;
+    const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
     const voice = resolvePreferredTtsVoice(
       resolveVoiceCallEffectiveConfig(ctx.config, numberRouteKey).config,
     );
@@ -380,14 +402,17 @@ export async function speakInitialMessage(
 
     if (mode === "notify") {
       const delaySec = ctx.config.outbound.notifyHangupDelaySec;
+      const delayMs = resolveVoiceCallSecondsTimerDelayMs(delaySec, 0);
       console.log(`[voice-call] Notify mode: auto-hangup in ${delaySec}s for call ${call.callId}`);
-      setTimeout(async () => {
-        const currentCall = ctx.activeCalls.get(call.callId);
-        if (currentCall && !TerminalStates.has(currentCall.state)) {
-          console.log(`[voice-call] Notify mode: hanging up call ${call.callId}`);
-          await endCall(ctx, call.callId);
-        }
-      }, delaySec * 1000);
+      setTimeout(() => {
+        void (async () => {
+          const currentCall = ctx.activeCalls.get(call.callId);
+          if (currentCall && !TerminalStates.has(currentCall.state)) {
+            console.log(`[voice-call] Notify mode: hanging up call ${call.callId}`);
+            await endCall(ctx, call.callId);
+          }
+        })();
+      }, delayMs);
     } else if (
       mode === "conversation" &&
       ctx.provider &&

@@ -1,3 +1,4 @@
+// Covers migration provider runtime hooks supplied by plugins.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRegistry } from "./registry-types.js";
@@ -225,7 +226,6 @@ describe("migration provider runtime", () => {
     expect(mocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
       config: cfg,
       env: process.env,
-      preferPersisted: false,
     });
     const manifestParams = requireMockCallArg(
       mocks.loadPluginManifestRegistry,
@@ -288,7 +288,6 @@ describe("migration provider runtime", () => {
     expect(mocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
       config: {},
       env: process.env,
-      preferPersisted: false,
       workspaceDir: undefined,
     });
     const manifestParams = requireMockCallArg(

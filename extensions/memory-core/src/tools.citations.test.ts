@@ -1,5 +1,5 @@
+// Memory Core tests cover tools.citations plugin behavior.
 import fs from "node:fs/promises";
-import path from "node:path";
 import {
   clearMemoryPluginState,
   registerMemoryCorpusSupplement,
@@ -7,7 +7,9 @@ import {
 import { readMemoryHostEvents } from "openclaw/plugin-sdk/memory-host-events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getMemoryCloseMockCalls,
   getMemorySearchManagerMockCalls,
+  getMemorySearchManagerMockParams,
   getReadAgentMemoryFileMockCalls,
   resetMemoryToolMockState,
   setMemoryBackend,
@@ -15,8 +17,10 @@ import {
   setMemorySearchImpl,
   setMemoryWorkspaceDir,
   type MemoryReadParams,
-} from "./memory-tool-manager-mock.js";
+} from "./memory-tool-manager.test-mocks.js";
+import { testing as shortTermPromotionTesting } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
+import { testing as memoryToolsTesting } from "./tools.js";
 import {
   asOpenClawConfig,
   createAutoCitationsMemorySearchTool,
@@ -38,7 +42,7 @@ function collectWikiResultPaths(results: readonly { corpus: string; path: string
   return paths;
 }
 
-async function waitFor<T>(task: () => Promise<T>, timeoutMs: number = 1500): Promise<T> {
+async function waitFor<T>(task: () => Promise<T>, timeoutMs = 1500): Promise<T> {
   let value: T | undefined;
   await vi.waitFor(
     async () => {
@@ -51,6 +55,7 @@ async function waitFor<T>(task: () => Promise<T>, timeoutMs: number = 1500): Pro
 
 beforeEach(() => {
   clearMemoryPluginState();
+  memoryToolsTesting.resetMemorySearchToolCooldowns();
   resetMemoryToolMockState({
     backend: "builtin",
     searchImpl: async () => [
@@ -157,6 +162,47 @@ describe("memory tools", () => {
       warning: "Memory search is unavailable because the embedding provider quota is exhausted.",
       action: "Top up or switch embedding provider, then retry memory_search.",
     });
+  });
+
+  it("uses default memory manager mode for shared memory_search", async () => {
+    setMemoryBackend("qmd");
+    const tool = createMemorySearchToolOrThrow({
+      config: asOpenClawConfig({
+        memory: { backend: "qmd", qmd: { command: "qmd" } },
+        agents: { list: [{ id: "main", default: true }] },
+      }),
+    });
+
+    await tool.execute("call_default_purpose", { query: "contact phrase" });
+
+    expect(getMemorySearchManagerMockParams()).toEqual([
+      expect.objectContaining({
+        agentId: "main",
+        purpose: undefined,
+      }),
+    ]);
+    expect(getMemoryCloseMockCalls()).toBe(0);
+  });
+
+  it("uses one-shot CLI memory manager mode for explicit local CLI memory_search", async () => {
+    setMemoryBackend("qmd");
+    const tool = createMemorySearchToolOrThrow({
+      config: asOpenClawConfig({
+        memory: { backend: "qmd", qmd: { command: "qmd" } },
+        agents: { list: [{ id: "main", default: true }] },
+      }),
+      oneShotCliRun: true,
+    });
+
+    await tool.execute("call_cli_purpose", { query: "contact phrase" });
+
+    expect(getMemorySearchManagerMockParams()).toEqual([
+      expect.objectContaining({
+        agentId: "main",
+        purpose: "cli",
+      }),
+    ]);
+    expect(getMemoryCloseMockCalls()).toBe(1);
   });
 
   it("returns disabled details when memory_get fails", async () => {
@@ -280,13 +326,15 @@ describe("memory tools", () => {
       });
       await tool.execute("call_recall_persist", { query: "glacier backup" });
 
-      const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");
-      const storeRaw = await waitFor(async () => await fs.readFile(storePath, "utf-8"));
-      const store = JSON.parse(storeRaw) as {
-        entries?: Record<string, { path: string; recallCount: number }>;
-      };
-      const entries = Object.values(store.entries ?? {});
-      expect(entries).toHaveLength(1);
+      const entries = await waitFor(async () => {
+        const store = await shortTermPromotionTesting.readRecallStore(
+          workspaceDir,
+          new Date().toISOString(),
+        );
+        const values = Object.values(store.entries);
+        expect(values).toHaveLength(1);
+        return values;
+      });
       const entry = entries[0];
       expect(entry?.path).toBe("memory/2026-04-03.md");
       expect(entry?.recallCount).toBe(1);
@@ -445,6 +493,105 @@ describe("memory tools", () => {
       ["memory", "MEMORY.md"],
     ]);
     expect(getMemorySearchManagerMockCalls()).toBe(1);
+  });
+
+  it("does not cooldown primary memory when a corpus=all wiki supplement stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      let searchCalls = 0;
+      setMemorySearchImpl(async () => {
+        searchCalls += 1;
+        return [
+          {
+            path: "MEMORY.md",
+            startLine: 5,
+            endLine: 7,
+            score: 0.9,
+            snippet: "@@ -5,3 @@\nAssistant: noted",
+            source: "memory" as const,
+          },
+        ];
+      });
+      registerMemoryCorpusSupplement("memory-wiki", {
+        search: async () => await new Promise(() => {}),
+        get: async () => null,
+      });
+
+      const tool = createMemorySearchToolOrThrow();
+      const stalledAllResultPromise = tool.execute("call_all_stalled_wiki", {
+        query: "alpha",
+        corpus: "all",
+      });
+      await vi.advanceTimersByTimeAsync(15_000);
+      const stalledAllResult = await stalledAllResultPromise;
+      expectUnavailableMemorySearchDetails(stalledAllResult.details, {
+        error: "memory_search timed out after 15s",
+        warning: "Memory search is unavailable due to an embedding/provider error.",
+        action: "Check embedding provider configuration and retry memory_search.",
+      });
+
+      const memoryResult = await tool.execute("call_memory_after_stalled_wiki", {
+        query: "alpha",
+      });
+      const details = memoryResult.details as { results: Array<{ corpus: string; path: string }> };
+      expect(details.results.map((entry) => [entry.corpus, entry.path])).toEqual([
+        ["memory", "MEMORY.md"],
+      ]);
+      expect(searchCalls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cooldowns primary memory when corpus=all memory search stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      let searchCalls = 0;
+      setMemorySearchImpl(async () => {
+        searchCalls += 1;
+        return await new Promise(() => {});
+      });
+      registerMemoryCorpusSupplement("memory-wiki", {
+        search: async () => [
+          {
+            corpus: "wiki",
+            path: "entities/alpha.md",
+            title: "Alpha",
+            kind: "entity",
+            score: 4,
+            snippet: "Alpha wiki entry",
+          },
+        ],
+        get: async () => null,
+      });
+
+      const tool = createMemorySearchToolOrThrow();
+      const stalledAllResultPromise = tool.execute("call_all_stalled_memory", {
+        query: "alpha",
+        corpus: "all",
+      });
+      await vi.advanceTimersByTimeAsync(15_000);
+      const stalledAllResult = await stalledAllResultPromise;
+      expectUnavailableMemorySearchDetails(stalledAllResult.details, {
+        error: "memory_search timed out after 15s",
+        warning: "Memory search is unavailable due to an embedding/provider error.",
+        action: "Check embedding provider configuration and retry memory_search.",
+      });
+
+      const wikiOnlyResult = await tool.execute("call_all_after_stalled_memory", {
+        query: "alpha",
+        corpus: "all",
+      });
+      const details = wikiOnlyResult.details as {
+        results: Array<{ corpus: string; path: string }>;
+      };
+      expect(details.results.map((entry) => [entry.corpus, entry.path])).toEqual([
+        ["wiki", "entities/alpha.md"],
+      ]);
+      expect(searchCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("falls back to a wiki corpus supplement for memory_get corpus=all", async () => {

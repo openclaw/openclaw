@@ -1,5 +1,6 @@
+// Policy tests cover policy state plugin behavior.
 import { describe, expect, it } from "vitest";
-import { scanPolicyChannels, scanPolicyTools } from "./policy-state.js";
+import { scanPolicyChannels, scanPolicyExecApprovals, scanPolicyTools } from "./policy-state.js";
 
 describe("scanPolicyChannels", () => {
   it("ignores reserved channel config namespaces", () => {
@@ -80,6 +81,126 @@ describe("scanPolicyTools", () => {
         risk: "critical",
         owner: "ops",
       },
+    ]);
+  });
+});
+
+describe("scanPolicyExecApprovals", () => {
+  it("scans redacted exec approvals posture and allowlist metadata", () => {
+    const evidence = scanPolicyExecApprovals(
+      JSON.stringify({
+        version: 1,
+        socket: { path: "/tmp/openclaw.sock", token: "secret-token" },
+        defaults: { security: "full", ask: "off", askFallback: "full", autoAllowSkills: true },
+        agents: {
+          sebby: {
+            security: "allowlist",
+            ask: "on-miss",
+            allowlist: [
+              {
+                pattern: "deploy",
+                argPattern: "^--prod$",
+                source: "allow-always",
+                commandText: "deploy --prod",
+                lastUsedCommand: "deploy --prod",
+              },
+              {
+                pattern: "inspect",
+                source: "free-form text that must not leak",
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(evidence).toEqual([
+      expect.objectContaining({
+        id: "defaults",
+        kind: "defaults",
+        security: "full",
+        autoAllowSkills: true,
+      }),
+      expect.objectContaining({
+        id: "agent:sebby",
+        kind: "agent",
+        agentId: "sebby",
+        security: "allowlist",
+        ask: "on-miss",
+      }),
+      expect.objectContaining({
+        id: "agent:sebby:allowlist:0",
+        kind: "allowlist",
+        agentId: "sebby",
+        pattern: "deploy",
+        argPattern: "^--prod$",
+        entrySource: "allow-always",
+      }),
+      expect.not.objectContaining({
+        entrySource: "free-form text that must not leak",
+      }),
+    ]);
+    expect(JSON.stringify(evidence)).not.toContain("secret-token");
+    expect(JSON.stringify(evidence)).not.toContain("deploy --prod");
+    expect(JSON.stringify(evidence)).not.toContain("free-form text that must not leak");
+  });
+
+  it("omits malformed exec approval mode fields", () => {
+    expect(
+      scanPolicyExecApprovals(
+        JSON.stringify({
+          version: 1,
+          defaults: { security: "bogus", ask: "bad", askFallback: "nope" },
+          agents: {
+            sebby: { security: "bogus", ask: "bad", askFallback: "nope" },
+          },
+        }),
+      ),
+    ).toEqual([
+      expect.not.objectContaining({ security: expect.any(String) }),
+      expect.not.objectContaining({ security: expect.any(String) }),
+    ]);
+  });
+
+  it("normalizes legacy default agents and string allowlist entries", () => {
+    expect(
+      scanPolicyExecApprovals(
+        JSON.stringify({
+          version: 1,
+          agents: {
+            default: {
+              security: "allowlist",
+              allowlist: ["legacy", { pattern: "doctor" }],
+            },
+          },
+        }),
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        id: "defaults",
+        kind: "defaults",
+      }),
+      expect.objectContaining({
+        id: "agent:main",
+        kind: "agent",
+        agentId: "main",
+        security: "allowlist",
+        source: "oc://exec-approvals.json/agents/default",
+      }),
+      expect.objectContaining({
+        id: "agent:main:allowlist:0",
+        kind: "allowlist",
+        agentId: "main",
+        pattern: "legacy",
+        source: "oc://exec-approvals.json/agents/default/allowlist/#0",
+      }),
+      expect.objectContaining({
+        id: "agent:main:allowlist:1",
+        kind: "allowlist",
+        agentId: "main",
+        pattern: "doctor",
+        source: "oc://exec-approvals.json/agents/default/allowlist/#1",
+      }),
     ]);
   });
 });

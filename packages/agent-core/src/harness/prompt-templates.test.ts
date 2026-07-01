@@ -1,7 +1,17 @@
+// Agent Core tests cover prompt templates behavior.
 import { describe, expect, it } from "vitest";
-import { substituteArgs } from "./prompt-templates.js";
+import { parseCommandArgs, substituteArgs } from "./prompt-template-arguments.js";
 
 describe("prompt template argument substitution", () => {
+  it("parses quoted and multiline arguments", () => {
+    expect(parseCommandArgs(`alpha "beta gamma"\ndelta 'echo one two'`)).toEqual([
+      "alpha",
+      "beta gamma",
+      "delta",
+      "echo one two",
+    ]);
+  });
+
   it("rejects unsafe positional placeholders", () => {
     expect(substituteArgs("$9007199254740992", ["first", "second"])).toBe("");
   });

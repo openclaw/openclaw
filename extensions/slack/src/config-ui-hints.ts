@@ -1,3 +1,4 @@
+// Slack helper module supports config ui hints behavior.
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const slackChannelConfigUiHints = {
@@ -16,6 +17,22 @@ export const slackChannelConfigUiHints = {
   configWrites: {
     label: "Slack Config Writes",
     help: "Allow Slack to write config in response to channel events/commands (default: true).",
+  },
+  mentionPatterns: {
+    label: "Slack Mention Pattern Policy",
+    help: "Scopes configured groupChat mentionPatterns to selected Slack channel IDs. Native Slack @mentions still trigger even when regex patterns are denied.",
+  },
+  "mentionPatterns.mode": {
+    label: "Slack Mention Pattern Mode",
+    help: '"allow" enables configured regex mention patterns unless denyIn matches; "deny" disables them unless allowIn matches.',
+  },
+  "mentionPatterns.allowIn": {
+    label: "Slack Mention Pattern Allowlist",
+    help: "Slack channel IDs where configured regex mention patterns are enabled when mode is deny.",
+  },
+  "mentionPatterns.denyIn": {
+    label: "Slack Mention Pattern Denylist",
+    help: "Slack channel IDs where configured regex mention patterns are disabled. Native @mentions still trigger.",
   },
   "commands.native": {
     label: "Slack Native Commands",
@@ -64,6 +81,22 @@ export const slackChannelConfigUiHints = {
   "socketMode.pingPongLoggingEnabled": {
     label: "Slack Socket Mode Ping/Pong Logging",
     help: "Enable Slack SDK ping/pong transport logs while debugging Socket Mode websocket health.",
+  },
+  relay: {
+    label: "Slack Relay Mode",
+    help: 'Relay-delivered Slack events. Use with mode="relay" when openclaw-slack-router owns the Slack Socket Mode connection.',
+  },
+  "relay.url": {
+    label: "Slack Relay URL",
+    help: "Full websocket URL for openclaw-slack-router. Include the route path, for example ws://127.0.0.1:8081/gateway/ws.",
+  },
+  "relay.authToken": {
+    label: "Slack Relay Auth Token",
+    help: "Bearer token used by this gateway to authenticate its reverse websocket connection to openclaw-slack-router.",
+  },
+  "relay.gatewayId": {
+    label: "Slack Relay Gateway ID",
+    help: "Destination id that openclaw-slack-router uses when routing user-group mentions to this gateway.",
   },
   botToken: {
     label: "Slack Bot Token",

@@ -1,3 +1,4 @@
+// Diagnostic stability tests cover stable diagnostic output under repeated events.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   emitDiagnosticEvent,
@@ -69,7 +70,9 @@ describe("diagnostic stability recorder", () => {
       durationMs: 12,
       byteLength: 345,
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
 
@@ -139,6 +142,30 @@ describe("diagnostic stability recorder", () => {
       outcome: "error",
     });
     expect(snapshot.events[1]).not.toHaveProperty("reason");
+  });
+
+  it("records exec approval followup suppression metadata", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "exec.approval.followup_suppressed",
+      approvalId: "approval-123",
+      reason: "session_rebound",
+      phase: "direct_delivery",
+    });
+
+    await waitForDiagnosticEventsDrained();
+
+    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
+    expectFields(snapshot.summary.byType, {
+      "exec.approval.followup_suppressed": 1,
+    });
+    expectFields(snapshot.events[0], {
+      type: "exec.approval.followup_suppressed",
+      approvalId: "approval-123",
+      reason: "session_rebound",
+      phase: "direct_delivery",
+    });
   });
 
   it("summarizes inbound delivery proof events without message content", () => {
@@ -237,7 +264,9 @@ describe("diagnostic stability recorder", () => {
       contextTokenBudget: 200_000,
       reserveTokens: 20_000,
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
 
@@ -284,7 +313,9 @@ describe("diagnostic stability recorder", () => {
         arrayBuffersBytes: 10,
       },
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
 
@@ -427,7 +458,9 @@ describe("diagnostic stability recorder", () => {
       });
     }
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     const midDrainSnapshot = getDiagnosticStabilitySnapshot({ limit: 1000 });
     expect(midDrainSnapshot.lastSeq).toBe(100);

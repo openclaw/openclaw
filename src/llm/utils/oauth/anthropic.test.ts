@@ -1,3 +1,4 @@
+// Anthropic OAuth tests cover token exchange and refresh behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { anthropicOAuthProvider, refreshAnthropicToken } from "./anthropic.js";
 
@@ -60,5 +61,44 @@ describe("Anthropic OAuth token responses", () => {
       expect(message).not.toContain("refresh_token");
       expect(message).toContain("bodyBytes=");
     }
+  });
+
+  it("rejects unsafe token lifetimes from refresh responses", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            '{"access_token":"new-access-token","refresh_token":"new-refresh-token","expires_in":1e309}',
+            { status: 200 },
+          ),
+      ),
+    );
+
+    await expect(refreshAnthropicToken("old-refresh-token")).rejects.toThrow(
+      "Anthropic token refresh returned invalid token fields.",
+    );
+  });
+
+  it("rejects an oversized Anthropic token refresh response", async () => {
+    let pullCount = 0;
+    const cancel = vi.fn(async () => undefined);
+    const oversizedStream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pullCount += 1;
+        controller.enqueue(new Uint8Array(pullCount === 1 ? 16 * 1024 * 1024 + 1 : 1));
+      },
+      cancel,
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(oversizedStream, { status: 200 })),
+    );
+
+    await expect(refreshAnthropicToken("old-refresh-token")).rejects.toThrow("too large");
+
+    expect(pullCount).toBeLessThanOrEqual(2);
+    expect(cancel).toHaveBeenCalledOnce();
   });
 });

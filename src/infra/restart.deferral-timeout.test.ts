@@ -1,3 +1,4 @@
+// Tests restart deferral timeout behavior and fallback cleanup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   testing,
@@ -64,6 +65,23 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     // Advance past 2 minutes
     vi.advanceTimersByTime(1);
     expect(hooks.onTimeout).toHaveBeenCalledOnce();
+  });
+
+  it("clamps oversized poll intervals instead of polling immediately", () => {
+    const hooks: RestartDeferralHooks = {
+      onReady: vi.fn(),
+    };
+    let pending = 1;
+
+    deferGatewayRestartUntilIdle({
+      getPendingCount: () => pending,
+      pollMs: Number.MAX_SAFE_INTEGER,
+      hooks,
+    });
+
+    pending = 0;
+    vi.advanceTimersByTime(1);
+    expect(hooks.onReady).not.toHaveBeenCalled();
   });
 
   it("carries timeout restart intent when the deferral budget is exhausted", () => {

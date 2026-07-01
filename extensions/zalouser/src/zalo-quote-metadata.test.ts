@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
+// Zalouser tests cover zalo quote metadata plugin behavior.
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { __testing as zaloTesting } from "./zalo-js.js";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("Zalo quote metadata extraction (#86851)", () => {
   it("extracts quote id, owner, and body from zca-js message data", () => {
@@ -41,5 +46,61 @@ describe("Zalo quote metadata extraction (#86851)", () => {
     expect(message?.quotedGlobalMsgId).toBeUndefined();
     expect(message?.quotedOwnerId).toBeUndefined();
     expect(message?.quotedBody).toBeUndefined();
+  });
+});
+
+describe("Zalo inbound timestamp normalization", () => {
+  function inboundTimestamp(ts: unknown): number | undefined {
+    return zaloTesting.toInboundMessage({
+      type: 0,
+      data: {
+        uidFrom: "123456789",
+        idTo: "987654321",
+        content: "plain message",
+        ts,
+      },
+    } as unknown as Parameters<typeof zaloTesting.toInboundMessage>[0])?.timestampMs;
+  }
+
+  it("normalizes second and millisecond timestamps", () => {
+    expect(inboundTimestamp(1_764_000_000)).toBe(1_764_000_000_000);
+    expect(inboundTimestamp("1764000000.5")).toBe(1_764_000_000_500);
+    expect(inboundTimestamp(1_764_000_000_000)).toBe(1_764_000_000_000);
+  });
+
+  it("falls back for partial or unsafe timestamps", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_700_000_000_000);
+
+    expect(inboundTimestamp("1764000000abc")).toBe(1_700_000_000_000);
+    expect(inboundTimestamp("9007199254740993")).toBe(1_700_000_000_000);
+    expect(inboundTimestamp(8_640_000_000_000_001)).toBe(1_700_000_000_000);
+  });
+});
+
+describe("Zalo group context cache", () => {
+  afterEach(() => {
+    zaloTesting.clearCachedGroupContext("cache-profile");
+  });
+
+  it("drops cached group context when the current clock is invalid", () => {
+    zaloTesting.writeCachedGroupContext("cache-profile", {
+      groupId: "group-invalid-clock",
+      name: "Cached",
+    });
+    vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+
+    expect(zaloTesting.readCachedGroupContext("cache-profile", "group-invalid-clock")).toBeNull();
+  });
+
+  it("does not cache group context when ttl expiry exceeds the Date range", () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+
+    zaloTesting.writeCachedGroupContext("cache-profile", {
+      groupId: "group-overflow",
+      name: "Overflow",
+    });
+
+    expect(zaloTesting.readCachedGroupContext("cache-profile", "group-overflow")).toBeNull();
   });
 });

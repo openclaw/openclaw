@@ -1,3 +1,4 @@
+// Memory Wiki plugin module implements bridge behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -18,6 +19,7 @@ import {
 import { writeImportedSourcePage } from "./source-page-shared.js";
 import { resolveArtifactKey } from "./source-path-shared.js";
 import {
+  assertMemoryWikiSourceSyncStateCapacity,
   pruneImportedSourceEntries,
   readMemoryWikiSourceSyncState,
   writeMemoryWikiSourceSyncState,
@@ -62,14 +64,19 @@ function shouldImportArtifact(
 
 async function collectBridgeArtifacts(
   bridgeConfig: ResolvedMemoryWikiConfig["bridge"],
+  vaultRoot: string,
   artifacts: MemoryPluginPublicArtifact[],
 ): Promise<BridgeArtifact[]> {
   const collected: BridgeArtifact[] = [];
+  const vaultRootKey = await resolveArtifactKey(vaultRoot);
   for (const artifact of artifacts) {
     if (!shouldImportArtifact(artifact, bridgeConfig)) {
       continue;
     }
     const syncKey = await resolveArtifactKey(artifact.absolutePath);
+    if (isPathInsideOrEqual(vaultRootKey, syncKey)) {
+      continue;
+    }
     collected.push({
       syncKey,
       artifactType: artifact.kind === "event-log" ? "memory-events" : "markdown",
@@ -83,6 +90,14 @@ async function collectBridgeArtifacts(
     deduped.set(artifact.syncKey, artifact);
   }
   return [...deduped.values()];
+}
+
+function isPathInsideOrEqual(parentPath: string, candidatePath: string): boolean {
+  const relative = path.relative(parentPath, candidatePath);
+  return (
+    relative === "" ||
+    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+  );
 }
 
 function resolveBridgeTitle(artifact: BridgeArtifact, agentIds: string[]): string {
@@ -223,16 +238,24 @@ export async function syncMemoryWikiBridgeSources(params: {
   }
 
   const publicArtifacts = await listActiveMemoryPublicArtifacts({ cfg: params.appConfig });
-  const state = await readMemoryWikiSourceSyncState(params.config.vault.path);
   const results: Array<{ pagePath: string; changed: boolean; created: boolean }> = [];
-  let artifactCount = 0;
   const activeKeys = new Set<string>();
-  const artifacts = await collectBridgeArtifacts(params.config.bridge, publicArtifacts);
+  const artifacts = await collectBridgeArtifacts(
+    params.config.bridge,
+    params.config.vault.path,
+    publicArtifacts,
+  );
+  const state = await readMemoryWikiSourceSyncState(params.config.vault.path);
+  assertMemoryWikiSourceSyncStateCapacity({
+    state,
+    group: "bridge",
+    incomingCount: artifacts.length,
+  });
   const agentIdsByWorkspace = new Map<string, string[]>();
   for (const artifact of publicArtifacts) {
     agentIdsByWorkspace.set(artifact.workspaceDir, artifact.agentIds);
   }
-  artifactCount = artifacts.length;
+  const artifactCount = artifacts.length;
   for (const artifact of artifacts) {
     const stats = await fs.stat(artifact.absolutePath);
     activeKeys.add(artifact.syncKey);

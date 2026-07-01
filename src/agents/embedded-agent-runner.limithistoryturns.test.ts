@@ -1,3 +1,4 @@
+// Covers limiting persisted history by recent user turns.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it } from "vitest";
 import { limitHistoryTurns } from "./embedded-agent-runner/history.js";
@@ -50,6 +51,8 @@ describe("limitHistoryTurns", () => {
     }) as AgentMessage;
 
   const firstText = (message: AgentMessage): string | undefined => {
+    // Tests only inspect visible text; helper hides provider-specific content
+    // block shapes.
     if (!("content" in message)) {
       return undefined;
     }
@@ -106,6 +109,8 @@ describe("limitHistoryTurns", () => {
   });
 
   it("handles messages with multiple assistant responses per user turn", () => {
+    // The limit is counted by user turns, so only the assistant tail attached to
+    // the kept user turn should remain.
     const messages = makeMessages(["user", "assistant", "assistant", "user", "assistant"]);
     const limited = limitHistoryTurns(messages, 1);
     expect(limited.length).toBe(2);
@@ -113,7 +118,52 @@ describe("limitHistoryTurns", () => {
     expect(limited[1].role).toBe("assistant");
   });
 
+  it("preserves leading compactionSummary when limiting", () => {
+    const compactionSummary: AgentMessage = {
+      role: "compactionSummary",
+      summary: "Previous conversation about topic X",
+      tokensBefore: 5000,
+      tokensAfter: 2000,
+      timestamp: Date.now(),
+    } as AgentMessage;
+    const messages = [
+      compactionSummary,
+      ...makeMessages(["user", "assistant", "user", "assistant"]),
+    ];
+    const limited = limitHistoryTurns(messages, 1);
+    // compactionSummary is preserved, last 1 user turn + assistant kept
+    expect(limited.length).toBe(3);
+    expect(limited[0].role).toBe("compactionSummary");
+    expect(firstText(limited[1])).toBe("message 2");
+  });
+
+  it("preserves leading branchSummary when limiting", () => {
+    const branchSummary: AgentMessage = {
+      role: "branchSummary",
+      summary: "Branch context",
+      fromId: "abc",
+      timestamp: Date.now(),
+    } as AgentMessage;
+    const messages = [branchSummary, ...makeMessages(["user", "assistant", "user", "assistant"])];
+    const limited = limitHistoryTurns(messages, 1);
+    expect(limited.length).toBe(3);
+    expect(limited[0].role).toBe("branchSummary");
+  });
+
+  it("returns all when only non-conversation messages exist", () => {
+    const compactionSummary: AgentMessage = {
+      role: "compactionSummary",
+      summary: "Summary only",
+      tokensBefore: 1000,
+      timestamp: Date.now(),
+    } as AgentMessage;
+    const limited = limitHistoryTurns([compactionSummary], 2);
+    expect(limited).toHaveLength(1);
+    expect(limited[0].role).toBe("compactionSummary");
+  });
+
   it("preserves message content integrity", () => {
+    // Limiting should slice whole turns, not mutate tool calls or message bodies.
     const messages: AgentMessage[] = [
       userMessage("first"),
       assistantToolCallMessage("1"),

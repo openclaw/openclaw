@@ -1,8 +1,10 @@
+// Covers Windows scheduled-task gateway restart script generation.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv } from "../test-utils/env.js";
+import { getWindowsCmdExePath } from "./windows-install-roots.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
 const resolvePreferredOpenClawTmpDirMock = vi.hoisted(() => vi.fn(() => os.tmpdir()));
@@ -99,13 +101,14 @@ describe("relaunchGatewayScheduledTask", () => {
     });
 
     const result = relaunchGatewayScheduledTask({ OPENCLAW_PROFILE: "work" });
+    const cmdExePath = getWindowsCmdExePath();
 
     expect(result.ok).toBe(true);
     expect(result.method).toBe("schtasks");
     expect(result.tried).toContain('schtasks /Run /TN "OpenClaw Gateway (work)"');
-    expect(result.tried).toContain(`cmd.exe /d /s /c ${seenCommandArg}`);
+    expect(result.tried).toContain(`${cmdExePath} /d /s /c ${seenCommandArg}`);
     const spawnCall = requireFirstMockCall(spawnMock, "restart helper spawn");
-    expect(spawnCall[0]).toBe("cmd.exe");
+    expect(spawnCall[0]).toBe(cmdExePath);
     expect(spawnCall[1]).toStrictEqual(["/d", "/s", "/c", seenCommandArg]);
     expect(spawnCall[2]).toStrictEqual({
       detached: true,
@@ -199,7 +202,7 @@ describe("relaunchGatewayScheduledTask", () => {
     if (typeof commandArg !== "string") {
       throw new Error("expected quoted restart helper path");
     }
-    expect(spawnCall[0]).toBe("cmd.exe");
+    expect(spawnCall[0]).toBe(getWindowsCmdExePath());
     expect(commandArgs).toStrictEqual(["/d", "/s", "/c", commandArg]);
     expect(commandArg.startsWith('"')).toBe(true);
     expect(commandArg.endsWith('"')).toBe(true);
@@ -230,7 +233,7 @@ describe("relaunchGatewayScheduledTask", () => {
     const script = fs.readFileSync(scriptPath, "utf8");
     expect(script).toContain(`schtasks /Query /TN`);
     expect(script).toContain(":fallback");
-    expect(script).toContain(`start "" /min cmd.exe /d /c`);
+    expect(script).toContain(`start "" /min ${getWindowsCmdExePath()} /d /c`);
     expect(script).toContain(taskScriptPath);
   });
 });

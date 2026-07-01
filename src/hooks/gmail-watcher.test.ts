@@ -1,3 +1,4 @@
+// Gmail watcher tests cover watcher events and Gmail hook message flow.
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -16,7 +17,7 @@ vi.mock("node:child_process", async () => {
   );
 });
 
-vi.mock("../agents/skills.js", () => ({
+vi.mock("../skills/loading/config.js", () => ({
   hasBinary: mocks.hasBinary,
 }));
 

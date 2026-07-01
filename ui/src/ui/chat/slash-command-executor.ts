@@ -4,11 +4,16 @@
  */
 
 import {
+  formatFastModeCommandOptions,
+  formatFastModeCurrentStatus,
+} from "../../../../src/shared/fast-mode.js";
+import {
   createChatModelOverride,
   resolvePreferredServerChatModelValue,
 } from "../chat-model-ref.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import { DEFAULT_AGENT_ID, DEFAULT_MAIN_KEY, parseAgentSessionKey } from "../session-key.ts";
+import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -23,26 +28,20 @@ import type {
   ChatModelOverride,
   GatewaySessionRow,
   GatewayThinkingLevelOption,
+  FastMode,
   ModelCatalogEntry,
   SessionsListResult,
   SessionsPatchResult,
 } from "../types.ts";
 import { generateUUID } from "../uuid.ts";
 import { SLASH_COMMANDS } from "./slash-commands.ts";
+import { formatCompactTokenCount } from "./token-format.ts";
 
 export type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */
   content: string;
   /** Side-effect action the caller should perform after displaying the result. */
-  action?:
-    | "refresh"
-    | "export"
-    | "new-session"
-    | "reset"
-    | "stop"
-    | "clear"
-    | "toggle-focus"
-    | "navigate-usage";
+  action?: "refresh" | "export" | "new-session" | "reset" | "stop" | "clear" | "navigate-usage";
   /** Optional session-level directive changes that the caller should mirror locally. */
   sessionPatch?: {
     modelOverride?: ChatModelOverride | null;
@@ -57,6 +56,7 @@ export type SlashCommandContext = {
   chatModelCatalog?: ModelCatalogEntry[];
   modelCatalog?: ModelCatalogEntry[];
   sessionsResult?: SessionsListResult | null;
+  agentId?: string;
 };
 
 function normalizeVerboseLevel(raw?: string | null): "off" | "on" | "full" | undefined {
@@ -102,18 +102,16 @@ export async function executeSlashCommand(
       return { content: "Stopping current run...", action: "stop" };
     case "clear":
       return { content: "Chat history cleared.", action: "clear" };
-    case "focus":
-      return { content: "Toggled focus mode.", action: "toggle-focus" };
     case "compact":
-      return await executeCompact(client, sessionKey);
+      return await executeCompact(client, sessionKey, context);
     case "model":
       return await executeModel(client, sessionKey, args, context);
     case "think":
-      return await executeThink(client, sessionKey, args);
+      return await executeThink(client, sessionKey, args, context);
     case "fast":
-      return await executeFast(client, sessionKey, args);
+      return await executeFast(client, sessionKey, args, context);
     case "verbose":
-      return await executeVerbose(client, sessionKey, args);
+      return await executeVerbose(client, sessionKey, args, context);
     case "export-session":
       return { content: "Exporting session...", action: "export" };
     case "usage":
@@ -123,7 +121,7 @@ export async function executeSlashCommand(
     case "steer":
       return await executeSteer(client, sessionKey, args, context);
     case "redirect":
-      return await executeRedirect(client, sessionKey, args);
+      return await executeRedirect(client, sessionKey, args, context);
     default:
       return { content: `Unknown command: \`/${commandName}\`` };
   }
@@ -153,13 +151,14 @@ function executeHelp(): SlashCommandResult {
 async function executeCompact(
   client: GatewayBrowserClient,
   sessionKey: string,
+  context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   try {
     const result = await client.request<{
       compacted?: boolean;
       reason?: string;
       result?: { tokensBefore?: number; tokensAfter?: number };
-    }>("sessions.compact", { key: sessionKey });
+    }>("sessions.compact", { key: sessionKey, ...selectedGlobalScope(sessionKey, context) });
     if (result?.compacted) {
       const before = result.result?.tokensBefore;
       const after = result.result?.tokensAfter;
@@ -214,6 +213,7 @@ async function executeModel(
     const [patched, resolvedModelCatalog] = await Promise.all([
       client.request<SessionsPatchResult>("sessions.patch", {
         key: sessionKey,
+        ...selectedGlobalScope(sessionKey, context),
         model: requestedModel,
       }),
       modelCatalog
@@ -251,6 +251,7 @@ async function executeThink(
   client: GatewayBrowserClient,
   sessionKey: string,
   args: string,
+  context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   const rawLevel = args.trim();
 
@@ -270,7 +271,11 @@ async function executeThink(
 
   if (isSessionDefaultDirectiveValue(rawLevel)) {
     try {
-      await client.request("sessions.patch", { key: sessionKey, thinkingLevel: null });
+      await client.request("sessions.patch", {
+        key: sessionKey,
+        ...selectedGlobalScope(sessionKey, context),
+        thinkingLevel: null,
+      });
       return {
         content: "Thinking level reset to default.",
         action: "refresh",
@@ -293,7 +298,11 @@ async function executeThink(
         content: `Unsupported thinking level "${rawLevel}" for this model. Valid levels: ${formatThinkingCommandOptionsForSession(session, defaults)}.`,
       };
     }
-    await client.request("sessions.patch", { key: sessionKey, thinkingLevel: level });
+    await client.request("sessions.patch", {
+      key: sessionKey,
+      ...selectedGlobalScope(sessionKey, context),
+      thinkingLevel: level,
+    });
     return {
       content: `Thinking level set to **${level}**.`,
       action: "refresh",
@@ -307,6 +316,7 @@ async function executeVerbose(
   client: GatewayBrowserClient,
   sessionKey: string,
   args: string,
+  context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   const rawLevel = args.trim();
 
@@ -332,7 +342,11 @@ async function executeVerbose(
   }
 
   try {
-    await client.request("sessions.patch", { key: sessionKey, verboseLevel: level });
+    await client.request("sessions.patch", {
+      key: sessionKey,
+      ...selectedGlobalScope(sessionKey, context),
+      verboseLevel: level,
+    });
     return {
       content: `Verbose mode set to **${level}**.`,
       action: "refresh",
@@ -342,10 +356,24 @@ async function executeVerbose(
   }
 }
 
+function normalizeFastMode(raw: string): FastMode | undefined {
+  if (raw === "auto") {
+    return "auto";
+  }
+  if (raw === "on") {
+    return true;
+  }
+  if (raw === "off") {
+    return false;
+  }
+  return undefined;
+}
+
 async function executeFast(
   client: GatewayBrowserClient,
   sessionKey: string,
   args: string,
+  context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   const rawMode = normalizeLowercaseStringOrEmpty(args);
 
@@ -354,8 +382,10 @@ async function executeFast(
       const session = await loadCurrentSession(client, sessionKey);
       return {
         content: formatDirectiveOptions(
-          `Current fast mode: ${resolveCurrentFastMode(session)}.`,
-          "status, on, off, default",
+          resolveCurrentFastModeStatus(session),
+          formatFastModeCommandOptions({
+            fastAutoOnSeconds: session?.fastAutoOnSeconds,
+          }),
         ),
       };
     } catch (err) {
@@ -365,7 +395,11 @@ async function executeFast(
 
   if (isSessionDefaultDirectiveValue(rawMode)) {
     try {
-      await client.request("sessions.patch", { key: sessionKey, fastMode: null });
+      await client.request("sessions.patch", {
+        key: sessionKey,
+        ...selectedGlobalScope(sessionKey, context),
+        fastMode: null,
+      });
       return {
         content: "Fast mode reset to default.",
         action: "refresh",
@@ -375,16 +409,24 @@ async function executeFast(
     }
   }
 
-  if (rawMode !== "on" && rawMode !== "off") {
+  const nextMode = normalizeFastMode(rawMode);
+  if (nextMode === undefined) {
     return {
-      content: `Unrecognized fast mode "${args.trim()}". Valid levels: status, on, off, default.`,
+      content: `Unrecognized fast mode "${args.trim()}". Valid levels: on, off, auto, default, status.`,
     };
   }
 
   try {
-    await client.request("sessions.patch", { key: sessionKey, fastMode: rawMode === "on" });
+    await client.request("sessions.patch", {
+      key: sessionKey,
+      ...selectedGlobalScope(sessionKey, context),
+      fastMode: nextMode,
+    });
     return {
-      content: `Fast mode ${rawMode === "on" ? "enabled" : "disabled"}.`,
+      content:
+        nextMode === "auto"
+          ? "Fast mode set to auto."
+          : `Fast mode ${nextMode ? "enabled" : "disabled"}.`,
       action: "refresh",
     };
   } catch (err) {
@@ -419,16 +461,16 @@ async function executeUsage(
     const totalDisplay =
       cumulativeTotal === null
         ? "n/a"
-        : `${totalTokensFresh ? "" : "~"}${fmtTokens(cumulativeTotal)}`;
+        : `${totalTokensFresh ? "" : "~"}${formatCompactTokenCount(cumulativeTotal)}`;
 
     const lines = [
       "**Session Usage**",
-      `Input: **${fmtTokens(input)}** tokens`,
-      `Output: **${fmtTokens(output)}** tokens`,
+      `Input: **${formatCompactTokenCount(input)}** tokens`,
+      `Output: **${formatCompactTokenCount(output)}** tokens`,
       `Total: **${totalDisplay}** tokens`,
     ];
     if (pct !== null) {
-      lines.push(`Context: **${pct}%** of ${fmtTokens(ctx)}`);
+      lines.push(`Context: **${pct}%** of ${formatCompactTokenCount(ctx)}`);
     }
     if (session.model) {
       lines.push(`Model: \`${session.model}\``);
@@ -464,11 +506,34 @@ function normalizeSessionKey(key?: string | null): string | undefined {
   return normalizeOptionalLowercaseString(key);
 }
 
+function selectedGlobalScope(
+  sessionKey: string,
+  context: SlashCommandContext,
+): { agentId?: string } {
+  const normalizedSessionKey = normalizeSessionKey(sessionKey);
+  const parsed = parseAgentSessionKey(normalizedSessionKey ?? "");
+  const aliasAgentId =
+    parsed &&
+    parsed.agentId !== DEFAULT_AGENT_ID &&
+    (parsed.rest === DEFAULT_MAIN_KEY || parsed.rest === "global")
+      ? parsed.agentId
+      : undefined;
+  const agentId = aliasAgentId ?? normalizeOptionalLowercaseString(context.agentId);
+  return (normalizedSessionKey === "global" || aliasAgentId) && agentId ? { agentId } : {};
+}
+
 function resolveEquivalentSessionKeys(
   currentSessionKey: string,
   currentAgentId: string | undefined,
 ): Set<string> {
   const keys = new Set<string>([currentSessionKey]);
+  if (currentAgentId && currentAgentId !== DEFAULT_AGENT_ID) {
+    const agentMainKey = `agent:${currentAgentId}:${DEFAULT_MAIN_KEY}`;
+    const agentGlobalKey = `agent:${currentAgentId}:global`;
+    if (currentSessionKey === agentMainKey || currentSessionKey === agentGlobalKey) {
+      keys.add("global");
+    }
+  }
   if (currentAgentId === DEFAULT_AGENT_ID) {
     const canonicalDefaultMain = `agent:${DEFAULT_AGENT_ID}:main`;
     if (currentSessionKey === DEFAULT_MAIN_KEY) {
@@ -538,17 +603,13 @@ function resolveThinkingLevelOptionsForSession(
   if (session?.thinkingLevels?.length) {
     return session.thinkingLevels;
   }
-  const sessionModelMatchesDefaults =
-    (!session?.modelProvider || session.modelProvider === defaults?.modelProvider) &&
-    (!session?.model || session.model === defaults?.model);
-  if (sessionModelMatchesDefaults && defaults?.thinkingLevels?.length) {
+  const matchesDefaults = sessionModelMatchesDefaults(session, defaults);
+  if (matchesDefaults && defaults?.thinkingLevels?.length) {
     return defaults.thinkingLevels;
   }
   const labels =
     (session?.thinkingOptions?.length ? session.thinkingOptions : null) ??
-    (sessionModelMatchesDefaults && defaults?.thinkingOptions?.length
-      ? defaults.thinkingOptions
-      : null) ??
+    (matchesDefaults && defaults?.thinkingOptions?.length ? defaults.thinkingOptions : null) ??
     formatThinkingLevels(
       session?.modelProvider ?? defaults?.modelProvider,
       session?.model ?? defaults?.model,
@@ -642,7 +703,7 @@ function resolveCurrentThinkingLevel(
   if (session?.thinkingDefault) {
     return session.thinkingDefault;
   }
-  if (defaults?.thinkingDefault) {
+  if ((!session || sessionModelMatchesDefaults(session, defaults)) && defaults?.thinkingDefault) {
     return defaults.thinkingDefault;
   }
   const provider = session?.modelProvider ?? defaults?.modelProvider;
@@ -657,8 +718,13 @@ function resolveCurrentThinkingLevel(
   });
 }
 
-function resolveCurrentFastMode(session: GatewaySessionRow | undefined): "on" | "off" {
-  return session?.fastMode === true ? "on" : "off";
+function resolveCurrentFastModeStatus(session: GatewaySessionRow | undefined): string {
+  const mode = session?.effectiveFastMode ?? session?.fastMode;
+  return formatFastModeCurrentStatus({
+    mode,
+    source: session?.effectiveFastModeSource,
+    fastAutoOnSeconds: session?.fastAutoOnSeconds,
+  });
 }
 
 async function resolveSteerTarget(
@@ -679,6 +745,38 @@ function isActiveSteerSession(session: GatewaySessionRow | undefined): boolean {
   return session?.status === "running" && session.endedAt == null;
 }
 
+type SteerChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
+
+function normalizeSteerChatSendAckStatus(payload: unknown): SteerChatSendAckStatus {
+  if (!payload || typeof payload !== "object") {
+    return "started";
+  }
+  const status = (payload as Record<string, unknown>).status;
+  return status === "in_flight" || status === "ok" || status === "timeout" || status === "error"
+    ? status
+    : "started";
+}
+
+function formatTerminalSteerAckContent(status: SteerChatSendAckStatus): string | undefined {
+  if (status === "timeout") {
+    return "The active run ended before the steer message was accepted.";
+  }
+  if (status === "error") {
+    return "Steer failed before it reached the run; try again.";
+  }
+  return undefined;
+}
+
+function formatTerminalRedirectAckContent(status: SteerChatSendAckStatus): string | undefined {
+  if (status === "timeout") {
+    return "The active run ended before the redirect message was accepted.";
+  }
+  if (status === "error") {
+    return "Redirect failed before it reached the run; try again.";
+  }
+  return undefined;
+}
+
 /** Soft inject — queues a message into the active run via chat.send (deliver: false). */
 async function executeSteer(
   client: GatewayBrowserClient,
@@ -694,23 +792,35 @@ async function executeSteer(
       };
     }
     const sessions =
-      context.sessionsResult ?? (await client.request<SessionsListResult>("sessions.list", {}));
+      context.sessionsResult ??
+      (await client.request<SessionsListResult>(
+        "sessions.list",
+        selectedGlobalScope(sessionKey, context),
+      ));
     const targetSession = resolveCurrentSession(sessions, resolved.key);
     if (!isActiveSteerSession(targetSession)) {
       return {
         content: "No active run. Use the chat input or `/redirect` instead.",
       };
     }
-    await client.request("chat.send", {
-      sessionKey: resolved.key,
-      message: resolved.message,
-      deliver: false,
-      idempotencyKey: generateUUID(),
-    });
-    return {
-      content: "Steered.",
-      pendingCurrentRun: resolved.key === sessionKey,
-    };
+    const ackStatus = normalizeSteerChatSendAckStatus(
+      await client.request("chat.send", {
+        sessionKey: resolved.key,
+        ...selectedGlobalScope(resolved.key, context),
+        message: resolved.message,
+        deliver: false,
+        idempotencyKey: generateUUID(),
+      }),
+    );
+    const terminalAckContent = formatTerminalSteerAckContent(ackStatus);
+    if (terminalAckContent) {
+      return { content: terminalAckContent };
+    }
+    const result: SlashCommandResult = { content: "Steered." };
+    if (ackStatus === "started" || ackStatus === "in_flight") {
+      result.pendingCurrentRun = resolved.key === sessionKey;
+    }
+    return result;
   } catch (err) {
     return { content: `Failed to steer: ${String(err)}` };
   }
@@ -721,6 +831,7 @@ async function executeRedirect(
   client: GatewayBrowserClient,
   sessionKey: string,
   args: string,
+  context: SlashCommandContext,
 ): Promise<SlashCommandResult> {
   try {
     const resolved = await resolveSteerTarget(sessionKey, args);
@@ -729,26 +840,22 @@ async function executeRedirect(
         content: resolved.error === "empty" ? "Usage: `/redirect <message>`" : resolved.error,
       };
     }
-    const resp = await client.request<{ runId?: string }>("sessions.steer", {
+    const resp = await client.request<{ runId?: string; status?: unknown }>("sessions.steer", {
       key: resolved.key,
+      ...selectedGlobalScope(resolved.key, context),
       message: resolved.message,
     });
+    const ackStatus = normalizeSteerChatSendAckStatus(resp);
+    const terminalAckContent = formatTerminalRedirectAckContent(ackStatus);
+    if (terminalAckContent) {
+      return { content: terminalAckContent };
+    }
     const runId = typeof resp?.runId === "string" ? resp.runId : undefined;
     return {
       content: "Redirected.",
-      trackRunId: runId,
+      ...(ackStatus === "started" || ackStatus === "in_flight" ? { trackRunId: runId } : {}),
     };
   } catch (err) {
     return { content: `Failed to redirect: ${String(err)}` };
   }
-}
-
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) {
-    return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
-  }
-  if (n >= 1_000) {
-    return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
-  }
-  return String(n);
 }

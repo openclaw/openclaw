@@ -1,3 +1,4 @@
+// Onboard custom config tests cover provider-specific config merging and context-window bounds.
 import { describe, expect, it } from "vitest";
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -5,11 +6,12 @@ import {
   applyCustomApiConfig,
   buildAnthropicVerificationProbeRequest,
   buildOpenAiVerificationProbeRequest,
-  CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS,
   inferCustomModelSupportsImageInput,
   parseNonInteractiveCustomApiFlags,
   resolveCustomModelImageInputInference,
 } from "./onboard-custom-config.js";
+
+const EXPECTED_CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
 
 function buildCustomProviderConfig(contextWindow?: number) {
   if (contextWindow === undefined) {
@@ -57,6 +59,25 @@ it("uses expanded max_tokens for openai verification probes", () => {
 
   expect(request.body.max_tokens).toBe(16);
 });
+
+it("uses responses probes for custom OpenAI Responses endpoints", () => {
+  const request = buildOpenAiVerificationProbeRequest({
+    baseUrl: "https://example.com/v1",
+    apiKey: "test-key",
+    modelId: "gpt-5.4",
+    responsesApi: true,
+  });
+
+  expect(request.endpoint).toBe("https://example.com/v1/responses");
+  expect(request.headers.Authorization).toBe("Bearer test-key");
+  expect(request.body).toEqual({
+    model: "gpt-5.4",
+    input: "Hi",
+    max_output_tokens: 16,
+    stream: false,
+  });
+});
+
 it("uses azure responses-specific headers and body for openai verification probes", () => {
   const request = buildOpenAiVerificationProbeRequest({
     baseUrl: "https://my-resource.openai.azure.com",
@@ -109,17 +130,17 @@ describe("applyCustomApiConfig", () => {
     {
       name: "uses stable default context window for newly added custom models",
       existingContextWindow: undefined,
-      expectedContextWindow: CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS,
+      expectedContextWindow: EXPECTED_CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS,
     },
     {
       name: "upgrades existing custom model context window when below hard minimum",
       existingContextWindow: 2048,
-      expectedContextWindow: CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS,
+      expectedContextWindow: EXPECTED_CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS,
     },
     {
       name: "raises legacy generated hard-min context window (#79428)",
       existingContextWindow: CONTEXT_WINDOW_HARD_MIN_TOKENS,
-      expectedContextWindow: CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS,
+      expectedContextWindow: EXPECTED_CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS,
     },
     {
       name: "preserves explicit small context window when already valid",
@@ -148,7 +169,8 @@ describe("applyCustomApiConfig", () => {
         modelId: "foo-large",
         compatibility: "invalid" as unknown as "openai",
       },
-      expectedMessage: 'Custom provider compatibility must be "openai" or "anthropic".',
+      expectedMessage:
+        'Custom provider compatibility must be "openai", "openai-responses", or "anthropic".',
     },
     {
       name: "explicit provider ids that normalize to empty",
@@ -188,6 +210,20 @@ describe("applyCustomApiConfig", () => {
 
     const modelRef = `${providerId}/${result.modelId}`;
     expect(result.config.agents?.defaults?.models?.[modelRef]?.params?.thinking).toBe("medium");
+  });
+
+  it("saves explicit custom OpenAI Responses compatibility", () => {
+    const result = applyCustomApiConfig({
+      config: {},
+      baseUrl: "https://responses.example.com/v1",
+      modelId: "gpt-5.4",
+      compatibility: "openai-responses",
+      apiKey: "abcd1234",
+    });
+
+    const provider = result.config.models?.providers?.[result.providerId!];
+    expect(provider?.baseUrl).toBe("https://responses.example.com/v1");
+    expect(provider?.api).toBe("openai-responses");
   });
 
   it("keeps selected compatibility for Azure AI Foundry URLs", () => {
@@ -473,6 +509,16 @@ describe("parseNonInteractiveCustomApiFlags", () => {
     expect(result.supportsImageInput).toBe(true);
   });
 
+  it("parses OpenAI Responses compatibility", () => {
+    const result = parseNonInteractiveCustomApiFlags({
+      baseUrl: "https://llm.example.com/v1",
+      modelId: "gpt-5.4",
+      compatibility: "openai-responses",
+    });
+
+    expect(result.compatibility).toBe("openai-responses");
+  });
+
   it.each([
     {
       name: "missing required flags",
@@ -486,7 +532,8 @@ describe("parseNonInteractiveCustomApiFlags", () => {
         modelId: "foo-large",
         compatibility: "xmlrpc",
       },
-      expectedMessage: 'Invalid --custom-compatibility (use "openai" or "anthropic").',
+      expectedMessage:
+        'Invalid --custom-compatibility (use "openai", "openai-responses", or "anthropic").',
     },
     {
       name: "invalid explicit provider ids",

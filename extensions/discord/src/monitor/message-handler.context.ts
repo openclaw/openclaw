@@ -1,3 +1,4 @@
+// Discord plugin module implements message handler.context behavior.
 import {
   buildChannelInboundEventContext,
   formatInboundEnvelope,
@@ -334,12 +335,17 @@ export async function buildDiscordMessageProcessContext(params: {
       tag: sender.tag,
       roles: memberRoleIds,
       displayLabel: senderLabel,
+      // PluralKit proxies post under a bot author but represent a human member,
+      // whose identity already replaced the sender fields here; only mark
+      // genuine (non-PluralKit) bot authors as bots.
+      isBot: author.bot && !sender.isPluralKit ? true : undefined,
     },
     conversation: {
       kind: isDirectMessage ? "direct" : "channel",
       id: messageChannelId,
       label: fromLabel,
       spaceId: isGuildMessage ? (guildInfo?.id ?? guildSlug) || undefined : undefined,
+      parentId: threadChannel ? threadParentId : undefined,
       threadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
     },
     route: {

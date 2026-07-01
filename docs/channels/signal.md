@@ -20,12 +20,18 @@ Status: external CLI integration. Gateway talks to `signal-cli` over HTTP — ei
 ## Quick setup (beginner)
 
 1. Use a **separate Signal number** for the bot (recommended).
-2. Install `signal-cli` (Java required if you use the JVM build).
-3. Choose one setup path:
+2. Install the OpenClaw plugin:
+
+```bash
+openclaw plugins install @openclaw/signal
+```
+
+3. Install `signal-cli` (Java required if you use the JVM build).
+4. Choose one setup path:
    - **Path A (QR link):** `signal-cli link -n "OpenClaw"` and scan with Signal.
    - **Path B (SMS register):** register a dedicated number with captcha + SMS verification.
-4. Configure OpenClaw and restart the gateway.
-5. Send a first DM and approve pairing (`openclaw pairing approve signal <CODE>`).
+5. Configure OpenClaw and restart the gateway.
+6. Send a first DM and approve pairing (`openclaw pairing approve signal <CODE>`).
 
 Minimal config:
 

@@ -40,9 +40,24 @@ public final class OpenClawChatViewModel {
 
     @ObservationIgnored
     private nonisolated(unsafe) var eventTask: Task<Void, Never>?
+    @ObservationIgnored
+    private nonisolated(unsafe) var bootstrapTask: Task<Void, Never>?
     private var pendingRuns = Set<String>() {
         didSet { self.pendingRunCount = self.pendingRuns.count }
     }
+
+    private var pendingLocalUserEchoMessageIDsByRunID: [String: UUID] = [:]
+    // Final chat events and durable session-message rows arrive independently.
+    // Keep each provisional final scoped to the run's user turn so a later identical
+    // answer in the same session does not adopt or suppress the wrong row.
+    private var runMessageScopesByRunID: [String: RunMessageScope] = [:]
+    private var provisionalFinalMessagesByID: [UUID: ProvisionalFinalMessage] = [:]
+    private var sessionGeneration: UInt64 = 0
+    private var bootstrapGeneration: UInt64 = 0
+    // A newer same-session history request only invalidates older responses after it applies.
+    // Failed later refreshes must not drop the last successful pending-run history payload.
+    private var lastIssuedHistoryRequestID: UInt64 = 0
+    private var latestAppliedHistoryRequestID: UInt64 = 0
 
     @ObservationIgnored
     private nonisolated(unsafe) var pendingRunTimeoutTasks: [String: Task<Void, Never>] = [:]
@@ -69,6 +84,48 @@ public final class OpenClawChatViewModel {
     private var isCompacting = false
     private var lastCompactAt: Date?
     private let compactCooldown: TimeInterval = 60
+
+    private enum SessionSwitchIntent {
+        case userInitiated
+        case externalSync
+    }
+
+    private struct SessionSnapshot {
+        var key: String
+        var generation: UInt64
+    }
+
+    private struct BootstrapContext {
+        var id: UInt64
+        var historyRequest: HistoryRequest
+
+        var session: SessionSnapshot {
+            self.historyRequest.session
+        }
+    }
+
+    private struct HistoryRequest {
+        var id: UInt64
+        var session: SessionSnapshot
+        var latestUserTurn: LatestUserTurn?
+    }
+
+    private struct LatestUserTurn {
+        var refreshKey: String?
+        var occurrence: Int
+        var timestamp: Double?
+    }
+
+    private struct RunMessageScope {
+        var session: SessionSnapshot
+        var latestUserTurn: LatestUserTurn?
+    }
+
+    private struct ProvisionalFinalMessage {
+        var reconciliationKey: String
+        var runId: String?
+        var scope: RunMessageScope
+    }
 
     private var pendingToolCallsById: [String: OpenClawChatPendingToolCall] = [:] {
         didSet {
@@ -114,17 +171,18 @@ public final class OpenClawChatViewModel {
 
     deinit {
         self.eventTask?.cancel()
+        self.bootstrapTask?.cancel()
         for (_, task) in self.pendingRunTimeoutTasks {
             task.cancel()
         }
     }
 
     public func load() {
-        Task { await self.bootstrap() }
+        self.startBootstrap()
     }
 
     public func refresh() {
-        Task { await self.bootstrap() }
+        self.startBootstrap()
     }
 
     public func resumeFromForeground() {
@@ -145,11 +203,16 @@ public final class OpenClawChatViewModel {
     }
 
     public func refreshSessions(limit: Int? = nil) {
-        Task { await self.fetchSessions(limit: limit) }
+        let context = self.currentSessionSnapshot()
+        Task { await self.fetchSessions(limit: limit, sessionSnapshot: context) }
     }
 
     public func switchSession(to sessionKey: String) {
-        Task { await self.performSwitchSession(to: sessionKey) }
+        self.applySessionSwitch(to: sessionKey, intent: .userInitiated)
+    }
+
+    public func syncSession(to sessionKey: String) {
+        self.applySessionSwitch(to: sessionKey, intent: .externalSync)
     }
 
     public func selectThinkingLevel(_ level: String) {
@@ -214,7 +277,7 @@ public final class OpenClawChatViewModel {
     }
 
     public var defaultModelLabel: String {
-        guard let defaultModelID = self.normalizedModelSelectionID(self.sessionDefaults?.model) else {
+        guard let defaultModelID = normalizedModelSelectionID(sessionDefaults?.model) else {
             return "Default"
         }
         return "Default: \(self.modelLabel(for: defaultModelID))"
@@ -259,7 +322,93 @@ public final class OpenClawChatViewModel {
         self.diagnosticsLog?(message)
     }
 
-    private func bootstrap() async {
+    private func currentSessionSnapshot() -> SessionSnapshot {
+        SessionSnapshot(key: self.sessionKey, generation: self.sessionGeneration)
+    }
+
+    private func isCurrentSession(_ snapshot: SessionSnapshot) -> Bool {
+        self.sessionKey == snapshot.key && self.sessionGeneration == snapshot.generation
+    }
+
+    private func isCurrentBootstrap(_ context: BootstrapContext) -> Bool {
+        self.bootstrapGeneration == context.id && self.isCurrentSession(context.session)
+    }
+
+    private func canApplyHistory(_ request: HistoryRequest) -> Bool {
+        request.id >= self.latestAppliedHistoryRequestID && self.isCurrentSession(request.session)
+    }
+
+    private func advanceSessionGeneration() {
+        self.sessionGeneration &+= 1
+    }
+
+    private func beginHistoryRequest(
+        for sessionSnapshot: SessionSnapshot? = nil,
+        captureLatestUserTurn: Bool = true) -> HistoryRequest
+    {
+        self.lastIssuedHistoryRequestID &+= 1
+        return HistoryRequest(
+            id: self.lastIssuedHistoryRequestID,
+            session: sessionSnapshot ?? self.currentSessionSnapshot(),
+            latestUserTurn: captureLatestUserTurn ? Self.latestUserTurn(in: self.messages) : nil)
+    }
+
+    private func markHistoryRequestApplied(_ request: HistoryRequest) {
+        self.latestAppliedHistoryRequestID = max(self.latestAppliedHistoryRequestID, request.id)
+    }
+
+    @discardableResult
+    private func applyHistoryPayload(
+        _ payload: OpenClawChatHistoryPayload,
+        for request: HistoryRequest,
+        preservingOptimisticLocalMessages: Bool,
+        syncThinkingOptions: Bool = false) -> Bool
+    {
+        guard self.canApplyHistory(request) else { return false }
+        let incoming = Self.decodeMessages(payload.messages ?? [])
+        self.messages = if preservingOptimisticLocalMessages {
+            Self.reconcileRunRefreshMessages(
+                previous: self.messages,
+                incoming: incoming,
+                pendingLocalUserEchoIDs: Set(self.pendingLocalUserEchoMessageIDsByRunID.values))
+        } else {
+            Self.reconcileMessageIDs(previous: self.messages, incoming: incoming)
+        }
+        self.prunePendingLocalUserEchoMessageIDs()
+        self.pruneProvisionalFinalMessages()
+        self.pruneRunMessageScopes()
+        self.sessionId = payload.sessionId
+        // Incomplete refreshes can arrive before durable assistant history.
+        // The latest visible user turn must survive answered before it can reject older replies.
+        let canInvalidateOlderHistory = if let latestUserTurn = request.latestUserTurn {
+            Self.hasAnsweredUser(latestUserTurn, in: self.messages)
+        } else {
+            !Self.hasUnansweredLatestUser(in: self.messages)
+        }
+        if canInvalidateOlderHistory {
+            self.markHistoryRequestApplied(request)
+        }
+        let appliedThinkingLevel = !self.prefersExplicitThinkingLevel
+            ? Self.normalizedThinkingLevel(payload.thinkingLevel)
+            : nil
+        if let level = appliedThinkingLevel {
+            self.thinkingLevel = level
+        }
+        if syncThinkingOptions || appliedThinkingLevel != nil {
+            self.syncThinkingLevelOptions()
+        }
+        return true
+    }
+
+    private func startBootstrap(sessionKey requestedSessionKey: String? = nil) {
+        let sessionKey = requestedSessionKey ?? self.sessionKey
+        guard sessionKey == self.sessionKey else { return }
+        self.bootstrapGeneration &+= 1
+        let historyRequest = self.beginHistoryRequest(captureLatestUserTurn: requestedSessionKey == nil)
+        let context = BootstrapContext(
+            id: bootstrapGeneration,
+            historyRequest: historyRequest)
+        self.bootstrapTask?.cancel()
         self.isLoading = true
         self.errorText = nil
         self.healthOK = false
@@ -267,42 +416,75 @@ public final class OpenClawChatViewModel {
         self.pendingToolCallsById = [:]
         self.streamingAssistantText = nil
         self.sessionId = nil
-        defer { self.isLoading = false }
-        do {
-            do {
-                try await self.transport.setActiveSessionKey(self.sessionKey)
-            } catch {
-                // Best-effort only; history/send/health still work without push events.
-            }
+        self.bootstrapTask = Task { [weak self] in
+            guard let self else { return }
+            await self.bootstrap(context: context)
+        }
+    }
 
-            let payload = try await self.transport.requestHistory(sessionKey: self.sessionKey)
-            self.messages = Self.reconcileMessageIDs(
-                previous: self.messages,
-                incoming: Self.decodeMessages(payload.messages ?? []))
-            self.sessionId = payload.sessionId
-            if !self.prefersExplicitThinkingLevel,
-               let level = Self.normalizedThinkingLevel(payload.thinkingLevel)
-            {
-                self.thinkingLevel = level
+    private func bootstrap(context: BootstrapContext) async {
+        guard self.isCurrentBootstrap(context) else { return }
+        defer {
+            if self.isCurrentBootstrap(context) {
+                self.isLoading = false
             }
-            self.syncThinkingLevelOptions()
-            await self.pollHealthIfNeeded(force: true)
-            await self.fetchSessions(limit: 50)
-            await self.fetchModels()
+        }
+        do {
+            await self.syncActiveSessionSubscription(startingWith: context.session.key)
+            guard self.isCurrentBootstrap(context) else { return }
+
+            let payload = try await transport.requestHistory(sessionKey: context.session.key)
+            guard self.isCurrentBootstrap(context) else { return }
+            _ = self.applyHistoryPayload(
+                payload,
+                for: context.historyRequest,
+                preservingOptimisticLocalMessages: false,
+                syncThinkingOptions: true)
+            await self.pollHealthIfNeeded(force: true, sessionSnapshot: context.session)
+            guard self.isCurrentBootstrap(context) else { return }
+            await self.fetchSessions(limit: 50, sessionSnapshot: context.session)
+            guard self.isCurrentBootstrap(context) else { return }
+            await self.fetchModels(sessionSnapshot: context.session)
+            guard self.isCurrentBootstrap(context) else { return }
             self.errorText = nil
         } catch {
+            guard self.isCurrentBootstrap(context) else { return }
             self.errorText = error.localizedDescription
             chatUILogger.error("bootstrap failed \(error.localizedDescription, privacy: .public)")
         }
     }
 
+    private func syncActiveSessionSubscription(startingWith sessionKey: String) async {
+        var nextSessionKey = sessionKey
+        while true {
+            do {
+                // Subscribe requests are gateway side effects. If a stale request finishes
+                // after a newer switch, immediately reassert the latest visible session.
+                try await self.transport.setActiveSessionKey(nextSessionKey)
+            } catch {
+                let currentSessionKey = self.sessionKey
+                guard currentSessionKey != nextSessionKey else {
+                    // Best-effort only; history/send/health still work without push events.
+                    return
+                }
+                nextSessionKey = currentSessionKey
+                continue
+            }
+            let currentSessionKey = self.sessionKey
+            guard currentSessionKey != nextSessionKey else { return }
+            nextSessionKey = currentSessionKey
+        }
+    }
+
     private func refreshPendingRunAfterForeground() async {
         guard self.pendingRunCount > 0 else { return }
+        let context = self.beginHistoryRequest()
         self.logDiagnostic(
-            "chat.ui foreground refresh sessionKey=\(self.sessionKey) "
+            "chat.ui foreground refresh sessionKey=\(context.session.key) "
                 + "pending=\(self.pendingRunCount)")
-        await self.refreshHistoryAfterRun()
-        await self.pollHealthIfNeeded(force: true)
+        await self.refreshHistoryAfterRun(historyRequest: context)
+        await self.pollHealthIfNeeded(force: true, sessionSnapshot: context.session)
+        guard self.isCurrentSession(context.session) else { return }
         if self.hasAssistantMessageAfterLatestUser() {
             self.clearPendingRuns(reason: nil)
             self.pendingToolCallsById = [:]
@@ -362,6 +544,14 @@ public final class OpenClawChatViewModel {
         }.joined(separator: "\\u{001E}")
     }
 
+    private static func finalMessageContentFingerprint(for message: OpenClawChatMessage) -> String {
+        message.content.map { item in
+            let type = (item.type ?? "text").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let text = (item.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            return [type, text].joined(separator: "\\u{001F}")
+        }.joined(separator: "\\u{001E}")
+    }
+
     private static func messageIdentityKey(for message: OpenClawChatMessage) -> String? {
         let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !role.isEmpty else { return nil }
@@ -391,6 +581,198 @@ public final class OpenClawChatViewModel {
             return nil
         }
         return [role, toolCallId, toolName, contentFingerprint].joined(separator: "|")
+    }
+
+    private static func finalMessageReconciliationKey(for message: OpenClawChatMessage) -> String? {
+        let role = message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard role == "assistant" else { return nil }
+
+        // chat.final and session.message can serialize the same final row with
+        // different timestamps/content ids; the run user-turn scope owns safety
+        // for repeated same-text replies across turns.
+        let contentFingerprint = Self.finalMessageContentFingerprint(for: message)
+        let toolCallId = (message.toolCallId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let toolName = (message.toolName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if contentFingerprint.isEmpty, toolCallId.isEmpty, toolName.isEmpty {
+            return nil
+        }
+        return [role, toolCallId, toolName, contentFingerprint].joined(separator: "|")
+    }
+
+    private static func normalizedRunID(_ runId: String?) -> String? {
+        let trimmed = runId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func currentRunMessageScope() -> RunMessageScope {
+        RunMessageScope(
+            session: self.currentSessionSnapshot(),
+            latestUserTurn: Self.latestUserTurn(in: self.messages))
+    }
+
+    private func runMessageScope(for runId: String?) -> RunMessageScope {
+        guard let runId = Self.normalizedRunID(runId),
+              let scope = self.runMessageScopesByRunID[runId],
+              self.isCurrentSession(scope.session)
+        else {
+            return self.currentRunMessageScope()
+        }
+        return scope
+    }
+
+    private static func isSameUserTurnBoundary(_ lhs: LatestUserTurn?, _ rhs: LatestUserTurn?) -> Bool {
+        switch (lhs, rhs) {
+        case (nil, nil):
+            return true
+        case let (lhs?, rhs?):
+            if let lhsKey = lhs.refreshKey, let rhsKey = rhs.refreshKey {
+                return lhsKey == rhsKey && lhs.occurrence == rhs.occurrence
+            }
+            return lhs.refreshKey == nil &&
+                rhs.refreshKey == nil &&
+                lhs.occurrence == rhs.occurrence &&
+                lhs.timestamp == rhs.timestamp
+        default:
+            return false
+        }
+    }
+
+    private static func indexAfterLatestUserTurn(
+        _ latestUserTurn: LatestUserTurn?,
+        in messages: [OpenClawChatMessage])
+        -> [OpenClawChatMessage].Index
+    {
+        guard let latestUserTurn else { return messages.startIndex }
+        if let refreshKey = latestUserTurn.refreshKey {
+            var occurrence = 0
+            for index in messages.indices {
+                guard self.userRefreshIdentityKey(for: messages[index]) == refreshKey else { continue }
+                occurrence += 1
+                if occurrence == latestUserTurn.occurrence {
+                    return messages.index(after: index)
+                }
+            }
+        } else if let timestamp = latestUserTurn.timestamp,
+                  let index = messages.lastIndex(where: { message in
+                      message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user" &&
+                          message.timestamp == timestamp
+                  })
+        {
+            return messages.index(after: index)
+        }
+
+        return messages.lastIndex(where: { message in
+            message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user"
+        }).map { messages.index(after: $0) } ?? messages.startIndex
+    }
+
+    private func hasCanonicalFinalMessageMatching(
+        _ message: OpenClawChatMessage,
+        scope: RunMessageScope) -> Bool
+    {
+        guard let key = Self.finalMessageReconciliationKey(for: message) else { return false }
+        guard self.isCurrentSession(scope.session) else { return false }
+        let searchStart = Self.indexAfterLatestUserTurn(scope.latestUserTurn, in: self.messages)
+        guard searchStart < self.messages.endIndex else { return false }
+
+        return self.messages[searchStart...].contains { existing in
+            self.provisionalFinalMessagesByID[existing.id] == nil &&
+                Self.finalMessageReconciliationKey(for: existing) == key
+        }
+    }
+
+    private func prunePendingLocalUserEchoMessageIDs() {
+        guard !self.pendingLocalUserEchoMessageIDsByRunID.isEmpty else { return }
+        let visibleMessageIDs = Set(messages.map(\.id))
+        self.pendingLocalUserEchoMessageIDsByRunID = self.pendingLocalUserEchoMessageIDsByRunID.filter {
+            self.pendingRuns.contains($0.key) && visibleMessageIDs.contains($0.value)
+        }
+    }
+
+    private func pruneProvisionalFinalMessages() {
+        guard !self.provisionalFinalMessagesByID.isEmpty else { return }
+        let visibleMessageIDs = Set(messages.map(\.id))
+        self.provisionalFinalMessagesByID = self.provisionalFinalMessagesByID.filter { entry in
+            visibleMessageIDs.contains(entry.key) && self.isCurrentSession(entry.value.scope.session)
+        }
+    }
+
+    private func pruneRunMessageScopes() {
+        self.runMessageScopesByRunID = self.runMessageScopesByRunID.filter { entry in
+            self.isCurrentSession(entry.value.session)
+        }
+        guard self.runMessageScopesByRunID.count > 64 else { return }
+        let referencedRunIDs = Set(self.pendingRuns)
+            .union(self.provisionalFinalMessagesByID.values.compactMap(\.runId))
+        self.runMessageScopesByRunID = self.runMessageScopesByRunID.filter { entry in
+            referencedRunIDs.contains(entry.key)
+        }
+    }
+
+    private func adoptPendingLocalUserEcho(incoming: OpenClawChatMessage) -> Bool {
+        guard let incomingKey = Self.userRefreshIdentityKey(for: incoming) else { return false }
+        guard let matchIndex = messages.lastIndex(where: { existing in
+            self.pendingLocalUserEchoMessageIDsByRunID.values.contains(existing.id)
+                && Self.userRefreshIdentityKey(for: existing) == incomingKey
+        }) else {
+            return false
+        }
+
+        let existing = self.messages[matchIndex]
+        self.pendingLocalUserEchoMessageIDsByRunID = self.pendingLocalUserEchoMessageIDsByRunID.filter {
+            $0.value != existing.id
+        }
+        var updated = self.messages
+        updated[matchIndex] = OpenClawChatMessage(
+            id: existing.id,
+            role: incoming.role,
+            content: incoming.content,
+            timestamp: incoming.timestamp ?? existing.timestamp,
+            toolCallId: incoming.toolCallId,
+            toolName: incoming.toolName,
+            usage: incoming.usage,
+            stopReason: incoming.stopReason,
+            errorMessage: incoming.errorMessage)
+        self.messages = Self.dedupeMessages(updated)
+        self.prunePendingLocalUserEchoMessageIDs()
+        return true
+    }
+
+    private func adoptProvisionalFinalMessage(incoming: OpenClawChatMessage) -> Bool {
+        guard let incomingKey = Self.finalMessageReconciliationKey(for: incoming) else { return false }
+        let canonicalScope = self.currentRunMessageScope()
+        let searchStart = Self.indexAfterLatestUserTurn(canonicalScope.latestUserTurn, in: self.messages)
+        guard searchStart < self.messages.endIndex else { return false }
+
+        guard let matchIndex = messages[searchStart...].lastIndex(where: { existing in
+            guard let provisional = self.provisionalFinalMessagesByID[existing.id] else { return false }
+            return provisional.reconciliationKey == incomingKey &&
+                Self.isSameUserTurnBoundary(provisional.scope.latestUserTurn, canonicalScope.latestUserTurn)
+        }) else {
+            return false
+        }
+
+        let existing = self.messages[matchIndex]
+        let provisional = self.provisionalFinalMessagesByID[existing.id]
+        var updated = self.messages
+        updated[matchIndex] = OpenClawChatMessage(
+            id: existing.id,
+            role: incoming.role,
+            content: incoming.content,
+            timestamp: incoming.timestamp ?? existing.timestamp,
+            toolCallId: incoming.toolCallId,
+            toolName: incoming.toolName,
+            usage: incoming.usage,
+            stopReason: incoming.stopReason,
+            errorMessage: incoming.errorMessage)
+        self.provisionalFinalMessagesByID.removeValue(forKey: existing.id)
+        if let runId = provisional?.runId {
+            self.runMessageScopesByRunID.removeValue(forKey: runId)
+        }
+        self.messages = Self.dedupeMessages(updated)
+        self.pruneProvisionalFinalMessages()
+        self.pruneRunMessageScopes()
+        return true
     }
 
     private static func reconcileMessageIDs(
@@ -434,7 +816,8 @@ public final class OpenClawChatViewModel {
 
     private static func reconcileRunRefreshMessages(
         previous: [OpenClawChatMessage],
-        incoming: [OpenClawChatMessage]) -> [OpenClawChatMessage]
+        incoming: [OpenClawChatMessage],
+        pendingLocalUserEchoIDs: Set<UUID>) -> [OpenClawChatMessage]
     {
         guard !previous.isEmpty else { return incoming }
         guard !incoming.isEmpty else { return previous }
@@ -450,42 +833,50 @@ public final class OpenClawChatViewModel {
         var remainingIncomingUserRefreshCounts = countKeys(
             reconciled.compactMap(Self.userRefreshIdentityKey(for:)))
 
-        var lastMatchedPreviousIndex: Int?
-        for (index, message) in previous.enumerated() {
-            if let key = Self.messageIdentityKey(for: message),
-               incomingIdentityKeys.contains(key)
-            {
-                lastMatchedPreviousIndex = index
+        // Exact history rows own their incoming user count before local echo matching.
+        // Otherwise repeated same-text sends can consume the canonical row twice.
+        for message in previous {
+            guard let identityKey = Self.messageIdentityKey(for: message),
+                  incomingIdentityKeys.contains(identityKey),
+                  let userKey = Self.userRefreshIdentityKey(for: message),
+                  let remaining = remainingIncomingUserRefreshCounts[userKey],
+                  remaining > 0
+            else {
                 continue
             }
-            if let userKey = Self.userRefreshIdentityKey(for: message),
-               let remaining = remainingIncomingUserRefreshCounts[userKey],
-               remaining > 0
-            {
-                remainingIncomingUserRefreshCounts[userKey] = remaining - 1
-                lastMatchedPreviousIndex = index
-            }
+            remainingIncomingUserRefreshCounts[userKey] = remaining - 1
         }
 
-        let trailingUserMessages = (lastMatchedPreviousIndex != nil
-            ? previous.suffix(from: previous.index(after: lastMatchedPreviousIndex!))
-            : ArraySlice(previous))
-            .filter { message in
-                guard message.role.lowercased() == "user" else { return false }
-                guard let key = Self.userRefreshIdentityKey(for: message) else { return false }
-                let remaining = remainingIncomingUserRefreshCounts[key] ?? 0
-                if remaining > 0 {
-                    remainingIncomingUserRefreshCounts[key] = remaining - 1
-                    return false
-                }
-                return true
-            }
+        let lastCanonicalPreviousIndex = previous.lastIndex { message in
+            guard let identityKey = Self.messageIdentityKey(for: message) else { return false }
+            return incomingIdentityKeys.contains(identityKey)
+        }
+        let trailingLocalCandidates = lastCanonicalPreviousIndex.map { index in
+            previous[previous.index(after: index)...]
+        } ?? []
 
-        guard !trailingUserMessages.isEmpty else {
+        let pendingLocalUsers = previous.filter { message in
+            message.role.lowercased() == "user" && pendingLocalUserEchoIDs.contains(message.id)
+        }
+        let trailingLocalUsers = trailingLocalCandidates.filter { message in
+            guard message.role.lowercased() == "user" else { return false }
+            guard let identityKey = Self.messageIdentityKey(for: message) else { return true }
+            guard !incomingIdentityKeys.contains(identityKey) else { return false }
+            guard let userKey = Self.userRefreshIdentityKey(for: message) else { return true }
+            let remaining = remainingIncomingUserRefreshCounts[userKey] ?? 0
+            if remaining > 0 {
+                remainingIncomingUserRefreshCounts[userKey] = remaining - 1
+                return false
+            }
+            return true
+        }
+        let optimisticUserMessages = pendingLocalUsers + trailingLocalUsers
+
+        guard !optimisticUserMessages.isEmpty else {
             return reconciled
         }
 
-        for message in trailingUserMessages {
+        for message in optimisticUserMessages {
             guard let messageTimestamp = message.timestamp else {
                 reconciled.append(message)
                 continue
@@ -564,14 +955,17 @@ public final class OpenClawChatViewModel {
             return
         }
 
-        let sessionKey = self.sessionKey
+        let sessionSnapshot = self.currentSessionSnapshot()
+        let sessionKey = sessionSnapshot.key
 
         if !self.healthOK {
-            await self.pollHealthIfNeeded(force: true)
+            await self.pollHealthIfNeeded(force: true, sessionSnapshot: sessionSnapshot)
+            guard self.isCurrentSession(sessionSnapshot) else { return }
         }
 
         self.isSending = true
         self.errorText = nil
+        defer { self.isSending = false }
         let runId = UUID().uuidString
         let messageText = trimmed.isEmpty && !self.attachments.isEmpty ? "See attached." : trimmed
         let thinkingLevel = self.thinkingLevel
@@ -619,12 +1013,15 @@ public final class OpenClawChatViewModel {
                     arguments: nil))
         }
         let userMessageTimestamp = Date().timeIntervalSince1970 * 1000
+        let userMessageID = UUID()
         self.messages.append(
             OpenClawChatMessage(
-                id: UUID(),
+                id: userMessageID,
                 role: "user",
                 content: userContent,
                 timestamp: userMessageTimestamp))
+        self.pendingLocalUserEchoMessageIDsByRunID[runId] = userMessageID
+        self.runMessageScopesByRunID[runId] = self.currentRunMessageScope()
 
         // Clear input immediately for responsive UX (before network await)
         self.input = ""
@@ -632,38 +1029,56 @@ public final class OpenClawChatViewModel {
 
         do {
             await self.waitForPendingModelPatches(in: sessionKey)
+            guard self.isCurrentSession(sessionSnapshot) else { return }
             self.logDiagnostic(
                 "chat.ui transport send start sessionKey=\(sessionKey) "
                     + "localRunId=\(runId)")
-            let response = try await self.transport.sendMessage(
+            let response = try await transport.sendMessage(
                 sessionKey: sessionKey,
                 message: messageText,
                 thinking: thinkingLevel,
                 idempotencyKey: runId,
                 attachments: encodedAttachments)
+            guard self.isCurrentSession(sessionSnapshot) else { return }
             self.logDiagnostic(
                 "chat.ui transport send accepted sessionKey=\(sessionKey) "
                     + "localRunId=\(runId) remoteRunId=\(response.runId)")
             if response.runId != runId {
+                let pendingUserMessageID = self.pendingLocalUserEchoMessageIDsByRunID.removeValue(forKey: runId)
+                let runScope = self.runMessageScopesByRunID.removeValue(forKey: runId)
                 self.clearPendingRun(runId)
                 self.pendingRuns.insert(response.runId)
+                self.pendingLocalUserEchoMessageIDsByRunID[response.runId] = pendingUserMessageID
+                self.runMessageScopesByRunID[response.runId] = runScope
                 self.armPendingRunTimeout(runId: response.runId)
             }
-            await self.refreshHistoryAfterRun()
-            if !self.clearPendingRunIfAssistantMessagePresent(
-                runId: response.runId,
-                after: userMessageTimestamp)
-            {
-                self.armPostSendRefreshFallback(
+            if response.status == "ok" {
+                let historyContext = self.beginHistoryRequest(for: sessionSnapshot)
+                await self.refreshHistoryAfterRun(historyRequest: historyContext)
+                guard self.isCurrentSession(sessionSnapshot) else { return }
+                self.finishPendingRunAfterTerminalOkSendAck(response)
+            } else if !self.finishPendingRunIfTerminalSendAck(response) {
+                let historyContext = self.beginHistoryRequest(for: sessionSnapshot)
+                await self.refreshHistoryAfterRun(historyRequest: historyContext)
+                guard self.isCurrentSession(sessionSnapshot) else { return }
+                if !self.clearPendingRunIfAssistantMessagePresent(
                     runId: response.runId,
-                    sessionKey: sessionKey,
-                    userMessageTimestamp: userMessageTimestamp)
-                self.armRunCompletionRefresh(
-                    runId: response.runId,
-                    sessionKey: sessionKey,
-                    userMessageTimestamp: userMessageTimestamp)
+                    after: userMessageTimestamp)
+                {
+                    self.armPostSendRefreshFallback(
+                        runId: response.runId,
+                        sessionSnapshot: sessionSnapshot,
+                        userMessageTimestamp: userMessageTimestamp)
+                    self.armRunCompletionRefresh(
+                        runId: response.runId,
+                        sessionSnapshot: sessionSnapshot,
+                        userMessageTimestamp: userMessageTimestamp)
+                }
             }
         } catch {
+            guard self.isCurrentSession(sessionSnapshot) else { return }
+            self.removePendingLocalUserEcho(for: runId)
+            self.runMessageScopesByRunID.removeValue(forKey: runId)
             self.clearPendingRun(runId)
             self.errorText = error.localizedDescription
             self.logDiagnostic(
@@ -671,8 +1086,6 @@ public final class OpenClawChatViewModel {
                     + "localRunId=\(runId) error=\(error.localizedDescription)")
             chatUILogger.error("chat transport send failed \(error.localizedDescription, privacy: .public)")
         }
-
-        self.isSending = false
     }
 
     private func performAbort() async {
@@ -681,7 +1094,7 @@ public final class OpenClawChatViewModel {
         self.isAborting = true
         defer { self.isAborting = false }
 
-        let runIds = Array(self.pendingRuns)
+        let runIds = Array(pendingRuns)
         for runId in runIds {
             do {
                 try await self.transport.abortRun(sessionKey: self.sessionKey, runId: runId)
@@ -691,9 +1104,10 @@ public final class OpenClawChatViewModel {
         }
     }
 
-    private func fetchSessions(limit: Int?) async {
+    private func fetchSessions(limit: Int?, sessionSnapshot: SessionSnapshot? = nil) async {
         do {
-            let res = try await self.transport.listSessions(limit: limit)
+            let res = try await transport.listSessions(limit: limit)
+            if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) { return }
             self.sessions = res.sessions
             self.sessionDefaults = res.defaults
             self.syncSelectedModel()
@@ -703,23 +1117,36 @@ public final class OpenClawChatViewModel {
         }
     }
 
-    private func fetchModels() async {
+    private func fetchModels(sessionSnapshot: SessionSnapshot? = nil) async {
         do {
-            self.modelChoices = try await self.transport.listModels()
+            let modelChoices = try await transport.listModels()
+            if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) { return }
+            self.modelChoices = modelChoices
             self.syncSelectedModel()
         } catch {
             // Best-effort.
         }
     }
 
-    private func performSwitchSession(to sessionKey: String) async {
+    private func applySessionSwitch(to sessionKey: String, intent: SessionSwitchIntent) {
         let next = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !next.isEmpty else { return }
         guard next != self.sessionKey else { return }
+        self.advanceSessionGeneration()
         self.sessionKey = next
-        self.onSessionChanged?(next)
+        if intent == .userInitiated {
+            self.onSessionChanged?(next)
+        }
         self.modelSelectionID = Self.defaultModelSelectionID
-        await self.bootstrap()
+        self.messages = []
+        self.pendingLocalUserEchoMessageIDsByRunID.removeAll()
+        self.runMessageScopesByRunID.removeAll()
+        self.provisionalFinalMessagesByID.removeAll()
+        self.sessionId = nil
+        self.pendingToolCallsById = [:]
+        self.streamingAssistantText = nil
+        self.clearPendingRuns(reason: nil)
+        self.startBootstrap(sessionKey: next)
     }
 
     private func performStartNewSession() async {
@@ -727,7 +1154,7 @@ public final class OpenClawChatViewModel {
         let parentSessionKey = self.sessionKey
         let next: String
         do {
-            let created = try await self.transport.createSession(
+            let created = try await transport.createSession(
                 key: requested,
                 label: nil,
                 parentSessionKey: parentSessionKey)
@@ -743,16 +1170,20 @@ public final class OpenClawChatViewModel {
             self.errorText = error.localizedDescription
             return
         }
+        self.advanceSessionGeneration()
         self.sessionKey = next
         self.onSessionChanged?(next)
         self.modelSelectionID = Self.defaultModelSelectionID
         self.messages = []
+        self.pendingLocalUserEchoMessageIDsByRunID.removeAll()
+        self.runMessageScopesByRunID.removeAll()
+        self.provisionalFinalMessagesByID.removeAll()
         self.sessionId = nil
         self.pendingToolCallsById = [:]
         self.streamingAssistantText = nil
         self.clearPendingRuns(reason: nil)
         self.errorText = nil
-        await self.bootstrap()
+        self.startBootstrap()
     }
 
     private static func isUnsupportedCreateSessionError(_ error: Error) -> Bool {
@@ -764,17 +1195,19 @@ public final class OpenClawChatViewModel {
     private func performReset() async {
         self.isLoading = true
         self.errorText = nil
-        defer { self.isLoading = false }
 
         do {
             try await self.transport.resetSession(sessionKey: self.sessionKey)
         } catch {
+            self.isLoading = false
             self.errorText = error.localizedDescription
             chatUILogger.error("session reset failed \(error.localizedDescription, privacy: .public)")
             return
         }
 
-        await self.bootstrap()
+        self.runMessageScopesByRunID.removeAll()
+        self.provisionalFinalMessagesByID.removeAll()
+        self.startBootstrap()
     }
 
     private func performCompact() async {
@@ -784,7 +1217,7 @@ public final class OpenClawChatViewModel {
             return
         }
         if let lastCompactAt,
-           Date().timeIntervalSince(lastCompactAt) < self.compactCooldown
+           Date().timeIntervalSince(lastCompactAt) < compactCooldown
         {
             self.errorText = "Please wait before compacting this session again."
             return
@@ -794,13 +1227,13 @@ public final class OpenClawChatViewModel {
         self.isLoading = true
         self.errorText = nil
         defer {
-            self.isLoading = false
             self.isCompacting = false
         }
 
         do {
             try await self.transport.compactSession(sessionKey: self.sessionKey)
         } catch {
+            self.isLoading = false
             self.errorText = "Unable to compact the session. Please try again."
             let nsError = error as NSError
             chatUILogger.error(
@@ -809,8 +1242,8 @@ public final class OpenClawChatViewModel {
             return
         }
 
-        self.lastCompactAt = Date()
-        await self.bootstrap()
+        lastCompactAt = Date()
+        self.startBootstrap()
     }
 
     private func performSelectThinkingLevel(_ level: String) async {
@@ -897,7 +1330,7 @@ public final class OpenClawChatViewModel {
     }
 
     private func endModelPatch(for sessionKey: String) {
-        let remaining = max(0, (self.inFlightModelPatchCountsBySession[sessionKey] ?? 0) - 1)
+        let remaining = max(0, (inFlightModelPatchCountsBySession[sessionKey] ?? 0) - 1)
         if remaining == 0 {
             self.inFlightModelPatchCountsBySession.removeValue(forKey: sessionKey)
             let waiters = self.modelPatchWaitersBySession.removeValue(forKey: sessionKey) ?? []
@@ -919,7 +1352,7 @@ public final class OpenClawChatViewModel {
     private func syncThinkingLevelOptions() {
         let currentSession = self.sessions.first(where: { $0.key == self.sessionKey })
         var options = self.resolvedThinkingLevelOptions(for: currentSession)
-        if let current = Self.normalizedThinkingLevel(self.thinkingLevel) {
+        if let current = Self.normalizedThinkingLevel(thinkingLevel) {
             options = Self.withCurrentThinkingOption(options, current: current)
         }
         self.thinkingLevelOptions = options
@@ -937,7 +1370,7 @@ public final class OpenClawChatViewModel {
         } ?? true
 
         if defaultsMatch,
-           let levels = Self.normalizedThinkingLevelOptions(self.sessionDefaults?.thinkingLevels),
+           let levels = Self.normalizedThinkingLevelOptions(sessionDefaults?.thinkingLevels),
            !levels.isEmpty
         {
             return levels
@@ -948,7 +1381,7 @@ public final class OpenClawChatViewModel {
         }
 
         if defaultsMatch,
-           let options = Self.thinkingOptions(from: self.sessionDefaults?.thinkingOptions),
+           let options = Self.thinkingOptions(from: sessionDefaults?.thinkingOptions),
            !options.isEmpty
         {
             return options
@@ -1058,7 +1491,7 @@ public final class OpenClawChatViewModel {
         guard !trimmed.isEmpty else { return nil }
         if let provider = Self.normalizedProvider(provider) {
             let providerQualified = Self.providerQualifiedModelSelectionID(modelID: trimmed, provider: provider)
-            if let match = self.modelChoices.first(where: {
+            if let match = modelChoices.first(where: {
                 $0.selectionID == providerQualified ||
                     ($0.modelID == trimmed && Self.normalizedProvider($0.provider) == provider)
             }) {
@@ -1086,9 +1519,9 @@ public final class OpenClawChatViewModel {
 
     private func generatedNewSessionKey() -> String {
         let baseKey = "ios-\(UUID().uuidString.lowercased())"
-        guard let agentID = Self.agentID(fromSessionKey: self.sessionKey) ??
-            Self.agentID(fromSessionKey: self.resolvedMainSessionKey) ??
-            self.sessions.lazy.compactMap({ Self.agentID(fromSessionKey: $0.key) }).first
+        guard let agentID = Self.agentID(fromSessionKey: sessionKey) ??
+            Self.agentID(fromSessionKey: resolvedMainSessionKey) ??
+            sessions.lazy.compactMap({ Self.agentID(fromSessionKey: $0.key) }).first
         else {
             return baseKey
         }
@@ -1123,11 +1556,12 @@ public final class OpenClawChatViewModel {
     }
 
     private func resolvedSessionModelIdentity(forSelectionID selectionID: String)
-    -> (modelID: String?, modelProvider: String?) {
-        guard let modelRef = self.modelRef(forSelectionID: selectionID) else {
+        -> (modelID: String?, modelProvider: String?)
+    {
+        guard let modelRef = modelRef(forSelectionID: selectionID) else {
             return (nil, nil)
         }
-        if let choice = self.modelChoices.first(where: { $0.selectionID == modelRef }) {
+        if let choice = modelChoices.first(where: { $0.selectionID == modelRef }) {
             return (choice.modelID, Self.normalizedProvider(choice.provider))
         }
         return (modelRef, nil)
@@ -1148,7 +1582,7 @@ public final class OpenClawChatViewModel {
     }
 
     private func updateCurrentSessionThinkingLevel(_ thinkingLevel: String?, sessionKey: String) {
-        guard let index = self.sessions.firstIndex(where: { $0.key == sessionKey }) else { return }
+        guard let index = sessions.firstIndex(where: { $0.key == sessionKey }) else { return }
         let current = self.sessions[index]
         self.sessions[index] = OpenClawChatSessionEntry(
             key: current.key,
@@ -1181,7 +1615,7 @@ public final class OpenClawChatViewModel {
         sessionKey: String,
         syncSelection: Bool)
     {
-        if let index = self.sessions.firstIndex(where: { $0.key == sessionKey }) {
+        if let index = sessions.firstIndex(where: { $0.key == sessionKey }) {
             let current = self.sessions[index]
             self.sessions[index] = OpenClawChatSessionEntry(
                 key: current.key,
@@ -1237,7 +1671,8 @@ public final class OpenClawChatViewModel {
         case let .health(ok):
             self.healthOK = ok
         case .tick:
-            Task { await self.pollHealthIfNeeded(force: false) }
+            let context = self.currentSessionSnapshot()
+            Task { await self.pollHealthIfNeeded(force: false, sessionSnapshot: context) }
         case let .chat(chat):
             self.handleChatEvent(chat)
         case let .sessionMessage(message):
@@ -1247,31 +1682,42 @@ public final class OpenClawChatViewModel {
         case .seqGap:
             self.errorText = nil
             self.clearPendingRuns(reason: nil)
+            let context = self.beginHistoryRequest()
             Task {
-                await self.refreshHistoryAfterRun()
-                await self.pollHealthIfNeeded(force: true)
+                await self.refreshHistoryAfterRun(historyRequest: context)
+                await self.pollHealthIfNeeded(force: true, sessionSnapshot: context.session)
             }
         }
     }
 
     private func handleSessionMessageEvent(_ payload: OpenClawSessionMessageEventPayload) {
         if let sessionKey = payload.sessionKey,
-           !self.matchesCurrentSessionKey(incoming: sessionKey, current: self.sessionKey)
+           !self.matchesCurrentSessionKey(incoming: sessionKey, agentId: payload.agentId, current: self.sessionKey)
         {
             return
         }
 
         guard let message = payload.message else { return }
-        guard message.role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "user" else {
+
+        let sanitized = Self.stripInboundMetadata(from: message)
+
+        // The active client also receives the gateway's echo of the user turn it
+        // just sent. performSend already appended an optimistic row carrying a
+        // local client timestamp, while the echo carries a server timestamp, so
+        // the timestamp-keyed identity/dedupe paths below never collapse them.
+        // Adopt the server record only onto a still-visible row created by this
+        // client's pending send; same-content user turns from other clients must append.
+        if self.adoptPendingLocalUserEcho(incoming: sanitized) {
             return
         }
-        if self.pendingRunCount > 0 {
+        if self.adoptProvisionalFinalMessage(incoming: sanitized) {
             return
         }
 
-        let sanitized = Self.stripInboundMetadata(from: message)
         let reconciled = Self.reconcileMessageIDs(previous: self.messages, incoming: self.messages + [sanitized])
         self.messages = Self.dedupeMessages(reconciled)
+        self.pruneProvisionalFinalMessages()
+        self.pruneRunMessageScopes()
     }
 
     private func handleChatEvent(_ chat: OpenClawChatEventPayload) {
@@ -1299,7 +1745,8 @@ public final class OpenClawChatViewModel {
                 self.streamingAssistantText = nil
                 self.pendingToolCallsById = [:]
                 self.appendFinalChatMessageIfPresent(chat)
-                Task { await self.refreshHistoryAfterRun() }
+                let context = self.beginHistoryRequest()
+                Task { await self.refreshHistoryAfterRun(historyRequest: context) }
             default:
                 break
             }
@@ -1319,7 +1766,8 @@ public final class OpenClawChatViewModel {
             self.pendingToolCallsById = [:]
             self.streamingAssistantText = nil
             self.appendFinalChatMessageIfPresent(chat)
-            Task { await self.refreshHistoryAfterRun() }
+            let context = self.beginHistoryRequest()
+            Task { await self.refreshHistoryAfterRun(historyRequest: context) }
         default:
             break
         }
@@ -1356,8 +1804,28 @@ public final class OpenClawChatViewModel {
                 stopReason: "stop")
         }
 
+        let runId = Self.normalizedRunID(chat.runId)
+        let scope = self.runMessageScope(for: runId)
+        guard self.isCurrentSession(scope.session) else { return }
+        guard let reconciliationKey = Self.finalMessageReconciliationKey(for: message) else { return }
+
+        if self.hasCanonicalFinalMessageMatching(message, scope: scope) {
+            if let runId {
+                self.runMessageScopesByRunID.removeValue(forKey: runId)
+            }
+            return
+        }
+
         let reconciled = Self.reconcileMessageIDs(previous: self.messages, incoming: self.messages + [message])
         self.messages = Self.dedupeMessages(reconciled)
+        if self.messages.contains(where: { $0.id == message.id }) {
+            self.provisionalFinalMessagesByID[message.id] = ProvisionalFinalMessage(
+                reconciliationKey: reconciliationKey,
+                runId: runId,
+                scope: scope)
+        }
+        self.pruneProvisionalFinalMessages()
+        self.pruneRunMessageScopes()
     }
 
     private static func isAssistantMessage(_ message: OpenClawChatMessage) -> Bool {
@@ -1437,7 +1905,8 @@ public final class OpenClawChatViewModel {
         }
         self.pendingToolCallsById = [:]
         self.streamingAssistantText = nil
-        Task { await self.refreshHistoryAfterRun() }
+        let context = self.beginHistoryRequest()
+        Task { await self.refreshHistoryAfterRun(historyRequest: context) }
     }
 
     private static func lowercasedAgentEventString(_ value: AnyCodable?) -> String? {
@@ -1471,15 +1940,61 @@ public final class OpenClawChatViewModel {
         return "Chat failed"
     }
 
-    private func armPostSendRefreshFallback(runId: String, sessionKey: String, userMessageTimestamp: Double) {
+    private func finishPendingRunAfterTerminalOkSendAck(_ response: OpenClawChatSendResponse) {
+        self.clearPendingRun(response.runId)
+        self.pendingToolCallsById = [:]
+        self.streamingAssistantText = nil
+        self.logDiagnostic(
+            "chat.ui send terminal ack sessionKey=\(self.sessionKey) "
+                + "runId=\(response.runId) status=ok")
+    }
+
+    private func finishPendingRunIfTerminalSendAck(_ response: OpenClawChatSendResponse) -> Bool {
+        switch response.status {
+        case "timeout":
+            self.removePendingLocalUserEcho(for: response.runId)
+            self.clearPendingRun(response.runId)
+            self.pendingToolCallsById = [:]
+            self.streamingAssistantText = nil
+            self.errorText = "Chat failed before the run started; try again."
+            self.logDiagnostic(
+                "chat.ui send terminal ack sessionKey=\(self.sessionKey) "
+                    + "runId=\(response.runId) status=timeout")
+            return true
+        case "error":
+            self.removePendingLocalUserEcho(for: response.runId)
+            self.clearPendingRun(response.runId)
+            self.pendingToolCallsById = [:]
+            self.streamingAssistantText = nil
+            self.errorText = "Chat failed before the run started; try again."
+            self.logDiagnostic(
+                "chat.ui send terminal ack sessionKey=\(self.sessionKey) "
+                    + "runId=\(response.runId) status=error")
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func removePendingLocalUserEcho(for runId: String) {
+        guard let messageID = pendingLocalUserEchoMessageIDsByRunID[runId] else { return }
+        self.messages.removeAll { $0.id == messageID }
+        self.pendingLocalUserEchoMessageIDsByRunID[runId] = nil
+    }
+
+    private func armPostSendRefreshFallback(
+        runId: String,
+        sessionSnapshot: SessionSnapshot,
+        userMessageTimestamp: Double)
+    {
         Task { [weak self] in
             for delayMs in Self.postSendRefreshDelaysMs {
                 try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
                 let shouldContinue = await self?.refreshIfPending(
                     runId: runId,
-                    sessionKey: sessionKey,
+                    sessionSnapshot: sessionSnapshot,
                     after: userMessageTimestamp,
-                    diagnostic: "chat.ui refresh fallback sessionKey=\(sessionKey) "
+                    diagnostic: "chat.ui refresh fallback sessionKey=\(sessionSnapshot.key) "
                         + "runId=\(runId) delayMs=\(delayMs)")
                 guard shouldContinue == true else {
                     return
@@ -1488,36 +2003,45 @@ public final class OpenClawChatViewModel {
         }
     }
 
-    private func armRunCompletionRefresh(runId: String, sessionKey: String, userMessageTimestamp: Double) {
-        let timeoutMs = Int(self.pendingRunTimeoutMs)
+    private func armRunCompletionRefresh(
+        runId: String,
+        sessionSnapshot: SessionSnapshot,
+        userMessageTimestamp: Double)
+    {
+        let timeoutMs = Int(pendingRunTimeoutMs)
         let transport = self.transport
         Task { [weak self, transport] in
             let observedCompletion = await transport.waitForRunCompletion(runId: runId, timeoutMs: timeoutMs)
             guard observedCompletion else { return }
             _ = await self?.refreshIfPending(
                 runId: runId,
-                sessionKey: sessionKey,
+                sessionSnapshot: sessionSnapshot,
                 after: userMessageTimestamp,
-                diagnostic: "chat.ui run completion refresh sessionKey=\(sessionKey) "
+                diagnostic: "chat.ui run completion refresh sessionKey=\(sessionSnapshot.key) "
                     + "runId=\(runId)")
         }
     }
 
     private func refreshIfPending(
         runId: String,
-        sessionKey: String,
+        sessionSnapshot: SessionSnapshot,
         after timestamp: Double,
         diagnostic: String) async -> Bool
     {
-        guard self.sessionKey == sessionKey, self.pendingRuns.contains(runId) else {
+        guard self.isCurrentSession(sessionSnapshot),
+              self.pendingRuns.contains(runId)
+        else {
             return false
         }
         guard !self.clearPendingRunIfAssistantMessagePresent(runId: runId, after: timestamp) else {
             return false
         }
         self.logDiagnostic(diagnostic)
-        await self.refreshHistoryAfterRun()
-        guard self.sessionKey == sessionKey, self.pendingRuns.contains(runId) else {
+        let historyContext = self.beginHistoryRequest(for: sessionSnapshot)
+        await self.refreshHistoryAfterRun(historyRequest: historyContext)
+        guard self.isCurrentSession(sessionSnapshot),
+              self.pendingRuns.contains(runId)
+        else {
             return false
         }
         return !self.clearPendingRunIfAssistantMessagePresent(runId: runId, after: timestamp)
@@ -1533,13 +2057,84 @@ public final class OpenClawChatViewModel {
     }
 
     private func hasAssistantMessageAfterLatestUser() -> Bool {
-        guard let lastUserIndex = self.messages.lastIndex(where: { $0.role.lowercased() == "user" }) else {
+        Self.hasAssistantMessageAfterLatestUser(in: self.messages)
+    }
+
+    private static func hasUnansweredLatestUser(in messages: [OpenClawChatMessage]) -> Bool {
+        self.latestUserTurn(in: messages) != nil && !self.hasAssistantMessageAfterLatestUser(in: messages)
+    }
+
+    private static func latestUserTurn(in messages: [OpenClawChatMessage]) -> LatestUserTurn? {
+        guard let lastUserIndex = messages.lastIndex(where: { $0.role.lowercased() == "user" }) else {
+            return nil
+        }
+        guard let refreshKey = userRefreshIdentityKey(for: messages[lastUserIndex]) else {
+            return LatestUserTurn(
+                refreshKey: nil,
+                occurrence: 0,
+                timestamp: messages[lastUserIndex].timestamp)
+        }
+        let occurrence = messages[...lastUserIndex].reduce(into: 0) { count, message in
+            guard self.userRefreshIdentityKey(for: message) == refreshKey else { return }
+            count += 1
+        }
+        return LatestUserTurn(
+            refreshKey: refreshKey,
+            occurrence: occurrence,
+            timestamp: messages[lastUserIndex].timestamp)
+    }
+
+    private static func hasAnsweredUser(
+        _ user: LatestUserTurn,
+        in messages: [OpenClawChatMessage])
+        -> Bool
+    {
+        guard let refreshKey = user.refreshKey else { return false }
+        var occurrence = 0
+        var latestMatchingUserIndex: [OpenClawChatMessage].Index?
+        for (index, message) in messages.enumerated() {
+            guard self.userRefreshIdentityKey(for: message) == refreshKey else { continue }
+            occurrence += 1
+            latestMatchingUserIndex = index
+            guard occurrence == user.occurrence else { continue }
+            let nextIndex = messages.index(after: index)
+            guard nextIndex < messages.endIndex else { return false }
+            return messages[nextIndex...].contains { message in
+                guard message.role.lowercased() == "assistant" else { return false }
+                let text = message.content.compactMap(\.text).joined(separator: "\n")
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                return !text.isEmpty || message.errorMessage != nil
+            }
+        }
+        guard let latestMatchingUserIndex,
+              messages.lastIndex(where: { $0.role.lowercased() == "user" }) == latestMatchingUserIndex
+        else {
             return false
         }
-        guard lastUserIndex < self.messages.index(before: self.messages.endIndex) else {
+        if let requestTimestamp = user.timestamp,
+           let latestTimestamp = messages[latestMatchingUserIndex].timestamp,
+           latestTimestamp < requestTimestamp
+        {
             return false
         }
-        return self.messages[self.messages.index(after: lastUserIndex)...].contains { message in
+        let nextIndex = messages.index(after: latestMatchingUserIndex)
+        guard nextIndex < messages.endIndex else { return false }
+        return messages[nextIndex...].contains { message in
+            guard message.role.lowercased() == "assistant" else { return false }
+            let text = message.content.compactMap(\.text).joined(separator: "\n")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return !text.isEmpty || message.errorMessage != nil
+        }
+    }
+
+    private static func hasAssistantMessageAfterLatestUser(in messages: [OpenClawChatMessage]) -> Bool {
+        guard let lastUserIndex = messages.lastIndex(where: { $0.role.lowercased() == "user" }) else {
+            return false
+        }
+        guard lastUserIndex < messages.index(before: messages.endIndex) else {
+            return false
+        }
+        return messages[messages.index(after: lastUserIndex)...].contains { message in
             guard message.role.lowercased() == "assistant" else { return false }
             let text = message.content.compactMap(\.text).joined(separator: "\n")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1559,21 +2154,18 @@ public final class OpenClawChatViewModel {
         }
     }
 
-    private func refreshHistoryAfterRun() async {
+    @discardableResult
+    private func refreshHistoryAfterRun(historyRequest request: HistoryRequest? = nil) async -> Bool {
+        let request = request ?? self.beginHistoryRequest()
         do {
-            let payload = try await self.transport.requestHistory(sessionKey: self.sessionKey)
-            self.messages = Self.reconcileRunRefreshMessages(
-                previous: self.messages,
-                incoming: Self.decodeMessages(payload.messages ?? []))
-            self.sessionId = payload.sessionId
-            if !self.prefersExplicitThinkingLevel,
-               let level = Self.normalizedThinkingLevel(payload.thinkingLevel)
-            {
-                self.thinkingLevel = level
-                self.syncThinkingLevelOptions()
-            }
+            let payload = try await transport.requestHistory(sessionKey: request.session.key)
+            return self.applyHistoryPayload(
+                payload,
+                for: request,
+                preservingOptimisticLocalMessages: true)
         } catch {
             chatUILogger.error("refresh history failed \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 
@@ -1597,6 +2189,7 @@ public final class OpenClawChatViewModel {
     private func clearPendingRun(_ runId: String) {
         let wasPending = self.pendingRuns.contains(runId)
         self.pendingRuns.remove(runId)
+        self.pendingLocalUserEchoMessageIDsByRunID[runId] = nil
         self.pendingRunTimeoutTasks[runId]?.cancel()
         self.pendingRunTimeoutTasks[runId] = nil
         if wasPending {
@@ -1607,12 +2200,13 @@ public final class OpenClawChatViewModel {
     }
 
     private func clearPendingRuns(reason: String?) {
-        let runIds = Array(self.pendingRuns)
+        let runIds = Array(pendingRuns)
         for runId in self.pendingRuns {
             self.pendingRunTimeoutTasks[runId]?.cancel()
         }
         self.pendingRunTimeoutTasks.removeAll()
         self.pendingRuns.removeAll()
+        self.pendingLocalUserEchoMessageIDsByRunID.removeAll()
         if let reason, !reason.isEmpty {
             self.errorText = reason
             for runId in runIds {
@@ -1623,15 +2217,17 @@ public final class OpenClawChatViewModel {
         }
     }
 
-    private func pollHealthIfNeeded(force: Bool) async {
-        if !force, let last = self.lastHealthPollAt, Date().timeIntervalSince(last) < 10 {
+    private func pollHealthIfNeeded(force: Bool, sessionSnapshot: SessionSnapshot? = nil) async {
+        if !force, let last = lastHealthPollAt, Date().timeIntervalSince(last) < 10 {
             return
         }
         self.lastHealthPollAt = Date()
         do {
-            let ok = try await self.transport.requestHealth(timeoutMs: 5000)
+            let ok = try await transport.requestHealth(timeoutMs: 5000)
+            if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) { return }
             self.healthOK = ok
         } catch {
+            if let sessionSnapshot, !self.isCurrentSession(sessionSnapshot) { return }
             self.healthOK = false
         }
     }

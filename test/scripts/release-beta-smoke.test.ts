@@ -1,11 +1,13 @@
+// Release Beta Smoke tests cover release beta smoke script behavior.
 import { describe, expect, it } from "vitest";
 import {
   mergeTelegramProofIntoReleaseBody,
   parseArgs,
   parseWorkflowRunIdFromOutput,
   pollRun,
+  readPositiveInt,
+  requireWorkflowRunIdFromOutput,
   run,
-  selectNewestDispatchedRunId,
 } from "../../scripts/release-beta-smoke.ts";
 
 describe("release-beta-smoke", () => {
@@ -13,6 +15,35 @@ describe("release-beta-smoke", () => {
     expect(() => parseArgs(["--skip-parallels", "--skip-telegram"])).toThrow(
       "--skip-parallels and --skip-telegram cannot be used together",
     );
+  });
+
+  it("stops parsing options after the argument terminator", () => {
+    expect(
+      parseArgs(["--beta", "beta-a", "--", "--skip-parallels", "--skip-telegram"]),
+    ).toMatchObject({
+      beta: "beta-a",
+      skipParallels: false,
+      skipTelegram: false,
+    });
+  });
+
+  it("accepts package-manager argument separators before script options", () => {
+    expect(parseArgs(["--", "--beta", "beta-a", "--skip-parallels"])).toMatchObject({
+      beta: "beta-a",
+      skipParallels: true,
+    });
+  });
+
+  it("rejects malformed positive integer environment limits", () => {
+    expect(readPositiveInt(undefined, 60, "OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS")).toBe(60);
+    expect(readPositiveInt("", 60, "OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS")).toBe(60);
+    expect(readPositiveInt("25", 60, "OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS")).toBe(25);
+
+    for (const raw of ["1e3", "25ms", "1.5", "0", "-1", String(Number.MAX_SAFE_INTEGER + 1)]) {
+      expect(() => readPositiveInt(raw, 60, "OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS")).toThrow(
+        "OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS must be a positive integer",
+      );
+    }
   });
 
   it("parses workflow run urls when gh includes them in dispatch output", () => {
@@ -23,34 +54,10 @@ describe("release-beta-smoke", () => {
     ).toBe("1234567890");
   });
 
-  it("selects the newest workflow_dispatch run not present before dispatch", () => {
-    const beforeIds = new Set(["100", "101"]);
-
-    expect(
-      selectNewestDispatchedRunId({
-        beforeIds,
-        runs: [
-          { databaseId: 100, createdAt: "2026-05-04T10:00:00Z" },
-          { databaseId: 102, createdAt: "2026-05-04T10:01:00Z" },
-          { databaseId: 103, createdAt: "2026-05-04T10:02:00Z" },
-        ],
-      }),
-    ).toBe("103");
-  });
-
-  it("selects runs returned by the actions workflow runs API", () => {
-    const beforeIds = new Set(["200"]);
-
-    expect(
-      selectNewestDispatchedRunId({
-        beforeIds,
-        runs: [
-          { id: 200, created_at: "2026-05-04T10:00:00Z" },
-          { id: 201, created_at: "2026-05-04T10:02:00Z" },
-          { id: 202, created_at: "2026-05-04T10:01:00Z" },
-        ],
-      }),
-    ).toBe("201");
+  it("fails closed when gh dispatch output does not include the run url", () => {
+    expect(() =>
+      requireWorkflowRunIdFromOutput("✓ Created workflow_dispatch event", "npm-telegram.yml"),
+    ).toThrow("refusing to guess from recent workflow_dispatch runs");
   });
 
   it("replaces stale Telegram proof placeholders", () => {

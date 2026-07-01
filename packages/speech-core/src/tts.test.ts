@@ -1,6 +1,8 @@
+// Speech Core tests cover tts behavior.
 import { rmSync } from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import {
   clearRuntimeConfigSnapshot,
@@ -418,6 +420,50 @@ describe("speech-core native voice-note routing", () => {
     expect(request.timeoutMs).toBe(600_000);
   });
 
+  it("caps oversized provider default TTS timeouts before synthesis", async () => {
+    installSpeechProviders([
+      createMockSpeechProvider("mock", { defaultTimeoutMs: Number.MAX_SAFE_INTEGER }),
+    ]);
+
+    const result = await synthesizeSpeech({
+      text: "Use capped provider timeout.",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+          },
+        },
+      } as OpenClawConfig,
+      disableFallback: true,
+    });
+
+    expect(result.success).toBe(true);
+    const request = requireFirstSynthesisRequest("provider default capped timeout request");
+    expect(request.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("ignores nonpositive provider default TTS timeouts", async () => {
+    installSpeechProviders([createMockSpeechProvider("mock", { defaultTimeoutMs: 0 })]);
+
+    const result = await synthesizeSpeech({
+      text: "Use fallback timeout.",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+          },
+        },
+      } as OpenClawConfig,
+      disableFallback: true,
+    });
+
+    expect(result.success).toBe(true);
+    const request = requireFirstSynthesisRequest("provider default fallback timeout request");
+    expect(request.timeoutMs).toBe(30_000);
+  });
+
   it("keeps explicit TTS config timeout ahead of provider default timeout", async () => {
     installSpeechProviders([createMockSpeechProvider("mock", { defaultTimeoutMs: 600_000 })]);
 
@@ -437,6 +483,34 @@ describe("speech-core native voice-note routing", () => {
 
     const request = requireFirstSynthesisRequest("configured timeout synthesis request");
     expect(request.timeoutMs).toBe(45_000);
+  });
+
+  it("caps oversized voice model TTS timeouts before synthesis", async () => {
+    installSpeechProviders([
+      createMockSpeechProvider("mock", { autoSelectOrder: 1, models: ["mock-tts"] }),
+    ]);
+
+    const result = await synthesizeSpeech({
+      text: "Use capped explicit timeout.",
+      cfg: {
+        agents: {
+          defaults: {
+            voiceModel: { primary: "mock/mock-tts", timeoutMs: Number.MAX_SAFE_INTEGER },
+          },
+        },
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+          },
+        },
+      } as OpenClawConfig,
+      disableFallback: true,
+    });
+
+    expect(result.success).toBe(true);
+    const request = requireFirstSynthesisRequest("voice model capped timeout request");
+    expect(request.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("uses agents.defaults.voiceModel as the default speech provider and model", async () => {
@@ -913,6 +987,20 @@ describe("speech-core native voice-note routing", () => {
     });
   });
 
+  it("skips auto TTS for legacy final media directives", async () => {
+    synthesizeMock.mockClear();
+    const cfg = createTtsConfig("openclaw-speech-core-media-directive-tts-test");
+    const result = await maybeApplyTtsToPayload({
+      payload: { text: "Here is the render.\nMEDIA:/tmp/render.png" },
+      cfg,
+      channel: "telegram",
+      kind: "final",
+    });
+
+    expect(synthesizeMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ text: "Here is the render.\nMEDIA:/tmp/render.png" });
+  });
+
   it("keeps skipping explicit tagged TTS text that strips to empty markdown", async () => {
     const cfg = createTtsConfig("openclaw-speech-core-empty-hidden-tts-test");
     const result = await maybeApplyTtsToPayload({
@@ -1082,14 +1170,14 @@ describe("speech-core native voice-note routing", () => {
   });
 
   it("passes directive overrides to telephony synthesis providers", async () => {
-    const synthesizeTelephony = vi.fn(async (_request: SpeechTelephonySynthesisRequest) => ({
+    const synthesizeTelephonyMock = vi.fn(async (_request: SpeechTelephonySynthesisRequest) => ({
       audioBuffer: Buffer.from("voice"),
       outputFormat: "pcm",
-      sampleRate: 24000,
+      sampleRate: 24_000,
     }));
     installSpeechProviders([
       createMockSpeechProvider("mock", {
-        synthesizeTelephony,
+        synthesizeTelephony: synthesizeTelephonyMock,
       }),
     ]);
 
@@ -1113,6 +1201,7 @@ describe("speech-core native voice-note routing", () => {
         providerOverrides: {
           mock: {
             speakerVoice: "directed-voice",
+            speed: 1.5,
           },
         },
       },
@@ -1121,12 +1210,15 @@ describe("speech-core native voice-note routing", () => {
     expect(result.success).toBe(true);
     expect(result.providerModel).toBe("telephony-model");
     expect(result.providerVoice).toBe("directed-voice");
-    expect(synthesizeTelephony).toHaveBeenCalledOnce();
+    expect(synthesizeTelephonyMock).toHaveBeenCalledOnce();
     const telephonyRequest = requireRecord(
-      requireFirstCallParam(synthesizeTelephony.mock.calls, "telephony synthesis"),
+      requireFirstCallParam(synthesizeTelephonyMock.mock.calls, "telephony synthesis"),
       "telephony synthesis request",
     );
-    expect(telephonyRequest.providerOverrides).toEqual({ speakerVoice: "directed-voice" });
+    expect(telephonyRequest.providerOverrides).toEqual({
+      speakerVoice: "directed-voice",
+      speed: 1.5,
+    });
   });
 
   it("uses provider defaults when fallback policy allows missing persona bindings", async () => {

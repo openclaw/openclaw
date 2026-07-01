@@ -1,3 +1,4 @@
+// Runtime Postbuild tests cover runtime postbuild script behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -61,9 +62,7 @@ describe("runtime postbuild static assets", () => {
       "dist/extensions/diffs-language-pack/assets/viewer-runtime.js",
       "dist/extensions/diffs/assets/viewer-runtime.js",
     ]);
-    expect(payload.sources).toContain(
-      "extensions/diffs-language-pack/assets/viewer-runtime.js",
-    );
+    expect(payload.sources).toContain("extensions/diffs-language-pack/assets/viewer-runtime.js");
     expect(payload.sources).toContain("extensions/diffs/assets/viewer-runtime.js");
   });
 
@@ -206,6 +205,45 @@ describe("runtime postbuild static assets", () => {
     });
 
     await expect(fs.readFile(runtimeAsset, "utf8")).resolves.toBe("console.log('viewer');\n");
+  });
+
+  it("can skip static asset copies for minimal runtime builds", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const warn = vi.fn();
+    const output = "assets/viewer-runtime.js";
+
+    await fs.mkdir(path.join(rootDir, "src", "plugin-sdk"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "src", "plugin-sdk", "root-alias.cjs"),
+      "module.exports = {};\n",
+      "utf8",
+    );
+    await fs.mkdir(path.join(rootDir, "extensions", "diffs"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "extensions", "diffs", "package.json"),
+      JSON.stringify({
+        name: "@openclaw/diffs",
+        openclaw: {
+          extensions: ["./index.ts"],
+          build: {
+            staticAssets: [{ source: `./${output}`, output }],
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    runRuntimePostBuild({
+      cwd: rootDir,
+      repoRoot: rootDir,
+      rootDir,
+      env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0" },
+      timings: false,
+      warn,
+    });
+
+    expect(warn).not.toHaveBeenCalled();
+    await expectPathMissing(path.join(rootDir, "dist", "extensions", "diffs", output));
   });
 
   it("skips runtime overlay asset copies when the runtime extension root is absent", async () => {
@@ -459,6 +497,40 @@ describe("runtime postbuild static assets", () => {
     );
   });
 
+  it("keeps text-transform runtime imports hashed after the stable alias export surface grew", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.writeFile(
+      path.join(distDir, "text-transforms.runtime-NewHash.js"),
+      "export const n = true;\nexport const t = true;\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "provider-runtime-NewHash.js"),
+      [
+        'import { n as applyPluginTextReplacements } from "./text-transforms.runtime-NewHash.js";',
+        "export { applyPluginTextReplacements };",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    rewriteRootRuntimeImportsToStableAliases({ rootDir });
+    writeStableRootRuntimeAliases({ rootDir });
+
+    expect(await fs.readFile(path.join(distDir, "provider-runtime-NewHash.js"), "utf8")).toBe(
+      [
+        'import { n as applyPluginTextReplacements } from "./text-transforms.runtime-NewHash.js";',
+        "export { applyPluginTextReplacements };",
+        "",
+      ].join("\n"),
+    );
+    expect(await fs.readFile(path.join(distDir, "text-transforms.runtime.js"), "utf8")).toBe(
+      'export * from "./text-transforms.runtime-NewHash.js";\n',
+    );
+  });
+
   it("rewrites gateway shutdown imports to stable runtime aliases", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const distDir = path.join(rootDir, "dist");
@@ -688,6 +760,26 @@ describe("runtime postbuild static assets", () => {
     expect(await fs.readFile(path.join(distDir, "install.runtime-CNHwKOIb.js"), "utf8")).toBe(
       'export * from "./install.runtime-NewPluginHash.js";\n',
     );
+  });
+
+  it("writes compatibility aliases for previous text-transform runtime chunk names", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.writeFile(
+      path.join(distDir, "text-transforms.runtime.js"),
+      'export * from "./text-transforms.runtime-NewHash.js";\n',
+      "utf8",
+    );
+
+    writeLegacyRootRuntimeCompatAliases({ rootDir });
+
+    expect(
+      await fs.readFile(path.join(distDir, "text-transforms.runtime-D9-SpAmI.js"), "utf8"),
+    ).toBe('export * from "./text-transforms.runtime.js";\n');
+    expect(
+      await fs.readFile(path.join(distDir, "text-transforms.runtime-sEqsN4pN.js"), "utf8"),
+    ).toBe('export * from "./text-transforms.runtime.js";\n');
   });
 
   it("writes compatibility aliases for previous gateway shutdown chunk names", async () => {

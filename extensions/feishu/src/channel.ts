@@ -1,3 +1,4 @@
+// Feishu plugin module implements channel behavior.
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
 import {
@@ -13,6 +14,7 @@ import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import {
   defineChannelMessageAdapter,
   createRuntimeOutboundDelegates,
+  createAccountStatusSink,
   type ChannelMessageSendResult,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -31,6 +33,7 @@ import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { PluginRuntime } from "../runtime-api.js";
 import {
   inspectFeishuCredentials,
   listEnabledFeishuAccounts,
@@ -1316,11 +1319,21 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
           ctx.log?.info(
             `starting feishu[${ctx.accountId}] (mode: ${account.config?.connectionMode ?? "websocket"})`,
           );
+          // Publish Feishu connected state and event recency through the
+          // shared channel status sink.
+          const statusSink = createAccountStatusSink({
+            accountId: ctx.accountId,
+            setStatus: ctx.setStatus,
+          });
           return monitorFeishuProvider({
             config: ctx.cfg,
             runtime: ctx.runtime,
+            // Gateway provides the full channel runtime here; the public SDK type
+            // stays context-only for external compatibility.
+            channelRuntime: ctx.channelRuntime as PluginRuntime["channel"] | undefined,
             abortSignal: ctx.abortSignal,
             accountId: ctx.accountId,
+            statusSink,
           });
         },
       },

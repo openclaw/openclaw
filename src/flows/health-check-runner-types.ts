@@ -1,3 +1,4 @@
+// Health check runner types describe execution state for doctor health checks.
 import type {
   HealthCheck,
   HealthCheckContext,
@@ -8,12 +9,14 @@ import type {
   HealthRepairResult,
 } from "./health-checks.js";
 
+// Runnable health-check contracts used by doctor lint/fix orchestration.
 export interface HealthCheckRunContext extends HealthCheckContext {
   readonly repair: boolean;
   readonly diff?: boolean;
   readonly previewRepair?: boolean;
 }
 
+/** Result shape for checks that combine detect, preview, and repair in one run() method. */
 export interface HealthCheckRunResult extends Omit<HealthRepairResult, "changes" | "status"> {
   readonly findings?: readonly HealthFinding[];
   readonly status?: "repairable" | "repaired" | "skipped" | "failed";
@@ -22,16 +25,23 @@ export interface HealthCheckRunResult extends Omit<HealthRepairResult, "changes"
   readonly effects?: readonly HealthRepairEffect[];
 }
 
-export interface RunnableHealthCheck extends Pick<
-  HealthCheck,
-  "id" | "kind" | "description" | "source"
-> {
+/** Internal runner selection metadata. This is intentionally not part of the public SDK type. */
+export interface HealthCheckSelectionOptions {
+  readonly defaultEnabled?: boolean;
+}
+
+export type SplitHealthCheckInput = HealthCheck & HealthCheckSelectionOptions;
+
+/** Health-check implementation that owns its own detect/repair orchestration. */
+export interface RunnableHealthCheck
+  extends Pick<HealthCheck, "id" | "kind" | "description" | "source">, HealthCheckSelectionOptions {
   run(ctx: HealthCheckRunContext, scope?: HealthCheckScope): Promise<HealthCheckRunResult>;
 }
 
-export type HealthCheckInput = HealthCheck | RunnableHealthCheck;
+export type HealthCheckInput = SplitHealthCheckInput | RunnableHealthCheck;
 
-export interface RegisteredHealthCheck extends HealthCheck {
+/** Normalized check contract consumed by lint and repair runners. */
+export interface RegisteredHealthCheck extends HealthCheck, HealthCheckSelectionOptions {
   readonly sourceContract: "split" | "run";
   run(ctx: HealthCheckRunContext, scope?: HealthCheckScope): Promise<HealthCheckRunResult>;
 }

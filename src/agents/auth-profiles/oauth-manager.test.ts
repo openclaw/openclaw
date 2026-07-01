@@ -1,13 +1,17 @@
+/**
+ * Tests OAuth manager store and refresh behavior.
+ * Covers identity safety, main-store adoption, refresh persistence, fallback
+ * recovery, and external profile overlays.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveOAuthDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { captureEnv } from "../../test-utils/env.js";
+import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { testing as externalAuthTesting } from "./external-auth.js";
-import { legacyOAuthSidecarTestUtils } from "./legacy-oauth-sidecar.js";
 import {
   createOAuthManager,
   isSafeToAdoptBootstrapOAuthIdentity,
@@ -15,7 +19,6 @@ import {
   isSafeToOverwriteStoredOAuthIdentity,
   OAuthManagerRefreshError,
 } from "./oauth-manager.js";
-import { resolveAuthStorePath } from "./paths.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
@@ -27,7 +30,7 @@ import type { AuthProfileStore, OAuthCredential } from "./types.js";
 function createCredential(overrides: Partial<OAuthCredential> = {}): OAuthCredential {
   return {
     type: "oauth",
-    provider: "openai-codex",
+    provider: "openai",
     access: "access-token",
     refresh: "refresh-token",
     expires: Date.now() + 60_000,
@@ -36,12 +39,30 @@ function createCredential(overrides: Partial<OAuthCredential> = {}): OAuthCreden
 }
 
 const tempDirs: string[] = [];
-const envSnapshot = captureEnv([
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_AGENT_DIR",
-  "OPENCLAW_OAUTH_DIR",
-  "OPENCLAW_AUTH_PROFILE_SECRET_KEY",
-]);
+
+async function withOAuthTempRoot(
+  prefix: string,
+  run: (tempRoot: string) => Promise<void>,
+): Promise<void> {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  tempDirs.push(tempRoot);
+  await withEnvAsync({ OPENCLAW_STATE_DIR: tempRoot }, async () => await run(tempRoot));
+}
+
+async function withOAuthAgentDirs(
+  prefix: string,
+  run: (dirs: { mainAgentDir: string; agentDir: string }) => Promise<void>,
+): Promise<void> {
+  await withOAuthTempRoot(prefix, async (tempRoot) => {
+    const mainAgentDir = path.join(tempRoot, "agents", "main", "agent");
+    const agentDir = path.join(tempRoot, "agents", "sub", "agent");
+    await withEnvAsync({ OPENCLAW_AGENT_DIR: mainAgentDir }, async () => {
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.mkdir(mainAgentDir, { recursive: true });
+      await run({ mainAgentDir, agentDir });
+    });
+  });
+}
 
 beforeEach(() => {
   externalAuthTesting.setResolveExternalAuthProfilesForTest(() => []);
@@ -49,7 +70,6 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  envSnapshot.restore();
   externalAuthTesting.resetResolveExternalAuthProfilesForTest();
   clearRuntimeAuthProfileStoreSnapshots();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
@@ -141,7 +161,7 @@ describe("OAuthManagerRefreshError", () => {
     const refreshedStore: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai-codex:default": createCredential({
+        "openai:oauth": createCredential({
           access: "store-access",
           refresh: "store-refresh",
         }),
@@ -149,14 +169,14 @@ describe("OAuthManagerRefreshError", () => {
     };
     const error = new OAuthManagerRefreshError({
       credential: createCredential({ access: "error-access", refresh: "error-refresh" }),
-      profileId: "openai-codex:default",
+      profileId: "openai:oauth",
       refreshedStore,
       cause: new Error("boom"),
     });
 
     const serialized = JSON.stringify(error);
-    expect(serialized).toContain("openai-codex");
-    expect(serialized).toContain("openai-codex:default");
+    expect(serialized).toContain("openai");
+    expect(serialized).toContain("openai:oauth");
     expect(serialized).not.toContain("error-access");
     expect(serialized).not.toContain("error-refresh");
     expect(serialized).not.toContain("store-access");
@@ -167,7 +187,7 @@ describe("OAuthManagerRefreshError", () => {
     const refreshedStore: AuthProfileStore = {
       version: 1,
       profiles: {
-        "openai-codex:default": createCredential({
+        "openai:oauth": createCredential({
           access: "store-access",
           refresh: "store-refresh",
           idToken: "store-id-token",
@@ -180,7 +200,7 @@ describe("OAuthManagerRefreshError", () => {
         refresh: "error-refresh",
         idToken: "error-id-token",
       }),
-      profileId: "openai-codex:default",
+      profileId: "openai:oauth",
       refreshedStore,
       cause: new Error(
         "refresh rejected error-access error-refresh error-id-token store-access store-refresh store-id-token",
@@ -210,7 +230,7 @@ describe("OAuthManagerRefreshError", () => {
     const refresh = "ya29.oauthreviewredaction1234567890yyyy";
     const error = new OAuthManagerRefreshError({
       credential: createCredential({ access, refresh }),
-      profileId: "openai-codex:default",
+      profileId: "openai:oauth",
       refreshedStore: { version: 1, profiles: {} },
       cause: new Error(`refresh rejected ${access} ${refresh}`, {
         cause: new Error(`nested failure ${access}`),
@@ -236,7 +256,7 @@ describe("OAuthManagerRefreshError", () => {
         credential: createCredential({
           access: "sk-nonjsonredaction1234567890zzzz",
         }),
-        profileId: "openai-codex:default",
+        profileId: "openai:oauth",
         refreshedStore: { version: 1, profiles: {} },
         cause,
       });
@@ -251,7 +271,7 @@ describe("OAuthManagerRefreshError", () => {
         access: "abc123",
         refresh: "abc123456",
       }),
-      profileId: "openai-codex:default",
+      profileId: "openai:oauth",
       refreshedStore: { version: 1, profiles: {} },
       cause: new Error("refresh rejected abc123 abc123456"),
     });
@@ -266,12 +286,12 @@ describe("OAuthManagerRefreshError", () => {
 
 describe("createOAuthManager", () => {
   it("passes active config to OAuth API-key formatting", async () => {
-    const profileId = "openai-codex:default";
+    const profileId = "openai:oauth";
     const credential = createCredential({ expires: Date.now() + 10 * 60_000 });
     const cfg = {
       models: {
         providers: {
-          "openai-codex": { auth: "oauth", baseUrl: "", models: [] },
+          openai: { auth: "oauth", baseUrl: "", models: [] },
         },
       },
     } satisfies OpenClawConfig;
@@ -299,365 +319,310 @@ describe("createOAuthManager", () => {
     }
     expect(result.apiKey).toBe("access-token");
 
-    expect(buildApiKey).toHaveBeenCalledWith("openai-codex", credential, {
+    expect(buildApiKey).toHaveBeenCalledWith("openai", credential, {
       cfg,
       agentDir: undefined,
     });
   });
 
   it("does not overlay external auth while checking main-store adoption", async () => {
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "oauth-manager-main-adopt-"));
-    tempDirs.push(tempRoot);
-    process.env.OPENCLAW_STATE_DIR = tempRoot;
-    const mainAgentDir = path.join(tempRoot, "agents", "main", "agent");
-    const agentDir = path.join(tempRoot, "agents", "sub", "agent");
-    process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
-    await fs.mkdir(agentDir, { recursive: true });
-    await fs.mkdir(mainAgentDir, { recursive: true });
-
-    const profileId = "openai-codex:default";
-    const subCredential = createCredential({
-      access: "expired-sub-access",
-      refresh: "sub-refresh",
-      expires: Date.now() - 60_000,
-    });
-    const mainCredential = createCredential({
-      access: "expired-main-access",
-      refresh: "main-refresh",
-      expires: Date.now() - 30_000,
-    });
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          [profileId]: subCredential,
-        },
-      },
-      agentDir,
-      { filterExternalAuthProfiles: false },
-    );
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          [profileId]: mainCredential,
-        },
-      },
-      mainAgentDir,
-      { filterExternalAuthProfiles: false },
-    );
-    externalAuthTesting.setResolveExternalAuthProfilesForTest(() => [
-      {
-        profileId,
-        credential: createCredential({
-          access: "external-fresh-access",
-          refresh: "external-fresh-refresh",
-          expires: Date.now() + 60_000,
-        }),
-        persistence: "runtime-only",
-      },
-    ]);
-
-    const refreshCredential = vi.fn(async (credential: OAuthCredential) => {
-      expect(credential.access).toBe("expired-main-access");
-      return {
-        access: "rotated-main-access",
-        refresh: "rotated-main-refresh",
-        expires: Date.now() + 60_000,
-      };
-    });
-    const manager = createOAuthManager({
-      buildApiKey: async (_provider, credential) => credential.access,
-      refreshCredential,
-      readBootstrapCredential: () => null,
-      isRefreshTokenReusedError: () => false,
-    });
-
-    const result = await manager.resolveOAuthAccess({
-      store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-        allowKeychainPrompt: false,
-      }),
-      profileId,
-      credential: subCredential,
-      agentDir,
-    });
-
-    expect(refreshCredential).toHaveBeenCalledTimes(1);
-    if (!result) {
-      throw new Error("Expected refreshed main-store OAuth result");
-    }
-    expect(result.apiKey).toBe("rotated-main-access");
-    expect(result.credential.access).toBe("rotated-main-access");
-    expect(result.credential.refresh).toBe("rotated-main-refresh");
-  });
-
-  it("refreshes with the adopted external oauth credential", async () => {
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "oauth-manager-refresh-"));
-    tempDirs.push(tempRoot);
-    process.env.OPENCLAW_STATE_DIR = tempRoot;
-    const mainAgentDir = path.join(tempRoot, "agents", "main", "agent");
-    const agentDir = path.join(tempRoot, "agents", "sub", "agent");
-    process.env.OPENCLAW_AGENT_DIR = mainAgentDir;
-    await fs.mkdir(agentDir, { recursive: true });
-    await fs.mkdir(mainAgentDir, { recursive: true });
-    const profileId = "minimax-portal:default";
-    const localCredential = createCredential({
-      provider: "minimax-portal",
-      access: "stale-local-access",
-      refresh: "stale-local-refresh",
-      expires: Date.now() - 60_000,
-    });
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          [profileId]: localCredential,
-        },
-      },
-      agentDir,
-      { filterExternalAuthProfiles: false },
-    );
-
-    const manager = createOAuthManager({
-      buildApiKey: async (_provider, credential) => credential.access,
-      refreshCredential: vi.fn(async (credential) => {
-        expect(credential.refresh).toBe("external-refresh");
-        return {
-          access: "rotated-access",
-          refresh: "rotated-refresh",
-          expires: Date.now() + 60_000,
-        };
-      }),
-      readBootstrapCredential: () =>
-        createCredential({
-          provider: "minimax-portal",
-          access: "expired-external-access",
-          refresh: "external-refresh",
-          expires: Date.now() - 30_000,
-        }),
-      isRefreshTokenReusedError: () => false,
-    });
-
-    const result = await manager.resolveOAuthAccess({
-      store: ensureAuthProfileStore(agentDir),
-      profileId,
-      credential: localCredential,
-      agentDir,
-    });
-
-    if (!result) {
-      throw new Error("Expected refreshed external OAuth result");
-    }
-    expect(result.apiKey).toBe("rotated-access");
-    expect(result.credential.provider).toBe("minimax-portal");
-    expect(result.credential.access).toBe("rotated-access");
-    expect(result.credential.refresh).toBe("rotated-refresh");
-  });
-
-  it("refreshes legacy oauthRef sidecar credentials and writes rotated tokens inline", async () => {
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "oauth-manager-legacy-ref-"));
-    tempDirs.push(tempRoot);
-    process.env.OPENCLAW_STATE_DIR = tempRoot;
-    process.env.OPENCLAW_OAUTH_DIR = path.join(tempRoot, "credentials");
-    process.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY = "legacy-seed";
-    const agentDir = path.join(tempRoot, "agents", "main", "agent");
-    const profileId = "openai-codex:default";
-    const ref = {
-      source: "openclaw-credentials" as const,
-      provider: "openai-codex" as const,
-      id: "0123456789abcdef0123456789abcdef",
-    };
-    await fs.mkdir(agentDir, { recursive: true });
-    await fs.writeFile(
-      resolveAuthStorePath(agentDir),
-      `${JSON.stringify(
+    await withOAuthAgentDirs("oauth-manager-main-adopt-", async ({ mainAgentDir, agentDir }) => {
+      const profileId = "openai:oauth";
+      const subCredential = createCredential({
+        access: "expired-sub-access",
+        refresh: "sub-refresh",
+        expires: Date.now() - 60_000,
+      });
+      const mainCredential = createCredential({
+        access: "expired-main-access",
+        refresh: "main-refresh",
+        expires: Date.now() - 30_000,
+      });
+      saveAuthProfileStore(
         {
           version: 1,
           profiles: {
-            [profileId]: {
-              type: "oauth",
-              provider: "openai-codex",
-              expires: Date.now() - 60_000,
-              oauthRef: ref,
-            },
+            [profileId]: subCredential,
           },
         },
-        null,
-        2,
-      )}\n`,
-    );
-    const sidecarPath = path.join(resolveOAuthDir(), "auth-profiles", `${ref.id}.json`);
-    await fs.mkdir(path.dirname(sidecarPath), { recursive: true });
-    await fs.writeFile(
-      sidecarPath,
-      `${JSON.stringify(
+        agentDir,
+        { filterExternalAuthProfiles: false },
+      );
+      saveAuthProfileStore(
         {
           version: 1,
+          profiles: {
+            [profileId]: mainCredential,
+          },
+        },
+        mainAgentDir,
+        { filterExternalAuthProfiles: false },
+      );
+      externalAuthTesting.setResolveExternalAuthProfilesForTest(() => [
+        {
           profileId,
-          provider: "openai-codex",
-          encrypted: legacyOAuthSidecarTestUtils.encryptLegacyOAuthMaterial({
-            ref,
-            profileId,
-            provider: "openai-codex",
-            seed: "legacy-seed",
-            material: {
-              access: "legacy-access",
-              refresh: "legacy-refresh",
-            },
+          credential: createCredential({
+            access: "external-fresh-access",
+            refresh: "external-fresh-refresh",
+            expires: Date.now() + 60_000,
           }),
+          persistence: "runtime-only",
         },
-        null,
-        2,
-      )}\n`,
-    );
+      ]);
 
-    const store = ensureAuthProfileStore(agentDir);
-    const credential = store.profiles[profileId];
-    expect(credential?.type).toBe("oauth");
-    expect(credential).toMatchObject({
-      access: "legacy-access",
-      refresh: "legacy-refresh",
-    });
-    const refreshCredential = vi.fn(async (input: OAuthCredential) => {
-      expect(input.refresh).toBe("legacy-refresh");
-      return {
-        access: "rotated-access",
-        refresh: "rotated-refresh",
-        expires: Date.now() + 60_000,
-      };
-    });
-    const manager = createOAuthManager({
-      buildApiKey: async (_provider, value) => value.access,
-      refreshCredential,
-      readBootstrapCredential: () => null,
-      isRefreshTokenReusedError: () => false,
-    });
+      const refreshCredential = vi.fn(async (credential: OAuthCredential) => {
+        expect(credential.access).toBe("expired-main-access");
+        return {
+          access: "rotated-main-access",
+          refresh: "rotated-main-refresh",
+          expires: Date.now() + 60_000,
+        };
+      });
+      const manager = createOAuthManager({
+        buildApiKey: async (_provider, credential) => credential.access,
+        refreshCredential,
+        readBootstrapCredential: () => null,
+        isRefreshTokenReusedError: () => false,
+      });
 
-    const result = await manager.resolveOAuthAccess({
-      store,
-      profileId,
-      credential: credential as OAuthCredential,
-      agentDir,
-    });
+      const result = await manager.resolveOAuthAccess({
+        store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+          allowKeychainPrompt: false,
+        }),
+        profileId,
+        credential: subCredential,
+        agentDir,
+      });
 
-    expect(refreshCredential).toHaveBeenCalledTimes(1);
-    expect(result?.apiKey).toBe("rotated-access");
-    const parsed = JSON.parse(await fs.readFile(resolveAuthStorePath(agentDir), "utf8")) as {
-      profiles: Record<string, Record<string, unknown>>;
-    };
-    expect(parsed.profiles[profileId]).not.toHaveProperty("oauthRef");
-    expect(parsed.profiles[profileId]).toMatchObject({
-      access: "rotated-access",
-      refresh: "rotated-refresh",
+      expect(refreshCredential).toHaveBeenCalledTimes(1);
+      if (!result) {
+        throw new Error("Expected refreshed main-store OAuth result");
+      }
+      expect(result.apiKey).toBe("rotated-main-access");
+      expect(result.credential.access).toBe("rotated-main-access");
+      expect(result.credential.refresh).toBe("rotated-main-refresh");
     });
   });
 
-  it("skips the refresh adapter when the credential has no refresh token", async () => {
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "oauth-manager-no-refresh-"));
-    tempDirs.push(tempRoot);
-    process.env.OPENCLAW_STATE_DIR = tempRoot;
-    const agentDir = path.join(tempRoot, "agents", "main", "agent");
-    await fs.mkdir(agentDir, { recursive: true });
-    const profileId = "openai-codex:default";
-    const credential = createCredential({
-      access: "",
-      refresh: "",
-      expires: Date.now() - 60_000,
-    });
-    saveAuthProfileStore(
-      {
-        version: 1,
-        profiles: {
-          [profileId]: credential,
+  it("adopts main-store OAuth when the local expiry is out of range", async () => {
+    await withOAuthAgentDirs("oauth-manager-invalid-local-", async ({ mainAgentDir, agentDir }) => {
+      const profileId = "openai-codex:default";
+      const localCredential = createCredential({
+        access: "poisoned-local-access",
+        refresh: "local-refresh",
+        expires: MAX_DATE_TIMESTAMP_MS + 1,
+      });
+      const mainCredential = createCredential({
+        access: "main-access",
+        refresh: "main-refresh",
+        expires: Date.now() + 10 * 60_000,
+      });
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            [profileId]: mainCredential,
+          },
         },
-      },
-      agentDir,
-      { filterExternalAuthProfiles: false },
-    );
-    const refreshCredential = vi.fn(async () => null);
-    const manager = createOAuthManager({
-      buildApiKey: async (_provider, value) => value.access,
-      refreshCredential,
-      readBootstrapCredential: () => null,
-      isRefreshTokenReusedError: () => false,
-    });
+        mainAgentDir,
+        { filterExternalAuthProfiles: false },
+      );
 
-    const result = await manager.resolveOAuthAccess({
-      store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-        allowKeychainPrompt: false,
-      }),
-      profileId,
-      credential,
-      agentDir,
-    });
+      const refreshCredential = vi.fn(async () => {
+        throw new Error("should not refresh poisoned local credential");
+      });
+      const manager = createOAuthManager({
+        buildApiKey: async (_provider, credential) => credential.access,
+        refreshCredential,
+        readBootstrapCredential: () => null,
+        isRefreshTokenReusedError: () => false,
+      });
 
-    expect(result).toBeNull();
-    expect(refreshCredential).not.toHaveBeenCalled();
-  });
-
-  it("redacts the external oauth credential attempted during refresh failures", async () => {
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "oauth-manager-refresh-redact-"));
-    tempDirs.push(tempRoot);
-    process.env.OPENCLAW_STATE_DIR = tempRoot;
-    const agentDir = path.join(tempRoot, "agents", "sub", "agent");
-    await fs.mkdir(agentDir, { recursive: true });
-    const profileId = "minimax-portal:default";
-    const localCredential = createCredential({
-      provider: "minimax-portal",
-      access: "fresh-local-access",
-      refresh: "fresh-local-refresh",
-      expires: Date.now() + 60_000,
-    });
-    const externalCredential = createCredential({
-      provider: "minimax-portal",
-      access: "external-attempt-access",
-      refresh: "external-attempt-refresh",
-      idToken: "external-attempt-id-token",
-      expires: Date.now() - 30_000,
-    });
-    saveAuthProfileStore(
-      {
+      const store: AuthProfileStore = {
         version: 1,
         profiles: {
           [profileId]: localCredential,
         },
-      },
-      agentDir,
-      { filterExternalAuthProfiles: false },
-    );
+      };
+      const result = await manager.resolveOAuthAccess({
+        store,
+        profileId,
+        credential: localCredential,
+        agentDir,
+      });
 
-    const manager = createOAuthManager({
-      buildApiKey: async (_provider, credential) => credential.access,
-      refreshCredential: vi.fn(async () => {
-        throw new Error(
-          "refresh rejected external-attempt-access external-attempt-refresh external-attempt-id-token",
-        );
-      }),
-      readBootstrapCredential: () => externalCredential,
-      isRefreshTokenReusedError: () => false,
+      expect(refreshCredential).not.toHaveBeenCalled();
+      expect(result?.apiKey).toBe("main-access");
+      expect(result?.credential.access).toBe("main-access");
+      expect(store.profiles[profileId]).toMatchObject({
+        type: "oauth",
+        access: "main-access",
+        refresh: "main-refresh",
+      });
     });
+  });
 
-    try {
-      await manager.resolveOAuthAccess({
+  it("refreshes with the adopted external oauth credential", async () => {
+    await withOAuthAgentDirs("oauth-manager-refresh-", async ({ agentDir }) => {
+      const profileId = "minimax-portal:default";
+      const localCredential = createCredential({
+        provider: "minimax-portal",
+        access: "stale-local-access",
+        refresh: "stale-local-refresh",
+        expires: Date.now() - 60_000,
+      });
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            [profileId]: localCredential,
+          },
+        },
+        agentDir,
+        { filterExternalAuthProfiles: false },
+      );
+
+      const manager = createOAuthManager({
+        buildApiKey: async (_provider, credential) => credential.access,
+        refreshCredential: vi.fn(async (credential) => {
+          expect(credential.refresh).toBe("external-refresh");
+          return {
+            access: "rotated-access",
+            refresh: "rotated-refresh",
+            expires: Date.now() + 60_000,
+          };
+        }),
+        readBootstrapCredential: () =>
+          createCredential({
+            provider: "minimax-portal",
+            access: "expired-external-access",
+            refresh: "external-refresh",
+            expires: Date.now() - 30_000,
+          }),
+        isRefreshTokenReusedError: () => false,
+      });
+
+      const result = await manager.resolveOAuthAccess({
         store: ensureAuthProfileStore(agentDir),
         profileId,
         credential: localCredential,
         agentDir,
-        forceRefresh: true,
       });
-      throw new Error("Expected refresh failure");
-    } catch (caught) {
-      if (!(caught instanceof OAuthManagerRefreshError)) {
-        throw caught;
+
+      if (!result) {
+        throw new Error("Expected refreshed external OAuth result");
       }
-      expect(caught.message).toContain("refresh rejected");
-      expect(caught.message).not.toContain("external-attempt-access");
-      expect(caught.message).not.toContain("external-attempt-refresh");
-      expect(caught.message).not.toContain("external-attempt-id-token");
-      const surfacedCauseMessage = formatErrorMessage(caught.cause);
-      expect(surfacedCauseMessage).not.toContain("external-attempt-access");
-      expect(surfacedCauseMessage).not.toContain("external-attempt-refresh");
-      expect(surfacedCauseMessage).not.toContain("external-attempt-id-token");
-    }
+      expect(result.apiKey).toBe("rotated-access");
+      expect(result.credential.provider).toBe("minimax-portal");
+      expect(result.credential.access).toBe("rotated-access");
+      expect(result.credential.refresh).toBe("rotated-refresh");
+    });
+  });
+
+  it("skips the refresh adapter when the credential has no refresh token", async () => {
+    await withOAuthTempRoot("oauth-manager-no-refresh-", async (tempRoot) => {
+      const agentDir = path.join(tempRoot, "agents", "main", "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      const profileId = "openai:oauth";
+      const credential = createCredential({
+        access: "",
+        refresh: "",
+        expires: Date.now() - 60_000,
+      });
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            [profileId]: credential,
+          },
+        },
+        agentDir,
+        { filterExternalAuthProfiles: false },
+      );
+      const refreshCredential = vi.fn(async () => null);
+      const manager = createOAuthManager({
+        buildApiKey: async (_provider, value) => value.access,
+        refreshCredential,
+        readBootstrapCredential: () => null,
+        isRefreshTokenReusedError: () => false,
+      });
+
+      const result = await manager.resolveOAuthAccess({
+        store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+          allowKeychainPrompt: false,
+        }),
+        profileId,
+        credential,
+        agentDir,
+      });
+
+      expect(result).toBeNull();
+      expect(refreshCredential).not.toHaveBeenCalled();
+    });
+  });
+
+  it("redacts the external oauth credential attempted during refresh failures", async () => {
+    await withOAuthTempRoot("oauth-manager-refresh-redact-", async (tempRoot) => {
+      const agentDir = path.join(tempRoot, "agents", "sub", "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      const profileId = "minimax-portal:default";
+      const localCredential = createCredential({
+        provider: "minimax-portal",
+        access: "fresh-local-access",
+        refresh: "fresh-local-refresh",
+        expires: Date.now() + 60_000,
+      });
+      const externalCredential = createCredential({
+        provider: "minimax-portal",
+        access: "external-attempt-access",
+        refresh: "external-attempt-refresh",
+        idToken: "external-attempt-id-token",
+        expires: Date.now() - 30_000,
+      });
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            [profileId]: localCredential,
+          },
+        },
+        agentDir,
+        { filterExternalAuthProfiles: false },
+      );
+
+      const manager = createOAuthManager({
+        buildApiKey: async (_provider, credential) => credential.access,
+        refreshCredential: vi.fn(async () => {
+          throw new Error(
+            "refresh rejected external-attempt-access external-attempt-refresh external-attempt-id-token",
+          );
+        }),
+        readBootstrapCredential: () => externalCredential,
+        isRefreshTokenReusedError: () => false,
+      });
+
+      try {
+        await manager.resolveOAuthAccess({
+          store: ensureAuthProfileStore(agentDir),
+          profileId,
+          credential: localCredential,
+          agentDir,
+          forceRefresh: true,
+        });
+        throw new Error("Expected refresh failure");
+      } catch (caught) {
+        if (!(caught instanceof OAuthManagerRefreshError)) {
+          throw caught;
+        }
+        expect(caught.message).toContain("refresh rejected");
+        expect(caught.message).not.toContain("external-attempt-access");
+        expect(caught.message).not.toContain("external-attempt-refresh");
+        expect(caught.message).not.toContain("external-attempt-id-token");
+        const surfacedCauseMessage = formatErrorMessage(caught.cause);
+        expect(surfacedCauseMessage).not.toContain("external-attempt-access");
+        expect(surfacedCauseMessage).not.toContain("external-attempt-refresh");
+        expect(surfacedCauseMessage).not.toContain("external-attempt-id-token");
+      }
+    });
   });
 });

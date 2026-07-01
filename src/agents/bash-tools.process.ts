@@ -1,3 +1,8 @@
+/**
+ * Process-control tool factory.
+ * Lists, polls, logs, writes to, sends keys to, pastes into, kills, clears,
+ * and removes background exec sessions.
+ */
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
 import { killProcessTree } from "../process/kill-tree.js";
@@ -30,6 +35,7 @@ import type { AgentToolResult } from "./runtime/index.js";
 import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AgentToolWithMeta } from "./tools/common.js";
 
+/** Defaults injected by tests, agent scopes, and scoped process registries. */
 export type ProcessToolDefaults = {
   cleanupMs?: number;
   hasCronTool?: boolean;
@@ -149,8 +155,6 @@ async function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void
     throw createAbortError(signal.reason);
   }
   await new Promise<void>((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let onAbort: (() => void) | undefined;
     const cleanup = () => {
       if (timer) {
         clearTimeout(timer);
@@ -163,16 +167,17 @@ async function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void
       cleanup();
       resolve();
     };
-    onAbort = () => {
+    const onAbort: (() => void) | undefined = () => {
       cleanup();
       reject(createAbortError(signal?.reason));
     };
-    timer = setTimeout(onResolve, ms);
+    const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(onResolve, ms);
     timer.unref?.();
     signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
+/** Build the process-control tool with optional cleanup, scope, and input-idle defaults. */
 export function createProcessTool(
   defaults?: ProcessToolDefaults,
 ): AgentToolWithMeta<typeof processSchema, unknown> {
@@ -372,14 +377,14 @@ export function createProcessTool(
       };
 
       const runningSessionResult = (
-        session: ProcessSession,
+        sessionLocal: ProcessSession,
         text: string,
       ): AgentToolResult<unknown> => ({
         content: [{ type: "text", text }],
         details: {
           status: "running",
           sessionId: params.sessionId,
-          name: deriveSessionName(session.command),
+          name: deriveSessionName(sessionLocal.command),
         },
       });
 
@@ -408,6 +413,20 @@ export function createProcessTool(
                   status: scopedFinished.status === "completed" ? "completed" : "failed",
                   sessionId: params.sessionId,
                   exitCode: scopedFinished.exitCode ?? undefined,
+                  ...(scopedFinished.exitSignal != null
+                    ? { exitSignal: scopedFinished.exitSignal }
+                    : {}),
+                  ...(scopedFinished.exitReason
+                    ? {
+                        exitReason: scopedFinished.exitReason,
+                        timedOut:
+                          scopedFinished.exitReason === "overall-timeout" ||
+                          scopedFinished.exitReason === "no-output-timeout",
+                      }
+                    : {}),
+                  ...(scopedFinished.noOutputTimedOut !== undefined
+                    ? { noOutputTimedOut: scopedFinished.noOutputTimedOut }
+                    : {}),
                   aggregated: scopedFinished.aggregated,
                   name: deriveSessionName(scopedFinished.command),
                 },
@@ -437,6 +456,8 @@ export function createProcessTool(
               scopedSession.exitCode ?? null,
               scopedSession.exitSignal ?? null,
               status,
+              scopedSession.exitReason,
+              scopedSession.noOutputTimedOut,
             );
           }
           const status = exited
@@ -470,6 +491,20 @@ export function createProcessTool(
               status,
               sessionId: params.sessionId,
               exitCode: exited ? exitCode : undefined,
+              ...(exited && scopedSession.exitSignal != null
+                ? { exitSignal: scopedSession.exitSignal }
+                : {}),
+              ...(exited && scopedSession.exitReason
+                ? {
+                    exitReason: scopedSession.exitReason,
+                    timedOut:
+                      scopedSession.exitReason === "overall-timeout" ||
+                      scopedSession.exitReason === "no-output-timeout",
+                  }
+                : {}),
+              ...(exited && scopedSession.noOutputTimedOut !== undefined
+                ? { noOutputTimedOut: scopedSession.noOutputTimedOut }
+                : {}),
               aggregated: scopedSession.aggregated,
               name: deriveSessionName(scopedSession.command),
               ...(runtime ? runningSessionInputDetails(runtime) : {}),
@@ -739,4 +774,5 @@ export function createProcessTool(
   };
 }
 
+/** Shared process-control tool instance used by the default Bash tool barrel. */
 export const processTool = createProcessTool();

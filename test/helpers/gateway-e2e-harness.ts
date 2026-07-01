@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+// Gateway E2E harness starts test gateway processes and HTTP probes.
 import { request as httpRequest } from "node:http";
 import path from "node:path";
 import { GatewayClient } from "../../src/gateway/client.js";
@@ -10,13 +10,6 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../src/utils/mess
 import { createOpenClawTestInstance, type OpenClawTestInstance } from "./openclaw-test-instance.js";
 
 export { extractFirstTextBlock };
-
-export type ChatEventPayload = {
-  runId?: string;
-  sessionKey?: string;
-  state?: string;
-  message?: unknown;
-};
 
 export type GatewayInstance = OpenClawTestInstance;
 
@@ -68,6 +61,7 @@ export async function postJson(
       settled = true;
       if (timeout) {
         clearTimeout(timeout);
+        timeout = undefined;
       }
       if ("error" in result) {
         reject(result.error);
@@ -205,49 +199,41 @@ export async function waitForNodeStatus(
   nodeId: string,
   timeoutMs = GATEWAY_NODE_STATUS_TIMEOUT_MS,
 ) {
-  const client = await connectStatusClient(
-    inst,
-    Math.min(GATEWAY_CONNECT_STATUS_TIMEOUT_MS, timeoutMs),
-  );
   const deadline = Date.now() + timeoutMs;
-  try {
-    while (Date.now() < deadline) {
-      const list = await client.request("node.list", {});
-      const match = list.nodes?.find((n) => n.nodeId === nodeId);
-      if (match?.connected && match?.paired) {
-        return;
-      }
-      await sleep(GATEWAY_NODE_STATUS_POLL_MS);
-    }
-  } finally {
-    client.stop();
-  }
-  throw new Error(`timeout waiting for node status for ${nodeId}`);
-}
-
-export async function waitForChatFinalEvent(params: {
-  events: ChatEventPayload[];
-  runId: string;
-  sessionKey: string;
-  timeoutMs?: number;
-}): Promise<ChatEventPayload> {
-  const deadline = Date.now() + (params.timeoutMs ?? 45_000);
+  let lastError: unknown;
   while (Date.now() < deadline) {
-    const match = params.events.find(
-      (evt) =>
-        evt.runId === params.runId && evt.sessionKey === params.sessionKey && evt.state === "final",
-    );
-    if (match) {
-      return match;
+    let client: GatewayClient | undefined;
+    while (Date.now() < deadline) {
+      try {
+        client = await connectStatusClient(
+          inst,
+          Math.min(2_000, GATEWAY_CONNECT_STATUS_TIMEOUT_MS, Math.max(1, deadline - Date.now())),
+        );
+        break;
+      } catch (error) {
+        lastError = error;
+        await sleep(GATEWAY_NODE_STATUS_POLL_MS);
+      }
     }
-    await sleep(20);
+    if (!client) {
+      break;
+    }
+    try {
+      while (Date.now() < deadline) {
+        const list = await client.request("node.list", {});
+        const match = list.nodes?.find((n) => n.nodeId === nodeId);
+        if (match?.connected && match?.paired) {
+          return;
+        }
+        await sleep(GATEWAY_NODE_STATUS_POLL_MS);
+      }
+    } catch (error) {
+      lastError = error;
+      await sleep(GATEWAY_NODE_STATUS_POLL_MS);
+    } finally {
+      client.stop();
+    }
   }
-  const observed = params.events
-    .filter((evt) => evt.runId === params.runId || evt.sessionKey === params.sessionKey)
-    .map((evt) => `${evt.runId ?? "no-run"}:${evt.sessionKey ?? "no-session"}:${evt.state}`)
-    .slice(-10)
-    .join(", ");
-  throw new Error(
-    `timeout waiting for final chat event (runId=${params.runId}, sessionKey=${params.sessionKey}, observed=${observed || "none"})`,
-  );
+  const suffix = lastError instanceof Error ? `: ${lastError.message}` : "";
+  throw new Error(`timeout waiting for node status for ${nodeId}${suffix}`);
 }

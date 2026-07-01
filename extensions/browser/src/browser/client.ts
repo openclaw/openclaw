@@ -1,3 +1,13 @@
+/**
+ * Browser control client API.
+ *
+ * Provides typed helpers for status, profile lifecycle, tabs, and snapshots
+ * over the browser-control transport.
+ */
+import {
+  clampPositiveTimerTimeoutMs,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
 import { fetchBrowserJson } from "./client-fetch.js";
 import type {
@@ -8,6 +18,7 @@ import type {
 } from "./client.types.js";
 import { DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./constants.js";
 import type { BrowserDoctorReport } from "./doctor.js";
+import type { AnnotationItem } from "./screenshot-annotate.js";
 
 export type { BrowserStatus, BrowserTab, BrowserTransport } from "./client.types.js";
 export type { BrowserDoctorCheck, BrowserDoctorReport } from "./doctor.js";
@@ -29,9 +40,7 @@ function resolveBrowserClientTimeoutMs(
   opts: BrowserClientTimeoutOptions | undefined,
   fallbackMs: number,
 ): number {
-  return typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
-    ? Math.max(1, Math.floor(opts.timeoutMs))
-    : fallbackMs;
+  return resolveTimerTimeoutMs(opts?.timeoutMs, fallbackMs);
 }
 
 function withProfilePath(baseUrl: string | undefined, path: string, profile?: string): string {
@@ -64,6 +73,7 @@ async function sendTabTargetRequest(params: {
   });
 }
 
+/** Profile status record returned by browser profile listing. */
 export type ProfileStatus = {
   name: string;
   transport?: BrowserTransport;
@@ -79,6 +89,7 @@ export type ProfileStatus = {
   reconcileReason?: string | null;
 };
 
+/** Result returned when a managed browser profile directory is reset. */
 export type BrowserResetProfileResult = {
   ok: true;
   moved: boolean;
@@ -86,6 +97,7 @@ export type BrowserResetProfileResult = {
   to?: string;
 };
 
+/** Snapshot response returned by browserSnapshot. */
 export type SnapshotResult =
   | {
       ok: true;
@@ -113,12 +125,18 @@ export type SnapshotResult =
       labels?: boolean;
       labelsCount?: number;
       labelsSkipped?: number;
+      /**
+       * Per-ref bounding boxes when labels=true. Coordinates are in the
+       * captured image's space. Omitted when empty.
+       */
+      annotations?: AnnotationItem[];
       imagePath?: string;
       imageType?: "png" | "jpeg";
       blockedByDialog?: boolean;
       browserState?: unknown;
     };
 
+/** Read browser-control status for the selected profile. */
 export async function browserStatus(
   baseUrl?: string,
   opts?: { profile?: string; timeoutMs?: number },
@@ -128,6 +146,7 @@ export async function browserStatus(
   });
 }
 
+/** Run browser doctor checks for the selected profile. */
 export async function browserDoctor(
   baseUrl?: string,
   opts?: { profile?: string; deep?: boolean },
@@ -147,6 +166,7 @@ export async function browserDoctor(
   });
 }
 
+/** List configured browser profiles and their current status. */
 export async function browserProfiles(
   baseUrl?: string,
   opts?: { timeoutMs?: number },
@@ -160,6 +180,7 @@ export async function browserProfiles(
   return res.profiles ?? [];
 }
 
+/** Start the selected browser profile. */
 export async function browserStart(
   baseUrl?: string,
   opts?: { profile?: string; timeoutMs?: number },
@@ -167,6 +188,7 @@ export async function browserStart(
   await sendProfilePost(baseUrl, "/start", opts, 15000);
 }
 
+/** Stop the selected browser profile. */
 export async function browserStop(
   baseUrl?: string,
   opts?: { profile?: string; timeoutMs?: number },
@@ -174,6 +196,7 @@ export async function browserStop(
   await sendProfilePost(baseUrl, "/stop", opts, 15000);
 }
 
+/** Reset the selected managed browser profile directory. */
 export async function browserResetProfile(
   baseUrl?: string,
   opts?: { profile?: string },
@@ -188,6 +211,7 @@ export async function browserResetProfile(
   );
 }
 
+/** Result returned after creating a browser profile. */
 export type BrowserCreateProfileResult = {
   ok: true;
   profile: string;
@@ -199,6 +223,7 @@ export type BrowserCreateProfileResult = {
   isRemote: boolean;
 };
 
+/** Create and persist a browser profile. */
 export async function browserCreateProfile(
   baseUrl: string | undefined,
   opts: {
@@ -226,12 +251,14 @@ export async function browserCreateProfile(
   );
 }
 
+/** Result returned after deleting a browser profile. */
 export type BrowserDeleteProfileResult = {
   ok: true;
   profile: string;
   deleted: boolean;
 };
 
+/** Delete a configured browser profile. */
 export async function browserDeleteProfile(
   baseUrl: string | undefined,
   profile: string,
@@ -245,6 +272,7 @@ export async function browserDeleteProfile(
   );
 }
 
+/** List tabs for the selected browser profile. */
 export async function browserTabs(
   baseUrl?: string,
   opts?: { profile?: string; timeoutMs?: number },
@@ -258,6 +286,7 @@ export async function browserTabs(
   return res.tabs ?? [];
 }
 
+/** Open a new tab in the selected browser profile. */
 export async function browserOpenTab(
   baseUrl: string | undefined,
   url: string,
@@ -271,6 +300,7 @@ export async function browserOpenTab(
   });
 }
 
+/** Focus an existing browser tab. */
 export async function browserFocusTab(
   baseUrl: string | undefined,
   targetId: string,
@@ -280,6 +310,7 @@ export async function browserFocusTab(
   await sendTabTargetRequest({ baseUrl, path: "/tabs/focus", method: "POST", opts, body });
 }
 
+/** Close an existing browser tab. */
 export async function browserCloseTab(
   baseUrl: string | undefined,
   targetId: string,
@@ -289,6 +320,7 @@ export async function browserCloseTab(
   await sendTabTargetRequest({ baseUrl, path, method: "DELETE", opts });
 }
 
+/** Execute legacy index-based tab actions. */
 export async function browserTabAction(
   baseUrl: string | undefined,
   opts: {
@@ -309,6 +341,7 @@ export async function browserTabAction(
   });
 }
 
+/** Capture an ARIA or AI snapshot for the selected tab. */
 export async function browserSnapshot(
   baseUrl: string | undefined,
   opts: {
@@ -373,9 +406,7 @@ export async function browserSnapshot(
     q.set("profile", opts.profile);
   }
   const resolvedTimeoutMs =
-    typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
-      ? Math.floor(opts.timeoutMs)
-      : DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS;
+    clampPositiveTimerTimeoutMs(opts.timeoutMs) ?? DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS;
   q.set("timeoutMs", String(resolvedTimeoutMs));
   return await fetchBrowserJson<SnapshotResult>(withBaseUrl(baseUrl, `/snapshot?${q.toString()}`), {
     timeoutMs: resolvedTimeoutMs,

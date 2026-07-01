@@ -1,3 +1,8 @@
+// Handles abort requests and active reply run cancellation.
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
@@ -14,25 +19,23 @@ import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
 } from "../../agents/tools/sessions-helpers.js";
+import { resolveStorePath } from "../../config/sessions.js";
 import {
-  loadSessionStore,
-  resolveSessionStoreEntry,
-  resolveStorePath,
-  type SessionEntry,
-  updateSessionStore,
-} from "../../config/sessions.js";
+  loadSessionEntry,
+  markSessionAbortTarget,
+  resolveSessionAbortTarget,
+  type SessionAbortTargetContext,
+  type SessionAbortTargetIdentity,
+  type SessionAbortTargetResult,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isAcpSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import {
-  applyAbortCutoffToSessionEntry,
+  type AbortCutoff,
   resolveAbortCutoffFromContext,
   shouldPersistAbortCutoff,
 } from "./abort-cutoff.js";
@@ -64,6 +67,8 @@ const defaultAbortDeps = {
   getAcpSessionManager,
   abortEmbeddedAgentRun,
   resolveActiveEmbeddedRunSessionId,
+  markSessionAbortTarget,
+  resolveSessionAbortTarget,
   getLatestSubagentRunByChildSessionKey,
   listSubagentRunsForController,
   markSubagentRunTerminated,
@@ -81,6 +86,10 @@ export const testing = {
       deps?.abortEmbeddedAgentRun ?? defaultAbortDeps.abortEmbeddedAgentRun;
     abortDeps.resolveActiveEmbeddedRunSessionId =
       deps?.resolveActiveEmbeddedRunSessionId ?? defaultAbortDeps.resolveActiveEmbeddedRunSessionId;
+    abortDeps.markSessionAbortTarget =
+      deps?.markSessionAbortTarget ?? defaultAbortDeps.markSessionAbortTarget;
+    abortDeps.resolveSessionAbortTarget =
+      deps?.resolveSessionAbortTarget ?? defaultAbortDeps.resolveSessionAbortTarget;
     abortDeps.getLatestSubagentRunByChildSessionKey =
       deps?.getLatestSubagentRunByChildSessionKey ??
       defaultAbortDeps.getLatestSubagentRunByChildSessionKey;
@@ -94,6 +103,8 @@ export const testing = {
     abortDeps.abortEmbeddedAgentRun = defaultAbortDeps.abortEmbeddedAgentRun;
     abortDeps.resolveActiveEmbeddedRunSessionId =
       defaultAbortDeps.resolveActiveEmbeddedRunSessionId;
+    abortDeps.markSessionAbortTarget = defaultAbortDeps.markSessionAbortTarget;
+    abortDeps.resolveSessionAbortTarget = defaultAbortDeps.resolveSessionAbortTarget;
     abortDeps.getLatestSubagentRunByChildSessionKey =
       defaultAbortDeps.getLatestSubagentRunByChildSessionKey;
     abortDeps.listSubagentRunsForController = defaultAbortDeps.listSubagentRunsForController;
@@ -130,29 +141,6 @@ export function formatAbortReplyText(stoppedSubagents?: number): string {
   return `⚙️ Agent was aborted. Stopped ${stoppedSubagents} ${label}.`;
 }
 
-export function resolveSessionEntryForKey(
-  store: Record<string, SessionEntry> | undefined,
-  sessionKey: string | undefined,
-): { entry?: SessionEntry; key?: string; legacyKeys?: string[] } {
-  if (!store || !sessionKey) {
-    return {};
-  }
-  const resolved = resolveSessionStoreEntry({ store, sessionKey });
-  if (resolved.existing) {
-    return resolved.legacyKeys.length > 0
-      ? {
-          entry: resolved.existing,
-          key: resolved.normalizedKey,
-          legacyKeys: resolved.legacyKeys,
-        }
-      : {
-          entry: resolved.existing,
-          key: resolved.normalizedKey,
-        };
-  }
-  return {};
-}
-
 function resolveStoredSessionId(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -163,8 +151,12 @@ function resolveStoredSessionId(params: {
   });
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
   try {
-    const store = loadSessionStore(storePath);
-    return resolveSessionEntryForKey(store, params.sessionKey).entry?.sessionId;
+    return loadSessionEntry({
+      agentId,
+      clone: false,
+      sessionKey: params.sessionKey,
+      storePath,
+    })?.sessionId;
   } catch {
     return undefined;
   }
@@ -244,7 +236,6 @@ export function stopSubagentsForRequester(params: {
     return { stopped: 0 };
   }
 
-  const storeCache = new Map<string, Record<string, SessionEntry>>();
   const seenChildKeys = new Set<string>();
   let stopped = 0;
 
@@ -259,13 +250,14 @@ export function stopSubagentsForRequester(params: {
       const cleared = clearSessionQueues([childKey]);
       const parsed = parseAgentSessionKey(childKey);
       const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed?.agentId });
-      let store = storeCache.get(storePath);
-      if (!store) {
-        store = loadSessionStore(storePath);
-        storeCache.set(storePath, store);
-      }
-      const entry = store[childKey];
-      const sessionId = replyRunRegistry.resolveSessionId(childKey) ?? entry?.sessionId;
+      const sessionId =
+        replyRunRegistry.resolveSessionId(childKey) ??
+        loadSessionEntry({
+          agentId: parsed?.agentId,
+          clone: false,
+          sessionKey: childKey,
+          storePath,
+        })?.sessionId;
       const aborted = abortSessionRunTarget({ key: childKey, sessionId });
       const markedTerminated =
         abortDeps.markSubagentRunTerminated({
@@ -339,9 +331,26 @@ export async function tryFastAbortFromMessage(params: {
 
   if (targetKey) {
     const storePath = resolveStorePath(cfg.session?.store, { agentId });
-    const store = loadSessionStore(storePath);
-    const { entry, key, legacyKeys } = resolveSessionEntryForKey(store, targetKey);
-    const resolvedTargetKey = key ?? targetKey;
+    const abortCutoffForTarget = (target: SessionAbortTargetContext): AbortCutoff | undefined =>
+      shouldPersistAbortCutoff({
+        commandSessionKey,
+        targetSessionKey: target.sessionKey,
+      })
+        ? resolveAbortCutoffFromContext(ctx)
+        : undefined;
+    let resolvedAbortTarget: SessionAbortTargetIdentity | null = null;
+    try {
+      resolvedAbortTarget = abortDeps.resolveSessionAbortTarget({
+        agentId,
+        sessionKey: targetKey,
+        storePath,
+      });
+    } catch (error) {
+      logVerbose(
+        `abort: failed to resolve abort metadata for ${targetKey}: ${formatErrorMessage(error)}`,
+      );
+    }
+    const resolvedTargetKey = resolvedAbortTarget?.sessionKey ?? targetKey;
     const conversationBoundAcpTargetKey = commandSessionKey
       ? resolveBoundAcpAbortTargetSessionKey({
           ctx,
@@ -387,7 +396,7 @@ export async function tryFastAbortFromMessage(params: {
         abortTargetKey,
         replyRunRegistry.resolveSessionId(abortTargetKey) ??
           (abortTargetKey === resolvedTargetKey
-            ? entry?.sessionId
+            ? resolvedAbortTarget?.sessionId
             : resolveStoredSessionId({ cfg, sessionKey: abortTargetKey })),
       ]),
     );
@@ -417,44 +426,33 @@ export async function tryFastAbortFromMessage(params: {
         `abort: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
       );
     }
-    // Cutoff metadata is only safe in the command session's message id/time
-    // space. Bound ACP/source stops may abort extra lanes, but those lanes do
-    // not necessarily share the source conversation's message ordering.
-    const abortCutoff = shouldPersistAbortCutoff({
-      commandSessionKey,
-      targetSessionKey: resolvedTargetKey,
-    })
-      ? resolveAbortCutoffFromContext(ctx)
-      : undefined;
-    if (entry && key) {
-      entry.abortedLastRun = true;
-      applyAbortCutoffToSessionEntry(entry, abortCutoff);
-      entry.updatedAt = Date.now();
-      store[key] = entry;
-      for (const legacyKey of legacyKeys ?? []) {
-        if (legacyKey !== key) {
-          delete store[legacyKey];
-        }
-      }
-      await updateSessionStore(storePath, (nextStore) => {
-        const nextEntry = nextStore[key] ?? entry;
-        if (!nextEntry) {
-          return;
-        }
-        nextEntry.abortedLastRun = true;
-        applyAbortCutoffToSessionEntry(nextEntry, abortCutoff);
-        nextEntry.updatedAt = Date.now();
-        nextStore[key] = nextEntry;
-        for (const legacyKey of legacyKeys ?? []) {
-          if (legacyKey !== key) {
-            delete nextStore[legacyKey];
-          }
-        }
-      });
-    } else if (abortKey) {
-      setAbortMemory(abortKey, true);
-    }
     const { stopped } = stopSubagentsForRequester({ cfg, requesterSessionKey });
+    let persistedAbortTarget: SessionAbortTargetResult | null = null;
+    try {
+      persistedAbortTarget = await abortDeps.markSessionAbortTarget({
+        scope: {
+          agentId,
+          sessionKey: targetKey,
+          storePath,
+        },
+        resolveAbortCutoff: abortCutoffForTarget,
+      });
+    } catch (error) {
+      logVerbose(
+        `abort: failed to persist abort metadata for ${targetKey}: ${formatErrorMessage(error)}`,
+      );
+    }
+    if (persistedAbortTarget?.persisted === false) {
+      logVerbose(
+        `abort: failed to persist abort metadata for ${targetKey}: ${persistedAbortTarget.persistenceError ?? "unknown error"}`,
+      );
+    }
+    const abortMemoryKey =
+      persistedAbortTarget?.sessionKey ?? resolvedAbortTarget?.sessionKey ?? abortKey;
+    const hasAbortTargetEntry = Boolean(persistedAbortTarget?.entry ?? resolvedAbortTarget?.entry);
+    if (persistedAbortTarget?.persisted !== true && abortMemoryKey && !hasAbortTargetEntry) {
+      setAbortMemory(abortMemoryKey, true);
+    }
     return { handled: true, aborted, stoppedSubagents: stopped };
   }
 

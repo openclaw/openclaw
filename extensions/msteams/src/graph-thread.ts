@@ -1,3 +1,8 @@
+// Msteams plugin module implements graph thread behavior.
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { fetchGraphJson, type GraphResponse } from "./graph.js";
 
 export type GraphThreadMessage = {
@@ -14,6 +19,13 @@ export type GraphThreadMessage = {
 const teamGroupIdCache = new Map<string, { groupId: string; expiresAt: number }>();
 const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
+function resolveTeamGroupIdCacheExpiresAt(nowRaw = Date.now()): number | undefined {
+  const now = asDateTimestampMs(nowRaw);
+  return now === undefined
+    ? undefined
+    : resolveExpiresAtMsFromDurationMs(CACHE_TTL_MS, { nowMs: now });
+}
+
 /**
  * Strip HTML tags from Teams message content, preserving @mention display names.
  * Teams wraps mentions in <at>Name</at> tags.
@@ -23,14 +35,16 @@ export function stripHtmlFromTeamsMessage(html: string): string {
   let text = html.replace(/<at[^>]*>(.*?)<\/at>/gi, "@$1");
   // Strip remaining HTML tags.
   text = text.replace(/<[^>]*>/g, " ");
-  // Decode common HTML entities.
+  // Decode common HTML entities. &amp; must be decoded LAST to prevent
+  // double-decoding (e.g. &amp;lt; → &lt; not <), matching decodeHtmlEntities
+  // in inbound.ts.
   text = text
-    .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, " ");
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&");
   // Normalize whitespace.
   return text.replace(/\s+/g, " ").trim();
 }
@@ -44,8 +58,13 @@ export async function resolveTeamGroupId(
   conversationTeamId: string,
 ): Promise<string> {
   const cached = teamGroupIdCache.get(conversationTeamId);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.groupId;
+  if (cached) {
+    const now = asDateTimestampMs(Date.now());
+    const expiresAt = asDateTimestampMs(cached.expiresAt);
+    if (now !== undefined && expiresAt !== undefined && expiresAt > now) {
+      return cached.groupId;
+    }
+    teamGroupIdCache.delete(conversationTeamId);
   }
 
   // The team ID in channelData is typically the group ID itself for standard teams.
@@ -59,10 +78,13 @@ export async function resolveTeamGroupId(
     // Only cache when the Graph lookup succeeds — caching a fallback raw ID
     // can cause silent failures for the entire TTL if the ID is not a valid
     // Graph team GUID (e.g. Bot Framework conversation key).
-    teamGroupIdCache.set(conversationTeamId, {
-      groupId,
-      expiresAt: Date.now() + CACHE_TTL_MS,
-    });
+    const expiresAt = resolveTeamGroupIdCacheExpiresAt();
+    if (expiresAt !== undefined) {
+      teamGroupIdCache.set(conversationTeamId, {
+        groupId,
+        expiresAt,
+      });
+    }
 
     return groupId;
   } catch {

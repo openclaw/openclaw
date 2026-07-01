@@ -1,5 +1,7 @@
+// Covers gateway-backed approval channel runtime behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
+import { createDeferred } from "../test-utils/deferred.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-approvals.js";
 
@@ -31,19 +33,6 @@ vi.mock("../logging/subsystem.js", () => ({
 
 let createExecApprovalChannelRuntime: typeof import("./exec-approval-channel-runtime.js").createExecApprovalChannelRuntime;
 let ExecApprovalChannelRuntimeTerminalStartError: typeof import("./exec-approval-channel-runtime.js").ExecApprovalChannelRuntimeTerminalStartError;
-
-function createDeferred<T>() {
-  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  let reject: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((promiseResolve, promiseReject) => {
-    resolve = promiseResolve;
-    reject = promiseReject;
-  });
-  if (!resolve || !reject) {
-    throw new Error("Expected deferred callbacks to be initialized");
-  }
-  return { promise, resolve, reject };
-}
 
 type GatewayEventClientParams = { onEvent?: (evt: { event: string; payload: unknown }) => void };
 
@@ -318,6 +307,7 @@ describe("createExecApprovalChannelRuntime", () => {
 
     await runtime.start();
     await runtime.request("exec.approval.resolve", { id: "abc", decision: "deny" });
+    await runtime.request("exec.approval.list", {});
 
     expect(mockGatewayClientStarts).toHaveBeenCalledTimes(1);
     expectStartGatewayClientCall();
@@ -325,6 +315,33 @@ describe("createExecApprovalChannelRuntime", () => {
       id: "abc",
       decision: "deny",
     });
+    expect(mockGatewayClientRequests).toHaveBeenCalledWith("exec.approval.list", {});
+  });
+
+  it("rejects write RPCs before they reach the approvals-only gateway client", async () => {
+    const runtime = createExecApprovalChannelRuntime({
+      label: "test/exec-approvals",
+      clientDisplayName: "Test Exec Approvals",
+      cfg: {} as never,
+      isConfigured: () => true,
+      shouldHandle: () => true,
+      deliverRequested: async () => [],
+      finalizeResolved: async () => undefined,
+    });
+
+    await runtime.start();
+    mockGatewayClientRequests.mockClear();
+
+    await expect(
+      runtime.request("send", {
+        channel: "slack",
+        to: "channel:C123",
+        message: "hello",
+      }),
+    ).rejects.toThrow(
+      "test/exec-approvals: operator approvals runtime cannot dispatch send; use a write-capable gateway client",
+    );
+    expect(mockGatewayClientRequests).not.toHaveBeenCalled();
   });
 
   it("fails startup when gateway client readiness times out before start", async () => {
@@ -450,7 +467,7 @@ describe("createExecApprovalChannelRuntime", () => {
     });
 
     let caught: unknown;
-    await runtime.start().catch((error) => {
+    await runtime.start().catch((error: unknown) => {
       caught = error;
     });
 

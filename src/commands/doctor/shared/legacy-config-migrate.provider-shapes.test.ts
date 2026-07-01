@@ -1,3 +1,4 @@
+// Legacy provider-shape migration tests cover doctor repair of old provider config shapes.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS } from "./legacy-config-migrations.runtime.tts.js";
@@ -101,6 +102,38 @@ describe("legacy migrate provider-shaped config", () => {
     });
   });
 
+  it("does not treat an existing realtime voice alias as Talk provider repair", () => {
+    const input: OpenClawConfig = {
+      talk: {
+        provider: "elevenlabs",
+        providers: {
+          elevenlabs: {
+            voiceId: "voice-1",
+          },
+        },
+        realtime: {
+          provider: "openai",
+          providers: {
+            openai: {
+              model: "gpt-realtime",
+            },
+          },
+          model: "gpt-realtime",
+          voice: "cedar",
+          mode: "realtime",
+          transport: "gateway-relay",
+          brain: "agent-consult",
+        },
+      },
+    };
+    const changes: string[] = [];
+
+    const migrated = normalizeLegacyTalkConfig(input, changes);
+
+    expect(changes).toStrictEqual([]);
+    expect(migrated).toEqual(input);
+  });
+
   it("moves messages.tts.<provider> keys into messages.tts.providers", () => {
     const res = migrateLegacyConfig({
       messages: {
@@ -200,6 +233,18 @@ describe("legacy migrate provider-shaped config", () => {
             },
           },
         },
+        list: [
+          {
+            id: "voice-agent",
+            tts: {
+              providers: {
+                openai: {
+                  voice: "cedar",
+                },
+              },
+            },
+          },
+        ],
       },
       channels: {
         discord: {
@@ -264,10 +309,8 @@ describe("legacy migrate provider-shaped config", () => {
       "Moved messages.tts.providers.elevenlabs.voiceId → messages.tts.providers.elevenlabs.speakerVoiceId.",
       "Moved messages.tts.providers.openai.voice → messages.tts.providers.openai.speakerVoice.",
       "Moved messages.tts.personas.narrator.providers.google.voiceName → messages.tts.personas.narrator.providers.google.speakerVoice.",
-      "Removed agents.defaults.tts.providers.openai.voice because agents.defaults.tts.providers.openai.speakerVoice is already set.",
-      "Moved channels.discord.tts.providers.microsoft.voice → channels.discord.tts.providers.microsoft.speakerVoice.",
+      "Moved agents.list[0].tts.providers.openai.voice → agents.list[0].tts.providers.openai.speakerVoice.",
       "Moved channels.discord.voice.tts.providers.openai.voice → channels.discord.voice.tts.providers.openai.speakerVoice.",
-      "Removed channels.discord.accounts.primary.tts.providers.gradium.voiceId because channels.discord.accounts.primary.tts.providers.gradium.speakerVoiceId is already set.",
       "Moved channels.discord.accounts.primary.voice.tts.providers.openai.voiceId → channels.discord.accounts.primary.voice.tts.providers.openai.speakerVoiceId.",
       "Moved plugins.entries.voice-call.config.tts.providers.xai.voiceId → plugins.entries.voice-call.config.tts.providers.xai.speakerVoiceId.",
     ]);
@@ -293,7 +336,10 @@ describe("legacy migrate provider-shaped config", () => {
     });
     const migratedConfig = res.config as
       | {
-          agents?: { defaults?: { tts?: Record<string, unknown> } };
+          agents?: {
+            defaults?: { tts?: Record<string, unknown> };
+            list?: Array<{ id?: string; tts?: Record<string, unknown> }>;
+          };
           channels?: {
             discord?: {
               tts?: Record<string, unknown>;
@@ -314,14 +360,25 @@ describe("legacy migrate provider-shaped config", () => {
     expect(migratedConfig?.agents?.defaults?.tts).toEqual({
       providers: {
         openai: {
+          voice: "cedar",
           speakerVoice: "marin",
+        },
+      },
+    });
+    expect(migratedConfig?.agents?.list?.[0]).toEqual({
+      id: "voice-agent",
+      tts: {
+        providers: {
+          openai: {
+            speakerVoice: "cedar",
+          },
         },
       },
     });
     expect(migratedConfig?.channels?.discord?.tts).toEqual({
       providers: {
         microsoft: {
-          speakerVoice: "en-US-AvaNeural",
+          voice: "en-US-AvaNeural",
         },
       },
     });
@@ -335,6 +392,7 @@ describe("legacy migrate provider-shaped config", () => {
     expect(migratedConfig?.channels?.discord?.accounts?.primary?.tts).toEqual({
       providers: {
         gradium: {
+          voiceId: "voice-2",
           speakerVoiceId: "voice-current",
         },
       },
@@ -383,8 +441,30 @@ describe("legacy migrate provider-shaped config", () => {
           tts: {
             enabled: true,
           },
+          voice: {
+            tts: {
+              enabled: false,
+            },
+          },
           accounts: {
             primary: {
+              tts: {
+                enabled: false,
+              },
+              voice: {
+                tts: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+        feishu: {
+          tts: {
+            enabled: true,
+          },
+          accounts: {
+            english: {
               tts: {
                 enabled: false,
               },
@@ -407,23 +487,34 @@ describe("legacy migrate provider-shaped config", () => {
 
     expect(res.changes).toEqual([
       'Moved messages.tts.enabled → messages.tts.auto "always".',
-      'Moved agents.defaults.tts.enabled → agents.defaults.tts.auto "off".',
       "Removed agents.list[0].tts.enabled because agents.list[0].tts.auto is already set.",
-      'Moved channels.discord.tts.enabled → channels.discord.tts.auto "always".',
-      'Moved channels.discord.accounts.primary.tts.enabled → channels.discord.accounts.primary.tts.auto "off".',
+      'Moved channels.discord.voice.tts.enabled → channels.discord.voice.tts.auto "off".',
+      'Moved channels.discord.accounts.primary.voice.tts.enabled → channels.discord.accounts.primary.voice.tts.auto "always".',
+      'Moved channels.feishu.tts.enabled → channels.feishu.tts.auto "always".',
+      'Moved channels.feishu.accounts.english.tts.enabled → channels.feishu.accounts.english.tts.auto "off".',
       'Moved plugins.entries.voice-call.config.tts.enabled → plugins.entries.voice-call.config.tts.auto "always".',
     ]);
     const migratedConfig = res.config as
       | {
           messages?: { tts?: { auto?: unknown } };
           agents?: {
-            defaults?: { tts?: { auto?: unknown } };
+            defaults?: { tts?: { enabled?: unknown; auto?: unknown } };
             list?: Array<{ id?: string; tts?: { auto?: unknown } }>;
           };
           channels?: {
             discord?: {
+              tts?: { enabled?: unknown; auto?: unknown };
+              voice?: { tts?: { auto?: unknown } };
+              accounts?: {
+                primary?: {
+                  tts?: { enabled?: unknown; auto?: unknown };
+                  voice?: { tts?: { auto?: unknown } };
+                };
+              };
+            };
+            feishu?: {
               tts?: { auto?: unknown };
-              accounts?: { primary?: { tts?: { auto?: unknown } } };
+              accounts?: { english?: { tts?: { auto?: unknown } } };
             };
           };
           plugins?: {
@@ -432,13 +523,19 @@ describe("legacy migrate provider-shaped config", () => {
         }
       | undefined;
     expect(migratedConfig?.messages?.tts?.auto).toBe("always");
-    expect(migratedConfig?.agents?.defaults?.tts?.auto).toBe("off");
+    expect(migratedConfig?.agents?.defaults?.tts).toEqual({ enabled: false });
     expect(migratedConfig?.agents?.list?.[0]).toEqual({
       id: "voice-agent",
       tts: { auto: "tagged" },
     });
-    expect(migratedConfig?.channels?.discord?.tts?.auto).toBe("always");
-    expect(migratedConfig?.channels?.discord?.accounts?.primary?.tts?.auto).toBe("off");
+    expect(migratedConfig?.channels?.discord?.tts).toEqual({ enabled: true });
+    expect(migratedConfig?.channels?.discord?.voice?.tts?.auto).toBe("off");
+    expect(migratedConfig?.channels?.discord?.accounts?.primary?.tts).toEqual({
+      enabled: false,
+    });
+    expect(migratedConfig?.channels?.discord?.accounts?.primary?.voice?.tts?.auto).toBe("always");
+    expect(migratedConfig?.channels?.feishu?.tts?.auto).toBe("always");
+    expect(migratedConfig?.channels?.feishu?.accounts?.english?.tts?.auto).toBe("off");
     expect(migratedConfig?.plugins?.entries?.["voice-call"]?.config?.tts?.auto).toBe("always");
   });
 

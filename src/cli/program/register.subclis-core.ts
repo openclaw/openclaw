@@ -1,4 +1,6 @@
+// Sub-CLI registry that lazily wires gateway, models, devices, plugins, and plugin commands.
 import type { Command } from "commander";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
 import { resolveCliCommandPathPolicy } from "../command-path-policy.js";
 import {
@@ -29,11 +31,16 @@ export type SubCliRegistrationContext = {
   purpose?: "runtime" | "completion";
 };
 
+type PluginCliModule = typeof import("../../plugins/cli.js");
 type SubCliRegistrar = (
   program: Command,
   argv: string[],
   context: SubCliRegistrationContext,
 ) => Promise<void> | void;
+
+const pluginCliLoader = createLazyImportLoader<PluginCliModule>(
+  () => import("../../plugins/cli.js"),
+);
 
 function shouldRegisterGatewayRunOnly(name: string, argv: string[]): boolean {
   if (name !== "gateway") {
@@ -47,6 +54,7 @@ function shouldRegisterGatewayRunOnly(name: string, argv: string[]): boolean {
 }
 
 async function registerGatewayRunOnly(program: Command): Promise<void> {
+  // Hot path for `gateway run`: avoid loading the full gateway command tree.
   const { addGatewayRunCommand } = await import("../gateway-cli/run-command.js");
   removeCommandByName(program, "gateway");
   const gateway = addGatewayRunCommand(
@@ -68,12 +76,12 @@ async function registerSubCliWithPluginCommands(
     !invocation.hasHelpOrVersion &&
     resolveCliCommandPathPolicy(invocation.commandPath).loadPlugins !== "never";
   if (pluginCliPosition === "before" && shouldRegisterPluginCommands) {
-    const { registerPluginCliCommandsFromValidatedConfig } = await import("../../plugins/cli.js");
+    const { registerPluginCliCommandsFromValidatedConfig } = await pluginCliLoader.load();
     await registerPluginCliCommandsFromValidatedConfig(program);
   }
   await registerSubCli();
   if (pluginCliPosition === "after" && shouldRegisterPluginCommands) {
-    const { registerPluginCliCommandsFromValidatedConfig } = await import("../../plugins/cli.js");
+    const { registerPluginCliCommandsFromValidatedConfig } = await pluginCliLoader.load();
     await registerPluginCliCommandsFromValidatedConfig(program);
   }
 }

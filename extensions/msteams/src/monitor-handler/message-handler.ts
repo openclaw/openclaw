@@ -1,3 +1,4 @@
+// Msteams plugin module implements message handler behavior.
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import {
   buildChannelInboundEventContext,
@@ -19,6 +20,8 @@ import {
   createChannelHistoryWindow,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
+import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { serializeMSTeamsAdaptiveCardActionValue } from "../adaptive-card-submit.js";
 import {
   buildMSTeamsAttachmentPlaceholder,
   buildMSTeamsMediaPayload,
@@ -246,8 +249,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const htmlSummary = summarizeMSTeamsHtmlAttachments(attachments);
 
     log.info("received message", {
-      rawText: rawText.slice(0, 50),
-      text: text.slice(0, 50),
+      rawText: truncateUtf16Safe(rawText, 50),
+      text: truncateUtf16Safe(text, 50),
       attachments: attachments.length,
       attachmentTypes,
       from: from?.id,
@@ -326,7 +329,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         allowNameMatching,
       });
       if (senderAccess.decision === "pairing") {
-        conversationStore.upsert(conversationId, conversationRef).catch((err) => {
+        conversationStore.upsert(conversationId, conversationRef).catch((err: unknown) => {
           log.debug?.("failed to save conversation reference", {
             error: formatUnknownError(err),
           });
@@ -433,7 +436,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       return;
     }
 
-    conversationStore.upsert(conversationId, conversationRef).catch((err) => {
+    conversationStore.upsert(conversationId, conversationRef).catch((err: unknown) => {
       log.debug?.("failed to save conversation reference", {
         error: formatUnknownError(err),
       });
@@ -501,13 +504,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       replyToId: activity.replyToId,
     });
 
-    const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
+    const preview = sliceUtf16Safe(rawBody.replace(/\s+/g, " "), 0, 160);
     const inboundLabel = isDirectMessage
       ? `Teams DM from ${senderName}`
       : `Teams message in ${conversationType} from ${senderName}`;
 
     const enqueuePrimaryMessageSystemEvent = () =>
-      core.system.enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
+      core.system.enqueueSystemEvent(inboundLabel, {
         sessionKey: route.sessionKey,
         contextKey: `msteams:message:${conversationId}:${activity.id ?? "unknown"}`,
       });
@@ -1011,7 +1014,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       : [];
     const rawText = activity.text?.trim() ?? "";
     const htmlText = extractTextFromHtmlAttachments(attachments);
-    const text = stripMSTeamsMentionTags(rawText || htmlText);
+    const valueText =
+      rawText || htmlText ? "" : serializeMSTeamsAdaptiveCardActionValue(activity.value);
+    const text = stripMSTeamsMentionTags(rawText || htmlText || valueText || "");
     const wasMentioned = wasMSTeamsBotMentioned(activity);
     const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "");
     const replyToId = activity.replyToId ?? undefined;

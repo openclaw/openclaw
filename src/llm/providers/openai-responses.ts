@@ -1,3 +1,4 @@
+// OpenAI Responses provider adapts OpenAI response streams to the agent runtime.
 import OpenAI from "openai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
 import { getEnvApiKey } from "../env-api-keys.js";
@@ -12,6 +13,7 @@ import type {
   Usage,
 } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import { resolveCacheRetention } from "./cache-retention.js";
 import { isCloudflareProvider, resolveCloudflareBaseUrl } from "./cloudflare.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.js";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
@@ -24,21 +26,7 @@ import {
 } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
 
-const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
-
-/**
- * Resolve cache retention preference.
- * Defaults to "short" and uses OPENCLAW_CACHE_RETENTION for backward compatibility.
- */
-function resolveCacheRetention(cacheRetention?: CacheRetention): CacheRetention {
-  if (cacheRetention) {
-    return cacheRetention;
-  }
-  if (typeof process !== "undefined" && process.env.OPENCLAW_CACHE_RETENTION === "long") {
-    return "long";
-  }
-  return "short";
-}
+const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
 
 function getCompat(model: Model<"openai-responses">): Required<OpenAIResponsesCompat> {
   return {
@@ -74,8 +62,13 @@ function formatOpenAIResponsesError(error: unknown): string {
 export interface OpenAIResponsesOptions extends StreamOptions {
   reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
   reasoningSummary?: "auto" | "detailed" | "concise" | null;
+  replayResponsesItemIds?: boolean;
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
 }
+
+type OpenAIResponsesReplayOptions = SimpleStreamOptions & {
+  replayResponsesItemIds?: boolean;
+};
 
 /**
  * Generate function for OpenAI Responses API
@@ -126,6 +119,8 @@ export const streamSimpleOpenAIResponses: StreamFunction<
   return streamOpenAIResponses(model, context, {
     ...base,
     reasoningEffort: resolveResponsesReasoningEffort(model, options?.reasoning),
+    replayResponsesItemIds: (options as OpenAIResponsesReplayOptions | undefined)
+      ?.replayResponsesItemIds,
   } satisfies OpenAIResponsesOptions);
 };
 
@@ -185,7 +180,9 @@ function buildParams(
   context: Context,
   options?: OpenAIResponsesOptions,
 ) {
-  const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS);
+  const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
+    replayResponsesItemIds: options?.replayResponsesItemIds ?? false,
+  });
 
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const compat = getCompat(model);

@@ -1,5 +1,7 @@
+// Line plugin module implements markdown to line behavior.
 import type { messagingApi } from "@line/bot-sdk";
 import { stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
+import { uriAction } from "./actions.js";
 import { createReceiptCard, toFlexMessage, type FlexBubble } from "./flex-templates.js";
 export { stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
 
@@ -304,11 +306,7 @@ export interface MarkdownLink {
 export function convertLinksToFlexBubble(links: MarkdownLink[]): FlexBubble {
   const buttons: FlexComponent[] = links.slice(0, 4).map((link, index) => ({
     type: "button",
-    action: {
-      type: "uri",
-      label: link.text.slice(0, 20), // LINE button label limit
-      uri: link.url,
-    },
+    action: uriAction(link.text, link.url),
     style: index === 0 ? "primary" : "secondary",
     margin: index > 0 ? "sm" : undefined,
   }));

@@ -1,7 +1,23 @@
+/**
+ * Public native agent harness contracts and capability shapes.
+ */
 export type AgentHarnessSupportContext = {
   provider: string;
   modelId?: string;
+  modelProvider?: {
+    api?: string;
+    baseUrl?: string;
+    azureApiVersion?: string;
+    request?: {
+      auth?: { mode?: unknown };
+      proxy?: unknown;
+      tls?: unknown;
+      allowPrivateNetwork?: unknown;
+    };
+  };
   requestedRuntime: import("../agent-runtime-id.js").EmbeddedAgentRuntime;
+  providerOwnerStatus?: "unowned" | "owned" | "ambiguous";
+  providerOwnerPluginIds?: readonly string[];
 };
 
 export type AgentHarnessSupport =
@@ -31,11 +47,26 @@ export type AgentHarnessSideQuestionParams = {
   isNewSession: boolean;
   sessionId: string;
   sessionFile: string;
+  sandboxSessionKey?: string;
   agentId?: string;
   workspaceDir?: string;
   messageChannel?: string;
   messageProvider?: string;
+  agentAccountId?: string;
+  messageTo?: string;
+  messageThreadId?: string | number;
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  memberRoleIds?: string[];
+  spawnedBy?: string | null;
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+  senderE164?: string | null;
+  senderIsOwner?: boolean;
   currentChannelId?: string;
+  toolsAllow?: string[];
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
 };
@@ -65,7 +96,7 @@ export type AgentHarnessDeliveryDefaults = {
   sourceVisibleReplies?: "automatic" | "message_tool";
 };
 
-export type AgentHarness = {
+type AgentHarnessRunCapability = {
   id: string;
   label: string;
   pluginId?: string;
@@ -78,15 +109,33 @@ export type AgentHarness = {
   deliveryDefaults?: AgentHarnessDeliveryDefaults;
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
   runAttempt(params: AgentHarnessAttemptParams): Promise<AgentHarnessAttemptResult>;
+};
+
+type AgentHarnessSideQuestionCapability = {
   runSideQuestion?(params: AgentHarnessSideQuestionParams): Promise<AgentHarnessSideQuestionResult>;
+};
+
+type AgentHarnessClassificationCapability = {
   classify?(
     result: AgentHarnessAttemptResult,
     ctx: AgentHarnessAttemptParams,
   ): AgentHarnessResultClassification | undefined;
+};
+
+type AgentHarnessCompactionCapability = {
   compact?(params: AgentHarnessCompactParams): Promise<AgentHarnessCompactResult | undefined>;
+};
+
+type AgentHarnessSessionLifecycleCapability = {
   reset?(params: AgentHarnessResetParams): Promise<void> | void;
   dispose?(): Promise<void> | void;
 };
+
+export type AgentHarness = AgentHarnessRunCapability &
+  AgentHarnessSideQuestionCapability &
+  AgentHarnessClassificationCapability &
+  AgentHarnessCompactionCapability &
+  AgentHarnessSessionLifecycleCapability;
 
 export type RegisteredAgentHarness = {
   harness: AgentHarness;

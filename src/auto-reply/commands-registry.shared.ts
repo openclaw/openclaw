@@ -1,5 +1,7 @@
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
+/** Shared command registry builders used by browser-safe and runtime command lists. */
+import { formatFastModeAutoLabel, resolveFastModeModelAutoOnSeconds } from "../shared/fast-mode.js";
+import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
   ChatCommandDefinition,
@@ -41,6 +43,7 @@ type DefineChatCommandInput = {
   tier?: CommandTier;
 };
 
+/** Defines one command with normalized aliases, scope, and argument parsing defaults. */
 export function defineChatCommand(command: DefineChatCommandInput): ChatCommandDefinition {
   const aliases = (command.textAliases ?? (command.textAlias ? [command.textAlias] : []))
     .map((alias) => alias.trim())
@@ -97,6 +100,7 @@ function registerAlias(commands: ChatCommandDefinition[], key: string, ...aliase
   }
 }
 
+/** Validates command registry uniqueness and text/native surface invariants. */
 export function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
   const keys = new Set<string>();
   const nativeNames = new Set<string>();
@@ -147,6 +151,7 @@ export function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
   }
 }
 
+/** Builds the built-in command list with context-aware thinking choices. */
 export function buildBuiltinChatCommands(
   params: { listThinkingLevels?: ListThinkingLevels } = {},
 ): ChatCommandDefinition[] {
@@ -219,6 +224,30 @@ export function buildBuiltinChatCommands(
       textAlias: "/status",
       category: "status",
       tier: "essential",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
+      key: "goal",
+      nativeName: "goal",
+      description: "Show or control the current goal.",
+      textAlias: "/goal",
+      category: "status",
+      tier: "standard",
+      acceptsArgs: true,
+      args: [
+        {
+          name: "action",
+          description: "status, start, pause, resume, complete, block, clear",
+          type: "string",
+          choices: ["status", "start", "pause", "resume", "complete", "block", "clear"],
+        },
+        {
+          name: "text",
+          description: "Goal objective or note",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
     }),
     defineChatCommand({
       key: "diagnostics",
@@ -714,6 +743,23 @@ export function buildBuiltinChatCommands(
       tier: "essential",
     }),
     defineChatCommand({
+      key: "name",
+      nativeName: "name",
+      description: "Name or rename the current session.",
+      textAlias: "/name",
+      acceptsArgs: true,
+      category: "session",
+      tier: "standard",
+      args: [
+        {
+          name: "title",
+          description: "New session name (omit to see a suggestion)",
+          type: "string",
+          captureRemaining: true,
+        },
+      ],
+    }),
+    defineChatCommand({
       key: "compact",
       nativeName: "compact",
       description: "Compact the session context.",
@@ -790,9 +836,20 @@ export function buildBuiltinChatCommands(
       args: [
         {
           name: "mode",
-          description: "status, on, off, or default",
+          description: "on, off, auto, default, or status",
           type: "string",
-          choices: ["status", "on", "off", "default"],
+          choices: ({ cfg, provider, model }) => [
+            "on",
+            "off",
+            {
+              value: "auto",
+              label: formatFastModeAutoLabel({
+                fastAutoOnSeconds: resolveFastModeModelAutoOnSeconds({ cfg, provider, model }),
+              }),
+            },
+            "default",
+            "status",
+          ],
         },
       ],
       argsMenu: "auto",

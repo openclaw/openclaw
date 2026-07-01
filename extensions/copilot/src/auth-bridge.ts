@@ -1,6 +1,7 @@
+// Copilot plugin module implements auth bridge behavior.
 import { createHash } from "node:crypto";
 import { homedir as osHomedir } from "node:os";
-import { join, normalize, resolve, sep } from "node:path";
+import { join, resolve } from "node:path";
 
 /**
  * Pure functional auth resolver for the copilot agent runtime.
@@ -53,17 +54,44 @@ export const COPILOT_DEFAULT_AGENT_ID = "copilot";
 
 /** Resolved auth shape that the runtime / pool consumes. */
 export interface ResolvedCopilotAuth {
-  authMode: "useLoggedInUser" | "gitHubToken";
+  authMode: "useLoggedInUser" | "gitHubToken" | "byok";
   /** Present only when authMode is "gitHubToken". */
   gitHubToken?: string;
-  /** Present only when authMode is "gitHubToken". */
+  /** Present for token and BYOK auth modes. */
   authProfileId?: string;
-  /** Present only when authMode is "gitHubToken". */
+  /** Present for token and BYOK auth modes. */
   authProfileVersion?: string;
   /** Absolute, normalized path. */
   copilotHome: string;
   /** Validated agent id used for path defaults and pool keying. */
   agentId: string;
+}
+
+export function createCopilotByokAuth(input: {
+  agentId?: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  copilotHome?: string;
+  authProfileId?: string;
+  authProfileVersion?: string;
+  env?: NodeJS.ProcessEnv;
+  homeDir?: () => string;
+}): ResolvedCopilotAuth {
+  const base = resolveCopilotAuth({
+    agentId: input.agentId,
+    agentDir: input.agentDir,
+    workspaceDir: input.workspaceDir,
+    copilotHome: input.copilotHome,
+    env: input.env,
+    homeDir: input.homeDir,
+    auth: { useLoggedInUser: true },
+  });
+  return {
+    ...base,
+    authMode: "byok",
+    authProfileId: input.authProfileId?.trim() || "byok:resolved",
+    authProfileVersion: input.authProfileVersion?.trim() || "byok:unfingerprinted",
+  };
 }
 
 export interface ResolveCopilotAuthInput {
@@ -305,17 +333,4 @@ export function tokenFingerprint(token: string): string {
 
 function readString(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-/**
- * Normalize a copilotHome path for cross-platform pool keying.
- * Re-exported so attempt.ts / runtime.ts can share the same
- * normalization without re-implementing.
- */
-export function normalizeCopilotHomePath(value: string): string {
-  return normalize(resolve(value)).replace(new RegExp(`${escapeForRegex(sep)}+$`), "");
-}
-
-function escapeForRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

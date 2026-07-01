@@ -1,0 +1,69 @@
+{
+  "id": "cohere",
+  "name": "Cohere",
+  "description": "OpenClaw Cohere provider plugin.",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["cohere"],
+  "modelCatalog": {
+    "providers": {
+      "cohere": {
+        "baseUrl": "https://api.cohere.ai/compatibility/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "command-a-03-2025",
+            "name": "Command A",
+            "input": ["text"],
+            "contextWindow": 256000,
+            "maxTokens": 8000,
+            "cost": {
+              "input": 2.5,
+              "output": 10,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsStore": false,
+              "supportsUsageInStreaming": false,
+              "maxTokensField": "max_tokens"
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "cohere": "static"
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "cohere",
+        "envVars": ["COHERE_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "cohere",
+      "method": "api-key",
+      "choiceId": "cohere-api-key",
+      "choiceLabel": "Cohere API key",
+      "groupId": "cohere",
+      "groupLabel": "Cohere",
+      "groupHint": "OpenAI-compatible inference",
+      "optionKey": "cohereApiKey",
+      "cliFlag": "--cohere-api-key",
+      "cliOption": "--cohere-api-key <key>",
+      "cliDescription": "Cohere API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
