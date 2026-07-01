@@ -648,7 +648,7 @@ jobs:
         run: pnpm ui:i18n:check
 
       - name: Pack built runtime artifacts
-        run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime
+        run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt openclaw.mjs package.json docs/reference/templates src/agents/templates dist dist-runtime
 
       - name: Upload built runtime artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

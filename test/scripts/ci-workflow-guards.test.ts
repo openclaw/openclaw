@@ -548,6 +548,29 @@ describe("ci workflow guards", () => {
     expect(buildArtifactSteps.map((step) => step.name)).not.toContain("Cache dist build");
   });
 
+  it("packs runtime artifacts with package-root runtime resources", () => {
+    const workflow = readCiWorkflow();
+    const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
+    const packStep = buildArtifactSteps.find(
+      (step) => step.name === "Pack built runtime artifacts",
+    );
+    const uploadStep = buildArtifactSteps.find(
+      (step) => step.name === "Upload built runtime artifacts",
+    );
+
+    expect(packStep.run).toBe(
+      "tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt openclaw.mjs package.json docs/reference/templates src/agents/templates dist dist-runtime",
+    );
+    expect(packStep.run).toContain("docs/reference/templates");
+    expect(packStep.run).toContain("src/agents/templates");
+    expect(packStep.run).toContain("dist");
+    expect(packStep.run).toContain("dist-runtime");
+    expect(uploadStep.with).toMatchObject({
+      name: "dist-runtime-build",
+      path: "dist-runtime-build.tar.zst",
+    });
+  });
+
   it("runs gateway watch after parallel built artifact checks", () => {
     const workflow = readCiWorkflow();
     const buildArtifactSteps = workflow.jobs["build-artifacts"].steps;
