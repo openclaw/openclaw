@@ -453,7 +453,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         if let sendMessageHook {
             return try await sendMessageHook(idempotencyKey)
         }
-        return OpenClawChatSendResponse(runId: idempotencyKey, status: "ok")
+        return OpenClawChatSendResponse(runId: idempotencyKey, status: "started")
     }
 
     func abortRun(sessionKey _: String, runId: String) async throws {
@@ -924,7 +924,9 @@ struct ChatViewModelTests {
     @Test func terminalOkSendAckClearsPendingRunWithoutWaitingForCompletion() async throws {
         let sessionId = "sess-main"
         let history = historyPayload(sessionId: sessionId, messages: [])
-        let (transport, vm) = await makeViewModel(historyResponses: [history, history])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history, history],
+            sendMessageHook: { runId in OpenClawChatSendResponse(runId: runId, status: "ok") })
         try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
 
         await sendUserMessage(vm, text: "cached")
