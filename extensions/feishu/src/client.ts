@@ -6,7 +6,13 @@ import {
   readPluginPackageVersion,
   resolveAmbientNodeProxyAgent,
 } from "openclaw/plugin-sdk/extension-shared";
-import { resolveConfiguredHttpTimeoutMs } from "./client-timeout.js";
+import {
+  FEISHU_HTTP_TIMEOUT_ENV_VAR,
+  FEISHU_HTTP_TIMEOUT_MAX_MS,
+  FEISHU_HTTP_TIMEOUT_MS,
+  resolveConfiguredHttpTimeoutMs,
+} from "./client-timeout.js";
+import { addFeishuTokenCacheClearer } from "./comment-shared.js";
 import type { FeishuConfig, FeishuDomain, ResolvedFeishuAccount } from "./types.js";
 
 const require = createRequire(import.meta.url);
@@ -27,6 +33,7 @@ type FeishuClientSdk = Pick<
   typeof Lark,
   | "AppType"
   | "Client"
+  | "CTenantAccessToken"
   | "defaultHttpInstance"
   | "Domain"
   | "EventDispatcher"
@@ -37,6 +44,7 @@ type FeishuClientSdk = Pick<
 const feishuClientSdk: FeishuClientSdk = {
   AppType: Lark.AppType,
   Client: Lark.Client,
+  CTenantAccessToken: Lark.CTenantAccessToken,
   defaultHttpInstance: Lark.defaultHttpInstance,
   Domain: Lark.Domain,
   EventDispatcher: Lark.EventDispatcher,
@@ -89,12 +97,17 @@ async function getWsProxyAgent() {
   return resolveAmbientNodeProxyAgent<Agent>();
 }
 
-// Multi-account client cache
+// Multi-account client cache, each entry also owns an SDK token cache so
+// clearClientCache can invalidate tenant_access_token by appId namespace
+// instead of writing to the shared module-level internalCache.
 const clientCache = new Map<
   string,
   {
     client: Lark.Client;
     config: { appId: string; appSecret: string; domain?: FeishuDomain; httpTimeoutMs: number };
+    /** Plugin-owned cache passed to the Lark Client constructor.
+     *  Isolates tenant_access_token from other accounts (#97287). */
+    sdkCache: Lark.Cache;
   }
 >();
 
@@ -146,6 +159,36 @@ export type FeishuClientCredentials = {
 };
 
 /**
+ * Build a Map-backed cache that satisfies the Lark SDK Cache interface.
+ * Each createFeishuClient call gets its own instance so the client's
+ * tenant_access_token entries are isolated per account and can be
+ * invalidated by appId namespace without affecting other accounts or
+ * writing to the shared module-level internalCache (#97287).
+ */
+function buildSdkTokenCache(): Lark.Cache {
+  const store = new Map<string, { value: unknown; expire?: number }>();
+  return {
+    async get(key, options) {
+      const k = options?.namespace ? `${options.namespace}/${String(key)}` : String(key);
+      const entry = store.get(k);
+      if (!entry) {
+        return undefined;
+      }
+      if (entry.expire !== undefined && entry.expire <= Date.now()) {
+        store.delete(k);
+        return undefined;
+      }
+      return entry.value;
+    },
+    async set(key, value, expire, options) {
+      const k = options?.namespace ? `${options.namespace}/${String(key)}` : String(key);
+      store.set(k, { value, expire: expire ?? undefined });
+      return true;
+    },
+  };
+}
+
+/**
  * Create or get a cached Feishu client for an account.
  * Accepts any object with appId, appSecret, and optional domain/accountId.
  */
@@ -169,19 +212,26 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
     return cached.client;
   }
 
-  // Create new client with timeout-aware HTTP instance
+  // Create a plugin-owned SDK token cache so clearClientCache can
+  // invalidate tenant_access_token by appId without touching the shared
+  // module-level internalCache (#97287).
+  const sdkTokenCache: Lark.Cache = buildSdkTokenCache();
+
+  // Create new client with timeout-aware HTTP instance + private token cache
   const client = new feishuClientSdk.Client({
     appId,
     appSecret,
     appType: feishuClientSdk.AppType.SelfBuild,
     domain: resolveDomain(domain),
     httpInstance: createTimeoutHttpInstance(defaultHttpTimeoutMs),
+    cache: sdkTokenCache,
   });
 
   // Cache it
   clientCache.set(accountId, {
     client,
     config: { appId, appSecret, domain, httpTimeoutMs: defaultHttpTimeoutMs },
+    sdkCache: sdkTokenCache,
   });
 
   return client;
@@ -226,4 +276,57 @@ export function createEventDispatcher(account: ResolvedFeishuAccount): Lark.Even
     encryptKey: account.encryptKey,
     verificationToken: account.verificationToken,
   });
+}
+
+/**
+ * Clear the cached tenant_access_token and client for an account.
+ *
+ * Each client was created with its own plugin-owned sdkCache (see
+ * buildSdkTokenCache), so we expire the CTenantAccessToken entry in
+ * that private cache for the account's appId namespace, then remove
+ * the client from our module-level clientCache.  The next getter call
+ * in send.ts creates a fresh client which fetches a new token.
+ *
+ * This is namespace-correct: we write to the account-specific cache,
+ * not to the SDK's shared module-level internalCache (#97287).
+ */
+export function clearClientCache(accountId?: string): void {
+  const expireToken = (entry: NonNullable<ReturnType<typeof clientCache.get>>): void => {
+    try {
+      void entry.sdkCache.set(feishuClientSdk.CTenantAccessToken, null, 0, {
+        namespace: entry.config.appId,
+      });
+    } catch {
+      // Best-effort — the getter pattern still creates a fresh client.
+    }
+  };
+
+  if (accountId) {
+    const entry = clientCache.get(accountId);
+    if (entry) {
+      expireToken(entry);
+    }
+    clientCache.delete(accountId);
+  } else {
+    for (const [, entry] of clientCache) {
+      expireToken(entry);
+    }
+    clientCache.clear();
+  }
+}
+
+// Register a cache clearer so requestFeishuApi in comment-shared.ts can
+// invalidate the client cache when it detects a token-invalid error and
+// retry automatically — no caller-side wiring needed (#97287).
+addFeishuTokenCacheClearer(() => {
+  clearClientCache();
+});
+
+export function setFeishuClientRuntimeForTest(overrides?: {
+  sdk?: Partial<FeishuClientSdk>;
+}): void {
+  feishuClientSdk = overrides?.sdk
+    ? { ...defaultFeishuClientSdk, ...overrides.sdk }
+    : defaultFeishuClientSdk;
+  clearClientCache();
 }

@@ -185,6 +185,7 @@ function firstWsClientOptions(): {
 beforeAll(async () => {
   vi.doMock("@larksuiteoapi/node-sdk", () => ({
     AppType: { SelfBuild: "self" },
+    CTenantAccessToken: Symbol("tenant-access-token"),
     Domain: { Feishu: "https://open.feishu.cn", Lark: "https://open.larksuite.com" },
     LoggerLevel: { info: "info" },
     Client: clientCtorMock,

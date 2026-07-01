@@ -1,5 +1,4 @@
 // Feishu plugin module implements comment shared behavior.
-import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
   isRecord as sharedIsRecord,
   normalizeOptionalString,
@@ -94,6 +93,38 @@ function createFeishuApiError(
   return new Error(formatFeishuApiFailure(error, errorPrefix, options), { cause: error });
 }
 
+// Feishu message-API error codes that signal a transient rate limit; safe to retry with backoff.
+// 230020: per-chat rate limit (ext=chat rate limit) — confirmed by real concurrent load test.
+// 11232: tenant-level "create message service trigger rate limit" (100/min, 5/sec per app/bot).
+// Distinct from FEISHU_BACKOFF_CODES in typing.ts, which covers the reaction API (99991400+).
+const FEISHU_SEND_RATE_LIMIT_CODES = new Set([230020, 11232]);
+const FEISHU_TOKEN_INVALID_CODES = new Set([99991663, 99991664]);
+
+/** Cache-owning modules register their clearers at import time so
+ *  requestFeishuApi can invalidate all caches before retrying after a
+ *  token-invalid error (99991663/99991664). After clearing the cached
+ *  tenant_access_token the SDK fetches a fresh token on the retry. */
+const feishuTokenCacheClearers: Array<() => void> = [];
+
+export function addFeishuTokenCacheClearer(fn: () => void): void {
+  feishuTokenCacheClearers.push(fn);
+}
+
+function clearFeishuTokenCaches(): void {
+  for (const fn of feishuTokenCacheClearers) {
+    fn();
+  }
+}
+
+export function getFeishuTokenInvalidCode(error: unknown): number | undefined {
+  if (!isRecord(error)) {
+    return undefined;
+  }
+  const response = isRecord(error.response) ? error.response : undefined;
+  const data = isRecord(response?.data) ? response.data : undefined;
+  const code = data?.code;
+  return typeof code === "number" && FEISHU_TOKEN_INVALID_CODES.has(code) ? code : undefined;
+}
 const FEISHU_SEND_MAX_RETRIES = 2;
 const FEISHU_SEND_RETRY_BASE_MS = 500;
 
@@ -107,35 +138,82 @@ export async function requestFeishuApi<T>(
     retryDelayMs?: number;
   } = {},
 ): Promise<T> {
-  try {
-    return await retryAsync(
-      async () => {
-        const result = await request();
-        // Feishu SDK may fulfill with a rate-limit body (e.g. { code: 11232, ... })
-        // instead of throwing. Rethrow it in the AxiosError response shape so
-        // getFeishuSendRateLimitCode classifies it retryable and exhaustion
-        // wraps it exactly like an SDK throw.
-        const fulfilledRateLimit = getFeishuSendRateLimitCodeFromResponse(result);
-        if (fulfilledRateLimit !== undefined) {
-          throw Object.assign(
-            new Error(`Request fulfilled with rate-limit code ${fulfilledRateLimit}`),
-            { response: { status: 200, data: result } },
-          );
+  const retryDelayMs = options.retryDelayMs ?? FEISHU_SEND_RETRY_BASE_MS;
+  let lastFulfilledRateLimit: { response: unknown; code: number } | undefined;
+  let retriedTokenInvalid = false; // single recovery retry per issue #97287
+  for (let attempt = 0; attempt <= FEISHU_SEND_MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      // Linear backoff: delay grows with each attempt to give the rate-limit window time to reset.
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, attempt * retryDelayMs);
+      });
+    }
+    try {
+      const result = await request();
+      // Feishu SDK may fulfill with a rate-limit body (e.g. { code: 11232, ... })
+      // instead of throwing. Classify before returning so retry covers both shapes.
+      const fulfilledRateLimit = getFeishuSendRateLimitCodeFromResponse(result);
+      if (fulfilledRateLimit !== undefined) {
+        lastFulfilledRateLimit = { response: result, code: fulfilledRateLimit };
+        if (attempt < FEISHU_SEND_MAX_RETRIES) {
+          continue;
         }
-        return result;
-      },
-      {
-        attempts: FEISHU_SEND_MAX_RETRIES + 1,
-        // With a 2-retry budget the core exponential schedule (1x, 2x base)
-        // matches the previous linear attempt*base backoff exactly; revisit
-        // the delay curve if FEISHU_SEND_MAX_RETRIES grows.
-        minDelayMs: options.retryDelayMs ?? FEISHU_SEND_RETRY_BASE_MS,
-        shouldRetry: (error) => getFeishuSendRateLimitCode(error) !== undefined,
-      },
-    );
-  } catch (error) {
-    throw createFeishuApiError(error, errorPrefix, options);
+        break;
+      }
+      // Also handle fulfilled token-invalid bodies (SDK sometimes resolves instead
+      // of throwing on 99991663/99991664). Clear caches and retry once.
+      const fulfilledTokenInvalid =
+        isRecord(result) &&
+        FEISHU_TOKEN_INVALID_CODES.has((result as { code?: number }).code as number);
+      if (fulfilledTokenInvalid) {
+        clearFeishuTokenCaches();
+        if (!retriedTokenInvalid) {
+          retriedTokenInvalid = true;
+          attempt--; // don't consume the rate-limit retry budget (#97287)
+          continue;
+        }
+        throw createFeishuApiError(
+          Object.assign(new Error("Feishu API token invalid"), { response: { data: result } }),
+          errorPrefix,
+          options,
+        );
+      }
+      return result;
+    } catch (error) {
+      const isRateLimit =
+        attempt < FEISHU_SEND_MAX_RETRIES && getFeishuSendRateLimitCode(error) !== undefined;
+      const isTokenInvalid = getFeishuTokenInvalidCode(error) !== undefined;
+      if (isTokenInvalid) {
+        clearFeishuTokenCaches();
+        if (!retriedTokenInvalid) {
+          retriedTokenInvalid = true;
+          attempt--; // don't consume the rate-limit retry budget (#97287)
+          continue;
+        }
+        throw createFeishuApiError(error, errorPrefix, options);
+      }
+      if (!isRateLimit) {
+        throw createFeishuApiError(error, errorPrefix, options);
+      }
+      // Rate-limit on a non-final attempt — loop continues to next retry.
+    }
   }
+  // Exhausted retries while the SDK kept fulfilling rate-limit bodies. Surface
+  // the last response as an error so callers see the same wrapped shape they
+  // would have seen if the SDK had thrown.
+  if (lastFulfilledRateLimit) {
+    const synthetic = Object.assign(
+      new Error(`Request fulfilled with rate-limit code ${lastFulfilledRateLimit.code}`),
+      { response: { status: 200, data: lastFulfilledRateLimit.response } },
+    );
+    throw createFeishuApiError(synthetic, errorPrefix, options);
+  }
+  // Exhausted retries — preserve the last error details when available.
+  throw createFeishuApiError(
+    new Error("Feishu API request failed after exhausting retries"),
+    errorPrefix,
+    options,
+  );
 }
 
 type ParsedCommentDocumentRef = {

@@ -10,7 +10,10 @@ import { requestFeishuApi } from "./comment-shared.js";
 import {
   getFeishuSendRateLimitCode,
   getFeishuSendRateLimitCodeFromResponse,
-} from "./send-rate-limit.js";
+  getFeishuTokenInvalidCode,
+  requestFeishuApi,
+  addFeishuTokenCacheClearer,
+} from "./comment-shared.js";
 
 /** Build an AxiosError-shaped object for a given Feishu body error code (HTTP 400). */
 function axiosError(code: number) {
@@ -319,5 +322,131 @@ describe("requestFeishuApi — retry on fulfilled rate-limit body (no throw)", (
     const result = await requestFeishuApi(request, "prefix", NO_DELAY);
     expect((result as { data: { message_id: string } }).data.message_id).toBe("om_recovered");
     expect(request).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("getFeishuTokenInvalidCode", () => {
+  it("returns 99991663 for token-invalid AxiosError", () => {
+    expect(getFeishuTokenInvalidCode(axiosError(99991663))).toBe(99991663);
+  });
+
+  it("returns 99991664 for token-expired AxiosError", () => {
+    expect(getFeishuTokenInvalidCode(axiosError(99991664))).toBe(99991664);
+  });
+
+  it("returns undefined for non-token-invalid Feishu code", () => {
+    expect(getFeishuTokenInvalidCode(axiosError(230001))).toBeUndefined();
+  });
+
+  it("returns undefined for undefined", () => {
+    expect(getFeishuTokenInvalidCode(undefined)).toBeUndefined();
+  });
+});
+
+describe("requestFeishuApi — retry on token-invalid errors (#97287)", () => {
+  it("retries once on 99991663 after clearing caches", async () => {
+    let cleared = false;
+    addFeishuTokenCacheClearer(() => {
+      cleared = true;
+    });
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(axiosError(99991663))
+      .mockResolvedValueOnce("ok-after-cache-cleared");
+
+    const result = await requestFeishuApi(request, "prefix", NO_DELAY);
+    expect(result).toBe("ok-after-cache-cleared");
+    expect(cleared).toBe(true);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries once on 99991664 after clearing caches", async () => {
+    let cleared = false;
+    addFeishuTokenCacheClearer(() => {
+      cleared = true;
+    });
+    const request = vi.fn().mockRejectedValueOnce(axiosError(99991664)).mockResolvedValueOnce("ok");
+
+    const result = await requestFeishuApi(request, "prefix", NO_DELAY);
+    expect(result).toBe("ok");
+    expect(cleared).toBe(true);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("exhausts attempts on persistent 99991663 (no recovery)", async () => {
+    addFeishuTokenCacheClearer(() => {});
+    const request = vi.fn().mockRejectedValue(axiosError(99991663));
+
+    await expect(requestFeishuApi(request, "prefix", NO_DELAY)).rejects.toThrow();
+    // 1 initial + exactly 1 recovery retry per #97287 = 2 total
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("mixed sequence: rate-limit then token-invalid retries independently", async () => {
+    // Rate-limit on attempt 0 → retry (1)
+    // Token-invalid on attempt 1 → attempt-- → retry (2)
+    // Success on attempt 2
+    let cleared = false;
+    addFeishuTokenCacheClearer(() => {
+      cleared = true;
+    });
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(axiosError(230020)) // rate-limit
+      .mockRejectedValueOnce(axiosError(99991663)) // token-invalid
+      .mockResolvedValueOnce("ok-after-both"); // success
+
+    const result = await requestFeishuApi(request, "prefix", NO_DELAY);
+    expect(result).toBe("ok-after-both");
+    expect(cleared).toBe(true);
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it("mixed sequence: token-invalid then rate-limit recovers fully", async () => {
+    // Token-invalid on attempt 0 → attempt-- → retry (1)
+    // Rate-limit on attempt 1 → retry (2)
+    // Success on attempt 2
+    let cleared = false;
+    addFeishuTokenCacheClearer(() => {
+      cleared = true;
+    });
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(axiosError(99991663)) // token-invalid
+      .mockRejectedValueOnce(axiosError(230020)) // rate-limit
+      .mockResolvedValueOnce("ok-after-both"); // success
+
+    const result = await requestFeishuApi(request, "prefix", NO_DELAY);
+    expect(result).toBe("ok-after-both");
+    expect(cleared).toBe(true);
+    expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it("mixed sequence: token-invalid on last attempt still retries once", async () => {
+    // Rate-limit on attempt 0 → retry (1)
+    // Rate-limit on attempt 1 → retry (2)
+    // Token-invalid on attempt 2 (last slot) → attempt-- → retries at slot 2
+    // Success
+    let cleared = false;
+    addFeishuTokenCacheClearer(() => {
+      cleared = true;
+    });
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(axiosError(230020)) // rate-limit → attempt 0 → 1
+      .mockRejectedValueOnce(axiosError(230020)) // rate-limit → attempt 1 → 2
+      .mockRejectedValueOnce(axiosError(99991663)) // token-invalid → attempt-- → 1 → retry
+      .mockResolvedValueOnce("ok"); // success at attempt 2
+
+    const result = await requestFeishuApi(request, "prefix", NO_DELAY);
+    expect(result).toBe("ok");
+    expect(cleared).toBe(true);
+    expect(request).toHaveBeenCalledTimes(4);
+  });
+
+  it("does not retry on non-token, non-rate-limit errors (unchanged)", async () => {
+    const request = vi.fn().mockRejectedValue(axiosError(230001));
+    await expect(requestFeishuApi(request, "prefix", NO_DELAY)).rejects.toThrow();
+    expect(request).toHaveBeenCalledTimes(1);
   });
 });
