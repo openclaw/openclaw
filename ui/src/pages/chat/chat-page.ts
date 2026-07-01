@@ -84,7 +84,8 @@ import {
   type ChatHost,
 } from "./data.ts";
 import {
-  handleChatEvent,
+  handleChatGatewayEvent,
+  handleChatSideResultGatewayEvent,
   loadChatHistory,
   syncSelectedSessionMessageSubscription,
   type ChatEventPayload,
@@ -1218,8 +1219,17 @@ function createPageState(
 
 function handlePageGatewayEvent(state: ChatPageHost, event: GatewayEventFrame) {
   if (event.event === "chat") {
-    handleChatEvent(state as unknown as ChatState, event.payload as ChatEventPayload | undefined);
+    handleChatGatewayEvent(
+      state as unknown as ChatState,
+      event.payload as ChatEventPayload | undefined,
+    );
     requestPageUpdate(state);
+    return;
+  }
+  if (event.event === "chat.side_result") {
+    if (handleChatSideResultGatewayEvent(state as unknown as ChatState, event.payload)) {
+      requestPageUpdate(state);
+    }
     return;
   }
   if (event.event === "agent" || event.event === "session.tool") {

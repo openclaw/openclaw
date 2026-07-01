@@ -51,6 +51,7 @@ import {
   cacheChatMessages,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
+import { parseChatSideResult, type ChatSideResult } from "./side-result.ts";
 import {
   appendTerminalAssistantMessage,
   clearToolStreamSegments,
@@ -427,6 +428,8 @@ export type ChatState = {
   chatVerboseLevel: string | null;
   lastError: string | null;
   chatError?: string | null;
+  chatSideResult?: ChatSideResult | null;
+  chatSideResultTerminalRuns?: Set<string>;
   agentsError?: string | null;
   resetChatInputHistoryNavigation?: () => void;
   assistantAgentId?: string | null;
@@ -533,16 +536,19 @@ function resolveDefaultAgentId(state: ChatState): string | undefined {
 }
 
 function chatEventAgentScopeMatches(state: ChatState, payload: ChatEventPayload): boolean {
-  if (
-    !isSelectedGlobalEventSessionKey(state.sessionKey) ||
-    !isGlobalSessionKey(payload.sessionKey)
-  ) {
+  return chatScopedEventAgentScopeMatches(state, payload.sessionKey, payload.agentId);
+}
+
+function chatScopedEventAgentScopeMatches(
+  state: ChatState,
+  sessionKey: string,
+  agentId?: string | null,
+): boolean {
+  if (!isSelectedGlobalEventSessionKey(state.sessionKey) || !isGlobalSessionKey(sessionKey)) {
     return true;
   }
   const payloadAgentId =
-    typeof payload.agentId === "string" && payload.agentId.trim()
-      ? normalizeAgentId(payload.agentId)
-      : undefined;
+    typeof agentId === "string" && agentId.trim() ? normalizeAgentId(agentId) : undefined;
   const selectedAgentId = resolveSelectedAgentId(state);
   return payloadAgentId
     ? selectedAgentId !== undefined && payloadAgentId === selectedAgentId
@@ -550,14 +556,26 @@ function chatEventAgentScopeMatches(state: ChatState, payload: ChatEventPayload)
 }
 
 function chatEventSessionMatches(state: ChatState, payload: ChatEventPayload): boolean {
-  if (areUiSessionKeysEquivalent(payload.sessionKey, state.sessionKey)) {
-    return chatEventAgentScopeMatches(state, payload);
+  return chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId);
+}
+
+function chatScopedEventSessionMatches(
+  state: ChatState,
+  sessionKey: string,
+  agentId?: string | null,
+): boolean {
+  if (areUiSessionKeysEquivalent(sessionKey, state.sessionKey)) {
+    return chatScopedEventAgentScopeMatches(state, sessionKey, agentId);
   }
   return (
-    isGlobalSessionKey(payload.sessionKey) &&
+    isGlobalSessionKey(sessionKey) &&
     isSelectedGlobalEventSessionKey(state.sessionKey) &&
-    chatEventAgentScopeMatches(state, payload)
+    chatScopedEventAgentScopeMatches(state, sessionKey, agentId)
   );
+}
+
+function isTerminalChatState(value: unknown): boolean {
+  return value === "final" || value === "aborted" || value === "error";
 }
 
 function normalizeSubscriptionKey(value: string | null | undefined): string | null {
@@ -1624,4 +1642,29 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     setChatError(state, payload.errorMessage ?? "chat error");
   }
   return payload.state;
+}
+
+export function handleChatGatewayEvent(state: ChatState, payload?: ChatEventPayload) {
+  if (
+    isTerminalChatState(payload?.state) &&
+    typeof payload?.runId === "string" &&
+    state.chatSideResultTerminalRuns?.has(payload.runId) === true
+  ) {
+    state.chatSideResultTerminalRuns.delete(payload.runId);
+    return null;
+  }
+  return handleChatEvent(state, payload);
+}
+
+export function handleChatSideResultGatewayEvent(state: ChatState, payload: unknown): boolean {
+  const sideResult = parseChatSideResult(payload);
+  if (!sideResult) {
+    return false;
+  }
+  if (!chatScopedEventSessionMatches(state, sideResult.sessionKey, sideResult.agentId)) {
+    return false;
+  }
+  state.chatSideResult = sideResult;
+  state.chatSideResultTerminalRuns?.add(sideResult.runId);
+  return true;
 }

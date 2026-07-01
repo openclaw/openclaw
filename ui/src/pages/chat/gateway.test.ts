@@ -8,6 +8,8 @@ import {
 import {
   abortChatRun,
   handleChatEvent,
+  handleChatGatewayEvent,
+  handleChatSideResultGatewayEvent,
   loadChatHistory,
   requestChatSend,
   requestSkillWorkshopRevisionChatSend,
@@ -30,6 +32,8 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatSending: false,
     chatStream: null,
     chatStreamStartedAt: null,
+    chatSideResult: null,
+    chatSideResultTerminalRuns: new Set<string>(),
     chatThinkingLevel: null,
     chatVerboseLevel: null,
     client: null,
@@ -133,6 +137,108 @@ function createOtherRunSilentFinalPayload(text: string): ChatEventPayload {
 function createOtherRunNoReplyFinalPayload(): ChatEventPayload {
   return createOtherRunSilentFinalPayload("NO_REPLY");
 }
+
+describe("chat side result gateway events", () => {
+  it("stores BTW side results for the active session", () => {
+    const state = createState();
+
+    expect(
+      handleChatSideResultGatewayEvent(state, {
+        kind: "btw",
+        runId: "btw-run-1",
+        sessionKey: "main",
+        question: "what changed?",
+        text: "Only the UI layer was missing support.",
+        ts: 123,
+      }),
+    ).toBe(true);
+
+    expect(state.chatSideResult).toMatchObject({
+      kind: "btw",
+      runId: "btw-run-1",
+      sessionKey: "main",
+      question: "what changed?",
+      text: "Only the UI layer was missing support.",
+    });
+    expect(state.chatSideResultTerminalRuns?.has("btw-run-1")).toBe(true);
+  });
+
+  it("stores selected-global BTW side results for agent main aliases", () => {
+    const state = createState({
+      sessionKey: "agent:work:main",
+      agentsList: { defaultId: "main" },
+    });
+
+    expect(
+      handleChatSideResultGatewayEvent(state, {
+        kind: "btw",
+        runId: "btw-work-global",
+        sessionKey: "global",
+        agentId: "work",
+        question: "what changed?",
+        text: "The alias receives canonical global side results.",
+        ts: 123,
+      }),
+    ).toBe(true);
+
+    expect(state.chatSideResult).toMatchObject({
+      kind: "btw",
+      runId: "btw-work-global",
+      sessionKey: "global",
+      agentId: "work",
+      text: "The alias receives canonical global side results.",
+    });
+    expect(state.chatSideResultTerminalRuns?.has("btw-work-global")).toBe(true);
+  });
+
+  it("ignores selected-global BTW side results from another agent", () => {
+    const state = createState({
+      sessionKey: "global",
+      assistantAgentId: "work",
+      agentsList: { defaultId: "main" },
+    });
+
+    expect(
+      handleChatSideResultGatewayEvent(state, {
+        kind: "btw",
+        runId: "btw-main-global",
+        sessionKey: "global",
+        agentId: "main",
+        question: "what changed?",
+        text: "This belongs to another selected agent.",
+        ts: 123,
+      }),
+    ).toBe(false);
+
+    expect(state.chatSideResult).toBeNull();
+    expect(state.chatSideResultTerminalRuns?.has("btw-main-global")).toBe(false);
+  });
+
+  it("ignores tracked BTW terminal events without touching the active run", () => {
+    const state = createState({
+      chatRunId: "main-run-1",
+      chatStream: "still streaming",
+      chatMessages: [{ role: "assistant", content: [{ type: "text", text: "existing" }] }],
+    });
+    state.chatSideResultTerminalRuns?.add("btw-run-2");
+
+    expect(
+      handleChatGatewayEvent(state, {
+        runId: "btw-run-2",
+        sessionKey: "main",
+        state: "final",
+      }),
+    ).toBe(null);
+
+    expect(state.chatSideResultTerminalRuns?.has("btw-run-2")).toBe(false);
+    expect(state.chatRunId).toBe("main-run-1");
+    expect(state.chatStream).toBe("still streaming");
+    expect(state.chatMessages).toEqual([
+      { role: "assistant", content: [{ type: "text", text: "existing" }] },
+    ]);
+    expect(state.lastError).toBeNull();
+  });
+});
 
 describe("handleChatEvent", () => {
   it("returns null when payload is missing", () => {
