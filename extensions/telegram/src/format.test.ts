@@ -265,6 +265,13 @@ describe("markdownToTelegramHtml", () => {
     expect(markdownToTelegramRichHtml(table(2), { tableMode: "code" })).not.toContain("<table>");
   });
 
+  it("marks rich markdown tables as bordered and striped for visible Telegram styling", () => {
+    const html = markdownToTelegramRichHtml("| Name | Score |\n| --- | ---: |\n| Alice | 10 |");
+
+    expect(html).toContain("<table bordered striped>");
+    expect(html).not.toContain("<table><thead>");
+  });
+
   it("falls back over-wide raw rich HTML tables", () => {
     const cells = Array.from({ length: 21 }, (_, index) => `<td>C${index + 1}</td>`).join("");
     const html = `<table><caption>Wide</caption><tbody><tr>${cells}</tr></tbody></table>`;

@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - **WeChat account routing:** `startAccount` preserves session routing by resolving manifest channel account config from raw account keys with opaque provider ids, while still ignoring manifest account keys that normalize to blocked object keys. (#93686) Thanks @zhangguiping-xydt.
+- **Telegram rich tables:** Markdown tables sent through `richMessages` keep Telegram's native `bordered` and `striped` table presentation so clients show grid lines and alternating rows instead of bare, unstyled tables.
 
 ## 2026.6.11
 
