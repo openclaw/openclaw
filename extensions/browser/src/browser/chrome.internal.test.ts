@@ -1138,10 +1138,14 @@ describe("chrome.ts internal", () => {
     it("escalates to SIGKILL when CDP keeps reporting reachable past the deadline", async () => {
       vi.stubGlobal(
         "fetch",
-        vi.fn().mockResolvedValue({
-          ok: true,
-          json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }),
-        } as unknown as Response),
+        vi
+          .fn()
+          .mockResolvedValue(
+            new Response(JSON.stringify({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            }),
+          ),
       );
       const proc = makeFakeProc();
       await stopOpenClawChrome(
@@ -1157,10 +1161,11 @@ describe("chrome.ts internal", () => {
     it("returns null when the /json/version response JSON is not an object", async () => {
       vi.stubGlobal(
         "fetch",
-        vi.fn().mockResolvedValue({
-          ok: true,
-          json: async () => null,
-        } as unknown as Response),
+        vi
+          .fn()
+          .mockResolvedValue(
+            new Response("null", { status: 200, headers: { "content-type": "application/json" } }),
+          ),
       );
       // isChromeReachable invokes fetchChromeVersion; when it returns null,
       // Boolean(null) === false → reachability is false.
@@ -1172,10 +1177,14 @@ describe("chrome.ts internal", () => {
     it("returns null when /json/version omits webSocketDebuggerUrl", async () => {
       vi.stubGlobal(
         "fetch",
-        vi.fn().mockResolvedValue({
-          ok: true,
-          json: async () => ({ Browser: "Chrome/Mock" }),
-        } as unknown as Response),
+        vi
+          .fn()
+          .mockResolvedValue(
+            new Response(JSON.stringify({ Browser: "Chrome/Mock" }), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            }),
+          ),
       );
       await expect(getChromeWebSocketUrl("http://127.0.0.1:12345", 50)).resolves.toBeNull();
     });
@@ -1185,10 +1194,11 @@ describe("chrome.ts internal", () => {
     it("returns false when getChromeWebSocketUrl resolves to null", async () => {
       vi.stubGlobal(
         "fetch",
-        vi.fn().mockResolvedValue({
-          ok: true,
-          json: async () => ({}),
-        } as unknown as Response),
+        vi
+          .fn()
+          .mockResolvedValue(
+            new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+          ),
       );
       await expect(isChromeCdpReady("http://127.0.0.1:12345", 50, 50)).resolves.toBe(false);
     });
@@ -1389,10 +1399,14 @@ describe("chrome.ts internal", () => {
       // isChromeCdpReady by pointing at a private-IP cdp url under strict SSRF.
       vi.stubGlobal(
         "fetch",
-        vi.fn().mockResolvedValue({
-          ok: true,
-          json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools/browser/x" }),
-        } as unknown as Response),
+        vi
+          .fn()
+          .mockResolvedValue(
+            new Response(
+              JSON.stringify({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools/browser/x" }),
+              { status: 200, headers: { "content-type": "application/json" } },
+            ),
+          ),
       );
       await expect(
         isChromeCdpReady("http://169.254.169.254:9222", 50, 50, {
