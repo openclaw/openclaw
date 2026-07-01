@@ -32,6 +32,8 @@ describe("reserved index.md filename collision (repro)", () => {
 
     const fetched = await getMemoryWikiPage({ config, lookup: applied.pagePath });
     expect(fetched?.content).toContain("Durable synthesis body that must survive.");
+    expect(applied.pageId).toBe("synthesis.index");
+    expect(await getMemoryWikiPage({ config, lookup: "synthesis.index" })).not.toBeNull();
 
     const onDisk = await fs.readFile(path.join(rootDir, applied.pagePath), "utf8");
     expect(onDisk).toContain("Durable synthesis body that must survive.");
@@ -55,12 +57,15 @@ describe("reserved index.md filename collision (repro)", () => {
       maxResults: 10,
     });
     expect(found.some((hit) => hit.path === result.pagePath)).toBe(true);
+    expect(result.pageId).toBe("source.index");
+    expect(await getMemoryWikiPage({ config, lookup: result.pageId })).not.toBeNull();
   });
 
   it("disambiguates the compiler-owned index stem but leaves shared slug output stable", () => {
     expect(slugifyWikiSegment("Index")).toBe("index");
 
     expect(slugifyWikiPageStem("Index")).toMatch(/^index-[0-9a-f]{12}$/);
+    expect(slugifyWikiPageStem(" INDEX ")).toBe(slugifyWikiPageStem("Index"));
     expect(slugifyWikiPageStem("Log")).toBe("log");
     expect(slugifyWikiPageStem("Overview")).toBe("overview");
   });

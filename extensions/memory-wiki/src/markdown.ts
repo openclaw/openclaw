@@ -180,7 +180,7 @@ export function slugifyWikiPageStem(raw: string): string {
   if (!WIKI_RESERVED_PAGE_STEMS.has(slug)) {
     return slug;
   }
-  const suffix = createHash("sha1").update(raw).digest("hex").slice(0, WIKI_SEGMENT_HASH_BYTES);
+  const suffix = createHash("sha1").update(slug).digest("hex").slice(0, WIKI_SEGMENT_HASH_BYTES);
   return `${slug}-${suffix}`;
 }
 
