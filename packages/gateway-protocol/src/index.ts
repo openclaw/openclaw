@@ -190,6 +190,9 @@ import {
   DevicePairRemoveParamsSchema,
   type DevicePairRejectParams,
   DevicePairRejectParamsSchema,
+  type DevicePairSetupCodeParams,
+  DevicePairSetupCodeParamsSchema,
+  type DevicePairSetupCodeResult,
   type DeviceTokenRevokeParams,
   DeviceTokenRevokeParamsSchema,
   type DeviceTokenRotateParams,
@@ -860,6 +863,9 @@ export const validateDevicePairRejectParams = lazyCompile<DevicePairRejectParams
 export const validateDevicePairRemoveParams = lazyCompile<DevicePairRemoveParams>(
   DevicePairRemoveParamsSchema,
 );
+export const validateDevicePairSetupCodeParams = lazyCompile<DevicePairSetupCodeParams>(
+  DevicePairSetupCodeParamsSchema,
+);
 export const validateDeviceTokenRotateParams = lazyCompile<DeviceTokenRotateParams>(
   DeviceTokenRotateParamsSchema,
 );
@@ -1234,6 +1240,8 @@ export type {
   DevicePairListParams,
   DevicePairApproveParams,
   DevicePairRejectParams,
+  DevicePairSetupCodeParams,
+  DevicePairSetupCodeResult,
   ConfigGetParams,
   ConfigSetParams,
   ConfigApplyParams,
