@@ -286,6 +286,12 @@ function expectMediaSendCall(
   expect(actualParams).toEqual(expectedParams);
 }
 
+function createRichEntityInvalidError(entity = "EMAIL", operation = "sendRichMessage"): Error {
+  return new Error(
+    `GrammyError: Call to '${operation}' failed! (400: Bad Request: RICH_MESSAGE_${entity}_INVALID)`,
+  );
+}
+
 function expectPersistedTarget(fields: Record<string, unknown>): void {
   const [target] = requireMockCall(
     mockCall(maybePersistResolvedTelegramTarget, -1, "persisted Telegram target"),
@@ -996,6 +1002,46 @@ describe("sendMessageTelegram", () => {
       skip_entity_detection: true,
     });
     expect(richMessage?.html).not.toContain("mailto:");
+  });
+
+  it("falls back to plain text when durable rich sends reject an invalid entity", async () => {
+    const text = "Status includes openai:owner@example.com";
+    botRawApi.sendRichMessage.mockRejectedValueOnce(createRichEntityInvalidError("EMAIL"));
+    botApi.sendMessage.mockResolvedValueOnce({ message_id: 46, chat: { id: "123" } });
+
+    const result = await sendMessageTelegram("123", text, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(botApi.sendMessage).toHaveBeenCalledWith("123", text);
+    expect(result).toEqual({ messageId: "46", chatId: "123" });
+  });
+
+  it("chunks long plain text when durable rich sends reject an invalid entity", async () => {
+    const text = `Status includes openai:owner@example.com ${"A".repeat(5000)}`;
+    botRawApi.sendRichMessage.mockRejectedValueOnce(createRichEntityInvalidError("EMAIL"));
+    botApi.sendMessage
+      .mockResolvedValueOnce({ message_id: 47, chat: { id: "123" } })
+      .mockResolvedValueOnce({ message_id: 48, chat: { id: "123" } });
+
+    const result = await sendMessageTelegram("123", text, {
+      cfg: { channels: { telegram: { richMessages: true } } },
+      token: "tok",
+      replyToMessageId: 100,
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+    });
+
+    expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
+    expect(botApi.sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessageTexts(botApi.sendMessage).every((chunk) => chunk.length <= 4000)).toBe(true);
+    for (const call of botApi.sendMessage.mock.calls) {
+      expect(call[2]).toBeUndefined();
+    }
+    expect(result.messageId).toBe("48");
+    expect(result.receipt?.platformMessageIds).toEqual(["47", "48"]);
   });
 
   it.each([
@@ -3678,6 +3724,22 @@ describe("editMessageTelegram", () => {
     );
     expect(captionParams.caption).toBe("New caption");
     expect(captionParams.parse_mode).toBe("HTML");
+  });
+
+  it("falls back to plain text when rich edits reject an invalid entity", async () => {
+    const text = "Status includes openai:owner@example.com";
+    botRawApi.editMessageText.mockRejectedValueOnce(
+      createRichEntityInvalidError("EMAIL", "editMessageText"),
+    );
+    botApi.editMessageText.mockResolvedValueOnce({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram("123", 1, text, {
+      token: "tok",
+      cfg: { channels: { telegram: { richMessages: true } } },
+    });
+
+    expect(botRawApi.editMessageText).toHaveBeenCalledTimes(1);
+    expect(botApi.editMessageText).toHaveBeenCalledWith("123", 1, text);
   });
 
   it("retries editMessageTelegram on Telegram 5xx errors", async () => {

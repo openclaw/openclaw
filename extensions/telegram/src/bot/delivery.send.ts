@@ -18,6 +18,7 @@ import {
   removeTelegramRichNativeQuoteParam,
   toTelegramRichMessageContextParams,
 } from "../rich-message.js";
+import { isTelegramRichEntityInvalidError } from "../send-error-predicates.js";
 import { buildInlineKeyboard } from "../send.js";
 import type { TelegramThreadSpec } from "./helpers.js";
 
@@ -26,8 +27,6 @@ export { buildTelegramSendParams } from "../reply-parameters.js";
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const EMPTY_TEXT_ERR_RE = /message text is empty/i;
 const QUOTE_PARAM_RE = /\bquote not found\b|\bQUOTE_TEXT_INVALID\b|\bquote text invalid\b/i;
-const RICH_ENTITY_INVALID_RE =
-  /RICH_MESSAGE_(?:EMAIL|URL|MENTION|HASHTAG|CASHTAG|BOT_COMMAND|PHONE|BANK_CARD)_INVALID/i;
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
 
@@ -169,10 +168,10 @@ export async function sendTelegramText(
       runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${res.message_id}`);
       return res.message_id;
     } catch (err) {
-      const errText = formatErrorMessage(err);
-      if (!RICH_ENTITY_INVALID_RE.test(errText) || !hasFallbackText) {
+      if (!isTelegramRichEntityInvalidError(err) || !hasFallbackText) {
         throw err;
       }
+      const errText = formatErrorMessage(err);
       const richFallbackText =
         opts?.plainText ?? (textMode === "html" ? telegramHtmlToPlainTextFallback(text) : text);
       runtime.log?.(

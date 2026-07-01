@@ -55,6 +55,7 @@ import {
   type TelegramRichMessageContextParams,
   type TelegramRichTextChunk,
 } from "./rich-message.js";
+import { isTelegramRichEntityInvalidError } from "./send-error-predicates.js";
 import {
   buildOutboundMediaLoadOptions,
   getImageMetadata,
@@ -977,7 +978,10 @@ export async function sendMessageTelegram(
     const richRawApi = getTelegramRichRawApi(api);
     let lastMessageId = "";
     let lastChatId = chatId;
-    let lastAcceptedParams: TelegramRichMessageContextParams | undefined;
+    let lastAcceptedParams:
+      | TelegramThreadScopedParams
+      | TelegramRichMessageContextParams
+      | undefined;
     let acceptedReplyToMessageId: number | undefined;
     const messageIds: string[] = [];
     let sentChunkCount = 0;
@@ -992,19 +996,70 @@ export async function sendMessageTelegram(
         index === chunks.length - 1,
         options.replyToAlreadyUsed === true,
       );
-      const result = await requestWithChatNotFound(
-        () =>
-          richRawApi.sendRichMessage({
-            chat_id: chatId,
-            rich_message: buildTelegramRichMessage(chunk.text, chunk.textMode, {
-              skipEntityDetection: account.config.linkPreview === false,
-              tableMode,
+      let result: TelegramMessageLike;
+      let recordedParams: TelegramThreadScopedParams | TelegramRichMessageContextParams | undefined;
+      try {
+        result = await requestWithChatNotFound(
+          () =>
+            richRawApi.sendRichMessage({
+              chat_id: chatId,
+              rich_message: buildTelegramRichMessage(chunk.text, chunk.textMode, {
+                skipEntityDetection: account.config.linkPreview === false,
+                tableMode,
+              }),
+              ...acceptedParams,
+              ...(opts.silent === true ? { disable_notification: true } : {}),
             }),
-            ...acceptedParams,
-            ...(opts.silent === true ? { disable_notification: true } : {}),
-          }),
-        "richMessage",
-      );
+          "richMessage",
+        );
+      } catch (err) {
+        if (!isTelegramRichEntityInvalidError(err)) {
+          throw err;
+        }
+        // Mirror delivery.send.ts plain-text fallback, but keep normal 4k
+        // sendMessage chunking because rich chunks may be much larger.
+        sendLogger.warn(
+          `telegram richMessage rejected invalid entity, retrying as plain text: ${formatErrorMessage(
+            err,
+          )}`,
+        );
+        const fallbackChunks = splitTelegramPlainTextChunks(chunk.plainText, 4000);
+        const fallbackReplyChunkCount = Math.max(chunks.length, fallbackChunks.length);
+        for (let fallbackIndex = 0; fallbackIndex < fallbackChunks.length; fallbackIndex += 1) {
+          const fallbackText = fallbackChunks[fallbackIndex] ?? "";
+          const fallbackReplyIndex = chunks.length === 1 ? fallbackIndex : index;
+          const fallbackParams = buildTextParams(
+            fallbackReplyIndex,
+            fallbackReplyChunkCount,
+            index === chunks.length - 1 && fallbackIndex === fallbackChunks.length - 1,
+            options.replyToAlreadyUsed === true,
+          );
+          const plainResult = await sendTelegramTextChunk(
+            { plainText: fallbackText },
+            fallbackParams,
+          );
+          const fallbackMessageId = resolveTelegramMessageIdOrThrow(plainResult.result, context);
+          recordSentMessage(chatId, fallbackMessageId, cfg);
+          await recordOutboundMessageForPromptContext({
+            cfg,
+            account,
+            chatId,
+            message: plainResult.result,
+            messageId: fallbackMessageId,
+            text: fallbackText,
+            ...(plainResult.acceptedParams?.message_thread_id !== undefined
+              ? { messageThreadId: plainResult.acceptedParams.message_thread_id }
+              : {}),
+          });
+          lastMessageId = String(fallbackMessageId);
+          lastChatId = String(plainResult.result?.chat?.id ?? chatId);
+          lastAcceptedParams = plainResult.acceptedParams;
+          acceptedReplyToMessageId ??= resolveAcceptedReplyToMessageId(plainResult.acceptedParams);
+          messageIds.push(lastMessageId);
+          sentChunkCount += 1;
+        }
+        continue;
+      }
       const messageId = resolveTelegramMessageIdOrThrow(result, context);
       recordSentMessage(chatId, messageId, cfg);
       await recordOutboundMessageForPromptContext({
@@ -1014,14 +1069,14 @@ export async function sendMessageTelegram(
         message: result,
         messageId,
         text: chunk.plainText,
-        ...(acceptedParams?.message_thread_id !== undefined
-          ? { messageThreadId: acceptedParams.message_thread_id }
+        ...(recordedParams?.message_thread_id !== undefined
+          ? { messageThreadId: recordedParams.message_thread_id }
           : {}),
       });
       lastMessageId = String(messageId);
       lastChatId = String(result?.chat?.id ?? chatId);
-      lastAcceptedParams = acceptedParams;
-      acceptedReplyToMessageId ??= resolveAcceptedReplyToMessageId(acceptedParams);
+      lastAcceptedParams = recordedParams;
+      acceptedReplyToMessageId ??= resolveAcceptedReplyToMessageId(recordedParams);
       messageIds.push(lastMessageId);
       sentChunkCount += 1;
     }
@@ -1763,7 +1818,26 @@ export async function editMessageTelegram(
           }),
         "editMessage",
         (err) => !isTelegramMessageNotModifiedError(err),
-      );
+      ).catch((err: unknown) => {
+        if (!isTelegramRichEntityInvalidError(err)) {
+          throw err;
+        }
+        // Mirror durable send fallback for edits: invalid rich entities degrade
+        // to the same plain text that normal HTML edit fallback would send.
+        sendLogger.warn(
+          `telegram editMessage rich entity rejected, retrying as plain text: ${formatErrorMessage(
+            err,
+          )}`,
+        );
+        return requestWithEditShouldLog(
+          () =>
+            Object.keys(plainTextParams).length > 0
+              ? api.editMessageText(chatId, messageId, plainText, plainTextParams)
+              : api.editMessageText(chatId, messageId, plainText),
+          "editMessage-plain",
+          (plainErr) => !isTelegramMessageNotModifiedError(plainErr),
+        );
+      });
     }
     return withTelegramHtmlParseFallback({
       label: "editMessage",
