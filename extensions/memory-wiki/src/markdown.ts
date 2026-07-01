@@ -73,6 +73,11 @@ export type WikiRelationship = {
   updatedAt?: string;
 };
 
+export type WikiPageFrontmatterError = {
+  relativePath: string;
+  message: string;
+};
+
 export type WikiPageSummary = {
   absolutePath: string;
   relativePath: string;
@@ -108,6 +113,11 @@ export type WikiPageSummary = {
   lastRefreshedAt?: string;
   updatedAt?: string;
 };
+
+export type WikiPageSummaryScanResult =
+  | { status: "valid"; page: WikiPageSummary }
+  | { status: "invalid-frontmatter"; error: WikiPageFrontmatterError }
+  | { status: "ignored" };
 
 const FRONTMATTER_PATTERN = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 const OBSIDIAN_LINK_PATTERN = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
@@ -179,12 +189,14 @@ export function parseWikiMarkdown(content: string): ParsedWikiMarkdown {
     return { hasFrontmatter: false, frontmatter: {}, body: content };
   }
   const parsed = YAML.parse(match[1]) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    // Every writer spreads this value back into YAML. Reject non-mapping roots
+    // so an edit cannot silently replace scalar or sequence frontmatter.
+    throw new TypeError("Wiki frontmatter must be a YAML mapping");
+  }
   return {
     hasFrontmatter: true,
-    frontmatter:
-      parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
-        : {},
+    frontmatter: parsed as Record<string, unknown>,
     body: content.slice(match[0].length),
   };
 }
@@ -613,16 +625,29 @@ export function inferWikiPageKind(relativePath: string): WikiPageKind | null {
   return null;
 }
 
-export function toWikiPageSummary(params: {
+export function scanWikiPageSummary(params: {
   absolutePath: string;
   relativePath: string;
   raw: string;
-}): WikiPageSummary | null {
+}): WikiPageSummaryScanResult {
   const kind = inferWikiPageKind(params.relativePath);
   if (!kind) {
-    return null;
+    return { status: "ignored" };
   }
-  const parsed = parseWikiMarkdown(params.raw);
+  let parsed: ParsedWikiMarkdown;
+  try {
+    parsed = parseWikiMarkdown(params.raw);
+  } catch (error) {
+    // Vault scans exclude malformed pages from derived state, while direct parse callers
+    // stay strict so write paths cannot replace unparsed metadata with empty fields.
+    return {
+      status: "invalid-frontmatter",
+      error: {
+        relativePath: params.relativePath.split(path.sep).join("/"),
+        message: error instanceof Error ? error.message : String(error),
+      },
+    };
+  }
   const title =
     (typeof parsed.frontmatter.title === "string" && parsed.frontmatter.title.trim()) ||
     extractTitleFromMarkdown(parsed.body) ||
@@ -638,44 +663,56 @@ export function toWikiPageSummary(params: {
     detectUnmanagedRawSourceBody(parsed.body);
 
   return {
-    absolutePath: params.absolutePath,
-    relativePath: params.relativePath.split(path.sep).join("/"),
-    kind,
-    title,
-    hasFrontmatter: parsed.hasFrontmatter,
-    id: normalizeOptionalString(parsed.frontmatter.id),
-    pageType: normalizeOptionalString(parsed.frontmatter.pageType),
-    entityType: normalizeOptionalString(parsed.frontmatter.entityType),
-    canonicalId: normalizeOptionalString(parsed.frontmatter.canonicalId),
-    aliases: normalizeSingleOrTrimmedStringList(parsed.frontmatter.aliases),
-    sourceIds: normalizeSourceIds(parsed.frontmatter.sourceIds),
-    linkTargets: extractWikiLinks(params.raw, params.relativePath.split(path.sep).join("/")),
-    claims: normalizeWikiClaims(parsed.frontmatter.claims),
-    contradictions: normalizeSingleOrTrimmedStringList(parsed.frontmatter.contradictions),
-    questions: normalizeSingleOrTrimmedStringList(parsed.frontmatter.questions),
-    confidence:
-      typeof parsed.frontmatter.confidence === "number" &&
-      Number.isFinite(parsed.frontmatter.confidence)
-        ? parsed.frontmatter.confidence
-        : undefined,
-    privacyTier: normalizeOptionalString(parsed.frontmatter.privacyTier),
-    personCard: normalizeWikiPersonCard(parsed.frontmatter.personCard),
-    relationships: normalizeWikiRelationships(parsed.frontmatter.relationships),
-    bestUsedFor: normalizeSingleOrTrimmedStringList(parsed.frontmatter.bestUsedFor),
-    notEnoughFor: normalizeSingleOrTrimmedStringList(parsed.frontmatter.notEnoughFor),
-    sourceType: normalizeOptionalString(parsed.frontmatter.sourceType),
-    provenanceMode: normalizeOptionalString(parsed.frontmatter.provenanceMode),
-    ...(importedSourceBody ? { importedSourceBody } : {}),
-    ...(generatedSourceBody ? { generatedSourceBody } : {}),
-    ...(unmanagedRawSourceBody ? { unmanagedRawSourceBody } : {}),
-    sourcePath: normalizeOptionalString(parsed.frontmatter.sourcePath),
-    bridgeRelativePath: normalizeOptionalString(parsed.frontmatter.bridgeRelativePath),
-    bridgeWorkspaceDir: normalizeOptionalString(parsed.frontmatter.bridgeWorkspaceDir),
-    unsafeLocalConfiguredPath: normalizeOptionalString(
-      parsed.frontmatter.unsafeLocalConfiguredPath,
-    ),
-    unsafeLocalRelativePath: normalizeOptionalString(parsed.frontmatter.unsafeLocalRelativePath),
-    lastRefreshedAt: normalizeOptionalString(parsed.frontmatter.lastRefreshedAt),
-    updatedAt: normalizeOptionalString(parsed.frontmatter.updatedAt),
+    status: "valid",
+    page: {
+      absolutePath: params.absolutePath,
+      relativePath: params.relativePath.split(path.sep).join("/"),
+      kind,
+      title,
+      hasFrontmatter: parsed.hasFrontmatter,
+      id: normalizeOptionalString(parsed.frontmatter.id),
+      pageType: normalizeOptionalString(parsed.frontmatter.pageType),
+      entityType: normalizeOptionalString(parsed.frontmatter.entityType),
+      canonicalId: normalizeOptionalString(parsed.frontmatter.canonicalId),
+      aliases: normalizeSingleOrTrimmedStringList(parsed.frontmatter.aliases),
+      sourceIds: normalizeSourceIds(parsed.frontmatter.sourceIds),
+      linkTargets: extractWikiLinks(params.raw, params.relativePath.split(path.sep).join("/")),
+      claims: normalizeWikiClaims(parsed.frontmatter.claims),
+      contradictions: normalizeSingleOrTrimmedStringList(parsed.frontmatter.contradictions),
+      questions: normalizeSingleOrTrimmedStringList(parsed.frontmatter.questions),
+      confidence:
+        typeof parsed.frontmatter.confidence === "number" &&
+        Number.isFinite(parsed.frontmatter.confidence)
+          ? parsed.frontmatter.confidence
+          : undefined,
+      privacyTier: normalizeOptionalString(parsed.frontmatter.privacyTier),
+      personCard: normalizeWikiPersonCard(parsed.frontmatter.personCard),
+      relationships: normalizeWikiRelationships(parsed.frontmatter.relationships),
+      bestUsedFor: normalizeSingleOrTrimmedStringList(parsed.frontmatter.bestUsedFor),
+      notEnoughFor: normalizeSingleOrTrimmedStringList(parsed.frontmatter.notEnoughFor),
+      sourceType: normalizeOptionalString(parsed.frontmatter.sourceType),
+      provenanceMode: normalizeOptionalString(parsed.frontmatter.provenanceMode),
+      ...(importedSourceBody ? { importedSourceBody } : {}),
+      ...(generatedSourceBody ? { generatedSourceBody } : {}),
+      ...(unmanagedRawSourceBody ? { unmanagedRawSourceBody } : {}),
+      sourcePath: normalizeOptionalString(parsed.frontmatter.sourcePath),
+      bridgeRelativePath: normalizeOptionalString(parsed.frontmatter.bridgeRelativePath),
+      bridgeWorkspaceDir: normalizeOptionalString(parsed.frontmatter.bridgeWorkspaceDir),
+      unsafeLocalConfiguredPath: normalizeOptionalString(
+        parsed.frontmatter.unsafeLocalConfiguredPath,
+      ),
+      unsafeLocalRelativePath: normalizeOptionalString(parsed.frontmatter.unsafeLocalRelativePath),
+      lastRefreshedAt: normalizeOptionalString(parsed.frontmatter.lastRefreshedAt),
+      updatedAt: normalizeOptionalString(parsed.frontmatter.updatedAt),
+    },
   };
+}
+
+export function toWikiPageSummary(params: {
+  absolutePath: string;
+  relativePath: string;
+  raw: string;
+}): WikiPageSummary | null {
+  const result = scanWikiPageSummary(params);
+  return result.status === "valid" ? result.page : null;
 }
