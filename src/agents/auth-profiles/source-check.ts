@@ -3,17 +3,19 @@
  * These checks intentionally avoid loading secret-bearing credential payloads.
  */
 import fs from "node:fs";
+import { evaluateStoredCredentialEligibility } from "./credential-state.js";
 import {
   resolveAuthStatePath,
   resolveAuthStorePath,
   resolveLegacyAuthStorePath,
 } from "./path-resolve.js";
+import { coerceLegacyAuthStore, coercePersistedAuthProfileStore } from "./persisted.js";
 import {
   getRuntimeAuthProfileStoreSnapshot,
   hasAnyRuntimeAuthProfileStoreSource,
 } from "./runtime-snapshots.js";
 import { readPersistedAuthProfileStateRaw, readPersistedAuthProfileStoreRaw } from "./sqlite.js";
-import type { AuthProfileStore } from "./types.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 
 // Auth-profile source checks look at runtime snapshots, JSON compatibility
 // files, legacy files, and SQLite stores without materializing secret values.
@@ -37,24 +39,47 @@ function normalizeProvider(provider: string): string {
   return provider.trim().toLowerCase();
 }
 
-function rawStoreHasProviderProfile(raw: unknown, provider: string): boolean {
-  if (!raw || typeof raw !== "object") {
+function isAuthProfileCredential(value: unknown): value is AuthProfileCredential {
+  if (!value || typeof value !== "object") {
     return false;
   }
-  const profiles = (raw as { profiles?: unknown }).profiles;
-  if (!profiles || typeof profiles !== "object") {
+  const credential = value as { provider?: unknown; type?: unknown };
+  const type = credential.type;
+  return (
+    typeof credential.provider === "string" &&
+    (type === "api_key" || type === "token" || type === "oauth")
+  );
+}
+
+function isEligibleProviderCredential(rawCredential: unknown, expectedProvider: string): boolean {
+  if (!isAuthProfileCredential(rawCredential)) {
+    return false;
+  }
+  return (
+    normalizeProvider(rawCredential.provider) === expectedProvider &&
+    evaluateStoredCredentialEligibility({ credential: rawCredential }).eligible
+  );
+}
+
+function coerceRawStoreProfiles(raw: unknown): Record<string, AuthProfileCredential> | null {
+  return coercePersistedAuthProfileStore(raw)?.profiles ?? coerceLegacyAuthStore(raw);
+}
+
+function rawStoreHasProviderProfile(
+  raw: unknown,
+  provider: string,
+  profileIds?: readonly string[],
+): boolean {
+  const profiles = coerceRawStoreProfiles(raw);
+  if (!profiles) {
     return false;
   }
   const expected = normalizeProvider(provider);
-  for (const [profileId, rawCredential] of Object.entries(profiles)) {
-    if (normalizeProvider(profileId).startsWith(`${expected}:`)) {
+  const credentials =
+    profileIds?.map((profileId) => profiles[profileId]) ?? Object.values(profiles);
+  for (const rawCredential of credentials) {
+    if (isEligibleProviderCredential(rawCredential, expected)) {
       return true;
-    }
-    if (rawCredential && typeof rawCredential === "object") {
-      const rawProvider = (rawCredential as { provider?: unknown }).provider;
-      if (typeof rawProvider === "string" && normalizeProvider(rawProvider) === expected) {
-        return true;
-      }
     }
   }
   return false;
@@ -63,8 +88,9 @@ function rawStoreHasProviderProfile(raw: unknown, provider: string): boolean {
 function runtimeStoreHasProviderProfile(
   store: AuthProfileStore | undefined,
   provider: string,
+  profileIds?: readonly string[],
 ): boolean {
-  return rawStoreHasProviderProfile(store, provider);
+  return rawStoreHasProviderProfile(store, provider, profileIds);
 }
 
 /** Returns true when any local/runtime/main auth profile source exists. */
@@ -104,22 +130,45 @@ export function hasLocalAuthProfileStoreSource(agentDir?: string): boolean {
   );
 }
 
+type AuthProfileSourceForProviderOptions = {
+  /** Optional hard order/profile constraint from config auth.order. */
+  profileIds?: readonly string[];
+};
+
 /** Returns true when a read-only auth-profile source contains a profile for a provider. */
-export function hasAuthProfileStoreSourceForProvider(provider: string, agentDir?: string): boolean {
+export function hasAuthProfileStoreSourceForProvider(
+  provider: string,
+  agentDir?: string,
+  options?: AuthProfileSourceForProviderOptions,
+): boolean {
   if (!normalizeProvider(provider)) {
     return false;
   }
+  const profileIds = options?.profileIds;
+  if (profileIds?.length === 0) {
+    return false;
+  }
   const localRuntimeStore = getRuntimeAuthProfileStoreSnapshot(agentDir);
-  if (runtimeStoreHasProviderProfile(localRuntimeStore, provider)) {
+  if (runtimeStoreHasProviderProfile(localRuntimeStore, provider, profileIds)) {
     return true;
   }
-  if (rawStoreHasProviderProfile(readJsonFile(resolveAuthStorePath(agentDir)), provider)) {
+  if (
+    rawStoreHasProviderProfile(readJsonFile(resolveAuthStorePath(agentDir)), provider, profileIds)
+  ) {
     return true;
   }
-  if (rawStoreHasProviderProfile(readJsonFile(resolveLegacyAuthStorePath(agentDir)), provider)) {
+  if (
+    rawStoreHasProviderProfile(
+      readJsonFile(resolveLegacyAuthStorePath(agentDir)),
+      provider,
+      profileIds,
+    )
+  ) {
     return true;
   }
-  if (rawStoreHasProviderProfile(readPersistedAuthProfileStoreRaw(agentDir), provider)) {
+  if (
+    rawStoreHasProviderProfile(readPersistedAuthProfileStoreRaw(agentDir), provider, profileIds)
+  ) {
     return true;
   }
 
@@ -127,14 +176,16 @@ export function hasAuthProfileStoreSourceForProvider(provider: string, agentDir?
     return false;
   }
   const mainRuntimeStore = getRuntimeAuthProfileStoreSnapshot();
-  if (runtimeStoreHasProviderProfile(mainRuntimeStore, provider)) {
+  if (runtimeStoreHasProviderProfile(mainRuntimeStore, provider, profileIds)) {
     return true;
   }
-  if (rawStoreHasProviderProfile(readJsonFile(resolveAuthStorePath()), provider)) {
+  if (rawStoreHasProviderProfile(readJsonFile(resolveAuthStorePath()), provider, profileIds)) {
     return true;
   }
-  if (rawStoreHasProviderProfile(readJsonFile(resolveLegacyAuthStorePath()), provider)) {
+  if (
+    rawStoreHasProviderProfile(readJsonFile(resolveLegacyAuthStorePath()), provider, profileIds)
+  ) {
     return true;
   }
-  return rawStoreHasProviderProfile(readPersistedAuthProfileStoreRaw(), provider);
+  return rawStoreHasProviderProfile(readPersistedAuthProfileStoreRaw(), provider, profileIds);
 }

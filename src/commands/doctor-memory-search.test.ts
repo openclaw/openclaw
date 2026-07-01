@@ -11,6 +11,7 @@ const resolveMemorySearchConfig = vi.hoisted(() => vi.fn());
 const resolveApiKeyForProvider = vi.hoisted(() => vi.fn());
 const hasAnyAuthProfileStoreSource = vi.hoisted(() => vi.fn(() => true));
 const hasAuthProfileStoreSourceForProvider = vi.hoisted(() => vi.fn(() => true));
+const isConfiguredAwsSdkAuthProfileForProvider = vi.hoisted(() => vi.fn(() => false));
 const getActiveMemorySearchManager = vi.hoisted(() => vi.fn());
 const resolveActiveMemoryBackendConfig = vi.hoisted(() => vi.fn());
 type CheckQmdBinaryAvailability = typeof checkQmdBinaryAvailabilityFn;
@@ -47,6 +48,7 @@ vi.mock("../agents/model-auth.js", () => ({
 vi.mock("../agents/auth-profiles.js", () => ({
   hasAnyAuthProfileStoreSource,
   hasAuthProfileStoreSourceForProvider,
+  isConfiguredAwsSdkAuthProfileForProvider,
 }));
 
 vi.mock("../plugins/memory-runtime.js", () => ({
@@ -176,6 +178,8 @@ describe("noteMemorySearchHealth", () => {
     hasAnyAuthProfileStoreSource.mockReturnValue(true);
     hasAuthProfileStoreSourceForProvider.mockReset();
     hasAuthProfileStoreSourceForProvider.mockReturnValue(true);
+    isConfiguredAwsSdkAuthProfileForProvider.mockReset();
+    isConfiguredAwsSdkAuthProfileForProvider.mockReturnValue(false);
     getActiveMemorySearchManager.mockReset();
     resolveActiveMemoryBackendConfig.mockReset();
     resolveActiveMemoryBackendConfig.mockImplementation(
@@ -974,6 +978,121 @@ describe("noteMemorySearchHealth", () => {
       "openai",
       "/tmp/agent-default",
     );
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
+  it("honors configured auth order when lint skips profile resolution", async () => {
+    hasAuthProfileStoreSourceForProvider.mockReturnValue(false);
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "openai",
+      model: "text-embedding-3-small",
+      local: {},
+      remote: {},
+    });
+    const orderedCfg = {
+      ...cfg,
+      auth: { order: { openai: ["openai:expired"] } },
+    } as OpenClawConfig;
+
+    await noteMemorySearchHealth(orderedCfg, {
+      skipAuthProfileResolution: true,
+      gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
+    });
+
+    expect(hasAuthProfileStoreSourceForProvider).toHaveBeenCalledWith(
+      "openai",
+      "/tmp/agent-default",
+      { profileIds: ["openai:expired"] },
+    );
+    expect(firstNoteMessage()).toContain('provider is set to "openai"');
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
+  it("warns for explicit empty auth order when lint skips profile resolution", async () => {
+    hasAuthProfileStoreSourceForProvider.mockReturnValue(false);
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "openai",
+      model: "text-embedding-3-small",
+      local: {},
+      remote: {},
+    });
+    const orderedCfg = {
+      ...cfg,
+      auth: { order: { openai: [] } },
+    } as OpenClawConfig;
+
+    await noteMemorySearchHealth(orderedCfg, {
+      skipAuthProfileResolution: true,
+      gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
+    });
+
+    expect(hasAuthProfileStoreSourceForProvider).toHaveBeenCalledWith(
+      "openai",
+      "/tmp/agent-default",
+      { profileIds: [] },
+    );
+    expect(firstNoteMessage()).toContain('provider is set to "openai"');
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
+  it("does not warn for Bedrock aws-sdk provider auth when lint skips profile resolution", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "bedrock",
+      model: "amazon.titan-embed-text-v2:0",
+      local: {},
+      remote: {},
+    });
+    const bedrockCfg = {
+      ...cfg,
+      models: {
+        providers: {
+          "amazon-bedrock": { auth: "aws-sdk", models: [] },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await noteMemorySearchHealth(bedrockCfg, {
+      skipAuthProfileResolution: true,
+      gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+    expect(hasAuthProfileStoreSourceForProvider).not.toHaveBeenCalled();
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
+  it("does not warn for ordered Bedrock aws-sdk auth profiles when lint skips profile resolution", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "bedrock",
+      model: "amazon.titan-embed-text-v2:0",
+      local: {},
+      remote: {},
+    });
+    const bedrockCfg = {
+      ...cfg,
+      models: {
+        providers: {
+          "amazon-bedrock": { auth: "aws-sdk", models: [] },
+        },
+      },
+      auth: {
+        profiles: {
+          "amazon-bedrock:default": {
+            provider: "amazon-bedrock",
+            mode: "aws-sdk",
+          },
+        },
+        order: { "amazon-bedrock": ["amazon-bedrock:default"] },
+      },
+    } as unknown as OpenClawConfig;
+
+    await noteMemorySearchHealth(bedrockCfg, {
+      skipAuthProfileResolution: true,
+      gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+    expect(hasAuthProfileStoreSourceForProvider).not.toHaveBeenCalled();
     expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
   });
 

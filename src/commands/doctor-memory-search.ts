@@ -13,6 +13,7 @@ import {
 import {
   hasAnyAuthProfileStoreSource,
   hasAuthProfileStoreSourceForProvider,
+  isConfiguredAwsSdkAuthProfileForProvider,
 } from "../agents/auth-profiles.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import {
@@ -140,6 +141,19 @@ function resolveSuggestedRemoteMemoryProvider(): string | undefined {
   return listAutoSelectMemoryEmbeddingProviderDoctorMetadata().find(
     (provider) => provider.transport === "remote",
   )?.providerId;
+}
+
+function hasConfiguredAwsSdkAuthForProvider(provider: string, cfg: OpenClawConfig): boolean {
+  const providerConfig = findNormalizedProviderValue(cfg.models?.providers, provider);
+  if (providerConfig?.auth === "aws-sdk") {
+    return true;
+  }
+  const orderedProfileIds = findNormalizedProviderValue(cfg.auth?.order, provider);
+  const profileIds =
+    orderedProfileIds ?? (cfg.auth?.profiles ? Object.keys(cfg.auth.profiles) : []);
+  return profileIds.some((profileId) =>
+    isConfiguredAwsSdkAuthProfileForProvider({ cfg, provider, profileId }),
+  );
 }
 
 function isOpenAICompatibleMemoryProvider(providerId: string, cfg: OpenClawConfig): boolean {
@@ -677,10 +691,15 @@ async function hasApiKeyForProvider(
     return true;
   }
   if (opts?.skipProfileResolution === true) {
-    return (
-      authProviderId !== "amazon-bedrock" &&
-      hasAuthProfileStoreSourceForProvider(authProviderId, agentDir)
-    );
+    if (authProviderId === "amazon-bedrock") {
+      return hasConfiguredAwsSdkAuthForProvider(authProviderId, cfg);
+    }
+    const orderedProfileIds = findNormalizedProviderValue(cfg.auth?.order, authProviderId);
+    return orderedProfileIds === undefined
+      ? hasAuthProfileStoreSourceForProvider(authProviderId, agentDir)
+      : hasAuthProfileStoreSourceForProvider(authProviderId, agentDir, {
+          profileIds: orderedProfileIds,
+        });
   }
   if (authProviderId !== "amazon-bedrock" && !hasAnyAuthProfileStoreSource(agentDir)) {
     return false;
