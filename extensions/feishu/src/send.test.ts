@@ -1,6 +1,7 @@
 // Feishu tests cover send plugin behavior.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
+import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { buildFeishuPostMessagePayload, buildMarkdownCard } from "./send.js";
 
 const {
@@ -62,6 +63,7 @@ let editMessageFeishu: typeof import("./send.js").editMessageFeishu;
 let getMessageFeishu: typeof import("./send.js").getMessageFeishu;
 let listFeishuThreadMessages: typeof import("./send.js").listFeishuThreadMessages;
 let resolveFeishuCardTemplate: typeof import("./send.js").resolveFeishuCardTemplate;
+let sendCardFeishu: typeof import("./send.js").sendCardFeishu;
 let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
 
 describe("buildFeishuPostMessagePayload", () => {
@@ -115,6 +117,7 @@ describe("getMessageFeishu", () => {
       getMessageFeishu,
       listFeishuThreadMessages,
       resolveFeishuCardTemplate,
+      sendCardFeishu,
       sendMessageFeishu,
     } = await import("./send.js"));
   });
@@ -291,6 +294,134 @@ describe("getMessageFeishu", () => {
         ],
       },
     });
+  });
+
+  it("redacts audit-sensitive contact info in post markdown without rewriting mention elements", async () => {
+    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_redacted" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    await sendMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_send",
+      text: "Latest invoice came from billing@example.com; call +86 138-1234-5678 or 95530.",
+      mentions: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
+    });
+
+    const content = JSON.parse(create.mock.calls[0][0].data.content) as {
+      zh_cn: { content: Array<Array<{ tag: string; text?: string; user_id?: string }>> };
+    };
+    expect(content.zh_cn.content[0]).toEqual([
+      { tag: "at", user_id: "ou_target", user_name: "Target User" },
+      {
+        tag: "md",
+        text: "Latest invoice came from [email redacted]; call [phone redacted] or [phone redacted].",
+      },
+    ]);
+  });
+
+  it("redacts visible card text without rewriting action payloads", async () => {
+    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_card" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    await sendCardFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_send",
+      card: {
+        header: {
+          title: { tag: "plain_text", content: "Owner billing@example.com" },
+        },
+        template_variable: {
+          owner: "billing@example.com",
+          support: "95530",
+        },
+        template_variables: {
+          hotline: "400-123-4567",
+        },
+        body: {
+          elements: [
+            { tag: "markdown", content: "Contact 51fapiao@ceair.com or 400-123-4567" },
+            {
+              tag: "action",
+              actions: [
+                {
+                  tag: "button",
+                  text: { tag: "plain_text", content: "Call 95530" },
+                  url: "https://example.com/support?phone=95530",
+                  value: createFeishuCardInteractionEnvelope({
+                    k: "meta",
+                    a: "test.audit_redaction.fixture",
+                    m: {
+                      command: "/mail 51fapiao@ceair.com",
+                      phone: "95530",
+                    },
+                  }),
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    const card = JSON.parse(create.mock.calls[0][0].data.content) as {
+      header: { title: { content: string } };
+      template_variable: { owner: string; support: string };
+      template_variables: { hotline: string };
+      body: {
+        elements: [
+          { content: string },
+          {
+            actions: Array<{
+              text: { content: string };
+              url: string;
+              value: ReturnType<typeof createFeishuCardInteractionEnvelope>;
+            }>;
+          },
+        ];
+      };
+    };
+    const action = card.body.elements[1].actions[0];
+    expect(card.header.title.content).toBe("Owner [email redacted]");
+    expect(card.template_variable).toEqual({
+      owner: "[email redacted]",
+      support: "[phone redacted]",
+    });
+    expect(card.template_variables).toEqual({
+      hotline: "[phone redacted]",
+    });
+    expect(card.body.elements[0].content).toBe("Contact [email redacted] or [phone redacted]");
+    expect(action.text.content).toBe("Call [phone redacted]");
+    expect(action.url).toBe("https://example.com/support?phone=95530");
+    expect(action.value).toEqual(
+      createFeishuCardInteractionEnvelope({
+        k: "meta",
+        a: "test.audit_redaction.fixture",
+        m: {
+          command: "/mail 51fapiao@ceair.com",
+          phone: "95530",
+        },
+      }),
+    );
   });
 
   it("extracts text content from interactive card elements", async () => {

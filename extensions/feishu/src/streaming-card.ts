@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { redactFeishuAuditSensitiveText } from "./audit-redaction.js";
 import { getFeishuUserAgent } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
@@ -241,7 +242,7 @@ export class FeishuStreamingSession {
       elements.push({ tag: "hr" });
       elements.push({
         tag: "markdown",
-        content: `<font color='grey'>${options.note}</font>`,
+        content: `<font color='grey'>${redactFeishuAuditSensitiveText(options.note)}</font>`,
         element_id: "note",
       });
     }
@@ -256,7 +257,10 @@ export class FeishuStreamingSession {
     };
     if (options?.header) {
       cardJson.header = {
-        title: { tag: "plain_text", content: options.header.title },
+        title: {
+          tag: "plain_text",
+          content: redactFeishuAuditSensitiveText(options.header.title),
+        },
         template: resolveFeishuCardTemplate(options.header.template) ?? "blue",
       };
     }
@@ -361,6 +365,7 @@ export class FeishuStreamingSession {
     if (!this.state) {
       return false;
     }
+    const safeText = redactFeishuAuditSensitiveText(text);
     const apiBase = resolveApiBase(this.creds.domain);
     this.state.sequence += 1;
     try {
@@ -374,7 +379,7 @@ export class FeishuStreamingSession {
             "User-Agent": getFeishuUserAgent(),
           },
           body: JSON.stringify({
-            content: text,
+            content: safeText,
             sequence: this.state.sequence,
             uuid: `s_${this.state.cardId}_${this.state.sequence}`,
           }),
@@ -401,6 +406,7 @@ export class FeishuStreamingSession {
     if (!this.state) {
       return false;
     }
+    const safeText = redactFeishuAuditSensitiveText(text);
     const apiBase = resolveApiBase(this.creds.domain);
     this.state.sequence += 1;
     try {
@@ -414,7 +420,7 @@ export class FeishuStreamingSession {
             "User-Agent": getFeishuUserAgent(),
           },
           body: JSON.stringify({
-            element: JSON.stringify({ tag: "markdown", content: text, element_id: "content" }),
+            element: JSON.stringify({ tag: "markdown", content: safeText, element_id: "content" }),
             sequence: this.state.sequence,
             uuid: `r_${this.state.cardId}_${this.state.sequence}`,
           }),
@@ -515,7 +521,7 @@ export class FeishuStreamingSession {
           "User-Agent": getFeishuUserAgent(),
         },
         body: JSON.stringify({
-          content: `<font color='grey'>${note}</font>`,
+          content: `<font color='grey'>${redactFeishuAuditSensitiveText(note)}</font>`,
           sequence: this.state.sequence,
           uuid: `n_${this.state.cardId}_${this.state.sequence}`,
         }),
@@ -575,7 +581,10 @@ export class FeishuStreamingSession {
         },
         body: JSON.stringify({
           settings: JSON.stringify({
-            config: { streaming_mode: false, summary: { content: truncateSummary(text) } },
+            config: {
+              streaming_mode: false,
+              summary: { content: truncateSummary(redactFeishuAuditSensitiveText(text)) },
+            },
           }),
           sequence: this.state.sequence,
           uuid: `c_${this.state.cardId}_${this.state.sequence}`,
