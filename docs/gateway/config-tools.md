@@ -213,6 +213,7 @@ Tool-loop safety checks are **disabled by default**. Set `enabled: true` to acti
   tools: {
     loopDetection: {
       enabled: true,
+      nativePreToolUseRelay: true,
       historySize: 30,
       warningThreshold: 10,
       criticalThreshold: 20,
@@ -229,6 +230,12 @@ Tool-loop safety checks are **disabled by default**. Set `enabled: true` to acti
 
 <ParamField path="historySize" type="number">
   Max tool-call history retained for loop analysis.
+</ParamField>
+<ParamField path="nativePreToolUseRelay" type="boolean">
+  Codex Harness only. When unset or `true`, loop-detection-only native
+  `PreToolUse` relay hooks keep the previous behavior. Set `false` to stop
+  installing that inactive `PreToolUse` relay subprocess path while leaving
+  before-tool policy, trusted-tool policy, and other local tool work unchanged.
 </ParamField>
 <ParamField path="warningThreshold" type="number">
   Repeating no-progress pattern threshold for warnings.

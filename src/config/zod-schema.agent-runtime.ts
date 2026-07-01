@@ -634,6 +634,7 @@ const ToolLoopPostCompactionGuardSchema = z
 const ToolLoopDetectionSchema = z
   .object({
     enabled: z.boolean().optional(),
+    nativePreToolUseRelay: z.boolean().optional(),
     historySize: z.number().int().positive().optional(),
     warningThreshold: z.number().int().positive().optional(),
     unknownToolThreshold: z.number().int().positive().optional(),
