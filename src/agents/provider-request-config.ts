@@ -73,7 +73,7 @@ export type ProviderRequestTransportOverrides = {
   tls?: ProviderRequestTlsOverride;
 };
 
-export type ProviderRequestRateLimitOverride = ConfiguredModelProviderRateLimit;
+type ProviderRequestRateLimitOverride = ConfiguredModelProviderRateLimit;
 
 /** Model-scoped transport overrides, including private-network policy. */
 export type ModelProviderRequestTransportOverrides = ProviderRequestTransportOverrides & {
