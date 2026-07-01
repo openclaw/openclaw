@@ -1304,9 +1304,17 @@ export async function dispatchReplyFromConfig(
   // Do not read thread ids from the normalised session store here: `origin.threadId` can be
   // folded back into lastThreadId/deliveryContext during store normalisation and resurrect a
   // stale route after thread delivery was intentionally cleared.
+  // deliveryContext.threadId set during ACP spawn (via requestDeliveryHint) is
+  // authoritative and safe — it is written once at session creation, not during
+  // normalization.  Only trust it when the session key has the `:acp:` segment;
+  // otherwise deliveryContext can carry stale normalized threadId values that
+  // would resurrect an intentionally cleared route.
+  const isAcpSession =
+    typeof acpDispatchSessionKey === "string" && acpDispatchSessionKey.includes(":acp:");
   const routeThreadId = resolveRoutedDeliveryThreadId({
     ctx,
     sessionKey: acpDispatchSessionKey,
+    deliveryThreadId: isAcpSession ? sessionStoreEntry.entry?.deliveryContext?.threadId : undefined,
   });
   // Inherited sessions_send routes carry thread ids only when the stored route
   // proves the thread came from an explicit target, not session normalization.

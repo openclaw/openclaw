@@ -1227,9 +1227,17 @@ export async function runPreparedReply(
   const runHasAutoFallbackProvenance =
     runHasSessionModelOverride &&
     hasSessionAutoModelFallbackProvenance(preparedSessionState.sessionEntry);
+  // deliveryContext.threadId is only authoritative for ACP sessions where
+  // it is set once during spawn (via requestDeliveryHint).  Non-ACP sessions
+  // can have stale normalized threadId values in deliveryContext that would
+  // resurrect an intentionally cleared route.
+  const isAcpSession = typeof sessionKey === "string" && sessionKey.includes(":acp:");
   const originatingThreadId = resolveRoutedDeliveryThreadId({
     ctx,
     sessionKey,
+    deliveryThreadId: isAcpSession
+      ? preparedSessionState.sessionEntry?.deliveryContext?.threadId
+      : undefined,
   });
   const currentTurnImages = await traceRunPhase("reply.resolve_current_turn_images", () =>
     resolveCurrentTurnImages({
