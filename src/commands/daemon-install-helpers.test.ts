@@ -411,7 +411,7 @@ describe("buildGatewayInstallPlan", () => {
     );
   });
 
-  it("includes env SecretRef values from config into the service environment", async () => {
+  it("renders config env SecretRefs as file-backed managed values on Linux", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
         OPENCLAW_PORT: "3000",
@@ -424,6 +424,7 @@ describe("buildGatewayInstallPlan", () => {
       }),
       port: 3000,
       runtime: "node",
+      platform: "linux",
       config: {
         channels: {
           discord: {
@@ -433,8 +434,78 @@ describe("buildGatewayInstallPlan", () => {
       },
     });
 
-    expect(plan.environment.DISCORD_BOT_TOKEN).toBeUndefined();
+    expect(plan.environment.DISCORD_BOT_TOKEN).toBe("discord-test-token");
+    expect(plan.environmentValueSources?.DISCORD_BOT_TOKEN).toBe("file");
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("DISCORD_BOT_TOKEN");
+  });
+
+  it("retains config env SecretRefs for Windows task scripts", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        DISCORD_BOT_TOKEN: "discord-test-token",
+      }),
+      port: 3000,
+      runtime: "node",
+      platform: "win32",
+      config: {
+        channels: {
+          discord: {
+            token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.DISCORD_BOT_TOKEN).toBe("discord-test-token");
+    expect(plan.environmentValueSources?.DISCORD_BOT_TOKEN).toBe("inline");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("DISCORD_BOT_TOKEN");
+  });
+
+  it("keeps config env SecretRefs managed when auth profiles reuse the key", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: isolatedPlanEnv({
+        OPENAI_API_KEY: "sk-openai-test",
+      }),
+      port: 3000,
+      runtime: "node",
+      platform: "linux",
+      config: {
+        models: {
+          providers: {
+            openai: {
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+              models: [],
+            },
+          },
+        },
+      },
+      authStore: {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.OPENAI_API_KEY).toBe("sk-openai-test");
+    expect(plan.environmentValueSources?.OPENAI_API_KEY).toBe("file");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe("OPENAI_API_KEY");
   });
 
   it("includes passEnv values for configured exec SecretRef providers", async () => {

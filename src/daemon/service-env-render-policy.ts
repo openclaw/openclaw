@@ -1,9 +1,13 @@
 /** Applies platform render policy for managed daemon service environment values. */
-import type { MutableServiceEnvPlan } from "./service-env-plan.js";
+import {
+  normalizeServiceEnvPlanKey,
+  type MutableServiceEnvPlan,
+} from "./service-env-plan.js";
 import {
   readManagedServiceEnvKeysFromEnvironment,
   writeManagedServiceEnvKeysToEnvironment,
 } from "./service-managed-env.js";
+import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 
 function isLaunchAgentServiceEnvironment(params: {
   platform: NodeJS.Platform;
@@ -15,18 +19,37 @@ function isLaunchAgentServiceEnvironment(params: {
   );
 }
 
+function addManagedServiceEnvEntries(params: {
+  plan: MutableServiceEnvPlan;
+  entries: Record<string, string | undefined>;
+  managedKeys: ReadonlySet<string>;
+  valueSource: GatewayServiceEnvironmentValueSource;
+}): void {
+  for (const [rawKey, value] of Object.entries(params.entries)) {
+    if (typeof value !== "string" || !value.trim()) {
+      continue;
+    }
+    const key = normalizeServiceEnvPlanKey(rawKey);
+    if (!key || !params.managedKeys.has(key)) {
+      continue;
+    }
+    params.plan.environment[rawKey] = value;
+    params.plan.environmentValueSources[rawKey] = params.valueSource;
+  }
+}
+
 export function applyManagedServiceEnvRenderPolicy(params: {
   plan: MutableServiceEnvPlan;
   managedServiceEnvKeys: string | undefined;
   serviceEnvironment: Record<string, string | undefined>;
   platform: NodeJS.Platform;
+  stateDirDotEnvEnvironment: Record<string, string | undefined>;
+  configSecretRefEnvironment: Record<string, string | undefined>;
 }): void {
+  const launchAgent = isLaunchAgentServiceEnvironment(params);
   writeManagedServiceEnvKeysToEnvironment(params.plan.environment, params.managedServiceEnvKeys);
   if (params.plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS) {
     params.plan.environmentValueSources.OPENCLAW_SERVICE_MANAGED_ENV_KEYS = "inline";
-  }
-  if (!isLaunchAgentServiceEnvironment(params)) {
-    return;
   }
   const managedKeys = readManagedServiceEnvKeysFromEnvironment({
     OPENCLAW_SERVICE_MANAGED_ENV_KEYS: params.managedServiceEnvKeys,
@@ -34,14 +57,18 @@ export function applyManagedServiceEnvRenderPolicy(params: {
   if (managedKeys.size === 0) {
     return;
   }
-  for (const entry of params.plan.entriesByNormalizedKey.values()) {
-    if (
-      !managedKeys.has(entry.normalizedKey) ||
-      (entry.source !== "state-dotenv" && entry.source !== "config-secretref-env")
-    ) {
-      continue;
-    }
-    params.plan.environment[entry.rawKey] = entry.value;
-    params.plan.environmentValueSources[entry.rawKey] = "inline";
+  if (launchAgent) {
+    addManagedServiceEnvEntries({
+      plan: params.plan,
+      entries: params.stateDirDotEnvEnvironment,
+      managedKeys,
+      valueSource: "inline",
+    });
   }
+  addManagedServiceEnvEntries({
+    plan: params.plan,
+    entries: params.configSecretRefEnvironment,
+    managedKeys,
+    valueSource: params.platform === "linux" ? "file" : "inline",
+  });
 }
