@@ -155,6 +155,42 @@ describe("ensureTool", () => {
       { stdio: "pipe" },
     );
   });
+
+  it("fails closed when the GitHub releases response exceeds the size cap", async () => {
+    const { ensureTool } = await import("./tools-manager.js");
+    const release = vi.fn(async () => {});
+
+    // Stream ~18 MiB so it exceeds the 16 MiB readResponseWithLimit cap.
+    let sent = 0;
+    const TOTAL = 18 * 1024 * 1024;
+    let canceled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent >= TOTAL) {
+          controller.close();
+          return;
+        }
+        const chunkSize = Math.min(64 * 1024, TOTAL - sent);
+        controller.enqueue(new Uint8Array(chunkSize));
+        sent += chunkSize;
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    const response = new Response(body, { status: 200 });
+
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response,
+      release,
+      finalUrl: "https://api.github.com/repos/sharkdp/fd/releases/latest",
+    });
+
+    // ensureTool catches the overflow error and returns undefined (fail-closed).
+    await expect(ensureTool("fd", true)).resolves.toBeUndefined();
+    expect(release).toHaveBeenCalledOnce();
+    expect(canceled).toBe(true);
+  });
 });
 
 describe("getToolPath exit-status handling", () => {
