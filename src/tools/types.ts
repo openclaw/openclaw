@@ -115,4 +115,9 @@ export type ToolPlan = {
 export type BuildToolPlanOptions = {
   readonly descriptors: readonly ToolDescriptor[];
   readonly availability?: ToolAvailabilityContext;
+  /** Called for each diagnostic that causes a tool to be hidden. */
+  readonly onHiddenDiagnostic?: (params: {
+    readonly descriptor: ToolDescriptor;
+    readonly diagnostic: ToolAvailabilityDiagnostic;
+  }) => void;
 };

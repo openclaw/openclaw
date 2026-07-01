@@ -50,6 +50,11 @@ export function buildToolPlan(options: BuildToolPlanOptions): ToolPlan {
     ];
     if (diagnostics.length > 0) {
       hidden.push({ descriptor, diagnostics });
+      if (options.onHiddenDiagnostic) {
+        for (const diagnostic of diagnostics) {
+          options.onHiddenDiagnostic({ descriptor, diagnostic });
+        }
+      }
       continue;
     }
     if (!descriptor.executor) {

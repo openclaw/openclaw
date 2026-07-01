@@ -130,7 +130,8 @@ function evaluateExpression(
     return diagnosticLocal ? [diagnosticLocal] : [];
   }
   if ("allOf" in expression) {
-    if (expression.allOf.length === 0) {
+    // Defensive guard: non-array values that bypass the TS type system must not crash .flatMap().
+    if (!Array.isArray(expression.allOf) || expression.allOf.length === 0) {
       return [
         {
           reason: "unsupported-signal",
@@ -141,7 +142,8 @@ function evaluateExpression(
     return expression.allOf.flatMap((entry) => evaluateExpression(entry, context));
   }
   if ("anyOf" in expression) {
-    if (expression.anyOf.length === 0) {
+    // Defensive guard: non-array values that bypass the TS type system must not crash .map().
+    if (!Array.isArray(expression.anyOf) || expression.anyOf.length === 0) {
       return [
         {
           reason: "unsupported-signal",

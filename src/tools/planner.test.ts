@@ -4,7 +4,7 @@ import { ToolPlanContractError } from "./diagnostics.js";
 import { formatToolExecutorRef } from "./execution.js";
 import { buildToolPlan } from "./planner.js";
 import { toToolProtocolDescriptors } from "./protocol.js";
-import type { ToolDescriptor } from "./types.js";
+import type { ToolAvailabilityDiagnostic, ToolDescriptor } from "./types.js";
 
 function descriptor(name: string, overrides: Partial<ToolDescriptor> = {}): ToolDescriptor {
   return {
@@ -111,6 +111,49 @@ describe("buildToolPlan", () => {
         message: "Empty availability allOf group",
       },
     ]);
+  });
+
+  it("calls onHiddenDiagnostic for each diagnostic that hides a tool", () => {
+    const hiddenCalls: Array<{
+      descriptor: ToolDescriptor;
+      diagnostic: ToolAvailabilityDiagnostic;
+    }> = [];
+
+    buildToolPlan({
+      descriptors: [
+        descriptor("visible_tool"),
+        descriptor("hidden_tool", {
+          availability: { allOf: [] },
+        }),
+        descriptor("hidden_env", {
+          availability: { kind: "env", name: "MISSING_ENV" },
+        }),
+      ],
+      availability: { env: {} },
+      onHiddenDiagnostic: ({ descriptor: desc, diagnostic }) => {
+        hiddenCalls.push({ descriptor: desc, diagnostic });
+      },
+    });
+
+    // visible_tool should NOT trigger a callback.
+    expect(hiddenCalls.filter((call) => call.descriptor.name === "visible_tool")).toEqual([]);
+
+    // hidden_tool has one unsupported-signal diagnostic.
+    const hiddenMalformed = hiddenCalls.filter(
+      (call) => call.descriptor.name === "hidden_tool",
+    );
+    expect(hiddenMalformed).toHaveLength(1);
+    expect(hiddenMalformed[0].diagnostic).toEqual({
+      reason: "unsupported-signal",
+      message: "Empty availability allOf group",
+    });
+
+    // hidden_env has one env-missing diagnostic.
+    const hiddenEnvCalls = hiddenCalls.filter(
+      (call) => call.descriptor.name === "hidden_env",
+    );
+    expect(hiddenEnvCalls).toHaveLength(1);
+    expect(hiddenEnvCalls[0].diagnostic.reason).toBe("env-missing");
   });
 
   it("keeps protocol conversion separate from executor refs and model normalization", () => {

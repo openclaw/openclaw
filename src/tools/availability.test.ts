@@ -236,6 +236,30 @@ describe("evaluateToolAvailability", () => {
     ).toEqual(["auth-missing", "env-missing", "config-missing", "plugin-disabled"]);
   });
 
+  it("returns unsupported-signal for non-array allOf instead of crashing", () => {
+    const descriptor: ToolDescriptor = {
+      ...baseDescriptor,
+      // Use a runtime cast to bypass the TS type system and simulate a
+      // malformed JS object that would otherwise crash on .flatMap().
+      availability: { allOf: "not-array" } as unknown as ToolDescriptor["availability"],
+    };
+
+    expect(
+      evaluateToolAvailability({ descriptor }).map((entry) => entry.reason),
+    ).toEqual(["unsupported-signal"]);
+  });
+
+  it("returns unsupported-signal for non-array anyOf instead of crashing", () => {
+    const descriptor: ToolDescriptor = {
+      ...baseDescriptor,
+      availability: { anyOf: 42 } as unknown as ToolDescriptor["availability"],
+    };
+
+    expect(
+      evaluateToolAvailability({ descriptor }).map((entry) => entry.reason),
+    ).toEqual(["unsupported-signal"]);
+  });
+
   it("surfaces an unsupported-signal sibling even when another anyOf branch is available", () => {
     const descriptor: ToolDescriptor = {
       ...baseDescriptor,
