@@ -174,6 +174,35 @@ function buildSummary(toolName: string, status: ActivityStatus, hiddenArgCount: 
   return `${toolName} ${statusLabel(status)}; ${argText}`;
 }
 
+/**
+ * Returns true when any activity entry in the host is still in "running" status.
+ * This bridges the agent event stream state to the composer run-status indicator,
+ * ensuring the UI shows "in progress" even when chatRunId has been cleared.
+ */
+export function hasActiveToolExecution(host: { activityEntries?: ActivityEntry[] }): boolean {
+  if (!Array.isArray(host.activityEntries) || host.activityEntries.length === 0) {
+    return false;
+  }
+  return host.activityEntries.some((entry) => entry.status === "running");
+}
+
+/**
+ * Returns the runId from the most recent running activity entry, if any.
+ * Used as a fallback when chatRunId is null but tools are actively executing.
+ */
+export function resolveActiveToolRunId(host: { activityEntries?: ActivityEntry[] }): string | null {
+  if (!Array.isArray(host.activityEntries) || host.activityEntries.length === 0) {
+    return null;
+  }
+  const running = host.activityEntries.filter((entry) => entry.status === "running");
+  if (running.length === 0) {
+    return null;
+  }
+  // Return the most recently updated running entry's runId
+  const latest = running.reduce((a, b) => (a.updatedAt >= b.updatedAt ? a : b));
+  return latest.runId;
+}
+
 export function updateActivityFromToolEvent(host: ActivityHost, payload: ToolEventPayload) {
   if (!Array.isArray(host.activityEntries)) {
     return;
