@@ -223,6 +223,12 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     if (status.gateway.probeNote) {
       defaultRuntime.log(`${label("Probe note:")} ${infoText(status.gateway.probeNote)}`);
     }
+    if (status.gateway.windowsFirewall?.severity === "warning") {
+      defaultRuntime.error(warnText(`Windows firewall: ${status.gateway.windowsFirewall.message}`));
+      for (const detail of status.gateway.windowsFirewall.details) {
+        defaultRuntime.error(warnText(`  ${detail}`));
+      }
+    }
     spacer();
   }
 

@@ -35,6 +35,10 @@ import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { isContainerEnvironment } from "../infra/container-environment.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  formatWindowsGatewayFirewallDiagnostic,
+  inspectWindowsGatewayFirewall,
+} from "../infra/windows-gateway-firewall-diagnostics.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { launchTuiCli } from "../tui/tui-launch.js";
 import { resolveUserPath } from "../utils.js";
@@ -556,6 +560,12 @@ export async function finalizeSetupWizard(
       : t("wizard.finalize.gatewayNotDetectedStatus", {
           detail: gatewayProbe.detail ? ` (${gatewayProbe.detail})` : "",
         });
+    const windowsFirewallLines = formatWindowsGatewayFirewallDiagnostic(
+      await inspectWindowsGatewayFirewall({
+        bind: settings.bind,
+        port: settings.port,
+      }),
+    );
     const bootstrapPath = path.join(
       resolveUserPath(options.workspaceDir),
       DEFAULT_BOOTSTRAP_FILENAME,
@@ -574,6 +584,7 @@ export async function finalizeSetupWizard(
           : undefined,
         t("wizard.finalize.gatewayWsUrl", { url: displayLinks.wsUrl }),
         gatewayStatusLine,
+        ...windowsFirewallLines,
         t("wizard.finalize.controlUiDocs"),
       ]
         .filter(Boolean)

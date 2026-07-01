@@ -36,6 +36,7 @@ const mocks = vi.hoisted(() => {
     resolveAdvertisedControlUiLinks: vi.fn(),
     resolveControlUiLinks: vi.fn(),
     resolveLocalControlUiProbeLinks: vi.fn(),
+    inspectWindowsGatewayFirewall: vi.fn(),
     summarizeExistingConfig: vi.fn(),
     promptAuthConfig: vi.fn(),
     promptGatewayConfig: vi.fn(),
@@ -89,6 +90,22 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../infra/control-ui-assets.js", () => ({
   ensureControlUiAssetsBuilt: mocks.ensureControlUiAssetsBuilt,
+}));
+
+vi.mock("../infra/windows-gateway-firewall-diagnostics.js", () => ({
+  inspectWindowsGatewayFirewall: mocks.inspectWindowsGatewayFirewall,
+  formatWindowsGatewayFirewallDiagnostic: (diagnostic: {
+    applies: boolean;
+    severity: string;
+    message: string;
+    details: string[];
+  }) =>
+    diagnostic.applies && diagnostic.severity === "warning"
+      ? [
+          `Windows firewall: ${diagnostic.message}`,
+          ...diagnostic.details.map((line) => `  ${line}`),
+        ]
+      : [],
 }));
 
 vi.mock("../wizard/clack-prompter.js", () => ({
@@ -231,6 +248,13 @@ function setupBaseWizardState(config: OpenClawConfig = {}) {
   mocks.resolveAdvertisedControlUiLinks.mockResolvedValue({
     httpUrl: "http://127.0.0.1:18789/",
     wsUrl: "ws://127.0.0.1:18789",
+  });
+  mocks.inspectWindowsGatewayFirewall.mockResolvedValue({
+    applies: false,
+    severity: "info",
+    code: "windows_firewall_not_applicable",
+    message: "Windows LAN firewall diagnostics do not apply.",
+    details: [],
   });
   mocks.summarizeExistingConfig.mockReturnValue("");
   mocks.createClackPrompter.mockReturnValue({
@@ -405,6 +429,37 @@ describe("runConfigureWizard", () => {
     );
     expect(mocks.note).toHaveBeenCalledWith(
       expect.stringContaining("Gateway WS: ws://10.211.55.3:18789"),
+      "Control UI",
+    );
+  });
+
+  it("warns when Windows Firewall may block configured LAN Gateway links", async () => {
+    setupBaseWizardState({
+      gateway: {
+        mode: "local",
+        bind: "lan",
+        auth: { token: "token" },
+      },
+    });
+    mocks.inspectWindowsGatewayFirewall.mockResolvedValueOnce({
+      applies: true,
+      severity: "warning",
+      code: "windows_firewall_local_rules_ignored",
+      message: "Windows Firewall may ignore local Gateway allow rules for this network profile.",
+      details: ["Windows reports LocalFirewallRules as N/A (GPO-store only)."],
+    });
+
+    await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
+
+    expect(mocks.inspectWindowsGatewayFirewall).toHaveBeenCalledWith(
+      expect.objectContaining({ bind: "lan", port: 18789 }),
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("Windows firewall: Windows Firewall may ignore"),
+      "Control UI",
+    );
+    expect(mocks.note).toHaveBeenCalledWith(
+      expect.stringContaining("GPO-store only"),
       "Control UI",
     );
   });

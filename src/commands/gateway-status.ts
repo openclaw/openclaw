@@ -4,6 +4,7 @@ import { parseGatewayPortOption } from "../cli/gateway-port-option.js";
 import { withProgress } from "../cli/progress.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
+import { inspectWindowsGatewayFirewall } from "../infra/windows-gateway-firewall-diagnostics.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { inferSshTargetFromRemoteUrl, resolveSshTarget } from "./gateway-status/discovery.js";
@@ -139,6 +140,19 @@ export async function gatewayStatusCommand(
         ? (localTlsRuntime.error ?? "gateway tls is enabled but local TLS runtime could not load")
         : null,
   });
+  const windowsFirewall = await inspectWindowsGatewayFirewall({
+    bind: cfg.gateway?.bind,
+    port: remotePort,
+    platform: process.platform,
+  });
+  if (windowsFirewall.applies && windowsFirewall.severity === "warning") {
+    warnings.push({
+      code: windowsFirewall.code,
+      message: windowsFirewall.message,
+      details: windowsFirewall.details,
+      targetIds: ["localLoopback"],
+    });
+  }
   const primary = pickPrimaryProbedTarget(probePass.probed);
 
   if (opts.json) {

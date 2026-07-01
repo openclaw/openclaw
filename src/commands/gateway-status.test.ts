@@ -47,6 +47,13 @@ const mocks = vi.hoisted(() => {
         fingerprintSha256: "sha256:local-fingerprint",
       }),
     ),
+    inspectWindowsGatewayFirewall: vi.fn<() => Promise<unknown>>(async () => ({
+      applies: false,
+      severity: "info",
+      code: "windows_firewall_not_applicable",
+      message: "Windows LAN firewall diagnostics do not apply.",
+      details: [],
+    })),
     probeGateway: vi.fn(async (opts: { url: string }): Promise<GatewayProbeResult> => {
       const { url } = opts;
       if (url.includes("127.0.0.1")) {
@@ -153,6 +160,7 @@ const {
   resolveSshConfig,
   startSshPortForward,
   loadGatewayTlsRuntime,
+  inspectWindowsGatewayFirewall,
   probeGateway,
 } = mocks;
 
@@ -213,6 +221,10 @@ vi.mock("../infra/ssh-config.js", () => ({
 
 vi.mock("../infra/tls/gateway.js", () => ({
   loadGatewayTlsRuntime: mocks.loadGatewayTlsRuntime,
+}));
+
+vi.mock("../infra/windows-gateway-firewall-diagnostics.js", () => ({
+  inspectWindowsGatewayFirewall: mocks.inspectWindowsGatewayFirewall,
 }));
 
 vi.mock("../gateway/probe.js", async (importOriginal) => ({
@@ -374,6 +386,39 @@ describe("gateway-status command", () => {
     const firstTarget = requireRecord(targets[0], "first gateway target");
     requireRecord(firstTarget.health, "first target health");
     requireRecord(firstTarget.summary, "first target summary");
+  });
+
+  it("includes Windows LAN firewall diagnostics in gateway status warnings", async () => {
+    readBestEffortConfig.mockResolvedValueOnce({
+      gateway: {
+        mode: "local",
+        bind: "lan",
+        auth: { token: "ltok" },
+      },
+    } as never);
+    inspectWindowsGatewayFirewall.mockResolvedValueOnce({
+      applies: true,
+      severity: "warning",
+      code: "windows_firewall_local_rules_ignored",
+      message: "Windows Firewall may ignore local Gateway allow rules for this network profile.",
+      details: ["Windows reports LocalFirewallRules as N/A (GPO-store only)."],
+    });
+    const { runtime, runtimeLogs } = createRuntimeCapture();
+
+    await runGatewayStatus(runtime, { timeout: "1000", json: true });
+
+    expect(inspectWindowsGatewayFirewall).toHaveBeenCalledWith(
+      expect.objectContaining({ bind: "lan", port: 18789 }),
+    );
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+      warnings: Array<{ code: string; details?: string[] }>;
+    };
+    expect(parsed.warnings).toContainEqual(
+      expect.objectContaining({
+        code: "windows_firewall_local_rules_ignored",
+        details: ["Windows reports LocalFirewallRules as N/A (GPO-store only)."],
+      }),
+    );
   });
 
   it("surfaces degraded model-pricing health as a warning", async () => {

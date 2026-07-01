@@ -183,6 +183,40 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.log, "protocol mismatch after rollback");
   });
 
+  it("prints Windows firewall diagnostics in gateway status output", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "lan",
+          bindHost: "0.0.0.0",
+          port: 18789,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18789",
+          windowsFirewall: {
+            applies: true,
+            severity: "warning",
+            code: "windows_firewall_local_rules_ignored",
+            message:
+              "Windows Firewall may ignore local Gateway allow rules for this network profile.",
+            details: ["Windows reports LocalFirewallRules as N/A (GPO-store only)."],
+          },
+        },
+        extraServices: [],
+      },
+      { json: false, deep: true },
+    );
+
+    expectMockLineContains(runtime.error, "Windows firewall: Windows Firewall may ignore");
+    expectMockLineContains(runtime.error, "GPO-store only");
+  });
+
   it("uses service command env for WSL systemd unavailable hints", () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "linux" });

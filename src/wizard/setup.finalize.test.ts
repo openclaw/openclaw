@@ -85,6 +85,15 @@ const startGatewayServer = vi.hoisted(() =>
     close: vi.fn(async () => {}),
   })),
 );
+const inspectWindowsGatewayFirewall = vi.hoisted(() =>
+  vi.fn<() => Promise<unknown>>(async () => ({
+    applies: false,
+    severity: "info",
+    code: "windows_firewall_not_applicable",
+    message: "Windows LAN firewall diagnostics do not apply.",
+    details: [],
+  })),
+);
 
 vi.mock("../commands/onboard-helpers.js", () => ({
   detectBrowserOpenSupport: vi.fn(async () => ({ ok: false })),
@@ -98,6 +107,22 @@ vi.mock("../commands/onboard-helpers.js", () => ({
   })),
   resolveLocalControlUiProbeLinks,
   waitForGatewayReachable,
+}));
+
+vi.mock("../infra/windows-gateway-firewall-diagnostics.js", () => ({
+  inspectWindowsGatewayFirewall,
+  formatWindowsGatewayFirewallDiagnostic: (diagnostic: {
+    applies: boolean;
+    severity: string;
+    message: string;
+    details: string[];
+  }) =>
+    diagnostic.applies && diagnostic.severity === "warning"
+      ? [
+          `Windows firewall: ${diagnostic.message}`,
+          ...diagnostic.details.map((line) => `  ${line}`),
+        ]
+      : [],
 }));
 
 vi.mock("../commands/daemon-install-helpers.js", () => ({
@@ -378,6 +403,14 @@ describe("finalizeSetupWizard", () => {
     isContainerEnvironment.mockReturnValue(false);
     startGatewayServer.mockReset();
     startGatewayServer.mockResolvedValue({ close: vi.fn(async () => {}) });
+    inspectWindowsGatewayFirewall.mockReset();
+    inspectWindowsGatewayFirewall.mockResolvedValue({
+      applies: false,
+      severity: "info",
+      code: "windows_firewall_not_applicable",
+      message: "Windows LAN firewall diagnostics do not apply.",
+      details: [],
+    });
   });
 
   it("resolves gateway password SecretRef for probe but omits auth from TUI hatch", async () => {
@@ -503,6 +536,44 @@ describe("finalizeSetupWizard", () => {
     );
     expectNoteContains(prompter, "http://10.211.55.3:18789/", "Control UI");
     expectNoteContains(prompter, "ws://10.211.55.3:18789", "Control UI");
+  });
+
+  it("warns when Windows Firewall may block advertised LAN Control UI links", async () => {
+    inspectWindowsGatewayFirewall.mockResolvedValueOnce({
+      applies: true,
+      severity: "warning",
+      code: "windows_firewall_local_rules_ignored",
+      message: "Windows Firewall may ignore local Gateway allow rules for this network profile.",
+      details: ["Windows reports LocalFirewallRules as N/A (GPO-store only)."],
+    });
+    const prompter = createLaterPrompter();
+    const args = createAdvancedFinalizeArgs({
+      nextConfig: {
+        gateway: {
+          bind: "lan",
+        },
+      },
+      prompter,
+    });
+
+    await finalizeSetupWizard({
+      ...args,
+      opts: {
+        ...args.opts,
+        skipHealth: false,
+        skipUi: false,
+      },
+      settings: {
+        ...args.settings,
+        bind: "lan",
+      },
+    });
+
+    expect(inspectWindowsGatewayFirewall).toHaveBeenCalledWith(
+      expect.objectContaining({ bind: "lan", port: 18789 }),
+    );
+    expectNoteContains(prompter, "Windows firewall: Windows Firewall may ignore", "Control UI");
+    expectNoteContains(prompter, "GPO-store only", "Control UI");
   });
 
   it("bounds the bootstrap hatch TUI run timeout", async () => {
