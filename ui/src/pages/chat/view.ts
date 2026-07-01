@@ -37,7 +37,6 @@ import {
   registerChatAttachmentPayload,
   releaseChatAttachmentPayload,
 } from "./attachment-payload-store.ts";
-import { renderChatQueue } from "./chat-queue.ts";
 import {
   buildCachedChatItems,
   coalesceStreamRuns,
@@ -48,8 +47,15 @@ import {
   syncToolCardExpansionState,
 } from "./chat-thread.ts";
 import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
+import {
+  renderChatQueue,
+  renderChatRunControls,
+  renderChatRunStatusIndicator,
+  renderCompactionIndicator,
+  renderContextNotice,
+  renderFallbackIndicator,
+} from "./components/chat-composer-controls.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
-import { renderContextNotice } from "./context-notice.ts";
 import "./components/chat-sidebar.ts";
 import { DeletedMessages } from "./deleted-messages.ts";
 import { exportChatMarkdown } from "./export.ts";
@@ -68,15 +74,9 @@ import {
 } from "./realtime-talk-catalog.ts";
 import type { RealtimeTalkConversationEntry } from "./realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "./realtime-talk.ts";
-import { renderChatRunControls } from "./run-controls.ts";
 import type { ChatRunUiStatus } from "./run-lifecycle.ts";
 import { getOrCreateSessionCacheValue } from "./session-cache.ts";
 import { renderSideResult, type ChatSideResult } from "./side-result.ts";
-import {
-  renderChatRunStatusIndicator,
-  renderCompactionIndicator,
-  renderFallbackIndicator,
-} from "./status-indicators.ts";
 import "../../components/resizable-divider.ts";
 
 function getPinnedMessageSummary(message: unknown): string {

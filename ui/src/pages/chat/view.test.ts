@@ -21,8 +21,8 @@ import {
   getChatAttachmentDataUrl,
   resetChatAttachmentPayloadStoreForTest,
 } from "./attachment-payload-store.ts";
-import { renderChatQueue } from "./chat-queue.ts";
 import { renderWelcomeState } from "./chat-welcome.ts";
+import { renderChatQueue } from "./components/chat-composer-controls.ts";
 import { renderChatModelSelect, renderChatQuotaPill } from "./components/chat-model-controls.ts";
 import { renderMarkdownSidebar } from "./components/chat-sidebar.ts";
 import { buildRawSidebarContent } from "./components/chat-sidebar.ts";

@@ -6,16 +6,15 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import {
   getContextNoticeViewModel,
-  renderContextNotice,
-  resetContextNoticeThemeCacheForTest,
-} from "./context-notice.ts";
-import { renderChatRunControls, type ChatRunControlsProps } from "./run-controls.ts";
-import { renderSideResult } from "./side-result.ts";
-import {
+  renderChatRunControls,
   renderChatRunStatusIndicator,
   renderCompactionIndicator,
+  renderContextNotice,
   renderFallbackIndicator,
-} from "./status-indicators.ts";
+  resetContextNoticeThemeCacheForTest,
+  type ChatRunControlsProps,
+} from "./components/chat-composer-controls.ts";
+import { renderSideResult } from "./side-result.ts";
 
 vi.mock("../../components/icons.ts", () => ({
   icons: {},
@@ -361,7 +360,7 @@ describe("context notice", () => {
     expect(lowNotice).toBeInstanceOf(HTMLElement);
     expect([...lowNotice!.classList]).toEqual(["context-ring"]);
     expect(lowNotice!.textContent?.replace(/\s+/gu, " ").trim()).toBe("23%");
-    expect(lowNotice!.getAttribute("title")).toBe("Session context usage: 46k / 200k (23%)");
+    expect(lowNotice!.getAttribute("aria-label")).toBe("Session context usage: 46k / 200k (23%)");
     const lowFill = lowNotice!.querySelector(".context-ring__fill");
     expect(lowFill?.tagName.toLowerCase()).toBe("circle");
     // 23% of the 40.84 circumference stays hidden via dashoffset.
