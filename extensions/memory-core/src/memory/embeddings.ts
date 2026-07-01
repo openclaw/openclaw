@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/embedding-providers";
 import {
   getMemoryEmbeddingProvider as getLegacyMemoryEmbeddingProvider,
+  listMemoryEmbeddingProviders,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderAdapter,
   type MemoryEmbeddingProviderCreateOptions,
@@ -34,7 +35,6 @@ type CreateEmbeddingProviderOptions = MemoryEmbeddingProviderCreateOptions & {
   fallback: EmbeddingProviderFallback;
 };
 
-const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
 const LOCAL_LLAMA_CPP_PROVIDER_ID = "local";
 
 function createMissingLlamaCppProviderError(): Error {
@@ -137,6 +137,23 @@ function formatProviderError(adapter: MemoryEmbeddingProviderAdapter, err: unkno
   return adapter.formatSetupError?.(err) ?? formatErrorMessage(err);
 }
 
+function shouldContinueAutoSelection(
+  adapter: MemoryEmbeddingProviderAdapter,
+  err: unknown,
+): boolean {
+  return adapter.shouldContinueAutoSelection?.(err) ?? false;
+}
+
+function listAutoSelectAdapters(): MemoryEmbeddingProviderAdapter[] {
+  return listMemoryEmbeddingProviders()
+    .filter((adapter) => typeof adapter.autoSelectPriority === "number")
+    .toSorted(
+      (a, b) =>
+        (a.autoSelectPriority ?? Number.MAX_SAFE_INTEGER) -
+        (b.autoSelectPriority ?? Number.MAX_SAFE_INTEGER),
+    );
+}
+
 function getAdapter(
   id: string,
   config?: MemoryEmbeddingProviderCreateOptions["config"],
@@ -200,8 +217,27 @@ export function resolveEmbeddingProviderAdapterTransport(
 }
 
 export function resolveEmbeddingProviderIndexIdentity(options: CreateEmbeddingProviderOptions) {
-  const provider =
-    options.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : options.provider;
+  if (options.provider === "auto") {
+    const autoAdapters = listAutoSelectAdapters();
+    if (autoAdapters.length > 0) {
+      const autoAdapter = autoAdapters[0];
+      const model = resolveProviderModel(autoAdapter, options.model);
+      const identity = autoAdapter.resolveIndexIdentity?.({
+        ...options,
+        provider: autoAdapter.id,
+        model,
+      });
+      if (identity) {
+        return {
+          provider: { id: autoAdapter.id, model: identity.model },
+          cacheKeyData: identity.cacheKeyData,
+          aliases: identity.aliases,
+        };
+      }
+    }
+    return undefined;
+  }
+  const provider = options.provider;
   try {
     const adapter = getAdapter(provider, options.config);
     const model = resolveProviderModel(adapter, options.model);
@@ -240,8 +276,38 @@ async function createWithAdapter(
 export async function createEmbeddingProvider(
   options: CreateEmbeddingProviderOptions,
 ): Promise<EmbeddingProviderResult> {
-  const provider =
-    options.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : options.provider;
+  if (options.provider === "auto") {
+    const reasons: string[] = [];
+    for (const adapter of listAutoSelectAdapters()) {
+      try {
+        const result = await createWithAdapter(adapter, {
+          ...options,
+          provider: adapter.id,
+        });
+        return {
+          ...result,
+          requestedProvider: "auto",
+        };
+      } catch (err) {
+        const message = formatProviderError(adapter, err);
+        if (shouldContinueAutoSelection(adapter, err)) {
+          reasons.push(message);
+          continue;
+        }
+        const wrapped = new Error(message) as Error & { cause?: unknown };
+        wrapped.cause = err;
+        throw wrapped;
+      }
+    }
+    return {
+      provider: null,
+      requestedProvider: "auto",
+      providerUnavailableReason:
+        reasons.length > 0 ? reasons.join("\n\n") : "No embeddings provider available.",
+    };
+  }
+
+  const provider = options.provider;
   const primaryAdapter = getAdapter(provider, options.config);
   try {
     return await createWithAdapter(primaryAdapter, {
