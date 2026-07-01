@@ -8,6 +8,7 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
@@ -302,7 +303,10 @@ export async function discoverMantleModels(params: {
       return cached?.models ?? [];
     }
 
-    const body = (await response.json()) as OpenAIModelsResponse;
+    const body = await readProviderJsonResponse<OpenAIModelsResponse>(
+      response,
+      "bedrock-mantle.model-discovery",
+    );
     const rawModels = body.data ?? [];
 
     const models = rawModels

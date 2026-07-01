@@ -262,16 +262,18 @@ describe("bedrock mantle discovery", () => {
   // ---------------------------------------------------------------------------
 
   it("discovers models from Mantle /v1/models endpoint sorted by id", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        data: [
-          { id: "openai.gpt-oss-120b", object: "model", owned_by: "openai" },
-          { id: "anthropic.claude-sonnet-4-6", object: "model", owned_by: "anthropic" },
-          { id: "mistral.devstral-2-123b", object: "model", owned_by: "mistral" },
-        ],
-      }),
-    });
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: [
+            { id: "openai.gpt-oss-120b", object: "model", owned_by: "openai" },
+            { id: "anthropic.claude-sonnet-4-6", object: "model", owned_by: "anthropic" },
+            { id: "mistral.devstral-2-123b", object: "model", owned_by: "mistral" },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
 
     const models = await discoverMantleModels({
       region: "us-east-1",
@@ -298,18 +300,20 @@ describe("bedrock mantle discovery", () => {
   });
 
   it("infers reasoning support from model IDs", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        data: [
-          { id: "moonshotai.kimi-k2-thinking", object: "model" },
-          { id: "openai.gpt-oss-120b", object: "model" },
-          { id: "openai.gpt-oss-safeguard-120b", object: "model" },
-          { id: "deepseek.v3.2", object: "model" },
-          { id: "mistral.mistral-large-3-675b-instruct", object: "model" },
-        ],
-      }),
-    });
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: [
+            { id: "moonshotai.kimi-k2-thinking", object: "model" },
+            { id: "openai.gpt-oss-120b", object: "model" },
+            { id: "openai.gpt-oss-safeguard-120b", object: "model" },
+            { id: "deepseek.v3.2", object: "model" },
+            { id: "mistral.mistral-large-3-675b-instruct", object: "model" },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
 
     const models = await discoverMantleModels({
       region: "us-east-1",
@@ -354,16 +358,18 @@ describe("bedrock mantle discovery", () => {
   });
 
   it("filters out models with empty IDs", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        data: [
-          { id: "anthropic.claude-sonnet-4-6", object: "model" },
-          { id: "", object: "model" },
-          { id: "  ", object: "model" },
-        ],
-      }),
-    });
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: [
+            { id: "anthropic.claude-sonnet-4-6", object: "model" },
+            { id: "", object: "model" },
+            { id: "  ", object: "model" },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
 
     const models = await discoverMantleModels({
       region: "us-east-1",
@@ -381,12 +387,14 @@ describe("bedrock mantle discovery", () => {
 
   it("returns cached models on subsequent calls within refresh interval", async () => {
     let now = 1000000;
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        data: [{ id: "anthropic.claude-sonnet-4-6", object: "model" }],
-      }),
-    });
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ data: [{ id: "anthropic.claude-sonnet-4-6", object: "model" }] }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
 
     // First call — hits the network
     const first = await discoverMantleModels({
@@ -425,12 +433,12 @@ describe("bedrock mantle discovery", () => {
     let now = 1000000;
     const mockFetch = vi
       .fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          data: [{ id: "anthropic.claude-sonnet-4-6", object: "model" }],
-        }),
-      })
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ data: [{ id: "anthropic.claude-sonnet-4-6", object: "model" }] }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      )
       .mockRejectedValueOnce(new Error("ECONNREFUSED"));
 
     // First call — succeeds
@@ -458,12 +466,14 @@ describe("bedrock mantle discovery", () => {
   // ---------------------------------------------------------------------------
 
   it("resolves implicit provider when bearer token is set", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        data: [{ id: "anthropic.claude-sonnet-4-6", object: "model" }],
-      }),
-    });
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({ data: [{ id: "anthropic.claude-sonnet-4-6", object: "model" }] }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
 
     const provider = await resolveImplicitMantleProvider({
       env: {
@@ -510,12 +520,12 @@ describe("bedrock mantle discovery", () => {
   it("uses a generated IAM token when no explicit token is set", async () => {
     const tokenProvider = vi.fn(async () => "bedrock-api-key-iam"); // pragma: allowlist secret
     const tokenProviderFactory = createTokenProviderFactory(tokenProvider);
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        data: [{ id: "openai.gpt-oss-120b", object: "model" }],
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ data: [{ id: "openai.gpt-oss-120b", object: "model" }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
       }),
-    });
+    );
 
     const provider = await resolveImplicitMantleProvider({
       env: {
@@ -604,10 +614,12 @@ describe("bedrock mantle discovery", () => {
   });
 
   it("defaults to us-east-1 when no region is set", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ data: [{ id: "openai.gpt-oss-120b", object: "model" }] }),
-    });
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ data: [{ id: "openai.gpt-oss-120b", object: "model" }] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
 
     const provider = await resolveImplicitMantleProvider({
       env: {
