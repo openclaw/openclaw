@@ -77,4 +77,44 @@ describe("Feishu app registration", () => {
     );
     expect(writeSpy).toHaveBeenCalledWith("terminal-qr\n");
   });
+
+  it("rejects oversized app-registration JSON responses", async () => {
+    const payload = {
+      device_code: "dc",
+      verification_uri_complete: "https://accounts.feishu.cn/verify?x=1",
+      user_code: "uc",
+      interval: 5,
+      expire_in: 600,
+    };
+    mockFeishuJson(payload);
+    await expect(beginAppRegistration()).resolves.toMatchObject({
+      deviceCode: "dc",
+      userCode: "uc",
+    });
+  });
+
+  it("rejects oversized app-registration JSON via real response size", async () => {
+    const small = {
+      device_code: "dc",
+      verification_uri_complete: "https://accounts.feishu.cn/verify?x=1",
+      user_code: "uc",
+      interval: 5,
+      expire_in: 600,
+    };
+    mockFeishuJson(small);
+    await expect(beginAppRegistration()).resolves.toBeDefined();
+
+    const large = "x".repeat(5 * 1024 * 1024);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(large, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      release: async () => {},
+    });
+
+    await expect(beginAppRegistration()).rejects.toThrow(
+      /Feishu app-registration response too large/,
+    );
+  });
 });

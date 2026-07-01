@@ -8,7 +8,10 @@ import {
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+
+const FEISHU_STREAMING_CARD_JSON_MAX_BYTES = 1 * 1024 * 1024;
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getFeishuUserAgent } from "./client.js";
 import { requestFeishuApi } from "./comment-shared.js";
@@ -117,7 +120,13 @@ async function getToken(creds: Credentials): Promise<string> {
     await release();
     throw new Error(`Token request failed with HTTP ${response.status}`);
   }
-  const data = (await response.json()) as {
+  const body = await readResponseWithLimit(response, FEISHU_STREAMING_CARD_JSON_MAX_BYTES, {
+    onOverflow: ({ size, maxBytes }) =>
+      new Error(
+        `Feishu streaming-card token response too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+      ),
+  });
+  const data = JSON.parse(body.toString("utf8")) as {
     code: number;
     msg: string;
     tenant_access_token?: string;

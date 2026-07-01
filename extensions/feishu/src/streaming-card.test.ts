@@ -69,15 +69,15 @@ describe("FeishuStreamingSession", () => {
         let status = 200;
         if (url.includes("/auth/")) {
           return {
-            response: {
-              ok: true,
-              json: async () => ({
+            response: new Response(
+              JSON.stringify({
                 code: 0,
                 msg: "ok",
                 tenant_access_token: "token",
                 expire: 7200,
               }),
-            },
+              { status: 200, headers: { "content-type": "application/json" } },
+            ),
             release,
           };
         }
@@ -125,19 +125,22 @@ describe("FeishuStreamingSession", () => {
           const token = `token-${authTokens.length + 1}`;
           authTokens.push(token);
           return {
-            response: { ok: true, json: async () => resolveAuthJson(token) },
+            response: new Response(JSON.stringify(resolveAuthJson(token)), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            }),
             release,
           };
         }
         return {
-          response: {
-            ok: true,
-            json: async () => ({
+          response: new Response(
+            JSON.stringify({
               code: 0,
               msg: "ok",
               data: { card_id: `card-${authTokens.length}` },
             }),
-          },
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
           release,
         };
       },
@@ -354,15 +357,15 @@ describe("FeishuStreamingSession", () => {
       async ({ url, init }: { url: string; init?: { body?: string } }) => {
         if (url.includes("/auth/")) {
           return {
-            response: {
-              ok: true,
-              json: async () => ({
+            response: new Response(
+              JSON.stringify({
                 code: 0,
                 msg: "ok",
                 tenant_access_token: "token",
                 expire: 7200,
               }),
-            },
+              { status: 200, headers: { "content-type": "application/json" } },
+            ),
             release,
           };
         }
