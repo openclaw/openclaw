@@ -1392,9 +1392,9 @@ export const fr: TranslationMap = {
       retryQueuedMessage: "Réessayer le message en file d’attente",
     },
     pairingQrExpired: {
-      title: "Pairing QR expired",
-      reason: "Run /pair qr again to generate a fresh setup code.",
-      badge: "Expired",
+      title: "QR d'appairage expiré",
+      reason: "Exécutez /pair qr à nouveau pour générer un nouveau code de configuration.",
+      badge: "Expiré",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",
