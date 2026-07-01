@@ -323,4 +323,114 @@ describe("plugin health status formatting", () => {
     expect(text).toContain("Loaded: 2 (active-ok, pinned-only)");
     expect(text).not.toContain("Installed (not active):");
   });
+
+  it("flags should-run plugins missing from the runtime-loaded set as drift", () => {
+    const text = formatDetailedPluginHealth({
+      plugins: [
+        { id: "runtime-ok", status: "loaded", enabled: true },
+        // Planned for eager startup but never loaded at runtime: drift.
+        { id: "planned-missing", status: "loaded", enabled: true },
+        // Installed/discovered but not in the startup plan: neutral inventory.
+        { id: "not-planned-idle", status: "loaded", enabled: true },
+      ],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeLoadedPluginIds: ["runtime-ok"],
+      shouldRunPluginIds: ["planned-missing", "runtime-ok"],
+    });
+
+    expect(text).toContain("Loaded: 1 (runtime-ok)");
+    expect(text).toContain("Configured to run but not loaded: 1 (planned-missing)");
+    // Not-planned stays neutral; the drift id never appears in both inventory lines.
+    expect(text).toContain("Installed (not active): 1 (not-planned-idle)");
+  });
+
+  it("reports no drift when every should-run plugin is runtime-loaded", () => {
+    const text = formatDetailedPluginHealth({
+      plugins: [
+        { id: "a", status: "loaded", enabled: true },
+        { id: "b", status: "loaded", enabled: true },
+      ],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeLoadedPluginIds: ["a", "b"],
+      shouldRunPluginIds: ["a", "b"],
+    });
+
+    expect(text).toContain("Loaded: 2 (a, b)");
+    expect(text).not.toContain("Configured to run but not loaded:");
+  });
+
+  it("does not re-report should-run plugins already shown as error or disabled", () => {
+    const text = formatDetailedPluginHealth({
+      plugins: [
+        { id: "runtime-ok", status: "loaded", enabled: true },
+        { id: "broken", status: "error", enabled: true, failurePhase: "load", error: "boom" },
+        { id: "off", status: "disabled", enabled: false },
+      ],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeLoadedPluginIds: ["runtime-ok"],
+      // Both broken and off are in the startup plan but already explained by their
+      // own records, so neither should surface as drift.
+      shouldRunPluginIds: ["broken", "off", "runtime-ok"],
+    });
+
+    expect(text).toContain("- broken [load]: boom");
+    expect(text).toContain("Disabled: 1");
+    expect(text).not.toContain("Configured to run but not loaded:");
+  });
+
+  it("omits the drift line when the should-run set is absent (back-compat)", () => {
+    const text = formatDetailedPluginHealth({
+      plugins: [
+        { id: "runtime-ok", status: "loaded", enabled: true },
+        { id: "installed-idle", status: "loaded", enabled: true },
+      ],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeLoadedPluginIds: ["runtime-ok"],
+    });
+
+    expect(text).toContain("Installed (not active): 1 (installed-idle)");
+    expect(text).not.toContain("Configured to run but not loaded:");
+  });
+
+  it("flags configured memory embedding providers that no loaded plugin registers", () => {
+    const text = formatDetailedPluginHealth({
+      plugins: [{ id: "runtime-ok", status: "loaded", enabled: true }],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeLoadedPluginIds: ["runtime-ok"],
+      unregisteredMemoryEmbeddingProviders: [
+        { configuredId: "custom-embed", source: "provider" },
+        { configuredId: "fallback-embed", source: "fallback" },
+      ],
+    });
+
+    expect(text).toContain(
+      "Configured memory provider not registered: 2 (custom-embed (memorySearch.provider), fallback-embed (memorySearch.fallback))",
+    );
+    // Observer-only: the unregistered-provider signal never enters the compact line.
+    expect(text.split("\n")[0]).toBe("🔌 Plugins: OK");
+  });
+
+  it("omits the memory-provider line when none are unregistered or the field is absent", () => {
+    const withEmpty = formatDetailedPluginHealth({
+      plugins: [{ id: "runtime-ok", status: "loaded", enabled: true }],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeLoadedPluginIds: ["runtime-ok"],
+      unregisteredMemoryEmbeddingProviders: [],
+    });
+    const withAbsent = formatDetailedPluginHealth({
+      plugins: [{ id: "runtime-ok", status: "loaded", enabled: true }],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeLoadedPluginIds: ["runtime-ok"],
+    });
+
+    expect(withEmpty).not.toContain("Configured memory provider not registered:");
+    expect(withAbsent).not.toContain("Configured memory provider not registered:");
+  });
 });

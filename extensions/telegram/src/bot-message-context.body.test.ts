@@ -98,6 +98,76 @@ describe("resolveTelegramInboundBody", () => {
     expect(result?.bodyText).toBe("[unsupported Telegram rich_message received]");
   });
 
+  it("extracts text from rich-message-only updates", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 0,
+        date: 1_700_000_000,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: {
+          blocks: [
+            {
+              type: "paragraph",
+              text: [{ type: "plain", text: "Forwarded rich text" }],
+            },
+          ],
+        },
+      } as never,
+    });
+
+    expect(result?.rawBody).toBe("Forwarded rich text");
+    expect(result?.bodyText).toBe("Forwarded rich text");
+  });
+
+  it("preserves whitespace across rich-message inline text spans", async () => {
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 0,
+        date: 1_700_000_000,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: {
+          blocks: [
+            {
+              type: "paragraph",
+              text: [
+                { type: "plain", text: "Forwarded " },
+                { type: "bold", text: "rich text" },
+              ],
+            },
+          ],
+        },
+      } as never,
+    });
+
+    expect(result?.rawBody).toBe("Forwarded rich text");
+  });
+
+  it("extracts markdown and html rich-message text", async () => {
+    const markdownResult = await resolveTelegramBody({
+      msg: {
+        message_id: 0,
+        date: 1_700_000_000,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: { markdown: "Forwarded **markdown**" },
+      } as never,
+    });
+    const htmlResult = await resolveTelegramBody({
+      msg: {
+        message_id: 0,
+        date: 1_700_000_000,
+        chat: { id: 42, type: "private", first_name: "Pat" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: { html: "<p>Forwarded html</p>" },
+      } as never,
+    });
+
+    expect(markdownResult?.rawBody).toBe("Forwarded **markdown**");
+    expect(htmlResult?.rawBody).toBe("Forwarded html");
+  });
+
   it("keeps rich-message placeholders quiet in requireMention groups", async () => {
     const logger = { info: vi.fn() };
     const result = await resolveTelegramBody({
@@ -125,6 +195,76 @@ describe("resolveTelegramInboundBody", () => {
       "skipping group message",
     );
     expect(result).toBeNull();
+  });
+
+  it("routes rich-message-only updates that match group mention patterns", async () => {
+    const logger = { info: vi.fn() };
+    const result = await resolveTelegramBody({
+      cfg: {
+        channels: { telegram: {} },
+        messages: { groupChat: { mentionPatterns: ["\\btelegram\\b"] } },
+      } as never,
+      msg: {
+        message_id: 1,
+        date: 1_700_000_001,
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Group" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: {
+          blocks: [
+            {
+              type: "paragraph",
+              text: [{ type: "plain", text: "telegram please read this" }],
+            },
+          ],
+        },
+      } as never,
+      isGroup: true,
+      chatId: -1001234567890,
+      senderId: "42",
+      groupConfig: { requireMention: true } as never,
+      requireMention: true,
+      logger,
+    });
+
+    expect(logger.info).not.toHaveBeenCalledWith(
+      { chatId: -1001234567890, reason: "no-mention" },
+      "skipping group message",
+    );
+    expect(result?.rawBody).toBe("telegram please read this");
+    expect(result?.effectiveWasMentioned).toBe(true);
+  });
+
+  it("routes rich-message-only updates that mention the bot username", async () => {
+    const logger = { info: vi.fn() };
+    const result = await resolveTelegramBody({
+      msg: {
+        message_id: 1,
+        date: 1_700_000_001,
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Group" },
+        from: { id: 42, first_name: "Pat" },
+        rich_message: {
+          blocks: [
+            {
+              type: "paragraph",
+              text: [{ type: "plain", text: "@bot please read this" }],
+            },
+          ],
+        },
+      } as never,
+      isGroup: true,
+      chatId: -1001234567890,
+      senderId: "42",
+      groupConfig: { requireMention: true } as never,
+      requireMention: true,
+      logger,
+    });
+
+    expect(logger.info).not.toHaveBeenCalledWith(
+      { chatId: -1001234567890, reason: "no-mention" },
+      "skipping group message",
+    );
+    expect(result?.rawBody).toBe("@bot please read this");
+    expect(result?.effectiveWasMentioned).toBe(true);
   });
 
   it("renders Telegram text entities before building the agent body", async () => {

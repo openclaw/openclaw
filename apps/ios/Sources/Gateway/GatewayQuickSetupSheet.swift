@@ -121,7 +121,7 @@ struct GatewayQuickSetupSheet: View {
         self.gatewayController.gateways.first
     }
 
-    private func fullRowToggle(_ title: String, isOn: Binding<Bool>) -> some View {
+    private func fullRowToggle(_ title: LocalizedStringKey, isOn: Binding<Bool>) -> some View {
         Toggle(title, isOn: isOn)
             .contentShape(Rectangle())
             .overlay {
@@ -138,8 +138,8 @@ struct GatewayQuickSetupSheet: View {
             }
     }
 
-    private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String {
-        problem.canTrustRotatedCertificate ? "Trust certificate" : "Connect"
+    private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String? {
+        GatewayProblemPrimaryAction.title(for: problem, retryTitle: "Connect")
     }
 
     private func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) async {
@@ -147,6 +147,10 @@ struct GatewayQuickSetupSheet: View {
             _ = await self.gatewayController.trustRotatedGatewayCertificate(from: problem)
             return
         }
+        if GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem) {
+            return
+        }
+        guard problem.retryable else { return }
         guard let candidate = self.bestCandidate else { return }
         self.connectError = nil
         self.connecting = true

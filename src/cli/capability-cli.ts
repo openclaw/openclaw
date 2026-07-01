@@ -30,6 +30,7 @@ import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveApiKeyForProvider } from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
+import { runWithImageModelFallback } from "../agents/model-fallback.js";
 import { canonicalizeCaseOnlyCatalogModelRef } from "../agents/model-selection.js";
 import { assertOkOrThrowHttpError } from "../agents/provider-http-errors.js";
 import {
@@ -62,8 +63,9 @@ import {
 import { buildMediaUnderstandingRegistry } from "../media-understanding/provider-registry.js";
 import type { RunMediaUnderstandingFileResult } from "../media-understanding/runtime-types.js";
 import {
+  describePreparedImageWithModel,
   describeImageFile,
-  describeImageFileWithModel,
+  prepareImageDescriptionInput,
   describeVideoFile,
   transcribeAudioFile,
 } from "../media-understanding/runtime.js";
@@ -1083,27 +1085,50 @@ async function runImageDescribe(params: {
     params.files.map(async (filePath) => {
       const resolvedPath = resolveImageDescribeInput(filePath);
       const isRemoteUrl = /^https?:\/\//i.test(resolvedPath);
-      const result = activeModel
-        ? await describeImageFileWithModel({
+      const preparedImage = activeModel
+        ? await prepareImageDescriptionInput({
             filePath: resolvedPath,
             ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
             cfg,
-            agentDir,
-            provider: activeModel.provider,
-            model: activeModel.model,
-            prompt: prompt ?? "Describe the image.",
             timeoutMs: params.timeoutMs,
           })
-        : await describeImageFile({
-            filePath: resolvedPath,
-            ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
-            cfg,
-            agentDir,
-            prompt,
-            timeoutMs: params.timeoutMs,
-          });
-      if (!result.text) {
-        if (isMissingMediaUnderstandingProvider(result)) {
+        : undefined;
+      const result =
+        activeModel && preparedImage
+          ? await runWithImageModelFallback({
+              cfg,
+              modelOverride: `${activeModel.provider}/${activeModel.model}`,
+              run: async (provider, model) => {
+                const described = await describePreparedImageWithModel({
+                  image: preparedImage,
+                  cfg,
+                  agentDir,
+                  provider,
+                  model,
+                  prompt: prompt ?? "Describe the image.",
+                  timeoutMs: params.timeoutMs,
+                });
+                if (!described.text?.trim()) {
+                  throw new Error(`No description returned for image: ${resolvedPath}`);
+                }
+                return described;
+              },
+            })
+          : {
+              result: await describeImageFile({
+                filePath: resolvedPath,
+                ...(isRemoteUrl ? { mediaUrl: resolvedPath } : {}),
+                cfg,
+                agentDir,
+                prompt,
+                timeoutMs: params.timeoutMs,
+              }),
+              provider: undefined,
+              model: undefined,
+              attempts: [],
+            };
+      if (!result.result.text) {
+        if (isMissingMediaUnderstandingProvider(result.result)) {
           throw new Error(
             "No image understanding provider is configured or ready. Configure tools.media.image.models or agents.defaults.imageModel.primary, or pass --model <provider/model> after configuring that provider's auth/API key.",
           );
@@ -1112,9 +1137,10 @@ async function runImageDescribe(params: {
       }
       return {
         path: resolvedPath,
-        text: result.text,
-        provider: activeModel?.provider ?? ("provider" in result ? result.provider : undefined),
-        model: result.model,
+        text: result.result.text,
+        provider: result.provider ?? result.result.provider,
+        model: result.result.model ?? result.model,
+        attempts: result.attempts,
         kind: "image.description",
       };
     }),
@@ -1125,8 +1151,8 @@ async function runImageDescribe(params: {
     transport: "local" as const,
     provider: outputs[0]?.provider,
     model: outputs[0]?.model,
-    attempts: [],
-    outputs,
+    attempts: outputs.flatMap((output) => output.attempts),
+    outputs: outputs.map(({ attempts: _attempts, ...output }) => output),
   } satisfies CapabilityEnvelope;
 }
 

@@ -10,6 +10,7 @@ import {
   resolveGatewayRestartLogPath,
   resolveGatewaySupervisorLogPaths,
 } from "../../daemon/restart-logs.js";
+import { isSystemdStartLimitHit } from "../../daemon/service-runtime.js";
 import {
   isSystemdUnavailableDetail,
   renderSystemdUnavailableHints,
@@ -208,13 +209,15 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     if (!controlUiEnabled) {
       defaultRuntime.log(`${label("Dashboard:")} ${warnText("disabled")}`);
     } else {
-      const links = resolveControlUiLinks({
-        port: status.gateway.port,
-        bind: status.gateway.bindMode,
-        customBindHost: status.gateway.customBindHost,
-        basePath: status.config?.daemon?.controlUi?.basePath,
-        tlsEnabled: status.gateway.tlsEnabled === true,
-      });
+      const links =
+        status.gateway.controlUiLinks ??
+        resolveControlUiLinks({
+          port: status.gateway.port,
+          bind: status.gateway.bindMode,
+          customBindHost: status.gateway.customBindHost,
+          basePath: status.config?.daemon?.controlUi?.basePath,
+          tlsEnabled: status.gateway.tlsEnabled === true,
+        });
       defaultRuntime.log(`${label("Dashboard:")} ${infoText(links.httpUrl)}`);
     }
     if (status.gateway.probeNote) {
@@ -366,8 +369,17 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       defaultRuntime.error(errorText(hint));
     }
   } else if (service.loaded && service.runtime?.status === "stopped") {
+    const startLimitHit = process.platform === "linux" && isSystemdStartLimitHit(service.runtime);
     defaultRuntime.error(
-      errorText("Service is loaded but not running (likely exited immediately)."),
+      errorText(
+        startLimitHit
+          ? // systemd gave up restarting after repeated crashes; sending the operator
+            // to restart (which now clears the failed latch) beats "exited immediately".
+            `systemd stopped restarting the gateway after repeated crashes; run ${formatCliCommand(
+              "openclaw gateway restart",
+            )} or inspect logs.`
+          : "Service is loaded but not running (likely exited immediately).",
+      ),
     );
     for (const hint of renderRuntimeHints(
       service.runtime,
