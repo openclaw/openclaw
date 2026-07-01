@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveOutboundFileName } from "./outbound-file-name.js";
 import { sendDocument } from "./outbound-media-send.js";
 
 const sendMediaMock = vi.hoisted(() => vi.fn());
@@ -37,12 +38,16 @@ function makeTrackedDir(prefix: string): string {
   return dir;
 }
 
+const UUID = "e46cdea3-a285-48f6-958d-ad31352855d6";
+
 describe("sendDocument", () => {
-  it("passes the recipient-facing media-store filename to QQ file sends", async () => {
-    const mediaDir = makeTrackedDir("qqbot-send-doc-");
-    const stagedPath = path.join(mediaDir, "report---e46cdea3-a285-48f6-958d-ad31352855d6.txt");
+  it("passes the recipient-facing filename to QQ file sends", async () => {
+    const tmpDir = makeTrackedDir("qqbot-send-doc-");
+    const stagedPath = path.join(tmpDir, `report---${UUID}.txt`);
     fs.writeFileSync(stagedPath, "hello");
     sendMediaMock.mockResolvedValue({ id: "qq-msg-1", timestamp: "123" });
+
+    const expectedFileName = await resolveOutboundFileName(stagedPath);
 
     const result = await sendDocument(
       {
@@ -63,10 +68,26 @@ describe("sendDocument", () => {
     expect(sendMediaMock).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "file",
-        fileName: "report.txt",
+        fileName: expectedFileName,
         source: { localPath: stagedPath },
         localPathForMeta: stagedPath,
       }),
     );
+  });
+});
+
+describe("resolveOutboundFileName integration", () => {
+  it("strips UUID suffix for paths inside the media store", async () => {
+    const { getMediaDir } = await import("openclaw/plugin-sdk/media-runtime");
+    const mediaDir = getMediaDir();
+    fs.mkdirSync(mediaDir, { recursive: true });
+
+    const stagedPath = path.join(mediaDir, `report---${UUID}.txt`);
+    expect(await resolveOutboundFileName(stagedPath)).toBe("report.txt");
+  });
+
+  it("preserves UUID-shaped filenames outside the media store", async () => {
+    const outsidePath = path.join("/tmp", `report---${UUID}.txt`);
+    expect(await resolveOutboundFileName(outsidePath)).toBe(`report---${UUID}.txt`);
   });
 });

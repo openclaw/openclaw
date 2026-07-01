@@ -2,16 +2,16 @@
  * Recipient-facing filename resolution for outbound attachments.
  */
 
+import path from "node:path";
 import { sanitizeFileName } from "../utils/string-normalize.js";
 
 /**
  * Resolve the filename a QQ recipient should see for an outbound attachment.
  *
- * Outbound media is staged in the media store as `<name>---<uuid>.<ext>`
- * (src/media/store.ts), so the bare basename would leak the internal UUID
- * suffix to recipients. `extractOriginalFilename` strips only that staging
- * shape and otherwise returns the plain basename (the same helper the msteams
- * and signal channels use), so non-staged paths and URLs are unchanged.
+ * UUID suffix stripping is scoped to paths inside the OpenClaw media store,
+ * mirroring the guard in `src/media/web-media.ts::resolveLocalMediaFileName`.
+ * Arbitrary local paths or URLs whose basename happens to match the
+ * `name---<uuid>.ext` shape are preserved as-is.
  *
  * `media-runtime` is imported lazily because the qqbot bridge deliberately
  * keeps that heavy barrel off the static startup graph (bridge/bootstrap.ts
@@ -19,6 +19,16 @@ import { sanitizeFileName } from "../utils/string-normalize.js";
  * ineffective.
  */
 export async function resolveOutboundFileName(filePath: string): Promise<string> {
-  const { extractOriginalFilename } = await import("openclaw/plugin-sdk/media-runtime");
-  return sanitizeFileName(extractOriginalFilename(filePath));
+  const { extractOriginalFilename, getMediaDir } =
+    await import("openclaw/plugin-sdk/media-runtime");
+  const basename = path.basename(filePath);
+  if (isPathInsideRoot(filePath, getMediaDir())) {
+    return sanitizeFileName(extractOriginalFilename(basename));
+  }
+  return sanitizeFileName(basename);
+}
+
+function isPathInsideRoot(filePath: string, root: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(filePath));
+  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
 }
