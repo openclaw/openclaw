@@ -1377,9 +1377,9 @@ export const id: TranslationMap = {
       retryQueuedMessage: "Coba lagi pesan dalam antrean",
     },
     pairingQrExpired: {
-      title: "Pairing QR expired",
-      reason: "Run /pair qr again to generate a fresh setup code.",
-      badge: "Expired",
+      title: "QR pemasangan kedaluwarsa",
+      reason: "Jalankan /pair qr lagi untuk membuat kode pengaturan baru.",
+      badge: "Kedaluwarsa",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",
