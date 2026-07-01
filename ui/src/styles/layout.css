@@ -219,9 +219,20 @@
   white-space: nowrap;
 }
 
+.topnav-shell .dashboard-header__breadcrumb-context--workspace {
+  max-width: min(32ch, 28vw);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+}
+
 @media (max-width: 720px) {
   .topnav-shell .dashboard-header__breadcrumb-context {
     max-width: 10ch;
+  }
+
+  .topnav-shell .dashboard-header__breadcrumb-context--workspace {
+    max-width: 12ch;
   }
 }
 

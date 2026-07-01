@@ -95,8 +95,11 @@ export function resolveAssistantAttachmentAuthToken(
 
 export function resolveDashboardHeaderContext(
   state: Pick<AppViewState, "agentsList" | "sessionKey">,
-): { agentLabel: string } {
-  const agentId = resolveAgentIdFromSessionKey(state.sessionKey);
+  opts?: { agentId?: string | null; includeWorkspace?: boolean; workspaceRoot?: string | null },
+): { agentLabel: string; workspaceLabel?: string; workspaceTitle?: string } {
+  const agentId = opts?.agentId
+    ? normalizeAgentId(opts.agentId)
+    : resolveAgentIdFromSessionKey(state.sessionKey);
   const agent = state.agentsList?.agents.find(
     (entry) => normalizeLowercaseStringOrEmpty(entry.id) === agentId,
   );
@@ -104,7 +107,14 @@ export function resolveDashboardHeaderContext(
     normalizeOptionalString(agent?.identity?.name) ??
     normalizeOptionalString(agent?.name) ??
     agentId;
-  return { agentLabel };
+  if (!opts?.includeWorkspace) {
+    return { agentLabel };
+  }
+  const workspaceRoot =
+    normalizeOptionalString(opts.workspaceRoot) ?? normalizeOptionalString(agent?.workspace);
+  return workspaceRoot
+    ? { agentLabel, workspaceLabel: workspaceRoot, workspaceTitle: workspaceRoot }
+    : { agentLabel };
 }
 
 function resolveSidebarChatSessionKey(state: AppViewState): string {
