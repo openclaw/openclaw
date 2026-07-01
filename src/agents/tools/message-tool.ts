@@ -1530,10 +1530,19 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         const option =
           typeof details?.pollVotedOption === "string" ? details.pollVotedOption.trim() : "";
         if (option) {
+          const recordedAt = Date.now();
+          // Prune expired entries on write so a session that votes but never
+          // sends a follow-up text can't leak a record forever in a long-lived
+          // gateway; the map stays bounded to sessions that voted within the TTL.
+          for (const [key, entry] of recentPollVoteBySession) {
+            if (recordedAt - entry.recordedAt > POLL_VOTE_ECHO_TTL_MS) {
+              recentPollVoteBySession.delete(key);
+            }
+          }
           recentPollVoteBySession.set(pollEchoSessionKey, {
             option,
             route: pollVoteEchoRoute,
-            recordedAt: Date.now(),
+            recordedAt,
           });
         }
       }

@@ -891,18 +891,21 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       return;
     }
 
-    // Remember native polls so a later inline reply to them is recognized as the
-    // poll's comment. The poll balloon (rendered with options + a vote cue) is
-    // still delivered; only the comment is folded in and dropped, so the agent
-    // votes without also answering the comment as a standalone question.
+    // Remember native polls so a caption reply that lands WITH the poll is
+    // recognized and folded. The poll balloon (rendered with options + a vote
+    // cue) is still delivered; only the near-simultaneous comment is dropped so
+    // the agent votes without also answering it as a standalone question. A
+    // deliberate later inline reply to the poll falls outside the window and is
+    // delivered normally.
+    const pollFoldAtMs = message.created_at ? Date.parse(message.created_at) : Number.NaN;
     if (message.poll) {
-      pollCommentFolder.rememberPoll(message.id, message.guid);
+      pollCommentFolder.rememberPoll(message.id, message.guid, pollFoldAtMs, message.sender);
     } else if (
       message.reply_to_id != null &&
-      pollCommentFolder.isPollComment(message.reply_to_id)
+      pollCommentFolder.isPollComment(message.reply_to_id, pollFoldAtMs, message.sender)
     ) {
       logVerbose(
-        "imessage: folding poll comment (inline reply to a poll) into the poll; not delivering standalone",
+        "imessage: folding poll comment (inline reply sent with a poll) into the poll; not delivering standalone",
       );
       return;
     }
