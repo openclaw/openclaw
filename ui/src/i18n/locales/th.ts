@@ -1345,9 +1345,9 @@ export const th: TranslationMap = {
       retryQueuedMessage: "ลองส่งข้อความในคิวอีกครั้ง",
     },
     pairingQrExpired: {
-      title: "Pairing QR expired",
-      reason: "Run /pair qr again to generate a fresh setup code.",
-      badge: "Expired",
+      title: "QR การจับคู่หมดอายุ",
+      reason: "เรียกใช้ /pair qr อีกครั้งเพื่อสร้างรหัสตั้งค่าใหม่",
+      badge: "หมดอายุ",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",
