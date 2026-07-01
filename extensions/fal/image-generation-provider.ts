@@ -37,6 +37,7 @@ const FAL_KREA_2_LARGE_MODEL = "krea/v2/large/text-to-image";
 const DEFAULT_OUTPUT_FORMAT = "png";
 const GPT_IMAGE_EDIT_MAX_INPUT_IMAGES = 10;
 const NANO_BANANA_EDIT_MAX_INPUT_IMAGES = 14;
+const GROK_IMAGINE_EDIT_MAX_INPUT_IMAGES = 3;
 const KREA_STYLE_REFERENCE_MAX_INPUT_IMAGES = 10;
 const FAL_OUTPUT_FORMATS = ["png", "jpeg"] as const;
 const FAL_SUPPORTED_SIZES = [
@@ -89,20 +90,39 @@ const NANO_BANANA_SUPPORTED_ASPECT_RATIOS = [
   "8:1",
   "1:8",
 ] as const;
+const GROK_IMAGINE_SUPPORTED_ASPECT_RATIOS = [
+  "2:1",
+  "20:9",
+  "19.5:9",
+  "16:9",
+  "4:3",
+  "3:2",
+  "1:1",
+  "2:3",
+  "3:4",
+  "9:16",
+  "9:19.5",
+  "9:20",
+  "1:2",
+] as const;
+const GROK_IMAGINE_SUPPORTED_RESOLUTIONS: readonly ("1K" | "2K" | "4K")[] = ["1K", "2K"] as const;
 const KREA_CREATIVITY_LEVELS = ["raw", "low", "medium", "high"] as const;
 
 const FAL_IMAGE_MALFORMED_RESPONSE = "fal image generation response malformed";
 const DEFAULT_GENERATED_IMAGE_MAX_BYTES = 6 * 1024 * 1024;
 
 type FalImageSize = string | { width: number; height: number };
+type FalEditEndpointSuffix = "edit" | "image-to-image" | "quality/edit";
 type FalImageModelSchema = {
   geometry: "image_size" | "native_aspect_ratio";
   aspectRatios?: readonly string[];
+  resolutions?: readonly ("1K" | "2K" | "4K")[];
+  resolutionCase?: "lower";
   referenceImages: "image_url" | "image_urls" | "image_style_references";
   maxInputImages: number;
   referenceLimitLabel: string;
   referenceLimitNoun: "reference image" | "style reference";
-  appendEditPath: false | "edit" | "image-to-image";
+  appendEditPath: false | FalEditEndpointSuffix;
   supportsCount: boolean;
   supportsOutputFormat: boolean;
   defaultBody?: Record<string, unknown>;
@@ -178,24 +198,18 @@ function resolveFalNetworkPolicy(params: {
 function ensureFalModelPath(model: string | undefined, hasInputImages: boolean): string {
   const trimmed = model?.trim() || DEFAULT_FAL_IMAGE_MODEL;
   const schema = resolveFalImageModelSchema(trimmed);
-  if (hasInputImages && schema.appendEditPath === false) {
-    return trimmed;
-  }
-  if (!hasInputImages) {
+  if (!hasInputImages || schema.appendEditPath === false) {
     return trimmed;
   }
   if (
+    trimmed.endsWith(`/${schema.appendEditPath}`) ||
     trimmed.endsWith("/edit") ||
     trimmed.endsWith(`/${DEFAULT_FAL_EDIT_SUBPATH}`) ||
     trimmed.includes("/image-to-image/")
   ) {
     return trimmed;
   }
-  // GPT Image 2 and Nano Banana 2 use /edit; Flux uses /image-to-image.
-  if (trimmed.startsWith("openai/gpt-image-") || trimmed.startsWith("fal-ai/nano-banana-")) {
-    return `${trimmed}/edit`;
-  }
-  return `${trimmed}/${DEFAULT_FAL_EDIT_SUBPATH}`;
+  return `${trimmed}/${schema.appendEditPath}`;
 }
 
 function resolveFalImageModelSchema(model: string): FalImageModelSchema {
@@ -225,6 +239,42 @@ function resolveFalImageModelSchema(model: string): FalImageModelSchema {
       referenceLimitLabel: isNanoBanana ? "fal Nano Banana 2" : "fal GPT Image edit",
       referenceLimitNoun: "reference image",
       appendEditPath: "edit",
+      supportsCount: true,
+      supportsOutputFormat: true,
+    };
+  }
+  // Nano Banana 2 Lite (Gemini 3.1 Flash Lite Image) — same aspect_ratio contract
+  // and image_urls reference contract as Nano Banana 2, but the fal endpoint suffix
+  // is /edit (not /image-to-image), and the /edit endpoint accepts only a single
+  // `resolution` value ("1K") — verified against the live fal API on 2026-07-01.
+  if (model.startsWith("google/nano-banana-2-lite")) {
+    return {
+      geometry: "native_aspect_ratio",
+      aspectRatios: NANO_BANANA_SUPPORTED_ASPECT_RATIOS,
+      resolutions: ["1K"],
+      referenceImages: "image_urls",
+      maxInputImages: NANO_BANANA_EDIT_MAX_INPUT_IMAGES,
+      referenceLimitLabel: "fal Nano Banana 2 Lite",
+      referenceLimitNoun: "reference image",
+      appendEditPath: "edit",
+      supportsCount: true,
+      supportsOutputFormat: true,
+    };
+  }
+  // Grok Imagine (xAI) — text-to-image at /xai/grok-imagine-image, edit at
+  // /xai/grok-imagine-image/quality/edit. Accepts up to 3 reference images via
+  // image_urls, aspect_ratio enum, and lowercase resolution enum (1k/2k only).
+  if (model.startsWith("xai/grok-imagine-image")) {
+    return {
+      geometry: "native_aspect_ratio",
+      aspectRatios: GROK_IMAGINE_SUPPORTED_ASPECT_RATIOS,
+      resolutions: GROK_IMAGINE_SUPPORTED_RESOLUTIONS,
+      resolutionCase: "lower",
+      referenceImages: "image_urls",
+      maxInputImages: GROK_IMAGINE_EDIT_MAX_INPUT_IMAGES,
+      referenceLimitLabel: "fal Grok Imagine",
+      referenceLimitNoun: "reference image",
+      appendEditPath: "quality/edit",
       supportsCount: true,
       supportsOutputFormat: true,
     };
@@ -434,7 +484,33 @@ function applyFalImageGeometry(params: {
       params.requestBody.aspect_ratio = nativeAspectRatio;
     }
     if (params.resolution && params.schema.referenceImages === "image_urls") {
-      params.requestBody.resolution = params.resolution;
+      // Schemas may opt in to resolution validation by declaring `resolutions`.
+      // - `resolutions: undefined` (default, e.g. Nano Banana 2): forward the
+      //   uppercase value unchanged, matching legacy behaviour.
+      // - `resolutions: ["1K", "2K"]` with `resolutionCase: "lower"` (Grok
+      //   Imagine): validate against the allowlist and lowercase before
+      //   sending.
+      // - `resolutions: ["1K"]` (Nano Banana 2 Lite): the fal endpoint
+      //   exposes a `resolution` field but only accepts the literal `"1K"`;
+      //   anything else (including `"1k"`, `"2K"`, `"4K"`) returns 422.
+      // - `resolutions: []` (reserved): reject any override entirely.
+      const allowedResolutions = params.schema.resolutions;
+      if (allowedResolutions === undefined) {
+        params.requestBody.resolution = params.resolution;
+      } else if (allowedResolutions.length === 0) {
+        throw new Error(
+          `${params.schema.referenceLimitLabel} does not support resolution overrides`,
+        );
+      } else if (!allowedResolutions.includes(params.resolution)) {
+        throw new Error(
+          `${params.schema.referenceLimitLabel} supports resolution values: ${allowedResolutions.join(", ")}`,
+        );
+      } else {
+        params.requestBody.resolution =
+          params.schema.resolutionCase === "lower"
+            ? params.resolution.toLowerCase()
+            : params.resolution;
+      }
     }
     return;
   }
