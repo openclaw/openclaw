@@ -172,12 +172,34 @@ type VisibleTextSuppressionReason =
 
 const POLL_VOTE_ECHO_TTL_MS = 30_000;
 
-function normalizePollEchoText(text: string): string {
-  return text
-    .replace(/^[\p{Extended_Pictographic}️‍]+\s+/u, "")
-    .replace(/[.!?\s]+$/u, "")
-    .trim()
-    .toLowerCase();
+// Sheds emoji ANYWHERE, then trailing sentence punctuation. Emoji land on both
+// sides asymmetrically: iMessage poll options suffix them ("Lobster 🦞 "), while
+// the agent's echo prefixes them ("🦞 Lobster."), so a leading-only strip left
+// "lobster 🦞" != "lobster" and the redundant text leaked. Each emoji run
+// becomes a space so "a🦞b" can't fuse. Internal punctuation stays, so "C#",
+// "C++", "Node.js" remain distinct. An emoji-only label normalizes to empty,
+// which the guard below refuses to suppress on (fail-open).
+// Exported for tests.
+export function normalizePollEchoText(text: string): string {
+  return (
+    text
+      // Keycap sequences (base + optional VS16 + U+20E3) clear as a UNIT so "1️⃣"
+      // -> "" not "1"; a plain "1"/"#"/"*" option (no U+20E3) is left intact so it
+      // can still match a plain-text echo.
+      .replace(/[0-9#*]\u{FE0F}?\u{20E3}/gu, " ")
+      // Pictographic, regional-indicator flags ("🇺🇸"), subdivision-flag tag chars,
+      // ZWJ, skin-tone, and leftover variation selectors. Flags and tags are NOT
+      // Extended_Pictographic, so they need their own ranges.
+      .replace(
+        /[\p{Extended_Pictographic}\u{1F1E6}-\u{1F1FF}\u{E0020}-\u{E007F}\u{FE0F}\u{200D}\u{20E3}\u{1F3FB}-\u{1F3FF}]+/gu,
+        " ",
+      )
+      .replace(/\s+/gu, " ")
+      .trim()
+      .replace(/[.!?]+$/u, "")
+      .trim()
+      .toLowerCase()
+  );
 }
 
 function resolvePollVoteEchoRoute(params: {
