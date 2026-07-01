@@ -69,7 +69,7 @@ describe("iMessage message-tool artifact", () => {
     setCachedIMessagePrivateApiStatus("imsg", {
       available: true,
       v2Ready: true,
-      selectors: { pollPayloadMessage: true, pollVoteMessage: true },
+      selectors: { pollPayloadMessage: true },
       rpcMethods: [],
     });
 
@@ -83,7 +83,10 @@ describe("iMessage message-tool artifact", () => {
     expect(discovery?.schema).toBeUndefined();
   });
 
-  it("hides poll-vote when only the poll creation selector is available", () => {
+  it("offers poll-vote when the pollPayloadMessage selector and poll.vote rpc are present", () => {
+    // Votes use the same pollPayloadMessage balloon initializer as poll-send, and
+    // the poll.vote rpc proves the binary carries the vote command — there is no
+    // separate pollVoteMessage selector in imsg.
     setCachedIMessagePrivateApiStatus("imsg", {
       available: true,
       v2Ready: true,
@@ -97,14 +100,14 @@ describe("iMessage message-tool artifact", () => {
     });
 
     expect(discovery?.actions).toContain("poll");
-    expect(discovery?.actions).not.toContain("poll-vote");
+    expect(discovery?.actions).toContain("poll-vote");
   });
 
   it("offers poll-vote once imsg advertises the poll.vote rpc", () => {
     setCachedIMessagePrivateApiStatus("imsg", {
       available: true,
       v2Ready: true,
-      selectors: { pollPayloadMessage: true, pollVoteMessage: true },
+      selectors: { pollPayloadMessage: true },
       rpcMethods: ["send", "poll.send", "poll.vote", "messages.poll.vote"],
     });
 

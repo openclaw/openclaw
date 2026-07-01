@@ -103,6 +103,7 @@ import {
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { stageIMessageAttachments } from "./media-staging.js";
 import { parseIMessageNotification } from "./parse-notification.js";
+import { createPollCommentFolder } from "./poll-comment.js";
 import { renderIMessagePollBody } from "./poll-render.js";
 import { enqueueIMessageReactionSystemEvent } from "./reaction-system-event.js";
 import { advanceIMessageRecoveryCursor, loadIMessageRecoveryCursor } from "./recovery-cursor.js";
@@ -832,6 +833,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     }
   }
 
+  // iMessage delivers a poll's comment as a separate inline reply to the poll
+  // balloon; fold it into the poll so the agent votes once instead of also
+  // replying to the caption in prose (a redundant restatement of the vote).
+  const pollCommentFolder = createPollCommentFolder();
+
   function resolveIMessageInboundBodyText(message: IMessagePayload) {
     // Native poll balloons carry only a 0xFFFD placeholder in `text`; render the
     // decoded poll (question/options/votes) so the agent sees the actual poll.
@@ -882,6 +888,22 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   async function handleMessageNowInner(rawMessage: IMessagePayload) {
     const message = await repairMessageConversationAnchor(rawMessage);
     if (!message) {
+      return;
+    }
+
+    // Remember native polls so a later inline reply to them is recognized as the
+    // poll's comment. The poll balloon (rendered with options + a vote cue) is
+    // still delivered; only the comment is folded in and dropped, so the agent
+    // votes without also answering the comment as a standalone question.
+    if (message.poll) {
+      pollCommentFolder.rememberPoll(message.id, message.guid);
+    } else if (
+      message.reply_to_id != null &&
+      pollCommentFolder.isPollComment(message.reply_to_id)
+    ) {
+      logVerbose(
+        "imessage: folding poll comment (inline reply to a poll) into the poll; not delivering standalone",
+      );
       return;
     }
 
