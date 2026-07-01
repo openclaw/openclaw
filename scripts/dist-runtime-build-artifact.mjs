@@ -328,7 +328,9 @@ function createGatewaySmokeConfig({ configPath, port }) {
 }
 
 function wait(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function reserveLoopbackPort() {
@@ -458,7 +460,9 @@ async function stopGateway(child) {
   }
   child.kill("SIGTERM");
   const exited = await Promise.race([
-    new Promise((resolve) => child.once("exit", () => resolve(true))),
+    new Promise((resolve) => {
+      child.once("exit", () => resolve(true));
+    }),
     wait(5000).then(() => false),
   ]);
   if (!exited) {
@@ -599,8 +603,10 @@ async function main(argv) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main(process.argv.slice(2)).catch((error) => {
+  try {
+    await main(process.argv.slice(2));
+  } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
-  });
+  }
 }
