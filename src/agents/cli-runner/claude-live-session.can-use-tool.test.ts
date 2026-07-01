@@ -2,10 +2,11 @@ import { describe, expect, it } from "vitest";
 import { buildClaudeLiveCanUseToolResponse } from "./claude-live-session.js";
 
 describe("buildClaudeLiveCanUseToolResponse", () => {
-  it("returns the updatedInput shape for allowed can_use_tool requests", () => {
+  it("returns the additive allow shape with behavior, updatedInput, and toolUseID", () => {
     const response = buildClaudeLiveCanUseToolResponse({
       requestId: "req-allow-1",
       toolInput: { command: "date" },
+      toolUseId: "tool-allow-1",
       allowed: true,
       denyMessage: "denied",
     });
@@ -15,7 +16,32 @@ describe("buildClaudeLiveCanUseToolResponse", () => {
       response: {
         subtype: "success",
         request_id: "req-allow-1",
-        response: { updatedInput: { command: "date" } },
+        response: {
+          behavior: "allow",
+          updatedInput: { command: "date" },
+          toolUseID: "tool-allow-1",
+        },
+      },
+    });
+  });
+
+  it("omits toolUseID when not provided for allowed can_use_tool requests", () => {
+    const response = buildClaudeLiveCanUseToolResponse({
+      requestId: "req-allow-2",
+      toolInput: { command: "echo hi" },
+      allowed: true,
+      denyMessage: "denied",
+    });
+
+    expect(response).toEqual({
+      type: "control_response",
+      response: {
+        subtype: "success",
+        request_id: "req-allow-2",
+        response: {
+          behavior: "allow",
+          updatedInput: { command: "echo hi" },
+        },
       },
     });
   });

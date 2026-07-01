@@ -852,6 +852,7 @@ function writeClaudeLiveControlResponse(session: ClaudeLiveSession, response: un
 export function buildClaudeLiveCanUseToolResponse(params: {
   requestId: string;
   toolInput: Record<string, unknown>;
+  toolUseId?: string;
   allowed: boolean;
   denyMessage: string;
 }): Record<string, unknown> {
@@ -861,7 +862,11 @@ export function buildClaudeLiveCanUseToolResponse(params: {
       subtype: "success",
       request_id: params.requestId,
       response: params.allowed
-        ? { updatedInput: params.toolInput }
+        ? {
+            behavior: "allow",
+            updatedInput: params.toolInput,
+            ...(params.toolUseId ? { toolUseID: params.toolUseId } : {}),
+          }
         : {
             behavior: "deny",
             decisionClassification: "user_reject",
@@ -889,12 +894,14 @@ function handleClaudeLiveControlRequest(
   }
   const rawInput = request.input;
   const toolInput = isRecord(rawInput) ? rawInput : {};
+  const toolUseId = typeof request.tool_use_id === "string" ? request.tool_use_id : undefined;
   const allowed = turn.execPermission.security === "full" && turn.execPermission.ask === "off";
   writeClaudeLiveControlResponse(
     session,
     buildClaudeLiveCanUseToolResponse({
       requestId,
       toolInput,
+      toolUseId,
       allowed,
       denyMessage: `OpenClaw exec policy denied Claude native tool use (security=${turn.execPermission.security}, ask=${turn.execPermission.ask}).`,
     }),
