@@ -3863,6 +3863,8 @@ describe("runAgentTurnWithFallback", () => {
       stop: vi.fn(),
       hasBuffered: vi.fn(() => true),
       didStream: vi.fn(() => false),
+      didObserveBlockReply: vi.fn(() => false),
+      didStreamSubstantiveReply: vi.fn(() => false),
       isAborted: vi.fn(() => false),
       hasSentPayload: vi.fn(() => false),
       getSentMediaUrls: vi.fn(() => []),
