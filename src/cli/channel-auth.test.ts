@@ -245,6 +245,54 @@ describe("channel-auth", () => {
     );
   });
 
+  it("requests gateway restart when channels.start fails because plugin is not loaded", async () => {
+    mocks.callGateway
+      .mockRejectedValueOnce(new Error("invalid channels.start channel"))
+      .mockResolvedValueOnce(undefined);
+
+    await runChannelLogin({ channel: "whatsapp", account: "acct-1" }, runtime);
+
+    expect(mocks.callGateway).toHaveBeenCalledTimes(2);
+    expect(mocks.callGateway).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        method: "channels.start",
+      }),
+    );
+    expect(mocks.callGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "gateway.restart.request",
+        params: { reason: "channel login: load whatsapp" },
+      }),
+    );
+    expect(readFirstLogMessage(runtime)).toContain("Gateway is restarting to load whatsapp");
+  });
+
+  it("falls back to generic warning when both channels.start and gateway restart fail", async () => {
+    mocks.callGateway
+      .mockRejectedValueOnce(new Error("invalid channels.start channel"))
+      .mockRejectedValueOnce(new Error("restart denied"));
+
+    await expect(
+      runChannelLogin({ channel: "whatsapp", account: "acct-1" }, runtime),
+    ).resolves.toBeUndefined();
+
+    expect(mocks.callGateway).toHaveBeenCalledTimes(2);
+    expect(readFirstLogMessage(runtime)).toContain(
+      "running gateway did not restart it: invalid channels.start channel",
+    );
+  });
+
+  it("does not request restart for non-channel-loading errors", async () => {
+    mocks.callGateway.mockRejectedValue(new Error("timeout connecting"));
+
+    await runChannelLogin({ channel: "whatsapp", account: "acct-1" }, runtime);
+
+    expect(mocks.callGateway).toHaveBeenCalledTimes(1);
+    expect(readFirstLogMessage(runtime)).toContain("running gateway did not restart it: timeout");
+  });
+
   it("auto-picks the single configured channel that supports login when opts are empty", async () => {
     await runChannelLogin({}, runtime);
 

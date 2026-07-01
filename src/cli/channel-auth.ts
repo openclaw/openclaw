@@ -176,10 +176,36 @@ async function reconcileGatewayRuntimeAfterLocalLogin(params: {
       deviceIdentity: null,
     });
   } catch (error) {
+    // The gateway may not have loaded the channel plugin yet (e.g. plugin was
+    // installed or enabled after the gateway started). Request a graceful
+    // restart so the gateway discovers the plugin and starts the channel.
+    if (isChannelNotLoadedError(error)) {
+      try {
+        await callGateway({
+          config: params.cfg,
+          method: "gateway.restart.request",
+          params: { reason: `channel login: load ${params.channelId}` },
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          deviceIdentity: null,
+        });
+        params.runtime.log(
+          `Gateway is restarting to load ${params.channelId}; the channel will start automatically.`,
+        );
+        return;
+      } catch {
+        // Fall through to the generic warning if the restart request also fails.
+      }
+    }
     params.runtime.log(
       `Local login saved auth for ${params.channelId}/${params.accountId}, but the running gateway did not restart it: ${formatErrorMessage(error)}`,
     );
   }
+}
+
+function isChannelNotLoadedError(error: unknown): boolean {
+  const message = formatErrorMessage(error);
+  return /invalid channels\.start channel|unknown channel/i.test(message);
 }
 
 async function logoutViaGatewayRuntime(params: {
