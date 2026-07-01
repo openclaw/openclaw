@@ -4,8 +4,7 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
-import { createQaChannelTransport } from "./qa-channel-transport.js";
-import type { QaTransportAdapter } from "./qa-transport.js";
+import type { QaTransportCapabilities } from "./qa-transport.js";
 import {
   createQaScenarioRuntimeApi,
   type QaScenarioRuntimeConstants,
@@ -120,8 +119,7 @@ describe("createQaScenarioRuntimeApi", () => {
     const inboundSpy = vi.spyOn(state, "addInboundMessage");
     const outboundSpy = vi.spyOn(state, "addOutboundMessage");
     const readSpy = vi.spyOn(state, "readMessage");
-    const transport = createQaChannelTransport(state);
-    const waitForCondition: QaTransportAdapter["capabilities"]["waitForCondition"] = async <T>(
+    const waitForCondition: QaTransportCapabilities["waitForCondition"] = async <T>(
       check: () => T | Promise<T | null | undefined> | null | undefined,
     ): Promise<T> => {
       const value = await check();
@@ -130,11 +128,35 @@ describe("createQaScenarioRuntimeApi", () => {
       }
       return value;
     };
-    transport.capabilities.waitForCondition = waitForCondition;
     const sleep = vi.fn(async () => undefined);
     const env = {
       lab: { baseUrl: "http://127.0.0.1:1234" },
-      transport,
+      transport: {
+        state,
+        reset: async () => {
+          state.reset();
+        },
+        sendInbound: async (input: Parameters<typeof state.addInboundMessage>[0]) =>
+          state.addInboundMessage(input),
+        waitForNoOutbound: vi.fn(async () => undefined),
+        waitForOutbound: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+        capabilities: {
+          waitForCondition,
+          getNormalizedMessageState: state.getSnapshot.bind(state),
+          resetNormalizedMessageState: async () => {
+            state.reset();
+          },
+          sendInboundMessage: state.addInboundMessage.bind(state),
+          injectOutboundMessage: state.addOutboundMessage.bind(state),
+          waitForOutboundMessage: state.waitFor.bind(state),
+          readNormalizedMessage: state.readMessage.bind(state),
+          executeGenericAction: vi.fn(async () => undefined),
+          waitForReady: vi.fn(async () => undefined),
+          assertNoFailureReplies: vi.fn(),
+        },
+      },
     };
     const scenario = {
       id: "generic-flow",
@@ -169,28 +191,26 @@ describe("createQaScenarioRuntimeApi", () => {
     expect(api.markGatewayLogCursor).toBe(deps.markGatewayLogCursor);
     expect(api.assertNoGatewayLogSentinels).toBe(deps.assertNoGatewayLogSentinels);
     expect(api.readSessionTranscriptSummary).toBe(deps.readSessionTranscriptSummary);
-    expect(typeof api.runChannelBehaviorScenario).toBe("function");
-    expect(typeof api.runConversation).toBe("function");
     for (const toolName of browserAndWebRuntimeTools) {
       expect(api[toolName]).toBe(deps[toolName]);
     }
     expect(api.getTransportSnapshot()).toEqual(state.getSnapshot());
     expect(api.imageUnderstandingPngBase64).toBe("png-small");
 
-    const inbound = await api.injectInboundMessage({
+    const inbound = api.injectInboundMessage({
       accountId: "qa-channel",
       conversation: { id: "qa-operator", kind: "direct" },
       senderId: "qa-operator",
       text: "hello",
     });
-    const outbound = await api.injectOutboundMessage({
+    const outbound = api.injectOutboundMessage({
       accountId: "qa-channel",
       to: "dm:qa-operator",
       text: "hi",
     });
     expect(inbound.id.trim()).not.toBe("");
     expect(outbound.id.trim()).not.toBe("");
-    await api.readTransportMessage({ accountId: "qa-channel", messageId: outbound.id });
+    api.readTransportMessage({ accountId: "qa-channel", messageId: outbound.id });
     await api.reset();
     await api.resetBus();
     await api.resetTransport();
@@ -200,89 +220,5 @@ describe("createQaScenarioRuntimeApi", () => {
     expect(readSpy).toHaveBeenCalledTimes(1);
     expect(resetSpy).toHaveBeenCalledTimes(3);
     expect(sleep).toHaveBeenCalledTimes(3);
-  });
-
-  it("runs channel behavior scenarios with the bound transport adapter", async () => {
-    const state = createQaBusState();
-    const transport = createQaChannelTransport(state);
-    const waitForCondition: QaTransportAdapter["capabilities"]["waitForCondition"] = async <T>(
-      check: () => T | Promise<T | null | undefined> | null | undefined,
-    ): Promise<T> => {
-      const value = await check();
-      if (value === null || value === undefined) {
-        throw new Error("waitForCondition test check did not return a value");
-      }
-      return value;
-    };
-    transport.capabilities.waitForCondition = waitForCondition;
-    const waitForOutboundDefault = transport.waitForOutbound.bind(transport);
-    const waitForOutbound = vi.spyOn(transport, "waitForOutbound");
-    waitForOutbound.mockImplementation(async (input) => {
-      state.addOutboundMessage({
-        accountId: "qa-channel",
-        to: "dm:alice",
-        text: "QA-DM-BASELINE-OK",
-      });
-      return await waitForOutboundDefault(input);
-    });
-    const env = {
-      lab: { baseUrl: "http://127.0.0.1:1234" },
-      transport,
-    };
-    const scenario = {
-      id: "channel-flow",
-      title: "Channel Flow",
-      surface: "test",
-      objective: "test",
-      successCriteria: ["works"],
-      sourcePath: "qa/scenarios/channel-flow.yaml",
-      execution: {
-        kind: "flow" as const,
-        config: {},
-        flow: {
-          steps: [{ name: "noop", actions: [{ assert: "true" }] }],
-        },
-      },
-    };
-
-    const api = createQaScenarioRuntimeApi({
-      env,
-      scenario,
-      deps: createDeps(),
-      constants,
-    });
-
-    const result = await api.runConversation({
-      target: "dm:alice",
-      from: "alice",
-      turns: [
-        {
-          id: "dm-reply",
-          name: "gets reply",
-          send: {
-            text: "hello",
-          },
-          expect: {
-            reply: {
-              includes: ["QA-DM-BASELINE-OK"],
-            },
-          },
-        },
-      ],
-    });
-
-    expect(result.lastOutbound?.text).toBe("QA-DM-BASELINE-OK");
-    expect(result.lastReply?.text).toBe("QA-DM-BASELINE-OK");
-    expect(
-      state
-        .getSnapshot()
-        .messages.some(
-          (message) =>
-            message.direction === "inbound" &&
-            message.conversation.id === "alice" &&
-            message.text === "hello",
-        ),
-    ).toBe(true);
-    expect(waitForOutbound).toHaveBeenCalledTimes(1);
   });
 });

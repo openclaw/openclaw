@@ -35,7 +35,6 @@ const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as
 
 const qaFlowImportLoaders: Record<string, QaFlowImportLoader> = {
   "./auth-profile.fixture.js": () => import("./auth-profile.fixture.js"),
-  "./channel-behavior-scenario.js": () => import("./channel-behavior-scenario.js"),
   "./codex-plugin.fixture.js": () => import("./codex-plugin.fixture.js"),
   "./tool-search-gateway.fixture.js": () => import("./tool-search-gateway.fixture.js"),
 };
@@ -162,21 +161,19 @@ async function runFlowAction(action: unknown, api: QaFlowApi, vars: QaFlowVars) 
     }
     return;
   }
-  if ("conversation" in action) {
-    const callable = resolveCallable("runConversation", api, vars);
-    const result = await callable(await resolveValue(action.conversation, api, vars));
-    if (typeof action.saveAs === "string" && action.saveAs.trim()) {
-      vars[action.saveAs.trim()] = result;
+  for (const name of ["sendInbound", "waitForOutbound", "waitForNoOutbound"] as const) {
+    if (name in action) {
+      const callable = resolveCallable(`transport.${name}`, api, vars);
+      const result = await callable(await resolveValue(action[name], api, vars));
+      if (typeof action.saveAs === "string" && action.saveAs.trim()) {
+        vars[action.saveAs.trim()] = result;
+      }
+      return;
     }
-    return;
   }
-  if (action.reset === "bus" || action.reset === "transport") {
-    const callable = resolveCallable(
-      action.reset === "bus" ? "resetBus" : "resetTransport",
-      api,
-      vars,
-    );
-    await callable();
+  if (action.resetTransport === true) {
+    const reset = resolveCallable("transport.reset", api, vars);
+    await reset();
     return;
   }
   if (typeof action.set === "string") {

@@ -1,25 +1,20 @@
 // Qa Lab API module exposes the plugin public contract.
 import type * as NodeFs from "node:fs/promises";
 import type * as NodePath from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  defineChannelBehaviorScenario,
-  defineChannelBehaviorScenarioFromConversation,
-  runChannelBehaviorScenario as runDefinedChannelBehaviorScenario,
-  type ChannelBehaviorConversationInput,
-  type ChannelBehaviorScenarioDefinitionInput,
-  type ChannelBehaviorScenarioRunResult,
-} from "./channel-behavior-scenario.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
 type QaScenarioRuntimeFunction = (...args: never[]) => unknown;
 
+type QaScenarioTransport = Pick<
+  QaTransportAdapter,
+  "capabilities" | "reset" | "sendInbound" | "state" | "waitForNoOutbound" | "waitForOutbound"
+>;
+
 export type QaScenarioRuntimeEnv<
   TLab = unknown,
-  TTransport extends QaTransportAdapter = QaTransportAdapter,
+  TTransport extends QaScenarioTransport = QaScenarioTransport,
 > = {
-  cfg?: OpenClawConfig;
   lab: TLab;
   transport: TTransport;
 };
@@ -114,6 +109,7 @@ type QaScenarioRuntimeApi<
 > = {
   env: TEnv;
   lab: TEnv["lab"];
+  transport: TEnv["transport"];
   state: TEnv["transport"]["state"];
   scenario: QaSeedScenarioWithSource;
   config: Record<string, unknown>;
@@ -204,12 +200,6 @@ type QaScenarioRuntimeApi<
   readTransportMessage: TEnv["transport"]["capabilities"]["readNormalizedMessage"];
   resetBus: () => Promise<void>;
   reset: () => Promise<void>;
-  runChannelBehaviorScenario: (
-    input: ChannelBehaviorScenarioDefinitionInput,
-  ) => Promise<ChannelBehaviorScenarioRunResult>;
-  runConversation: (
-    input: ChannelBehaviorConversationInput,
-  ) => Promise<ChannelBehaviorScenarioRunResult>;
 };
 
 export function createQaScenarioRuntimeApi<
@@ -225,23 +215,11 @@ export function createQaScenarioRuntimeApi<
     await params.env.transport.capabilities.resetNormalizedMessageState();
     await params.deps.sleep(100);
   };
-  const runChannelBehaviorScenario = async (input: ChannelBehaviorScenarioDefinitionInput) => {
-    return await runDefinedChannelBehaviorScenario(
-      defineChannelBehaviorScenario(input),
-      params.env.transport,
-      { cfg: params.env.cfg },
-    );
-  };
-  const runConversation = async (input: ChannelBehaviorConversationInput) =>
-    await runChannelBehaviorScenario(
-      defineChannelBehaviorScenarioFromConversation(input, {
-        scenarioId: params.scenario.id,
-      }),
-    );
 
   return {
     env: params.env,
     lab: params.env.lab,
+    transport: params.env.transport,
     state: params.env.transport.state,
     scenario: params.scenario,
     config: params.scenario.execution.config ?? {},
@@ -332,7 +310,5 @@ export function createQaScenarioRuntimeApi<
     readTransportMessage: params.env.transport.capabilities.readNormalizedMessage,
     resetBus: resetTransportState,
     reset: resetTransportState,
-    runChannelBehaviorScenario,
-    runConversation,
   };
 }

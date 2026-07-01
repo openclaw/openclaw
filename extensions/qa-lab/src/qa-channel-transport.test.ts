@@ -119,6 +119,27 @@ describe("qa channel transport", () => {
     expect(message.text).toBe("hello from the operator");
   });
 
+  it("implements the portable scenario transport actions", async () => {
+    const transport = createQaChannelTransport(createQaBusState());
+    const conversation = { id: "alice", kind: "direct" as const };
+
+    await transport.sendInbound({
+      conversation,
+      senderId: "alice",
+      text: "hello",
+    });
+    await transport.state.addOutboundMessage({
+      to: "dm:alice",
+      text: "QA-PORTABLE-OK",
+    });
+
+    await expect(
+      transport.waitForOutbound({ conversation, textIncludes: "QA-PORTABLE-OK" }),
+    ).resolves.toMatchObject({ text: "QA-PORTABLE-OK" });
+    await transport.reset();
+    expect(transport.state.getSnapshot().messages).toEqual([]);
+  });
+
   it("inherits the shared failure-aware wait helper", async () => {
     const transport = createQaChannelTransport(createQaBusState());
     let injected = false;

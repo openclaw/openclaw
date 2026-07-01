@@ -2,22 +2,17 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { extractToolPayload } from "openclaw/plugin-sdk/tool-payload";
 import type { QaProviderMode } from "./model-selection.js";
+import { extractQaFailureReplyText } from "./reply-failure.js";
 import type {
-  QaBusAttachment,
-  QaBusConversation,
   QaBusInboundMessageInput,
   QaBusMessage,
   QaBusOutboundMessageInput,
   QaBusReadMessageInput,
   QaBusSearchMessagesInput,
   QaBusStateSnapshot,
-  QaBusThread,
-  QaBusToolCall,
   QaBusWaitForInput,
-} from "./protocol.js";
-import { extractQaFailureReplyText } from "./reply-failure.js";
+} from "./runtime-api.js";
 
 export type QaTransportGatewayClient = {
   call: (
@@ -54,73 +49,25 @@ export type QaTransportState = {
   waitFor: (input: QaBusWaitForInput) => Promise<unknown>;
 };
 
-export type QaTransportChannel = {
-  id: string;
-  kind: QaBusConversation["kind"];
-  title?: string;
-};
-
-export type QaTransportRestartHooks = {
-  afterStep?: boolean;
-  beforeStep?: boolean;
-  reason?: string;
-};
-
-export type QaTransportInbound = {
-  attachments?: QaBusAttachment[];
-  senderId?: string;
-  senderName?: string;
-  text: string;
-  threadId?: string;
-  threadTitle?: string;
-  toolCalls?: QaBusToolCall[];
-};
-
-export type QaTransportReplyExpectation = {
-  kind: "reply";
-  conversationId?: string;
-  senderId?: string;
-  textIncludes?: readonly string[];
-  threadId?: string;
-  timeoutMs?: number;
-};
-
-export type QaTransportCreateThreadInput = {
-  cfg?: OpenClawConfig;
-  channel?: QaTransportChannel;
-  title?: string;
-};
-
-export type QaTransportSendInboundInput = {
-  channel?: QaTransportChannel;
-  message: QaTransportInbound;
-};
-
-export type QaTransportWaitForOutboundInput = {
-  channel?: QaTransportChannel;
-  expectation: QaTransportReplyExpectation;
-  sinceIndex?: number;
-};
-
-export type QaTransportWaitForNoOutboundInput = {
-  quietMs?: number;
-  sinceIndex?: number;
-};
-
-export type QaTransportSendReplyInput = {
-  channel?: QaTransportChannel;
-  replyToMessageId?: string;
-  text: string;
-  threadId?: string;
-};
-
-export type QaTransportProviderMetadata = Record<string, unknown>;
-
 type QaTransportFailureCursorSpace = "all" | "outbound";
 
 type QaTransportFailureAssertionOptions = {
   sinceIndex?: number;
   cursorSpace?: QaTransportFailureCursorSpace;
+};
+
+export type QaTransportOutboundMatch = {
+  conversation?: QaBusInboundMessageInput["conversation"];
+  senderId?: string;
+  sinceIndex?: number;
+  textIncludes?: string;
+  threadId?: string;
+  timeoutMs?: number;
+};
+
+export type QaTransportWaitForNoOutboundInput = {
+  quietMs?: number;
+  sinceIndex?: number;
 };
 
 export type QaTransportCapabilities = {
@@ -232,9 +179,11 @@ export type QaTransportAdapter = {
   supportedActions: readonly QaTransportActionName[];
   state: QaTransportState;
   capabilities: QaTransportCapabilities;
-  createThread: (input: QaTransportCreateThreadInput) => Promise<QaBusThread>;
+  reset: () => Promise<void>;
+  sendInbound: (input: QaBusInboundMessageInput) => Promise<QaBusMessage>;
+  waitForNoOutbound: (input?: QaTransportWaitForNoOutboundInput) => Promise<void>;
+  waitForOutbound: (input: QaTransportOutboundMatch) => Promise<QaBusMessage>;
   createGatewayConfig: (params: { baseUrl: string }) => QaTransportGatewayConfig;
-  getOutboundCursor: () => number;
   waitReady: (params: {
     gateway: QaTransportGatewayClient;
     timeoutMs?: number;
@@ -253,12 +202,6 @@ export type QaTransportAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => Promise<unknown>;
-  observeProviderMetadata: () => Promise<QaTransportProviderMetadata | null>;
-  restartGateway: (hooks?: QaTransportRestartHooks) => Promise<void>;
-  sendInbound: (input: QaTransportSendInboundInput) => Promise<QaBusMessage>;
-  sendReplyTo: (input: QaTransportSendReplyInput) => Promise<QaBusMessage>;
-  waitForNoOutbound: (input: QaTransportWaitForNoOutboundInput) => Promise<void>;
-  waitForOutbound: (input: QaTransportWaitForOutboundInput) => Promise<QaBusMessage>;
   createReportNotes: (params: QaTransportReportParams) => string[];
   cleanup?: () => Promise<void>;
 };
@@ -324,164 +267,56 @@ export abstract class QaStateBackedTransportAdapter implements QaTransportAdapte
   }) => Promise<unknown>;
   abstract createReportNotes: (params: QaTransportReportParams) => string[];
 
-  async createThread(input: QaTransportCreateThreadInput): Promise<QaBusThread> {
-    if (!this.supportedActions.includes("thread-create")) {
-      throw new Error(`${this.label} transport does not support thread-create`);
-    }
-    if (!input.cfg) {
-      throw new Error(`${this.label} transport cannot create threads without gateway config`);
-    }
-    const channel = input.channel ?? { id: "qa-room", kind: "channel" as const };
-    const result = await this.handleAction({
-      action: "thread-create",
-      args: {
-        channelId: channel.id,
-        ...(input.title ? { title: input.title } : {}),
-      },
-      cfg: input.cfg,
-      accountId: this.accountId,
-    });
-    const payload = extractToolPayload(result as Parameters<typeof extractToolPayload>[0]);
-    return readQaTransportThreadPayload(payload);
+  async reset() {
+    await this.state.reset();
   }
 
-  getOutboundCursor() {
-    return this.state.getSnapshot().messages.filter((message) => message.direction === "outbound")
-      .length;
+  async sendInbound(input: QaBusInboundMessageInput) {
+    return await this.state.addInboundMessage(input);
   }
 
-  async observeProviderMetadata(): Promise<QaTransportProviderMetadata | null> {
-    return null;
-  }
-
-  async restartGateway(_hooks?: QaTransportRestartHooks): Promise<void> {
-    throw new Error(`${this.label} transport does not support scenario gateway restart`);
-  }
-
-  async sendInbound(input: QaTransportSendInboundInput): Promise<QaBusMessage> {
-    const channel = input.channel ?? { id: "qa-room", kind: "channel" as const };
-    return await this.state.addInboundMessage(
-      buildQaTransportInboundMessageInput(channel, input.message),
-    );
-  }
-
-  async sendReplyTo(_input: QaTransportSendReplyInput): Promise<QaBusMessage> {
-    throw new Error(`${this.label} transport does not support scenario reply targeting`);
-  }
-
-  async waitForNoOutbound(input: QaTransportWaitForNoOutboundInput): Promise<void> {
+  async waitForNoOutbound(input: QaTransportWaitForNoOutboundInput = {}) {
     const quietMs = resolveTimerTimeoutMs(input.quietMs, 1_200, 0);
     await sleep(quietMs);
     assertNoFailureReplies(this.state, {
       sinceIndex: input.sinceIndex,
       cursorSpace: "outbound",
     });
-    const observedMessages = this.state
-      .getSnapshot()
-      .messages.filter((message) => message.direction === "outbound")
-      .slice(input.sinceIndex ?? 0);
-    if (observedMessages.length > 0) {
-      const summary = observedMessages.map((message) => `${message.id}:${message.text}`).join("\n");
+    const observed = this.outboundSince(input.sinceIndex);
+    if (observed.length > 0) {
+      const summary = observed.map((message) => `${message.id}:${message.text}`).join("\n");
       throw new Error(`expected no outbound messages for ${quietMs}ms, saw:\n${summary}`);
     }
   }
 
-  async waitForOutbound(input: QaTransportWaitForOutboundInput): Promise<QaBusMessage> {
-    const channel = input.channel ?? { id: "qa-room", kind: "channel" as const };
-    const timeoutMs = input.expectation.timeoutMs ?? 15_000;
-    return await waitForQaTransportCondition(
-      () => {
-        assertNoFailureReplies(this.state, {
-          sinceIndex: input.sinceIndex,
-          cursorSpace: "outbound",
-        });
-        return this.state
-          .getSnapshot()
-          .messages.filter((message) => message.direction === "outbound")
-          .slice(input.sinceIndex ?? 0)
-          .find((message) =>
-            matchesQaTransportOutbound(message, {
-              channel,
-              expectation: input.expectation,
-            }),
-          );
-      },
-      timeoutMs,
-      100,
-    );
+  async waitForOutbound(input: QaTransportOutboundMatch) {
+    return await waitForQaTransportCondition(() => {
+      assertNoFailureReplies(this.state, {
+        sinceIndex: input.sinceIndex,
+        cursorSpace: "outbound",
+      });
+      return this.outboundSince(input.sinceIndex).find((message) => {
+        if (input.conversation && message.conversation.id !== input.conversation.id) {
+          return false;
+        }
+        if (input.conversation && message.conversation.kind !== input.conversation.kind) {
+          return false;
+        }
+        if (input.senderId && message.senderId !== input.senderId) {
+          return false;
+        }
+        if (input.threadId && message.threadId !== input.threadId) {
+          return false;
+        }
+        return !input.textIncludes || message.text.includes(input.textIncludes);
+      });
+    }, input.timeoutMs);
   }
-}
 
-export function qaTransportChannelConversation(channel: QaTransportChannel): QaBusConversation {
-  return {
-    id: channel.id,
-    kind: channel.kind,
-    ...(channel.title ? { title: channel.title } : {}),
-  };
-}
-
-export function buildQaTransportInboundMessageInput(
-  channel: QaTransportChannel,
-  message: QaTransportInbound,
-): QaBusInboundMessageInput {
-  return {
-    ...message,
-    conversation: qaTransportChannelConversation(channel),
-    senderId: message.senderId?.trim() || "qa-operator",
-  };
-}
-
-export function matchesQaTransportOutbound(
-  message: QaBusMessage,
-  params: {
-    channel: QaTransportChannel;
-    expectation: QaTransportReplyExpectation;
-  },
-): boolean {
-  const conversationId = params.expectation.conversationId ?? params.channel.id;
-  if (message.direction !== "outbound") {
-    return false;
+  private outboundSince(sinceIndex = 0) {
+    return this.state
+      .getSnapshot()
+      .messages.filter((message) => message.direction === "outbound")
+      .slice(sinceIndex);
   }
-  if (message.conversation.id !== conversationId) {
-    return false;
-  }
-  if (message.conversation.kind !== params.channel.kind) {
-    return false;
-  }
-  if (params.expectation.senderId && message.senderId !== params.expectation.senderId) {
-    return false;
-  }
-  if (params.expectation.threadId && message.threadId !== params.expectation.threadId) {
-    return false;
-  }
-  return (params.expectation.textIncludes ?? []).every((needle) => message.text.includes(needle));
-}
-
-function readQaTransportThreadPayload(payload: unknown): QaBusThread {
-  if (!isRecord(payload) || !isRecord(payload.thread)) {
-    throw new Error("qa transport thread-create action did not return a thread");
-  }
-  const thread = payload.thread;
-  if (
-    typeof thread.id !== "string" ||
-    typeof thread.accountId !== "string" ||
-    typeof thread.conversationId !== "string" ||
-    typeof thread.title !== "string" ||
-    typeof thread.createdAt !== "number" ||
-    typeof thread.createdBy !== "string"
-  ) {
-    throw new Error("qa transport thread-create action returned an invalid thread");
-  }
-  return {
-    id: thread.id,
-    accountId: thread.accountId,
-    conversationId: thread.conversationId,
-    title: thread.title,
-    createdAt: thread.createdAt,
-    createdBy: thread.createdBy,
-  };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

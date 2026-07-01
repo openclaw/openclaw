@@ -6,47 +6,6 @@ export { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 export { defaultQaRuntimeModelForMode } from "./model-selection.runtime.js";
 export {
-  channelBehaviorConversation,
-  channelBehaviorInboundMessage,
-  channelBehaviorTarget,
-  collectChannelBehaviorScenarioRequirements,
-  defineChannelBehaviorScenario,
-  defineChannelBehaviorScenarioFromConversation,
-  matchesChannelBehaviorOutbound,
-  runChannelBehaviorScenario,
-} from "./channel-behavior-scenario.js";
-export type {
-  ChannelBehaviorConversationInput,
-  ChannelBehaviorScenarioChannel,
-  ChannelBehaviorScenarioDefinition,
-  ChannelBehaviorScenarioDefinitionInput,
-  ChannelBehaviorScenarioExpectation,
-  ChannelBehaviorScenarioInbound,
-  ChannelBehaviorScenarioNoReplyExpectation,
-  ChannelBehaviorScenarioReplyExpectation,
-  ChannelBehaviorScenarioReplyRequirement,
-  ChannelBehaviorScenarioRunResult,
-  ChannelBehaviorScenarioRequirements,
-  ChannelBehaviorScenarioRestartHooks,
-  ChannelBehaviorScenarioStep,
-  ChannelBehaviorScenarioStepInput,
-  ChannelBehaviorScenarioStepResult,
-  ChannelBehaviorScenarioThreadRequirement,
-} from "./channel-behavior-scenario.js";
-export type {
-  QaTransportAdapter,
-  QaTransportChannel,
-  QaTransportCreateThreadInput,
-  QaTransportInbound,
-  QaTransportProviderMetadata,
-  QaTransportReplyExpectation,
-  QaTransportRestartHooks,
-  QaTransportSendInboundInput,
-  QaTransportSendReplyInput,
-  QaTransportWaitForNoOutboundInput,
-  QaTransportWaitForOutboundInput,
-} from "./qa-transport.js";
-export {
   buildQaTarget,
   createQaBusThread,
   deleteQaBusMessage,

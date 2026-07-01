@@ -1,13 +1,6 @@
 // Qa Lab tests cover scenario flow runner plugin behavior.
 import { describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
-import {
-  defineChannelBehaviorScenario,
-  defineChannelBehaviorScenarioFromConversation,
-  runChannelBehaviorScenario as runDefinedChannelBehaviorScenario,
-} from "./channel-behavior-scenario.js";
-import { createQaChannelTransport } from "./qa-channel-transport.js";
-import type { QaTransportState } from "./qa-transport.js";
 import { readQaScenarioById } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 
@@ -28,8 +21,8 @@ async function runLoadedScenarioFlow(
   params: {
     onWaitForOutboundMessage?: (params: {
       waitCount: number;
-      state: QaTransportState;
-    }) => Promise<void> | void;
+      state: ReturnType<typeof createQaBusState>;
+    }) => void;
   } = {},
 ) {
   const scenario = readQaScenarioById(scenarioId);
@@ -40,33 +33,39 @@ async function runLoadedScenarioFlow(
 
   const state = createQaBusState();
   let waitCount = 0;
-  const createTransport = () => {
-    const transport = createQaChannelTransport(state);
-    transport.waitForNoOutbound = async () => undefined;
-    transport.waitForOutbound = async (input) => {
+  const transport = {
+    state,
+    reset: async () => {
+      state.reset();
+    },
+    sendInbound: async (input: Parameters<typeof state.addInboundMessage>[0]) =>
+      state.addInboundMessage(input),
+    waitForNoOutbound: async () => undefined,
+    waitForOutbound: async (input: {
+      conversation?: { id: string; kind: string };
+      textIncludes?: string;
+      timeoutMs?: number;
+    }) => {
       waitCount += 1;
-      await params.onWaitForOutboundMessage?.({ waitCount, state });
+      params.onWaitForOutboundMessage?.({ waitCount, state });
       const match = state
         .getSnapshot()
-        .messages.filter((message) => message.direction === "outbound")
-        .slice(input.sinceIndex ?? 0)
-        .find(
-          (message) =>
-            message.conversation.id === (input.expectation.conversationId ?? input.channel?.id) &&
-            (!input.channel || message.conversation.kind === input.channel.kind) &&
-            (input.expectation.textIncludes ?? []).every((needle) => message.text.includes(needle)),
+        .messages.find(
+          (candidate) =>
+            candidate.direction === "outbound" &&
+            (!input.conversation || candidate.conversation.id === input.conversation.id) &&
+            (!input.conversation || candidate.conversation.kind === input.conversation.kind) &&
+            (!input.textIncludes || candidate.text.includes(input.textIncludes)),
         );
       if (match) {
         return match;
       }
-      throw new Error(
-        `timed out after ${input.expectation.timeoutMs}ms waiting for outbound marker`,
-      );
-    };
-    return transport;
+      throw new Error(`timed out after ${input.timeoutMs}ms waiting for outbound marker`);
+    },
   };
   const api = {
     env: {},
+    transport,
     state,
     scenario,
     config: scenario.execution.config ?? {},
@@ -82,10 +81,6 @@ async function runLoadedScenarioFlow(
     resetBus: async () => {
       state.reset();
     },
-    resetTransport: async () => {
-      state.reset();
-    },
-    injectInboundMessage: state.addInboundMessage.bind(state),
     runAgentPrompt: async () => undefined,
     formatTransportTranscript: formatTestTranscript,
     waitForOutboundMessage: async (
@@ -95,7 +90,7 @@ async function runLoadedScenarioFlow(
       options?: { sinceIndex?: number },
     ) => {
       waitCount += 1;
-      await params.onWaitForOutboundMessage?.({ waitCount, state: stateLocal });
+      params.onWaitForOutboundMessage?.({ waitCount, state: stateLocal });
       const match = stateLocal
         .getSnapshot()
         .messages.slice(options?.sinceIndex ?? 0)
@@ -105,24 +100,6 @@ async function runLoadedScenarioFlow(
       }
       throw new Error(`timed out after ${timeoutMs}ms waiting for outbound marker`);
     },
-    runChannelBehaviorScenario: async (
-      input: Parameters<typeof defineChannelBehaviorScenario>[0],
-    ) =>
-      await runDefinedChannelBehaviorScenario(
-        defineChannelBehaviorScenario(input),
-        createTransport(),
-      ),
-    runConversation: async (
-      input: Parameters<typeof defineChannelBehaviorScenarioFromConversation>[0],
-    ) =>
-      await runDefinedChannelBehaviorScenario(
-        defineChannelBehaviorScenario(
-          defineChannelBehaviorScenarioFromConversation(input, {
-            scenarioId: scenario.id,
-          }),
-        ),
-        createTransport(),
-      ),
     runScenario: async (_name: string, steps: QaFlowStep[]) => {
       const stepResults = [];
       for (const step of steps) {
@@ -271,22 +248,6 @@ describe("scenario-flow-runner", () => {
                   expr: 'typeof plugin.createCodexPluginInstallGate === "function"',
                 },
               },
-              {
-                set: "channelScenarios",
-                value: {
-                  expr: 'await qaImport("./channel-behavior-scenario.js")',
-                },
-              },
-              {
-                assert: {
-                  expr: 'typeof channelScenarios.defineChannelBehaviorScenario === "function"',
-                },
-              },
-              {
-                assert: {
-                  expr: 'typeof channelScenarios.runChannelBehaviorScenario === "function"',
-                },
-              },
             ],
             detailsExpr: '"loaded"',
           },
@@ -398,8 +359,8 @@ describe("scenario-flow-runner", () => {
   ])("rejects unmarked outbound replies for $scenarioId", async ({ scenarioId, to, text }) => {
     await expect(
       runLoadedScenarioFlow(scenarioId, {
-        onWaitForOutboundMessage: async ({ state }) => {
-          await state.addOutboundMessage({
+        onWaitForOutboundMessage: ({ state }) => {
+          state.addOutboundMessage({
             accountId: "qa-channel",
             to,
             text,
@@ -412,16 +373,16 @@ describe("scenario-flow-runner", () => {
   it("rejects reconnect follow-up replies that replay the first marker", async () => {
     await expect(
       runLoadedScenarioFlow("qa-channel-reconnect-dedupe", {
-        onWaitForOutboundMessage: async ({ waitCount, state }) => {
+        onWaitForOutboundMessage: ({ waitCount, state }) => {
           if (waitCount === 1) {
-            await state.addOutboundMessage({
+            state.addOutboundMessage({
               accountId: "qa-channel",
               to: "channel:qa-room",
               text: "RECONNECT-FIRST-OK",
             });
             return;
           }
-          await state.addOutboundMessage({
+          state.addOutboundMessage({
             accountId: "qa-channel",
             to: "channel:qa-room",
             text: "RECONNECT-FIRST-OK",
@@ -434,21 +395,21 @@ describe("scenario-flow-runner", () => {
   it("rejects reconnect follow-up turns with extra unmarked outbound replies", async () => {
     await expect(
       runLoadedScenarioFlow("qa-channel-reconnect-dedupe", {
-        onWaitForOutboundMessage: async ({ waitCount, state }) => {
+        onWaitForOutboundMessage: ({ waitCount, state }) => {
           if (waitCount === 1) {
-            await state.addOutboundMessage({
+            state.addOutboundMessage({
               accountId: "qa-channel",
               to: "channel:qa-room",
               text: "RECONNECT-FIRST-OK",
             });
             return;
           }
-          await state.addOutboundMessage({
+          state.addOutboundMessage({
             accountId: "qa-channel",
             to: "channel:qa-room",
             text: "RECONNECT-SECOND-OK",
           });
-          await state.addOutboundMessage({
+          state.addOutboundMessage({
             accountId: "qa-channel",
             to: "channel:qa-room",
             text: "unmarked duplicate delivery",

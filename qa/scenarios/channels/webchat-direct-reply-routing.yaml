@@ -56,17 +56,16 @@ flow:
         - set: requestCountBefore
           value:
             expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
-        - call: state.addInboundMessage
-          args:
-            - conversation:
-                id:
-                  ref: conversationId
-                kind: direct
-              senderId:
+        - sendInbound:
+            conversation:
+              id:
                 ref: conversationId
-              senderName: WebChat QA
-              text:
-                expr: "`Reply exactly \\`${config.expectedMarker}\\` in this current chat. Do not call the message tool.`"
+              kind: direct
+            senderId:
+              ref: conversationId
+            senderName: WebChat QA
+            text:
+              expr: "`Reply exactly \\`${config.expectedMarker}\\` in this current chat. Do not call the message tool.`"
         - try:
             actions:
               - call: waitForCondition

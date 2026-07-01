@@ -150,18 +150,26 @@ const qaFlowCallActionSchema = z.object({
   saveAs: z.string().trim().min(1).optional(),
 });
 
-const qaFlowConversationActionSchema = z.object({
-  conversation: z.unknown(),
-  saveAs: z.string().trim().min(1).optional(),
-});
+const qaFlowTransportActionSchema = z.union([
+  z.object({
+    resetTransport: z.literal(true),
+  }),
+  z.object({
+    sendInbound: z.unknown(),
+    saveAs: z.string().trim().min(1).optional(),
+  }),
+  z.object({
+    waitForOutbound: z.unknown(),
+    saveAs: z.string().trim().min(1).optional(),
+  }),
+  z.object({
+    waitForNoOutbound: z.unknown(),
+  }),
+]);
 
 const qaFlowSetActionSchema = z.object({
   set: z.string().trim().min(1),
   value: z.unknown(),
-});
-
-const qaFlowResetActionSchema = z.object({
-  reset: z.enum(["bus", "transport"]),
 });
 
 const qaFlowAssertActionSchema = z.object({
@@ -194,8 +202,7 @@ qaFlowIfShapeBase[qaFlowThenKey] = z.array(z.unknown()).min(1);
 const qaFlowActionSchema: z.ZodType = z.lazy(() =>
   z.union([
     qaFlowCallActionSchema,
-    qaFlowConversationActionSchema,
-    qaFlowResetActionSchema,
+    qaFlowTransportActionSchema,
     qaFlowSetActionSchema,
     qaFlowAssertActionSchema,
     qaFlowThrowActionSchema,

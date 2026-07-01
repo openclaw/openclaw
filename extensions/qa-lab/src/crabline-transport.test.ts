@@ -107,7 +107,7 @@ describe("crabline transport", () => {
       });
 
       try {
-        await transport.state.addInboundMessage({
+        await transport.sendInbound({
           conversation: {
             id: "D12345678",
             kind: "direct",
@@ -138,6 +138,17 @@ describe("crabline transport", () => {
         });
         await release();
         expect(response.ok).toBe(true);
+
+        await expect(
+          transport.waitForOutbound({
+            conversation: { id: "D12345678", kind: "direct" },
+            textIncludes: "assistant via fake slack",
+            timeoutMs: 1_000,
+          }),
+        ).resolves.toMatchObject({
+          conversation: { id: "D12345678", kind: "direct" },
+          text: "assistant via fake slack",
+        });
 
         await expect(
           transport.state.waitFor({
