@@ -31,17 +31,8 @@ struct CommandPanel<Content: View>: View {
 }
 
 struct CommandControlBackground: View {
-    @Environment(\.colorScheme) private var colorScheme
-
     var body: some View {
-        Color(uiColor: self.colorScheme == .dark ? .systemBackground : .systemGroupedBackground)
-            .overlay(alignment: .top) {
-                if self.colorScheme == .light {
-                    Color.white.opacity(0.20)
-                        .frame(height: 140)
-                }
-            }
-            .ignoresSafeArea()
+        OpenClawProBackground()
     }
 }
 

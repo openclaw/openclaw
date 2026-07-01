@@ -84,7 +84,7 @@ struct AgentProTab: View {
     }
 
     enum AgentLayout {
-        static let cardRadius: CGFloat = 12
+        static let cardRadius: CGFloat = OpenClawProMetric.cardRadius
         static let filterHeight: CGFloat = 34
         static let rowMinHeight: CGFloat = 104
         static let metricTileHeight: CGFloat = 94

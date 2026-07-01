@@ -16,7 +16,7 @@ enum SettingsRoute: Hashable {
 }
 
 enum SettingsLayout {
-    static let cardRadius: CGFloat = 12
+    static let cardRadius: CGFloat = OpenClawProMetric.cardRadius
     static let rowHeight: CGFloat = 58
 }
 

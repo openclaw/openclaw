@@ -116,7 +116,7 @@ struct TalkProTab: View {
             OpenClawProMark(size: 31, shadowRadius: 9)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Talk")
-                    .font(.system(size: 27, weight: .bold, design: .rounded))
+                    .font(.system(size: 30, weight: .bold))
                 Text(self.headerSubtitle)
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
@@ -172,16 +172,11 @@ struct TalkProTab: View {
                 Button(action: self.handlePrimaryAction) {
                     Label(self.state.primaryButtonTitle, systemImage: self.state.primaryButtonIcon)
                         .font(.subheadline.weight(.bold))
-                        .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .frame(height: 50)
-                        .background {
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .fill(self.state.primaryButtonFill)
-                                .shadow(color: self.state.primaryButtonFill.opacity(0.22), radius: 18, y: 8)
-                        }
                 }
-                .buttonStyle(.plain)
+                .buttonBorderShape(.capsule)
+                .openClawGlassButton(prominent: true, tint: self.state.primaryButtonFill)
                 .disabled(self.state.primaryAction == .waiting)
             }
         }

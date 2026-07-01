@@ -1,8 +1,6 @@
 import SwiftUI
 
 struct VoiceWakeToast: View {
-    @Environment(\.colorScheme) private var colorScheme
-
     var command: String
 
     var body: some View {
@@ -19,10 +17,7 @@ struct VoiceWakeToast: View {
         }
         .padding(.vertical, 10)
         .padding(.horizontal, 12)
-        .proGlassSurface(
-            fill: self.colorScheme == .dark ? Color.white.opacity(0.055) : Color.white.opacity(0.72),
-            stroke: self.colorScheme == .dark ? Color.white.opacity(0.12) : Color.black.opacity(0.08),
-            radius: 14)
+        .openClawGlassSurface()
         .accessibilityLabel("Voice Wake triggered")
         .accessibilityValue("Command: \(self.command)")
     }

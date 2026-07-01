@@ -16,22 +16,24 @@ extension AgentProTab {
                     OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
                 }
             } accessory: {
-                HStack(spacing: 10) {
-                    self.gatewayPillButton
-                    self.headerIconButton(
-                        systemName: "magnifyingglass",
-                        label: "Search agents",
-                        action: {
-                            withAnimation(.snappy(duration: 0.18)) {
-                                self.agentSearchPresented.toggle()
-                            }
-                        })
-                    self.headerIconButton(
-                        systemName: "arrow.clockwise",
-                        label: self.overviewLoading ? "Refreshing agents" : "Refresh agents",
-                        action: {
-                            self.overviewRefreshNonce += 1
-                        })
+                OpenClawGlassControlGroup {
+                    HStack(spacing: 10) {
+                        self.gatewayPillButton
+                        self.headerIconButton(
+                            systemName: "magnifyingglass",
+                            label: "Search agents",
+                            action: {
+                                withAnimation(.snappy(duration: 0.18)) {
+                                    self.agentSearchPresented.toggle()
+                                }
+                            })
+                        self.headerIconButton(
+                            systemName: "arrow.clockwise",
+                            label: self.overviewLoading ? "Refreshing agents" : "Refresh agents",
+                            action: {
+                                self.overviewRefreshNonce += 1
+                            })
+                    }
                 }
                 .padding(.top, 2)
             }
@@ -41,15 +43,8 @@ extension AgentProTab {
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .font(.subheadline)
-                    .padding(.horizontal, 12)
+                    .textFieldStyle(.roundedBorder)
                     .frame(height: 38)
-                    .background {
-                        Capsule()
-                            .fill(self.searchFieldFill)
-                            .overlay {
-                                Capsule().strokeBorder(self.searchFieldStroke, lineWidth: 1)
-                            }
-                    }
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
@@ -63,7 +58,8 @@ extension AgentProTab {
             Button(action: openSettings) {
                 OpenClawGatewayCompactPill()
             }
-            .buttonStyle(.plain)
+            .buttonBorderShape(.capsule)
+            .openClawGlassButton()
             .accessibilityHint("Opens Settings / Gateway")
         } else {
             OpenClawGatewayCompactPill()
@@ -72,41 +68,35 @@ extension AgentProTab {
 
     var agentFilters: some View {
         ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(AgentRosterFilter.allCases) { filter in
-                    Button {
-                        withAnimation(.snappy(duration: 0.18)) {
-                            self.agentRosterFilter = filter
+            OpenClawGlassControlGroup {
+                HStack(spacing: 8) {
+                    ForEach(AgentRosterFilter.allCases) { filter in
+                        Button {
+                            withAnimation(.snappy(duration: 0.18)) {
+                                self.agentRosterFilter = filter
+                            }
+                        } label: {
+                            Text(filter.title)
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 6)
+                                .frame(height: AgentLayout.filterHeight)
                         }
-                    } label: {
-                        Text(filter.title)
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(self.agentRosterFilter == filter ? .primary : .secondary)
-                            .padding(.horizontal, 15)
-                            .frame(height: AgentLayout.filterHeight)
-                            .background {
-                                Capsule()
-                                    .fill(self.agentRosterFilter == filter
-                                        ? Color.primary.opacity(0.13)
-                                        : Color.primary.opacity(0.055))
-                            }
-                            .overlay {
-                                Capsule()
-                                    .strokeBorder(Color.primary.opacity(self.agentRosterFilter == filter ? 0.22 : 0.06))
-                            }
+                        .buttonBorderShape(.capsule)
+                        .openClawGlassButton(
+                            prominent: self.agentRosterFilter == filter,
+                            tint: self.agentRosterFilter == filter ? OpenClawBrand.accent : nil)
                     }
-                    .buttonStyle(.plain)
-                }
 
-                if self.agentFiltersActive {
-                    self.headerIconButton(
-                        systemName: "xmark",
-                        label: "Clear filters",
-                        action: {
-                            self.agentRosterFilter = .all
-                            self.agentSearchText = ""
-                        })
-                        .frame(width: AgentLayout.filterHeight, height: AgentLayout.filterHeight)
+                    if self.agentFiltersActive {
+                        self.headerIconButton(
+                            systemName: "xmark",
+                            label: "Clear filters",
+                            action: {
+                                self.agentRosterFilter = .all
+                                self.agentSearchText = ""
+                            })
+                            .frame(width: AgentLayout.filterHeight, height: AgentLayout.filterHeight)
+                    }
                 }
             }
             .padding(.horizontal, OpenClawProMetric.pagePadding)
@@ -319,15 +309,9 @@ extension AgentProTab {
             Image(systemName: systemName)
                 .font(.subheadline.weight(.semibold))
                 .frame(width: AgentLayout.filterHeight, height: AgentLayout.filterHeight)
-                .background {
-                    Circle()
-                        .fill(self.iconButtonFill)
-                        .overlay {
-                            Circle().strokeBorder(self.iconButtonStroke, lineWidth: 1)
-                        }
-                }
         }
-        .buttonStyle(.plain)
+        .buttonBorderShape(.circle)
+        .openClawGlassButton()
         .accessibilityLabel(label)
     }
 
@@ -560,14 +544,6 @@ extension AgentProTab {
         !self.appModel.isLocalGatewayFixtureEnabled &&
             self.gatewayConnected &&
             self.appModel.isOperatorGatewayConnected
-    }
-
-    private var searchFieldFill: Color {
-        self.colorScheme == .dark ? Color.white.opacity(0.045) : Color.white.opacity(0.78)
-    }
-
-    private var searchFieldStroke: Color {
-        self.colorScheme == .dark ? Color.white.opacity(0.11) : Color.black.opacity(0.07)
     }
 
     private var iconButtonFill: Color {
