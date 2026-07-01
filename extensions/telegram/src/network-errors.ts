@@ -71,6 +71,7 @@ const RECOVERABLE_MESSAGE_SNIPPETS = [
   "getaddrinfo",
   "timeout", // catch timeout messages not covered by error codes/names
   "timed out", // grammY getUpdates returns "timed out after X seconds" (not matched by "timeout")
+  "malformed json", // telegram ingress worker fetchJson: non-JSON Bot API body (HTML error page / empty / truncated)
 ];
 
 function collectTelegramErrorCandidates(err: unknown) {

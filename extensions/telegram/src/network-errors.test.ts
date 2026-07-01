@@ -140,6 +140,21 @@ describe("isRecoverableTelegramNetworkError", () => {
     expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "polling" })).toBe(true);
   });
 
+  it("treats ingress-worker malformed-JSON errors as recoverable for polling/webhook, not send", () => {
+    // telegram-ingress-worker.runtime.ts fetchJson throws this on a non-JSON Bot
+    // API body (HTML error page / empty / truncated from a CDN, reverse proxy, or
+    // TLS MITM). The long-poll loop must back off and retry instead of exiting
+    // the isolated worker and silently dropping the channel.
+    const err = Object.assign(new Error("Telegram getUpdates returned malformed JSON (HTTP 503)"), {
+      statusCode: 503,
+    });
+    expect(isRecoverableTelegramNetworkError(err, { context: "polling" })).toBe(true);
+    expect(isRecoverableTelegramNetworkError(err, { context: "webhook" })).toBe(true);
+    // send stays conservative: a malformed send response must not retry, since
+    // the message may already have been delivered.
+    expect(isRecoverableTelegramNetworkError(err, { context: "send" })).toBe(false);
+  });
+
   it("treats delete/react/edit/action (idempotent) contexts like polling, not send", () => {
     const undiciSnippetErr = new Error("Undici: socket failure");
     // delete, react, edit, and action are idempotent or non-message operations;
