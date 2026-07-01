@@ -219,4 +219,35 @@ describe("before_agent_start hook merger", () => {
 
     expect(capturedCtx).toBe(stubCtx);
   });
+
+  it("skips unreadable typed hook metadata before dispatching healthy hooks", async () => {
+    registry.typedHooks.push({
+      pluginId: "poisoned-hook",
+      get hookName() {
+        throw new Error("typed hook name getter exploded");
+      },
+      get handler() {
+        throw new Error("typed hook handler getter exploded");
+      },
+      get priority() {
+        throw new Error("typed hook priority getter exploded");
+      },
+      source: "test",
+    } as unknown as PluginHookRegistration);
+    addBeforeAgentStartHook(
+      registry,
+      "healthy-hook",
+      () => ({ prependContext: "healthy hook ran" }),
+      5,
+    );
+
+    const runner = createHookRunner(registry);
+
+    expect(runner.hasHooks("before_agent_start")).toBe(true);
+    expect(runner.getHookCount("before_agent_start")).toBe(1);
+    await expect(runner.runBeforeAgentStart({ prompt: "test" }, stubCtx)).resolves.toEqual({
+      ...EMPTY_BEFORE_AGENT_START_RESULT,
+      prependContext: "healthy hook ran",
+    });
+  });
 });

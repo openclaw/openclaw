@@ -230,6 +230,24 @@ describe("before_agent_run hook", () => {
     );
   });
 
+  it("fails closed when matching hook handler metadata is unreadable", async () => {
+    const registry = makeRegistry([
+      {
+        pluginId: "unreadable-handler-plugin",
+        hookName: "before_agent_run",
+        get handler() {
+          throw new Error("hook handler getter exploded");
+        },
+        source: "test",
+      } as unknown as PluginHookRegistration,
+    ]);
+    const runner = createHookRunner(registry);
+
+    await expect(runner.runBeforeAgentRun({ prompt: "test", messages: [] }, ctx)).rejects.toThrow(
+      "before_agent_run handler from unreadable-handler-plugin failed: hook handler getter exploded",
+    );
+  });
+
   it("fails closed when handlers exceed the default timeout", async () => {
     vi.useFakeTimers();
     const registry = makeRegistry([
