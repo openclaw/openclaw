@@ -158,6 +158,7 @@ Configure your tunnel's ingress rules to only route the webhook path:
    - `audienceType: "project-number"` → audience is the Cloud project number.
 3. Messages are routed by space:
    - DMs use session key `agent:<agentId>:googlechat:direct:<spaceId>`.
+   - With `channels.googlechat.threadSessions: true`, inbound DM threads use separate thread-scoped sessions and replies stay in the originating Google Chat thread.
    - Spaces use session key `agent:<agentId>:googlechat:group:<spaceId>`.
 4. DM access is pairing by default. Unknown senders receive a pairing code; approve with:
    - `openclaw pairing approve googlechat <code>`
@@ -201,6 +202,7 @@ Use these identifiers for delivery and allowlists:
         },
       },
       actions: { reactions: true },
+      threadSessions: true,
       typingIndicator: "message",
       mediaMaxMb: 20,
     },
@@ -214,6 +216,7 @@ Notes:
 - `serviceAccountRef` is also supported (env/file SecretRef), including per-account refs under `channels.googlechat.accounts.<id>.serviceAccountRef`.
 - Default webhook path is `/googlechat` if `webhookPath` isn't set.
 - `dangerouslyAllowNameMatching` re-enables mutable email principal matching for allowlists (break-glass compatibility mode).
+- `threadSessions` is off by default. Enable it when you want each Google Chat DM thread to become its own OpenClaw session and receive replies in that same thread.
 - Reactions are available via the `reactions` tool and `channels action` when `actions.reactions` is enabled.
 - Native approval cards use Google Chat `cardsV2` button clicks, not reaction events. Approvers come from `dm.allowFrom` or `defaultTo` and must be stable numeric `users/<id>` values.
 - Message actions expose `send` for text and `upload-file` for explicit attachment sends. `upload-file` accepts `media` / `filePath` / `path` plus optional `message`, `filename`, and thread targeting.

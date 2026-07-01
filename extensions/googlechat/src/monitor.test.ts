@@ -1,5 +1,6 @@
 // Googlechat tests cover monitor plugin behavior.
 import { recordChannelBotPairLoopAndCheckSuppression } from "openclaw/plugin-sdk/channel-inbound";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
@@ -395,7 +396,7 @@ describe("googlechat monitor direct messages", () => {
     expect(runTurn).toHaveBeenCalledOnce();
   });
 
-  it("omits thread metadata from DM reply context and typing messages", async () => {
+  it("omits thread metadata from DM reply context and typing messages by default", async () => {
     const runTurn = vi.fn();
     const buildContext = vi.fn((payload: unknown) => payload);
     const core = {
@@ -476,6 +477,132 @@ describe("googlechat monitor direct messages", () => {
       space: "spaces/DM",
       text: "_OpenClaw is typing..._",
       thread: undefined,
+    });
+    expect(runTurn).toHaveBeenCalledOnce();
+  });
+
+  it("uses a thread-specific DM session while preserving original DM peer bindings", async () => {
+    const runTurn = vi.fn();
+    const buildContext = vi.fn((payload: unknown) => payload);
+    const core = {
+      logging: { shouldLogVerbose: () => false },
+      channel: {
+        routing: {
+          resolveAgentRoute: vi.fn(resolveAgentRoute),
+        },
+        session: {
+          resolveStorePath: () => "/tmp/openclaw-googlechat-test",
+          readSessionUpdatedAt: () => undefined,
+          recordInboundSession: vi.fn(),
+        },
+        reply: {
+          resolveEnvelopeFormatOptions: () => ({}),
+          formatAgentEnvelope: ({ body }: { body: string }) => body,
+          dispatchReplyWithBufferedBlockDispatcher: vi.fn(),
+        },
+        inbound: { buildContext, run: runTurn },
+      },
+    } as unknown as GoogleChatCoreRuntime;
+    const runtime = { error: vi.fn(), log: vi.fn() } satisfies GoogleChatRuntimeEnv;
+    const account = {
+      accountId: "work",
+      config: {
+        threadSessions: true,
+        typingIndicator: "message",
+      },
+      credentialSource: "inline",
+    } as ResolvedGoogleChatAccount;
+    const event = {
+      type: "MESSAGE",
+      eventTime: "2026-03-22T00:00:00.001Z",
+      space: { name: "spaces/DM", type: "DM" },
+      message: {
+        name: "spaces/DM/messages/2",
+        text: "hello",
+        thread: { name: "spaces/DM/threads/thread-1" },
+        sender: { name: "users/alice", displayName: "Alice", type: "HUMAN" },
+      },
+    } satisfies GoogleChatEvent;
+
+    accessMocks.applyGoogleChatInboundAccessPolicy.mockResolvedValue({
+      ok: true,
+      commandAuthorized: undefined,
+      effectiveWasMentioned: undefined,
+      groupBotLoopProtection: undefined,
+      groupSystemPrompt: undefined,
+    });
+    apiMocks.sendGoogleChatMessage.mockResolvedValue({
+      messageName: "spaces/DM/messages/typing",
+    });
+
+    await testing.processMessageWithPipeline({
+      event,
+      account,
+      config: {
+        agents: { list: [{ id: "agent-1" }, { id: "bound-agent" }] },
+        bindings: [
+          {
+            agentId: "bound-agent",
+            match: {
+              channel: "googlechat",
+              accountId: "work",
+              peer: { kind: "direct", id: "spaces/DM" },
+            },
+          },
+        ],
+      },
+      runtime,
+      core,
+      mediaMaxMb: 10,
+    });
+
+    expect(core.channel.routing.resolveAgentRoute).toHaveBeenCalledWith({
+      cfg: expect.objectContaining({
+        bindings: [
+          {
+            agentId: "bound-agent",
+            match: {
+              channel: "googlechat",
+              accountId: "work",
+              peer: { kind: "direct", id: "spaces/DM" },
+            },
+          },
+        ],
+        session: { dmScope: "per-channel-peer" },
+      }),
+      channel: "googlechat",
+      accountId: "work",
+      peer: {
+        kind: "direct",
+        id: "spaces/DM:thread:spaces/DM/threads/thread-1",
+      },
+      parentPeer: {
+        kind: "direct",
+        id: "spaces/DM",
+      },
+    });
+
+    expect(buildContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        route: {
+          agentId: "bound-agent",
+          accountId: "work",
+          routeSessionKey:
+            "agent:bound-agent:googlechat:direct:spaces/dm:thread:spaces/dm/threads/thread-1",
+        },
+        reply: {
+          to: "googlechat:spaces/DM",
+          originatingTo: "googlechat:spaces/DM",
+          replyToId: "spaces/DM/threads/thread-1",
+          replyToIdFull: "spaces/DM/threads/thread-1",
+        },
+      }),
+    );
+    expect(apiMocks.sendGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      space: "spaces/DM",
+      text: "_OpenClaw is typing..._",
+      thread: "spaces/DM/threads/thread-1",
     });
     expect(runTurn).toHaveBeenCalledOnce();
   });

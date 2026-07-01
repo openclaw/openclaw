@@ -91,6 +91,8 @@ export type GoogleChatAccountConfig = {
   historyLimit?: number;
   /** Max DM turns to keep as history context. */
   dmHistoryLimit?: number;
+  /** If true, treat each inbound Google Chat DM thread as its own OpenClaw session and reply in that thread. Default: false. */
+  threadSessions?: boolean;
   /** Per-DM config overrides keyed by user id. */
   dms?: Record<string, DmConfig>;
   /** Outbound text chunk size (chars). Default: 4000. */
