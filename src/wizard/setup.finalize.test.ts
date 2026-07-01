@@ -14,6 +14,18 @@ const probeGatewayReachable = vi.hoisted(() =>
 const waitForGatewayReachable = vi.hoisted(() =>
   vi.fn<() => Promise<{ ok: boolean; detail?: string }>>(async () => ({ ok: true })),
 );
+const resolveAdvertisedControlUiLinks = vi.hoisted(() =>
+  vi.fn(async () => ({
+    httpUrl: "http://127.0.0.1:18789",
+    wsUrl: "ws://127.0.0.1:18789",
+  })),
+);
+const resolveLocalControlUiProbeLinks = vi.hoisted(() =>
+  vi.fn(() => ({
+    httpUrl: "http://127.0.0.1:18789",
+    wsUrl: "ws://127.0.0.1:18789",
+  })),
+);
 const setupWizardShellCompletion = vi.hoisted(() => vi.fn(async () => {}));
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
 const buildGatewayInstallPlan = vi.hoisted(() =>
@@ -79,10 +91,12 @@ vi.mock("../commands/onboard-helpers.js", () => ({
   formatControlUiSshHint: vi.fn(() => "ssh hint"),
   openUrl: vi.fn(async () => false),
   probeGatewayReachable,
+  resolveAdvertisedControlUiLinks,
   resolveControlUiLinks: vi.fn(() => ({
     httpUrl: "http://127.0.0.1:18789",
     wsUrl: "ws://127.0.0.1:18789",
   })),
+  resolveLocalControlUiProbeLinks,
   waitForGatewayReachable,
 }));
 
@@ -323,6 +337,16 @@ describe("finalizeSetupWizard", () => {
     probeGatewayReachable.mockResolvedValue({ ok: false, detail: "offline" });
     waitForGatewayReachable.mockReset();
     waitForGatewayReachable.mockResolvedValue({ ok: true });
+    resolveAdvertisedControlUiLinks.mockReset();
+    resolveAdvertisedControlUiLinks.mockResolvedValue({
+      httpUrl: "http://127.0.0.1:18789",
+      wsUrl: "ws://127.0.0.1:18789",
+    });
+    resolveLocalControlUiProbeLinks.mockReset();
+    resolveLocalControlUiProbeLinks.mockReturnValue({
+      httpUrl: "http://127.0.0.1:18789",
+      wsUrl: "ws://127.0.0.1:18789",
+    });
     setupWizardShellCompletion.mockClear();
     healthCommand.mockReset();
     healthCommand.mockResolvedValue(undefined);
@@ -437,6 +461,48 @@ describe("finalizeSetupWizard", () => {
       },
       {},
     );
+  });
+
+  it("advertises LAN Control UI links while probing the local gateway", async () => {
+    resolveAdvertisedControlUiLinks.mockResolvedValueOnce({
+      httpUrl: "http://10.211.55.3:18789/",
+      wsUrl: "ws://10.211.55.3:18789",
+    });
+    resolveLocalControlUiProbeLinks.mockReturnValue({
+      httpUrl: "http://127.0.0.1:18789/",
+      wsUrl: "ws://127.0.0.1:18789",
+    });
+    const prompter = createLaterPrompter();
+    const args = createAdvancedFinalizeArgs({
+      nextConfig: {
+        gateway: {
+          bind: "lan",
+        },
+      },
+      prompter,
+    });
+
+    await finalizeSetupWizard({
+      ...args,
+      opts: {
+        ...args.opts,
+        skipHealth: false,
+        skipUi: false,
+      },
+      settings: {
+        ...args.settings,
+        bind: "lan",
+      },
+    });
+
+    expect(resolveAdvertisedControlUiLinks).toHaveBeenCalledWith(
+      expect.objectContaining({ bind: "lan", port: 18789 }),
+    );
+    expect(waitForGatewayReachable).toHaveBeenCalledWith(
+      expect.objectContaining({ url: "ws://127.0.0.1:18789" }),
+    );
+    expectNoteContains(prompter, "http://10.211.55.3:18789/", "Control UI");
+    expectNoteContains(prompter, "ws://10.211.55.3:18789", "Control UI");
   });
 
   it("bounds the bootstrap hatch TUI run timeout", async () => {
