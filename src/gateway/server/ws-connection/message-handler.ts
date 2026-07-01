@@ -339,11 +339,9 @@ function isSetupCodeNativeBootstrapClient(client: {
   id?: string;
   platform?: string;
   deviceFamily?: string;
-  modelIdentifier?: string;
 }): boolean {
   const platform = normalizeDeviceMetadataForAuth(client.platform);
   const deviceFamily = normalizeDeviceMetadataForAuth(client.deviceFamily);
-  const modelIdentifier = normalizeDeviceMetadataForAuth(client.modelIdentifier);
   if (client.id === GATEWAY_CLIENT_IDS.ANDROID_APP) {
     return /^android(?:\s|$)/.test(platform) && deviceFamily === "android";
   }
@@ -351,11 +349,7 @@ function isSetupCodeNativeBootstrapClient(client: {
     return /^(?:ios|ipados)(?:\s|$)/.test(platform) && /^(?:iphone|ipad|ios)$/.test(deviceFamily);
   }
   if (client.id === GATEWAY_CLIENT_IDS.EVEN_G2_NODE) {
-    return (
-      platform === "even-hub" &&
-      deviceFamily === "glasses" &&
-      /^(?:even g2|eveng2|g2)$/.test(modelIdentifier)
-    );
+    return platform === "even-hub" && deviceFamily === "glasses";
   }
   return false;
 }
@@ -867,8 +861,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           connectParams.client.mode === GATEWAY_CLIENT_MODES.UI &&
           (connectParams.client.id === GATEWAY_CLIENT_IDS.MACOS_APP ||
             connectParams.client.id === GATEWAY_CLIENT_IDS.IOS_APP ||
-            connectParams.client.id === GATEWAY_CLIENT_IDS.ANDROID_APP ||
-            connectParams.client.id === GATEWAY_CLIENT_IDS.EVEN_G2_NODE);
+            connectParams.client.id === GATEWAY_CLIENT_IDS.ANDROID_APP);
         if (enforceOriginCheckForAnyClient || isBrowserOperatorUi || isWebchat) {
           const hostHeaderOriginFallbackEnabled =
             configSnapshot.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;

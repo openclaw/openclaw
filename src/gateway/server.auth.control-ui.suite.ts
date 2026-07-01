@@ -265,6 +265,7 @@ export function registerControlUiAndPairingSuite(): void {
     clientMode: string;
     displayName: string;
     platform: string;
+    deviceFamily?: string;
     scopes?: string[];
   }): Promise<{ identityPath: string; identity: { deviceId: string } }> => {
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
@@ -282,6 +283,7 @@ export function registerControlUiAndPairingSuite(): void {
       clientMode: params.clientMode,
       displayName: params.displayName,
       platform: params.platform,
+      deviceFamily: params.deviceFamily,
     });
     await approveDevicePairing(seeded.request.requestId, {
       callerScopes: ["operator.admin"],
@@ -1009,6 +1011,59 @@ export function registerControlUiAndPairingSuite(): void {
     restoreGatewayToken(prevToken);
   });
 
+  test("requires approval when an Even Hub node id reconnects as UI for metadata upgrade", async () => {
+    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
+    const evenHubNodeClient = {
+      id: "openclaw-even-g2-node",
+      version: "2026.6.2",
+      platform: "even-hub",
+      mode: GATEWAY_CLIENT_MODES.NODE,
+      deviceFamily: "glasses",
+    };
+    const { identity, identityPath } = await seedApprovedOperatorReadPairing({
+      identityPrefix: "openclaw-even-hub-ui-metadata-",
+      clientId: evenHubNodeClient.id,
+      clientMode: evenHubNodeClient.mode,
+      displayName: "even-hub-node",
+      platform: evenHubNodeClient.platform,
+      deviceFamily: evenHubNodeClient.deviceFamily,
+    });
+
+    const { server, port, prevToken } = await startControlUiServer("secret");
+    let ws: WebSocket | undefined;
+    try {
+      ws = await openWs(port);
+      const result = await connectReq(ws, {
+        token: "secret",
+        scopes: ["operator.read"],
+        client: {
+          ...evenHubNodeClient,
+          platform: "even-hub beta",
+          mode: GATEWAY_CLIENT_MODES.UI,
+        },
+        deviceIdentityPath: identityPath,
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.error?.message ?? "").toContain("pairing required");
+      expect((result.error?.details as { reason?: string } | undefined)?.reason).toBe(
+        "metadata-upgrade",
+      );
+
+      const pending = (await listDevicePairing()).pending.filter(
+        (entry) => entry.deviceId === identity.deviceId,
+      );
+      expect(pending).toHaveLength(1);
+      const paired = await getPairedDevice(identity.deviceId);
+      expect(paired?.platform).toBe(evenHubNodeClient.platform);
+      expect(paired?.deviceFamily).toBe(evenHubNodeClient.deviceFamily);
+    } finally {
+      ws?.close();
+      await server.close();
+      restoreGatewayToken(prevToken);
+    }
+  });
+
   test("returns pairing-required for malformed persisted access lists", async () => {
     const { identity, identityPath } = await seedApprovedOperatorReadPairing({
       identityPrefix: "openclaw-device-malformed-access-",
@@ -1322,7 +1377,6 @@ export function registerControlUiAndPairingSuite(): void {
         platform: "even-hub",
         mode: "node" as const,
         deviceFamily: "glasses",
-        modelIdentifier: "Even G2",
       },
     },
     {
