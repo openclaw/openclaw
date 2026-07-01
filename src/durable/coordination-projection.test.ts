@@ -10,7 +10,7 @@ import type { DurableRuntimeLink, DurableRuntimeRun, DurableRuntimeStep } from "
 describe("durable coordination projection", () => {
   it("summarizes waiting child runs for taskflow and workboard consumers", () => {
     const run: DurableRuntimeRun = {
-      runtimeRunId: "wfr_parent",
+      runtimeRunId: "rt_parent",
       operationKind: "openclaw.agent.turn",
       operationVersion: "1",
       status: "waiting_child",
@@ -44,7 +44,7 @@ describe("durable coordination projection", () => {
       {
         parentRuntimeRunId: run.runtimeRunId,
         parentStepId: "subagents",
-        childRuntimeRunId: "wfr_child_1",
+        childRuntimeRunId: "rt_child_1",
         linkType: "subagent",
         status: "succeeded",
         createdAt: 120,
@@ -53,7 +53,7 @@ describe("durable coordination projection", () => {
       {
         parentRuntimeRunId: run.runtimeRunId,
         parentStepId: "subagents",
-        childRuntimeRunId: "wfr_child_2",
+        childRuntimeRunId: "rt_child_2",
         linkType: "subagent",
         status: "failed",
         createdAt: 121,
@@ -62,7 +62,7 @@ describe("durable coordination projection", () => {
       {
         parentRuntimeRunId: run.runtimeRunId,
         parentStepId: "subagents",
-        childRuntimeRunId: "wfr_child_3",
+        childRuntimeRunId: "rt_child_3",
         linkType: "subagent",
         status: "running",
         createdAt: 122,
@@ -73,7 +73,7 @@ describe("durable coordination projection", () => {
     const projection = buildDurableCoordinationProjection({ run, steps, childLinks });
 
     expect(projection).toMatchObject({
-      runtimeRunId: "wfr_parent",
+      runtimeRunId: "rt_parent",
       workUnitId: "workboard:default:card-parent",
       reportRouteId: "discord:bo-main",
       status: "waiting_child",
@@ -97,26 +97,28 @@ describe("durable coordination projection", () => {
         open: 1,
       },
       controls: {
-        canCancel: true,
-        canResume: true,
+        canCancel: false,
+        canRetry: false,
+        canResume: false,
+        canSignal: false,
         canOpenTimeline: true,
       },
     });
 
     expect(buildDurableTaskFlowStateProjection(projection)).toMatchObject({
-      runtimeRunId: "wfr_parent",
+      runtimeRunId: "rt_parent",
       workUnitId: "workboard:default:card-parent",
       reportRouteId: "discord:bo-main",
       waitingReason: "child",
       children: { open: 1, failed: 1 },
     });
     expect(buildDurableWorkboardMetadataProjection(projection)).toMatchObject({
-      runtimeRunId: "wfr_parent",
+      runtimeRunId: "rt_parent",
       workUnitId: "workboard:default:card-parent",
       reportRouteId: "discord:bo-main",
       taskId: "task_parent",
       taskFlowId: "flow_parent",
-      timelineCommand: "openclaw durable timeline wfr_parent",
+      timelineCommand: "openclaw durable timeline rt_parent",
     });
     expect(
       mergeDurableProjectionIntoJsonObject(
@@ -126,14 +128,14 @@ describe("durable coordination projection", () => {
     ).toMatchObject({
       existing: true,
       durable: {
-        runtimeRunId: "wfr_parent",
+        runtimeRunId: "rt_parent",
       },
     });
   });
 
   it("exposes recovery diagnostics for lost runs without requiring a Workboard card", () => {
     const run: DurableRuntimeRun = {
-      runtimeRunId: "wfr_lost",
+      runtimeRunId: "rt_lost",
       operationKind: "openclaw.agent.turn",
       operationVersion: "1",
       status: "lost",
@@ -171,14 +173,17 @@ describe("durable coordination projection", () => {
     const projection = buildDurableCoordinationProjection({ run });
 
     expect(projection).toMatchObject({
-      runtimeRunId: "wfr_lost",
+      runtimeRunId: "rt_lost",
       status: "lost",
       recoveryState: "lost",
       external: {
         sessionKey: "agent:bo:direct",
       },
       controls: {
-        canRetry: true,
+        canCancel: false,
+        canRetry: false,
+        canResume: false,
+        canSignal: false,
         canOpenTimeline: true,
       },
       recovery: {
