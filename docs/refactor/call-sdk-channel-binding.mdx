@@ -1,0 +1,285 @@
+---
+title: "ChannelPlugin → real-time call design"
+---
+
+Author(s): [visionik](https://github.com/visionik) (OpenClaw)
+
+<Note>
+  **Companion design doc** to [`call-sdk-rfd.mdx`](./call-sdk-rfd.mdx). This document covers the
+  OpenClaw-side binding: how `@openclaw/call-sdk`'s `CallTransport` lives on `ChannelPlugin.call`,
+  the load-bearing "channels never tap" guardrail, and the trust boundary between channel plugins
+  and tap-attaching code. For the portable SDK API itself, see
+  [`call-sdk-design.mdx`](./call-sdk-design.mdx).
+</Note>
+
+## Goal
+
+One channel package per platform owns both **messaging** and **real-time calls**. Today `@openclaw/call-sdk` defines `Call` + `CallTap`; today OpenClaw's `ChannelPlugin` defines messaging. Bridge them by hanging a call **transport** adapter off `ChannelPlugin` and surfacing capability flags so core can route uniformly.
+
+A `Call` exposes inbound and outbound media tracks. A `CallTap` is _anything attached to that media surface_ — STT/TTS, a realtime model, a recorder, live captions, a translator, a DSP transform, a mixer. Inference is one kind of tap; the design supports many kinds and many concurrent taps per call. Inference taps stay on their own axis and are resolved by core, not by the channel.
+
+## Two axes, two registries
+
+The single biggest design rule: **transport** and **anything that taps a call's media** are different things and live in different registries. They meet at the `Call` / `MediaSource` primitives through `CallTap`, but neither side registers as the other.
+
+| Registry                                                     | What it produces                                       | Lifecycle unit          | Examples                                                                                                                                 |
+| ------------------------------------------------------------ | ------------------------------------------------------ | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| **Channel call adapter** (transport)                         | A `Call` (signaling, media tracks, platform lifecycle) | Per-call                | WhatsApp/Baileys, Discord gateway, Matrix WebRTC, Meet Media API, Twilio, Telnyx, Plivo, Zoom                                            |
+| **Tap consumers** (anything that attaches to a call's media) | A `CallTap` consuming/producing `Call` media           | Per-tap (many per call) | Inference (STT/TTS, OpenAI Realtime, Deepgram, ElevenLabs, Gemini Live), recorders, live captioners, translators, DSP transforms, mixers |
+
+A Twilio call can have an inference tap (OpenAI Realtime _or_ Deepgram + ElevenLabs), a recording tap, and a live-caption tap running simultaneously — none knowing about the others. Core auto-attaches the inference tap per the agent's call config and resolves providers from the existing `realtime-voice` / speech / transcription registries; other tap kinds plug in through their own registries.
+
+## Naming
+
+| Symbol                         | Choice                                                                   | Why                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------ | ------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Capability key                 | `capabilities.call`                                                      | Pairs with `ChannelPlugin.call` and the SDK's `Call` type. Covers audio/video/screen/data — the same telecom-heritage scope the cap had under its earlier `voice` name. Inference registries (`realtime-voice`, etc.) keep their existing OpenClaw names; the cap doesn't try to align with them anymore.                                                            |
+| Adapter key on `ChannelPlugin` | `ChannelPlugin.call`                                                     | Same                                                                                                                                                                                                                                                                                                                                                                 |
+| Transport contract type        | `ChannelCallAdapter` (extends `CallTransport` from `@openclaw/call-sdk`) | The portable SDK exports the generic `CallTransport`; `plugin-sdk` re-exports it as `ChannelCallAdapter` — a thin extension that adds OpenClaw-specific surface (channel-account context, single-connection hooks, capability shape). Two names, one shape: external SDK consumers reach for `CallTransport`; channel-plugin authors reach for `ChannelCallAdapter`. |
+| Per-call transport object      | `Call`                                                                   | Already defined in call-sdk                                                                                                                                                                                                                                                                                                                                          |
+| STT inference contract         | `STTProvider`                                                            | Already in call-sdk; resolved from `realtime-voice` registry                                                                                                                                                                                                                                                                                                         |
+| TTS inference contract         | `TTSProvider`                                                            | Same                                                                                                                                                                                                                                                                                                                                                                 |
+| Bidi realtime-model contract   | `RealtimeVoiceProvider`                                                  | Matches existing `realtime-voice` plugin slot (the inference-side registry name; unaffected by the cap rename)                                                                                                                                                                                                                                                       |
+| Per-call media attachment      | `CallTap`                                                                | One or more per `Call`; inference taps are core-resolved, other kinds plug in via their own registries                                                                                                                                                                                                                                                               |
+
+Notes:
+
+- The portable SDK type is `CallTransport` (in `@openclaw/call-sdk`). The OpenClaw plugin-sdk re-exports it as `ChannelCallAdapter` — either as a direct alias or a thin extension adding channel-binding fields (account context, single-connection hooks, capability shape). The standalone SDK gets the generic name; OpenClaw keeps the explicit channel-layer name; both refer to the same shape.
+- Capability key and field renamed: `capabilities.voice` → `capabilities.call`, `ChannelPlugin.voice` → `ChannelPlugin.call`. The cap covers the same scope (audio/video/screen/data); just the name moved to align with the SDK's `Call`/`CallTap`/`CallTransport` vocabulary.
+- Old name `VoiceProvider` is gone (stopped competing with inference vocabulary). Renamed `VoiceProvider` → `ChannelCallAdapter` (which itself extends the SDK's `CallTransport`).
+- `AgentBridge` → `CallTap`: "agent" reads OpenClaw-specific; "bridge" is loaded in telephony (B2BUA / conference bridging); "control" is loaded for call-control signaling APIs. A `Tap` is structurally generic — a media attachment to a `Call` — and admits multiplicity.
+- All renames are clean — no external consumers yet, so no deprecated aliases needed.
+
+## Tap kinds
+
+`CallTap` is the abstraction. Concrete kinds plug in through their own registries:
+
+| Kind           | Consumes                       | Produces                                                            | Registry / source                                                 | Status                                        |
+| -------------- | ------------------------------ | ------------------------------------------------------------------- | ----------------------------------------------------------------- | --------------------------------------------- |
+| `InferenceTap` | inbound audio                  | outbound audio (TTS or realtime model) + transcript events to agent | `realtime-voice` / `speech` / `realtime-transcription` (existing) | Designed; the original "AgentBridge" use case |
+| `RecordingTap` | inbound + outbound audio/video | nothing on the call; writes to storage                              | new `recording-provider` registry (or skill-attached)             | Future                                        |
+| `CaptionTap`   | inbound audio                  | text events (could land in the in-call text channel)                | reuses inference STT or a dedicated caption provider              | Future                                        |
+| `TransformTap` | inbound or outbound audio      | replaces the same                                                   | `dsp-provider` registry or skill                                  | Future                                        |
+| `MixerTap`     | inbound audio from many calls  | outbound audio to many calls                                        | core (multi-call composer)                                        | Future                                        |
+| `TestTap`      | whichever                      | whichever                                                           | test harness                                                      | For SDK tests                                 |
+
+A `Call` may have zero or many taps active at once. Composition is independent: an inference tap doesn't know a recording tap is also attached. Each tap's lifecycle is bounded by (or shorter than) the call's.
+
+## Channels never tap (load-bearing guardrail)
+
+Channel plugins produce a `Call` and stop. They never construct a `CallTap`, never instantiate an inference provider, never know what taps will be attached. Anything that wants to consume or produce media on the call — inference, recorder, captioner, transform — attaches via core (or, for non-inference taps, via skills/extensions calling into core). Enforced at three layers:
+
+| Layer   | Guardrail                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Types   | `openclaw/plugin-sdk/channel-call` exports `CallTap` as a **type-only** symbol — usable in function signatures and doc references, never in a runtime-facing channel API (no parameter, return value, field, callback argument, or event payload exposed to channel code may be typed as `CallTap`). No `CallTap` constructor is exported. Inference contract types (`STTProvider`, `TTSProvider`, `RealtimeVoiceProvider`) are not re-exported through `channel-call` at all, so a channel reading them as "types channels consume" doesn't even compile. |
+| Runtime | Channels register `onCall((call, ctx) => …)` with a core-supplied handler; the channel hands core a raw transport `Call` and never receives or retains a reference to any `CallTap`. The agent's inference tap (and any other configured taps) are attached behind `core.attachTap(call, tapImpl, { sessionKey, ... })` from the core handler.                                                                                                                                                                                                             |
+| PR docs | `sdk-channel-plugins.md` adds a "Call transport vs. taps" section: channels never call `new CallTap(...)`, never instantiate inference providers, never construct any tap kind, never read vendor names. If your channel imports `CallTap` for any reason other than as a _type_ in a function signature passed to core, that's the smell.                                                                                                                                                                                                                 |
+
+Rationale: the failure mode is a plugin author trying to "make it work" against one inference vendor before the registry seam exists, then never undoing it. Spelling out the smell explicitly catches it in review the first time. The same rule generalizes cleanly to non-inference taps — channels don't record their own calls, don't caption their own calls, don't transform their own audio.
+
+### Authority boundary
+
+Channels and tap-attaching code live on different sides of a trust line. The asymmetry isn't "channels can't, skills can" — it's "untrusted transport adapters can't, code running under the agent's authority can."
+
+| Layer                          | Trust posture               | Why                                                                                                                                                                                                                                                     |
+| ------------------------------ | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Channel plugin                 | Untrusted transport adapter | Often third-party, often touching external platforms via reverse-engineered or unstable APIs (Baileys, MTProto, browser automation, headless Chromium). Surface kept minimal on purpose: produce a `Call`, hand it over.                                |
+| Core                           | Trusted                     | Runs in the agent runtime, owns policy, decides what gets attached to each call (inference, recording, captioning) per agent + tenant config.                                                                                                           |
+| Skills / jobs / workflow nodes | Trusted under policy        | Authorized code in the agent runtime, subject to permission/RBAC checks before they can call `core.attachTap(...)`. A skill can attach a `RecordingTap` because the agent's policy authorized it; the same code embedded in a channel plugin could not. |
+
+It's not the code that grants authority — it's the role under which the code runs. A piece of code calling `attachTap` from inside a skill acts on the agent's authority; embedded in a channel plugin it would be smuggling tap behavior into an untrusted transport adapter. The smell test in the PR docs (`grep CallTap` in channel sources) catches that smuggling. Core enforces this in two places: the `channel-call` types don't expose `attachTap` at all, and `core.attachTap` requires a caller-identity context that channel plugins are not given.
+
+### Handoff contract
+
+One-directional. Channel produces a `Call`, core attaches whatever taps it wants.
+
+| Direction      | Allowed                                                    | Forbidden                                        |
+| -------------- | ---------------------------------------------------------- | ------------------------------------------------ |
+| Channel → core | Hand a raw transport `Call` to the `onCall` handler        | Returning, retaining, or referencing a `CallTap` |
+| Core → channel | Calls into `Call` methods (`accept`, send media, `hangup`) | Handing back any tap or inference handle         |
+
+Consequences:
+
+- `ChannelCallAdapter.onCall(handler)` registers a `(call: Call, ctx: CallContext) => void | Promise<void>`. The handler is supplied by **core**, not by the plugin author. The plugin only registers the function; it doesn't define what the function does.
+- If a channel needs per-call state, hang it off the `Call` object (or a channel-owned `WeakMap` keyed by `call`) — never off any tap.
+- `Call` stays dumb w.r.t. taps: no `call.transcript`, no `call.taps` accessor, no `call.say()`. Speaking back into the call is `call.send(audio, 'audio')`; the audio happens to come from a TTS provider core wired through an inference tap — the channel doesn't know or care.
+
+## Capabilities shape
+
+Add a `call` block alongside the existing messaging caps. Describes the **transport's media surface** — not what taps will do with it. Lets core feature-detect without per-channel branches.
+
+| Field               | Type                                              | Purpose                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `call.inbound`      | `boolean`                                         | Channel can receive calls                                                                                                                                                                                                                                                                                                                                                                               |
+| `call.outbound`     | `boolean`                                         | Channel can `dial` / `join`                                                                                                                                                                                                                                                                                                                                                                             |
+| `call.group`        | `boolean`                                         | Group / conference calls                                                                                                                                                                                                                                                                                                                                                                                |
+| `call.mediaTypes`   | `MediaType[]`                                     | `'audio' \| 'video' \| 'screen' \| 'data'`                                                                                                                                                                                                                                                                                                                                                              |
+| `call.modes`        | `CallMode[]`                                      | `'listen-only' \| 'talkback' \| 'full-duplex'`                                                                                                                                                                                                                                                                                                                                                          |
+| `call.participants` | `boolean`                                         | Exposes `onJoin` / `onLeave` / `onSpeaking`                                                                                                                                                                                                                                                                                                                                                             |
+| `call.dtmf`         | `boolean`                                         | DTMF in/out (PSTN, IVR)                                                                                                                                                                                                                                                                                                                                                                                 |
+| `call.transfer`     | `boolean`                                         | Blind transfer                                                                                                                                                                                                                                                                                                                                                                                          |
+| `call.textChannel`  | `boolean`                                         | In-call chat (Meet/Discord style)                                                                                                                                                                                                                                                                                                                                                                       |
+| `call.recording`    | `{ mediaAvailableForRecording, consentRequired }` | Transport-level facts only: can this platform's media be captured for recording at all (some platforms refuse / actively block it), and does platform/jurisdiction policy require explicit consent before a recording tap may be attached. The actual recording is a `RecordingTap`; this cap just gates whether one can be attached and whether core must enforce a consent banner/announcement first. |
+
+## Adapter shape (`ChannelPlugin.call: ChannelCallAdapter`)
+
+The transport contract — `dial` / `join` / `onCall` plus connection lifecycle. **Does not** include taps; those come from their own registries. `ChannelCallAdapter extends CallTransport`: the base method shape comes from `@openclaw/call-sdk`; `plugin-sdk` adds the channel-binding hooks below.
+
+| Method                                        | When core calls it                                                                                             | Returns                              |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| `onCall(handler)`                             | Plugin registers a core-supplied handler at start; the adapter invokes it per inbound call with the raw `Call` | `void`                               |
+| `dial({ account, endpoint, options? })`       | Agent or operator initiates outbound                                                                           | `Promise<Call>`                      |
+| `join({ account, groupId, options? })`        | Agent joins meeting/conference                                                                                 | `Promise<Call>`                      |
+| `attachToConnection({ account, connection })` | Reuse existing channel socket (WASocket, Discord gateway, etc.)                                                | `Promise<void>`                      |
+| `start(ctx)` / `stop(handle)`                 | Lifecycle parity with `gateway.start/stop`                                                                     | `Promise<unknown>` / `Promise<void>` |
+
+## What core owns vs. what the channel owns
+
+| Concern                                                  | Core | Channel plugin | Tap consumer       |
+| -------------------------------------------------------- | ---- | -------------- | ------------------ |
+| `Call` lifecycle state machine                           | ✓    | —              | —                  |
+| Attaching the agent's `InferenceTap`                     | ✓    | —              | —                  |
+| Session key shape                                        | ✓    | —              | —                  |
+| Resolving STT/TTS/realtime model from registries         | ✓    | —              | —                  |
+| Joining/dialing the actual platform                      | —    | ✓              | —                  |
+| Audio I/O (WebRTC, WASocket, Meet Media API)             | —    | ✓              | —                  |
+| `call.resolveSessionCall(rawCall)` parsing               | —    | ✓              | —                  |
+| Single-connection contract                               | —    | ✓              | —                  |
+| `transcribe(audio)` / `synthesize(text)` / bidi realtime | —    | —              | ✓ (inference)      |
+| Recording / archiving                                    | —    | —              | ✓ (recording tap)  |
+| Live captioning / transform / mixing                     | —    | —              | ✓ (respective tap) |
+
+## Registry rules (enforced by SDK)
+
+| Rule                                                                                                                                             | Why                                                                                                                |
+| ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `api.registerChannel({ plugin })` is the **only** path that takes a `call` adapter                                                               | Prevents Twilio from being shoved into the realtime slot                                                           |
+| `api.registerRealtimeVoiceProvider(...)`, `registerSpeechProvider`, `registerRealtimeTranscriptionProvider` are the **only** paths for inference | Prevents OpenAI Realtime from being treated as a transport                                                         |
+| Channels never construct or attach a `CallTap`                                                                                                   | Channels can't accidentally hard-wire one inference vendor to one transport — or pick what gets recorded/captioned |
+| Each non-inference tap kind has its own registry (recording, caption, transform, mixer)                                                          | Keeps tap kinds composable and independently swappable                                                             |
+| `capabilities.call` describes transport media surface only                                                                                       | Keeps caps composable across whatever taps are attached                                                            |
+
+## Session keys
+
+Extend the existing `agent:<id>:<channel>:<peer>` shape:
+
+| Surface          | Suffix               |
+| ---------------- | -------------------- |
+| DM message       | _(none)_             |
+| Threaded message | `:thread:<threadId>` |
+| Real-time call   | `:call:<callId>`     |
+
+Channel plugin provides `call.resolveSessionCall(rawCall)` returning `{ baseConversationId, callId, peer }`, parallel to `messaging.resolveSessionConversation`.
+
+## Inbound dispatch helpers (new SDK family)
+
+Mirror `channel-inbound` for calls. Core calls these from inside the `onCall` handler it registers with the channel adapter.
+
+| Helper                                                              | Purpose                                                                                    |
+| ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `recordInboundCall({ config, channelId, accountId, peer, callId })` | Returns session key                                                                        |
+| `dispatchCallStartToAgent({ sessionKey, call })`                    | Notify agent of new call                                                                   |
+| `dispatchCallTranscriptToAgent({ sessionKey, transcript })`         | Forward STT segments (originated by the inference provider via the agent's `InferenceTap`) |
+| `dispatchCallEndToAgent({ sessionKey, reason })`                    | Notify agent of teardown                                                                   |
+
+## Single-connection contract
+
+Channels with one socket for chat + calls (WhatsApp/Baileys, Discord gateway, Matrix client) must not open a second one. The `WhatsAppVoiceProvider` pattern in this repo generalizes via `attachToConnection({ account, connection })`. Core passes the existing transport in; the call-transport adapter wires onto it.
+
+## Real-world capability matrix
+
+| Channel                          | `messaging` | `call.inbound` | `call.outbound` | Notes                                 |
+| -------------------------------- | ----------- | -------------- | --------------- | ------------------------------------- |
+| WhatsApp                         | ✓           | ✓              | ✓               | Already prototyped in this repo       |
+| Discord                          | ✓           | ✓              | ✓               | Calls via gateway connection          |
+| Matrix                           | ✓           | ✓              | ✓               | Element Call / WebRTC                 |
+| Telegram                         | ✓           | partial        | partial         | Voice chats need MTProto, not Bot API |
+| Google Meet                      | partial     | ✓              | ✓               | Meet Media API audio still pending    |
+| Slack                            | ✓           | ✗              | ✗               | Huddles unavailable to bots           |
+| iMessage                         | ✓           | ✗              | ✗               | FaceTime not in `imsg` surface        |
+| Signal                           | ✓           | ✗              | ✗               | Not in `signal-cli`                   |
+| voice-call (Twilio/Telnyx/Plivo) | ✗           | ✓              | ✓               | PSTN only — call-only "channel"       |
+
+## Migration path
+
+| Phase | Change                                                                                                                                                                                                                                                                                                                                                                                    | Breaking?                     |
+| ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| 1     | Add `capabilities.call` (optional) and `ChannelPlugin.call` (optional) to plugin-sdk types                                                                                                                                                                                                                                                                                                | No                            |
+| 2     | Re-export `Call` / `CallTap` / `MediaSource` / `MediaStreamQueue` / `CallTransport` from `@openclaw/call-sdk` through `openclaw/plugin-sdk/channel-call`; declare `ChannelCallAdapter extends CallTransport` (alias or thin extension); apply `VoiceProvider` → `ChannelCallAdapter` and `AgentBridge` → `CallTap` renames in the SDK (no deprecated aliases — no external consumers yet) | No                            |
+| 3     | Core auto-attaches the agent's `InferenceTap` via `core.attachTap(call, inferenceTap, ...)` and resolves `STTProvider` / `TTSProvider` / `RealtimeVoiceProvider` from the existing realtime registries. Channel call adapters never participate in tap resolution.                                                                                                                        | No                            |
+| 4     | Add `channel-call-inbound` dispatch helpers in core (route `InferenceTap` events to the agent)                                                                                                                                                                                                                                                                                            | No                            |
+| 5     | Convert `WhatsAppVoiceProvider` → `whatsapp` extension's `call` adapter                                                                                                                                                                                                                                                                                                                   | No (additive)                 |
+| 6     | Build `googlemeet` channel using `call` only (no `messaging`) — proves the contract for call-only channels                                                                                                                                                                                                                                                                                | No                            |
+| 7     | Migrate `voice-call` extension (Twilio/Telnyx/Plivo) onto the same shape                                                                                                                                                                                                                                                                                                                  | Maybe (deprecate old surface) |
+| 8     | Add `RecordingTap` and `CaptionTap` as additional tap kinds to validate multi-tap composition                                                                                                                                                                                                                                                                                             | No (additive)                 |
+
+## Edge cases worth resolving up front
+
+| Question                                                            | Recommendation                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Call-only channels (Meet, PSTN) — does `messaging` become required? | No. Make `messaging` optional too; `capabilities` already feature-detects.                                                                                                                                                                                                                                                                     |
+| Does `outbound.send` apply to in-call text?                         | Yes for channels with `call.textChannel = true`; reuse the same outbound adapter, dispatcher passes `callId` via the route.                                                                                                                                                                                                                    |
+| Approvals during a live call?                                       | `approvalCapability` already exists; render approvals via TTS injection on the inference tap for full-duplex calls, fall back to text channel if available.                                                                                                                                                                                    |
+| Multiple simultaneous calls per account?                            | Session key includes `:call:<callId>`; per-call taps. No global call state.                                                                                                                                                                                                                                                                    |
+| Multiple taps on a single call?                                     | Yes — first-class. Inference + recording + captioning can run together, independent. Each tap's lifecycle is bounded by the call's.                                                                                                                                                                                                            |
+| Call recording / consent                                            | `call.recording.consentRequired` drives a banner/announcement contract enforced by core. The recording itself is a `RecordingTap` whose attachment is _configured_ per-agent or at channel-level (as policy/defaults), but always _attached_ by core. Channel plugins never attach the tap, even when channel-level config is what enabled it. |
+| Can a channel ship its own preferred inference defaults?            | Yes via config (`channels.<id>.call.inference.preferred`), but the channel never _implements_ an inference provider or attaches the tap.                                                                                                                                                                                                       |
+
+## Why this is the right shape
+
+| Benefit                                   | Mechanism                                                                                                                        |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| One package per platform                  | Same `ChannelPlugin` registers messaging + calls                                                                                 |
+| Transport and taps don't bleed            | Separate registries; `CallTap` is the only meeting point, attached by core                                                       |
+| Composable per-call                       | Many taps per `Call`; inference, recording, captioning, transform run independently                                              |
+| No per-channel agent wiring               | Core resolves inference from `realtime-voice` registry; channels never see taps                                                  |
+| Call-only and chat-only channels both fit | Both `messaging` and `call` are optional, gated by `capabilities`                                                                |
+| Anti-detection / single socket            | `attachToConnection` keeps one transport per account                                                                             |
+| Future-proof                              | `mediaTypes` covers `data`/`screen`; new tap kinds (translation, vision, mixing) plug in without changing the transport contract |
+
+## Non-channel use (within OpenClaw)
+
+Nothing in the design type-locks the tap layer to channel plugins. Skills, jobs, workflow nodes, and tests can attach taps to any `Call` they have a handle to. Soft fences to relax so non-channel use is a first-class affordance, not a workaround:
+
+| Fence today                                                                              | Relaxation                                                                                        |
+| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `core.attachTap` framed as called only inside the channel-supplied `onCall` handler      | Make `core.attachTap(call, tap, { sessionKey, ... })` a public core API any plugin/skill can call |
+| Session-key shape `agent:<id>:<channel>:<peer>:call:<callId>` assumes a `<channel>` slot | Allow a non-channel originator (e.g., `agent:<id>:system:call:<callId>`)                          |
+| `recordInboundCall` / `dispatchCallStartToAgent` take `channelId`                        | Accept `originatorId` instead, with `channelId` as a special case                                 |
+| Capability discovery only via `ChannelPlugin.capabilities.call`                          | Non-channel callers don't need feature-detection; document that explicitly                        |
+
+Registry rule stays: `api.registerChannel({ plugin })` is still the only path that _registers_ a `call` adapter. Ad-hoc `Call` construction inside a skill is fine; ad-hoc tap attachment to an existing call is fine; ad-hoc _registration_ of a transport is not.
+
+## Use outside OpenClaw
+
+`@openclaw/call-sdk` has zero `@openclaw/core` or `@openclaw/plugin-sdk` imports today (only `commander` as a runtime dep). The framework is already portable; OpenClaw is the integrator. The split:
+
+| Layer                                                   | Portable      | Notes                                                             |
+| ------------------------------------------------------- | ------------- | ----------------------------------------------------------------- |
+| `Call`, `MediaSource`, `MediaStreamQueue`               | ✓             | Pure transport types                                              |
+| `CallTap` abstraction + base lifecycle                  | ✓             | Generic media-attachment primitive; no OpenClaw concepts          |
+| `STTProvider` / `TTSProvider` / `RealtimeVoiceProvider` | ✓             | Vendor-neutral                                                    |
+| `ChannelCallAdapter`                                    | ✓             | Method shape doesn't reference `ChannelPlugin`                    |
+| Capability flags                                        | ✓             | Generic transport surface                                         |
+| Provider impls (`providers/whatsapp`, `providers/mock`) | ✓             | Depend on Baileys, not OpenClaw                                   |
+| `api.registerChannel` / `registerRealtimeVoiceProvider` | OpenClaw seam | Lives in core                                                     |
+| `core.attachTap`                                        | OpenClaw seam | External consumers attach taps via their own runtime              |
+| `recordInboundCall` / `dispatchCall*ToAgent`            | OpenClaw seam | Routes the agent's `InferenceTap` into the OpenClaw agent runtime |
+| Session-key shape                                       | OpenClaw seam | OpenClaw routing convention                                       |
+
+To make external use first-class:
+
+| Item                                                                                         | Why                                                                                            |
+| -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Frame "two axes, two registries" in call-sdk docs as a vendor-neutral pattern                | Today it's framed as an OpenClaw rule; the separation is universal                             |
+| Ship a standalone-host example (no OpenClaw, no agent runtime) — e.g., a recording-only host | Pins the coupling boundary, proves the SDK is usable on its own, exercises a non-inference tap |
+| Neutral CLI binary name (`call-sdk` alongside `openclaw-call`)                               | CLI name leaks branding into an otherwise portable artifact                                    |
+
+## Open questions to decide before building
+
+| Decision                                                                                                                                                            | Options                                                                                                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Should the plugin-sdk module/path be `channel-call` (matches the cap and SDK) or stay `channel-voice` (matches existing `realtime-voice` etc. registry vocabulary)? | Recommended: `channel-call` for self-consistency with the cap, the SDK type names, and the existing `Call`-prefixed identifiers. Inference registry names (`realtime-voice`) stay untouched on their own axis. |
+| Where `Call` / `CallTap` interface types live                                                                                                                       | Keep in `@openclaw/call-sdk` and re-export, or move into `openclaw/plugin-sdk/channel-call`                                                                                                                    |
+| Whether to require `messaging` to be optional now                                                                                                                   | Yes — unblocks Meet/PSTN as first-class channels                                                                                                                                                               |
+| One `attachTap` API or per-kind helpers (`attachInferenceTap`, `attachRecordingTap`, …)?                                                                            | Lean toward one generic `attachTap` plus thin convenience wrappers per kind                                                                                                                                    |

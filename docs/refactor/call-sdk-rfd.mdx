@@ -1,0 +1,107 @@
+---
+title: "@openclaw/call-sdk — provider-agnostic real-time call SDK"
+---
+
+Author(s): [visionik](https://github.com/visionik) (OpenClaw)
+
+<Note>
+  **RFC draft status.** This RFC and its companion design docs live in
+  `docs/refactor/call-sdk-rfd.mdx`, `docs/refactor/call-sdk-design.mdx`, and
+  `docs/refactor/call-sdk-channel-binding.mdx` for iteration with OpenClaw maintainers before any
+  implementation begins. Nothing in here is committed; please push back on anything that feels
+  wrong.
+</Note>
+
+## Goal
+
+Define a single TypeScript abstraction for real-time calls (audio / video / screen / data) that lets one transport adapter per platform (WhatsApp, Google Meet, Twilio, Discord, SIP, …) plug into a common `Call` lifecycle, and lets multiple independent consumers — AI inference, recording, captioning, DSP, mixing — attach to a call's media surface concurrently without competing or knowing about each other.
+
+The SDK ships as `@openclaw/call-sdk` (portable, zero `@openclaw/core` or `@openclaw/plugin-sdk` imports). OpenClaw binds it to `ChannelPlugin.call: ChannelCallAdapter` (a thin extension of the SDK's `CallTransport`) so a single channel package per platform owns both messaging and calls cleanly.
+
+## Non-goals
+
+- **Codec / encoder / decoder pipeline.** v1 ships `MediaSource = AsyncIterable<Buffer>`; `MediaFrame` and the codec stack are v2.
+- **Policy / RBAC / consent enforcement.** The SDK exposes attach/detach observability events; _enforcement_ is the host's job (OpenClaw wraps `attachTap` under RBAC; other hosts wrap differently or not at all).
+- **Browser / WebRTC peer-side use.** Node-native `AsyncIterable<Buffer>` streams; no DOM dependency. Browser interop is not in scope.
+- **Telephony-stack reinvention.** No conferencing engine, no SIP stack, no media server, no IVR-DSL parser. Transports plug in existing libraries; the SDK orchestrates `Call`s and `CallTap`s on top.
+- **Backwards compatibility with previous drafts.** No external consumers yet; `VoiceProvider` / `AgentBridge` are gone, no aliases.
+
+## Proposed interface (sketch)
+
+Three layers:
+
+```ts
+// 1. Transport (per platform) → produces Calls
+interface CallTransport {
+  dial(endpoint, opts?): Promise<Call>
+  join(groupId, opts?): Promise<Call>
+  onCall(handler: (call: Call) => void): void
+}
+
+// 2. Call (per session) → exposes media surface + lifecycle
+interface Call {
+  readonly id: string
+  readonly state: CallState
+  readonly mode: CallMode;     setMode(m: CallMode): Promise<void>
+  readonly channels: ReadonlySet<MediaType>;  setChannels(t: MediaType[]): Promise<void>
+  readonly capabilities: CallCapabilities  // runtime feature-detection
+  accept(opts?): Promise<void>
+  hangup(reason?): Promise<void>
+  receive(type, opts?: { signal?: AbortSignal }): MediaSource | null
+  send(stream, type, opts?: { signal?: AbortSignal }): Promise<void>
+  onAudio(handler: (s: MediaSource, ctx: { signal: AbortSignal }) => void): void
+  // optional, gated by capabilities:
+  hold?(): Promise<void>;  resume?(): Promise<void>
+  transfer?(endpoint): Promise<void>
+  dtmf?(tone): Promise<void>
+  text?(msg): Promise<void>;  onText?(h): void
+  onTapAttached(h): void;  onTapDetached(h): void  // observability
+}
+
+// 3. CallTap (zero-or-many per Call) → media attachment primitive
+function attachTap(call: Call, tap: CallTap, opts?): CallTap  // returns handle
+interface CallTap {
+  readonly state: 'attaching' | 'active' | 'detached' | 'failed'
+  detach(): void
+  onError(h): void
+}
+
+// Concrete tap kinds (v1 / v1.1 / later):
+inferenceTap({ ear: STTProvider, mouth: TTSProvider } | { realtime: RealtimeVoiceProvider })  // v1
+recordingTap({ sink, format })  // v1.1
+captionTap({ provider, emitToTextChannel })  // v1.1
+ivrTap({...})        // later
+transformTap({...})  // v2
+mixerTap({...})      // v2
+```
+
+The OpenClaw plugin-sdk re-exports `CallTransport` as `ChannelCallAdapter` (thin extension adding channel-binding hooks); `ChannelPlugin.call: ChannelCallAdapter` is the field. Channel plugins produce a `Call` and never touch taps; tap attachment is core's (or a skill-under-RBAC's) job.
+
+## Hard tradeoffs
+
+1. **`Buffer` now vs. `MediaFrame` later.** Shipping `AsyncIterable<Buffer>` in v1 lets the SDK exist without a codec pipeline — but it punts every real-codec concern (sample rate, sequence numbers, track identity, EOS / error markers) to v2 and forces a typed migration of every provider implementation later. The alternative — block v1 on a complete `MediaFrame` design — delays the abstractions that are independently valuable (`Call`, `CallTap`, fan-out) and risks designing the frame shape without real transport pressure to validate it. **Chosen:** ship `Buffer` v1, design `MediaFrame` against actual codec needs in v2.
+2. **Many taps per call vs. one bridge per call.** Multi-tap composition (inference + recording + captions, independent) is a stronger primitive than the original "one `AgentBridge`" — but it requires fan-out, backpressure, and `AbortSignal` cancellation to be _boringly correct in v1_, not v1-polish. Without them, detach leaks pipelines and the multi-tap claim is marketing. **Chosen:** promote fan-out / cancellation into v1 core; defer `RecordingTap` / `CaptionTap` to v1.1 as validation, not feature-creep into v1.
+3. **Policy lives in the host, not the SDK.** Keeping `attachTap(call, tap)` a plain function with no RBAC means the SDK is portable, testable, and not coupled to OpenClaw's identity model — but it pushes consent enforcement, audit logging, and recording-disclosure rules onto every host. The compromise is a thin observability surface (`onTapAttached` / `onTapDetached` events with `tapKind` / `mediaDirection` / `sinkIdentity` / `timestamp` payloads) so hosts can wire policy on top without monkey-patching. The cost: a host that forgets to wrap `attachTap` gets no enforcement; the SDK won't save them.
+
+## Companion design docs (in this PR)
+
+The full design lives in two companion documents in this same PR. The summary above is intentionally short; the docs below carry the complete API reference, capability matrix, migration path, and channel-binding rules that this RFC depends on.
+
+- **[Call-SDK design](./call-sdk-design.mdx)** — the portable, OpenClaw-agnostic API design for `@openclaw/call-sdk`: `Call`, `CallTransport`, `CallTap` and its built-in kinds, the `MediaFrame` v1→v2 migration, fan-out / `AbortSignal` v1 core, the policy-free `attachTap` primitive, lifecycle observability events, the v1 / v1.1 / v2 / later scope split, and worked examples for inbound calls, agent-in-Meet, multi-tap composition, recording-only host, IVR→AI handoff, and mock-based testing.
+- **[Call-SDK channel binding](./call-sdk-channel-binding.mdx)** — how the SDK plugs into OpenClaw's `ChannelPlugin` model: `capabilities.call`, `ChannelPlugin.call: ChannelCallAdapter`, the load-bearing "channels never tap" guardrail (enforced at types / runtime / PR docs), the channel ↔ core ↔ skill trust boundary, two-axes / two-registries split, session-key conventions with a `:call:<callId>` suffix, the `channel-call-inbound` dispatch helpers, single-connection contract, real-world capability matrix, and 8-phase migration path.
+
+The two docs are written so they can be reviewed independently; this RFD is the entry point that pins the goal / non-goals / core tradeoffs.
+
+## Open questions (deferred to companion docs)
+
+The companion docs each carry their own "Open questions" tables. The two questions worth surfacing at the RFD level:
+
+- **Should `messaging` become optional on `ChannelPlugin`** so call-only platforms (Meet, PSTN) are first-class? (Recommended: yes — see [channel binding](./call-sdk-channel-binding.mdx).)
+- **Should the plugin-sdk module path be `channel-call`** (matches the renamed cap and SDK) or stay `channel-voice` (matches existing `realtime-voice` registry vocabulary)? (Recommended: `channel-call` — see [channel binding](./call-sdk-channel-binding.mdx).)
+
+## External draft references
+
+For reviewers who want to see the in-progress drafts these docs were synthesized from (kept until the RFD is merged):
+
+- Call-SDK design gist: <https://gist.github.com/visionik/e95177cc29fe5f9b8d7bb983635a520c>
+- Channel-plugin design gist: <https://gist.github.com/visionik/6d27c758552403ea4b4641c72d73ebda>
