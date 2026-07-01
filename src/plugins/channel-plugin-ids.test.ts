@@ -2396,6 +2396,57 @@ describe("resolveGatewayStartupPluginIds", () => {
     expect(plan.configuredDeferredChannelPluginIds).toStrictEqual([]);
   });
 
+  it("skips unreadable manifest channel lists while preserving healthy channel plugins", () => {
+    const healthyChannel = withManifestLoadPaths({
+      id: "healthy-channel",
+      channels: ["healthy-channel"],
+      origin: "bundled" as const,
+      enabledByDefault: undefined,
+      providers: [],
+      cliBackends: [],
+    });
+    const brokenChannel = {
+      id: "broken-channel",
+      rootDir: "/tmp/plugins/broken-channel",
+      source: "/tmp/plugins/broken-channel/index.ts",
+      manifestPath: "/tmp/plugins/broken-channel/openclaw.plugin.json",
+      origin: "bundled" as const,
+      enabledByDefault: undefined,
+      providers: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      get channels() {
+        throw new Error("fuzzplugin channels exploded");
+      },
+    } as unknown as PluginManifestRecord;
+    const registry = {
+      plugins: [healthyChannel, brokenChannel],
+      diagnostics: [],
+    } satisfies PluginManifestRegistry;
+    const index = createInstalledPluginIndexFixture({
+      plugins: [healthyChannel],
+      diagnostics: [],
+    });
+
+    const plan = resolveGatewayStartupPluginPlanFromRegistry({
+      config: {
+        channels: {
+          "healthy-channel": {
+            token: "configured",
+          },
+        },
+      } as OpenClawConfig,
+      env: createPluginPlanningTestEnv(),
+      index,
+      manifestRegistry: registry,
+    });
+
+    expect(plan.channelPluginIds).toStrictEqual(["healthy-channel"]);
+    expect(plan.pluginIds).toStrictEqual(["healthy-channel"]);
+    expect(plan.configuredDeferredChannelPluginIds).toStrictEqual([]);
+  });
+
   it("carries deferred configured channel ids through the startup plan", () => {
     const registry = createManifestRegistryFixtureWithWorkspaceDemoChannel();
     const index = createInstalledPluginIndexFixture(registry);

@@ -283,14 +283,41 @@ type ManifestRegistryLookup = ReadonlyMap<string, PluginManifestRecord>;
 function createManifestRegistryLookup(
   manifestRegistry: PluginManifestRegistry,
 ): ManifestRegistryLookup {
-  return new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin]));
+  const lookup = new Map<string, PluginManifestRecord>();
+  for (const plugin of manifestRegistry.plugins) {
+    const pluginId = readManifestPluginId(plugin);
+    if (pluginId) {
+      lookup.set(pluginId, plugin);
+    }
+  }
+  return lookup;
+}
+
+function readManifestPluginId(plugin: PluginManifestRecord): string | undefined {
+  try {
+    return typeof plugin.id === "string" && plugin.id.trim() ? plugin.id : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readManifestChannelIds(manifest: PluginManifestRecord | undefined): readonly string[] {
+  try {
+    const channels = manifest?.channels;
+    if (!Array.isArray(channels)) {
+      return [];
+    }
+    return channels.filter((channelId): channelId is string => typeof channelId === "string");
+  } catch {
+    return [];
+  }
 }
 
 function listManifestChannelIds(
   manifestLookup: ManifestRegistryLookup,
   pluginId: string,
 ): readonly string[] {
-  return manifestLookup.get(pluginId)?.channels ?? [];
+  return readManifestChannelIds(manifestLookup.get(pluginId));
 }
 
 function findManifestPlugin(
@@ -1893,9 +1920,10 @@ export function resolveChannelPluginIdsFromRegistry(params: {
   manifestRegistry: PluginManifestRegistry;
 }): string[] {
   const { manifestRegistry } = params;
-  return manifestRegistry.plugins
-    .filter((plugin) => plugin.channels.length > 0)
-    .map((plugin) => plugin.id);
+  return manifestRegistry.plugins.flatMap((plugin) => {
+    const pluginId = readManifestPluginId(plugin);
+    return pluginId && readManifestChannelIds(plugin).length > 0 ? [pluginId] : [];
+  });
 }
 
 export function resolveConfiguredDeferredChannelPluginIdsFromRegistry(params: {
