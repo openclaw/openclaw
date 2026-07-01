@@ -198,6 +198,31 @@ describe("deliverMatrixReplies", () => {
     expect(sendOptions(0).cfg).toBe(cfg);
   });
 
+  it("suppresses MiniMax mm: namespaced reasoning-only replies before Matrix sends", async () => {
+    await deliverMatrixReplies({
+      cfg,
+      replies: [
+        { text: "<mm:think>Reading\nChecking</mm:think>" },
+        { text: "<mm:thinking>Planning</mm:thinking>" },
+        { text: "<mm:thought>Drafting</mm:thought>" },
+        { text: "Visible answer" },
+      ],
+      roomId: "room:7",
+      client: {} as MatrixClient,
+      runtime: runtimeEnv,
+      textLimit: 4000,
+      replyToMode: "off",
+    });
+
+    expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(sendCall(0)[0]).toBe("room:7");
+    expect(sendCall(0)[1]).toBe("Visible answer");
+    const sentTexts = sendMessageMatrixMock.mock.calls.map((call) => String(call[1]));
+    expect(sentTexts.join("\n")).not.toContain("Reading");
+    expect(sentTexts.join("\n")).not.toContain("Planning");
+    expect(sentTexts.join("\n")).not.toContain("Drafting");
+  });
+
   it("uses supplied cfg for chunking and send delivery without reloading runtime config", async () => {
     const explicitCfg = {
       channels: {
