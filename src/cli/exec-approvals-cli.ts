@@ -73,6 +73,17 @@ async function readStdin(
   return Buffer.concat(chunks, total).toString("utf8");
 }
 
+async function readFileWithBound(
+  filePath: string,
+  maxBytes = EXEC_APPROVALS_STDIN_MAX_BYTES,
+): Promise<string> {
+  const stat = await fs.stat(filePath);
+  if (stat.size > maxBytes) {
+    throw new Error(`Exec approvals file exceeds ${maxBytes} bytes: ${filePath}`);
+  }
+  return await fs.readFile(filePath, "utf8");
+}
+
 async function resolveTargetNodeId(opts: ExecApprovalsCliOpts): Promise<string | null> {
   if (opts.gateway) {
     return null;
@@ -549,7 +560,7 @@ export function registerExecApprovalsCli(program: Command) {
           exitWithError("Use either --file or --stdin (not both).");
         }
         const { source, nodeId, targetLabel, baseHash } = await loadWritableSnapshotTarget(opts);
-        const raw = opts.stdin ? await readStdin() : await fs.readFile(String(opts.file), "utf8");
+        const raw = opts.stdin ? await readStdin() : await readFileWithBound(String(opts.file));
         let file: ExecApprovalsFile;
         try {
           file = JSON5.parse(raw);
@@ -635,4 +646,5 @@ export function registerExecApprovalsCli(program: Command) {
 
 export const testing = {
   readStdin,
+  readFileWithBound,
 };
