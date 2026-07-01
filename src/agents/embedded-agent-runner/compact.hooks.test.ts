@@ -12,6 +12,9 @@ import {
   enqueueCommandInLaneMock,
   ensureRuntimePluginsLoaded,
   estimateTokensMock,
+  ensureAuthProfileStoreMock,
+  externalCliDiscoveryForProviderAuthMock,
+  getApiKeyForModelMock,
   getMemorySearchManagerMock,
   guardSessionManagerMock,
   hookRunner,
@@ -23,6 +26,8 @@ import {
   resolveContextWindowInfoMock,
   resolveContextEngineMock,
   resolveEmbeddedAgentStreamFnMock,
+  resolveAuthProfileOrderMock,
+  readSessionLeafStateFromTranscriptAsyncMock,
   resolveMemorySearchConfigMock,
   resolveModelMock,
   resolveSandboxContextMock,
@@ -647,6 +652,139 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       ([provider, modelId]) => provider === "openai" && modelId === "gpt-fallback",
     );
     expectRecordFields(mockCallArg(resolveEmbeddedAgentStreamFnMock, 1), {
+      authProfileId: "openai:default",
+    });
+  });
+
+  it("retries auto-selected auth profiles within the same provider before failing compaction", async () => {
+    resolveAuthProfileOrderMock.mockReturnValueOnce(["openai:default", "openai:backup"]);
+    resolveModelMock.mockImplementation((provider = "openai", modelId = "fake") => ({
+      model: { provider, api: "responses", id: modelId, input: [] },
+      error: null,
+      authStorage: { setRuntimeApiKey: vi.fn() },
+      modelRegistry: {},
+    }));
+    sessionCompactImpl
+      .mockRejectedValueOnce(
+        Object.assign(new Error("primary compaction rate limited"), {
+          status: 429,
+          code: "rate_limit_exceeded",
+        }),
+      )
+      .mockResolvedValueOnce({
+        summary: "backup profile summary",
+        firstKeptEntryId: "entry-backup",
+        tokensBefore: 120,
+        details: { ok: true },
+      });
+
+    const result = await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-primary",
+      authProfileId: "openai:default",
+      authProfileIdSource: "auto",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.result?.summary).toBe("backup profile summary");
+    expect(sessionCompactImpl).toHaveBeenCalledTimes(2);
+    expect(ensureAuthProfileStoreMock).toHaveBeenCalledTimes(1);
+    expect(externalCliDiscoveryForProviderAuthMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        profileId: "openai:default",
+        preferredProfile: "openai:default",
+      }),
+    );
+    expect(resolveAuthProfileOrderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        preferredProfile: "openai:default",
+      }),
+    );
+    expectRecordFields(mockCallArg(resolveEmbeddedAgentStreamFnMock, 0), {
+      authProfileId: "openai:default",
+    });
+    expectRecordFields(mockCallArg(resolveEmbeddedAgentStreamFnMock, 1), {
+      authProfileId: "openai:backup",
+    });
+    expectRecordFields(mockCallArg(getApiKeyForModelMock, 0), {
+      profileId: "openai:default",
+      lockedProfile: false,
+    });
+    expectRecordFields(mockCallArg(getApiKeyForModelMock, 1), {
+      profileId: "openai:backup",
+      lockedProfile: false,
+    });
+  });
+
+  it("does not retry backup profiles when the selected auth profile is user locked", async () => {
+    resolveAuthProfileOrderMock.mockReturnValueOnce(["openai:default", "openai:backup"]);
+    sessionCompactImpl.mockRejectedValueOnce(
+      Object.assign(new Error("user profile rate limited"), {
+        status: 429,
+        code: "rate_limit_exceeded",
+      }),
+    );
+
+    const result = await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-primary",
+      authProfileId: "openai:default",
+      authProfileIdSource: "user",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain("user profile rate limited");
+    expect(sessionCompactImpl).toHaveBeenCalledTimes(1);
+    expect(ensureAuthProfileStoreMock).not.toHaveBeenCalled();
+    expect(resolveAuthProfileOrderMock).not.toHaveBeenCalled();
+    expectRecordFields(mockCallArg(resolveEmbeddedAgentStreamFnMock), {
+      authProfileId: "openai:default",
+    });
+    expectRecordFields(mockCallArg(getApiKeyForModelMock), {
+      profileId: "openai:default",
+      lockedProfile: true,
+    });
+  });
+
+  it("stops backup auth profile retry when the transcript state changes", async () => {
+    resolveAuthProfileOrderMock.mockReturnValueOnce(["openai:default", "openai:backup"]);
+    readSessionLeafStateFromTranscriptAsyncMock
+      .mockResolvedValueOnce({ entryId: "entry-before", leafId: "leaf-before" })
+      .mockResolvedValueOnce({ entryId: "entry-after", leafId: "leaf-after" });
+    sessionCompactImpl.mockRejectedValueOnce(
+      Object.assign(new Error("primary compaction rate limited"), {
+        status: 429,
+        code: "rate_limit_exceeded",
+      }),
+    );
+
+    const result = await compactEmbeddedAgentSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      provider: "openai",
+      model: "gpt-primary",
+      authProfileId: "openai:default",
+      authProfileIdSource: "auto",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain("primary compaction rate limited");
+    expect(sessionCompactImpl).toHaveBeenCalledTimes(1);
+    expect(readSessionLeafStateFromTranscriptAsyncMock).toHaveBeenCalledTimes(2);
+    expect(resolveEmbeddedAgentStreamFnMock).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(resolveEmbeddedAgentStreamFnMock), {
       authProfileId: "openai:default",
     });
   });

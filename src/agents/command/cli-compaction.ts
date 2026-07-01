@@ -98,6 +98,7 @@ type CliCompactionRuntimeContextParams = {
   messageChannel?: string;
   agentAccountId?: string;
   authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
   workspaceDir: string;
   cwd?: string;
   agentDir: string;
@@ -227,6 +228,7 @@ function buildCliCompactionRuntimeContext(params: CliCompactionRuntimeContextPar
       messageProvider: params.messageChannel,
       agentAccountId: params.agentAccountId,
       authProfileId: params.authProfileId,
+      authProfileIdSource: params.authProfileIdSource,
       workspaceDir: params.workspaceDir,
       cwd: params.cwd,
       agentDir: params.agentDir,
@@ -262,6 +264,7 @@ async function compactCliTranscript(params: {
   messageChannel?: string;
   agentAccountId?: string;
   authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
   senderIsOwner?: boolean;
   thinkLevel?: Parameters<typeof buildEmbeddedCompactionRuntimeContext>[0]["thinkLevel"];
   extraSystemPrompt?: string;
@@ -272,6 +275,7 @@ async function compactCliTranscript(params: {
     messageChannel: params.messageChannel,
     agentAccountId: params.agentAccountId,
     authProfileId: params.authProfileId,
+    authProfileIdSource: params.authProfileIdSource,
     workspaceDir: params.workspaceDir,
     cwd: params.cwd,
     agentDir: params.agentDir,
@@ -392,6 +396,9 @@ async function compactNativeHarnessCliTranscript(params: {
     const sessionAgentId = readAgentIdFromSessionKey(params.sessionKey);
     const nativeHarnessId = params.sessionEntry.agentHarnessId?.trim();
     const authProfileId = params.sessionEntry.authProfileOverride?.trim() || undefined;
+    const authProfileIdSource = authProfileId
+      ? params.sessionEntry.authProfileOverrideSource
+      : undefined;
     await cliCompactionDeps.ensureSelectedAgentHarnessPlugin({
       provider: params.provider,
       modelId: params.model,
@@ -415,6 +422,7 @@ async function compactNativeHarnessCliTranscript(params: {
           provider: params.provider,
           model: params.model,
           authProfileId,
+          authProfileIdSource,
           contextTokenBudget: params.contextTokenBudget,
           currentTokenCount: params.currentTokenCount,
           trigger: "budget",
@@ -573,6 +581,9 @@ export async function runCliTurnCompactionLifecycle(params: {
   let resolvedContextEngine: ContextEngine | undefined;
   let autoCompactionGuardApplied = false;
   const authProfileId = params.sessionEntry?.authProfileOverride?.trim() || undefined;
+  const authProfileIdSource = authProfileId
+    ? params.sessionEntry?.authProfileOverrideSource
+    : undefined;
   const applyAutoCompactionGuard = async (contextEngine: ContextEngine): Promise<void> => {
     if (autoCompactionGuardApplied) {
       return;
@@ -657,6 +668,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       messageChannel: params.messageChannel,
       agentAccountId: params.agentAccountId,
       authProfileId,
+      authProfileIdSource,
       senderIsOwner: params.senderIsOwner,
       thinkLevel: params.thinkLevel,
       extraSystemPrompt: params.extraSystemPrompt,

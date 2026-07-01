@@ -1010,6 +1010,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     expect(compactCalls).toHaveLength(1);
     expect(compactCalls[0]?.runtimeContext).toMatchObject({
       authProfileId: "github-copilot:work",
+      authProfileIdSource: "auto",
     });
     expect(maintenance).toHaveBeenCalledTimes(1);
     expect(recordCliCompactionInStore).toHaveBeenCalledWith(

@@ -663,6 +663,7 @@ function buildCompactionContextEngineRuntimeContext(params: {
       currentThreadTs: params.params.currentThreadTs,
       currentMessageId: params.params.currentMessageId,
       authProfileId: params.params.authProfileId,
+      authProfileIdSource: params.params.authProfileIdSource,
       workspaceDir: params.params.workspaceDir,
       cwd: params.params.cwd,
       agentDir: params.agentDir,
