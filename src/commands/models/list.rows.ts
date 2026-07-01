@@ -41,6 +41,7 @@ export type RowBuilderContext = {
   configuredByKey: ConfiguredByKey;
   discoveredKeys: Set<string>;
   filter: RowFilter;
+  browse?: boolean;
   skipRuntimeModelSuppression?: boolean;
   metadataSnapshot?: PluginMetadataSnapshot;
   workspaceDir?: string;
@@ -80,10 +81,29 @@ function matchesProviderFilter(context: RowBuilderContext, provider: string): bo
   return normalizeProviderId(canonicalProvider) === providerFilter;
 }
 
+function isProviderAllowed(context: RowBuilderContext, provider: string): boolean {
+  if (context.browse) {
+    return true;
+  }
+  if (context.cfg.models?.mode !== "replace") {
+    return true;
+  }
+  const configuredProviders = context.cfg.models.providers ?? {};
+  const canonicalProvider = canonicalizeModelCatalogProviderAlias(provider, {
+    cfg: context.cfg,
+    metadataSnapshot: context.metadataSnapshot,
+  });
+  const normProvider = normalizeProviderId(canonicalProvider);
+  return Object.keys(configuredProviders).some((key) => normalizeProviderId(key) === normProvider);
+}
+
 function matchesRowFilter(
   context: RowBuilderContext,
   model: { provider: string; baseUrl?: string },
 ) {
+  if (!isProviderAllowed(context, model.provider)) {
+    return false;
+  }
   if (!matchesProviderFilter(context, model.provider)) {
     return false;
   }
@@ -395,6 +415,9 @@ export async function appendAuthenticatedCatalogRows(params: {
     metadataSnapshot: params.context.metadataSnapshot,
   });
   for (const entry of catalog) {
+    if (!isProviderAllowed(params.context, entry.provider)) {
+      continue;
+    }
     if (!params.context.authIndex.hasProviderAuth(entry.provider)) {
       continue;
     }
@@ -552,6 +575,9 @@ export async function appendConfiguredRows(params: {
     ? (await loadModelResolverModule()).resolveModelWithRegistry
     : undefined;
   for (const entry of params.entries) {
+    if (!isProviderAllowed(params.context, entry.ref.provider)) {
+      continue;
+    }
     if (!matchesProviderFilter(params.context, entry.ref.provider)) {
       continue;
     }
