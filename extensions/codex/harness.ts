@@ -33,6 +33,33 @@ type CodexAppServerAgentHarness = AgentHarness & {
   ): Promise<AgentHarnessCompactResult | undefined>;
 };
 
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function resolveCodexAppServerNativeHookRelay(options?: {
+  pluginConfig?: unknown;
+  resolvePluginConfig?: () => unknown;
+}): { enabled: boolean; hookTimeoutSec?: number } {
+  const pluginConfig = options?.resolvePluginConfig?.() ?? options?.pluginConfig;
+  const appServer = readRecord(readRecord(pluginConfig)?.appServer);
+  const relay = readRecord(appServer?.nativeHookRelay);
+  const mode = typeof relay?.mode === "string" ? relay.mode.trim().toLowerCase() : undefined;
+  const hookTimeoutSec =
+    typeof relay?.hookTimeoutSec === "number" &&
+    Number.isFinite(relay.hookTimeoutSec) &&
+    relay.hookTimeoutSec > 0
+      ? relay.hookTimeoutSec
+      : undefined;
+
+  if (relay?.enabled === false || mode === "disabled") {
+    return { enabled: false };
+  }
+  return hookTimeoutSec === undefined ? { enabled: true } : { enabled: true, hookTimeoutSec };
+}
+
 /**
  * Creates the Codex app-server harness used for attempts, side questions,
  * compaction, reset, and disposal.
@@ -72,14 +99,14 @@ export function createCodexAppServerAgentHarness(options?: {
       const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
       return runCodexAppServerAttempt(params, {
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
-        nativeHookRelay: { enabled: true },
+        nativeHookRelay: resolveCodexAppServerNativeHookRelay(options),
       });
     },
     runSideQuestion: async (params) => {
       const { runCodexAppServerSideQuestion } = await import("./src/app-server/side-question.js");
       return runCodexAppServerSideQuestion(params, {
         pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
-        nativeHookRelay: { enabled: true },
+        nativeHookRelay: resolveCodexAppServerNativeHookRelay(options),
       });
     },
     compact: async (params) => {

@@ -240,6 +240,25 @@
           "defaultWorkspaceDir": {
             "type": "string"
           },
+          "nativeHookRelay": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "mode": {
+                "type": "string",
+                "enum": ["enabled", "disabled", "serial", "full"],
+                "default": "enabled"
+              },
+              "hookTimeoutSec": {
+                "type": "number",
+                "minimum": 1
+              }
+            }
+          },
           "experimental": {
             "type": "object",
             "additionalProperties": false,
@@ -521,6 +540,11 @@
     "appServer.defaultWorkspaceDir": {
       "label": "Default Workspace",
       "help": "Workspace used by /codex bind when --cwd is omitted.",
+      "advanced": true
+    },
+    "appServer.nativeHookRelay": {
+      "label": "Native Hook Relay",
+      "help": "Controls Codex app-server native hook relay. Use disabled for constrained Telegram linked-review lanes.",
       "advanced": true
     },
     "appServer.experimental": {
