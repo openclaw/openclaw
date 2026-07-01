@@ -1,6 +1,7 @@
 // Pure helpers for parsing, adding, removing, and generating agent route bindings.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { normalizeChatType } from "../channels/chat-type.js";
 import { getBundledChannelSetupPlugin } from "../channels/plugins/bundled.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
@@ -316,37 +317,76 @@ export function parseBindingSpecs(params: {
     if (!trimmed) {
       continue;
     }
-    // Bind specs are exactly <channel> or <channel>:<account>; extra colon
-    // segments would silently change the requested account if truncated.
-    const [channelRaw, accountRaw, ...extraSegments] = trimmed.split(":");
-    if (extraSegments.length > 0) {
-      errors.push(
-        `Invalid binding "${trimmed}". Account id cannot contain ":". Use <channel>:<account>, for example telegram:default.`,
-      );
-      continue;
-    }
+    const segments = trimmed.split(":");
+    const channelRaw = segments[0];
     const channel = normalizeBindingChannelId(channelRaw, params.config);
     if (!channel) {
       errors.push(formatUnknownChannelMessage({ channel: channelRaw }));
       continue;
     }
-    let accountId: string | undefined = accountRaw?.trim();
-    if (accountRaw !== undefined && !accountId) {
+
+    const match: AgentRouteBinding["match"] = { channel };
+
+    if (segments.length === 1) {
+      // <channel> only — resolve default accountId from plugin
+      const accountId = resolveBindingAccountId({
+        channel,
+        config: params.config,
+        agentId,
+        explicitAccountId: undefined,
+      });
+      if (accountId) {
+        match.accountId = accountId;
+      }
+    } else if (segments.length === 2) {
+      // <channel>:<account> — accountId binding
+      let accountId: string | undefined = segments[1]?.trim();
+      if (!accountId) {
+        errors.push(
+          `Invalid binding "${trimmed}". Account id is empty. Use <channel>:<account>, for example telegram:default.`,
+        );
+        continue;
+      }
+      accountId = resolveBindingAccountId({
+        channel,
+        config: params.config,
+        agentId,
+        explicitAccountId: accountId,
+      });
+      if (accountId) {
+        match.accountId = accountId;
+      }
+    } else if (segments.length === 3) {
+      // <channel>:<peer_kind>:<peer_id> — peer binding
+      const peerKindRaw = segments[1]?.trim();
+      const peerIdRaw = segments[2]?.trim();
+      if (!peerKindRaw) {
+        errors.push(
+          `Invalid binding "${trimmed}". Peer kind is empty. Use <channel>:<peer_kind>:<peer_id>, for example feishu:group:oc_test.`,
+        );
+        continue;
+      }
+      if (!peerIdRaw) {
+        errors.push(
+          `Invalid binding "${trimmed}". Peer id is empty. Use <channel>:<peer_kind>:<peer_id>, for example feishu:group:oc_test.`,
+        );
+        continue;
+      }
+      const peerKind = normalizeChatType(peerKindRaw);
+      if (!peerKind) {
+        errors.push(
+          `Invalid binding "${trimmed}". Peer kind "${peerKindRaw}" is not valid. Use one of: direct, group, channel. For example feishu:group:oc_test.`,
+        );
+        continue;
+      }
+      match.peer = { kind: peerKind, id: peerIdRaw };
+    } else {
       errors.push(
-        `Invalid binding "${trimmed}". Account id is empty. Use <channel>:<account>, for example telegram:default.`,
+        `Invalid binding "${trimmed}". Too many segments. Use <channel>:<account> (e.g., telegram:default) or <channel>:<peer_kind>:<peer_id> (e.g., feishu:group:oc_test).`,
       );
       continue;
     }
-    accountId = resolveBindingAccountId({
-      channel,
-      config: params.config,
-      agentId,
-      explicitAccountId: accountId,
-    });
-    const match: AgentRouteBinding["match"] = { channel };
-    if (accountId) {
-      match.accountId = accountId;
-    }
+
     bindings.push({ type: "route", agentId, match });
   }
   return { bindings, errors };

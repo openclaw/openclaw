@@ -57,17 +57,25 @@ You can also add bindings when creating an agent:
 openclaw agents add work --workspace ~/.openclaw/workspace-work --bind telegram:* --bind discord:*
 ```
 
+Bind to a specific conversation (group, channel, or direct message) using the 3-segment format:
+
+```bash
+openclaw agents add feishu-bot --workspace ~/.openclaw/workspace-feishu --bind 'feishu:group:oc_test'
+openclaw agents bind --agent feishu-bot --bind 'matrix:dm:user123'
+```
+
 If you omit `accountId` (`--bind <channel>`), OpenClaw resolves it from plugin setup hooks, forced account binding, or the channel's configured account count.
 
 If you omit `--agent` for `bind` or `unbind`, OpenClaw targets the current default agent.
 
 ### `--bind` format
 
-| Format                       | Meaning                                                                                           |
-| ---------------------------- | ------------------------------------------------------------------------------------------------- |
-| `--bind <channel>:*`         | Match all accounts on the channel.                                                                |
-| `--bind <channel>:<account>` | Match one account.                                                                                |
-| `--bind <channel>`           | Match the default account only unless the CLI can safely resolve a plugin-specific account scope. |
+| Format                         | Meaning                                                                                           |
+| ------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `--bind <channel>:*`           | Match all accounts on the channel.                                                                |
+| `--bind <channel>:<account>`   | Match one account.                                                                                |
+| `--bind <channel>`             | Match the default account only unless the CLI can safely resolve a plugin-specific account scope. |
+| `--bind <channel>:<kind>:<id>` | Match a specific conversation by peer kind (`direct`, `group`, or `channel`) and peer ID.         |
 
 ### Binding scope behavior
 
@@ -122,7 +130,7 @@ Options:
 - `--workspace <dir>`
 - `--model <id>`
 - `--agent-dir <dir>`
-- `--bind <channel[:accountId]>` (repeatable)
+- `--bind <format>` (repeatable) — see [`--bind` format](#--bind-format)
 - `--non-interactive`
 - `--json`
 
@@ -149,7 +157,7 @@ Options:
 Options:
 
 - `--agent <id>` (defaults to the current default agent)
-- `--bind <channel[:accountId]>` (repeatable)
+- `--bind <format>` (repeatable) — see [`--bind` format](#--bind-format)
 - `--json`
 
 ### `agents unbind`
@@ -157,7 +165,7 @@ Options:
 Options:
 
 - `--agent <id>` (defaults to the current default agent)
-- `--bind <channel[:accountId]>` (repeatable)
+- `--bind <format>` (repeatable) — see [`--bind` format](#--bind-format)
 - `--all`
 - `--json`
 
