@@ -47,7 +47,7 @@ function syncNameSessionEntry(params: HandleCommandsParams): void {
   params.sessionEntry = entry;
 }
 
-type NameWriteResult =
+export type NameWriteResult =
   | {
       ok: true;
       label: string;
@@ -57,53 +57,17 @@ type NameWriteResult =
     }
   | { ok: false; error: string };
 
-export const handleNameCommand: CommandHandler = async (params, allowTextCommands) => {
-  if (!allowTextCommands) {
-    return null;
-  }
-  const parsed = parseNameCommand(params.command.commandBodyNormalized);
-  if (!parsed) {
-    return null;
-  }
-  const unauthorized = rejectUnauthorizedCommand(params, "/name");
-  if (unauthorized) {
-    return unauthorized;
-  }
-
+export async function writeSessionLabel(
+  params: HandleCommandsParams,
+  title: string,
+): Promise<NameWriteResult> {
   if (!params.storePath || !params.sessionKey) {
-    return nameReply("Naming is not available for this session.");
-  }
-
-  const title = normalizeOptionalString(parsed.title);
-
-  // No argument: surface the current name plus a deterministic suggestion
-  // derived locally (no LLM, no mutation). Apply it with `/name <title>`.
-  if (!title) {
-    const entry =
-      getSessionEntry({ sessionKey: params.sessionKey, storePath: params.storePath }) ??
-      params.sessionEntry;
-    const current = normalizeOptionalString(entry?.label);
-    const suggestion = deriveSessionTitle(entry);
-    const lines: string[] = [];
-    lines.push(
-      current ? `Current session name: ${current}` : "This session has no custom name yet.",
-    );
-    if (suggestion && suggestion !== current) {
-      lines.push(`Suggested name: ${suggestion}`);
-    }
-    lines.push("Use /name <title> to set a name (mirrors the session manager).");
-    return nameReply(lines.join("\n"));
+    return { ok: false, error: "naming is not available for this session" };
   }
 
   const storePath = params.storePath;
   const sessionKey = params.sessionKey;
-  // Reuse the canonical label validation (`parseSessionLabel`) and the same
-  // cross-store uniqueness rule enforced by the web/admin `sessions.patch`
-  // path so chat naming behaves identically to the session manager. Resolve the
-  // session via `resolveSessionStoreEntry` so renames land on the canonical
-  // entry even when the store still holds a legacy/case-folded key alias, and
-  // exclude those aliases from the uniqueness scan to avoid false conflicts.
-  const result = await updateSessionStore<NameWriteResult>(
+  return await updateSessionStore<NameWriteResult>(
     storePath,
     (store) => {
       const resolved = resolveSessionStoreEntry({ store, sessionKey });
@@ -148,6 +112,53 @@ export const handleNameCommand: CommandHandler = async (params, allowTextCommand
           : null,
     },
   );
+}
+
+export const handleNameCommand: CommandHandler = async (params, allowTextCommands) => {
+  if (!allowTextCommands) {
+    return null;
+  }
+  const parsed = parseNameCommand(params.command.commandBodyNormalized);
+  if (!parsed) {
+    return null;
+  }
+  const unauthorized = rejectUnauthorizedCommand(params, "/name");
+  if (unauthorized) {
+    return unauthorized;
+  }
+
+  if (!params.storePath || !params.sessionKey) {
+    return nameReply("Naming is not available for this session.");
+  }
+
+  const title = normalizeOptionalString(parsed.title);
+
+  // No argument: surface the current name plus a deterministic suggestion
+  // derived locally (no LLM, no mutation). Apply it with `/name <title>`.
+  if (!title) {
+    const entry =
+      getSessionEntry({ sessionKey: params.sessionKey, storePath: params.storePath }) ??
+      params.sessionEntry;
+    const current = normalizeOptionalString(entry?.label);
+    const suggestion = deriveSessionTitle(entry);
+    const lines: string[] = [];
+    lines.push(
+      current ? `Current session name: ${current}` : "This session has no custom name yet.",
+    );
+    if (suggestion && suggestion !== current) {
+      lines.push(`Suggested name: ${suggestion}`);
+    }
+    lines.push("Use /name <title> to set a name (mirrors the session manager).");
+    return nameReply(lines.join("\n"));
+  }
+
+  // Reuse the canonical label validation (`parseSessionLabel`) and the same
+  // cross-store uniqueness rule enforced by the web/admin `sessions.patch`
+  // path so chat naming behaves identically to the session manager. Resolve the
+  // session via `resolveSessionStoreEntry` so renames land on the canonical
+  // entry even when the store still holds a legacy/case-folded key alias, and
+  // exclude those aliases from the uniqueness scan to avoid false conflicts.
+  const result = await writeSessionLabel(params, title);
 
   if (!result.ok) {
     return nameReply(`Couldn't rename the session: ${result.error}`);
