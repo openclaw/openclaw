@@ -5,7 +5,7 @@
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import type { RawData } from "ws";
 import { resolveClickClackInboundAccess } from "./access.js";
-import { resolveClickClackAccount } from "./accounts.js";
+import { resolveClickClackAccount, resolveClickClackRuntimeToken } from "./accounts.js";
 import { createClickClackClient } from "./http-client.js";
 import { handleClickClackInbound } from "./inbound.js";
 import { resolveWorkspaceId } from "./resolve.js";
@@ -126,9 +126,23 @@ export async function startClickClackGatewayAccount(
   if (!configuredAccount.configured) {
     throw new Error(`ClickClack is not configured for account "${configuredAccount.accountId}"`);
   }
+  // Runtime path: resolve exec/file SecretRefs the synchronous inspect
+  // resolver can't evaluate. Without this, direct exec SecretRef tokens cause
+  // startup to send an empty Authorization header even though the secrets
+  // audit reports the ref as resolvable (#98428).
+  const token = await resolveClickClackRuntimeToken({
+    cfg: ctx.cfg,
+    value: configuredAccount.config.token,
+    accountId: ctx.account.accountId,
+  });
+  if (!token) {
+    throw new Error(
+      `ClickClack token for account "${configuredAccount.accountId}" resolved to an empty value`,
+    );
+  }
   const client = createClickClackClient({
     baseUrl: configuredAccount.baseUrl,
-    token: configuredAccount.token,
+    token,
   });
   const workspaceId = await resolveWorkspaceId(client, configuredAccount.workspace);
   const me = await client.me();

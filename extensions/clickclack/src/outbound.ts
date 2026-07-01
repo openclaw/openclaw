@@ -2,7 +2,7 @@
  * Outbound ClickClack delivery helpers for channel messages, thread replies,
  * and direct messages.
  */
-import { resolveClickClackAccount } from "./accounts.js";
+import { resolveClickClackAccount, resolveClickClackRuntimeToken } from "./accounts.js";
 import { createClickClackClient } from "./http-client.js";
 import { resolveChannelId, resolveWorkspaceId } from "./resolve.js";
 import { parseClickClackTarget } from "./target.js";
@@ -21,7 +21,14 @@ export async function sendClickClackText(params: {
   replyToId?: string | number | null;
 }) {
   const account = resolveClickClackAccount({ cfg: params.cfg, accountId: params.accountId });
-  const client = createClickClackClient({ baseUrl: account.baseUrl, token: account.token });
+  // Resolve exec/file SecretRefs at delivery time so direct managed-secret
+  // tokens reach ClickClack instead of the empty inspect-mode fallback (#98428).
+  const token = await resolveClickClackRuntimeToken({
+    cfg: params.cfg,
+    value: account.config.token,
+    accountId: account.accountId,
+  });
+  const client = createClickClackClient({ baseUrl: account.baseUrl, token });
   const workspaceId = await resolveWorkspaceId(client, account.workspace);
   const parsed = parseClickClackTarget(params.to);
   const explicitThreadId = params.threadId == null ? "" : String(params.threadId);
