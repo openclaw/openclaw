@@ -2756,7 +2756,38 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     ).toBe(false);
   });
 
-  it("does not retry errored thinking-only turns after side effects", () => {
+  it("does not retry errored thinking-only turns when the current turn had tool activity", () => {
+    const assistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      content: [
+        {
+          type: "redacted_thinking",
+          data: "opaque",
+        },
+      ],
+      usage: { input: 100, output: 1120, totalTokens: 1220 },
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          clientToolCalls: [
+            {
+              name: "read",
+              params: { path: "README.md" },
+            },
+          ],
+          lastAssistant: assistant,
+        }),
+        assistant,
+      }),
+    ).toBe(false);
+  });
+
+  it("retries errored thinking-only turns when prior session turns had side effects but the current turn is clean (#97877)", () => {
     const assistant = {
       role: "assistant",
       stopReason: "error",
@@ -2778,6 +2809,35 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             hadPotentialSideEffects: true,
             replaySafe: false,
           },
+          lastAssistant: assistant,
+        }),
+        assistant,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not retry errored thinking-only turns when the current turn ran a replay-unsafe sync tool (#97877)", () => {
+    const assistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "anthropic",
+      model: "claude-opus-4-8",
+      content: [
+        {
+          type: "redacted_thinking",
+          data: "opaque",
+        },
+      ],
+      usage: { input: 100, output: 1120, totalTokens: 1220 },
+    } as unknown as EmbeddedRunAttemptResult["lastAssistant"];
+    expect(
+      shouldRetrySilentErrorAssistantTurn({
+        attempt: makeAttemptResult({
+          assistantTexts: [],
+          // exec is not in UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES, so the
+          // fixture marks replaySafe=false. The current turn is therefore
+          // terminal even without clientToolCalls or async-started activity.
+          toolMetas: [{ toolName: "exec" }],
           lastAssistant: assistant,
         }),
         assistant,

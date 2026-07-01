@@ -535,7 +535,7 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
     | "toolTrustedLocalMedia"
     | "didDeliverSourceReplyViaMessageTool"
     | "messagingToolSourceReplyPayloads"
-    | "replayMetadata"
+    | "toolMetas"
   >;
   assistant: EmbeddedRunAttemptResult["lastAssistant"] | null | undefined;
 }): boolean {
@@ -545,7 +545,10 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
   if (hasAttemptTerminalState(params.attempt)) {
     return false;
   }
-  if (resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects) {
+  // Current-attempt sync tools with declared side effects make a retry unsafe:
+  // resubmitting could duplicate those effects even when no visible assistant
+  // output was produced. Prior-session effects are already committed context.
+  if ((params.attempt.toolMetas ?? []).some((entry) => entry.replaySafe !== true)) {
     return false;
   }
 
