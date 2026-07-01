@@ -5,7 +5,6 @@ extension SettingsProTab {
     var settingsHeader: some View {
         OpenClawAdaptiveHeaderRow(
             title: "Settings",
-            subtitle: "Gateway, permissions, voice, and device controls.",
             titleFont: .title3.weight(.semibold),
             subtitleFont: .callout)
         {
@@ -40,8 +39,8 @@ extension SettingsProTab {
     }
 
     var gatewaySection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ProSectionHeader(title: "Gateway", uppercase: false)
+        // Keep this container boundary: copying a directly returned generic ProCard crashes SwiftUI on iOS 26.
+        VStack(alignment: .leading, spacing: 0) {
             ProCard(padding: 0, radius: SettingsLayout.cardRadius) {
                 VStack(spacing: 0) {
                     NavigationLink(value: SettingsRoute.gateway) {
@@ -51,15 +50,6 @@ extension SettingsProTab {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    Divider()
-                    self.gatewayDetailRow(label: "Address", value: self.gatewayAddress)
-                    Divider()
-                    self.gatewayDetailRow(label: "Server", value: self.gatewayServer)
-                    Divider()
-                    self.gatewayDetailRow(label: "Agents", value: "\(self.appModel.gatewayAgents.count)")
-                    Divider()
-                    self.gatewayActions
-                        .padding(14)
                 }
             }
             .padding(.horizontal, OpenClawProMetric.pagePadding)
@@ -73,11 +63,14 @@ extension SettingsProTab {
                 color: self.gatewayStatusColor)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("Connection")
+                Text(self.gatewayServer)
                     .font(.subheadline.weight(.semibold))
-                Text(self.gatewayStatusDetail)
+                    .lineLimit(1)
+                Text(self.gatewaySummaryDetail)
                     .font(.caption)
-                    .foregroundStyle(self.gatewayStatusColor)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
 
             Spacer(minLength: 8)
@@ -88,20 +81,10 @@ extension SettingsProTab {
         }
     }
 
-    func gatewayDetailRow(label: String, value: String) -> some View {
-        HStack {
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 8)
-            Text(value)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-        }
-        .padding(.horizontal, 14)
-        .frame(height: 40)
+    var gatewaySummaryDetail: String {
+        let agentCount = self.appModel.gatewayAgents.count
+        let agents = agentCount == 1 ? "1 agent" : "\(agentCount) agents"
+        return "\(self.gatewayStatusDetail) • \(agents)"
     }
 
     var gatewayActions: some View {
@@ -129,39 +112,36 @@ extension SettingsProTab {
 
     var settingsListSection: some View {
         VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 8) {
-                ProSectionHeader(title: "OpenClaw", uppercase: false)
-                ProCard(padding: 0, radius: SettingsLayout.cardRadius) {
-                    VStack(spacing: 0) {
-                        self.settingsListRow(
-                            icon: "checkmark.shield.fill",
-                            title: "Approvals",
-                            detail: self.approvalsDetail,
-                            route: .approvals,
-                            color: self.pendingApproval == nil ? .secondary : OpenClawBrand.warn,
-                            badgeValue: self.pendingApproval == nil ? nil : "1")
-                        Divider().padding(.leading, 58)
-                        self.settingsListRow(
-                            icon: "person.2",
-                            title: "Permissions",
-                            detail: self.permissionsDetail,
-                            route: .permissions)
-                        Divider().padding(.leading, 58)
-                        self.settingsListRow(
-                            icon: "point.3.connected.trianglepath.dotted",
-                            title: "Channels / Integrations",
-                            detail: "Message routing and external channel clients.",
-                            route: .channels)
-                        Divider().padding(.leading, 58)
-                        self.settingsListRow(
-                            icon: "waveform",
-                            title: "Voice & Talk",
-                            detail: self.voiceDetail,
-                            route: .voice)
-                    }
+            ProCard(padding: 0, radius: SettingsLayout.cardRadius) {
+                VStack(spacing: 0) {
+                    self.settingsListRow(
+                        icon: "checkmark.shield.fill",
+                        title: "Approvals",
+                        detail: self.approvalsDetail,
+                        route: .approvals,
+                        color: self.pendingApproval == nil ? .secondary : OpenClawBrand.warn,
+                        badgeValue: self.pendingApproval == nil ? nil : "1")
+                    Divider().padding(.leading, 58)
+                    self.settingsListRow(
+                        icon: "person.2",
+                        title: "Permissions",
+                        detail: self.permissionsDetail,
+                        route: .permissions)
+                    Divider().padding(.leading, 58)
+                    self.settingsListRow(
+                        icon: "point.3.connected.trianglepath.dotted",
+                        title: "Channels",
+                        detail: "Connected services and message routing",
+                        route: .channels)
+                    Divider().padding(.leading, 58)
+                    self.settingsListRow(
+                        icon: "waveform",
+                        title: "Voice & Talk",
+                        detail: self.voiceDetail,
+                        route: .voice)
                 }
-                .padding(.horizontal, OpenClawProMetric.pagePadding)
             }
+            .padding(.horizontal, OpenClawProMetric.pagePadding)
 
             VStack(alignment: .leading, spacing: 8) {
                 ProSectionHeader(title: "Device", uppercase: false)

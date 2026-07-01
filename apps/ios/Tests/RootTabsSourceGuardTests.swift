@@ -174,7 +174,8 @@ struct RootTabsSourceGuardTests {
         let dreamingSource = try String(contentsOf: Self.agentProDreamingDestinationSourceURL(), encoding: .utf8)
 
         #expect(!source.contains("ToolbarItem"))
-        #expect(source.contains("route == .agents || self.directHeaderLeadingAction(for: route) != nil ? .hidden : .visible"))
+        #expect(source
+            .contains("route == .agents || self.directHeaderLeadingAction(for: route) != nil ? .hidden : .visible"))
         #expect(destinationsSource.contains(".toolbar(.hidden, for: .navigationBar)"))
         #expect(destinationsSource.contains("self.directHeaderLeadingAction(for: .instances)"))
         #expect(destinationsSource.contains("self.directHeaderLeadingAction(for: .dreaming)"))
@@ -208,6 +209,7 @@ struct RootTabsSourceGuardTests {
     @Test func `professional layout avoids nested pills and card stacks`() throws {
         let componentsSource = try String(contentsOf: Self.proComponentsSourceURL(), encoding: .utf8)
         let agentSource = try String(contentsOf: Self.agentProTabOverviewSourceURL(), encoding: .utf8)
+        let talkSource = try String(contentsOf: Self.talkProTabSourceURL(), encoding: .utf8)
         let settingsSource = try String(contentsOf: Self.settingsProTabSectionsSourceURL(), encoding: .utf8)
         let overviewSource = try String(contentsOf: Self.commandCenterSourceURL(), encoding: .utf8)
         let overviewRowsSource = try String(contentsOf: Self.commandCenterSupportSourceURL(), encoding: .utf8)
@@ -219,6 +221,10 @@ struct RootTabsSourceGuardTests {
             agentSource,
             from: "var agentFilters: some View",
             to: "var agentFiltersActive: Bool")
+        let agentRow = try Self.extract(
+            agentSource,
+            from: "func agentRow(_ agent: AgentSummary) -> some View",
+            to: "func headerIconButton(")
         let settingsList = try Self.extract(
             settingsSource,
             from: "var settingsListSection: some View",
@@ -234,7 +240,14 @@ struct RootTabsSourceGuardTests {
         #expect(agentFilters.contains("Picker(\"Agent status\""))
         #expect(agentFilters.contains(".pickerStyle(.segmented)"))
         #expect(!agentFilters.contains(".openClawGlassButton("))
-        #expect(settingsList.contains("ProSectionHeader(title: \"OpenClaw\""))
+        #expect(!agentRow.contains("agentMetric"))
+        #expect(!agentRow.contains("chevron.right"))
+        #expect(agentRow.contains("Image(systemName: \"checkmark\")"))
+        #expect(agentRow.contains("agentAccessibilityLabel"))
+        #expect(!talkSource.contains("conversationCard"))
+        #expect(!talkSource.contains("voiceModeCard"))
+        #expect(!talkSource.contains("statusChip"))
+        #expect(!settingsList.contains("ProSectionHeader(title: \"OpenClaw\""))
         #expect(settingsList.contains("ProSectionHeader(title: \"Device\""))
         #expect(settingsList.matches(of: /ProCard\(padding: 0/).count == 2)
         #expect(settingsRow.contains(".contentShape(Rectangle())"))
@@ -324,6 +337,7 @@ struct RootTabsSourceGuardTests {
         #expect(source.contains(".accessibilityLabel(\"Gateway \\(self.gatewayStateText)\")"))
         #expect(!source.contains("private var gatewayActionRow: some View"))
         #expect(!source.contains("ProValuePill(value: self.gatewayStateText"))
+        #expect(!source.contains("destination.subtitle"))
         #expect(source.contains("self.openPhoneRootDestination(.gateway)"))
         #expect(source.contains("private var phoneDetailBackAction: OpenClawSidebarHeaderAction"))
         #expect(source.contains("accessibilityLabel: \"Back to Control\""))
@@ -338,7 +352,7 @@ struct RootTabsSourceGuardTests {
         #expect(!source.contains("private func metric(label:"))
     }
 
-    @Test func phoneHubClearsDetailPathBeforeRootTabHandoff() throws {
+    @Test func `phone hub clears detail path before root tab handoff`() throws {
         let source = try String(contentsOf: Self.phoneHubSourceURL(), encoding: .utf8)
         let handoff = try Self.extract(
             source,
@@ -353,7 +367,7 @@ struct RootTabsSourceGuardTests {
         #expect(clearRange.lowerBound < openRange.lowerBound)
     }
 
-    @Test func workboardUsesRealGatewayMethods() throws {
+    @Test func `workboard uses real gateway methods`() throws {
         let source = try String(contentsOf: Self.iPadWorkboardScreenSourceURL(), encoding: .utf8)
 
         #expect(source.contains("workboard.cards.list"))
@@ -661,7 +675,7 @@ struct RootTabsSourceGuardTests {
         #expect(notificationGuidanceSource.contains("suppressFuture: true"))
         #expect(notificationGuidanceSource.contains("Text(\"Don't show again\")"))
         #expect(rootSource.contains("private func selectSettingsRoute(_ route: SettingsRoute)"))
-        #expect(settingsSource.contains("title: \"Channels / Integrations\""))
+        #expect(settingsSource.contains("title: \"Channels\""))
         #expect(settingsSource.contains("route: .channels"))
         #expect(docsSource.contains(".accessibilityHint(\"Opens Settings / Gateway\")"))
     }
@@ -710,7 +724,8 @@ struct RootTabsSourceGuardTests {
         #expect(actionsSource.contains("self.gatewayController.refreshActiveGatewayRegistrationFromSettings()"))
         #expect(actionsSource.contains("self.gatewayController.restartDiscovery()"))
         #expect(actionsSource.contains("await self.appModel.refreshGatewayOverviewIfConnected()"))
-        #expect(actionsSource.contains("self.gatewayController.requestLocalNetworkAccess(reason: \"settings_preflight\")"))
+        #expect(actionsSource
+            .contains("self.gatewayController.requestLocalNetworkAccess(reason: \"settings_preflight\")"))
         #expect(controllerSource.contains("await self.tcpReachabilityProbe("))
         #expect(controllerSource.contains("Check Tailscale or LAN."))
         #expect(actionsSource.contains("Tailscale is off on this device. Turn it on, then try again."))
@@ -782,7 +797,7 @@ struct RootTabsSourceGuardTests {
 
         #expect(chatSource.matches(of: /self\.appModel\.makeChatTransport\(\)/).count == 2)
         #expect(appModelSource.contains("return IOSGatewayChatTransport(gateway: self.operatorSession)"))
-        #expect(settingsSectionsSource.contains("Message routing and external channel clients."))
+        #expect(settingsSectionsSource.contains("Connected services and message routing"))
         #expect(channelsSource.contains("\"clickclack\": SettingsChannelFallbackMetadata"))
         #expect(channelsSource.contains("label: \"ClickClack\""))
         #expect(channelsSource.contains("Self-hosted chat bot routing."))
@@ -929,6 +944,13 @@ struct RootTabsSourceGuardTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/Design/ChatProTab.swift")
+    }
+
+    private static func talkProTabSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Design/TalkProTab.swift")
     }
 
     private static func docsSourceURL() -> URL {

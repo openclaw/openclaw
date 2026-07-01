@@ -12,7 +12,6 @@ struct AgentProTab: View {
     @State var overview: AgentOverviewSnapshot?
     @State var overviewErrorText: String?
     @State var overviewLoading: Bool = false
-    @State var overviewRefreshNonce: Int = 0
     @State var agentRosterFilter: AgentRosterFilter = .all
     @State var agentSearchPresented = false
     @State var agentSearchText = ""
@@ -85,21 +84,13 @@ struct AgentProTab: View {
     enum AgentLayout {
         static let cardRadius: CGFloat = OpenClawProMetric.cardRadius
         static let filterHeight: CGFloat = 34
-        static let rowMinHeight: CGFloat = 104
+        static let rowMinHeight: CGFloat = 72
         static let metricTileHeight: CGFloat = 94
-        static let actionButtonSize: CGFloat = 34
     }
 
     enum AgentRosterState: Equatable {
         case online
         case ready
-
-        var title: String {
-            switch self {
-            case .online: "Online"
-            case .ready: "Ready"
-            }
-        }
 
         var color: Color {
             switch self {

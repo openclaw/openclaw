@@ -53,26 +53,21 @@ struct RootTabsPhoneControlHub: View {
                             .font(.headline)
                             .foregroundStyle(.primary)
                             .lineLimit(1)
-                        HStack(spacing: 6) {
-                            ProStatusDot(color: self.gatewayStateColor)
-                            Text(self.gatewayDisplayLabel)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
+                        Text(self.gatewayDisplayLabel)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                     }
                     Spacer(minLength: 8)
-                    VStack(alignment: .trailing, spacing: 4) {
+                    HStack(spacing: 7) {
+                        ProStatusDot(color: self.gatewayStateColor)
                         Text(self.gatewayStateText)
                             .font(.footnote.weight(.semibold))
                             .foregroundStyle(self.gatewayStateColor)
-                        HStack(spacing: 3) {
-                            Text(self.gatewayActionTitle)
-                            Image(systemName: "chevron.right")
-                        }
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
                     }
                 }
                 .padding(self.isCompactHeight ? 10 : 14)
@@ -124,21 +119,15 @@ struct RootTabsPhoneControlHub: View {
     private func rowLabel(_ destination: RootTabs.SidebarDestination) -> some View {
         HStack(alignment: .center, spacing: 12) {
             ProIconBadge(systemName: destination.systemImage, color: .secondary)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(destination.title)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                Text(destination.subtitle)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
+            Text(destination.title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
             Spacer(minLength: 8)
             Image(systemName: "chevron.right")
                 .font(.caption2.weight(.bold))
                 .foregroundStyle(.secondary)
         }
-        .padding(.vertical, self.isCompactHeight ? 8 : 10)
+        .padding(.vertical, self.isCompactHeight ? 7 : 9)
         .padding(.horizontal, 14)
         .contentShape(Rectangle())
     }
@@ -274,19 +263,6 @@ struct RootTabsPhoneControlHub: View {
             OpenClawBrand.warn
         case .disconnected:
             .secondary
-        }
-    }
-
-    private var gatewayActionTitle: String {
-        switch GatewayStatusBuilder.build(appModel: self.appModel) {
-        case .connected:
-            "Manage"
-        case .connecting:
-            "Details"
-        case .error:
-            "Fix"
-        case .disconnected:
-            "Connect"
         }
     }
 

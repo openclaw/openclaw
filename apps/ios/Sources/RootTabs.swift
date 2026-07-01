@@ -403,7 +403,6 @@ struct RootTabs: View {
             ChatProTab(
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 headerTitle: "Chat",
-                headerSubtitle: "Agent conversation",
                 showsAgentBadge: false,
                 ownsNavigationStack: false,
                 openSettings: { self.selectSidebarDestination(.gateway) })

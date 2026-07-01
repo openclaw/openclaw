@@ -267,8 +267,8 @@ struct ChatProTab: View {
             ?? Self.defaultHeaderTitle(showsAgentBadge: self.showsAgentBadge, agentDisplayName: self.agentDisplayName)
     }
 
-    private var headerDisplaySubtitle: String {
-        self.normalized(self.headerSubtitle) ?? "AI Assistant"
+    private var headerDisplaySubtitle: String? {
+        self.normalized(self.headerSubtitle)
     }
 
     nonisolated static func defaultHeaderTitle(showsAgentBadge: Bool, agentDisplayName: String) -> String {

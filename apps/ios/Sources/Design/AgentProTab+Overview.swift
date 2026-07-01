@@ -27,12 +27,6 @@ extension AgentProTab {
                                     self.agentSearchPresented.toggle()
                                 }
                             })
-                        self.headerIconButton(
-                            systemName: "arrow.clockwise",
-                            label: self.overviewLoading ? "Refreshing agents" : "Refresh agents",
-                            action: {
-                                self.overviewRefreshNonce += 1
-                            })
                     }
                 }
                 .padding(.top, 2)
@@ -228,61 +222,44 @@ extension AgentProTab {
     func agentRow(_ agent: AgentSummary) -> some View {
         let isActive = agent.id == self.activeAgentID
         let state = self.agentRosterState(for: agent)
-        return HStack(alignment: .top, spacing: 12) {
-            self.agentAvatar(agent, state: state)
+        return Button {
+            guard !isActive else { return }
+            self.appModel.setSelectedAgentId(agent.id)
+        } label: {
+            HStack(alignment: .center, spacing: 12) {
+                self.agentAvatar(agent, state: state)
 
-            VStack(alignment: .leading, spacing: 8) {
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(self.agentName(for: agent))
-                            .font(.subheadline.weight(.semibold))
-                            .lineLimit(1)
-
-                        HStack(spacing: 4) {
-                            Circle()
-                                .fill(state.color)
-                                .frame(width: 6, height: 6)
-                            Text(state.title)
-                                .font(.caption2.weight(.semibold))
-                        }
-                        .foregroundStyle(state.color)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(self.agentName(for: agent))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
-                    }
 
                     Text(self.agentDetail(for: agent))
-                        .font(.caption)
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
+                .layoutPriority(1)
 
-                HStack(spacing: 0) {
-                    self.agentMetric(label: "Sessions", value: self.agentSessionSummary(agent))
-                    Divider()
-                        .frame(height: 24)
-                        .padding(.horizontal, 12)
-                    self.agentMetric(label: "Runtime", value: self.agentRuntimeSummary(agent))
+                Spacer(minLength: 8)
+
+                if isActive {
+                    Image(systemName: "checkmark")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(OpenClawBrand.accent)
+                        .frame(width: 24, height: 44)
+                        .accessibilityHidden(true)
                 }
             }
-            .layoutPriority(1)
-
-            Button {
-                self.appModel.setSelectedAgentId(agent.id)
-            } label: {
-                Image(systemName: isActive ? "checkmark.circle.fill" : "chevron.right")
-                    .font(.caption.weight(.bold))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(isActive ? OpenClawBrand.accent : .secondary)
-            .frame(width: 24, height: AgentLayout.actionButtonSize)
-            .accessibilityLabel(isActive ? "Default agent" : "Set default agent")
+            .padding(.vertical, 10)
+            .padding(.horizontal, 13)
+            .frame(maxWidth: .infinity, minHeight: AgentLayout.rowMinHeight, alignment: .leading)
+            .contentShape(Rectangle())
         }
-        .padding(.vertical, 14)
-        .padding(.horizontal, 13)
-        .frame(maxWidth: .infinity, minHeight: AgentLayout.rowMinHeight, alignment: .leading)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            self.appModel.setSelectedAgentId(agent.id)
-        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(self.agentAccessibilityLabel(agent, isActive: isActive, state: state))
+        .accessibilityHint(isActive ? "Selected agent" : "Selects this agent")
     }
 
     func headerIconButton(
@@ -307,7 +284,7 @@ extension AgentProTab {
                 .foregroundStyle(.white)
                 .minimumScaleFactor(0.62)
                 .lineLimit(1)
-                .frame(width: 48, height: 48)
+                .frame(width: 42, height: 42)
                 .background(
                     Circle()
                         .fill(self.agentTint(for: agent, state: state).gradient))
@@ -315,23 +292,9 @@ extension AgentProTab {
 
             Circle()
                 .fill(state.color)
-                .frame(width: 10, height: 10)
+                .frame(width: 9, height: 9)
                 .overlay(Circle().strokeBorder(Color(uiColor: .systemBackground), lineWidth: 2))
         }
-    }
-
-    func agentMetric(label: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(label)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.74)
-        }
-        .frame(minWidth: 60, alignment: .leading)
     }
 
     func agentMenuRow(
@@ -546,7 +509,6 @@ extension AgentProTab {
             self.appModel.isOperatorGatewayConnected ? "operator" : "no-operator",
             self.activeAgentID,
             self.scenePhase == .active ? "active" : "inactive",
-            "\(self.overviewRefreshNonce)",
         ].joined(separator: ":")
     }
 

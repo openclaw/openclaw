@@ -382,7 +382,7 @@ struct OpenClawNoticeBanner: View {
 
 struct OpenClawAdaptiveHeaderRow<Leading: View, Accessory: View>: View {
     let title: String
-    let subtitle: String
+    let subtitle: String?
     var titleFont: Font = .title3.weight(.semibold)
     var subtitleFont: Font = .subheadline
     var subtitleLineLimit: Int? = 2
@@ -391,7 +391,7 @@ struct OpenClawAdaptiveHeaderRow<Leading: View, Accessory: View>: View {
 
     init(
         title: String,
-        subtitle: String,
+        subtitle: String? = nil,
         titleFont: Font = .title3.weight(.semibold),
         subtitleFont: Font = .subheadline,
         subtitleLineLimit: Int? = 2,
@@ -454,11 +454,13 @@ struct OpenClawAdaptiveHeaderRow<Leading: View, Accessory: View>: View {
                 .lineLimit(2)
                 .minimumScaleFactor(0.86)
                 .fixedSize(horizontal: false, vertical: true)
-            Text(self.subtitle)
-                .font(self.subtitleFont)
-                .foregroundStyle(.secondary)
-                .lineLimit(self.subtitleLineLimit)
-                .fixedSize(horizontal: false, vertical: true)
+            if let subtitle, !subtitle.isEmpty {
+                Text(subtitle)
+                    .font(self.subtitleFont)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(self.subtitleLineLimit)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 }
