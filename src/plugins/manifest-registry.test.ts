@@ -2897,4 +2897,87 @@ describe("loadPluginManifestRegistry", () => {
     expect(newerHost.plugins.map((plugin) => plugin.id)).toContain("synology-chat");
     expectNoRegistryDiagnosticContains(newerHost, "this host is 2026.3.21");
   });
+
+  it("normalizes versioned JSON-RPC plugin manifests", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "json-rpc-normalized",
+      configSchema: { type: "object" },
+      jsonRpc: {
+        protocolVersion: 1,
+        process: {
+          command: "bin/plugin",
+          timeoutMs: 5000,
+          maxFrameBytes: 1024,
+          maxPendingRequests: 8,
+        },
+        permissions: {
+          host: ["runtime.llm.complete", "invalid", "runtime.__proto__.pollute"],
+        },
+        registrations: [
+          {
+            type: "api",
+            method: "registerCommand",
+            args: [
+              {
+                name: "remote",
+                description: "Remote command",
+                handler: { $rpc: "plugin.command" },
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "json-rpc-normalized",
+      rootDir: dir,
+      origin: "workspace",
+    });
+
+    expect(registry.plugins[0]?.jsonRpc).toEqual({
+      protocolVersion: 1,
+      process: {
+        command: "bin/plugin",
+        timeoutMs: 5000,
+        maxFrameBytes: 1024,
+        maxPendingRequests: 8,
+      },
+      permissions: { host: ["runtime.llm.complete"] },
+      registrations: [
+        {
+          type: "api",
+          method: "registerCommand",
+          args: [
+            {
+              name: "remote",
+              description: "Remote command",
+              handler: { $rpc: "plugin.command" },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("rejects JSON-RPC manifests without protocol negotiation", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "json-rpc-unversioned",
+      configSchema: { type: "object" },
+      jsonRpc: {
+        process: { command: "bin/plugin" },
+        registrations: [{ type: "tool", name: "remote", description: "Remote" }],
+      },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "json-rpc-unversioned",
+      rootDir: dir,
+      origin: "workspace",
+    });
+
+    expect(registry.plugins[0]?.jsonRpc).toBeUndefined();
+  });
 });

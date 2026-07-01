@@ -1198,6 +1198,67 @@ describe("loadOpenClawPlugins", () => {
     });
   });
 
+  it("loads JSON-RPC plugins declared entirely from the plugin manifest", () => {
+    useNoBundledPlugins();
+    const pluginDir = makeTempDir();
+    const childPath = path.join(pluginDir, "json-rpc-child.cjs");
+    const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
+    fs.writeFileSync(
+      childPath,
+      `const readline = require("node:readline");
+const rl = readline.createInterface({ input: process.stdin });
+rl.on("line", (line) => {
+  const message = JSON.parse(line);
+  process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { ok: true } }) + "\\n");
+});`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      manifestPath,
+      JSON.stringify(
+        {
+          id: "manifest-json-rpc-plugin",
+          name: "Manifest JSON-RPC Plugin",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+          contracts: { tools: ["manifest_echo"] },
+          jsonRpc: {
+            protocolVersion: 1,
+            process: {
+              command: process.execPath,
+              args: [childPath],
+              inheritEnv: false,
+            },
+            registrations: [
+              {
+                type: "tool",
+                name: "manifest_echo",
+                description: "Echoes through a manifest-owned JSON-RPC child process.",
+              },
+            ],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: pluginDir,
+      config: {
+        plugins: {
+          load: { paths: [manifestPath] },
+          allow: ["manifest-json-rpc-plugin"],
+        },
+      },
+    });
+
+    const record = registry.plugins.find((entry) => entry.id === "manifest-json-rpc-plugin");
+    expect(record?.status).toBe("loaded");
+    expect(registry.tools.flatMap((entry) => entry.names)).toContain("manifest_echo");
+  });
+
   it("emits loader startup trace failure counts for load and register failures", () => {
     useNoBundledPlugins();
     const loadFailPlugin = writePlugin({

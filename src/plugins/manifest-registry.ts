@@ -41,6 +41,7 @@ import {
   type PluginManifestChannelConfig,
   type PluginManifestContracts,
   type PluginManifestMediaUnderstandingProviderMetadata,
+  type PluginManifestJsonRpc,
   type PluginManifestModelCatalog,
   type PluginManifestModelIdNormalization,
   type PluginManifestModelPricing,
@@ -265,6 +266,7 @@ export type PluginManifestRecord = {
   toolMetadata?: Record<string, PluginManifestToolMetadata>;
   configContracts?: PluginManifestConfigContracts;
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
+  jsonRpc?: PluginManifestJsonRpc;
   channelCatalogMeta?: {
     id: string;
     label?: string;
@@ -563,6 +565,7 @@ function buildRecord(params: {
     toolMetadata: params.manifest.toolMetadata,
     configContracts: params.manifest.configContracts,
     channelConfigs,
+    jsonRpc: params.manifest.jsonRpc,
     ...(params.candidate.packageManifest?.channel?.id
       ? {
           channelCatalogMeta: {

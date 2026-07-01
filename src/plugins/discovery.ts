@@ -23,6 +23,7 @@ import { readLegacyNpmPluginDeclaration } from "./legacy-npm-declaration.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
+  PLUGIN_MANIFEST_FILENAME,
   getPackageManifestMetadata,
   loadPluginManifest,
   type PluginManifest,
@@ -1094,6 +1095,27 @@ function discoverInDirectory(params: {
       continue;
     }
 
+    if (candidateManifest?.manifest.jsonRpc) {
+      addCandidate({
+        candidates: params.candidates,
+        diagnostics: params.diagnostics,
+        seen: params.seen,
+        idHint: manifestId ?? entry.name,
+        source: candidateManifest.manifestPath,
+        ...(setupSource ? { setupSource } : {}),
+        rootDir: fullPath,
+        origin: params.origin,
+        ownershipUid: params.ownershipUid,
+        workspaceDir: params.workspaceDir,
+        manifest,
+        packageDir: fullPath,
+        requiredPluginIds: candidateManifest.manifest.requiresPlugins,
+        requiredPluginSource: candidateManifest.manifestPath,
+        realpathCache: params.realpathCache,
+      });
+      continue;
+    }
+
     const bundleDiscovery = discoverBundleInRoot({
       rootDir: fullPath,
       origin: params.origin,
@@ -1235,6 +1257,34 @@ function discoverFromPath(params: {
 
   const stat = fs.statSync(resolved);
   if (stat.isFile()) {
+    if (path.basename(resolved) === PLUGIN_MANIFEST_FILENAME) {
+      const rootDir = path.dirname(resolved);
+      const rootRealPath = safeRealpathSync(rootDir, params.realpathCache) ?? undefined;
+      const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
+        origin: params.origin,
+        rootDir,
+        env: params.env,
+        realpathCache: params.realpathCache,
+      });
+      const candidateManifest = resolveCandidateManifest(rootDir, rejectHardlinks, rootRealPath);
+      if (candidateManifest?.manifest.jsonRpc) {
+        addCandidate({
+          candidates: params.candidates,
+          diagnostics: params.diagnostics,
+          seen: params.seen,
+          idHint: candidateManifest.manifest.id,
+          source: candidateManifest.manifestPath,
+          rootDir,
+          origin: params.origin,
+          ownershipUid: params.ownershipUid,
+          workspaceDir: params.workspaceDir,
+          requiredPluginIds: candidateManifest.manifest.requiresPlugins,
+          requiredPluginSource: candidateManifest.manifestPath,
+          realpathCache: params.realpathCache,
+        });
+        return;
+      }
+    }
     if (!isExtensionFile(resolved)) {
       params.diagnostics.push({
         level: "error",
@@ -1353,6 +1403,27 @@ function discoverFromPath(params: {
           realpathCache: params.realpathCache,
         });
       }
+      return;
+    }
+
+    if (candidateManifest?.manifest.jsonRpc) {
+      addCandidate({
+        candidates: params.candidates,
+        diagnostics: params.diagnostics,
+        seen: params.seen,
+        idHint: manifestId ?? path.basename(resolved),
+        source: candidateManifest.manifestPath,
+        ...(setupSource ? { setupSource } : {}),
+        rootDir: resolved,
+        origin: params.origin,
+        ownershipUid: params.ownershipUid,
+        workspaceDir: params.workspaceDir,
+        manifest,
+        packageDir: resolved,
+        requiredPluginIds: candidateManifest.manifest.requiresPlugins,
+        requiredPluginSource: candidateManifest.manifestPath,
+        realpathCache: params.realpathCache,
+      });
       return;
     }
 
