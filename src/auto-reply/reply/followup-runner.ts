@@ -90,6 +90,7 @@ import {
   evaluateNoOpRearmAdmission,
   type NoOpRearmWakeClass,
   recordNoOpRearmOutcome,
+  summarizeEmbeddedRunOutcome,
 } from "./no-op-rearm-guard.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
@@ -1397,12 +1398,26 @@ export function createFollowupRunner(params: {
       // Post-turn no-op replay outcome recording (#1138/#1142). Record before any
       // continuation/followup scheduling so a no-op self-rearm turn increments the
       // streak before it can schedule the next same-family wake. Idempotent per runId.
+      //
+      // For message-tool-only followups, raw final payload text is NOT proof of a
+      // visible/substantive outcome: automatic final delivery is intentionally
+      // suppressed later unless the message tool actually sent content. Keep the
+      // rest of the classifier facts, but base visibility on committed delivery
+      // evidence for that mode so stale backlog cannot reset the streak with an
+      // undelivered final text.
       if (noOpRearmWakeClass && (replySessionKey ?? run.sessionKey)) {
+        const facts = summarizeEmbeddedRunOutcome(runResult);
+        const messageToolOnlyWithoutDelivery =
+          run.sourceReplyDeliveryMode === "message_tool_only" &&
+          runResult.didSendViaMessagingTool !== true &&
+          runResult.didDeliverSourceReplyViaMessageTool !== true;
         recordNoOpRearmOutcome({
           sessionKey: replySessionKey ?? run.sessionKey ?? "",
           wakeClass: noOpRearmWakeClass,
           runId,
-          result: runResult,
+          ...(messageToolOnlyWithoutDelivery
+            ? { facts: { ...facts, hasVisibleReply: false } }
+            : { facts }),
         });
       }
 

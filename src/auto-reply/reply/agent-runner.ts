@@ -1897,7 +1897,6 @@ export async function runReplyAgent(replyParams: {
         messageId: followupRun.messageId,
         isHeartbeat,
         isContinuationWake: isContinuationWake === true,
-        isRecoveryReplay: effectiveResetTriggered,
       });
       noOpRearmWakeClass = admission.wake;
       if (!admission.admit) {

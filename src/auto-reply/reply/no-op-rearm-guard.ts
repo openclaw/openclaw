@@ -20,7 +20,7 @@ import {
   type InputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../sessions/input-provenance.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 
 /** Provenance sourceTool used by restart/pending-delivery recovery replays. */
 const RESTART_SENTINEL_SOURCE_TOOL = "restart-sentinel";
@@ -233,7 +233,11 @@ export type NoOpRearmTurnOutcome =
 
 function isNoReplyText(text: string | undefined): boolean {
   const normalized = normalizeOptionalString(text)?.toUpperCase();
-  return normalized === SILENT_REPLY_TOKEN || normalized === `[[${SILENT_REPLY_TOKEN}]]`;
+  return (
+    normalized === SILENT_REPLY_TOKEN ||
+    normalized === `[[${SILENT_REPLY_TOKEN}]]` ||
+    isSilentReplyText(text, SILENT_REPLY_TOKEN)
+  );
 }
 
 function hasSubstantiveToolCall(toolNames: readonly string[]): boolean {
@@ -255,7 +259,11 @@ export function summarizeEmbeddedRunOutcome(
     if (payload.isError === true || payload.isReasoning === true) {
       return false;
     }
-    if (typeof payload.text === "string" && payload.text.trim().length > 0) {
+    if (
+      typeof payload.text === "string" &&
+      payload.text.trim().length > 0 &&
+      !isNoReplyText(payload.text)
+    ) {
       return true;
     }
     if (typeof payload.mediaUrl === "string" && payload.mediaUrl.trim().length > 0) {

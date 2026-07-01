@@ -203,6 +203,16 @@ describe("turn outcome classification", () => {
     expect(classifyNoOpRearmTurnOutcome(summarizeEmbeddedRunOutcome(result)).kind).toBe("no_op");
   });
 
+  it("does not treat exact silent payload text as a visible reply", () => {
+    const result: EmbeddedAgentRunResult = {
+      payloads: [{ text: "  NO_REPLY  " }],
+      meta: { durationMs: 1 },
+    };
+    const facts = summarizeEmbeddedRunOutcome(result);
+    expect(facts.hasVisibleReply).toBe(false);
+    expect(classifyNoOpRearmTurnOutcome(facts).kind).toBe("no_op");
+  });
+
   it("classifies an error-only turn with no output as error_no_gain", () => {
     const result: EmbeddedAgentRunResult = {
       payloads: [],
