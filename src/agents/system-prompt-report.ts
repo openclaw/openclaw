@@ -23,6 +23,18 @@ function sha256(input: string): string {
   return createHash("sha256").update(input).digest("hex");
 }
 
+function countSchemaProperties(parameters: object): number | null {
+  try {
+    const props = (parameters as Record<string, unknown>).properties;
+    if (!props || typeof props !== "object") {
+      return null;
+    }
+    return Object.keys(props as Record<string, unknown>).length;
+  } catch {
+    return null;
+  }
+}
+
 function extractBetween(input: string, startMarker: string, endMarker: string): string {
   const start = input.indexOf(startMarker);
   if (start === -1) {
@@ -67,14 +79,7 @@ function buildToolSchemaStats(
   const stats = {
     schemaChars: schemaJson.length,
     schemaHash: sha256(schemaJson),
-    propertiesCount: (() => {
-      const schema = parameters as Record<string, unknown>;
-      const props = typeof schema.properties === "object" ? schema.properties : null;
-      if (!props || typeof props !== "object") {
-        return null;
-      }
-      return Object.keys(props as Record<string, unknown>).length;
-    })(),
+    propertiesCount: countSchemaProperties(parameters),
   };
   // Tool parameter objects are reused across runs; cache their stable size/hash
   // so report generation stays cheap during frequent prompt rebuilds.

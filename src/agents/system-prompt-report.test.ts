@@ -220,4 +220,39 @@ describe("buildSystemPromptReport", () => {
     });
     expect(report.tools.entries[0]?.schemaHash).toMatch(/^[a-f0-9]{64}$/u);
   });
+
+  it("keeps reporting when tool schema properties cannot be read", () => {
+    const file = makeBootstrapFile({ path: "/tmp/workspace/AGENTS.md" });
+    const unreadableSchema: Record<string, unknown> = { type: "object" };
+    Object.defineProperty(unreadableSchema, "properties", {
+      enumerable: true,
+      get() {
+        throw new Error("system prompt schema properties exploded");
+      },
+    });
+
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "system",
+      bootstrapFiles: [file],
+      injectedFiles: [],
+      skillsPrompt: "",
+      tools: [
+        {
+          name: "broken",
+          description: "Broken schema",
+          parameters: unreadableSchema,
+        },
+      ] as never,
+    });
+
+    expect(report.tools.entries[0]).toMatchObject({
+      name: "broken",
+      schemaChars: 0,
+      propertiesCount: null,
+    });
+    expect(report.tools.entries[0]?.schemaHash).toMatch(/^[a-f0-9]{64}$/u);
+  });
 });
