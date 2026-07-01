@@ -6,6 +6,7 @@ import {
 } from "../../infra/session-delivery-queue-storage.js";
 import type { SessionDeliveryContext } from "../../infra/session-delivery-queue-storage.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   CONTINUATION_DELEGATE_FANOUT_MODES,
   hasContinuationDelegateTargeting,
@@ -31,6 +32,8 @@ export type {
   ContinuationDelegateFanoutMode,
   ContinuationDelegateTargeting,
 };
+
+const log = createSubsystemLogger("continuation/targeting");
 
 export function resolveContinuationReturnTargetSessionKeys(
   params: ContinuationDelegateTargeting & {
@@ -110,7 +113,7 @@ export async function enqueueContinuationReturnDeliveries(
     );
     deliveryIds.push(deliveryId);
 
-    deps.enqueueSystemEvent(params.text, {
+    const enqueued = deps.enqueueSystemEvent(params.text, {
       sessionKey,
       trusted: true,
       ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
@@ -118,6 +121,23 @@ export async function enqueueContinuationReturnDeliveries(
       sessionDeliveryAckId: deliveryId,
       ...(params.stateDir ? { sessionDeliveryAckStateDir: params.stateDir } : {}),
     });
+    if (!enqueued) {
+      // The in-memory system-event queue collapsed this delivery as a duplicate
+      // of an already-queued identical-text return before the ack id could ride
+      // out on a queued event. The surviving duplicate carries the same text, so
+      // ack the dropped durable row now — otherwise `ackDrainedSessionDeliveries`
+      // never sees this id at drain time and restart recovery replays it as a
+      // duplicate return.
+      try {
+        await deps.ackSessionDelivery(deliveryId, params.stateDir);
+      } catch (err) {
+        // Best-effort: a failed ack just leaves the durable row for restart
+        // recovery, which is the pre-existing behavior for un-acked rows.
+        log.warn(
+          `Failed to ack de-duplicated continuation-return delivery ${deliveryId}: ${String(err)}`,
+        );
+      }
+    }
     if (params.wakeRecipients) {
       deps.requestHeartbeatNow({
         sessionKey,
@@ -125,9 +145,10 @@ export async function enqueueContinuationReturnDeliveries(
         parentRunId: params.childRunId,
       });
     }
-    // Do NOT ack the durable file here. The in-memory event carries the ack id
-    // and the prompt-drain path acknowledges it only after recipient consumption;
-    // non-attached recipients still need restart recovery to replay this file.
+    // For a queued event, do NOT ack the durable file here. The in-memory event
+    // carries the ack id and the prompt-drain path acknowledges it only after
+    // recipient consumption; non-attached recipients still need restart recovery
+    // to replay this file.
     delivered += 1;
   }
 
