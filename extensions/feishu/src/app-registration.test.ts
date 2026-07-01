@@ -1,92 +1,237 @@
 // Feishu tests cover app registration plugin behavior.
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
+import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { beginAppRegistration, pollAppRegistration, printQrCode } from "./app-registration.js";
+import {
+  beginAppRegistration,
+  type FeishuAppRegistrationFetch,
+  pollAppRegistration,
+  printQrCode,
+} from "./app-registration.js";
 import { FEISHU_JSON_MAX_BYTES } from "./json-response.js";
 
-const { fetchWithSsrFGuardMock, renderQrTerminalMock } = vi.hoisted(() => ({
-  fetchWithSsrFGuardMock: vi.fn(),
+const { renderQrTerminalMock } = vi.hoisted(() => ({
   renderQrTerminalMock: vi.fn(async () => "terminal-qr"),
-}));
-
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
 vi.mock("./qr-terminal.js", () => ({
   renderQrTerminal: renderQrTerminalMock,
 }));
 
-function mockFeishuJson(payload: unknown) {
-  fetchWithSsrFGuardMock.mockResolvedValueOnce({
-    response: new Response(JSON.stringify(payload), { status: 200 }),
-    release: async () => {},
+type LocalServer = {
+  port: number;
+  stop: () => Promise<void>;
+};
+
+type DispatcherInit = RequestInit & { dispatcher?: unknown };
+type RegistrationFetchOptions = {
+  fetchImpl: FeishuAppRegistrationFetch;
+  lookupFn: LookupFn;
+};
+
+const HERMETIC_PUBLIC_LOOKUP_ADDRESS = "93.184.216.34";
+
+const hermeticPublicLookup: LookupFn = async () => ({
+  address: HERMETIC_PUBLIC_LOOKUP_ADDRESS,
+  family: 4,
+});
+
+async function startLocalServer(
+  handler: (req: IncomingMessage, res: ServerResponse) => void,
+): Promise<LocalServer> {
+  return await new Promise<LocalServer>((resolve, reject) => {
+    const server = createServer(handler);
+    server.on("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address();
+      if (!addr || typeof addr === "string") {
+        reject(new Error("local test server did not expose a TCP port"));
+        return;
+      }
+      resolve({
+        port: addr.port,
+        stop: async () =>
+          await new Promise<void>((innerResolve, innerReject) => {
+            server.close((err) => (err ? innerReject(err) : innerResolve()));
+          }),
+      });
+    });
   });
 }
 
-/** Builds a ReadableStream that streams `totalBytes` of zero bytes and tracks cancellation. */
-function makeOversizedStream(totalBytes: number): {
-  stream: ReadableStream<Uint8Array>;
-  state: { bytesPulled: number; canceled: boolean };
-} {
-  const state = { bytesPulled: 0, canceled: false };
-  const CHUNK = 1024 * 1024; // 1 MiB per chunk
-  let pulled = 0;
-  const stream = new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (pulled >= totalBytes) {
-        controller.close();
+function stripDispatcher(init: RequestInit | undefined): RequestInit | undefined {
+  if (!init || !("dispatcher" in init)) {
+    return init;
+  }
+  const { dispatcher: _dispatcher, ...rest } = init as DispatcherInit;
+  return rest;
+}
+
+function createLocalRedirectFetch(port: number): FeishuAppRegistrationFetch {
+  const realFetch = globalThis.fetch.bind(globalThis);
+  return withFetchPreconnect(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(input instanceof Request ? input.url : input.toString());
+    if (url.hostname === "accounts.feishu.cn" || url.hostname === "accounts.larksuite.com") {
+      const loopback = new URL(`${url.pathname}${url.search}`, `http://127.0.0.1:${port}`);
+      return await realFetch(loopback, stripDispatcher(init));
+    }
+    return await realFetch(input, init);
+  });
+}
+
+async function withRegistrationServer<T>(
+  handler: (req: IncomingMessage, res: ServerResponse) => void,
+  run: (options: RegistrationFetchOptions) => Promise<T>,
+): Promise<T> {
+  const server = await startLocalServer(handler);
+  try {
+    return await run({
+      fetchImpl: createLocalRedirectFetch(server.port),
+      lookupFn: hermeticPublicLookup,
+    });
+  } finally {
+    await server.stop();
+  }
+}
+
+function writeJson(res: ServerResponse, payload: unknown): void {
+  res.writeHead(200, { "content-type": "application/json" });
+  res.end(JSON.stringify(payload));
+}
+
+function writeOversizedJson(
+  res: ServerResponse,
+  totalBytes: number,
+): { bytesPulled: () => number; canceled: () => boolean } {
+  const chunk = Buffer.alloc(1024 * 1024, 0x20);
+  let bytesPulled = 0;
+  let canceled = false;
+  let ended = false;
+  res.writeHead(200, { "content-type": "application/json" });
+  res.on("close", () => {
+    if (!ended && bytesPulled < totalBytes) {
+      canceled = true;
+    }
+  });
+  const prefix = Buffer.from('{"device_code":"dev","padding":"');
+  bytesPulled += prefix.byteLength;
+  res.write(prefix);
+  const sendChunk = () => {
+    if (bytesPulled >= totalBytes) {
+      if (!res.destroyed) {
+        ended = true;
+        res.end('"}');
+      }
+      return;
+    }
+    const remaining = totalBytes - bytesPulled;
+    const size = Math.min(chunk.byteLength, remaining);
+    bytesPulled += size;
+    const ok = res.write(chunk.subarray(0, size));
+    if (ok) {
+      setImmediate(sendChunk);
+      return;
+    }
+    res.once("drain", sendChunk);
+  };
+  setImmediate(sendChunk);
+  return {
+    bytesPulled: () => bytesPulled,
+    canceled: () => canceled || (!ended && bytesPulled < totalBytes),
+  };
+}
+
+async function readRequestBody(req: IncomingMessage): Promise<string> {
+  let body = "";
+  for await (const chunk of req) {
+    body += String(chunk);
+  }
+  return body;
+}
+
+async function readRegistrationAction(req: IncomingMessage): Promise<string> {
+  const body = await readRequestBody(req);
+  return new URLSearchParams(body).get("action") ?? "";
+}
+
+function beginRegistrationPayload(
+  overrides?: Partial<Record<string, unknown>>,
+): Record<string, unknown> {
+  return {
+    device_code: "device-code",
+    verification_uri_complete: "https://accounts.feishu.cn/verify?x=1",
+    user_code: "user-code",
+    interval: 5,
+    expire_in: 300,
+    ...overrides,
+  };
+}
+
+function beginRegistrationWithServer<T>(
+  handler: (req: IncomingMessage, res: ServerResponse) => void,
+  run: (options: RegistrationFetchOptions) => Promise<T>,
+): Promise<T> {
+  return withRegistrationServer(handler, run);
+}
+
+function beginRegistrationJson<T>(
+  payload: Record<string, unknown>,
+  run: (options: RegistrationFetchOptions) => Promise<T>,
+): Promise<T> {
+  return beginRegistrationWithServer((req, res) => {
+    void readRegistrationAction(req).then((action) => {
+      if (action !== "begin") {
+        res.writeHead(400);
+        res.end("unexpected action");
         return;
       }
-      const remaining = totalBytes - pulled;
-      const size = Math.min(CHUNK, remaining);
-      pulled += size;
-      state.bytesPulled += size;
-      controller.enqueue(new Uint8Array(size));
-    },
-    cancel() {
-      state.canceled = true;
-    },
-  });
-  return { stream, state };
+      writeJson(res, payload);
+    });
+  }, run);
 }
 
 describe("Feishu app registration", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-    fetchWithSsrFGuardMock.mockReset();
     renderQrTerminalMock.mockClear();
   });
 
   it("defaults unsafe begin polling lifetimes from provider responses", async () => {
-    mockFeishuJson({
-      device_code: "device-code",
-      verification_uri_complete: "https://accounts.feishu.cn/verify?x=1",
-      user_code: "user-code",
-      interval: Number.POSITIVE_INFINITY,
-      expire_in: Number.POSITIVE_INFINITY,
-    });
-
-    await expect(beginAppRegistration()).resolves.toMatchObject({
-      deviceCode: "device-code",
-      userCode: "user-code",
-      interval: 5,
-      expireIn: 600,
-    });
+    await beginRegistrationJson(
+      beginRegistrationPayload({
+        interval: Number.POSITIVE_INFINITY,
+        expire_in: Number.POSITIVE_INFINITY,
+      }),
+      async (options) => {
+        await expect(beginAppRegistration("feishu", options)).resolves.toMatchObject({
+          deviceCode: "device-code",
+          userCode: "user-code",
+          interval: 5,
+          expireIn: 600,
+        });
+      },
+    );
   });
 
   it("clamps unsafe poll sleeps from provider intervals", async () => {
     vi.useFakeTimers();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("transient"));
+    const fetchImpl = withFetchPreconnect(
+      vi.fn(async () => {
+        throw new Error("transient");
+      }),
+    ) as FeishuAppRegistrationFetch;
 
     const poll = pollAppRegistration({
       deviceCode: "device-code",
       interval: 10_000_000,
       expireIn: 10_000_000,
+      fetchImpl,
+      lookupFn: hermeticPublicLookup,
     });
     await vi.advanceTimersByTimeAsync(0);
 
@@ -108,31 +253,30 @@ describe("Feishu app registration", () => {
     expect(writeSpy).toHaveBeenCalledWith("terminal-qr\n");
   });
 
-  // over-cap: body > 16 MiB, no Content-Length — bounded reader cancels stream and rejects.
-  // mutation control: reverting readResponseWithLimit to bare response.json() turns this test red
-  // because json() buffers the entire stream instead of cancelling at 16 MiB.
+  // over-cap: body > 16 MiB, no Content-Length. The bounded reader cancels
+  // through the real SSRF guard and rejects before full buffering.
   it("rejects Feishu API responses that exceed the 16 MiB JSON body cap", async () => {
-    const { stream, state } = makeOversizedStream(FEISHU_JSON_MAX_BYTES * 2); // 32 MiB
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(stream, {
-        status: 200,
-        headers: { "content-type": "application/json" },
-        // No Content-Length — tests the streaming path
-      }),
-      release,
-    });
-
-    await expect(beginAppRegistration()).rejects.toThrow(
-      /feishu\.api: JSON response exceeds \d+ bytes/,
+    let streamState:
+      | {
+          bytesPulled: () => number;
+          canceled: () => boolean;
+        }
+      | undefined;
+    await beginRegistrationWithServer(
+      (_req, res) => {
+        streamState = writeOversizedJson(res, FEISHU_JSON_MAX_BYTES * 2);
+      },
+      async (options) => {
+        await expect(beginAppRegistration("feishu", options)).rejects.toThrow(
+          /feishu\.api: JSON response exceeds \d+ bytes/,
+        );
+      },
     );
-    // Confirm the stream was cancelled — not fully buffered.
-    expect(state.canceled).toBe(true);
-    expect(state.bytesPulled).toBeLessThan(FEISHU_JSON_MAX_BYTES * 2);
-    // release() must be called even when the body overflows.
-    expect(release).toHaveBeenCalledOnce();
+
+    expect(streamState?.canceled()).toBe(true);
+    expect(streamState?.bytesPulled()).toBeLessThan(FEISHU_JSON_MAX_BYTES * 2);
     console.log(
-      `[feishu fetchFeishuJson bound proof] over-cap: bytes_pulled=${state.bytesPulled} cap=${FEISHU_JSON_MAX_BYTES} canceled=${state.canceled}`,
+      `[feishu fetchFeishuJson bound proof] over-cap: bytes_pulled=${streamState?.bytesPulled()} cap=${FEISHU_JSON_MAX_BYTES} canceled=${streamState?.canceled()}`,
     );
   });
 
@@ -145,83 +289,94 @@ describe("Feishu app registration", () => {
       interval: 5,
       expire_in: 300,
     };
-    // Serve via ReadableStream (no Content-Length) to exercise the streaming path.
-    const body = JSON.stringify(payload);
-    const encoded = new TextEncoder().encode(body);
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(encoded.slice(0, Math.floor(encoded.length / 2)));
-        controller.enqueue(encoded.slice(Math.floor(encoded.length / 2)));
-        controller.close();
-      },
+
+    await beginRegistrationJson(payload, async (options) => {
+      const result = await beginAppRegistration("feishu", options);
+      expect(result).toMatchObject({
+        deviceCode: "dev-code-123",
+        userCode: "UC-456",
+        interval: 5,
+        expireIn: 300,
+      });
+      console.log(
+        `[feishu fetchFeishuJson bound proof] under-cap: returned=${JSON.stringify(result)}`,
+      );
     });
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(stream, {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-      release: async () => {},
+  });
+
+  it("sends bound reads through the real SSRF guard before local socket redirect", async () => {
+    const fetchCalls: string[] = [];
+    await beginRegistrationJson(beginRegistrationPayload(), async (options) => {
+      const recordingFetch: FeishuAppRegistrationFetch = withFetchPreconnect(
+        async (input, init) => {
+          fetchCalls.push(input instanceof Request ? input.url : input.toString());
+          return await options.fetchImpl(input, init);
+        },
+      );
+
+      await expect(
+        beginAppRegistration("feishu", { ...options, fetchImpl: recordingFetch }),
+      ).resolves.toMatchObject({
+        deviceCode: "device-code",
+        userCode: "user-code",
+      });
     });
 
-    const result = await beginAppRegistration();
-    expect(result).toMatchObject({
-      deviceCode: "dev-code-123",
-      userCode: "UC-456",
-      interval: 5,
-      expireIn: 300,
-    });
+    expect(fetchCalls).toEqual(["https://accounts.feishu.cn/oauth/v1/app/registration"]);
     console.log(
-      `[feishu fetchFeishuJson bound proof] under-cap: returned=${JSON.stringify(result)}`,
+      `[feishu fetchFeishuJson bound proof] real-ssrf-guard: guarded_url=${fetchCalls[0]} socket=127.0.0.1`,
     );
   });
 
   it("wraps malformed Feishu API JSON with a feishu.api labelled error", async () => {
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response("not-valid-json{{", {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-      release,
-    });
-
-    await expect(beginAppRegistration()).rejects.toThrow(/feishu\.api: malformed JSON response/);
-    expect(release).toHaveBeenCalledOnce();
+    await beginRegistrationWithServer(
+      (_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end("not-valid-json{{");
+      },
+      async (options) => {
+        await expect(beginAppRegistration("feishu", options)).rejects.toThrow(
+          /feishu\.api: malformed JSON response/,
+        );
+      },
+    );
   });
 });
 
-describe("feishu bound reads — real HTTP server (no fetch mock)", () => {
-  it("rejects oversized response before fully buffering 20 MiB (OOM guard)", async () => {
-    const CHUNK = Buffer.alloc(1024 * 1024, 0x61);
-    const TOTAL_CHUNKS = 20;
+describe("feishu bound reads — local HTTP server", () => {
+  it("rejects oversized response before fully buffering the response (OOM guard)", async () => {
+    const chunk = Buffer.alloc(1024 * 1024, 0x61);
+    const totalChunks = 64;
     let chunksWritten = 0;
 
-    const srv = await new Promise<{ port: number; stop: () => Promise<void> }>((resolve, reject) => {
-      const server = createServer((_req, res) => {
-        res.writeHead(200, { "content-type": "application/json" });
-        let sent = 0;
-        const sendChunk = () => {
-          if (sent >= TOTAL_CHUNKS) { res.end(); return; }
-          sent++; chunksWritten++;
-          const ok = res.write(CHUNK);
-          if (ok) { setImmediate(sendChunk); }
-          else { res.once("drain", sendChunk); }
-        };
-        sendChunk();
-      });
-      server.on("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        const addr = server.address() as { port: number };
-        resolve({ port: addr.port, stop: () => new Promise<void>((r, e) => { server.close(err => (err ? e(err) : r())); }) });
-      });
+    const srv = await startLocalServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      let sent = 0;
+      const sendChunk = () => {
+        if (sent >= totalChunks) {
+          res.end();
+          return;
+        }
+        sent += 1;
+        chunksWritten += 1;
+        const ok = res.write(chunk);
+        if (ok) {
+          setImmediate(sendChunk);
+          return;
+        }
+        res.once("drain", sendChunk);
+      };
+      sendChunk();
     });
 
     try {
       const response = await fetch(`http://127.0.0.1:${srv.port}/`);
       // Mutation-control: bare `response.json()` would buffer all 20 MiB.
-      await expect(readProviderJsonResponse(response, "feishu.bound-proof")).rejects.toThrow(/JSON response exceeds/);
-      expect(chunksWritten).toBeLessThan(TOTAL_CHUNKS);
-      console.log(`[bound-proof] canceled at ${chunksWritten}/${TOTAL_CHUNKS} chunks`);
+      await expect(readProviderJsonResponse(response, "feishu.bound-proof")).rejects.toThrow(
+        /JSON response exceeds/,
+      );
+      expect(chunksWritten).toBeLessThan(totalChunks);
+      console.log(`[bound-proof] canceled at ${chunksWritten}/${totalChunks} chunks`);
     } finally {
       await srv.stop();
     }
@@ -229,16 +384,8 @@ describe("feishu bound reads — real HTTP server (no fetch mock)", () => {
 
   it("parses well-formed JSON response under the cap", async () => {
     const payload = { code: 0, data: { app_id: "cli_test" } };
-    const srv = await new Promise<{ port: number; stop: () => Promise<void> }>((resolve, reject) => {
-      const server = createServer((_req, res) => {
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify(payload));
-      });
-      server.on("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        const addr = server.address() as { port: number };
-        resolve({ port: addr.port, stop: () => new Promise<void>((r, e) => { server.close(err => (err ? e(err) : r())); }) });
-      });
+    const srv = await startLocalServer((_req, res) => {
+      writeJson(res, payload);
     });
     try {
       const response = await fetch(`http://127.0.0.1:${srv.port}/`);
