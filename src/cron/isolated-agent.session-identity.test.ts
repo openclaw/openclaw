@@ -1,5 +1,6 @@
 // Isolated agent session identity tests cover stable session ids for cron runs.
 import "./isolated-agent.mocks.js";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as modelThinkingDefault from "../agents/model-thinking-default.js";
