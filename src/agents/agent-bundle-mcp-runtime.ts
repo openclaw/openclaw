@@ -1,7 +1,10 @@
 /** Session-scoped MCP runtime manager, catalog loader, and transport lifecycle. */
 import crypto from "node:crypto";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import {
+  StreamableHTTPClientTransport,
+  StreamableHTTPError,
+} from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { ErrorCode, type CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { ServerCapabilities } from "@modelcontextprotocol/sdk/types.js";
@@ -44,6 +47,7 @@ type BundleMcpSession = {
   transportType: "stdio" | "sse" | "streamable-http";
   requestTimeoutMs: number;
   supportsParallelToolCalls: boolean;
+  usesOAuth: boolean;
   connected: boolean;
   retiring: boolean;
   catalogUseCount: number;
@@ -478,6 +482,10 @@ function createDisposedError(sessionId: string): Error {
   return new Error(`bundle-mcp runtime disposed for session ${sessionId}`);
 }
 
+function isRetriableMcpAuthSessionFailure(error: unknown): boolean {
+  return error instanceof StreamableHTTPError && error.code === 401;
+}
+
 function resolveSessionMcpRuntimeIdleTtlMs(cfg?: OpenClawConfig): number {
   const raw = cfg?.mcp?.sessionIdleTtlMs;
   if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
@@ -577,6 +585,100 @@ export function createSessionMcpRuntime(params: {
     await disposeSession(session);
     return true;
   };
+  const connectedSessionOrThrow = (serverName: string): BundleMcpSession => {
+    const session = sessions.get(serverName);
+    if (!session) {
+      throw new Error(`bundle-mcp server "${serverName}" is not connected`);
+    }
+    return session;
+  };
+  const retryAfterAuthSessionFailure = async <T>(
+    serverName: string,
+    failedSession: BundleMcpSession,
+    request: (session: BundleMcpSession) => Promise<T>,
+  ): Promise<T> => {
+    // Some streamable-HTTP MCP servers keep auth state on the MCP session ID.
+    // After bearer refresh, the SDK may still be rejected on the old session;
+    // recreate the transport once so gateway behavior matches a fresh probe.
+    const backoffAfterAuthFailure = serverBackoff.get(serverName);
+    const retired = await retireSessionIfCurrent(serverName, failedSession);
+    if (retired) {
+      catalog = null;
+      catalogInFlight = undefined;
+      serverBackoff.delete(serverName);
+    }
+    try {
+      await getCatalog();
+      const nextSession = connectedSessionOrThrow(serverName);
+      const result = await request(nextSession);
+      serverBackoff.delete(serverName);
+      return result;
+    } catch (error) {
+      if (backoffAfterAuthFailure) {
+        serverBackoff.set(serverName, backoffAfterAuthFailure);
+      }
+      throw error;
+    }
+  };
+  const runSessionServerRequest = async <T>(
+    serverName: string,
+    request: (session: BundleMcpSession) => Promise<T>,
+  ): Promise<T> => {
+    await getCatalog();
+    const session = connectedSessionOrThrow(serverName);
+    try {
+      return await runGuardedServerRequest(serverName, async () => await request(session));
+    } catch (error) {
+      if (!session.usesOAuth || !isRetriableMcpAuthSessionFailure(error)) {
+        throw error;
+      }
+      return await retryAfterAuthSessionFailure(serverName, session, request);
+    }
+  };
+  const createResolvedSession = (
+    serverName: string,
+    resolved: NonNullable<ReturnType<typeof resolveMcpTransport>>,
+  ): BundleMcpSession => {
+    const client = new Client(
+      {
+        name: "openclaw-bundle-mcp",
+        version: "0.0.0",
+      },
+      {
+        jsonSchemaValidator: createBundleMcpJsonSchemaValidator(),
+        listChanged: {
+          tools: {
+            autoRefresh: false,
+            debounceMs: 0,
+            onChanged: (error) => {
+              if (error) {
+                logWarn(
+                  `bundle-mcp: failed to refresh changed tool list for server "${serverName}": ${redactErrorUrls(error)}`,
+                );
+              }
+              catalogInvalidationGeneration += 1;
+              catalog = null;
+              catalogInFlight = undefined;
+            },
+          },
+        },
+      },
+    );
+    return {
+      serverName,
+      client,
+      transport: resolved.transport,
+      transportType: resolved.transportType,
+      requestTimeoutMs: resolved.requestTimeoutMs,
+      supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+      usesOAuth: resolved.usesOAuth,
+      connected: false,
+      retiring: false,
+      catalogUseCount: 0,
+      sharedAcrossCatalogGenerations: false,
+      detachStderr: resolved.detachStderr,
+    };
+  };
 
   const getCatalog = async (): Promise<McpToolCatalog> => {
     failIfDisposed();
@@ -643,46 +745,9 @@ export function createSessionMcpRuntime(params: {
               if (session?.retiring) {
                 session = undefined;
               }
-              const reusedSession = Boolean(session);
+              let reusedSession = Boolean(session);
               if (!session) {
-                const client = new Client(
-                  {
-                    name: "openclaw-bundle-mcp",
-                    version: "0.0.0",
-                  },
-                  {
-                    jsonSchemaValidator: createBundleMcpJsonSchemaValidator(),
-                    listChanged: {
-                      tools: {
-                        autoRefresh: false,
-                        debounceMs: 0,
-                        onChanged: (error) => {
-                          if (error) {
-                            logWarn(
-                              `bundle-mcp: failed to refresh changed tool list for server "${serverName}": ${redactErrorUrls(error)}`,
-                            );
-                          }
-                          catalogInvalidationGeneration += 1;
-                          catalog = null;
-                          catalogInFlight = undefined;
-                        },
-                      },
-                    },
-                  },
-                );
-                session = {
-                  serverName,
-                  client,
-                  transport: resolved.transport,
-                  transportType: resolved.transportType,
-                  requestTimeoutMs: resolved.requestTimeoutMs,
-                  supportsParallelToolCalls: resolved.supportsParallelToolCalls,
-                  connected: false,
-                  retiring: false,
-                  catalogUseCount: 0,
-                  sharedAcrossCatalogGenerations: false,
-                  detachStderr: resolved.detachStderr,
-                };
+                session = createResolvedSession(serverName, resolved);
                 sessions.set(serverName, session);
               }
 
@@ -694,16 +759,18 @@ export function createSessionMcpRuntime(params: {
               }
               session.catalogUseCount += 1;
               let connectedForCatalog = false;
-              try {
+              const loadCatalogForSession = async (
+                currentSession: BundleMcpSession,
+              ): Promise<ServerResult> => {
                 failIfDisposed();
-                await ensureSessionConnected(session, resolved.connectionTimeoutMs);
+                await ensureSessionConnected(currentSession, resolved.connectionTimeoutMs);
                 connectedForCatalog = true;
                 failIfDisposed();
                 const capabilities = summarizeServerCapabilities(
-                  session.client.getServerCapabilities(),
+                  currentSession.client.getServerCapabilities(),
                 );
                 const listedTools = await listAllToolsBestEffort({
-                  client: session.client,
+                  client: currentSession.client,
                   timeoutMs: getCatalogListTimeoutMs(rawServer, resolved.requestTimeoutMs),
                   suppressUnsupported: Boolean(
                     !capabilities.tools && (capabilities.resources || capabilities.prompts),
@@ -764,8 +831,30 @@ export function createSessionMcpRuntime(params: {
                   toolEntries,
                   diagnostics: [] as McpToolCatalogDiagnostic[],
                 };
+              };
+              try {
+                return await loadCatalogForSession(session);
               } catch (error) {
-                const message = redactErrorUrls(error);
+                let catalogError = error;
+                if (session.usesOAuth && isRetriableMcpAuthSessionFailure(error)) {
+                  const retired = await retireSessionIfCurrent(serverName, session);
+                  if (retired) {
+                    connectedForCatalog = false;
+                    const retryResolved = resolveMcpTransport(serverName, rawServer);
+                    if (retryResolved) {
+                      session = createResolvedSession(serverName, retryResolved);
+                      reusedSession = false;
+                      session.catalogUseCount += 1;
+                      sessions.set(serverName, session);
+                      try {
+                        return await loadCatalogForSession(session);
+                      } catch (retryError) {
+                        catalogError = retryError;
+                      }
+                    }
+                  }
+                }
+                const message = redactErrorUrls(catalogError);
                 if (!disposed) {
                   const action = reusedSession ? "refresh" : "start";
                   logWarn(
@@ -893,14 +982,9 @@ export function createSessionMcpRuntime(params: {
     },
     async callTool(serverName, toolName, input) {
       failIfDisposed();
-      await getCatalog();
-      const session = sessions.get(serverName);
-      if (!session) {
-        throw new Error(`bundle-mcp server "${serverName}" is not connected`);
-      }
-      return await runGuardedServerRequest(
+      return await runSessionServerRequest(
         serverName,
-        async () =>
+        async (session) =>
           (await session.client.callTool(
             {
               name: toolName,
@@ -913,49 +997,29 @@ export function createSessionMcpRuntime(params: {
     },
     async listResources(serverName) {
       failIfDisposed();
-      await getCatalog();
-      const session = sessions.get(serverName);
-      if (!session) {
-        throw new Error(`bundle-mcp server "${serverName}" is not connected`);
-      }
-      return await runGuardedServerRequest(serverName, async () =>
+      return await runSessionServerRequest(serverName, async (session) =>
         listAllResources(session.client, session.requestTimeoutMs),
       );
     },
     async readResource(serverName, uri) {
       failIfDisposed();
-      await getCatalog();
-      const session = sessions.get(serverName);
-      if (!session) {
-        throw new Error(`bundle-mcp server "${serverName}" is not connected`);
-      }
-      return await runGuardedServerRequest(
+      return await runSessionServerRequest(
         serverName,
-        async () =>
+        async (session) =>
           await session.client.readResource({ uri }, { timeout: session.requestTimeoutMs }),
       );
     },
     async listPrompts(serverName) {
       failIfDisposed();
-      await getCatalog();
-      const session = sessions.get(serverName);
-      if (!session) {
-        throw new Error(`bundle-mcp server "${serverName}" is not connected`);
-      }
-      return await runGuardedServerRequest(serverName, async () =>
+      return await runSessionServerRequest(serverName, async (session) =>
         listAllPrompts(session.client, session.requestTimeoutMs),
       );
     },
     async getPrompt(serverName, name, args) {
       failIfDisposed();
-      await getCatalog();
-      const session = sessions.get(serverName);
-      if (!session) {
-        throw new Error(`bundle-mcp server "${serverName}" is not connected`);
-      }
-      return await runGuardedServerRequest(
+      return await runSessionServerRequest(
         serverName,
-        async () =>
+        async (session) =>
           await session.client.getPrompt(
             { name, ...(args ? { arguments: args } : {}) },
             { timeout: session.requestTimeoutMs },

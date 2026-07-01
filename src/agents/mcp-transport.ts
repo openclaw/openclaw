@@ -28,6 +28,7 @@ type ResolvedMcpTransport = {
   connectionTimeoutMs: number;
   requestTimeoutMs: number;
   supportsParallelToolCalls: boolean;
+  usesOAuth: boolean;
   detachStderr?: () => void;
 };
 
@@ -109,6 +110,7 @@ export function resolveMcpTransport(
       connectionTimeoutMs: resolved.connectionTimeoutMs,
       requestTimeoutMs: resolved.requestTimeoutMs,
       supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+      usesOAuth: false,
       detachStderr: attachStderrLogging(serverName, transport),
     };
   }
@@ -148,6 +150,7 @@ export function resolveMcpTransport(
       connectionTimeoutMs: resolved.connectionTimeoutMs,
       requestTimeoutMs: resolved.requestTimeoutMs,
       supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+      usesOAuth: resolved.auth === "oauth",
     };
   }
   const sseHeaders: Record<string, string> = { ...headers };
@@ -166,5 +169,6 @@ export function resolveMcpTransport(
     connectionTimeoutMs: resolved.connectionTimeoutMs,
     requestTimeoutMs: resolved.requestTimeoutMs,
     supportsParallelToolCalls: resolved.supportsParallelToolCalls,
+    usesOAuth: resolved.auth === "oauth",
   };
 }
