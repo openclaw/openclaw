@@ -94,6 +94,26 @@ function formatTypeBoxErrors(errors: Array<{ instancePath?: string; message?: st
   );
 }
 
+function formatSchemaSetupError(error: unknown): string {
+  if (typeof error === "string") {
+    const message = error.trim();
+    if (message) {
+      return message;
+    }
+  }
+  try {
+    if (error instanceof Error) {
+      const message = error.message.trim();
+      if (message) {
+        return message;
+      }
+    }
+  } catch {
+    // Hostile schemas can throw while formatting the setup error too.
+  }
+  return "schema setup failed";
+}
+
 const schemaMapKeywords = new Set([
   "$defs",
   "definitions",
@@ -169,13 +189,20 @@ export function createBundleMcpJsonSchemaValidator(): jsonSchemaValidator {
       if (!isDraft202012Schema(schema)) {
         return defaultValidator.getValidator<T>(schema);
       }
-      const schemaError = findJsonSchemaShapeError(schema as never);
-      if (schemaError) {
-        throw new Error(`Invalid MCP draft-2020-12 JSON Schema: ${schemaError}`);
+      let validator: ReturnType<typeof Compile>;
+      try {
+        const schemaError = findJsonSchemaShapeError(schema as never);
+        if (schemaError) {
+          throw new Error(schemaError);
+        }
+        validator = Compile(
+          normalizeJsonSchemaForTypeBox(stripJsonSchemaFormats(schema) as never) as never,
+        );
+      } catch (error) {
+        throw new Error(`Invalid MCP draft-2020-12 JSON Schema: ${formatSchemaSetupError(error)}`, {
+          cause: error,
+        });
       }
-      const validator = Compile(
-        normalizeJsonSchemaForTypeBox(stripJsonSchemaFormats(schema) as never) as never,
-      );
       return (input: unknown) => {
         const valid = validator.Check(input);
         if (valid) {

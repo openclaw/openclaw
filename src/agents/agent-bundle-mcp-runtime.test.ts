@@ -459,6 +459,25 @@ describe("session MCP runtime", () => {
     }
   });
 
+  it("wraps draft-2020-12 schema setup failures from external MCP catalogs", () => {
+    const properties = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("bundle schema properties ownKeys exploded");
+        },
+      },
+    );
+
+    expect(() =>
+      createBundleMcpJsonSchemaValidator().getValidator({
+        $schema: "https://json-schema.org/draft/2020-12/schema",
+        type: "object",
+        properties,
+      } as never),
+    ).toThrow("Invalid MCP draft-2020-12 JSON Schema: bundle schema properties ownKeys exploded");
+  });
+
   it("accepts draft-2020-12 local refs to boolean schemas and anchors", () => {
     const neverValidator = createBundleMcpJsonSchemaValidator().getValidator({
       $schema: "https://json-schema.org/draft/2020-12/schema",
