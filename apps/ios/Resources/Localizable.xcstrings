@@ -128,6 +128,12 @@
             "state": "translated",
             "value": "Добавьте сообщение, затем нажмите «Отправить»."
           }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lägg till ett meddelande och tryck sedan på Skicka."
+          }
         }
       }
     },
@@ -257,6 +263,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Агент"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agent"
           }
         }
       }
@@ -388,6 +400,12 @@
             "state": "translated",
             "value": "Одобрить"
           }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Godkänn"
+          }
         }
       }
     },
@@ -517,6 +535,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Отмена"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Avbryt"
           }
         }
       }
@@ -648,6 +672,12 @@
             "state": "translated",
             "value": "Чат"
           }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Chatt"
+          }
         }
       }
     },
@@ -777,6 +807,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Закрыть"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stäng"
           }
         }
       }
@@ -908,6 +944,12 @@
             "state": "translated",
             "value": "Подключиться"
           }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anslut"
+          }
         }
       }
     },
@@ -1037,6 +1079,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Подключиться к шлюзу?"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ansluta till en gateway?"
           }
         }
       }
@@ -1168,6 +1216,12 @@
             "state": "translated",
             "value": "Подключение…"
           }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ansluter…"
+          }
         }
       }
     },
@@ -1297,6 +1351,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Продолжить на iPhone"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fortsätt på iPhone"
           }
         }
       }
@@ -1428,6 +1488,12 @@
             "state": "translated",
             "value": "Управление"
           }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kontroll"
+          }
         }
       }
     },
@@ -1557,6 +1623,148 @@
           "stringUnit": {
             "state": "translated",
             "value": "Отклонить"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Neka"
+          }
+        }
+      }
+    },
+    "Don’t show this again": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Don’t show this again"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不再显示"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不再顯示"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Não mostrar novamente"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nicht erneut anzeigen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No volver a mostrar"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今後表示しない"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "다시 표시하지 않기"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ne plus afficher"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "इसे दोबारा न दिखाएँ"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "عدم الإظهار مرة أخرى"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non mostrare più"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bir daha gösterme"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Більше не показувати"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jangan tampilkan lagi"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nie pokazuj ponownie"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ไม่ต้องแสดงอีก"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Không hiển thị lại"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Niet meer tonen"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "دوباره نشان نده"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Больше не показывать"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Visa inte igen"
           }
         }
       }
@@ -1688,6 +1896,12 @@
             "state": "translated",
             "value": "Готово"
           }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Klar"
+          }
         }
       }
     },
@@ -1817,6 +2031,148 @@
           "stringUnit": {
             "state": "translated",
             "value": "Отредактируйте текст, затем нажмите «Отправить»."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Redigera texten och tryck sedan på Skicka."
+          }
+        }
+      }
+    },
+    "First-time TLS connection.\n\nVerify this SHA-256 fingerprint out-of-band before trusting:\n%@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "First-time TLS connection.\n\nVerify this SHA-256 fingerprint out-of-band before trusting:\n%@"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "首次 TLS 连接。\n\n请通过其他渠道验证此 SHA-256 指纹后再信任：\n%@"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "首次 TLS 連線。\n\n請透過其他管道驗證此 SHA-256 指紋後再信任：\n%@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Primeira conexão TLS.\n\nVerifique esta impressão digital SHA-256 por outro canal antes de confiar:\n%@"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Erste TLS-Verbindung.\n\nÜberprüfen Sie diesen SHA-256-Fingerabdruck über einen anderen Kanal, bevor Sie ihm vertrauen:\n%@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Primera conexión TLS.\n\nVerifica esta huella SHA-256 por otro canal antes de confiar:\n%@"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "初回の TLS 接続です。\n\n信頼する前に、この SHA-256 フィンガープリントを別の経路で確認してください：\n%@"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "첫 TLS 연결입니다.\n\n신뢰하기 전에 다른 경로로 이 SHA-256 지문을 확인하세요:\n%@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Première connexion TLS.\n\nVérifiez cette empreinte SHA-256 par un autre canal avant d’accorder votre confiance :\n%@"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "पहला TLS कनेक्शन।\n\nभरोसा करने से पहले किसी अन्य माध्यम से इस SHA-256 फ़िंगरप्रिंट की पुष्टि करें:\n%@"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "اتصال TLS لأول مرة.\n\nتحقق من بصمة SHA-256 هذه عبر قناة أخرى قبل الوثوق:\n%@"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prima connessione TLS.\n\nVerifica questa impronta SHA-256 tramite un altro canale prima di considerarla attendibile:\n%@"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İlk TLS bağlantısı.\n\nGüvenmeden önce bu SHA-256 parmak izini başka bir kanaldan doğrulayın:\n%@"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Перше TLS-з’єднання.\n\nПерш ніж довіряти, перевірте цей відбиток SHA-256 через інший канал:\n%@"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Koneksi TLS pertama.\n\nVerifikasi sidik jari SHA-256 ini melalui saluran lain sebelum memercayainya:\n%@"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pierwsze połączenie TLS.\n\nPrzed zaufaniem zweryfikuj ten odcisk SHA-256 innym kanałem:\n%@"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "การเชื่อมต่อ TLS ครั้งแรก\n\nตรวจสอบลายนิ้วมือ SHA-256 นี้ผ่านช่องทางอื่นก่อนเชื่อถือ:\n%@"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kết nối TLS lần đầu.\n\nXác minh dấu vân tay SHA-256 này qua một kênh khác trước khi tin cậy:\n%@"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eerste TLS-verbinding.\n\nControleer deze SHA-256-vingerafdruk via een ander kanaal voordat je deze vertrouwt:\n%@"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "نخستین اتصال TLS.\n\nپیش از اعتماد، این اثر انگشت SHA-256 را از مسیری دیگر تأیید کنید:\n%@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Первое TLS-подключение.\n\nПрежде чем доверять, проверьте этот отпечаток SHA-256 по другому каналу:\n%@"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Första TLS-anslutningen.\n\nVerifiera detta SHA-256-fingeravtryck via en annan kanal innan du litar på det:\n%@"
           }
         }
       }
@@ -1948,6 +2304,12 @@
             "state": "translated",
             "value": "Недействительный сохраненный URL шлюза."
           }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Den sparade gateway-URL:en är ogiltig."
+          }
         }
       }
     },
@@ -2077,6 +2439,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Выйти"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Logga ut"
           }
         }
       }
@@ -2208,6 +2576,12 @@
             "state": "translated",
             "value": "Сообщение пустое."
           }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Meddelandet är tomt."
+          }
         }
       }
     },
@@ -2337,6 +2711,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Написать OpenClaw"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skicka meddelande till OpenClaw"
           }
         }
       }
@@ -2468,6 +2848,12 @@
             "state": "translated",
             "value": "Чат не синхронизирован"
           }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ingen chatt synkroniserad"
+          }
         }
       }
     },
@@ -2597,6 +2983,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Шлюзы пока не найдены. Убедитесь, что ваш шлюз запущен и обнаружение Bonjour включено."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inga gateways hittades ännu. Kontrollera att din gateway körs och att Bonjour-upptäckt är aktiverad."
           }
         }
       }
@@ -2728,6 +3120,12 @@
             "state": "translated",
             "value": "Не сейчас"
           }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inte nu"
+          }
         }
       }
     },
@@ -2857,6 +3255,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Открыть все одобрения"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Öppna alla godkännanden"
           }
         }
       }
@@ -2988,6 +3392,12 @@
             "state": "translated",
             "value": "OpenClaw еще не подключен к шлюзу."
           }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "OpenClaw är inte ansluten till någon gateway ännu."
+          }
         }
       }
     },
@@ -3117,6 +3527,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Подготовка к отправке…"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Förbereder delning…"
           }
         }
       }
@@ -3248,6 +3664,12 @@
             "state": "translated",
             "value": "Быстрая настройка"
           }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Snabbkonfiguration"
+          }
         }
       }
     },
@@ -3377,6 +3799,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Обновить"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uppdatera"
           }
         }
       }
@@ -3508,135 +3936,11 @@
             "state": "translated",
             "value": "Просмотреть снова"
           }
-        }
-      }
-    },
-    "Run now": {
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Run now"
-          }
         },
-        "zh-CN": {
+        "sv": {
           "stringUnit": {
             "state": "translated",
-            "value": "立即运行"
-          }
-        },
-        "zh-TW": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "立即執行"
-          }
-        },
-        "pt-BR": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Executar agora"
-          }
-        },
-        "de": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Jetzt ausführen"
-          }
-        },
-        "es": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Ejecutar ahora"
-          }
-        },
-        "ja-JP": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "今すぐ実行"
-          }
-        },
-        "ko": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "지금 실행"
-          }
-        },
-        "fr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Exécuter maintenant"
-          }
-        },
-        "hi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "अभी चलाएँ"
-          }
-        },
-        "ar": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "تشغيل الآن"
-          }
-        },
-        "it": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Esegui ora"
-          }
-        },
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Şimdi çalıştır"
-          }
-        },
-        "uk": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Запустити зараз"
-          }
-        },
-        "id": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Jalankan sekarang"
-          }
-        },
-        "pl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Uruchom teraz"
-          }
-        },
-        "th": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "เรียกใช้ตอนนี้"
-          }
-        },
-        "vi": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Chạy ngay"
-          }
-        },
-        "nl": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Nu uitvoeren"
-          }
-        },
-        "fa": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "اکنون اجرا شود"
-          }
-        },
-        "ru": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Запустить сейчас"
+            "value": "Granska igen"
           }
         }
       }
@@ -3768,6 +4072,12 @@
             "state": "translated",
             "value": "Сохранить"
           }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Spara"
+          }
         }
       }
     },
@@ -3897,6 +4207,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Не удалось отправить: %@"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Det gick inte att skicka: %@"
           }
         }
       }
@@ -4028,6 +4344,12 @@
             "state": "translated",
             "value": "Отправить в OpenClaw"
           }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skicka till OpenClaw"
+          }
         }
       }
     },
@@ -4157,6 +4479,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Отправка на шлюз OpenClaw…"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skickar till OpenClaw-gateway…"
           }
         }
       }
@@ -4288,6 +4616,12 @@
             "state": "translated",
             "value": "Отправлено в OpenClaw."
           }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skickat till OpenClaw."
+          }
         }
       }
     },
@@ -4417,6 +4751,148 @@
           "stringUnit": {
             "state": "translated",
             "value": "Настройки"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Inställningar"
+          }
+        }
+      }
+    },
+    "Talk": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Talk"
+          }
+        },
+        "zh-CN": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "语音"
+          }
+        },
+        "zh-TW": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "語音"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Falar"
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sprechen"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hablar"
+          }
+        },
+        "ja-JP": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "トーク"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "대화"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Parler"
+          }
+        },
+        "hi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "बात करें"
+          }
+        },
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "التحدث"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Parla"
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Konuş"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Розмова"
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bicara"
+          }
+        },
+        "pl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rozmowa"
+          }
+        },
+        "th": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "พูดคุย"
+          }
+        },
+        "vi": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Trò chuyện"
+          }
+        },
+        "nl": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Praten"
+          }
+        },
+        "fa": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "گفتگو"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Разговор"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prata"
           }
         }
       }
@@ -4548,6 +5024,12 @@
             "state": "translated",
             "value": "Поговорить с Claw"
           }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Prata med Claw"
+          }
         }
       }
     },
@@ -4677,6 +5159,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Коснитесь кнопки сообщения ниже, чтобы начать с часов."
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tryck på meddelandeknappen nedan för att börja från klockan."
           }
         }
       }
@@ -4808,6 +5296,12 @@
             "state": "translated",
             "value": "Доверять и подключиться"
           }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lita på och anslut"
+          }
         }
       }
     },
@@ -4937,6 +5431,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Доверять этому шлюзу?"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lita på denna gateway?"
           }
         }
       }
@@ -5068,6 +5568,12 @@
             "state": "translated",
             "value": "Пишет"
           }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Skriver"
+          }
         }
       }
     },
@@ -5197,6 +5703,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Вы"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Du"
           }
         }
       }

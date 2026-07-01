@@ -9586,14 +9586,6 @@
       "id": "native.apple.0892fd4bee73202a"
     },
     {
-      "kind": "ui-call-multiline",
-      "line": 25,
-      "path": "apps/ios/Sources/Gateway/GatewayTrustPromptAlert.swift",
-      "source": "First-time TLS connection.\n\nVerify this SHA-256 fingerprint out-of-band before trusting:\n\\(prompt.fingerprintSha256)",
-      "surface": "apple",
-      "id": "native.apple.19b4cff499014a56"
-    },
-    {
       "kind": "ui-call",
       "line": 52,
       "path": "apps/ios/Sources/Gateway/NotificationPermissionGuidanceDialog.swift",

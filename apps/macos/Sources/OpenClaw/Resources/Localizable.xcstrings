@@ -128,6 +128,12 @@
             "state": "translated",
             "value": "Выйти"
           }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Logga ut"
+          }
         }
       }
     },
@@ -257,6 +263,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Обновить"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Uppdatera"
           }
         }
       }
@@ -388,6 +400,12 @@
             "state": "translated",
             "value": "Запустить сейчас"
           }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kör nu"
+          }
         }
       }
     },
@@ -517,6 +535,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Сохранить"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Spara"
           }
         }
       }
