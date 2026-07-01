@@ -468,6 +468,41 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
     expect(providerMocks.runProviderStaticCatalog).not.toHaveBeenCalled();
   });
 
+  it("defaults missing maxTokens to a per-request output cap, not a context-window-sized value (#98295)", async () => {
+    const provider = {
+      id: "google",
+      pluginId: "google",
+      label: "Google",
+      auth: [],
+      staticCatalog: { run: vi.fn() },
+    };
+    providerMocks.resolveOwningPluginIdsForProviderRef.mockReturnValue(["google"]);
+    providerMocks.resolveBundledProviderCompatPluginIds.mockReturnValue(["google"]);
+    providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
+    providerMocks.runProviderStaticCatalog.mockResolvedValue({ marker: "static-result" });
+    providerMocks.normalizePluginDiscoveryResult.mockReturnValue({
+      google: {
+        models: [
+          {
+            id: "custom-without-max-tokens",
+            name: "Custom Without Max Tokens",
+            contextWindow: 1_048_576,
+          },
+        ],
+      },
+    });
+
+    const resolveModel = createBundledProviderStaticCatalogModelResolver();
+    const resolved = await resolveModel({
+      provider: "google",
+      modelId: "custom-without-max-tokens",
+    });
+    expect(resolved).toMatchObject({
+      contextWindow: 1_048_576,
+      maxTokens: 8192,
+    });
+  });
+
   it("runs each prepared provider static catalog once", async () => {
     const provider = {
       id: "google",

@@ -23,7 +23,7 @@ import {
   resolveBundledProviderCompatPluginIds,
   resolveOwningPluginIdsForProviderRef,
 } from "../../plugins/providers.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL_MAX_TOKENS } from "../defaults.js";
 import { normalizeStaticProviderModelId } from "../model-ref-shared.js";
 import { buildInlineProviderModels } from "./model.inline-provider.js";
 
@@ -92,7 +92,7 @@ function modelFromStaticCatalogRow(row: NormalizedModelCatalogRow): ProviderRunt
     cost: normalizeStaticCatalogCost(row.cost),
     contextWindow: row.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
     contextTokens: row.contextTokens,
-    maxTokens: row.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+    maxTokens: row.maxTokens ?? DEFAULT_MODEL_MAX_TOKENS,
     thinkingLevelMap: row.thinkingLevelMap ? { ...row.thinkingLevelMap } : undefined,
     headers: row.headers,
     compat: row.compat,
@@ -129,7 +129,7 @@ function modelFromProviderStaticCatalog(params: {
       model?.maxTokens ??
       params.model.maxTokens ??
       params.providerConfig.maxTokens ??
-      DEFAULT_CONTEXT_TOKENS,
+      DEFAULT_MODEL_MAX_TOKENS,
     ...(params.providerConfig.authHeader !== undefined
       ? { authHeader: params.providerConfig.authHeader }
       : {}),
