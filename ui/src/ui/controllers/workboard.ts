@@ -2895,7 +2895,7 @@ function extractChatHistoryText(
   role: "assistant" | "user",
   direction: "first" | "last",
 ): string | null {
-  const ordered = direction === "first" ? messages : messages.toReversed();
+  const ordered = direction === "first" ? messages : messages.slice().reverse();
   for (const message of ordered) {
     if (!isRecord(message) || message.role !== role) {
       continue;

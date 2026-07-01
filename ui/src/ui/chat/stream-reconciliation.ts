@@ -444,7 +444,8 @@ function timestampForInsertedVisibleStream(
 ): number {
   const previousTimestamp = messages
     .slice(0, index)
-    .toReversed()
+    .slice()
+    .reverse()
     .map(messageTimestampMs)
     .find((timestamp): timestamp is number => timestamp != null);
   const nextTimestamp = messages

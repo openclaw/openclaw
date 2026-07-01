@@ -410,7 +410,7 @@ function formatEventLabel(event: WorkboardEvent): string {
 }
 
 function renderEvents(card: WorkboardCard) {
-  const events = (card.events ?? []).toReversed().slice(0, 4);
+  const events = (card.events ?? []).slice(-4).reverse();
   if (events.length === 0) {
     return nothing;
   }
@@ -1880,7 +1880,7 @@ function renderCardDetailsPanel(props: WorkboardProps) {
   const workerLogs = card.metadata?.workerLogs ?? [];
   const workerProtocol = card.metadata?.workerProtocol;
   const automation = card.metadata?.automation;
-  const events = (card.events ?? []).slice(-6).toReversed();
+  const events = (card.events ?? []).slice(-6).reverse();
   const busy = state.busyCardIds.has(card.id) || state.dispatching;
   const showStartControls = writable && cardCanStart(state, props.sessions, card);
   const dependencies = getWorkboardDependencyState(card, state.cards);

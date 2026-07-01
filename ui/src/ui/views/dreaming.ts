@@ -83,7 +83,7 @@ function formatDiaryChipLabel(date: string): string {
 }
 
 function buildDiaryNavigation(entries: DiaryEntry[]): DiaryEntryNav[] {
-  const reversed = [...entries].toReversed();
+  const reversed = [...entries].slice().reverse();
   return reversed.map((entry, page) => Object.assign({}, entry, { page }));
 }
 

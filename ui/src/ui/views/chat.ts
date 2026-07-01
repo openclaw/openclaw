@@ -720,7 +720,8 @@ function deletedChatItemsSignature(
   const deletedKeys = chatItems
     .map((item) => item.key)
     .filter((key) => deleted.has(key))
-    .toSorted();
+    .slice()
+    .sort();
   return deletedKeys.length === 0 ? "" : deletedKeys.join("\u0000");
 }
 

@@ -1022,7 +1022,8 @@ function renderSessionsCard(
     }
     return formatSessionListLabel(a).localeCompare(formatSessionListLabel(b));
   });
-  const sortedWithDir = sessionSortDir === "asc" ? sortedSessions.toReversed() : sortedSessions;
+  const sortedWithDir =
+    sessionSortDir === "asc" ? sortedSessions.slice().reverse() : sortedSessions;
 
   const totalValue = sortedWithDir.reduce((sum, session) => sum + getSessionValue(session), 0);
   const avgValue = sortedWithDir.length ? totalValue / sortedWithDir.length : 0;
