@@ -64,7 +64,13 @@ const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
 type EmbeddingProviderRequest = string;
 type MemorySearchEmbeddingConfig = Pick<
   NonNullable<ReturnType<typeof resolveMemorySearchConfig>>,
-  "local" | "remote" | "outputDimensionality" | "inputType" | "queryInputType" | "documentInputType"
+  | "local"
+  | "remote"
+  | "outputDimensionality"
+  | "inputType"
+  | "queryInputType"
+  | "documentInputType"
+  | "queryInstructionTemplate"
 >;
 
 function coerceRequest(value: unknown): EmbeddingsRequest {
@@ -139,6 +145,10 @@ async function createConfiguredEmbeddingProvider(params: {
       model: params.model || adapter.defaultModel || "",
       local: params.memorySearch?.local,
       remote: resolveEmbeddingProviderRemoteConfig(params.memorySearch?.remote),
+      inputType: params.memorySearch?.inputType,
+      queryInputType: params.memorySearch?.queryInputType,
+      documentInputType: params.memorySearch?.documentInputType,
+      queryInstructionTemplate: params.memorySearch?.queryInstructionTemplate,
       outputDimensionality: params.memorySearch?.outputDimensionality,
       acquireLocalService,
     };
@@ -157,6 +167,7 @@ async function createConfiguredEmbeddingProvider(params: {
       inputType: params.memorySearch?.inputType,
       queryInputType: params.memorySearch?.queryInputType,
       documentInputType: params.memorySearch?.documentInputType,
+      queryInstructionTemplate: params.memorySearch?.queryInstructionTemplate,
       acquireLocalService,
     };
     const result = await adapter.create(createOptions);

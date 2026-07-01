@@ -1,6 +1,7 @@
 // Builds OpenAI-compatible embedding provider entries for plugins.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { applyQueryInstructionTemplate } from "../../packages/memory-host-sdk/src/engine-embeddings.js";
 import { readProviderJsonResponse } from "../agents/provider-http-errors.js";
 import type {
   AcquireConfiguredProviderLocalService,
@@ -39,6 +40,7 @@ type OpenAICompatibleEmbeddingClient = {
   documentInputType?: string;
   localServiceTarget?: ConfiguredProviderLocalServiceTarget;
   acquireLocalService?: AcquireConfiguredProviderLocalService;
+  queryInstructionTemplate?: boolean;
 };
 
 type OpenAICompatibleEmbeddingResponse = {
@@ -114,49 +116,6 @@ function normalizeOptionalInputType(value: string | undefined): string | undefin
 function normalizeOptionalString(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized ? normalized : undefined;
-}
-
-/**
- * Query instruction templates for models that require instruction-aware embeddings.
- * Mirrors the behavior implemented by the OpenAI and Ollama embedding adapters.
- */
-const QUERY_INSTRUCTION_TEMPLATES = [
-  {
-    prefix: "qwen3-embedding",
-    template:
-      "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:{query}",
-  },
-  {
-    prefix: "nomic-embed-text",
-    template: "search_query: {query}",
-  },
-  {
-    prefix: "mxbai-embed-large",
-    template: "Represent this sentence for searching relevant passages: {query}",
-  },
-] as const;
-
-function normalizeTemplateMatchModel(model: string): string {
-  const normalizedModel = model.trim().toLowerCase();
-  const segments = normalizedModel.split("/").filter(Boolean);
-  return segments.at(-1) ?? normalizedModel;
-}
-
-function matchesTemplateModelAlias(model: string, prefix: string): boolean {
-  return (
-    model === prefix ||
-    model.startsWith(`${prefix}-`) ||
-    model.startsWith(`${prefix}:`) ||
-    model.includes(`-${prefix}`)
-  );
-}
-
-function applyQueryInstructionTemplate(model: string, queryText: string): string {
-  const normalizedModel = normalizeTemplateMatchModel(model);
-  const match = QUERY_INSTRUCTION_TEMPLATES.find(({ prefix }) =>
-    matchesTemplateModelAlias(normalizedModel, prefix),
-  );
-  return match ? match.template.replace("{query}", () => queryText) : queryText;
 }
 
 function chooseSecretInputOverride<T>(
@@ -375,7 +334,7 @@ async function postEmbeddingRequest(params: {
   const { client, input } = params;
   const inputType = resolveRequestInputType(client, params.inputType);
   const requestInput =
-    params.inputType === "query"
+    client.queryInstructionTemplate && params.inputType === "query"
       ? input.map((text) => applyQueryInstructionTemplate(client.model, text))
       : input;
   const body = {
@@ -465,6 +424,7 @@ async function createOpenAICompatibleEmbeddingClient(
     ...(inputType ? { inputType } : {}),
     ...(queryInputType ? { queryInputType } : {}),
     ...(documentInputType ? { documentInputType } : {}),
+    ...(options.queryInstructionTemplate === true ? { queryInstructionTemplate: true } : {}),
   };
 }
 

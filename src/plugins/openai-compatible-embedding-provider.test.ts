@@ -780,6 +780,37 @@ describe("openai-compatible generic embedding provider", () => {
     ]);
   });
 
+  it("leaves instruction-aware openai-compatible query models raw unless opted in", async () => {
+    const server = await startEmbeddingServer({
+      respond: ({ body }) => {
+        const input = body.input;
+        const texts = Array.isArray(input) ? input : [input];
+        return {
+          object: "list",
+          data: texts.map((text, index) => ({
+            object: "embedding",
+            embedding: [String(text).length, index + 0.25, 1],
+            index,
+          })),
+          model: String(body.model),
+        };
+      },
+    });
+
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({
+        model: "qwen3-embedding-4b",
+        remote: { baseUrl: server.baseUrl },
+      }),
+    );
+
+    await expect(provider.embed("find workshop notes", { inputType: "query" })).resolves.toEqual([
+      19, 0.25, 1,
+    ]);
+
+    expect(server.requests[0]?.body.input).toEqual(["find workshop notes"]);
+  });
+
   it.each([
     {
       model: "qwen3-embedding-4b",
@@ -830,6 +861,7 @@ describe("openai-compatible generic embedding provider", () => {
       const { provider } = await createOpenAICompatibleEmbeddingProvider(
         createOptions({
           model,
+          queryInstructionTemplate: true,
           remote: { baseUrl: server.baseUrl },
         }),
       );
