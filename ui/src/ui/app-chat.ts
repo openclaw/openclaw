@@ -123,6 +123,7 @@ export type ChatHost = ChatInputHistoryState & {
   sessionsResult?: SessionsListResult | null;
   sessionsError?: string | null;
   sessionsShowArchived?: boolean;
+  sidebarRecentSessionsAllAgents?: boolean;
   updateComplete?: Promise<unknown>;
   requestUpdate?: () => void;
   refreshSessionsAfterChat: Map<string, ChatSessionRefreshTarget>;
@@ -379,6 +380,30 @@ export function scopedAgentListParamsForRefreshTarget(
     normalizeOptionalString(target.agentId) ??
     scopedAgentListParamsForSession(host, target.sessionKey).agentId;
   return agentId ? { agentId: normalizeAgentId(agentId) } : {};
+}
+
+export function sidebarRecentSessionsListParamsForSession(
+  host: Pick<
+    ChatHost,
+    "assistantAgentId" | "agentsList" | "hello" | "sidebarRecentSessionsAllAgents"
+  >,
+  sessionKey: string,
+) {
+  return host.sidebarRecentSessionsAllAgents === true
+    ? {}
+    : scopedAgentListParamsForSession(host, sessionKey);
+}
+
+export function sidebarRecentSessionsListParamsForRefreshTarget(
+  host: Pick<
+    ChatHost,
+    "assistantAgentId" | "agentsList" | "hello" | "sidebarRecentSessionsAllAgents"
+  >,
+  target: ChatSessionRefreshTarget,
+) {
+  return host.sidebarRecentSessionsAllAgents === true
+    ? {}
+    : scopedAgentListParamsForRefreshTarget(host, target);
 }
 
 export async function handleAbortChat(host: ChatHost, opts?: ChatAbortOptions) {

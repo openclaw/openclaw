@@ -143,6 +143,7 @@ export type AppViewState = {
   chatSessionPickerResult: SessionsListResult | null;
   sessionsResultAgentId?: string | null;
   chatAgentSessionRowsByAgent?: Record<string, SessionsListResult["sessions"]>;
+  sidebarRecentSessionsAllAgents?: boolean;
   announceSessionSwitch?: (sessionKey: string, label: string) => void;
   chatQueue: ChatQueueItem[];
   chatQueueBySession: Record<string, ChatQueueItem[]>;

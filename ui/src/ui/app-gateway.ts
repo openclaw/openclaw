@@ -13,8 +13,8 @@ import {
   recordChatSendServerTiming,
   recordFirstAssistantChatTiming,
   refreshChatAvatar,
-  scopedAgentListParamsForRefreshTarget,
   retryReconnectableQueuedChatSends,
+  scopedAgentListParamsForRefreshTarget,
   scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
 } from "./app-chat.ts";

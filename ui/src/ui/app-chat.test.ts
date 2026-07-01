@@ -1380,6 +1380,33 @@ describe("handleSendChat", () => {
     expect(host.chatMessage).toBe("");
   });
 
+  it("keeps post-send session refreshes scoped when the sidebar all-agents toggle is enabled", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "ok" };
+      }
+      if (method === "sessions.list") {
+        return createSessionsResult([]);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "/reset",
+      sessionKey: "agent:ops:main",
+      sidebarRecentSessionsAllAgents: true,
+    });
+
+    await handleSendChat(host);
+
+    expect(request).toHaveBeenCalledWith(
+      "sessions.list",
+      expect.objectContaining({
+        agentId: "ops",
+      }),
+    );
+  });
+
   it.each([
     {
       input: "/reset soft please reload system prompt",

@@ -38,6 +38,34 @@ vi.mock("./app-chat.ts", () => ({
     const [, agentId] = target.sessionKey.split(":");
     return target.sessionKey.startsWith("agent:") && agentId ? { agentId } : {};
   },
+  sidebarRecentSessionsListParamsForSession: (
+    host: { assistantAgentId?: string | null; sidebarRecentSessionsAllAgents?: boolean },
+    sessionKey: string,
+  ) => {
+    if (host.sidebarRecentSessionsAllAgents === true) {
+      return {};
+    }
+    const [, agentId] = sessionKey.split(":");
+    if (sessionKey.startsWith("agent:") && agentId) {
+      return { agentId };
+    }
+    return sessionKey === "global" && host.assistantAgentId
+      ? { agentId: host.assistantAgentId }
+      : {};
+  },
+  sidebarRecentSessionsListParamsForRefreshTarget: (
+    host: { sidebarRecentSessionsAllAgents?: boolean },
+    target: { sessionKey: string; agentId?: string },
+  ) => {
+    if (host.sidebarRecentSessionsAllAgents === true) {
+      return {};
+    }
+    if (target.agentId) {
+      return { agentId: target.agentId };
+    }
+    const [, agentId] = target.sessionKey.split(":");
+    return target.sessionKey.startsWith("agent:") && agentId ? { agentId } : {};
+  },
   clearPendingQueueItemsForRun: clearPendingQueueItemsForRunMock,
   flushChatQueueForEvent: flushChatQueueForEventMock,
   recordFirstAssistantChatTiming: recordFirstAssistantChatTimingMock,
@@ -192,6 +220,30 @@ describe("handleGatewayEvent sessions.changed", () => {
     });
   });
 
+  it("keeps terminal chat refreshes scoped when the sidebar all-agents toggle is enabled", () => {
+    loadSessionsMock.mockReset();
+    handleChatEventMock.mockReset().mockReturnValue("final");
+    const host = createHost();
+    host.sessionKey = "agent:ops:main";
+    (
+      host as typeof host & { sidebarRecentSessionsAllAgents?: boolean }
+    ).sidebarRecentSessionsAllAgents = true;
+    host.refreshSessionsAfterChat.set("run-1", { sessionKey: "agent:ops:main", agentId: "ops" });
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "chat",
+      payload: { state: "final", runId: "run-1", sessionKey: "agent:ops:main", agentId: "ops" },
+      seq: 1,
+    });
+
+    expect(loadSessionsMock).toHaveBeenCalledWith(host, {
+      activeMinutes: 10,
+      limit: 25,
+      agentId: "ops",
+    });
+  });
+
   it("scopes selected-global chat session refreshes after a completed run", () => {
     loadSessionsMock.mockReset();
     handleChatEventMock.mockReset().mockReturnValue("final");
@@ -276,6 +328,31 @@ describe("handleGatewayEvent sessions.changed", () => {
     expect(clearPendingQueueItemsForRunMock).toHaveBeenCalledWith(host, "run-1");
     expect(flushChatQueueForEventMock).toHaveBeenCalledWith(host);
     expect(loadSessionsMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps deferred session-message refreshes scoped when the sidebar all-agents toggle is enabled", () => {
+    loadSessionsMock.mockReset().mockResolvedValue(undefined);
+    applySessionsChangedEventMock.mockReset().mockReturnValue({ applied: false });
+    const host = createHost();
+    host.sessionKey = "agent:ops:main";
+    host.chatRunId = "run-1";
+    (
+      host as typeof host & { sidebarRecentSessionsAllAgents?: boolean }
+    ).sidebarRecentSessionsAllAgents = true;
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "session.message",
+      payload: { sessionKey: "agent:ops:main", agentId: "ops" },
+      seq: 1,
+    });
+
+    expect(loadSessionsMock).toHaveBeenCalledWith(host, {
+      activeMinutes: 10,
+      limit: 25,
+      agentId: "ops",
+      publishChatRunStatus: false,
+    });
   });
 
   it("replays deferred history before flushing queued work after session completion", async () => {

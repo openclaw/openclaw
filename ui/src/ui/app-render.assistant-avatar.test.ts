@@ -621,6 +621,145 @@ describe("renderApp assistant avatar routing", () => {
     expect(labels).toEqual(["Work new", "Work older"]);
   });
 
+  it("keeps the all-agents sidebar scope control reachable with no recent rows", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "chat",
+          sessionKey: "agent:main:main",
+          sessionsResult: {
+            ts: 0,
+            path: "",
+            count: 0,
+            defaults: { modelProvider: null, model: null, contextTokens: null },
+            sessions: [],
+          } as AppViewState["sessionsResult"],
+        }),
+      ),
+      container,
+    );
+
+    const scopeButton = container.querySelector(".sidebar-recent-sessions__scope");
+    expect(scopeButton).toBeInstanceOf(HTMLButtonElement);
+    expect(scopeButton?.textContent?.trim()).toBe("All agents");
+  });
+
+  it("shows cross-agent subagent sessions when sidebar all-agents mode is active", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "chat",
+          sessionKey: "agent:main:main",
+          sidebarRecentSessionsAllAgents: true,
+          agentsList: {
+            defaultId: "main",
+            agents: [
+              { id: "main", name: "Main" },
+              { id: "orchestrator", name: "Orchestrator" },
+            ],
+          } as AppViewState["agentsList"],
+          sessionsResult: {
+            ts: 0,
+            path: "",
+            count: 3,
+            defaults: { modelProvider: null, model: null, contextTokens: null },
+            sessions: [
+              {
+                key: "agent:main:main",
+                kind: "direct",
+                label: "Main",
+                updatedAt: 20,
+              },
+              {
+                key: "agent:orchestrator:subagent:child",
+                kind: "direct",
+                label: "Planner",
+                spawnedBy: "agent:orchestrator:main",
+                updatedAt: 30,
+              },
+              {
+                key: "agent:main:cron:nightly",
+                kind: "cron",
+                label: "Nightly",
+                updatedAt: 40,
+              },
+            ],
+          } as AppViewState["sessionsResult"],
+        }),
+      ),
+      container,
+    );
+
+    const labels = Array.from(container.querySelectorAll(".sidebar-recent-session__name")).map(
+      (node) => node.textContent?.trim(),
+    );
+    expect(labels).toEqual(["Subagent: Planner", "Main"]);
+  });
+
+  it("keeps opening checkpoints scoped when sidebar all-agents mode is active", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return {
+          ts: 1,
+          path: "",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:review:chat",
+              kind: "direct",
+              label: "Review chat",
+              updatedAt: 1,
+            },
+          ],
+        };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const setTab = vi.fn();
+    const state = createState({
+      tab: "chat",
+      sessionKey: "agent:review:chat",
+      sidebarRecentSessionsAllAgents: true,
+      client: { request } as unknown as AppViewState["client"],
+      setTab,
+      sessionsLoading: false,
+      sessionsError: null,
+      sessionsIncludeGlobal: true,
+      sessionsIncludeUnknown: true,
+      sessionsShowArchived: false,
+      sessionsFilterActive: "0",
+      sessionsFilterLimit: "50",
+      sessionsPage: 0,
+      sessionsPageSize: 25,
+      sessionsSelectedKeys: new Set(),
+      sessionsExpandedCheckpointKey: null,
+      sessionsCheckpointItemsByKey: { "agent:review:chat": [] },
+      sessionsCheckpointLoadingKey: null,
+      sessionsCheckpointBusyKey: null,
+    });
+
+    renderApp(state);
+    void chatProps.current?.onOpenSessionCheckpoints?.();
+
+    expect(state.sessionsExpandedCheckpointKey).toBe("agent:review:chat");
+    expect(setTab).toHaveBeenCalledWith("sessions");
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith("sessions.list", {
+        includeGlobal: true,
+        includeUnknown: true,
+        configuredAgentsOnly: true,
+        agentId: "review",
+        limit: 50,
+      });
+    });
+    expect(state.sessionsResultAgentId).toBe("review");
+  });
+
   it("keeps legacy main sessions tied to the default agent when identity is stale", () => {
     const container = document.createElement("div");
 

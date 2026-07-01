@@ -558,6 +558,33 @@ describe("patchSession", () => {
 });
 
 describe("loadSessions", () => {
+  it("honors explicit agent params from non-sidebar scoped refreshes", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 1,
+        path: "(multiple)",
+        count: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      };
+    });
+    const state = createState(request);
+
+    await loadSessions(state, { agentId: "reviewer", activeMinutes: 0, limit: 50 });
+
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      agentId: "reviewer",
+      limit: 50,
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+    });
+    expect(state.sessionsResultAgentId).toBe("reviewer");
+  });
+
   it("hides explicitly archived sessions by default", async () => {
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {
@@ -1220,6 +1247,50 @@ describe("loadSessions", () => {
       includeUnknown: true,
       configuredAgentsOnly: true,
       agentId: "work",
+    });
+  });
+
+  it("keeps checkpoint branch and restore refreshes scoped to the session agent", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return { ts: 1, path: "(multiple)", count: 0, defaults: {}, sessions: [] };
+      }
+      if (method === "sessions.compaction.branch") {
+        return { ok: true, sourceKey: "agent:review:chat", key: "agent:review:dashboard:1" };
+      }
+      if (method === "sessions.compaction.restore") {
+        return { ok: true, key: "agent:review:chat" };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const state = createState(request, {
+      sessionKey: "agent:main:main",
+      sidebarRecentSessionsAllAgents: true,
+    } as Partial<SessionsState & { sessionKey: string; sidebarRecentSessionsAllAgents: boolean }>);
+
+    await branchSessionFromCheckpoint(state, "agent:review:chat", "checkpoint-1");
+    await restoreSessionFromCheckpoint(state, "agent:review:chat", "checkpoint-1");
+
+    expect(request).toHaveBeenNthCalledWith(1, "sessions.compaction.branch", {
+      key: "agent:review:chat",
+      checkpointId: "checkpoint-1",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+      agentId: "review",
+    });
+    expect(request).toHaveBeenNthCalledWith(3, "sessions.compaction.restore", {
+      key: "agent:review:chat",
+      checkpointId: "checkpoint-1",
+    });
+    expect(request).toHaveBeenNthCalledWith(4, "sessions.list", {
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+      agentId: "review",
     });
   });
 });
