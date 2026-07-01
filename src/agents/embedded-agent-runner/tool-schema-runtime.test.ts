@@ -88,4 +88,102 @@ describe("tool schema runtime diagnostics", () => {
       },
     );
   });
+
+  it("logs provider diagnostics when source tool names are unreadable", () => {
+    const unreadable = { name: "unreadable" };
+    Object.defineProperty(unreadable, "name", {
+      enumerable: true,
+      get(): string {
+        throw new Error("provider diagnostics tool name getter exploded");
+      },
+    });
+    mocks.inspectProviderToolSchemasWithPlugin.mockReturnValueOnce([
+      {
+        toolName: "fuzzplugin_move_angles",
+        toolIndex: 0,
+        violations: ["unsupported dynamic schema"],
+      },
+    ]);
+
+    expect(() =>
+      logProviderToolSchemaDiagnostics({
+        provider: "example",
+        tools: [unreadable, { name: "healthy" }] as never,
+      }),
+    ).not.toThrow();
+
+    expect(mocks.log.warn).toHaveBeenCalledWith(
+      "provider tool schema diagnostics: 1 tool for example: fuzzplugin_move_angles (1 violation)",
+      expect.objectContaining({
+        tools: ["0:tool[0]", "1:healthy"],
+      }),
+    );
+  });
+
+  it("logs provider inspection failures without throwing", () => {
+    const unreadable = { name: "unreadable" };
+    Object.defineProperty(unreadable, "name", {
+      enumerable: true,
+      get(): string {
+        throw new Error("provider diagnostics tool name getter exploded");
+      },
+    });
+    mocks.inspectProviderToolSchemasWithPlugin.mockImplementationOnce(() => {
+      throw new Error("provider inspector exploded");
+    });
+
+    expect(() =>
+      logProviderToolSchemaDiagnostics({
+        provider: "example",
+        tools: [unreadable, { name: "healthy" }] as never,
+      }),
+    ).not.toThrow();
+
+    expect(mocks.log.warn).toHaveBeenCalledWith(
+      "provider tool schema diagnostics failed for example: provider inspector exploded",
+      {
+        provider: "example",
+        toolCount: 2,
+        tools: ["0:tool[0]", "1:healthy"],
+      },
+    );
+  });
+
+  it("logs provider diagnostics when diagnostic descriptors are unreadable", () => {
+    const diagnostic = { toolIndex: 0, toolName: "fuzzplugin_move_angles", violations: ["one"] };
+    Object.defineProperty(diagnostic, "toolName", {
+      enumerable: true,
+      get(): string {
+        throw new Error("provider diagnostic tool name getter exploded");
+      },
+    });
+    Object.defineProperty(diagnostic, "violations", {
+      enumerable: true,
+      get(): string[] {
+        throw new Error("provider diagnostic violations getter exploded");
+      },
+    });
+    mocks.inspectProviderToolSchemasWithPlugin.mockReturnValueOnce([diagnostic]);
+
+    expect(() =>
+      logProviderToolSchemaDiagnostics({
+        provider: "example",
+        tools: [{ name: "healthy" }] as never,
+      }),
+    ).not.toThrow();
+
+    expect(mocks.log.warn).toHaveBeenCalledWith(
+      "provider tool schema diagnostics: 1 tool for example: tool[0] (1 violation)",
+      expect.objectContaining({
+        diagnostics: [
+          {
+            index: 0,
+            tool: "tool[0]",
+            violations: ["diagnostic violations unreadable"],
+            violationCount: 1,
+          },
+        ],
+      }),
+    );
+  });
 });
