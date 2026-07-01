@@ -750,6 +750,20 @@ describe("qa scenario catalog", () => {
     }
   });
 
+  it("routes native command session targeting through Crabline Telegram", () => {
+    const scenario = readQaScenarioById("native-command-session-target");
+    const config = readQaScenarioExecutionConfig("native-command-session-target") as
+      | {
+          requiredChannelDriver?: string;
+          requiredProviderMode?: string;
+        }
+      | undefined;
+
+    expect(scenario.execution.channel).toBe("telegram");
+    expect(config?.requiredChannelDriver).toBeUndefined();
+    expect(config?.requiredProviderMode).toBe("mock-openai");
+  });
+
   it("adds a dreaming shadow trial report scenario", () => {
     const scenario = readQaScenarioById("dreaming-shadow-trial-report");
     const config = readQaScenarioExecutionConfig("dreaming-shadow-trial-report") as
