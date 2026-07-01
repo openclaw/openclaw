@@ -551,6 +551,19 @@ describe("bundled plugin metadata", () => {
     }
   });
 
+  it("declares ClickClack channel config metadata", () => {
+    const entry = listRepoBundledPluginMetadata().find(
+      ({ manifest }) => manifest.id === "clickclack",
+    );
+
+    expect(entry?.manifest.channelConfigs?.clickclack).toMatchObject({
+      label: "ClickClack",
+      schema: {
+        type: "object",
+      },
+    });
+  });
+
   it("declares explicit startup activation on all bundled plugin manifests", () => {
     const startupPluginIds: string[] = [];
 

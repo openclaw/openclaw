@@ -5,7 +5,7 @@
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import type { RawData } from "ws";
 import { resolveClickClackInboundAccess } from "./access.js";
-import { resolveClickClackAccount } from "./accounts.js";
+import { resolveRuntimeClickClackAccount } from "./accounts.js";
 import { createClickClackClient } from "./http-client.js";
 import { handleClickClackInbound } from "./inbound.js";
 import { resolveWorkspaceId } from "./resolve.js";
@@ -119,7 +119,7 @@ async function processEvent(params: {
 export async function startClickClackGatewayAccount(
   ctx: ChannelGatewayContext<ResolvedClickClackAccount>,
 ) {
-  const configuredAccount = resolveClickClackAccount({
+  const configuredAccount = await resolveRuntimeClickClackAccount({
     cfg: ctx.cfg,
     accountId: ctx.account.accountId,
   });
