@@ -779,9 +779,17 @@ describe("buildSessionEntry", () => {
     expect(checkpointEntry.lineMap).toStrictEqual([]);
   });
 
-  it("keeps cron-run deleted archives opaque when the live session store entry is gone", async () => {
+  it("keeps cron-run deleted archives opaque when session metadata records a cron session key", async () => {
     const archivePath = path.join(tmpDir, "cron-run.jsonl.deleted.2026-02-16T22-27-33.000Z");
     const jsonlLines = [
+      // session-meta with a cron-run sessionKey makes this a genuine
+      // cron-generated archive.  The text-based [cron: prefix on user
+      // messages is not sufficient as a classification signal — user-typed
+      // text can match the same pattern.  (#98241)
+      JSON.stringify({
+        type: "session-meta",
+        data: { sessionKey: "agent:main:cron:sync:run:run-1" },
+      }),
       JSON.stringify({
         type: "message",
         message: {
@@ -822,6 +830,50 @@ describe("buildSessionEntry", () => {
     expect(entry.content).toBe("");
     expect(entry.lineMap).toStrictEqual([]);
     expect(entry.generatedByCronRun).toBe(true);
+  });
+
+  it("preserves unrelated indexed content in usage-counted archives when a user message begins with [cron: (#98241)", async () => {
+    // A user-typed [cron: prefix in an archive must not trigger
+    // generatedByCronRun and wipe all collected content.  Ordinary human
+    // text like "[cron:daily-digest] why did my job fail?" stays indexed.
+    const archivePath = path.join(
+      tmpDir,
+      "normal.jsonl.reset.2026-02-16T22-27-33.000Z",
+    );
+    const jsonlLines = [
+      JSON.stringify({
+        type: "message",
+        message: { role: "user", content: "Please remember: vendor is Acme, budget 5000." },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: { role: "assistant", content: "Noted: Acme, 5000 USD." },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "user",
+          content: "[cron:daily-digest] why did my job fail last night?",
+        },
+      }),
+      JSON.stringify({
+        type: "message",
+        message: {
+          role: "assistant",
+          content: "The digest failed because the API token expired.",
+        },
+      }),
+    ];
+    fsSync.writeFileSync(archivePath, jsonlLines.join("\n"));
+
+    const entry = requireSessionEntry(await buildSessionEntry(archivePath));
+
+    // generatedByCronRun stays unset — the [cron: prefix is user-typed text,
+    // not a cron-generated signal.  (The field is only present when true.)
+    expect(entry.generatedByCronRun).toBeFalsy();
+    // Content collected before and after the [cron: message must survive.
+    expect(entry.content).toContain("vendor is Acme, budget 5000");
+    expect(entry.content).toContain("Noted: Acme, 5000 USD");
   });
 
   it("skips blank lines and invalid JSON without breaking lineMap", async () => {

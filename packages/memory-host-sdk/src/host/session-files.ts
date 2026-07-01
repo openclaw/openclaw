@@ -840,15 +840,15 @@ export async function buildSessionEntry(
       if (rawText === null) {
         continue;
       }
-      if (
-        !generatedByCronRun &&
-        allowArchiveContentCronClassification &&
-        isGeneratedCronPromptMessage(normalizeSessionText(rawText), message.role)
-      ) {
-        generatedByCronRun = true;
-        collected.length = 0;
-        lineMap.length = 0;
-        messageTimestampsMs.length = 0;
+      if (allowArchiveContentCronClassification) {
+        // Usage-counted archives (.reset / .deleted) must stay indexed so
+        // memory_search can surface hits on post-reset / post-delete history.
+        // A user-typed message starting with [cron: is not a cron-generated
+        // prompt, and treating it as one would silently discard the entire
+        // archive's indexed content (collected.length = 0) plus every
+        // subsequent message (generatedByCronRun = true).  The session-store
+        // classifier and record-level check above are sufficient for
+        // detecting genuine cron-generated sessions.  (#98241)
       }
       const text = sanitizeSessionText(rawText, message.role);
       if (!text) {
