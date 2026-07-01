@@ -548,10 +548,76 @@ function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] 
     .slice(0, 5);
 }
 
+type SidebarRecentSessionGroup = {
+  key: string;
+  label: string;
+  sessions: GatewaySessionRow[];
+};
+
+const SIDEBAR_CHANNEL_LABELS: Record<string, string> = {
+  discord: "Discord",
+  email: "Email",
+  feishu: "Feishu",
+  imessage: "iMessage",
+  lark: "Lark",
+  matrix: "Matrix",
+  signal: "Signal",
+  slack: "Slack",
+  sms: "SMS",
+  telegram: "Telegram",
+  whatsapp: "WhatsApp",
+};
+
+function formatSidebarChannelLabel(channel: string): string {
+  const normalized = channel.trim().toLowerCase();
+  if (!normalized) {
+    return "Other";
+  }
+  return (
+    SIDEBAR_CHANNEL_LABELS[normalized] ??
+    normalized
+      .split(/[-_]/)
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ")
+  );
+}
+
+function resolveSidebarRecentSessionChannel(row: GatewaySessionRow): string {
+  if (/^agent:[^:]+:dashboard:/.test(row.key)) {
+    return "dashboard";
+  }
+
+  const channel =
+    normalizeOptionalString(row.channel) ??
+    normalizeOptionalString(row.origin?.provider) ??
+    row.key.match(/^agent:[^:]+:([^:]+)(?::[^:]+)?:(direct|group|channel)(?::|$)/)?.[1] ??
+    "";
+  return channel || "other";
+}
+
+function resolveSidebarRecentSessionGroups(
+  sessions: GatewaySessionRow[],
+): SidebarRecentSessionGroup[] {
+  const groups = new Map<string, SidebarRecentSessionGroup>();
+  for (const row of sessions) {
+    const key = resolveSidebarRecentSessionChannel(row);
+    const existing = groups.get(key);
+    if (existing) {
+      existing.sessions.push(row);
+      continue;
+    }
+    const label = key === "dashboard" ? "Dashboard" : formatSidebarChannelLabel(key);
+    groups.set(key, { key, label, sessions: [row] });
+  }
+  return [...groups.values()];
+}
+
 function renderSidebarSessions(state: AppViewState) {
   const collapsed = state.settings.navCollapsed;
   const busy = isSidebarSessionBusy(state);
   const recent = collapsed ? [] : resolveSidebarRecentSessions(state);
+  const recentGroups = resolveSidebarRecentSessionGroups(recent);
   const newSessionDisabled = !state.connected || state.sessionsLoading || busy || !state.client;
   const newSessionTitle = !state.connected
     ? "Connect to create a new session"
@@ -616,7 +682,16 @@ function renderSidebarSessions(state: AppViewState) {
                 <span class="sidebar-recent-sessions__chevron"> ${icons.chevronDown} </span>
               </button>
               <div class="sidebar-recent-sessions__list">
-                ${recent.map((row) => renderSidebarRecentSession(state, row))}
+                ${recentGroups.map(
+                  (group) => html`
+                    <div class="sidebar-recent-session-group" data-channel=${group.key}>
+                      <div class="sidebar-recent-session-group__label">${group.label}</div>
+                      <div class="sidebar-recent-session-group__items">
+                        ${group.sessions.map((row) => renderSidebarRecentSession(state, row))}
+                      </div>
+                    </div>
+                  `,
+                )}
               </div>
             </div>
           `}

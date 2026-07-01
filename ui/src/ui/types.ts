@@ -472,10 +472,17 @@ export type GatewaySessionRow = {
   kind: "cron" | "direct" | "group" | "global" | "unknown";
   label?: string;
   displayName?: string;
+  channel?: string;
   surface?: string;
   subject?: string;
   room?: string;
   space?: string;
+  origin?: {
+    provider?: string;
+    surface?: string;
+    chatType?: string;
+    label?: string;
+  };
   updatedAt: number | null;
   sessionId?: string;
   systemSent?: boolean;

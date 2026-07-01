@@ -680,6 +680,29 @@
 
 .sidebar-recent-sessions__list {
   display: grid;
+  gap: 8px;
+}
+
+.sidebar-recent-session-group {
+  display: grid;
+  gap: 4px;
+}
+
+.sidebar-recent-session-group__label {
+  padding: 0 10px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--muted) 82%, var(--text) 18%);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.sidebar-recent-session-group__items {
+  display: grid;
   gap: 4px;
 }
 

@@ -774,4 +774,81 @@ describe("renderApp assistant avatar routing", () => {
     );
     expect(labels).toEqual(["Main old", "Work new"]);
   });
+
+  it("groups the five most recent sidebar sessions by channel", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderApp(
+        createState({
+          tab: "chat",
+          sessionKey: "agent:main:main",
+          sessionsResult: {
+            ts: 0,
+            path: "",
+            count: 6,
+            defaults: { modelProvider: null, model: null, contextTokens: null },
+            sessions: [
+              {
+                key: "agent:main:feishu:direct:ou-new",
+                kind: "direct",
+                label: "Feishu new",
+                channel: "feishu",
+                updatedAt: 60,
+              },
+              {
+                key: "agent:main:dashboard:one",
+                kind: "direct",
+                label: "Dashboard one",
+                updatedAt: 50,
+              },
+              {
+                key: "agent:main:slack:direct:u-1",
+                kind: "direct",
+                label: "Slack one",
+                channel: "slack",
+                updatedAt: 40,
+              },
+              {
+                key: "agent:main:feishu:main:direct:ou-old",
+                kind: "direct",
+                label: "Feishu old",
+                updatedAt: 30,
+              },
+              {
+                key: "agent:main:dashboard:two",
+                kind: "direct",
+                label: "Dashboard two",
+                updatedAt: 20,
+              },
+              {
+                key: "agent:main:telegram:direct:u-2",
+                kind: "direct",
+                label: "Telegram hidden",
+                channel: "telegram",
+                updatedAt: 10,
+              },
+            ],
+          } as AppViewState["sessionsResult"],
+        }),
+      ),
+      container,
+    );
+
+    const groupLabels = Array.from(
+      container.querySelectorAll(".sidebar-recent-session-group__label"),
+    ).map((node) => node.textContent?.trim());
+    expect(groupLabels).toEqual(["Feishu", "Dashboard", "Slack"]);
+
+    const labels = Array.from(container.querySelectorAll(".sidebar-recent-session__name")).map(
+      (node) => node.textContent?.trim(),
+    );
+    expect(labels).toEqual([
+      "Feishu new",
+      "Feishu old",
+      "Dashboard one",
+      "Dashboard two",
+      "Slack one",
+    ]);
+  });
 });
