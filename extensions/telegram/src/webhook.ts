@@ -30,6 +30,7 @@ import {
   WEBHOOK_RATE_LIMIT_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-ingress";
 import { readJsonBodyWithLimit } from "openclaw/plugin-sdk/webhook-request-guards";
+import { mergeTelegramAccountConfig } from "./account-config.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import {
@@ -38,6 +39,7 @@ import {
   type TelegramSpooledReplayDeferredParticipant,
 } from "./bot-processing-outcome.js";
 import { createTelegramBot } from "./bot.js";
+import { resolveTelegramTransport } from "./fetch.js";
 import { isRetryableTelegramApiError } from "./network-errors.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import {
@@ -665,19 +667,37 @@ export async function startTelegramWebhook(opts: {
   const diagnosticsEnabled = isDiagnosticsEnabled(opts.config);
   const spoolDir = opts.spoolDir ?? resolveTelegramIngressSpoolDir({ accountId: opts.accountId });
   let shutDown = false;
+  const telegramAccountConfig = opts.config
+    ? mergeTelegramAccountConfig(opts.config, opts.accountId ?? "default")
+    : undefined;
+  const telegramTransport = resolveTelegramTransport(opts.fetch, {
+    network: telegramAccountConfig?.network,
+  });
+  let closeTransportPromise: Promise<void> | undefined;
+  const closeTransportOnce = (): Promise<void> => {
+    closeTransportPromise ??= telegramTransport.close();
+    return closeTransportPromise;
+  };
   const bot = createTelegramBot({
     token: opts.token,
     runtime,
     proxyFetch: opts.fetch,
     config: opts.config,
     accountId: opts.accountId,
+    telegramTransport,
   });
-  await initializeTelegramWebhookBot({
-    bot,
-    runtime,
-    abortSignal: opts.abortSignal,
-    retryPolicy: webhookRegistrationRetryPolicy,
-  });
+  try {
+    await initializeTelegramWebhookBot({
+      bot,
+      runtime,
+      abortSignal: opts.abortSignal,
+      retryPolicy: webhookRegistrationRetryPolicy,
+    });
+  } catch (err) {
+    await bot.stop();
+    await closeTransportOnce();
+    throw err;
+  }
   const telegramWebhookRateLimiter = createFixedWindowRateLimiter({
     windowMs: WEBHOOK_RATE_LIMIT_DEFAULTS.windowMs,
     maxRequests: WEBHOOK_RATE_LIMIT_DEFAULTS.maxRequests,
@@ -912,7 +932,7 @@ export async function startTelegramWebhook(opts: {
   });
 
   let webhookAdvertised = false;
-  const shutdown = () => {
+  const shutdown = async () => {
     if (shutDown) {
       return;
     }
@@ -921,16 +941,19 @@ export async function startTelegramWebhook(opts: {
       clearInterval(drainTimer);
     }
     server.close();
-    void bot.stop();
+    await bot.stop();
+    // The webhook owns this transport because it resolved and injected it into
+    // createTelegramBot; close once so abort/startup-failure paths cannot leak sockets.
+    await closeTransportOnce();
     status.noteWebhookStop();
     if (diagnosticsEnabled) {
       stopDiagnosticHeartbeat();
     }
   };
   if (opts.abortSignal?.aborted) {
-    shutdown();
+    void shutdown();
   } else if (opts.abortSignal) {
-    opts.abortSignal.addEventListener("abort", shutdown, { once: true });
+    opts.abortSignal.addEventListener("abort", () => void shutdown(), { once: true });
   }
 
   const advertiseWebhook = async (): Promise<void> => {
@@ -993,13 +1016,14 @@ export async function startTelegramWebhook(opts: {
       attempt += 1;
     }
   };
-  const closeAfterStartupFailure = () => {
+  const closeAfterStartupFailure = async () => {
     shutDown = true;
     if (drainTimer) {
       clearInterval(drainTimer);
     }
     server.close();
-    void bot.stop();
+    await bot.stop();
+    await closeTransportOnce();
     status.noteWebhookStop();
     if (diagnosticsEnabled) {
       stopDiagnosticHeartbeat();
@@ -1013,7 +1037,7 @@ export async function startTelegramWebhook(opts: {
       await advertiseWebhook();
     } catch (err) {
       if (!shouldRetryWebhookRegistration(err)) {
-        closeAfterStartupFailure();
+        await closeAfterStartupFailure();
         throw err;
       }
       void retryWebhookRegistration(1);

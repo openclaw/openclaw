@@ -33,6 +33,18 @@ const createTelegramBotSpy = vi.hoisted(() =>
     stop: stopSpy,
   })),
 );
+const transportCloseSpies = vi.hoisted(() => [] as Array<ReturnType<typeof vi.fn>>);
+const resolveTelegramTransportSpy = vi.hoisted(() =>
+  vi.fn(() => {
+    const close = vi.fn(async () => undefined);
+    transportCloseSpies.push(close);
+    return {
+      fetch: globalThis.fetch,
+      sourceFetch: globalThis.fetch,
+      close,
+    };
+  }),
+);
 
 const WEBHOOK_POST_TIMEOUT_MS = process.platform === "win32" ? 20_000 : 8_000;
 const TELEGRAM_TOKEN = "tok";
@@ -117,6 +129,10 @@ vi.mock("./bot.js", () => ({
   createTelegramBot: createTelegramBotSpy,
 }));
 
+vi.mock("./fetch.js", () => ({
+  resolveTelegramTransport: resolveTelegramTransportSpy,
+}));
+
 let startTelegramWebhook: typeof import("./webhook.js").startTelegramWebhook;
 let webhookStateDir: string | undefined;
 let webhookSpoolDir: string | undefined;
@@ -149,6 +165,8 @@ function resetTelegramWebhookMocks(): void {
   initSpy.mockReset();
   initSpy.mockImplementation(async () => undefined);
   stopSpy.mockReset();
+  resolveTelegramTransportSpy.mockClear();
+  transportCloseSpies.length = 0;
   createTelegramBotSpy.mockReset();
   createTelegramBotSpy.mockImplementation(() => ({
     init: initSpy,
@@ -456,6 +474,7 @@ async function withStartedWebhook<T>(
   try {
     return await run({ server: started.server, port: getServerPort(started.server) });
   } finally {
+    await started.stop();
     abort.abort();
   }
 }
@@ -528,6 +547,7 @@ describe("startTelegramWebhook", () => {
         );
         expect(botParams.accountId).toBe("opie");
         expect(requireRecord(botParams.config, "telegram config").bindings).toEqual([]);
+        expect(botParams.telegramTransport).toBeDefined();
         const health = await fetch(`http://127.0.0.1:${port}/healthz`);
         expect(health.status).toBe(200);
         expect(initSpy).toHaveBeenCalledTimes(1);
@@ -608,6 +628,7 @@ describe("startTelegramWebhook", () => {
     ).rejects.toThrow("unauthorized");
 
     expect(stopSpy).toHaveBeenCalledTimes(1);
+    expect(transportCloseSpies[0]).toHaveBeenCalledTimes(1);
     expectMockMessageContains(runtimeError, "telegram setWebhook failed: unauthorized");
   });
 
@@ -655,7 +676,8 @@ describe("startTelegramWebhook", () => {
     ).rejects.toThrow("unauthorized");
 
     expect(setWebhookSpy).not.toHaveBeenCalled();
-    expect(stopSpy).not.toHaveBeenCalled();
+    expect(stopSpy).toHaveBeenCalledTimes(1);
+    expect(transportCloseSpies[0]).toHaveBeenCalledTimes(1);
     expectMockMessageContains(runtimeError, "telegram getMe failed: unauthorized");
   });
 
@@ -1085,6 +1107,8 @@ describe("startTelegramWebhook", () => {
       expect(secondResponse.status).toBe(200);
       await vi.waitFor(() => expect(handleUpdateSpy).toHaveBeenCalledTimes(1));
     } finally {
+      await first.stop();
+      await second.stop();
       firstAbort.abort();
       secondAbort.abort();
     }
@@ -1284,7 +1308,7 @@ describe("startTelegramWebhook", () => {
   it("does not de-register webhook when shutting down", async () => {
     deleteWebhookSpy.mockClear();
     const abort = new AbortController();
-    await startTelegramWebhook({
+    const started = await startTelegramWebhook({
       token: TELEGRAM_TOKEN,
       secret: TELEGRAM_SECRET,
       port: 0,
@@ -1293,7 +1317,23 @@ describe("startTelegramWebhook", () => {
       spoolDir: requireWebhookSpoolDir(),
     });
 
+    await started.stop();
     abort.abort();
     expect(deleteWebhookSpy).toHaveBeenCalledTimes(0);
+  });
+
+  it("closes the owned transport exactly once on shutdown", async () => {
+    const started = await startTelegramWebhook({
+      token: TELEGRAM_TOKEN,
+      secret: TELEGRAM_SECRET,
+      port: 0,
+      path: TELEGRAM_WEBHOOK_PATH,
+      spoolDir: requireWebhookSpoolDir(),
+    });
+
+    await started.stop();
+    await started.stop();
+
+    expect(transportCloseSpies[0]).toHaveBeenCalledTimes(1);
   });
 });
