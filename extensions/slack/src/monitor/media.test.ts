@@ -1293,6 +1293,52 @@ describe("resolveSlackThreadHistory", () => {
     expect(result[0]?.botId).toBe("BMONITOR");
   });
 
+  it("collects all readable text from attachment blocks and section fields", async () => {
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [
+        {
+          text: "  ",
+          bot_id: "BMONITOR",
+          ts: "1.000",
+          attachments: [
+            {
+              blocks: [
+                { type: "header", text: { type: "plain_text", text: "Alert firing" } },
+                {
+                  type: "section",
+                  fields: [
+                    { type: "mrkdwn", text: "*host:* dc2.ipa.mgt" },
+                    { type: "mrkdwn", text: "*device:* /dev/sda1" },
+                  ],
+                },
+                {
+                  type: "section",
+                  text: { type: "mrkdwn", text: "Free space below threshold" },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      response_metadata: { next_cursor: "" },
+    });
+    const client = {
+      conversations: { replies },
+    } as unknown as Parameters<typeof resolveSlackThreadHistory>[0]["client"];
+
+    const result = await resolveSlackThreadHistory({
+      channelId: "C1",
+      threadTs: "1.000",
+      client,
+      limit: 10,
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.text).toBe(
+      "Alert firing\n*host:* dc2.ipa.mgt\n*device:* /dev/sda1\nFree space below threshold",
+    );
+  });
+
   it("preserves formatting in primary Slack text", async () => {
     const replies = vi.fn().mockResolvedValueOnce({
       messages: [
