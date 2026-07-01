@@ -1410,6 +1410,8 @@ export async function stopScheduledTask({ stdout, env }: GatewayServiceControlAr
       }
     }
   }
+  // Disable the task to prevent PT3M repeat triggers from re-launching during update window
+  await execSchtasks(["/Change", "/TN", taskName, "/DISABLE"]);
   stdout.write(`${formatLine("Stopped Scheduled Task", taskName)}\n`);
 }
 
@@ -1433,6 +1435,8 @@ export async function restartScheduledTask({
   }
   const taskName = resolveTaskName(effectiveEnv);
   await execSchtasks(["/End", "/TN", taskName]);
+  // Re-enable the task before re-launching (it was disabled by stopScheduledTask)
+  await execSchtasks(["/Change", "/TN", taskName, "/ENABLE"]);
   const manageGatewayPort = shouldManageGatewayListenerPort(effectiveEnv);
   const restartPort = manageGatewayPort ? await resolveScheduledTaskPort(effectiveEnv) : null;
   if (manageGatewayPort) {
