@@ -10,6 +10,7 @@ import {
   getCompactionProvider,
   type CompactionProvider,
 } from "../../plugins/compaction-provider.js";
+import { normalizeInputProvenance } from "../../sessions/input-provenance.js";
 import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
 import {
   buildHistoryPrunePlanWithWorker,
@@ -31,6 +32,7 @@ import {
 } from "../compaction.js";
 import { collectTextContentBlocks } from "../content-blocks.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "../copilot-dynamic-headers.js";
+import { isMessagingToolSendAction } from "../embedded-agent-messaging.js";
 import { isTimeoutError } from "../failover-error.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
@@ -72,6 +74,7 @@ const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
 const MAX_RECENT_TURNS_PRESERVE = 12;
 const MAX_QUALITY_GUARD_MAX_RETRIES = 3;
 const MAX_RECENT_TURN_TEXT_CHARS = 600;
+const TOOL_CALL_BLOCK_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
 const PREVIOUS_SUMMARY_REDISTILL_PREFIX =
   "Previous compaction summary to re-distill with the current conversation. " +
   "Prune stale, duplicate, or superseded details instead of preserving it verbatim.";
@@ -174,6 +177,115 @@ function collectSessionBranchMessages(sessionManager: unknown): AgentMessage[] {
         : undefined,
     )
     .filter((message): message is AgentMessage => Boolean(message));
+}
+
+function isReplayUnsafeInterSessionInput(message: AgentMessage): boolean {
+  if ((message as { role?: unknown }).role !== "user") {
+    return false;
+  }
+  const provenance = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
+  return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
+}
+
+function recordOrEmpty(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function filterReplayUnsafeMessagingToolCalls(
+  message: AgentMessage,
+  replayUnsafeToolCallIds: Set<string>,
+): AgentMessage | undefined {
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return message;
+  }
+  let removed = false;
+  const filteredContent = content.filter((block) => {
+    if (!block || typeof block !== "object") {
+      return true;
+    }
+    const record = block as {
+      type?: unknown;
+      id?: unknown;
+      name?: unknown;
+      arguments?: unknown;
+      input?: unknown;
+    };
+    if (typeof record.type !== "string" || !TOOL_CALL_BLOCK_TYPES.has(record.type)) {
+      return true;
+    }
+    if (typeof record.name !== "string" || !record.name.trim()) {
+      return true;
+    }
+    const args = recordOrEmpty(record.arguments ?? record.input);
+    if (!isMessagingToolSendAction(record.name, args)) {
+      return true;
+    }
+    removed = true;
+    if (typeof record.id === "string" && record.id.trim()) {
+      replayUnsafeToolCallIds.add(record.id.trim());
+    }
+    return false;
+  });
+  if (!removed) {
+    return message;
+  }
+  return filteredContent.length > 0
+    ? ({ ...message, content: filteredContent } as AgentMessage)
+    : undefined;
+}
+
+function isReplayUnsafeMessagingToolResult(
+  message: AgentMessage,
+  replayUnsafeToolCallIds: Set<string>,
+): boolean {
+  if ((message as { role?: unknown }).role !== "toolResult") {
+    return false;
+  }
+  const toolResultId = extractToolResultId(
+    message as Extract<AgentMessage, { role: "toolResult" }>,
+  );
+  if (toolResultId && replayUnsafeToolCallIds.has(toolResultId)) {
+    return true;
+  }
+  return (message as { toolName?: unknown }).toolName === "sessions_send";
+}
+
+function filterReplayUnsafeSessionBranchMessages(messages: AgentMessage[]): AgentMessage[] {
+  const filtered: AgentMessage[] = [];
+  const replayUnsafeToolCallIds = new Set<string>();
+  let skippingInterSessionReply = false;
+  for (const message of messages) {
+    if (isReplayUnsafeInterSessionInput(message)) {
+      skippingInterSessionReply = true;
+      continue;
+    }
+    const role = (message as { role?: unknown }).role;
+    if (skippingInterSessionReply) {
+      if (role === "assistant" || role === "toolResult") {
+        continue;
+      }
+      skippingInterSessionReply = false;
+    }
+    if (role === "assistant") {
+      const filteredMessage = filterReplayUnsafeMessagingToolCalls(
+        message,
+        replayUnsafeToolCallIds,
+      );
+      if (!filteredMessage) {
+        continue;
+      }
+      filtered.push(filteredMessage);
+      continue;
+    }
+    if (isReplayUnsafeMessagingToolResult(message, replayUnsafeToolCallIds)) {
+      continue;
+    }
+    filtered.push(message);
+  }
+  return filtered;
 }
 
 function containsRealConversation(messages: AgentMessage[]): boolean {
@@ -905,8 +1017,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     let hasRealSummarizable = containsRealConversation(baseMessagesToSummarize);
     let hasRealTurnPrefix = containsRealConversation(baseTurnPrefixMessages);
     if (!hasRealSummarizable && !hasRealTurnPrefix) {
-      const branchMessages = stripRuntimeContextCustomMessages(
-        collectSessionBranchMessages(ctx.sessionManager),
+      const branchMessages = filterReplayUnsafeSessionBranchMessages(
+        stripRuntimeContextCustomMessages(collectSessionBranchMessages(ctx.sessionManager)),
       );
       if (containsRealConversation(branchMessages)) {
         log.info(
