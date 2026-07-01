@@ -15,9 +15,11 @@ import {
   configureSqliteConnectionPragmas,
   type SqliteWalMaintenance,
 } from "../infra/sqlite-wal.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
+import { resolveOpenClawStateSqliteDir } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
@@ -37,6 +39,9 @@ export { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 const OPENCLAW_AGENT_SCHEMA_VERSION = 1;
 const OPENCLAW_AGENT_DB_DIR_MODE = 0o700;
 const OPENCLAW_AGENT_DB_FILE_MODE = 0o600;
+
+const agentDbLog = createSubsystemLogger("state/agent-db");
+const agentDbChmodWarnedTargets = new Set<string>();
 
 /** Open per-agent SQLite database handle plus lifecycle maintenance. */
 export type OpenClawAgentDatabase = {
@@ -70,6 +75,69 @@ function assertSupportedAgentSchemaVersion(db: DatabaseSync, pathname: string): 
   }
 }
 
+function enforcePrivateAgentDbChmodSync(
+  target: string,
+  mode: number,
+  defaultProfileLocation: boolean,
+): void {
+  let chmodFailure: { error: unknown; text: string } | undefined;
+  try {
+    chmodSync(target, mode);
+  } catch (err) {
+    chmodFailure = { error: err, text: String(err) };
+  }
+  if (process.platform === "win32") {
+    if (defaultProfileLocation) {
+      return;
+    }
+    throw new Error(
+      `OpenClaw agent database ${target} stores credentials in a relocated Windows location whose private NTFS ACL cannot be proven (Windows file modes do not reflect ACLs). Keep agent credential storage at the default per-user location instead of relocating it with OPENCLAW_STATE_DIR.`,
+      chmodFailure ? { cause: chmodFailure.error } : undefined,
+    );
+  }
+  const resultingMode = statSync(target).mode & 0o777;
+  if ((resultingMode & 0o077) !== 0) {
+    const reason = chmodFailure?.text ?? "chmod reported success without changing the mode";
+    throw new Error(
+      `OpenClaw agent database ${target} stores credentials and cannot be made private on this volume (mode ${resultingMode.toString(8)}; ${reason}). Move the agent database to a filesystem that enforces private permissions by setting OPENCLAW_STATE_DIR to a local directory.`,
+      chmodFailure ? { cause: chmodFailure.error } : undefined,
+    );
+  }
+  if (!chmodFailure) {
+    return;
+  }
+  if (agentDbChmodWarnedTargets.has(target)) {
+    return;
+  }
+  agentDbChmodWarnedTargets.add(target);
+  agentDbLog.warn(
+    `agent database ${target} is already private; skipped chmod rejected by this volume: ${chmodFailure.text}`,
+  );
+}
+
+export function isDefaultProfileAgentDatabaseLocation(
+  pathname: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (env.OPENCLAW_STATE_DIR?.trim()) {
+    return false;
+  }
+  const agentsRoot = path.resolve(path.dirname(resolveOpenClawStateSqliteDir(env)), "agents");
+  const resolved = path.resolve(pathname);
+  return resolved === agentsRoot || resolved.startsWith(agentsRoot + path.sep);
+}
+
+export function enforcePrivateAgentDbFilePermissions(
+  pathname: string,
+  defaultProfileLocation: boolean,
+): void {
+  for (const candidate of resolveSqliteDatabaseFilePaths(pathname)) {
+    if (existsSync(candidate)) {
+      enforcePrivateAgentDbChmodSync(candidate, OPENCLAW_AGENT_DB_FILE_MODE, defaultProfileLocation);
+    }
+  }
+}
+
 function ensureOpenClawAgentDatabasePermissions(
   pathname: string,
   options: OpenClawAgentDatabaseOptions,
@@ -80,17 +148,14 @@ function ensureOpenClawAgentDatabasePermissions(
     env: options.env,
   });
   const isDefaultAgentDatabase = path.resolve(pathname) === path.resolve(defaultPath);
+  const defaultProfileLocation = isDefaultProfileAgentDatabaseLocation(pathname, options.env);
   const dirExisted = existsSync(dir);
   mkdirSync(dir, { recursive: true, mode: OPENCLAW_AGENT_DB_DIR_MODE });
   // Default agent state is private by contract; custom pre-existing dirs keep caller ownership.
   if (isDefaultAgentDatabase || !dirExisted) {
-    chmodSync(dir, OPENCLAW_AGENT_DB_DIR_MODE);
+    enforcePrivateAgentDbChmodSync(dir, OPENCLAW_AGENT_DB_DIR_MODE, defaultProfileLocation);
   }
-  for (const candidate of resolveSqliteDatabaseFilePaths(pathname)) {
-    if (existsSync(candidate)) {
-      chmodSync(candidate, OPENCLAW_AGENT_DB_FILE_MODE);
-    }
-  }
+  enforcePrivateAgentDbFilePermissions(pathname, defaultProfileLocation);
 }
 
 function readExistingSchemaMeta(db: DatabaseSync): ExistingSchemaMeta | null {
@@ -261,6 +326,7 @@ export function openOpenClawAgentDatabase(
         synchronous: "NORMAL",
       });
       ensureAgentSchema(db, agentId, pathname);
+      ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
       return maintenance;
     } catch (err) {
       maintenance?.close();
@@ -268,7 +334,6 @@ export function openOpenClawAgentDatabase(
       throw err;
     }
   })();
-  ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
   const database = { agentId, db, path: pathname, walMaintenance };
   cachedDatabases.set(pathname, database);
   registerAgentDatabase({ agentId, path: pathname, env: options.env });

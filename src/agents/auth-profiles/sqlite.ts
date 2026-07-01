@@ -17,6 +17,8 @@ import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
+  enforcePrivateAgentDbFilePermissions,
+  isDefaultProfileAgentDatabaseLocation,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -89,6 +91,7 @@ function getAuthProfileKysely(db: DatabaseSync) {
 
 function readAuthProfileJsonCellReadOnly(pathname: string, target: "store" | "state"): unknown {
   const sqlite = requireNodeSqlite();
+  enforcePrivateAgentDbFilePermissions(pathname, isDefaultProfileAgentDatabaseLocation(pathname));
   const db = new sqlite.DatabaseSync(pathname, { readOnly: true });
   try {
     // This short-lived reader bypasses the canonical agent DB bootstrap, but it
