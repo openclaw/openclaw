@@ -1259,17 +1259,19 @@ internal fun sanitizeProviderErrorDetails(raw: String): String {
       .map { it.trim() }
       .filter { it.isNotEmpty() }
       .joinToString("\n")
-      .take(1_200)
-  return listOf(
+  return redactProviderSecrets(normalized).take(1_200)
+}
+
+private fun redactProviderSecrets(value: String): String =
+  listOf(
     Regex("sk-[A-Za-z0-9_-]{8,}") to "sk-[redacted]",
     Regex("\\bghp_[A-Za-z0-9_]{8,}\\b") to "ghp_[redacted]",
     Regex("\\bgithub_pat_[A-Za-z0-9_]{8,}\\b") to "github_pat_[redacted]",
     Regex("\\bAIza[0-9A-Za-z_-]{10,}\\b") to "AIza[redacted]",
     Regex("\\b(?:AKIA|ASIA)[A-Z0-9]{12,}\\b") to "aws_[redacted]",
-  ).fold(redactLabeledSecret(redactBearerSecret(normalized))) { text, (regex, replacement) ->
+  ).fold(redactLabeledSecret(redactBearerSecret(value))) { text, (regex, replacement) ->
     regex.replace(text, replacement)
   }
-}
 
 private fun redactBearerSecret(value: String): String =
   Regex("(?i)((?:\"authorization\"|authorization|\"proxy-authorization\"|proxy-authorization)\\s*[:=]\\s*\"?(?:bearer|basic)\\s+)[^\"'\\s,}]+")

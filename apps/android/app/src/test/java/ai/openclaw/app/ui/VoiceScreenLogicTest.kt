@@ -3,7 +3,9 @@ package ai.openclaw.app.ui
 import ai.openclaw.app.GatewayTalkSetupRow
 import ai.openclaw.app.VoiceCaptureMode
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VoiceScreenLogicTest {
@@ -102,6 +104,16 @@ class VoiceScreenLogicTest {
       "OpenAI 404 invalid_request_error: model not found Authorization: Bearer [redacted] token=[redacted] {\"authorization\":\"Bearer [redacted]\",\"apiKey\":\"[redacted]\"} url=https://api.example.test/v1?key=[redacted]&client_secret=[redacted] aws=aws_[redacted]",
       issue?.details,
     )
+  }
+
+  @Test
+  fun providerIssueRedactsSecretsBeforeTruncatingDetails() {
+    val longSecret = "sk-" + "a".repeat(1_300)
+    val details = sanitizeProviderErrorDetails("OpenAI failed $longSecret")
+
+    assertTrue(details.length <= 1_200)
+    assertTrue(details.contains("sk-[redacted]"))
+    assertFalse(details.contains("sk-aaaaaaaa"))
   }
 
   @Test

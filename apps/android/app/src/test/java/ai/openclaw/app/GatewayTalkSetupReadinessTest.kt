@@ -105,7 +105,7 @@ class GatewayTalkSetupReadinessTest {
   }
 
   @Test
-  fun unmatchedActiveProviderLeavesReadinessUnknownInsteadOfFalseReady() {
+  fun unmatchedRealtimeProviderStaysGatewayVerifiedWhileTranscriptionAliasesResolve() {
     val readiness =
       parseGatewayTalkSetupReadiness(
         catalog =
@@ -132,9 +132,84 @@ class GatewayTalkSetupReadinessTest {
 
     assertFalse(readiness.realtimeTalk.ready)
     assertFalse(readiness.realtimeTalk.setupKnown)
-    assertEquals("Gateway returned openai-realtime outside the Realtime Talk catalog.", readiness.realtimeTalk.subtitle)
+    assertEquals("Gateway", readiness.realtimeTalk.statusText)
+    assertEquals("openai-realtime", readiness.realtimeTalk.providerId)
+    assertEquals("Gateway will verify openai-realtime when you start.", readiness.realtimeTalk.subtitle)
+    assertTrue(readiness.dictation.ready)
+    assertTrue(readiness.dictation.setupKnown)
+    assertEquals("Ready", readiness.dictation.statusText)
+    assertEquals("openai", readiness.dictation.providerId)
+    assertEquals("OpenAI Realtime Transcription via Gateway relay", readiness.dictation.subtitle)
+  }
+
+  @Test
+  fun activeProviderAliasMatchesCatalogProviderAlias() {
+    val readiness =
+      parseGatewayTalkSetupReadiness(
+        catalog =
+          jsonObject(
+            """
+            {
+              "realtime": {
+                "activeProvider": "openai-realtime",
+                "providers": [
+                  {"id":"openai-realtime","label":"OpenAI Realtime","configured":true}
+                ]
+              },
+              "transcription": {
+                "activeProvider": "openai-realtime",
+                "providers": [
+                  {
+                    "id":"openai",
+                    "label":"OpenAI Realtime Transcription",
+                    "aliases":["openai-realtime"],
+                    "configured":true
+                  }
+                ]
+              }
+            }
+            """,
+          ),
+        config = null,
+      )
+
+    assertTrue(readiness.dictation.ready)
+    assertTrue(readiness.dictation.setupKnown)
+    assertEquals("openai", readiness.dictation.providerId)
+    assertEquals("OpenAI Realtime Transcription via Gateway relay", readiness.dictation.subtitle)
+  }
+
+  @Test
+  fun activeTranscriptionAliasWithUnconfiguredCanonicalRowStaysGatewayVerified() {
+    val readiness =
+      parseGatewayTalkSetupReadiness(
+        catalog =
+          jsonObject(
+            """
+            {
+              "realtime": {
+                "activeProvider": "openai-realtime",
+                "providers": [
+                  {"id":"openai-realtime","label":"OpenAI Realtime","configured":true}
+                ]
+              },
+              "transcription": {
+                "activeProvider": "openai-realtime",
+                "providers": [
+                  {"id":"openai","label":"OpenAI Realtime Transcription","configured":false}
+                ]
+              }
+            }
+            """,
+          ),
+        config = null,
+      )
+
     assertFalse(readiness.dictation.ready)
     assertFalse(readiness.dictation.setupKnown)
+    assertEquals("Gateway", readiness.dictation.statusText)
+    assertEquals("openai-realtime", readiness.dictation.providerId)
+    assertEquals("Gateway will verify openai-realtime when you start.", readiness.dictation.subtitle)
   }
 
   @Test
