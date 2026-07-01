@@ -778,7 +778,7 @@ describe("channel ingress queue", () => {
         await queue.enqueue("null-ok", null);
         const pending = await queue.listPending();
         expect(pending).toHaveLength(1);
-        expect(pending[0]!.payload).toBeNull();
+        expect(pending[0].payload).toBeNull();
       });
     });
   });
