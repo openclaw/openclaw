@@ -30,6 +30,7 @@ import {
   validateGeminiTurns,
 } from "../embedded-agent-helpers.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
+import { computeEffectiveSettings } from "../agent-hooks/context-pruning/settings.js";
 import { isReasoningOnlyLengthAssistantTurn } from "../replay-turn-classification.js";
 import type { AgentMessage } from "../runtime/index.js";
 import {
@@ -757,14 +758,27 @@ export async function sanitizeSessionHistory(params: {
   const droppedReasoning = policy.dropReasoningFromHistory
     ? dropReasoningFromHistory(validatedThinkingSignatures)
     : validatedThinkingSignatures;
-  // Read thinking pruning config from contextPruning
-  const thinkingPruning = params.config?.agents?.defaults?.contextPruning?.thinking;
-  // Apply thinking block pruning based on config
-  const droppedThinking = thinkingPruning?.enabled
+  // Compute effective context pruning settings using normalization path
+  const rawPruningConfig = params.config?.agents?.defaults?.contextPruning;
+  const effectivePruningSettings = computeEffectiveSettings(rawPruningConfig);
+  
+  // Apply thinking block pruning respecting provider strategy boundaries
+  // Provider strategy (policy.dropThinkingBlocks) controls default behavior
+  // User config (effectivePruningSettings?.thinking) can override when appropriate
+  const shouldPruneThinking = effectivePruningSettings?.thinking?.enabled ?? false;
+  const providerDropsThinking = policy.dropThinkingBlocks;
+  
+  // Decision logic:
+  // 1. If provider requires preserving thinking blocks (dropThinkingBlocks=false), respect provider strategy
+  // 2. If provider allows dropping thinking blocks (dropThinkingBlocks=true), apply user config
+  // 3. If no provider strategy, use user config
+  const providerRequiresPreservation = !providerDropsThinking;
+  const applyThinkingPruning = !providerRequiresPreservation && shouldPruneThinking;
+  const droppedThinking = applyThinkingPruning
     ? dropThinkingBlocks(droppedReasoning, {
-        keepRecentTurns: thinkingPruning.keepRecentTurns ?? 1,
+        keepRecentTurns: effectivePruningSettings?.thinking?.keepRecentTurns ?? 1,
       })
-    : policy.dropThinkingBlocks
+    : providerDropsThinking
       ? dropThinkingBlocks(droppedReasoning)
       : droppedReasoning;
   const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
