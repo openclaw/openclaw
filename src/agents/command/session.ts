@@ -9,6 +9,7 @@ import {
   type ThinkLevel,
   type VerboseLevel,
 } from "../../auto-reply/thinking.js";
+import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import {
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
   resolveSessionLifecycleTimestamps,
@@ -386,19 +387,27 @@ export function resolveSession(opts: {
           storePath,
         })
       : false;
+  const entryHasClosedMarker =
+    typeof sessionEntry?.sessionClosedAt === "number" &&
+    Number.isFinite(sessionEntry.sessionClosedAt);
+  const skipImplicitExpiry =
+    !entryHasClosedMarker &&
+    resetPolicy.configured !== true &&
+    hasProviderOwnedSession(sessionEntry);
   const fresh = sessionEntry
     ? !terminalMainTranscriptNewerThanRegistry &&
-      evaluateSessionFreshness({
-        updatedAt: sessionEntry.updatedAt,
-        sessionClosedAt: sessionEntry.sessionClosedAt,
-        ...resolveSessionLifecycleTimestamps({
-          entry: sessionEntry,
-          agentId: sessionAgentId,
-          storePath,
-        }),
-        now,
-        policy: resetPolicy,
-      }).fresh
+      (skipImplicitExpiry ||
+        evaluateSessionFreshness({
+          updatedAt: sessionEntry.updatedAt,
+          sessionClosedAt: sessionEntry.sessionClosedAt,
+          ...resolveSessionLifecycleTimestamps({
+            entry: sessionEntry,
+            agentId: sessionAgentId,
+            storePath,
+          }),
+          now,
+          policy: resetPolicy,
+        }).fresh)
     : false;
   const sessionId =
     requestedSessionId || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();

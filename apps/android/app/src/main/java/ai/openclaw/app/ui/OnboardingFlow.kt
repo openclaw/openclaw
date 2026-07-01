@@ -182,6 +182,36 @@ fun OnboardingFlow(
 
     val permissionState = rememberPermissionState(context = context, viewModel = viewModel)
 
+    fun connectToGatewayConfig(
+      config: GatewayConnectConfig,
+      resetSetupAuth: Boolean,
+    ) {
+      setupError = null
+      attemptedGatewayName = null
+      attemptedConnect = true
+      connectAttemptStartedAtMs = SystemClock.elapsedRealtime()
+      viewModel.saveGatewayConfigAndConnect(
+        host = config.host,
+        port = config.port,
+        tls = config.tls,
+        token = config.token,
+        bootstrapToken = config.bootstrapToken,
+        password = config.password,
+        resetSetupAuth = resetSetupAuth,
+      )
+      step = OnboardingStep.Recovery
+    }
+
+    fun resolveCurrentGatewayConfig(setupCodeValue: String = setupCode): GatewayConnectConfig? =
+      resolveOnboardingGatewayConnectConfig(
+        setupCode = setupCodeValue,
+        manualHost = manualHost,
+        manualPort = manualPort,
+        manualTls = manualTls,
+        token = token,
+        password = password,
+      )
+
     LaunchedEffect(startAtGatewaySetup) {
       if (startAtGatewaySetup) {
         step = OnboardingStep.Gateway
@@ -261,15 +291,26 @@ fun OnboardingFlow(
               .startScan()
               .addOnSuccessListener { barcode ->
                 val scanned = resolveScannedSetupCodeResult(barcode.rawValue.orEmpty())
-                if (scanned.setupCode == null) {
+                val scannedSetupCode = scanned.setupCode
+                if (scannedSetupCode == null) {
                   setupError =
                     gatewayEndpointValidationMessage(
                       scanned.error ?: GatewayEndpointValidationError.INVALID_URL,
                       GatewayEndpointInputSource.QR_SCAN,
+                  )
+                  return@addOnSuccessListener
+                }
+                val config = resolveCurrentGatewayConfig(setupCodeValue = scannedSetupCode)
+                if (config == null) {
+                  setupError =
+                    gatewayEndpointValidationMessage(
+                      GatewayEndpointValidationError.INVALID_URL,
+                      GatewayEndpointInputSource.QR_SCAN,
                     )
                   return@addOnSuccessListener
                 }
-                setupCode = scanned.setupCode
+                setupCode = scannedSetupCode
+                connectToGatewayConfig(config, resetSetupAuth = true)
               }.addOnFailureListener { setupError = "Could not open the scanner." }
           },
           onSetupCodeChange = {
@@ -296,34 +337,12 @@ fun OnboardingFlow(
             step = OnboardingStep.Recovery
           },
           onPair = {
-            val config =
-              resolveGatewayConfig(
-                setupCode = setupCode,
-                manualHost = manualHost,
-                manualPort = manualPort,
-                manualTls = manualTls,
-                token = token,
-                password = password,
-              )
+            val config = resolveCurrentGatewayConfig()
             if (config == null) {
               setupError = "Enter a setup code or a valid gateway URL."
               return@GatewaySetupScreen
             }
-
-            setupError = null
-            attemptedGatewayName = null
-            attemptedConnect = true
-            connectAttemptStartedAtMs = SystemClock.elapsedRealtime()
-            viewModel.saveGatewayConfigAndConnect(
-              host = config.host,
-              port = config.port,
-              tls = config.tls,
-              token = config.token,
-              bootstrapToken = config.bootstrapToken,
-              password = config.password,
-              resetSetupAuth = true,
-            )
-            step = OnboardingStep.Recovery
+            connectToGatewayConfig(config, resetSetupAuth = true)
           },
         )
       OnboardingStep.Recovery ->
@@ -339,26 +358,8 @@ fun OnboardingFlow(
           connectSettling = recoveryNowMs - connectAttemptStartedAtMs < GATEWAY_CONNECT_SETTLING_MS,
           onBack = { step = OnboardingStep.Gateway },
           onRetry = {
-            attemptedConnect = true
-            connectAttemptStartedAtMs = SystemClock.elapsedRealtime()
-            val config =
-              resolveGatewayConfig(
-                setupCode = setupCode,
-                manualHost = manualHost,
-                manualPort = manualPort,
-                manualTls = manualTls,
-                token = token,
-                password = password,
-              ) ?: return@GatewayRecoveryScreen
-            viewModel.saveGatewayConfigAndConnect(
-              host = config.host,
-              port = config.port,
-              tls = config.tls,
-              token = config.token,
-              bootstrapToken = config.bootstrapToken,
-              password = config.password,
-              resetSetupAuth = false,
-            )
+            val config = resolveCurrentGatewayConfig() ?: return@GatewayRecoveryScreen
+            connectToGatewayConfig(config, resetSetupAuth = false)
           },
           onEdit = { step = OnboardingStep.Gateway },
           onContinue = { step = OnboardingStep.Permissions },
@@ -1151,59 +1152,28 @@ internal fun recoveryGatewayName(
       ?.takeIf { it.isNotEmpty() }
     ?: "Home Gateway"
 
-private data class GatewayConfig(
-  val host: String,
-  val port: Int,
-  val tls: Boolean,
-  val bootstrapToken: String,
-  val token: String,
-  val password: String,
-)
-
-/** Resolves setup-code or manual fields into the gateway config used for first connect. */
-private fun resolveGatewayConfig(
+/** Resolves onboarding setup-code or manual fields into the gateway config used for connect. */
+internal fun resolveOnboardingGatewayConnectConfig(
   setupCode: String,
   manualHost: String,
   manualPort: String,
   manualTls: Boolean,
   token: String,
   password: String,
-): GatewayConfig? {
-  val setup = setupCode.takeIf { it.isNotBlank() }?.let(::decodeGatewaySetupCode)
-  if (setup != null) {
-    val endpoint = parseGatewayEndpointResult(setup.url).config ?: return null
-    val bootstrapToken = setup.bootstrapToken?.trim().orEmpty()
-    // Bootstrap setup codes own first-pairing auth; fall back to typed token or
-    // password only for non-bootstrap setup payloads.
-    return GatewayConfig(
-      host = endpoint.host,
-      port = endpoint.port,
-      tls = endpoint.tls,
-      bootstrapToken = bootstrapToken,
-      token =
-        setup.token
-          ?.trim()
-          .orEmpty()
-          .ifEmpty { if (bootstrapToken.isEmpty()) token.trim() else "" },
-      password =
-        setup.password
-          ?.trim()
-          .orEmpty()
-          .ifEmpty { if (bootstrapToken.isEmpty()) password.trim() else "" },
-    )
-  }
-
-  val manualUrl = composeGatewayManualUrl(manualHost, manualPort, manualTls) ?: return null
-  val endpoint = parseGatewayEndpointResult(manualUrl).config ?: return null
-  return GatewayConfig(
-    host = endpoint.host,
-    port = endpoint.port,
-    tls = endpoint.tls,
-    bootstrapToken = "",
-    token = token.trim(),
-    password = password.trim(),
+): GatewayConnectConfig? =
+  resolveGatewayConnectConfig(
+    useSetupCode = setupCode.isNotBlank(),
+    setupCode = setupCode,
+    savedManualHost = manualHost,
+    savedManualPort = manualPort,
+    savedManualTls = manualTls,
+    manualHostInput = manualHost,
+    manualPortInput = manualPort,
+    manualTlsInput = manualTls,
+    fallbackBootstrapToken = "",
+    fallbackToken = token,
+    fallbackPassword = password,
   )
-}
 
 /** Selects the recovery detail line from endpoint metadata and transient gateway status. */
 internal fun recoveryGatewayDetail(
@@ -1216,31 +1186,32 @@ internal fun recoveryGatewayDetail(
   if (ready) {
     remoteAddress?.takeIf { it.isNotBlank() } ?: "Ready for chat and voice"
   } else if (
-      nodeCapabilityApprovalState == GatewayNodeApprovalState.PendingApproval ||
-      nodeCapabilityApprovalState == GatewayNodeApprovalState.PendingReapproval ||
-      nodeCapabilityApprovalState == GatewayNodeApprovalState.Unapproved
-    ) {
-      "Gateway paired. Waiting for node capability approval."
-    } else if (gatewayConnectionProblem?.isPairingRequired == true && !gatewayConnectionProblem.canAutoRetry) {
-      recoveryGatewayApprovalCommand(gatewayConnectionProblem)
-        ?.let { "Gateway approval is pending. Run this on the gateway host:" }
-        ?: "Gateway approval is pending. Run openclaw devices list on the gateway host, approve this phone, then retry."
-    } else if (gatewayConnectionProblem?.isPairingRequired == true && gatewayConnectionProblem.canAutoRetry) {
-      "Gateway approval is in progress. OpenClaw will retry automatically."
-    } else if (gatewayConnectionProblem != null) {
-      recoveryGatewayAuthDetail(gatewayConnectionProblem)
-    } else if (nodeCapabilityApprovalState == GatewayNodeApprovalState.Loading) {
-      "Gateway paired. Checking node capability approval."
-    } else if (statusText.contains("operator offline", ignoreCase = true)) {
-      "Gateway paired. Waiting for operator access."
-    } else if (gatewayStatusLooksLikePairing(statusText)) {
-      "Gateway approval is in progress. OpenClaw will retry automatically."
-    } else {
-      remoteAddress?.takeIf { it.isNotBlank() } ?: "Gateway unreachable"
-    }
+    nodeCapabilityApprovalState == GatewayNodeApprovalState.PendingApproval ||
+    nodeCapabilityApprovalState == GatewayNodeApprovalState.PendingReapproval ||
+    nodeCapabilityApprovalState == GatewayNodeApprovalState.Unapproved
+  ) {
+    "Gateway paired. Waiting for node capability approval."
+  } else if (gatewayConnectionProblem?.isPairingRequired == true && !gatewayConnectionProblem.canAutoRetry) {
+    recoveryGatewayApprovalCommand(gatewayConnectionProblem)
+      ?.let { "Gateway approval is pending. Run this on the gateway host:" }
+      ?: "Gateway approval is pending. Run openclaw devices list on the gateway host, approve this phone, then retry."
+  } else if (gatewayConnectionProblem?.isPairingRequired == true && gatewayConnectionProblem.canAutoRetry) {
+    "Gateway approval is in progress. OpenClaw will retry automatically."
+  } else if (gatewayConnectionProblem != null) {
+    recoveryGatewayAuthDetail(gatewayConnectionProblem)
+  } else if (nodeCapabilityApprovalState == GatewayNodeApprovalState.Loading) {
+    "Gateway paired. Checking node capability approval."
+  } else if (statusText.contains("operator offline", ignoreCase = true)) {
+    "Gateway paired. Waiting for operator access."
+  } else if (gatewayStatusLooksLikePairing(statusText)) {
+    "Gateway approval is in progress. OpenClaw will retry automatically."
+  } else {
+    remoteAddress?.takeIf { it.isNotBlank() } ?: "Gateway unreachable"
+  }
 
 internal fun recoveryGatewayAuthDetail(gatewayConnectionProblem: GatewayConnectionProblem): String =
   when (gatewayConnectionProblem.code) {
+    "PROTOCOL_MISMATCH" -> recoveryGatewayProtocolMismatchDetail(gatewayConnectionProblem)
     "AUTH_BOOTSTRAP_TOKEN_INVALID" -> "Setup code expired. Scan a fresh setup QR."
     "AUTH_DEVICE_TOKEN_MISMATCH",
     "AUTH_TOKEN_MISMATCH",
@@ -1259,6 +1230,40 @@ internal fun recoveryGatewayAuthDetail(gatewayConnectionProblem: GatewayConnecti
         else -> gatewayConnectionProblem.message.takeIf { it.isNotBlank() } ?: "Gateway authentication needs attention."
       }
   }
+
+private fun recoveryGatewayProtocolMismatchDetail(gatewayConnectionProblem: GatewayConnectionProblem): String {
+  val clientMin = gatewayConnectionProblem.clientMinProtocol
+  val clientMax = gatewayConnectionProblem.clientMaxProtocol
+  val expected = gatewayConnectionProblem.expectedProtocol
+  val summary =
+    when {
+      clientMax != null && expected != null && clientMax < expected ->
+        "This app is older than the gateway. Update OpenClaw on this device, then retry."
+      clientMin != null && expected != null && clientMin > expected ->
+        "The gateway is older than this app. Update OpenClaw on the gateway host, then retry."
+      else -> "The app and gateway use incompatible protocol versions. Update OpenClaw on both, then retry."
+    }
+  return protocolMismatchVersions(clientMin, clientMax, expected)?.let { "$summary $it" } ?: summary
+}
+
+private fun protocolMismatchVersions(
+  clientMin: Int?,
+  clientMax: Int?,
+  expected: Int?,
+): String? {
+  val clientRange =
+    when {
+      clientMin == null && clientMax == null -> null
+      clientMin != null && clientMin == clientMax -> "app protocol v$clientMin"
+      clientMin != null && clientMax != null -> "app protocols v$clientMin-v$clientMax"
+      clientMin != null -> "app protocol min v$clientMin"
+      else -> "app protocol max v$clientMax"
+    }
+  val gatewayVersion = expected?.let { "gateway protocol v$it" }
+  return listOfNotNull(clientRange, gatewayVersion)
+    .takeIf { it.isNotEmpty() }
+    ?.joinToString(prefix = "(", postfix = ").")
+}
 
 private fun recoveryGatewayApprovalCommand(gatewayConnectionProblem: GatewayConnectionProblem?): String? {
   if (gatewayConnectionProblem?.isPairingRequired != true || gatewayConnectionProblem.canAutoRetry) return null

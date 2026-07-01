@@ -324,6 +324,12 @@ function isUnknownRequestIdError(error: unknown): boolean {
   return normalizeLowercaseStringOrEmpty(message).includes("unknown requestid");
 }
 
+function isScopeUpgradePendingApproval(error: unknown): boolean {
+  return (
+    readConnectPairingRequiredMessage(normalizeErrorMessage(error))?.reason === "scope-upgrade"
+  );
+}
+
 function resolveLocalPairingFallback(
   opts: DevicesRpcOpts,
   error: unknown,
@@ -1102,9 +1108,23 @@ export async function runDevicesApproveCommand(
     defaultRuntime.exit(1);
     return;
   }
-  const result = await approvePairingWithFallback(opts, resolvedRequestId);
+  let result: Record<string, unknown> | null;
+  try {
+    result = await approvePairingWithFallback(opts, resolvedRequestId);
+  } catch (error) {
+    if (isScopeUpgradePendingApproval(error)) {
+      defaultRuntime.error(
+        "This device can't approve its own scope upgrade. Approve it from the Control UI or another authorized device.",
+      );
+      defaultRuntime.exit(1);
+      return;
+    }
+    throw error;
+  }
   if (!result) {
-    defaultRuntime.error("unknown requestId");
+    defaultRuntime.error(
+      `No pending device request matches ${sanitizeForLog(resolvedRequestId)}. Run ${formatCliCommand("openclaw devices list")} and retry with the current request ID.`,
+    );
     const nodeApprovalNotices = await findQueryPendingNodeApprovalNotices(opts, resolvedRequestId);
     for (const notice of nodeApprovalNotices) {
       defaultRuntime.error(formatNodeApprovalNotice(notice));

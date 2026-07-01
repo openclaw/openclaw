@@ -52,6 +52,7 @@ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copi
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { mapOpenAIStopReason } from "./openai-stop-reason.js";
 import { buildBaseOptions } from "./simple-options.js";
+import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 /**
@@ -92,7 +93,6 @@ function isImageContentBlock(block: { type: string }): block is ImageContent {
 }
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
-const IMAGE_TOOL_RESULT_TEXT = "(see attached image)";
 
 function sanitizeToolResultText(text: string, fallback: string): string {
   const sanitized = sanitizeSurrogates(text);
@@ -1138,16 +1138,14 @@ export function convertMessages(
         const toolMsg = transformedMessages[j] as ToolResultMessage;
 
         // Extract text and image content
-        const textResult = toolMsg.content
-          .filter(isTextContentBlock)
-          .map((block) => block.text)
-          .join("\n");
+        const textResult = extractToolResultText(toolMsg.content);
+        const mediaPlaceholder = describeToolResultMediaPlaceholder(toolMsg.content);
         const hasImages = toolMsg.content.some((c) => c.type === "image");
 
         // Always send tool result with text (or placeholder if only images)
         const content = sanitizeToolResultText(
           textResult,
-          hasImages ? IMAGE_TOOL_RESULT_TEXT : EMPTY_TOOL_RESULT_TEXT,
+          mediaPlaceholder ?? EMPTY_TOOL_RESULT_TEXT,
         );
         // Some providers require the 'name' field in tool results
         const toolResultMsg: ChatCompletionToolMessageParam = {

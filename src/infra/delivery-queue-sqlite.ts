@@ -57,9 +57,15 @@ function enoent(queueName: string, id: string): Error & { code: string } {
   return err;
 }
 
-function inflate(row: QueueRow): DeliveryQueueEntryState {
+function inflate(row: QueueRow): DeliveryQueueEntryState | null {
+  let parsed: DeliveryQueueEntryState;
+  try {
+    parsed = JSON.parse(row.entry_json) as DeliveryQueueEntryState;
+  } catch {
+    return null;
+  }
   return {
-    ...(JSON.parse(row.entry_json) as DeliveryQueueEntryState),
+    ...parsed,
     id: row.id,
     enqueuedAt: Number(row.enqueued_at),
     retryCount: Number(row.retry_count),
@@ -205,7 +211,7 @@ export function loadDeliveryQueueEntries(
       .orderBy("enqueued_at", "asc")
       .orderBy("id", "asc"),
   ).rows as QueueRow[];
-  return rows.map(inflate);
+  return rows.map(inflate).filter((entry): entry is DeliveryQueueEntryState => entry != null);
 }
 
 /** Delete a pending delivery queue entry after successful delivery. */

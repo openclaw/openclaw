@@ -10,6 +10,7 @@ import {
   convertResponsesMessages,
   type OpenAIResponsesStreamEvent,
   processResponsesStream,
+  resolveResponsesReasoningEffort,
 } from "./openai-responses-shared.js";
 import { convertResponsesTools } from "./openai-responses-tools.js";
 
@@ -61,6 +62,15 @@ const proxyOpenAIModel = {
   name: "Custom Model",
   baseUrl: "https://proxy.example.com/v1",
 } satisfies Model<"openai-responses">;
+
+const gpt56SolModel = {
+  ...nativeOpenAIModel,
+  id: "gpt-5.6-sol",
+  name: "GPT-5.6 Sol",
+  thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
+} satisfies Model<"openai-responses">;
+
+const testAllowedToolCallProviders = new Set(["openai", "openai-codex", "opencode"]);
 
 function createAssistantOutput(): AssistantMessage {
   return {
@@ -238,8 +248,45 @@ describe("convertResponsesTools", () => {
   });
 });
 
+describe("Responses reasoning effort", () => {
+  it("omits unsupported default-off reasoning for GPT-5.6 Sol", () => {
+    const params = {} as never;
+    applyCommonResponsesParams(params, gpt56SolModel, { messages: [] });
+
+    expect(params).not.toHaveProperty("reasoning");
+  });
+
+  it("passes max through for GPT-5.6 Sol", () => {
+    expect(resolveResponsesReasoningEffort(gpt56SolModel, "max")).toBe("max");
+
+    const params = {} as never;
+    applyCommonResponsesParams(
+      params,
+      gpt56SolModel,
+      { messages: [] },
+      {
+        reasoningEffort: "max",
+      },
+    );
+    expect(params).toMatchObject({ reasoning: { effort: "max", summary: "auto" } });
+  });
+
+  it("raises unsupported minimal reasoning to low for GPT-5.6 Sol", () => {
+    expect(resolveResponsesReasoningEffort(gpt56SolModel, "minimal")).toBe("low");
+  });
+
+  it("keeps max clamped to xhigh for earlier models", () => {
+    const gpt55WithXHigh = {
+      ...nativeOpenAIModel,
+      thinkingLevelMap: { xhigh: "xhigh" },
+    } satisfies Model<"openai-responses">;
+
+    expect(resolveResponsesReasoningEffort(gpt55WithXHigh, "max")).toBe("xhigh");
+  });
+});
+
 describe("convertResponsesMessages", () => {
-  const allowedToolCallProviders = new Set(["openai", "openai-codex", "opencode"]);
+  const allowedToolCallProviders = testAllowedToolCallProviders;
 
   it("adds explicit message item types for system and user input items", () => {
     const input = convertResponsesMessages(
@@ -575,6 +622,53 @@ describe("convertResponsesMessages", () => {
     ]);
   });
 
+  it("uses audio placeholder for audio-only tool results instead of image or no-output text", () => {
+    const input = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: nativeOpenAIModel.api,
+            provider: nativeOpenAIModel.provider,
+            model: nativeOpenAIModel.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [{ type: "toolCall", id: "call_audio", name: "audio", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_audio",
+            toolName: "audio",
+            content: [{ type: "audio", mimeType: "audio/mpeg", data: "YXVkaW8=" }],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+      } as unknown as Context,
+      allowedToolCallProviders,
+      { includeSystemPrompt: false },
+    ) as unknown as Array<Record<string, unknown>>;
+
+    const functionOutput = input.find((item) => item.type === "function_call_output");
+    expect(functionOutput).toMatchObject({
+      type: "function_call_output",
+      call_id: "call_audio",
+      output: "(see attached audio)",
+    });
+    expect(functionOutput?.output).not.toBe("(see attached image)");
+    expect(functionOutput?.output).not.toBe("(no output)");
+  });
+
   it("keeps encrypted reasoning replay item ids when requested", () => {
     const input = convertResponsesMessages(
       nativeOpenAIModel,
@@ -619,6 +713,37 @@ describe("convertResponsesMessages", () => {
       id: "rs_foundry_prior",
       encrypted_content: "ciphertext",
       summary: [],
+    });
+  });
+
+  it("serializes structured tool results as text instead of image placeholders", () => {
+    const input = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "toolResult",
+            toolCallId: "call_structured",
+            toolName: "session_status",
+            content: [
+              {
+                type: "json",
+                payload: { sessionKey: "current", model: "openai/gpt-5.4", status: "ok" },
+              },
+            ],
+            isError: false,
+            timestamp: 1,
+          },
+        ],
+      } as unknown as Context,
+      testAllowedToolCallProviders,
+      { includeSystemPrompt: false, replayResponsesItemIds: false },
+    ) as unknown as Array<Record<string, unknown>>;
+    expect(input).toContainEqual({
+      type: "function_call_output",
+      call_id: "call_structured",
+      output: expect.stringContaining('"type":"json"'),
     });
   });
 });
@@ -699,6 +824,50 @@ describe("processResponsesStream", () => {
       "toolcall_delta",
       "toolcall_end",
     ]);
+  });
+
+  it("prices cache-write tokens separately from ordinary Responses input", async () => {
+    const model = {
+      ...gpt56SolModel,
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+    } satisfies Model<"openai-responses">;
+    const output = createResponsesAssistantOutput(model, model.api);
+    const stream = new AssistantMessageEventStream();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_cache_write",
+            status: "completed",
+            usage: {
+              input_tokens: 100,
+              input_tokens_details: { cached_tokens: 20, cache_write_tokens: 30 },
+              output_tokens: 10,
+              output_tokens_details: { reasoning_tokens: 0 },
+              total_tokens: 110,
+            },
+          },
+        },
+      ]),
+      output,
+      stream,
+      model,
+    );
+
+    expect(output.usage).toMatchObject({
+      input: 50,
+      output: 10,
+      cacheRead: 20,
+      cacheWrite: 30,
+      totalTokens: 110,
+    });
+    expect(output.usage.cost.input).toBeCloseTo(0.00025);
+    expect(output.usage.cost.output).toBeCloseTo(0.0003);
+    expect(output.usage.cost.cacheRead).toBeCloseTo(0.00001);
+    expect(output.usage.cost.cacheWrite).toBeCloseTo(0.0001875);
+    expect(output.usage.cost.total).toBeCloseTo(0.0007475);
   });
 
   it("collapses cumulative message snapshot items into one text block (#91959)", async () => {

@@ -1,7 +1,7 @@
 import Foundation
 import OpenClawKit
 
-enum TalkModeExecutionMode {
+enum TalkModeExecutionMode: Equatable {
     case native
     case realtimeRelay
 }
@@ -60,7 +60,7 @@ struct TalkRuntimeIssue: Equatable {
 
     var technicalDetails: String {
         var lines = [
-            "code: \(self.code.rawValue)",
+            "code: \(code.rawValue)",
             "message: \(self.displayMessage)",
         ]
         if let provider, !provider.isEmpty { lines.append("provider: \(provider)") }
@@ -71,7 +71,7 @@ struct TalkRuntimeIssue: Equatable {
     }
 
     var diagnosticSummary: String {
-        var parts = [self.displayMessage]
+        var parts = [displayMessage]
         if let provider, !provider.isEmpty { parts.append("provider: \(provider)") }
         if let model, !model.isEmpty { parts.append("model: \(model)") }
         if let transport, !transport.isEmpty { parts.append("transport: \(transport)") }
@@ -201,7 +201,7 @@ enum TalkModeProviderSelection: String, CaseIterable, Identifiable {
     static let storageKey = "talk.providerSelection"
 
     var id: String {
-        self.rawValue
+        rawValue
     }
 
     var label: String {
@@ -218,6 +218,79 @@ enum TalkModeProviderSelection: String, CaseIterable, Identifiable {
     static func resolved(_ raw: String?) -> TalkModeProviderSelection {
         let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return TalkModeProviderSelection(rawValue: trimmed) ?? .gatewayDefault
+    }
+}
+
+enum TalkModeRuntimeRoute: Equatable {
+    case localElevenLabs
+    case gatewayTalkSpeak
+    case realtimeRelay
+
+    var usesRealtime: Bool {
+        self == .realtimeRelay
+    }
+
+    var usesGatewayTalkSpeak: Bool {
+        self == .gatewayTalkSpeak
+    }
+
+    var gatewayOwnsCredentials: Bool {
+        self != .localElevenLabs
+    }
+}
+
+struct TalkModeResolvedRouting: Equatable {
+    let activeProvider: String
+    let executionMode: TalkModeExecutionMode
+    let realtimeProvider: String?
+    let realtimeModelId: String?
+    let route: TalkModeRuntimeRoute
+}
+
+enum TalkModeRoutingResolver {
+    static func resolve(
+        parsed: TalkModeGatewayConfigState,
+        providerSelection: TalkModeProviderSelection,
+        defaultProvider: String,
+        defaultRealtimeModelId: String) -> TalkModeResolvedRouting
+    {
+        var activeProvider = parsed.activeProvider
+        var realtimeProvider = parsed.realtimeProvider
+        var realtimeModelId = parsed.realtimeModelId
+        let route: TalkModeRuntimeRoute
+
+        switch providerSelection {
+        case .gatewayDefault:
+            // Only an explicit realtime config selects the realtime transport. Other Gateway
+            // speech providers stay native and synthesize through talk.speak.
+            if parsed.executionMode == .realtimeRelay {
+                route = .realtimeRelay
+            } else if Self.normalized(activeProvider) == Self.normalized(defaultProvider) {
+                // Preserve the shipped local ElevenLabs path, including its streaming playback.
+                route = .localElevenLabs
+            } else {
+                route = .gatewayTalkSpeak
+            }
+        case .nativeElevenLabs:
+            activeProvider = defaultProvider
+            route = .localElevenLabs
+        case .openAIRealtime:
+            activeProvider = "openai"
+            realtimeProvider = realtimeProvider ?? "openai"
+            realtimeModelId = realtimeModelId ?? defaultRealtimeModelId
+            route = .realtimeRelay
+        }
+
+        return TalkModeResolvedRouting(
+            activeProvider: activeProvider,
+            executionMode: route.usesRealtime ? .realtimeRelay : .native,
+            realtimeProvider: realtimeProvider,
+            realtimeModelId: realtimeModelId,
+            route: route)
+    }
+
+    private static func normalized(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 }
 
@@ -254,6 +327,7 @@ struct TalkModeGatewayConfigState {
     let executionMode: TalkModeExecutionMode
     let defaultVoiceId: String?
     let voiceAliases: [String: String]
+    let configuredModelId: String?
     let defaultModelId: String
     let defaultOutputFormat: String?
     let realtimeProvider: String?
@@ -325,6 +399,7 @@ enum TalkModeGatewayConfigParser {
             executionMode: executionMode,
             defaultVoiceId: defaultVoiceId,
             voiceAliases: voiceAliases,
+            configuredModelId: model,
             defaultModelId: defaultModelId,
             defaultOutputFormat: defaultOutputFormat,
             realtimeProvider: realtimeProvider,

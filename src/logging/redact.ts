@@ -88,9 +88,10 @@ const FORM_BODY_LINE_BREAK_SPLIT_RE = /(\r\n|\r|\n)/u;
 const FORM_BODY_LINE_BREAK_SEGMENT_RE = /^(?:\r\n|\r|\n)$/u;
 const PAYMENT_CREDENTIAL_JSON_KEYS = String.raw`cardNumber|card_number|cardCvc|card_cvc|cardCvv|card_cvv|cvc|cvv|securityCode|security_code|paymentCredential|payment_credential|sharedPaymentToken|shared_payment_token`;
 const STRUCTURED_SECRET_FIELD_RE = new RegExp(
-  String.raw`^(?:api[-_]?key|apiKey|token|secret|password|passwd|credential|authorization|private[-_]?key|privateKey|access[-_]?token|accessToken|refresh[-_]?token|refreshToken|id[-_]?token|idToken|auth[-_]?token|authToken|client[-_]?secret|clientSecret|app[-_]?secret|appSecret|secret[-_]?value|secretValue|raw[-_]?secret|rawSecret|secret[-_]?input|secretInput|key[-_]?material|keyMaterial|${PAYMENT_CREDENTIAL_QUERY_KEYS}|${PAYMENT_CREDENTIAL_JSON_KEYS})$`,
+  String.raw`^(?:api[-_]?key|apiKey|api[-_]?token|apiToken|bearer[-_]?token|bearerToken|token|secret|password|passwd|credential|authorization|private[-_]?key|privateKey|access[-_]?token|accessToken|refresh[-_]?token|refreshToken|id[-_]?token|idToken|auth[-_]?token|authToken|client[-_]?secret|clientSecret|app[-_]?secret|appSecret|secret[-_]?value|secretValue|raw[-_]?secret|rawSecret|secret[-_]?input|secretInput|key|key[-_]?material|keyMaterial|jwt|session|signature|cookie|set[-_]?cookie|${PAYMENT_CREDENTIAL_QUERY_KEYS}|${PAYMENT_CREDENTIAL_JSON_KEYS})$`,
   "i",
 );
+const STRUCTURED_INTERNAL_SOURCE_PATH_VALUE_RE = /^\$WORKSPACE_DIR\/[A-Za-z0-9._/-]+\.jsonl$/u;
 const STRUCTURED_APP_PASSWORD_FIELD_RE =
   /^(?:apple|icloud|app[-_]?specific[-_]?password|appSpecificPassword|application[-_]?password|text|content|message|error|errorMessage|detail|details|reason)$/i;
 const APP_SPECIFIC_PASSWORD_RE = /\b([a-z]{4}-[a-z]{4}-[a-z]{4}-[a-z]{4})\b/g;
@@ -143,7 +144,7 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   // lower-case URL secrets stay redacted without hiding config-key diagnostics.
   String.raw`/[?&](?:${AUTH_QUERY_KEYS}|${PAYMENT_CREDENTIAL_QUERY_KEYS})=([^&#\s<>]+)/gi`,
   // JSON fields.
-  String.raw`"(?:apiKey|api_key|token|secret|password|passwd|credential|authorization|accessToken|access_token|refreshToken|refresh_token|idToken|id_token|authToken|auth_token|clientSecret|client_secret|privateKey|private_key|secret_value|raw_secret|secret_input|key_material|${PAYMENT_CREDENTIAL_JSON_KEYS})"\s*:\s*"([^"]+)"`,
+  String.raw`"(?:apiKey|api_key|apiToken|api_token|bearerToken|bearer_token|token|secret|password|passwd|credential|authorization|accessToken|access_token|refreshToken|refresh_token|idToken|id_token|authToken|auth_token|clientSecret|client_secret|privateKey|private_key|secret_value|raw_secret|secret_input|key_material|${PAYMENT_CREDENTIAL_JSON_KEYS})"\s*:\s*"([^"]+)"`,
   // HTTP client diagnostics often stringify request config objects using
   // JSON or util.inspect-style fields rather than env/CLI syntax.
   String.raw`(^|[\s,{])["']?(?:api[-_]key|access[-_]token|refresh[-_]token|id[-_]token|authToken|auth[-_]token|clientSecret|client[-_]secret|appSecret|app[-_]secret|private[-_]key|credential|authorization|secret[-_]value|raw[-_]secret|secret[-_]input|key[-_]material)["']?\s*[:=]\s*(["'])([^"'\r\n]+)\2`,
@@ -1038,6 +1039,7 @@ function redactSensitiveFieldValueWithOptions(
   key: string,
   value: string,
   options: RedactOptions,
+  path: readonly string[] = [key],
 ): string {
   const resolved = resolveRedactOptions(options);
   if (resolved.mode === "off") {
@@ -1055,6 +1057,16 @@ function redactSensitiveFieldValueWithOptions(
   }
   if (redacted !== value) {
     return redacted;
+  }
+  const normalizedStructuredKey = key.toLowerCase();
+  if (shouldRedactStructuredAuthorizationCode(normalizedStructuredKey, path)) {
+    return maskToken(value);
+  }
+  if (
+    normalizedStructuredKey === "session" &&
+    STRUCTURED_INTERNAL_SOURCE_PATH_VALUE_RE.test(value)
+  ) {
+    return value;
   }
   if (isSensitiveFieldKey(key)) {
     if (isShellReferenceToKey(key, value)) {
@@ -1085,6 +1097,39 @@ export function redactSensitiveFieldValueWithConfig(
   );
 }
 
+function pathEndsWith(path: readonly string[], suffix: readonly string[]): boolean {
+  if (path.length < suffix.length) {
+    return false;
+  }
+  return suffix.every((part, index) => path[path.length - suffix.length + index] === part);
+}
+
+function shouldRedactStructuredAuthorizationCode(
+  normalizedKey: string,
+  path: readonly string[],
+): boolean {
+  if (normalizedKey !== "code") {
+    return false;
+  }
+  const normalizedPath = path.map((part) => part.toLowerCase());
+  if (
+    normalizedPath.length === 1 ||
+    pathEndsWith(normalizedPath, ["error", "code"]) ||
+    pathEndsWith(normalizedPath, ["nodeerror", "code"]) ||
+    pathEndsWith(normalizedPath, ["status", "code"]) ||
+    pathEndsWith(normalizedPath, ["details", "code"]) ||
+    pathEndsWith(normalizedPath, ["warnings", "code"])
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function shouldRedactStructuredPrimitiveField(key: string, path: readonly string[]): boolean {
+  const normalizedKey = key.toLowerCase();
+  return shouldRedactStructuredAuthorizationCode(normalizedKey, path) || isSensitiveFieldKey(key);
+}
+
 function isPlainRedactableObject(value: object): value is Record<string, unknown> {
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
@@ -1095,22 +1140,23 @@ function redactStructuredSecretValue(
   value: unknown,
   seen: WeakSet<object>,
   options: RedactOptions,
+  path: readonly string[] = key ? [key] : [],
 ): unknown {
   if (typeof value === "string") {
-    return redactSensitiveFieldValueWithOptions(key, value, options);
+    return redactSensitiveFieldValueWithOptions(key, value, options, path);
   }
   if (value === null || value === undefined) {
     return value;
   }
   if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return value;
+    return shouldRedactStructuredPrimitiveField(key, path) ? "***" : value;
   }
   if (Array.isArray(value)) {
     if (seen.has(value)) {
       return "[Circular]";
     }
     seen.add(value);
-    const out = value.map((entry) => redactStructuredSecretValue(key, entry, seen, options));
+    const out = value.map((entry) => redactStructuredSecretValue(key, entry, seen, options, path));
     seen.delete(value);
     return out;
   }
@@ -1124,7 +1170,10 @@ function redactStructuredSecretValue(
     seen.add(value);
     const out: Record<string, unknown> = {};
     for (const [nestedKey, nestedValue] of Object.entries(value)) {
-      out[nestedKey] = redactStructuredSecretValue(nestedKey, nestedValue, seen, options);
+      out[nestedKey] = redactStructuredSecretValue(nestedKey, nestedValue, seen, options, [
+        ...path,
+        nestedKey,
+      ]);
     }
     seen.delete(value);
     return out;

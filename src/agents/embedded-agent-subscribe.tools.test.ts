@@ -94,6 +94,54 @@ describe("extractToolErrorMessage", () => {
     ).toBe("INVALID_REQUEST");
   });
 
+  it("preserves structured diagnostic tool error codes through sanitization", () => {
+    const sanitized = sanitizeToolResult({
+      details: {
+        status: "failed",
+        error: {
+          code: "SYSTEM_RUN_DENIED",
+          message: "approval required",
+        },
+      },
+    }) as { details: { error: { code: string; message: string } } };
+
+    expect(sanitized.details.error.code).toBe("SYSTEM_RUN_DENIED");
+    expect(extractToolErrorCode(sanitized)).toBe("SYSTEM_RUN_DENIED");
+  });
+
+  it("preserves structured invalid-request tool error codes through sanitization", () => {
+    const sanitized = sanitizeToolResult({
+      details: {
+        status: "failed",
+        nodeError: {
+          code: "INVALID_REQUEST",
+          message: "approval expired",
+        },
+      },
+    }) as { details: { nodeError: { code: string; message: string } } };
+
+    expect(sanitized.details.nodeError.code).toBe("INVALID_REQUEST");
+    expect(extractToolErrorCode(sanitized)).toBe("INVALID_REQUEST");
+  });
+
+  it("preserves direct structured tool error codes through sanitization", () => {
+    const detailsCode = sanitizeToolResult({
+      details: {
+        status: "failed",
+        code: "output_limit_exceeded",
+      },
+    }) as { details: { code: string } };
+    const rootCode = sanitizeToolResult({
+      status: "failed",
+      code: "output_limit_exceeded",
+    }) as { code: string };
+
+    expect(detailsCode.details.code).toBe("output_limit_exceeded");
+    expect(extractToolErrorCode(detailsCode)).toBe("output_limit_exceeded");
+    expect(rootCode.code).toBe("output_limit_exceeded");
+    expect(extractToolErrorCode(rootCode)).toBe("output_limit_exceeded");
+  });
+
   it("does not extract error codes from prose-only tool output", () => {
     expect(
       extractToolErrorCode({

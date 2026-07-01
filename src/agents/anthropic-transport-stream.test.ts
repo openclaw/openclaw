@@ -141,6 +141,7 @@ function makeAnthropicTransportModel(
     reasoning?: boolean;
     params?: Record<string, unknown>;
     maxTokens?: number;
+    input?: AnthropicMessagesModel["input"];
     thinkingLevelMap?: AnthropicMessagesModel["thinkingLevelMap"];
     headers?: Record<string, string>;
     authHeader?: boolean;
@@ -156,7 +157,7 @@ function makeAnthropicTransportModel(
       baseUrl: params.baseUrl ?? "https://api.anthropic.com",
       reasoning: params.reasoning ?? true,
       ...(params.params ? { params: params.params } : {}),
-      input: ["text"],
+      input: params.input ?? ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200000,
       maxTokens: params.maxTokens ?? 8192,
@@ -2550,6 +2551,122 @@ describe("anthropic transport stream", () => {
           data: imageData,
         },
       },
+    ]);
+    expect(toolResult.is_error).toBe(false);
+  });
+
+  it("serializes structured non-image blocks in tool results as JSON text", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({ id: "claude-sonnet-4-6" }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            content: [{ type: "toolCall", id: "tool_1", name: "fetch", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "tool_1",
+            content: [
+              {
+                type: "resource",
+                resource: {
+                  uri: "https://example.com/data.json",
+                  mimeType: "application/json",
+                  text: '{"key":"value"}',
+                },
+              },
+            ],
+            isError: false,
+          },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    const userMessage = findRecord(
+      latestAnthropicRequest().payload.messages,
+      (record) => record.role === "user",
+    );
+    const toolResult = findRecord(
+      userMessage.content,
+      (record) => record.type === "tool_result" && record.tool_use_id === "tool_1",
+    );
+    // No images → returns sanitized text string, not array
+    expect(typeof toolResult.content).toBe("string");
+    expect(toolResult.content).toContain('"type":"resource"');
+    expect(toolResult.content).toContain('{\\"key\\":\\"***\\"}');
+    expect(toolResult.is_error).toBe(false);
+  });
+
+  it("includes serialized structured blocks alongside images in tool results", async () => {
+    const imageData = Buffer.from("image").toString("base64");
+
+    await runTransportStream(
+      makeAnthropicTransportModel({ id: "claude-sonnet-4-6", input: ["text", "image"] }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            content: [{ type: "toolCall", id: "tool_1", name: "screenshot", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "tool_1",
+            content: [
+              { type: "text", text: "before image" },
+              { type: "image", data: imageData, mimeType: "image/png" },
+              {
+                type: "resource",
+                resource: {
+                  uri: "https://example.com/data.json",
+                  mimeType: "application/json",
+                  text: '{"key":"value"}',
+                },
+              },
+              { type: "text", text: "after image" },
+            ],
+            isError: false,
+          },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    const userMessage = findRecord(
+      latestAnthropicRequest().payload.messages,
+      (record) => record.role === "user",
+    );
+    const toolResult = findRecord(
+      userMessage.content,
+      (record) => record.type === "tool_result" && record.tool_use_id === "tool_1",
+    );
+    expect(toolResult.content).toEqual([
+      { type: "text", text: "before image" },
+      {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: "image/png",
+          data: imageData,
+        },
+      },
+      { type: "text", text: expect.stringContaining('{"type":"resource"') },
+      { type: "text", text: "after image" },
     ]);
     expect(toolResult.is_error).toBe(false);
   });

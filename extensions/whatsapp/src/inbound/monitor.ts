@@ -297,6 +297,7 @@ type MonitorWebInboxOptions = {
   groupMetadataCache?: WhatsAppGroupMetadataCache;
   recentMessageKeys?: WhatsAppBaileysMessageCache;
   baileysGroupMetaCache?: WhatsAppBaileysGroupMetadataCache;
+  onPendingWorkChanged?: (pendingWorkCount: number, at?: number) => void;
 };
 
 type AttachWebInboxToSocketOptions = Omit<
@@ -403,6 +404,14 @@ export async function attachWebInboxToSocket(
   const inboundDebounceMs = Math.max(0, Math.trunc(options.debounceMs ?? 0));
   const pendingDebounceKeys = new Set<string>();
   const activeInboundFlushes = new Set<Promise<void>>();
+  const pendingMessageHandlers = new Set<Promise<void>>();
+  let nextReceiveOrder = 0;
+  const publishPendingWorkState = (at = Date.now()) => {
+    options.onPendingWorkChanged?.(
+      pendingMessageHandlers.size + pendingDebounceKeys.size + activeInboundFlushes.size,
+      at,
+    );
+  };
   const buildInboundDebounceKey = (msg: QueuedInboundMessage): string | null => {
     const admission = requireWhatsAppInboundAdmission(msg);
     const sender = msg.platform.sender;
@@ -478,6 +487,7 @@ export async function attachWebInboxToSocket(
         finishFlush = resolve;
       });
       activeInboundFlushes.add(flushTask);
+      publishPendingWorkState();
       try {
         const orderedEntries = orderDebouncedInboundEntries(entries);
         const last = orderedEntries.at(-1);
@@ -540,6 +550,7 @@ export async function attachWebInboxToSocket(
         }
         activeInboundFlushes.delete(flushTask);
         finishFlush();
+        publishPendingWorkState();
       }
     },
     onError: (err) => {
@@ -1310,6 +1321,7 @@ export async function attachWebInboxToSocket(
       inboundMessage.debounceKey = debounceKey;
       if (inboundDebounceMs > 0 && shouldDebounceInboundMessage(inboundMessage)) {
         pendingDebounceKeys.add(debounceKey);
+        publishPendingWorkState();
       }
     }
     if (inboundMessage.event.id) {
@@ -1341,8 +1353,6 @@ export async function attachWebInboxToSocket(
     }
   };
 
-  const pendingMessageHandlers = new Set<Promise<void>>();
-  let nextReceiveOrder = 0;
   const handleMessagesUpsert = async (upsert: { type?: string; messages?: Array<WAMessage> }) => {
     if (upsert.type !== "notify" && upsert.type !== "append") {
       return;
@@ -1375,8 +1385,10 @@ export async function attachWebInboxToSocket(
       inboundConsoleLog.error(`Messages upsert handler error: ${String(err)}`);
     });
     pendingMessageHandlers.add(task);
+    publishPendingWorkState();
     void task.finally(() => {
       pendingMessageHandlers.delete(task);
+      publishPendingWorkState();
     });
   };
   const waitForPendingMessageHandlers = async () => {
@@ -1525,8 +1537,10 @@ export async function attachWebInboxToSocket(
     inboundConsoleLog.error(`Failed replaying durable WhatsApp inbound: ${String(err)}`);
   });
   pendingMessageHandlers.add(replayTask);
+  publishPendingWorkState();
   void replayTask.finally(() => {
     pendingMessageHandlers.delete(replayTask);
+    publishPendingWorkState();
   });
 
   const groupHydrationTask = (async () => {
