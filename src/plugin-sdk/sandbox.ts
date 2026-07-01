@@ -46,12 +46,14 @@ export {
   registerSandboxBackend,
   requireSandboxBackendFactory,
   resolveSandboxRuntimeStatus,
+  resolveReadOnlyWorkspaceSkillMounts,
   resolveWritableRenameTargets,
   resolveWritableRenameTargetsForBridge,
   runSshSandboxCommand,
   sanitizeEnvVars,
   shellEscape,
   uploadDirectoryToSshTarget,
+  type ReadOnlyWorkspaceSkillMount,
 } from "../agents/sandbox.js";
 
 export {

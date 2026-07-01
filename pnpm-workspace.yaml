@@ -36,6 +36,7 @@ minimumReleaseAgeExclude:
   - "@aws-sdk/token-providers@3.1052.0"
   - "@aws-sdk/token-providers@3.1053.0"
   - "@copilotkit/aimock@1.27.1"
+  - "@microsoft/mxc-sdk@0.7.0"
   - "@earendil-works/pi-tui"
   - "@google/genai@2.6.0"
   - "@larksuiteoapi/node-sdk@1.66.0"
@@ -122,6 +123,7 @@ overrides:
   yauzl: 3.2.1
   protobufjs: 7.6.3
   uuid: 14.0.0
+  "openclaw@2026.5.28>undici": 8.5.0
 
 allowBuilds:
   "@openclaw/fs-safe": true
@@ -143,6 +145,7 @@ allowBuilds:
   clawpdf: true
   "@openclaw/crabline": true
   rastermill: true
+  node-pty: true
 
 packageExtensions:
   baileys:
