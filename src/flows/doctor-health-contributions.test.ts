@@ -21,8 +21,10 @@ const mocks = vi.hoisted(() => ({
   maybeRepairGatewayDaemon: vi.fn().mockResolvedValue(undefined),
   maybeRepairLegacyOAuthProfileIds: vi.fn(async (cfg: unknown) => cfg),
   maybeRepairLegacyOAuthSidecarProfiles: vi.fn().mockResolvedValue(undefined),
+  collectAuthProfileHealthFindings: vi.fn(async () => []),
   noteAuthProfileHealth: vi.fn().mockResolvedValue(undefined),
   noteLegacyCodexProviderOverride: vi.fn(),
+  noteMemorySearchHealth: vi.fn().mockResolvedValue(undefined),
   buildGatewayConnectionDetails: vi.fn(() => ({ message: "gateway details" })),
   resolveSecretInputRef: vi.fn((params: { value?: unknown }) => ({
     ref:
@@ -73,6 +75,8 @@ const mocks = vi.hoisted(() => ({
   }),
   gatherDaemonStatus: vi.fn(),
   noteWorkspaceStatus: vi.fn(),
+  collectWorkspaceStatusHealthFindings: vi.fn().mockResolvedValue([]),
+  collectDevicePairingHealthFindings: vi.fn(async () => []),
   applyWizardMetadata: vi.fn((cfg: unknown) => cfg),
   logConfigUpdated: vi.fn(),
   isRecord: vi.fn(
@@ -145,8 +149,15 @@ vi.mock("../commands/doctor-auth-oauth-sidecar.js", () => ({
 }));
 
 vi.mock("../commands/doctor-auth.js", () => ({
+  collectAuthProfileHealthFindings: mocks.collectAuthProfileHealthFindings,
   noteAuthProfileHealth: mocks.noteAuthProfileHealth,
   noteLegacyCodexProviderOverride: mocks.noteLegacyCodexProviderOverride,
+}));
+
+vi.mock("../commands/doctor-memory-search.js", () => ({
+  maybeRepairMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
+  noteMemoryRecallHealth: vi.fn().mockResolvedValue(undefined),
+  noteMemorySearchHealth: mocks.noteMemorySearchHealth,
 }));
 
 vi.mock("../gateway/call.js", () => ({
@@ -259,6 +270,12 @@ vi.mock("../cli/daemon-cli/status.gather.js", () => ({
 
 vi.mock("../commands/doctor-workspace-status.js", () => ({
   noteWorkspaceStatus: mocks.noteWorkspaceStatus,
+  collectWorkspaceStatusHealthFindings: mocks.collectWorkspaceStatusHealthFindings,
+}));
+
+vi.mock("../commands/doctor-device-pairing.js", () => ({
+  collectDevicePairingHealthFindings: mocks.collectDevicePairingHealthFindings,
+  noteDevicePairingHealth: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../commands/onboard-helpers.js", () => ({
@@ -327,9 +344,13 @@ describe("doctor health contributions", () => {
     mocks.maybeRepairLegacyOAuthProfileIds.mockImplementation(async (cfg: unknown) => cfg);
     mocks.maybeRepairLegacyOAuthSidecarProfiles.mockClear();
     mocks.maybeRepairLegacyOAuthSidecarProfiles.mockResolvedValue(undefined);
+    mocks.collectAuthProfileHealthFindings.mockClear();
+    mocks.collectAuthProfileHealthFindings.mockResolvedValue([]);
     mocks.noteAuthProfileHealth.mockClear();
     mocks.noteAuthProfileHealth.mockResolvedValue(undefined);
     mocks.noteLegacyCodexProviderOverride.mockClear();
+    mocks.noteMemorySearchHealth.mockClear();
+    mocks.noteMemorySearchHealth.mockResolvedValue(undefined);
     mocks.buildGatewayConnectionDetails.mockClear();
     mocks.buildGatewayConnectionDetails.mockReturnValue({ message: "gateway details" });
     mocks.resolveSecretInputRef.mockClear();
@@ -427,6 +448,10 @@ describe("doctor health contributions", () => {
     mocks.gatherDaemonStatus.mockReset();
     mocks.gatherDaemonStatus.mockResolvedValue({});
     mocks.noteWorkspaceStatus.mockReset();
+    mocks.collectWorkspaceStatusHealthFindings.mockReset();
+    mocks.collectWorkspaceStatusHealthFindings.mockResolvedValue([]);
+    mocks.collectDevicePairingHealthFindings.mockReset();
+    mocks.collectDevicePairingHealthFindings.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -652,6 +677,70 @@ describe("doctor health contributions", () => {
 
     expect(ids.indexOf("doctor:skills")).toBeGreaterThan(-1);
     expect(ids.indexOf("doctor:skills")).toBeLessThan(ids.indexOf("doctor:write-config"));
+  });
+
+  it("keeps workspace status opt-in for structured lint selection", async () => {
+    const contribution = requireDoctorContribution("doctor:workspace-status");
+    const check = contribution.healthChecks[0] as HealthCheck & { defaultEnabled?: boolean };
+    expect(contribution.healthCheckIds).toEqual(["core/doctor/workspace-status"]);
+    expect(check.defaultEnabled).toBe(false);
+
+    const pluginVersionDrift = {
+      gatewayVersion: "2026.6.1",
+      drifts: [
+        {
+          pluginId: "codex",
+          installedVersion: "2026.5.30-beta.1",
+          gatewayVersion: "2026.6.1",
+          source: "npm" as const,
+        },
+      ],
+    };
+    mocks.gatherDaemonStatus.mockResolvedValueOnce({
+      gateway: { version: "2026.6.1" },
+      pluginVersionDrift,
+    });
+    mocks.collectWorkspaceStatusHealthFindings.mockResolvedValueOnce([
+      {
+        checkId: "core/doctor/workspace-status",
+        severity: "warning",
+        message: "Plugin codex is stale.",
+        path: "plugins.entries.codex",
+      },
+    ]);
+    const ctx = {
+      cfg: { plugins: { entries: { codex: { enabled: true } } } },
+      mode: "lint",
+      allowExecSecretRefs: true,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+
+    await expect(runDoctorLintChecks(ctx, { checks: [check] })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    expect(mocks.collectWorkspaceStatusHealthFindings).not.toHaveBeenCalled();
+
+    await expect(
+      runDoctorLintChecks(ctx, { checks: [check], onlyIds: ["core/doctor/workspace-status"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [expect.objectContaining({ checkId: "core/doctor/workspace-status" })],
+    });
+    expect(mocks.collectWorkspaceStatusHealthFindings).toHaveBeenCalledWith(ctx.cfg, {
+      pluginVersionDrift,
+    });
+    expect(mocks.gatherDaemonStatus).toHaveBeenCalledWith({
+      rpc: {
+        timeout: "3000",
+        json: true,
+      },
+      probe: true,
+      requireRpc: false,
+      deep: false,
+      allowExecSecretRefs: true,
+    });
   });
 
   it("passes daemon-context plugin drift into the workspace status note", async () => {
@@ -1007,6 +1096,32 @@ describe("doctor health contributions", () => {
     });
   });
 
+  it("registers auth profile health as an opt-in structured check", async () => {
+    const contribution = requireDoctorContribution("doctor:auth-profiles");
+    const [check] = contribution.healthChecks;
+
+    expect(contribution.healthCheckIds).toEqual(["core/doctor/auth-profiles"]);
+    expect(check).toMatchObject({
+      id: "core/doctor/auth-profiles",
+      kind: "core",
+      defaultEnabled: false,
+    });
+    if (!check || !("detect" in check)) {
+      throw new Error("expected split auth profile health check");
+    }
+
+    await check.detect({
+      mode: "lint",
+      cfg: { auth: { profiles: {} } },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    });
+
+    expect(mocks.collectAuthProfileHealthFindings).toHaveBeenCalledWith({
+      cfg: { auth: { profiles: {} } },
+      allowKeychainPrompt: false,
+    });
+  });
+
   it("forwards skipped Gateway health to daemon repair", async () => {
     const contribution = requireDoctorContribution("doctor:gateway-daemon");
     const ctx = {
@@ -1053,6 +1168,7 @@ describe("doctor health contributions", () => {
     expect(contributionIds).toContain("core/doctor/session-snapshots");
     expect(contributionIds).toContain("core/doctor/plugin-registry");
     expect(contributionIds).toContain("core/doctor/configured-plugin-installs");
+    expect(contributionIds).toContain("core/doctor/device-pairing");
     expect(contributionChecks.map((check) => check.id)).toEqual(contributionIds);
   });
 
@@ -1086,6 +1202,99 @@ describe("doctor health contributions", () => {
     ).resolves.toMatchObject({
       checksRun: 1,
       checksSkipped: 0,
+    });
+  });
+
+  it("collects memory-search notes as structured findings", async () => {
+    const contribution = requireDoctorContribution("doctor:memory-search");
+    const check = contribution.healthChecks[0] as HealthCheck;
+    mocks.noteMemorySearchHealth.mockImplementationOnce(async (_cfg, opts) => {
+      opts.noteFn(
+        [
+          'Memory search provider is set to "openai" but no API key was found.',
+          "Semantic recall will not work without a valid API key.",
+          "Fix (pick one):",
+          "- Set OPENAI_API_KEY in your environment",
+        ].join("\n"),
+        "Memory search",
+      );
+    });
+
+    const findings = await check.detect({
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      cfg: {},
+    });
+
+    expect(contribution.healthCheckIds).toEqual(["core/doctor/memory-search"]);
+    expect((check as HealthCheck & { defaultEnabled?: boolean }).defaultEnabled).toBe(false);
+    expect(mocks.noteMemorySearchHealth).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        includeWorkspaceMemoryHealth: false,
+        skipQmdBinaryProbe: true,
+        skipAuthProfileResolution: true,
+        gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
+        noteFn: expect.any(Function),
+      }),
+    );
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/memory-search",
+        severity: "warning",
+        path: "agents.defaults.memorySearch.provider",
+        message: 'Memory search provider is set to "openai" but no API key was found.',
+        fixHint: expect.stringContaining("OPENAI_API_KEY"),
+      }),
+    ]);
+  });
+
+  it("does not report disabled memory search as a lint warning", async () => {
+    const contribution = requireDoctorContribution("doctor:memory-search");
+    const check = contribution.healthChecks[0] as HealthCheck;
+    mocks.noteMemorySearchHealth.mockImplementationOnce(async (_cfg, opts) => {
+      opts.noteFn("Memory search is explicitly disabled (enabled: false).", "Memory search");
+    });
+
+    const findings = await check.detect({
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      cfg: {},
+    });
+
+    expect(findings).toEqual([]);
+  });
+
+  it("keeps device pairing opt-in for default lint selection", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const devicePairingCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/device-pairing",
+    );
+    expect(devicePairingCheck).toMatchObject({ defaultEnabled: false });
+    expect(devicePairingCheck).toBeDefined();
+
+    const ctx = {
+      cfg: { gateway: { mode: "local" } },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [devicePairingCheck!];
+
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    expect(mocks.collectDevicePairingHealthFindings).not.toHaveBeenCalled();
+
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/device-pairing"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+    });
+    expect(mocks.collectDevicePairingHealthFindings).toHaveBeenCalledWith({
+      cfg: ctx.cfg,
+      healthOk: false,
     });
   });
 

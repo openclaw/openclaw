@@ -1331,6 +1331,8 @@ export const pt_BR: TranslationMap = {
     settings: "Configurações do chat",
     thinkingToggle: "Alternar saída de pensamento/trabalho do assistente",
     toolCallsToggle: "Alternar chamadas de ferramenta e resultados de ferramenta",
+    commentaryToggle: "Manter comentários após a resposta final",
+    commentaryLabel: "Comentários",
     autoScrollMode: "Modo de rolagem automática",
     autoScrollAlways: "Sempre",
     autoScrollNearBottom: "Próximo ao final",

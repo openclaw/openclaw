@@ -1206,36 +1206,94 @@ private fun resolveGatewayConfig(
 }
 
 /** Selects the recovery detail line from endpoint metadata and transient gateway status. */
-private fun recoveryGatewayDetail(
+internal fun recoveryGatewayDetail(
   ready: Boolean,
   remoteAddress: String?,
   statusText: String,
   nodeCapabilityApprovalState: GatewayNodeApprovalState,
   gatewayConnectionProblem: GatewayConnectionProblem?,
 ): String =
-  remoteAddress
-    ?.takeIf { it.isNotBlank() }
-    ?: if (ready) {
-      "Ready for chat and voice"
-    } else if (
-      nodeCapabilityApprovalState == GatewayNodeApprovalState.PendingApproval ||
-      nodeCapabilityApprovalState == GatewayNodeApprovalState.PendingReapproval ||
-      nodeCapabilityApprovalState == GatewayNodeApprovalState.Unapproved
-    ) {
-      "Gateway paired. Waiting for node capability approval."
-    } else if (nodeCapabilityApprovalState == GatewayNodeApprovalState.Loading) {
-      "Gateway paired. Checking node capability approval."
-    } else if (gatewayConnectionProblem?.isPairingRequired == true && !gatewayConnectionProblem.canAutoRetry) {
-      recoveryGatewayApprovalCommand(gatewayConnectionProblem)
-        ?.let { "Gateway approval is pending. Run this on the gateway host:" }
-        ?: "Gateway approval is pending. Run openclaw devices list on the gateway host, approve this phone, then retry."
-    } else if (statusText.contains("operator offline", ignoreCase = true)) {
-      "Gateway paired. Waiting for operator access."
-    } else if (gatewayStatusLooksLikePairing(statusText)) {
-      "Gateway approval is in progress. OpenClaw will retry automatically."
-    } else {
-      "Gateway unreachable"
+  if (ready) {
+    remoteAddress?.takeIf { it.isNotBlank() } ?: "Ready for chat and voice"
+  } else if (
+    nodeCapabilityApprovalState == GatewayNodeApprovalState.PendingApproval ||
+    nodeCapabilityApprovalState == GatewayNodeApprovalState.PendingReapproval ||
+    nodeCapabilityApprovalState == GatewayNodeApprovalState.Unapproved
+  ) {
+    "Gateway paired. Waiting for node capability approval."
+  } else if (gatewayConnectionProblem?.isPairingRequired == true && !gatewayConnectionProblem.canAutoRetry) {
+    recoveryGatewayApprovalCommand(gatewayConnectionProblem)
+      ?.let { "Gateway approval is pending. Run this on the gateway host:" }
+      ?: "Gateway approval is pending. Run openclaw devices list on the gateway host, approve this phone, then retry."
+  } else if (gatewayConnectionProblem?.isPairingRequired == true && gatewayConnectionProblem.canAutoRetry) {
+    "Gateway approval is in progress. OpenClaw will retry automatically."
+  } else if (gatewayConnectionProblem != null) {
+    recoveryGatewayAuthDetail(gatewayConnectionProblem)
+  } else if (nodeCapabilityApprovalState == GatewayNodeApprovalState.Loading) {
+    "Gateway paired. Checking node capability approval."
+  } else if (statusText.contains("operator offline", ignoreCase = true)) {
+    "Gateway paired. Waiting for operator access."
+  } else if (gatewayStatusLooksLikePairing(statusText)) {
+    "Gateway approval is in progress. OpenClaw will retry automatically."
+  } else {
+    remoteAddress?.takeIf { it.isNotBlank() } ?: "Gateway unreachable"
+  }
+
+internal fun recoveryGatewayAuthDetail(gatewayConnectionProblem: GatewayConnectionProblem): String =
+  when (gatewayConnectionProblem.code) {
+    "PROTOCOL_MISMATCH" -> recoveryGatewayProtocolMismatchDetail(gatewayConnectionProblem)
+    "AUTH_BOOTSTRAP_TOKEN_INVALID" -> "Setup code expired. Scan a fresh setup QR."
+    "AUTH_DEVICE_TOKEN_MISMATCH",
+    "AUTH_TOKEN_MISMATCH",
+    -> "Saved authentication is invalid. Re-authenticate or reset this gateway connection."
+    "AUTH_PASSWORD_MISSING" -> "Gateway password is required. Enter it again or edit this connection."
+    "AUTH_PASSWORD_MISMATCH" -> "Gateway password is invalid. Re-enter it or reset this gateway connection."
+    "AUTH_TOKEN_MISSING" -> "Gateway token is required. Enter it again or edit this connection."
+    "CONTROL_UI_DEVICE_IDENTITY_REQUIRED",
+    "DEVICE_IDENTITY_REQUIRED",
+    -> "Gateway requires this device identity. Re-authenticate or reset this gateway connection."
+    else ->
+      when (gatewayConnectionProblem.recommendedNextStep) {
+        "update_auth_credentials" -> "Saved authentication is invalid. Re-authenticate or reset this gateway connection."
+        "update_auth_configuration" -> "Gateway authentication is not configured. Edit this connection and try again."
+        "review_auth_configuration" -> "Gateway authentication needs review. Check gateway settings, then retry."
+        else -> gatewayConnectionProblem.message.takeIf { it.isNotBlank() } ?: "Gateway authentication needs attention."
+      }
+  }
+
+private fun recoveryGatewayProtocolMismatchDetail(gatewayConnectionProblem: GatewayConnectionProblem): String {
+  val clientMin = gatewayConnectionProblem.clientMinProtocol
+  val clientMax = gatewayConnectionProblem.clientMaxProtocol
+  val expected = gatewayConnectionProblem.expectedProtocol
+  val summary =
+    when {
+      clientMax != null && expected != null && clientMax < expected ->
+        "This app is older than the gateway. Update OpenClaw on this device, then retry."
+      clientMin != null && expected != null && clientMin > expected ->
+        "The gateway is older than this app. Update OpenClaw on the gateway host, then retry."
+      else -> "The app and gateway use incompatible protocol versions. Update OpenClaw on both, then retry."
     }
+  return protocolMismatchVersions(clientMin, clientMax, expected)?.let { "$summary $it" } ?: summary
+}
+
+private fun protocolMismatchVersions(
+  clientMin: Int?,
+  clientMax: Int?,
+  expected: Int?,
+): String? {
+  val clientRange =
+    when {
+      clientMin == null && clientMax == null -> null
+      clientMin != null && clientMin == clientMax -> "app protocol v$clientMin"
+      clientMin != null && clientMax != null -> "app protocols v$clientMin-v$clientMax"
+      clientMin != null -> "app protocol min v$clientMin"
+      else -> "app protocol max v$clientMax"
+    }
+  val gatewayVersion = expected?.let { "gateway protocol v$it" }
+  return listOfNotNull(clientRange, gatewayVersion)
+    .takeIf { it.isNotEmpty() }
+    ?.joinToString(prefix = "(", postfix = ").")
+}
 
 private fun recoveryGatewayApprovalCommand(gatewayConnectionProblem: GatewayConnectionProblem?): String? {
   if (gatewayConnectionProblem?.isPairingRequired != true || gatewayConnectionProblem.canAutoRetry) return null

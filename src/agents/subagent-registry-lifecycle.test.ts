@@ -2,6 +2,7 @@
 // detached task status, and resource retirement around child-run endings.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../gateway/call.js";
+import { leasePendingAgentSteeringItemsFromSubagentRuns } from "./agent-steering-queue.js";
 import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
@@ -941,53 +942,125 @@ describe("subagent registry lifecycle hardening", () => {
     expect(Number.isNaN(entry.cleanupCompletedAt)).toBe(false);
   });
 
-  it("escalates an expected completion with a result on give-up instead of dropping it", async () => {
+  it.each([
+    {
+      reason: "retry-limit" as const,
+      completion: {
+        required: true,
+        resultText: "final answer",
+        fallbackResultText: undefined,
+      },
+      expectedResult: "final answer",
+    },
+    {
+      reason: "expiry" as const,
+      completion: {
+        required: true,
+        resultText: undefined,
+        fallbackResultText: "fallback final answer",
+      },
+      expectedResult: "fallback final answer",
+    },
+  ])(
+    "surfaces a successful delete-mode completion to the requester after $reason give-up",
+    async ({ reason, completion, expectedResult }) => {
+      const persist = vi.fn();
+      const entry = createRunEntry({
+        cleanup: "delete",
+        endedAt: 4_000,
+        endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+        expectsCompletionMessage: true,
+        completion,
+        delivery: { status: "pending", lastError: "gateway request timeout for agent" },
+        outcome: { status: "ok" },
+      });
+      const runs = new Map([[entry.runId, entry]]);
+      const controller = createLifecycleController({
+        entry,
+        runs,
+        persist,
+        captureSubagentCompletionReply: vi.fn(async () => undefined),
+      });
+
+      await controller.finalizeResumedAnnounceGiveUp({
+        runId: entry.runId,
+        entry,
+        reason,
+      });
+
+      expect(entry.delivery?.status).toBe("suspended");
+      expect(
+        entry.delivery?.payload?.frozenResultText ??
+          entry.delivery?.payload?.fallbackFrozenResultText,
+      ).toBe(expectedResult);
+      expect(entry.cleanupHandled).toBe(false);
+      expect(entry.cleanupCompletedAt).toBeUndefined();
+
+      const requesterTurn = leasePendingAgentSteeringItemsFromSubagentRuns({
+        runs,
+        requesterSessionKey: entry.requesterSessionKey,
+        leaseId: `requester-turn-${reason}`,
+        now: 5_000,
+      });
+      expect(requesterTurn?.runIds).toEqual([entry.runId]);
+      expect(requesterTurn?.prompt).toContain(expectedResult);
+    },
+  );
+
+  it.each([
+    {
+      name: "failed result",
+      overrides: {
+        endedReason: SUBAGENT_ENDED_REASON_ERROR,
+        expectsCompletionMessage: true,
+        completion: { required: true, resultText: "partial failure details" },
+        outcome: { status: "error" as const, error: "child failed" },
+      },
+    },
+    {
+      name: "non-deliverable sentinel",
+      overrides: {
+        endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+        expectsCompletionMessage: true,
+        completion: {
+          required: true,
+          resultText: "ANNOUNCE_SKIP",
+          fallbackResultText: "stale fallback that must not override the sentinel",
+        },
+        outcome: { status: "ok" as const },
+      },
+    },
+    {
+      name: "missing result",
+      overrides: {
+        endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+        expectsCompletionMessage: true,
+        completion: { required: true, resultText: null },
+        outcome: { status: "ok" as const },
+      },
+    },
+    {
+      name: "completion that was not expected",
+      overrides: {
+        endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+        expectsCompletionMessage: false,
+        completion: { required: false, resultText: "final answer" },
+        outcome: { status: "ok" as const },
+      },
+    },
+  ])("keeps delete cleanup terminal for $name on give-up", async ({ overrides }) => {
     const persist = vi.fn();
     const entry = createRunEntry({
       cleanup: "delete",
       endedAt: 4_000,
-      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
-      expectsCompletionMessage: true,
-      completion: { required: true, resultText: "final answer" },
       delivery: { status: "pending", lastError: "gateway request timeout for agent" },
-      outcome: { status: "ok" },
+      ...overrides,
     });
+    const runs = new Map([[entry.runId, entry]]);
 
     const controller = createLifecycleController({
       entry,
-      persist,
-      captureSubagentCompletionReply: vi.fn(async () => undefined),
-    });
-
-    await controller.finalizeResumedAnnounceGiveUp({
-      runId: entry.runId,
-      entry,
-      reason: "retry-limit",
-    });
-
-    // Not suspendable (cleanup=delete) but a result exists: it must be escalated
-    // and preserved for user-visible delivery, never silently cleared.
-    expect(entry.delivery?.status).toBe("suspended");
-    expect(entry.delivery?.escalated).toBe(true);
-    expect(entry.delivery?.payload).toMatchObject({ frozenResultText: "final answer" });
-    expect(entry.cleanupHandled).toBe(false);
-    expect(entry.cleanupCompletedAt).toBeUndefined();
-  });
-
-  it("does not escalate an expected completion result from a non-successful run", async () => {
-    const persist = vi.fn();
-    const entry = createRunEntry({
-      cleanup: "delete",
-      endedAt: 4_000,
-      endedReason: SUBAGENT_ENDED_REASON_ERROR,
-      expectsCompletionMessage: true,
-      completion: { required: true, resultText: "partial failure details" },
-      delivery: { status: "pending", lastError: "gateway request timeout for agent" },
-      outcome: { status: "error", error: "child failed" },
-    });
-
-    const controller = createLifecycleController({
-      entry,
+      runs,
       persist,
       captureSubagentCompletionReply: vi.fn(async () => undefined),
     });
@@ -999,62 +1072,7 @@ describe("subagent registry lifecycle hardening", () => {
     });
 
     expect(entry.delivery?.status).toBe("failed");
-    expect(entry.delivery?.escalated).toBeUndefined();
-  });
-
-  it("does not escalate non-deliverable completion sentinel results", async () => {
-    const persist = vi.fn();
-    const entry = createRunEntry({
-      cleanup: "delete",
-      endedAt: 4_000,
-      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
-      expectsCompletionMessage: true,
-      completion: { required: true, resultText: "ANNOUNCE_SKIP" },
-      delivery: { status: "pending", lastError: "gateway request timeout for agent" },
-      outcome: { status: "ok" },
-    });
-
-    const controller = createLifecycleController({
-      entry,
-      persist,
-      captureSubagentCompletionReply: vi.fn(async () => undefined),
-    });
-
-    await controller.finalizeResumedAnnounceGiveUp({
-      runId: entry.runId,
-      entry,
-      reason: "retry-limit",
-    });
-
-    expect(entry.delivery?.status).toBe("failed");
-    expect(entry.delivery?.escalated).toBeUndefined();
-  });
-
-  it("still clears delivery on give-up when no completion message was expected", async () => {
-    const persist = vi.fn();
-    const entry = createRunEntry({
-      cleanup: "delete",
-      endedAt: 4_000,
-      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
-      expectsCompletionMessage: false,
-      delivery: { status: "pending", lastError: "gateway request timeout for agent" },
-      outcome: { status: "ok" },
-    });
-
-    const controller = createLifecycleController({
-      entry,
-      persist,
-      captureSubagentCompletionReply: vi.fn(async () => undefined),
-    });
-
-    await controller.finalizeResumedAnnounceGiveUp({
-      runId: entry.runId,
-      entry,
-      reason: "retry-limit",
-    });
-
-    expect(entry.delivery?.status).toBe("failed");
-    expect(entry.delivery?.escalated).toBeUndefined();
+    expect(runs.has(entry.runId)).toBe(false);
   });
 
   it("suspends successful keep-mode final delivery instead of completing cleanup on retry exhaustion", async () => {

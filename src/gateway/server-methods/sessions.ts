@@ -124,7 +124,7 @@ import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { chatHandlers } from "./chat.js";
 import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
-import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
+import { hasTrackedActiveSessionRun, hasVisibleActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type {
   GatewayClient,
@@ -899,10 +899,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           () => {
             return result.sessions.map((session) =>
               Object.assign({}, session, {
-                hasActiveRun: hasTrackedActiveSessionRun({
+                hasActiveRun: hasVisibleActiveSessionRun({
                   context,
                   requestedKey: session.key,
                   canonicalKey: session.key,
+                  sessionId: session.sessionId,
                   ...(session.key === "global" && p.agentId ? { agentId: p.agentId } : {}),
                   defaultAgentId: resolveDefaultAgentId(cfg),
                 }),

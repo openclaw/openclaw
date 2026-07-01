@@ -812,7 +812,6 @@ async function discardSuspendedPendingFinalDelivery(
     endedAt: payload?.endedAt ?? entry.endedAt,
     status: payload?.outcome?.status ?? entry.outcome?.status,
     lastError: getDeliveryLastError(entry) ?? null,
-    ...(delivery.escalated === true ? { escalated: true } : {}),
   };
   delivery.payload = undefined;
   delivery.createdAt = undefined;

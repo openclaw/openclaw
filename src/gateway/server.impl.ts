@@ -1640,6 +1640,7 @@ export async function startGatewayServer(
             controlUiBasePath,
             logTailscale,
             gatewayPluginConfigAtStart,
+            activationSourceConfig: startupActivationSourceConfig,
             pluginRegistry,
             defaultWorkspaceDir,
             deps,
