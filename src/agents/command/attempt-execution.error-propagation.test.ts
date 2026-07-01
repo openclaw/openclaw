@@ -1,5 +1,6 @@
 // Covers ACP diagnostic event propagation and sanitized error formatting.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { ACP_TURN_TIMEOUT_DETAIL_CODE } from "../../acp/control-plane/manager.turn-timeout.js";
 import { AcpRuntimeError, formatAcpErrorChain } from "../../acp/runtime/errors.js";
 import {
   type AgentEventPayload,
@@ -265,6 +266,39 @@ describe("ACP diagnostic events", () => {
         terminalReason: "timed_out",
       },
     ]);
+  });
+
+  it("preserves manager-owned ACP timeout attribution without an aborted caller signal", () => {
+    emitAcpRuntimeEvent({
+      runId: "run-manager-timeout",
+      event: {
+        type: "tool_call",
+        tag: "tool_call",
+        text: "running",
+        kind: "execute",
+        toolCallId: "call-manager-timeout",
+        status: "in_progress",
+      },
+    });
+
+    emitAcpLifecycleError({
+      runId: "run-manager-timeout",
+      error: new AcpRuntimeError("ACP_TURN_FAILED", "ACP turn timed out.", {
+        detailCode: ACP_TURN_TIMEOUT_DETAIL_CODE,
+      }),
+    });
+
+    expect(capturedTools.at(-1)).toMatchObject({
+      type: "tool.execution.error",
+      toolCallId: "call-manager-timeout",
+      terminalReason: "timed_out",
+    });
+    expect(captured.at(-1)?.data).toMatchObject({
+      phase: "error",
+      aborted: true,
+      stopReason: "timeout",
+      status: "timed_out",
+    });
   });
 });
 

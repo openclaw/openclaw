@@ -18,7 +18,6 @@ import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
-import { emitAgentEvent } from "../../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { generateSecureUuid } from "../../infra/secure-random.js";
@@ -52,6 +51,9 @@ import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.type
 
 const dispatchAcpManagerRuntimeLoader = createLazyImportLoader(
   () => import("./dispatch-acp-manager.runtime.js"),
+);
+const dispatchAcpAuditRuntimeLoader = createLazyImportLoader(
+  () => import("../../agents/command/attempt-execution.runtime.js"),
 );
 
 type OrderedAcpAttachment = {
@@ -99,6 +101,10 @@ const dispatchAcpTranscriptRuntimeLoader = createLazyImportLoader(
 
 function loadDispatchAcpManagerRuntime() {
   return dispatchAcpManagerRuntimeLoader.load();
+}
+
+function loadDispatchAcpAuditRuntime() {
+  return dispatchAcpAuditRuntimeLoader.load();
 }
 
 function loadDispatchAcpSessionRuntime() {
@@ -216,30 +222,14 @@ function finishAcpDispatchAttempt(params: {
   delivery: AcpDispatchDeliveryCoordinator;
   getStats: () => AcpDispatchStatsSnapshot;
   sessionKey: string;
-  runId?: string;
   startedAt: number;
   outcome: AcpDispatchOutcome;
-  lifecyclePhase?: "end" | "error";
   recordProcessed: DispatchProcessedRecorder;
   markIdle: (reason: string) => void;
 }): AcpDispatchAttemptResult {
   const counts = params.dispatcher.getQueuedCounts();
   params.delivery.applyRoutedCounts(counts);
   const acpStats = params.getStats();
-  const runId = normalizeOptionalString(params.runId);
-  if (runId && params.lifecyclePhase) {
-    emitAgentEvent({
-      runId,
-      sessionKey: params.sessionKey,
-      stream: "lifecycle",
-      data: {
-        phase: params.lifecyclePhase,
-        startedAt: params.startedAt,
-        endedAt: Date.now(),
-        ...(params.outcome.kind === "error" ? { error: params.outcome.error.message } : {}),
-      },
-    });
-  }
   if (params.outcome.kind === "ok") {
     logVerbose(
       `acp-dispatch: session=${params.sessionKey} outcome=ok latencyMs=${Date.now() - params.startedAt} queueDepth=${acpStats.turns.queueDepth} activeRuntimes=${acpStats.runtimeCache.activeSessions}`,
@@ -535,18 +525,13 @@ export async function tryDispatchAcpReply(params: {
   });
 
   const acpDispatchStartedAt = Date.now();
-  const finishAttempt = (options: {
-    queuedFinal: boolean;
-    outcome: AcpDispatchOutcome;
-    lifecyclePhase?: "end" | "error";
-  }) =>
+  const finishAttempt = (options: { queuedFinal: boolean; outcome: AcpDispatchOutcome }) =>
     finishAcpDispatchAttempt({
       ...options,
       dispatcher: params.dispatcher,
       delivery,
       getStats: () => acpManager.getObservabilitySnapshot(params.cfg),
       sessionKey,
-      runId: params.runId,
       startedAt: acpDispatchStartedAt,
       recordProcessed: params.recordProcessed,
       markIdle: params.markIdle,
@@ -660,19 +645,59 @@ export async function tryDispatchAcpReply(params: {
       logVerbose(`dispatch-acp: start reply lifecycle failed: ${formatErrorMessage(error)}`);
     }
 
-    await acpManager.runTurn({
-      cfg: params.cfg,
+    const requestId = resolveAcpRequestId(params.ctx);
+    const auditRunId = normalizeOptionalString(params.runId) ?? requestId;
+    const auditRuntime = await loadDispatchAcpAuditRuntime();
+    let auditStopReason: string | undefined;
+    auditRuntime.emitAcpLifecycleStart({
+      runId: auditRunId,
       sessionKey: canonicalSessionKey,
-      text: resolveAcpTurnText({
-        promptText: turnPromptText,
-        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-      }),
-      attachments: attachments.length > 0 ? attachments : undefined,
-      mode: "prompt",
-      requestId: resolveAcpRequestId(params.ctx),
-      ...(params.abortSignal ? { signal: params.abortSignal } : {}),
-      onEvent: async (event) => await projector.onEvent(event),
+      agentId: acpAgentId,
+      startedAt: Date.now(),
     });
+    try {
+      await acpManager.runTurn({
+        cfg: params.cfg,
+        sessionKey: canonicalSessionKey,
+        text: resolveAcpTurnText({
+          promptText: turnPromptText,
+          sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        }),
+        attachments: attachments.length > 0 ? attachments : undefined,
+        mode: "prompt",
+        requestId,
+        ...(params.abortSignal ? { signal: params.abortSignal } : {}),
+        onEvent: async (event) => {
+          auditRuntime.emitAcpRuntimeEvent({
+            runId: auditRunId,
+            sessionKey: canonicalSessionKey,
+            agentId: acpAgentId,
+            ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
+            event,
+          });
+          if (event.type === "done") {
+            auditStopReason = event.stopReason;
+          }
+          await projector.onEvent(event);
+        },
+      });
+      auditRuntime.emitAcpLifecycleEnd({
+        runId: auditRunId,
+        sessionKey: canonicalSessionKey,
+        agentId: acpAgentId,
+        ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
+        ...(auditStopReason ? { stopReason: auditStopReason } : {}),
+      });
+    } catch (error) {
+      auditRuntime.emitAcpLifecycleError({
+        runId: auditRunId,
+        sessionKey: canonicalSessionKey,
+        agentId: acpAgentId,
+        ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
+        error,
+      });
+      throw error;
+    }
 
     await projector.flush(true);
     if (params.abortSignal?.aborted) {
@@ -715,7 +740,6 @@ export async function tryDispatchAcpReply(params: {
     return finishAttempt({
       queuedFinal,
       outcome: { kind: "ok" },
-      lifecyclePhase: "end",
     });
   } catch (err) {
     await projector.flush(true);
@@ -736,7 +760,6 @@ export async function tryDispatchAcpReply(params: {
     return finishAttempt({
       queuedFinal,
       outcome: { kind: "error", error: acpError },
-      lifecyclePhase: "error",
     });
   }
 }

@@ -7,6 +7,7 @@ import {
   type FastMode,
 } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
+import { ACP_TURN_TIMEOUT_DETAIL_CODE } from "../../acp/control-plane/manager.turn-timeout.js";
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
@@ -872,11 +873,13 @@ export function buildAcpResult(params: {
 export function emitAcpLifecycleStart(params: {
   runId: string;
   startedAt: number;
+  sessionKey?: string;
   agentId?: string;
   lifecycleGeneration?: string;
 }) {
   emitAgentEvent({
     runId: params.runId,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
     stream: "lifecycle",
@@ -928,6 +931,7 @@ function acpAuditToolName(kind: unknown): string {
 function resolveAcpToolTerminalReason(
   signal: AbortSignal | undefined,
   stopReason?: string,
+  error?: unknown,
 ): "failed" | "cancelled" | "timed_out" {
   const abortFields = resolveAgentRunAbortLifecycleFields(signal);
   if (abortFields.aborted) {
@@ -935,6 +939,12 @@ function resolveAcpToolTerminalReason(
   }
   const normalizedStopReason = normalizeOptionalLowercaseString(stopReason);
   if (normalizedStopReason === "timeout") {
+    return "timed_out";
+  }
+  if (
+    error instanceof Error &&
+    (error as Error & { detailCode?: unknown }).detailCode === ACP_TURN_TIMEOUT_DETAIL_CODE
+  ) {
     return "timed_out";
   }
   if (
@@ -1167,6 +1177,7 @@ export function emitAcpRuntimeEvent(params: {
 
 export function emitAcpLifecycleEnd(params: {
   runId: string;
+  sessionKey?: string;
   agentId?: string;
   lifecycleGeneration?: string;
   abortSignal?: AbortSignal;
@@ -1178,6 +1189,7 @@ export function emitAcpLifecycleEnd(params: {
   );
   emitAgentEvent({
     runId: params.runId,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.agentId ? { agentId: params.agentId } : {}),
     ...(params.lifecycleGeneration ? { lifecycleGeneration: params.lifecycleGeneration } : {}),
     stream: "lifecycle",
@@ -1197,7 +1209,12 @@ export function emitAcpLifecycleError(params: {
   lifecycleGeneration?: string;
   abortSignal?: AbortSignal;
 }) {
-  finalizeAcpToolsForRun(params.runId, resolveAcpToolTerminalReason(params.abortSignal));
+  const terminalReason = resolveAcpToolTerminalReason(params.abortSignal, undefined, params.error);
+  finalizeAcpToolsForRun(params.runId, terminalReason);
+  const lifecycleFields =
+    terminalReason === "timed_out"
+      ? ({ aborted: true, stopReason: "timeout", status: "timed_out" } as const)
+      : resolveAgentRunAbortLifecycleFields(params.abortSignal);
   emitAgentEvent({
     runId: params.runId,
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -1208,7 +1225,7 @@ export function emitAcpLifecycleError(params: {
       phase: "error",
       error: formatAcpErrorChain(params.error),
       endedAt: Date.now(),
-      ...resolveAgentRunAbortLifecycleFields(params.abortSignal),
+      ...lifecycleFields,
     },
   });
 }
