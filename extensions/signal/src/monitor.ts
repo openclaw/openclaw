@@ -148,9 +148,9 @@ function createSignalDaemonLifecycle(params: { abortSignal?: AbortSignal }) {
   let daemonExitError: Error | undefined;
   const daemonAbortController = new AbortController();
   const mergedAbort = mergeAbortSignals(params.abortSignal, daemonAbortController.signal);
-  const stop = () => {
+  const stop = async () => {
     daemonStopRequested = true;
-    daemonHandle?.stop();
+    await daemonHandle?.stop();
   };
   const attach = (handle: SignalDaemonHandle) => {
     daemonHandle = handle;
@@ -539,7 +539,9 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   }
 
   const onAbort = () => {
-    daemonLifecycle.stop();
+    void daemonLifecycle.stop().catch((err: unknown) => {
+      runtime.error?.(`daemon stop error on abort: ${String(err)}`);
+    });
   };
   opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
 
@@ -635,6 +637,6 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     await monitorTaskRunner.waitForIdle();
     daemonLifecycle.dispose();
     opts.abortSignal?.removeEventListener("abort", onAbort);
-    daemonLifecycle.stop();
+    await daemonLifecycle.stop();
   }
 }
