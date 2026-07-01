@@ -27,6 +27,7 @@ import {
 } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext } from "../server-context.js";
+import { resolveTargetIdFromTabs } from "../target-id.js";
 import { matchBrowserUrlPattern } from "../url-pattern.js";
 import { registerBrowserAgentActDownloadRoutes } from "./agent.act.download.js";
 import {
@@ -35,7 +36,7 @@ import {
   jsonActError,
 } from "./agent.act.errors.js";
 import { registerBrowserAgentActHookRoutes } from "./agent.act.hooks.js";
-import { normalizeActRequest, validateBatchTargetIds } from "./agent.act.normalize.js";
+import { canonicalizeActTargetIds, normalizeActRequest } from "./agent.act.normalize.js";
 import { type ActKind, isActKind } from "./agent.act.shared.js";
 import {
   readBody,
@@ -441,14 +442,31 @@ export function registerBrowserAgentActRoutes(
               ...extra,
             });
           };
-          if (action.targetId && action.targetId !== tab.targetId) {
+          // The route already resolved `tab` from the request targetId, which
+          // may be any supported alias form (tabId/label/suggestedTargetId/raw
+          // id or unique prefix). Canonicalize the action's targetId aliases
+          // (top-level and nested batch sub-actions) to the resolved tab id
+          // before dispatch, and reject ids that resolve to a different tab.
+          // The Playwright executor looks the page up by exact targetId, so a
+          // surviving alias would miss the lookup and break the action.
+          const targetIdReferencesCurrentTab = (raw: string): boolean =>
+            resolveTargetIdFromTabs(raw, [tab]).ok;
+          const canonicalizedTargetIds = canonicalizeActTargetIds(
+            action,
+            tab.targetId,
+            targetIdReferencesCurrentTab,
+          );
+          if (!canonicalizedTargetIds.ok) {
             return jsonActError(
               res,
               403,
               ACT_ERROR_CODES.targetIdMismatch,
-              "action targetId must match request targetId",
+              canonicalizedTargetIds.error,
             );
           }
+          // Only the managed Playwright dispatch needs the canonicalized action;
+          // existing-session executors address the tab by `tab.targetId` directly.
+          const dispatchAction = canonicalizedTargetIds.action;
           const profileName = profileCtx.profile.name;
           if (isExistingSession) {
             const initialTabTargetIds = hasNavigationResultPolicy
@@ -661,15 +679,9 @@ export function registerBrowserAgentActRoutes(
           if (!pw) {
             return;
           }
-          if (action.kind === "batch") {
-            const targetIdError = validateBatchTargetIds(action.actions, tab.targetId);
-            if (targetIdError) {
-              return jsonActError(res, 403, ACT_ERROR_CODES.targetIdMismatch, targetIdError);
-            }
-          }
           const result = await pw.executeActViaPlaywright({
             cdpUrl,
-            action,
+            action: dispatchAction,
             targetId: tab.targetId,
             evaluateEnabled,
             ssrfPolicy,
