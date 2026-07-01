@@ -879,6 +879,7 @@ describe("test-projects args", () => {
           "src/state/openclaw-agent-db.test.ts",
           "src/state/openclaw-state-db.test.ts",
           "src/state/sqlite-query-plan.test.ts",
+          "src/transcripts/store.test.ts",
         ],
         includePatterns: null,
         watchMode: false,
