@@ -264,38 +264,6 @@ function resolveAssistantMediaRoutePath(basePath?: string): string {
   return `${normalizedBasePath}${CONTROL_UI_ASSISTANT_MEDIA_PREFIX}`;
 }
 
-function resolveAssistantMediaAuthToken(req: IncomingMessage): string | undefined {
-  const bearer = getBearerToken(req);
-  if (bearer) {
-    return bearer;
-  }
-  const urlRaw = req.url;
-  if (!urlRaw) {
-    return undefined;
-  }
-  try {
-    const url = new URL(urlRaw, "http://localhost");
-    const token = url.searchParams.get("token")?.trim();
-    return token || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function resolveControlUiReadAuthToken(
-  req: IncomingMessage,
-  opts?: { allowQueryToken?: boolean },
-): string | undefined {
-  const bearer = getBearerToken(req);
-  if (bearer) {
-    return bearer;
-  }
-  if (!opts?.allowQueryToken) {
-    return undefined;
-  }
-  return resolveAssistantMediaAuthToken(req);
-}
-
 async function authorizeControlUiReadRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -304,7 +272,6 @@ async function authorizeControlUiReadRequest(
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
-    allowQueryToken?: boolean;
     requiredOperatorMethod?: string;
   },
 ): Promise<boolean> {
@@ -312,9 +279,11 @@ async function authorizeControlUiReadRequest(
     return true;
   }
 
-  const token = resolveControlUiReadAuthToken(req, {
-    allowQueryToken: opts.allowQueryToken,
-  });
+  // Control UI read auth is header-only: a query-string token (?token=) would
+  // leak the gateway secret through proxy/access logs, browser history, and
+  // Referer. Browser media fetches authenticate with the signed mediaTicket
+  // instead; programmatic clients send Authorization: Bearer.
+  const token = getBearerToken(req);
   const clientIp =
     resolveRequestClientIp(req, opts.trustedProxies, opts.allowRealIpFallback === true) ??
     req.socket?.remoteAddress;
@@ -583,7 +552,6 @@ export async function handleControlUiAssistantMediaRequest(
       trustedProxies: opts?.trustedProxies,
       allowRealIpFallback: opts?.allowRealIpFallback,
       rateLimiter: opts?.rateLimiter,
-      allowQueryToken: true,
     }))
   ) {
     return true;
