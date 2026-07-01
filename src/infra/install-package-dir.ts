@@ -55,6 +55,42 @@ async function sanitizeManifestForNpmInstall(targetDir: string): Promise<void> {
   await writeJson(manifestPath, manifest, { trailingNewline: true });
 }
 
+/**
+ * Formats the failure suffix for `npm install failed:` messages when npm exits
+ * with a non-zero status. Prefers npm's own stderr/stdout when either is
+ * populated, but falls back to the exit code / signal / termination reason so
+ * users still get an actionable signal when npm returns empty output (observed
+ * on some npm 11 combinations for @openclaw/acpx installs, #98484).
+ */
+function formatNpmDependencyInstallFailure(result: {
+  stdout: string;
+  stderr: string;
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
+}): string {
+  const detail = result.stderr.trim() || result.stdout.trim();
+  if (detail) {
+    return detail;
+  }
+  const parts: string[] = [];
+  if (result.termination === "timeout") {
+    parts.push("timed out");
+  } else if (result.termination === "no-output-timeout") {
+    parts.push("exceeded no-output timeout");
+  }
+  if (typeof result.code === "number") {
+    parts.push(`exit code ${result.code}`);
+  }
+  if (result.signal) {
+    parts.push(`signal ${result.signal}`);
+  }
+  if (parts.length === 0) {
+    return "npm exited with no output";
+  }
+  return `${parts.join(", ")} (no output from npm)`;
+}
+
 async function hideProjectNpmConfigForInstall(targetDir: string): Promise<HiddenProjectConfigFile> {
   const originalPath = path.join(targetDir, STAGED_NPM_PROJECT_CONFIG_NAME);
   let hiddenDir = "";
@@ -281,7 +317,7 @@ export async function installPackageDir(params: {
         }
       })();
       if (npmRes.code !== 0) {
-        return await fail(`npm install failed: ${npmRes.stderr.trim() || npmRes.stdout.trim()}`);
+        return await fail(`npm install failed: ${formatNpmDependencyInstallFailure(npmRes)}`);
       }
     } catch (error) {
       return await fail(`npm install failed: ${String(error)}`, error);
