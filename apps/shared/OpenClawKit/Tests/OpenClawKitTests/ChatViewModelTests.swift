@@ -3,12 +3,30 @@ import OpenClawKit
 import Testing
 @testable import OpenClawChatUI
 
-private func chatTextMessage(role: String, text: String, timestamp: Double) -> AnyCodable {
-    AnyCodable([
+private func chatTextMessage(role: String, text: String, timestamp: Double, contentId: String? = nil) -> AnyCodable {
+    var content: [String: Any] = ["type": "text", "text": text]
+    if let contentId {
+        content["id"] = contentId
+    }
+    return AnyCodable([
         "role": role,
-        "content": [["type": "text", "text": text]],
+        "content": [content],
         "timestamp": timestamp,
     ])
+}
+
+private func chatTextModelMessage(role: String, text: String, timestamp: Double) -> OpenClawChatMessage {
+    OpenClawChatMessage(
+        role: role,
+        content: [
+            OpenClawChatMessageContent(
+                type: "text",
+                text: text,
+                mimeType: nil,
+                fileName: nil,
+                content: nil),
+        ],
+        timestamp: timestamp)
 }
 
 private func chatErrorMessage(role: String, errorMessage: String, timestamp: Double) -> AnyCodable {
@@ -19,6 +37,15 @@ private func chatErrorMessage(role: String, errorMessage: String, timestamp: Dou
         "stopReason": "error",
         "errorMessage": errorMessage,
     ])
+}
+
+fileprivate extension Array where Element == OpenClawChatMessage {
+    func containsUserText(_ text: String) -> Bool {
+        self.contains { message in
+            message.role == "user" &&
+                message.content.contains { $0.text == text }
+        }
+    }
 }
 
 private func historyPayload(
@@ -104,6 +131,7 @@ private func makeViewModel(
     compactSessionHook: (@Sendable (String) async throws -> Void)? = nil,
     setSessionModelHook: (@Sendable (String?) async throws -> Void)? = nil,
     setSessionThinkingHook: (@Sendable (String) async throws -> Void)? = nil,
+    sendMessageHook: (@Sendable (String) async throws -> OpenClawChatSendResponse)? = nil,
     waitForRunCompletionHook: (@Sendable (String, Int) async -> Bool)? = nil,
     healthResponses: [Bool] = [true],
     initialThinkingLevel: String? = nil,
@@ -122,6 +150,7 @@ private func makeViewModel(
         compactSessionHook: compactSessionHook,
         setSessionModelHook: setSessionModelHook,
         setSessionThinkingHook: setSessionThinkingHook,
+        sendMessageHook: sendMessageHook,
         waitForRunCompletionHook: waitForRunCompletionHook,
         healthResponses: healthResponses)
     let vm = await MainActor.run {
@@ -347,6 +376,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
     private let compactSessionHook: (@Sendable (String) async throws -> Void)?
     private let setSessionModelHook: (@Sendable (String?) async throws -> Void)?
     private let setSessionThinkingHook: (@Sendable (String) async throws -> Void)?
+    private let sendMessageHook: (@Sendable (String) async throws -> OpenClawChatSendResponse)?
     private let waitForRunCompletionHook: (@Sendable (String, Int) async -> Bool)?
     private let healthResponses: [Bool]
 
@@ -364,6 +394,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         compactSessionHook: (@Sendable (String) async throws -> Void)? = nil,
         setSessionModelHook: (@Sendable (String?) async throws -> Void)? = nil,
         setSessionThinkingHook: (@Sendable (String) async throws -> Void)? = nil,
+        sendMessageHook: (@Sendable (String) async throws -> OpenClawChatSendResponse)? = nil,
         waitForRunCompletionHook: (@Sendable (String, Int) async -> Bool)? = nil,
         healthResponses: [Bool] = [true])
     {
@@ -377,6 +408,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.compactSessionHook = compactSessionHook
         self.setSessionModelHook = setSessionModelHook
         self.setSessionThinkingHook = setSessionThinkingHook
+        self.sendMessageHook = sendMessageHook
         self.waitForRunCompletionHook = waitForRunCompletionHook
         self.healthResponses = healthResponses
         var cont: AsyncStream<OpenClawChatTransportEvent>.Continuation!
@@ -435,6 +467,9 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         await self.state.sentSessionKeysAppend(sessionKey)
         await self.state.sentRunIdsAppend(idempotencyKey)
         await self.state.sentThinkingLevelsAppend(thinking)
+        if let sendMessageHook {
+            return try await sendMessageHook(idempotencyKey)
+        }
         return OpenClawChatSendResponse(runId: idempotencyKey, status: "ok")
     }
 
@@ -782,6 +817,175 @@ struct ChatViewModelTests {
         }
     }
 
+    @Test func `session message adopts provisional final event reply`() async throws {
+        let sessionId = "sess-main"
+        let now = Date().timeIntervalSince1970 * 1000
+        let finalRefreshGate = SessionSubscribeGate()
+        let historyCount = AsyncCounter()
+        let history = historyPayload(sessionId: sessionId)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history, history],
+            requestHistoryHook: { _ in
+                let count = await historyCount.increment()
+                if count == 2 {
+                    await finalRefreshGate.wait()
+                }
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "hello")
+        try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
+        let runId = try await waitForLastSentRunId(transport)
+
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: runId,
+                    sessionKey: "main",
+                    state: "final",
+                    message: chatTextMessage(
+                        role: "assistant",
+                        text: "dedupe me",
+                        timestamp: now + 1,
+                        contentId: "live-final-content"),
+                    errorMessage: nil)))
+
+        try await waitUntil("provisional final visible once") {
+            await MainActor.run {
+                vm.messages.count(where: { msg in
+                    msg.role == "assistant" && msg.content.first?.text == "dedupe me"
+                }) == 1
+            }
+        }
+
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: chatTextModelMessage(role: "assistant", text: "dedupe me", timestamp: now + 2),
+                    messageId: "msg-assistant-final",
+                    messageSeq: 2)))
+
+        try await waitUntil("canonical session message adopted final event row") {
+            await MainActor.run {
+                let matches = vm.messages.filter { msg in
+                    msg.role == "assistant" && msg.content.first?.text == "dedupe me"
+                }
+                return matches.count == 1 && matches.first?.timestamp == now + 2
+            }
+        }
+
+        await finalRefreshGate.release()
+    }
+
+    @Test func `final event does not duplicate canonical assistant session message`() async throws {
+        let sessionId = "sess-main"
+        let now = Date().timeIntervalSince1970 * 1000
+        let finalRefreshGate = SessionSubscribeGate()
+        let historyCount = AsyncCounter()
+        let history = historyPayload(sessionId: sessionId)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history, history],
+            requestHistoryHook: { _ in
+                let count = await historyCount.increment()
+                if count == 2 {
+                    await finalRefreshGate.wait()
+                }
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "hello")
+        try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
+        let runId = try await waitForLastSentRunId(transport)
+
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: chatTextModelMessage(role: "assistant", text: "canonical first", timestamp: now + 2),
+                    messageId: "msg-assistant-first",
+                    messageSeq: 2)))
+
+        try await waitUntil("canonical assistant visible once") {
+            await MainActor.run {
+                vm.messages.count(where: { msg in
+                    msg.role == "assistant" && msg.content.first?.text == "canonical first"
+                }) == 1
+            }
+        }
+
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: runId,
+                    sessionKey: "main",
+                    state: "final",
+                    message: chatTextMessage(role: "assistant", text: "canonical first", timestamp: now + 1),
+                    errorMessage: nil)))
+
+        try await Task.sleep(nanoseconds: 50_000_000)
+        #expect(await MainActor.run {
+            let matches = vm.messages.filter { msg in
+                msg.role == "assistant" && msg.content.first?.text == "canonical first"
+            }
+            return matches.count == 1 && matches.first?.timestamp == now + 2
+        })
+
+        await finalRefreshGate.release()
+    }
+
+    @Test func `later identical session reply does not adopt prior turn provisional final`() async throws {
+        let sessionId = "sess-main"
+        let now = Date().timeIntervalSince1970 * 1000
+        let history = historyPayload(sessionId: sessionId)
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history, history],
+            sendMessageHook: { runId in
+                OpenClawChatSendResponse(runId: runId, status: "pending")
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "first turn")
+        try await waitUntil("first pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
+        let firstRunId = try await waitForLastSentRunId(transport)
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: firstRunId,
+                    sessionKey: "main",
+                    state: "final",
+                    message: chatTextMessage(role: "assistant", text: "OK", timestamp: now + 1),
+                    errorMessage: nil)))
+
+        try await waitUntil("first provisional final visible") {
+            await MainActor.run {
+                vm.messages.count(where: { msg in
+                    msg.role == "assistant" && msg.content.first?.text == "OK"
+                }) == 1
+            }
+        }
+
+        await sendUserMessage(vm, text: "second turn")
+        try await waitUntil("second pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
+
+        transport.emit(
+            .sessionMessage(
+                OpenClawSessionMessageEventPayload(
+                    sessionKey: "agent:main:main",
+                    message: chatTextModelMessage(role: "assistant", text: "OK", timestamp: now + 4),
+                    messageId: "msg-second-assistant",
+                    messageSeq: 4)))
+
+        try await waitUntil("second identical reply appends after second user") {
+            await MainActor.run {
+                let okReplies = vm.messages.filter { msg in
+                    msg.role == "assistant" && msg.content.first?.text == "OK"
+                }
+                return okReplies.count == 2 && vm.messages.last?.timestamp == now + 4
+            }
+        }
+    }
+
     @Test func `completion wait refreshes history and clears pending run`() async throws {
         let sessionId = "sess-main"
         let now = (Date().timeIntervalSince1970 * 1000) + 10000
@@ -878,6 +1082,50 @@ struct ChatViewModelTests {
         #expect(await transport.sentRunIds() == firstRunIds)
         #expect(await MainActor.run { vm.pendingRunCount } == 1)
         #expect(await MainActor.run { vm.input } == "second")
+    }
+
+    @Test func terminalOkSendAckClearsPendingRunWithoutWaitingForCompletion() async throws {
+        let sessionId = "sess-main"
+        let history = historyPayload(sessionId: sessionId, messages: [])
+        let (transport, vm) = await makeViewModel(historyResponses: [history, history])
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "cached")
+        try await waitUntil("terminal ok ack clears pending run") {
+            await MainActor.run { vm.pendingRunCount == 0 && !vm.isSending }
+        }
+
+        #expect(await MainActor.run { vm.errorText } == nil)
+        #expect(await transport.waitCompletionRunIds().isEmpty)
+        #expect(await MainActor.run { vm.messages.containsUserText("cached") })
+    }
+
+    @Test func terminalTimeoutSendAckSurfacesErrorAndAllowsNextSend() async throws {
+        let sessionId = "sess-main"
+        let history = historyPayload(sessionId: sessionId, messages: [])
+        let sendCount = AsyncCounter()
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [history],
+            sendMessageHook: { runId in
+                let count = await sendCount.increment()
+                return OpenClawChatSendResponse(
+                    runId: runId,
+                    status: count == 1 ? "timeout" : "ok")
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: sessionId)
+
+        await sendUserMessage(vm, text: "first")
+        try await waitUntil("timeout ack clears pending run") {
+            await MainActor.run { vm.pendingRunCount == 0 && !vm.isSending }
+        }
+        #expect(await transport.sentRunIds().count == 1)
+        #expect(await MainActor.run { vm.errorText } == "Chat failed before the run started; try again.")
+        #expect(await MainActor.run { !vm.messages.containsUserText("first") })
+
+        await sendUserMessage(vm, text: "second")
+        try await waitUntil("second send is accepted after timeout ack") {
+            await transport.sentRunIds().count == 2
+        }
     }
 
     @Test func `keeps optimistic user message when final refresh returns only assistant history`() async throws {
@@ -1394,7 +1642,11 @@ struct ChatViewModelTests {
     }
 
     @Test func `dedupes gateway echo of local user message`() async throws {
-        let (transport, vm) = await makeViewModel(historyResponses: [historyPayload()])
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sendMessageHook: { runId in
+                OpenClawChatSendResponse(runId: runId, status: "pending")
+            })
 
         await MainActor.run { vm.load() }
         try await waitUntil("bootstrap history loaded") { await MainActor.run { vm.messages.isEmpty } }

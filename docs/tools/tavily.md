@@ -15,16 +15,22 @@ title: "Tavily"
 
 Tavily returns structured results optimized for LLM consumption with configurable search depth, topic filtering, domain filters, AI-generated answer summaries, and content extraction from URLs (including JavaScript-rendered pages).
 
-| Property      | Value                               |
-| ------------- | ----------------------------------- |
-| Plugin id     | `tavily`                            |
-| Auth          | `TAVILY_API_KEY` or config `apiKey` |
-| Base URL      | `https://api.tavily.com` (default)  |
-| Bundled tools | `tavily_search`, `tavily_extract`   |
+| Property  | Value                               |
+| --------- | ----------------------------------- |
+| Plugin id | `tavily`                            |
+| Package   | `@openclaw/tavily-plugin`           |
+| Auth      | `TAVILY_API_KEY` or config `apiKey` |
+| Base URL  | `https://api.tavily.com` (default)  |
+| Tools     | `tavily_search`, `tavily_extract`   |
 
 ## Getting started
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install @openclaw/tavily-plugin
+    ```
+  </Step>
   <Step title="Get an API key">
     Create a Tavily account at [tavily.com](https://tavily.com), then generate an API key in the dashboard.
   </Step>
@@ -60,7 +66,7 @@ Tavily returns structured results optimized for LLM consumption with configurabl
 </Steps>
 
 <Tip>
-Choosing Tavily in onboarding or `openclaw configure --section web` enables the bundled Tavily plugin automatically.
+Choosing Tavily in onboarding or `openclaw configure --section web` installs and enables the official Tavily plugin when needed.
 </Tip>
 
 ## Tool reference

@@ -1,6 +1,9 @@
 // Isolated agent delivery target tests cover target resolution for cron runs.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
+import type {
+  ChannelDirectoryEntry,
+  ChannelOutboundAdapter,
+} from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
@@ -741,6 +744,57 @@ describe("resolveDeliveryTarget", () => {
     expect(result.threadId).toBeUndefined();
   });
 
+  it("resolves cron reserved explicit targets through directory entries", async () => {
+    setMainSessionEntry(undefined);
+    const listGroups = vi.fn(async () => [
+      {
+        kind: "group",
+        id: "-1002458651455",
+        name: "current",
+        handle: "@current",
+      } satisfies ChannelDirectoryEntry,
+    ]);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            ...createOutboundTestPlugin({
+              id: "telegram",
+              outbound: createStubOutbound("Telegram"),
+              capabilities: { chatTypes: ["direct", "group", "channel"] },
+              messaging: {
+                ...telegramMessagingForTest,
+                normalizeTarget: normalizeTelegramTargetForDeliveryTest,
+                targetResolver: {
+                  reservedLiterals: ["current", "self", "this", "me"],
+                  hint: "<chatId>",
+                },
+              },
+            }),
+            directory: { listGroups },
+          },
+        },
+      ]),
+    );
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "telegram",
+      to: "current",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("-1002458651455");
+    expect(result.threadId).toBeUndefined();
+    expect(listGroups).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: undefined,
+        query: "current",
+      }),
+    );
+  });
+
   it("uses canonical route targets even when the route has no thread", async () => {
     setMainSessionEntry(undefined);
     setActivePluginRegistry(
@@ -1109,6 +1163,29 @@ describe("resolveDeliveryTarget", () => {
 
     const result = await resolveForAgent({ cfg: makeCfg({ bindings: [] }) });
     expect(result.threadId).toBe("thread-2");
+  });
+
+  it("can resolve the same explicit recipient without inheriting its session threadId", async () => {
+    setLastSessionEntry({
+      sessionId: "sess-3",
+      lastChannel: "forum",
+      lastTo: "room:default",
+      lastThreadId: "thread-2",
+    });
+
+    const result = await resolveDeliveryTarget(
+      makeCfg({ bindings: [] }),
+      AGENT_ID,
+      {
+        channel: "forum",
+        to: "room:default",
+      },
+      { inheritSessionThread: false },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("room:default");
+    expect(result.threadId).toBeUndefined();
   });
 
   it("does not carry a Telegram topic threadId to a bare explicit group target", async () => {

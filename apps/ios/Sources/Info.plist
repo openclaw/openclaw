@@ -57,7 +57,7 @@
 	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
 	<string>OpenClaw uses your calendars to add events when you enable calendar access.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>OpenClaw can capture photos or short video clips when requested via the gateway.</string>
+	<string>OpenClaw uses the camera when you scan a Gateway setup QR code or ask your paired Gateway or assistant to capture a photo or short video from this iPhone, for example to connect to your Gateway or show your assistant a document, device screen, or workspace.</string>
 	<key>NSContactsUsageDescription</key>
 	<string>OpenClaw uses your contacts so you can search and reference people while using the assistant.</string>
 	<key>NSLocalNetworkUsageDescription</key>
@@ -82,14 +82,10 @@
 	<string>$(OPENCLAW_APP_GROUP_ID)</string>
 	<key>OpenClawCanonicalVersion</key>
 	<string>$(OPENCLAW_IOS_VERSION)</string>
-	<key>OpenClawPushAPNsEnvironment</key>
-	<string>$(OPENCLAW_PUSH_APNS_ENVIRONMENT)</string>
-	<key>OpenClawPushDistribution</key>
-	<string>$(OPENCLAW_PUSH_DISTRIBUTION)</string>
+	<key>OpenClawPushMode</key>
+	<string>$(OPENCLAW_PUSH_MODE)</string>
 	<key>OpenClawPushRelayBaseURL</key>
 	<string>$(OPENCLAW_PUSH_RELAY_BASE_URL)</string>
-	<key>OpenClawPushTransport</key>
-	<string>$(OPENCLAW_PUSH_TRANSPORT)</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

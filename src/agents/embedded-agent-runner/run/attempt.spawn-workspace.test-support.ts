@@ -57,6 +57,7 @@ type SessionManagerMocks = {
   resetLeaf: UnknownMock;
   buildSessionContext: Mock<() => { messages: AgentMessage[] }>;
   appendCustomEntry: UnknownMock;
+  rewriteFile: UnknownMock;
   flushPendingToolResults: UnknownMock;
   clearPendingToolResults: UnknownMock;
   removeTrailingEntries: UnknownMock;
@@ -207,6 +208,7 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     resetLeaf: vi.fn(),
     buildSessionContext: vi.fn<() => { messages: AgentMessage[] }>(() => ({ messages: [] })),
     appendCustomEntry: vi.fn(),
+    rewriteFile: vi.fn(),
     flushPendingToolResults: vi.fn(),
     clearPendingToolResults: vi.fn(),
     removeTrailingEntries: vi.fn(() => 0),
@@ -389,6 +391,14 @@ vi.mock("../../bootstrap-files.js", async () => {
     resolveBootstrapContextForRun: hoisted.resolveBootstrapContextForRunMock,
     resolveContextInjectionMode: hoisted.resolveContextInjectionModeMock,
     hasCompletedBootstrapTurn: hoisted.hasCompletedBootstrapTurnMock,
+  };
+});
+
+vi.mock("../../workspace.js", async () => {
+  const actual = await vi.importActual<typeof import("../../workspace.js")>("../../workspace.js");
+  return {
+    ...actual,
+    isWorkspaceBootstrapPending: hoisted.isWorkspaceBootstrapPendingMock,
   };
 });
 
@@ -1025,6 +1035,7 @@ export function resetEmbeddedAttemptHarness(
     .mockReset()
     .mockReturnValue({ messages: params.sessionMessages ?? [] });
   hoisted.sessionManager.appendCustomEntry.mockReset();
+  hoisted.sessionManager.rewriteFile.mockReset();
   if (params.subscribeImpl) {
     hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation(params.subscribeImpl);
   }

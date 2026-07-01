@@ -114,10 +114,44 @@ class GatewayConfigResolverTest {
   }
 
   @Test
-  fun parseGatewayEndpointRejectsMdnsCleartextWsUrls() {
+  fun parseGatewayEndpointAllowsMdnsCleartextWsUrls() {
     val parsed = parseGatewayEndpoint("ws://gateway.local:18789")
 
-    assertNull(parsed)
+    assertEquals(
+      GatewayEndpointConfig(
+        host = "gateway.local",
+        port = 18789,
+        tls = false,
+        displayUrl = "http://gateway.local:18789",
+      ),
+      parsed,
+    )
+  }
+
+  @Test
+  fun parseGatewayEndpointAllowsNormalizedMdnsCleartextWsUrls() {
+    val parsed = parseGatewayEndpoint("ws://GATEWAY.LOCAL.:18789")
+
+    assertEquals("GATEWAY.LOCAL.", parsed?.host)
+    assertEquals(18789, parsed?.port)
+    assertEquals(false, parsed?.tls)
+  }
+
+  @Test
+  fun parseGatewayEndpointRejectsMdnsSuffixAndLabelBypasses() {
+    val rejected =
+      listOf(
+        "ws://gateway.local.evil.com:18789",
+        "ws://gatewaylocal:18789",
+        "ws://local:18789",
+        "ws://.local:18789",
+        "ws://gateway..local:18789",
+        "ws://gateway.local%25wlan0:18789",
+      )
+
+    for (url in rejected) {
+      assertNull(url, parseGatewayEndpoint(url))
+    }
   }
 
   @Test
@@ -204,17 +238,18 @@ class GatewayConfigResolverTest {
   }
 
   @Test
-  fun resolveScannedSetupCodeAcceptsRawSetupCode() {
+  fun resolveScannedSetupCodeResultAcceptsRawSetupCode() {
     val setupCode =
       encodeSetupCode("""{"url":"wss://gateway.example:18789","bootstrapToken":"bootstrap-1"}""")
 
-    val resolved = resolveScannedSetupCode(setupCode)
+    val resolved = resolveScannedSetupCodeResult(setupCode)
 
-    assertEquals(setupCode, resolved)
+    assertEquals(setupCode, resolved.setupCode)
+    assertNull(resolved.error)
   }
 
   @Test
-  fun resolveScannedSetupCodeAcceptsQrJsonPayload() {
+  fun resolveScannedSetupCodeResultAcceptsQrJsonPayload() {
     val setupCode =
       encodeSetupCode("""{"url":"wss://gateway.example:18789","bootstrapToken":"bootstrap-1"}""")
     val qrJson =
@@ -227,49 +262,66 @@ class GatewayConfigResolverTest {
       }
       """.trimIndent()
 
-    val resolved = resolveScannedSetupCode(qrJson)
+    val resolved = resolveScannedSetupCodeResult(qrJson)
 
-    assertEquals(setupCode, resolved)
+    assertEquals(setupCode, resolved.setupCode)
+    assertNull(resolved.error)
   }
 
   @Test
-  fun resolveScannedSetupCodeRejectsInvalidInput() {
-    val resolved = resolveScannedSetupCode("not-a-valid-setup-code")
-    assertNull(resolved)
+  fun resolveScannedSetupCodeResultRejectsInvalidInput() {
+    val resolved = resolveScannedSetupCodeResult("not-a-valid-setup-code")
+    assertNull(resolved.setupCode)
+    assertEquals(GatewayEndpointValidationError.INVALID_URL, resolved.error)
   }
 
   @Test
-  fun resolveScannedSetupCodeRejectsJsonWithInvalidSetupCode() {
+  fun resolveScannedSetupCodeResultRejectsJsonWithInvalidSetupCode() {
     val qrJson = """{"setupCode":"invalid"}"""
-    val resolved = resolveScannedSetupCode(qrJson)
-    assertNull(resolved)
+    val resolved = resolveScannedSetupCodeResult(qrJson)
+    assertNull(resolved.setupCode)
+    assertEquals(GatewayEndpointValidationError.INVALID_URL, resolved.error)
   }
 
   @Test
-  fun resolveScannedSetupCodeRejectsJsonWithNonStringSetupCode() {
+  fun resolveScannedSetupCodeResultRejectsJsonWithNonStringSetupCode() {
     val qrJson = """{"setupCode":{"nested":"value"}}"""
-    val resolved = resolveScannedSetupCode(qrJson)
-    assertNull(resolved)
+    val resolved = resolveScannedSetupCodeResult(qrJson)
+    assertNull(resolved.setupCode)
+    assertEquals(GatewayEndpointValidationError.INVALID_URL, resolved.error)
   }
 
   @Test
-  fun resolveScannedSetupCodeRejectsNonLoopbackCleartextGateway() {
+  fun resolveScannedSetupCodeResultRejectsNonLoopbackCleartextGateway() {
     val setupCode =
       encodeSetupCode("""{"url":"ws://attacker.example:18789","bootstrapToken":"bootstrap-1"}""")
 
-    val resolved = resolveScannedSetupCode(setupCode)
+    val resolved = resolveScannedSetupCodeResult(setupCode)
 
-    assertNull(resolved)
+    assertNull(resolved.setupCode)
+    assertEquals(GatewayEndpointValidationError.INSECURE_REMOTE_URL, resolved.error)
   }
 
   @Test
-  fun resolveScannedSetupCodeAcceptsPrivateLanCleartextGateway() {
+  fun resolveScannedSetupCodeResultAcceptsPrivateLanCleartextGateway() {
     val setupCode =
       encodeSetupCode("""{"url":"ws://192.168.31.100:18789","bootstrapToken":"bootstrap-1"}""")
 
-    val resolved = resolveScannedSetupCode(setupCode)
+    val resolved = resolveScannedSetupCodeResult(setupCode)
 
-    assertEquals(setupCode, resolved)
+    assertEquals(setupCode, resolved.setupCode)
+    assertNull(resolved.error)
+  }
+
+  @Test
+  fun resolveScannedSetupCodeResultAcceptsMdnsCleartextGateway() {
+    val setupCode =
+      encodeSetupCode("""{"url":"ws://gateway.local:18789","bootstrapToken":"bootstrap-1"}""")
+
+    val resolved = resolveScannedSetupCodeResult(setupCode)
+
+    assertEquals(setupCode, resolved.setupCode)
+    assertNull(resolved.error)
   }
 
   @Test
@@ -309,6 +361,22 @@ class GatewayConfigResolverTest {
         port = 18789,
         tls = false,
         displayUrl = "http://192.168.1.20:18789",
+      ),
+      parsed.config,
+    )
+    assertNull(parsed.error)
+  }
+
+  @Test
+  fun parseGatewayEndpointResultAllowsMdnsCleartextGateway() {
+    val parsed = parseGatewayEndpointResult("ws://gateway.local:18789")
+
+    assertEquals(
+      GatewayEndpointConfig(
+        host = "gateway.local",
+        port = 18789,
+        tls = false,
+        displayUrl = "http://gateway.local:18789",
       ),
       parsed.config,
     )
@@ -379,6 +447,34 @@ class GatewayConfigResolverTest {
     assertEquals("gateway.example", resolved?.host)
     assertEquals(443, resolved?.port)
     assertEquals(true, resolved?.tls)
+    assertEquals("bootstrap-1", resolved?.bootstrapToken)
+    assertNull(resolved?.token?.takeIf { it.isNotEmpty() })
+    assertNull(resolved?.password?.takeIf { it.isNotEmpty() })
+  }
+
+  @Test
+  fun resolveGatewayConnectConfigAllowsMdnsCleartextSetupCode() {
+    val setupCode =
+      encodeSetupCode("""{"url":"ws://gateway.local:18789","bootstrapToken":"bootstrap-1"}""")
+
+    val resolved =
+      resolveGatewayConnectConfig(
+        useSetupCode = true,
+        setupCode = setupCode,
+        savedManualHost = "",
+        savedManualPort = "",
+        savedManualTls = false,
+        manualHostInput = "",
+        manualPortInput = "",
+        manualTlsInput = false,
+        fallbackBootstrapToken = "",
+        fallbackToken = "shared-token",
+        fallbackPassword = "shared-password",
+      )
+
+    assertEquals("gateway.local", resolved?.host)
+    assertEquals(18789, resolved?.port)
+    assertEquals(false, resolved?.tls)
     assertEquals("bootstrap-1", resolved?.bootstrapToken)
     assertNull(resolved?.token?.takeIf { it.isNotEmpty() })
     assertNull(resolved?.password?.takeIf { it.isNotEmpty() })
@@ -470,6 +566,28 @@ class GatewayConfigResolverTest {
       )
 
     assertEquals("192.168.31.100", resolved?.host)
+    assertEquals(18789, resolved?.port)
+    assertEquals(false, resolved?.tls)
+  }
+
+  @Test
+  fun resolveGatewayConnectConfigAllowsMdnsManualCleartextEndpoint() {
+    val resolved =
+      resolveGatewayConnectConfig(
+        useSetupCode = false,
+        setupCode = "",
+        savedManualHost = "",
+        savedManualPort = "",
+        savedManualTls = false,
+        manualHostInput = "gateway.local",
+        manualPortInput = "18789",
+        manualTlsInput = false,
+        fallbackBootstrapToken = "bootstrap-1",
+        fallbackToken = "",
+        fallbackPassword = "",
+      )
+
+    assertEquals("gateway.local", resolved?.host)
     assertEquals(18789, resolved?.port)
     assertEquals(false, resolved?.tls)
   }

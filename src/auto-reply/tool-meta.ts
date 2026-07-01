@@ -7,21 +7,13 @@ type ToolAggregateOptions = {
   markdown?: boolean;
 };
 
-/** Shortens user-home paths inside arbitrary tool metadata. */
-export function shortenMeta(meta: string): string {
-  if (!meta) {
-    return meta;
-  }
-  return shortenHomeInString(meta);
-}
-
 /** Formats one grouped tool-progress label from a tool name and metadata entries. */
 export function formatToolAggregate(
   toolName?: string,
   metas?: string[],
   options?: ToolAggregateOptions,
 ): string {
-  const filtered = (metas ?? []).filter(Boolean).map(shortenMeta);
+  const filtered = (metas ?? []).filter(Boolean).map(shortenHomeInString);
   const display = resolveToolDisplay({ name: toolName });
   const normalizedToolName = normalizeLowercaseStringOrEmpty(toolName);
   const compactCommandSummary =

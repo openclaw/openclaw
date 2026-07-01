@@ -14,6 +14,7 @@ import {
   isGenericProviderInternalError,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
+import { truncateUtf16Safe } from "../../shared/utf16-slice.js";
 export {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
@@ -75,6 +76,10 @@ export {
 const log = createSubsystemLogger("errors");
 const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
 export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
+export const AUTH_INVALID_TOKEN_USER_TEXT =
+  "Authentication failed (provider returned HTTP 401). " +
+  "Your provider token may have expired — try the request again in a moment. " +
+  "If the failure persists, re-authenticate this provider.";
 const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
   "LLM request failed: provider rejected the request schema or tool payload.";
 const MODEL_NOT_FOUND_USER_TEXT =
@@ -448,6 +453,8 @@ const AUTH_INVALID_TOKEN_HINT_RE =
   /\bunauthorized\b|\b(?:invalid|incorrect|expired|stale)[_\s-]?api[_\s-]?key\b|\b(?:invalid|incorrect|expired|stale)\s+(?:token|jwt|credential|api[_\s-]?key)\b|\b(?:token|jwt|credential|api[_\s-]?key)\s+(?:is\s+)?(?:invalid|incorrect|expired|stale)\b/i;
 const HTML_BODY_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const HTML_CLOSE_RE = /<\/html>/i;
+const CLOUDFLARE_CHALLENGE_RE =
+  /Enable\s+JavaScript\s+and\s+cookies\s+to\s+continue|cf-browser-verification|__cf_challenge|cdn-cgi\/challenge-platform|challenge-error-text/i;
 const PROXY_ERROR_RE =
   /\bproxyconnect\b|\bhttps?_proxy\b|\b407\b|\bproxy authentication required\b|\btunnel connection failed\b|\bconnect tunnel\b|\bsocks proxy\b|\bproxy error\b/i;
 const DNS_ERROR_RE = /\benotfound\b|\beai_again\b|\bgetaddrinfo\b|\bno such host\b|\bdns\b/i;
@@ -513,6 +520,10 @@ function isHtmlErrorResponse(raw: string, status?: number): boolean {
   }
   const rest = extractLeadingHttpStatus(candidate)?.rest ?? candidate;
   return HTML_BODY_RE.test(rest) && HTML_CLOSE_RE.test(rest);
+}
+
+function isCloudflareChallengeResponse(message: string): boolean {
+  return CLOUDFLARE_CHALLENGE_RE.test(message);
 }
 
 function isTransportHtmlErrorStatus(status: number | undefined): boolean {
@@ -917,6 +928,26 @@ function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason
   }
 }
 
+function classifyFailoverReasonFromErrorType(raw: string | undefined): FailoverReason | null {
+  const normalized = normalizeOptionalLowercaseString(raw);
+  switch (normalized) {
+    case "server_error":
+    case "upstream_error":
+      return "server_error";
+    case "overloaded_error":
+      return "overloaded";
+    default:
+      return null;
+  }
+}
+
+function classifyFailoverClassificationFromErrorType(
+  raw: string | undefined,
+): FailoverClassification | null {
+  const reason = classifyFailoverReasonFromErrorType(raw);
+  return reason ? toReasonClassification(reason) : null;
+}
+
 function isProvider(provider: string | undefined, match: string): boolean {
   const normalized = normalizeOptionalLowercaseString(provider);
   return Boolean(normalized && normalized.includes(match));
@@ -1176,9 +1207,14 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
           errorType: signal.errorType,
         })
       : null;
+  const messageOrDetailClassification = mergeMessageAndDetailClassification(
+    messageClassification,
+    detailClassification,
+  );
+  const errorTypeClassification = classifyFailoverClassificationFromErrorType(signal.errorType);
   const effectiveMessageClassification = providerPluginReason
     ? toReasonClassification(providerPluginReason)
-    : mergeMessageAndDetailClassification(messageClassification, detailClassification);
+    : (messageOrDetailClassification ?? errorTypeClassification);
   const codeReason = classifyFailoverReasonFromCode(signal.code);
   if (codeReason === "auth_permanent") {
     return toReasonClassification(codeReason);
@@ -1235,6 +1271,13 @@ export function classifyProviderRuntimeFailureKind(
     return "proxy";
   }
   if (message && isHtmlErrorResponse(message, status)) {
+    // Cloudflare challenge pages block programmatic requests at the CDN layer.
+    // These are upstream gateway blocks, not authentication failures — surface
+    // the more accurate "upstream_html" message, which already mentions
+    // "CDN or gateway (e.g. Cloudflare) blocked the request".
+    if (status === 403 && isCloudflareChallengeResponse(message)) {
+      return "upstream_html";
+    }
     return status === 401 || status === 403 ? "auth_html" : "upstream_html";
   }
   const failoverClassification = classifyFailoverSignal({
@@ -1419,11 +1462,7 @@ export function formatAssistantErrorText(
   }
 
   if (providerRuntimeFailureKind === "auth_invalid_token") {
-    return (
-      "Authentication failed (provider returned HTTP 401). " +
-      "Your provider token may have expired — try the request again in a moment. " +
-      "If the failure persists, re-authenticate this provider."
-    );
+    return AUTH_INVALID_TOKEN_USER_TEXT;
   }
 
   if (providerRuntimeFailureKind === "upstream_html") {
@@ -1540,7 +1579,7 @@ export function formatAssistantErrorText(
   if (raw.length > 600) {
     log.warn(`Long error truncated: ${raw.slice(0, 200)}`);
   }
-  return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
+  return raw.length > 600 ? `${truncateUtf16Safe(raw, 600)}…` : raw;
 }
 
 export function isRawAssistantErrorPassthrough(params: {
@@ -1560,7 +1599,7 @@ export function isRawAssistantErrorPassthrough(params: {
     friendlyError.startsWith("HTTP ");
   return (
     friendlyError === rawError ||
-    (rawError.length > 600 && friendlyError === `${rawError.slice(0, 600)}…`) ||
+    (rawError.length > 600 && friendlyError === `${truncateUtf16Safe(rawError, 600)}…`) ||
     Boolean(parsedMessage && hasRawDerivedProviderPrefix) ||
     Boolean(leadingStatusRest && friendlyError.startsWith("HTTP "))
   );
@@ -1657,8 +1696,17 @@ function isStructuredServerErrorMessage(raw: string): boolean {
   if (!raw) {
     return false;
   }
+  const parsedType = normalizeOptionalLowercaseString(parseApiErrorInfo(raw)?.type);
+  if (parsedType === "server_error" || parsedType === "upstream_error") {
+    return true;
+  }
   const value = normalizeLowercaseStringOrEmpty(raw);
-  return value.includes('"type":"server_error"') || value.includes('"code":"server_error"');
+  return (
+    value.includes('"type":"server_error"') ||
+    value.includes('"code":"server_error"') ||
+    value.includes('"type":"upstream_error"') ||
+    value.includes('"code":"upstream_error"')
+  );
 }
 
 export function parseImageDimensionError(raw: string): {
@@ -1723,8 +1771,6 @@ export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean
   }
   return isAuthErrorMessage(msg.errorMessage ?? "");
 }
-
-export { isModelNotFoundErrorMessage };
 
 function isCliSessionExpiredErrorMessage(raw: string): boolean {
   if (!raw) {

@@ -1,6 +1,7 @@
 // Azure OpenAI Responses provider adapts Azure deployments to Responses API streams.
 import OpenAI, { AzureOpenAI } from "openai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
+import { buildGuardedModelFetch } from "../../agents/provider-transport-fetch.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "../../shared/azure-openai-responses-client-compat.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import type {
@@ -23,12 +24,7 @@ import {
 import { buildBaseOptions } from "./simple-options.js";
 
 const DEFAULT_AZURE_API_VERSION = "v1";
-const AZURE_TOOL_CALL_PROVIDERS = new Set([
-  "openai",
-  "openai",
-  "opencode",
-  "azure-openai-responses",
-]);
+const AZURE_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode", "azure-openai-responses"]);
 
 function resolveDeploymentName(
   model: Model<"azure-openai-responses">,
@@ -110,10 +106,11 @@ export const streamSimpleAzureOpenAIResponses: StreamFunction<
   }
 
   const base = buildBaseOptions(model, options, apiKey);
+  const reasoningEffort = resolveResponsesReasoningEffort(model, options?.reasoning);
 
   return streamAzureOpenAIResponses(model, context, {
     ...base,
-    reasoningEffort: resolveResponsesReasoningEffort(model, options?.reasoning),
+    reasoningEffort: reasoningEffort === "max" ? "xhigh" : reasoningEffort,
   } satisfies AzureOpenAIResponsesOptions);
 };
 
@@ -203,6 +200,7 @@ function createClient(
   }
 
   const { baseUrl, apiVersion } = resolveAzureConfig(model, options);
+  const guardedFetch = buildGuardedModelFetch({ ...model, baseUrl });
 
   if (isOpenAICompatibleAzureResponsesBaseUrl(baseUrl)) {
     return new OpenAI({
@@ -210,6 +208,7 @@ function createClient(
       dangerouslyAllowBrowser: true,
       defaultHeaders: headers,
       baseURL: baseUrl,
+      fetch: guardedFetch,
     });
   }
 
@@ -219,6 +218,7 @@ function createClient(
     dangerouslyAllowBrowser: true,
     defaultHeaders: headers,
     baseURL: baseUrl,
+    fetch: guardedFetch,
   });
 }
 

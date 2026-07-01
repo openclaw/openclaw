@@ -5,6 +5,7 @@
  * snapshots, DOM text, and selector lookup on top of the CDP socket helpers.
  */
 import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import {
   appendCdpPath,
@@ -298,25 +299,6 @@ async function prepareCdpPageSession(send: CdpSendFn, sessionId?: string): Promi
   ]);
   await send("Runtime.runIfWaitingForDebugger", undefined, sessionId).catch(() => {});
 }
-
-/** Runtime.evaluate remote-object subset used by CDP helpers. */
-export type CdpRemoteObject = {
-  type: string;
-  subtype?: string;
-  value?: unknown;
-  description?: string;
-  unserializableValue?: string;
-  preview?: unknown;
-};
-
-/** Exception details surfaced from CDP Runtime.evaluate. */
-export type CdpExceptionDetails = {
-  text?: string;
-  lineNumber?: number;
-  columnNumber?: number;
-  exception?: CdpRemoteObject;
-  stackTrace?: unknown;
-};
 
 /** Normalized accessibility tree node returned by ARIA snapshots. */
 export type AriaSnapshotNode = {
@@ -639,7 +621,7 @@ async function findCursorInteractiveElements(
           }
           el.setAttribute("${attr}", String(out.length));
           out.push({
-            text: String(el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 100),
+            text: String(el.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 101),
             tagName,
             hasCursorPointer,
             hasOnClick,
@@ -656,7 +638,10 @@ async function findCursorInteractiveElements(
     sessionId,
   ).catch(() => null)) as { result?: { value?: unknown } } | null;
   const entries = Array.isArray(evaluated?.result?.value)
-    ? (evaluated.result.value as CursorInteractiveInfo[])
+    ? (evaluated.result.value as CursorInteractiveInfo[]).map((entry) => {
+        entry.text = truncateUtf16Safe(entry.text, 100);
+        return entry;
+      })
     : [];
   if (!entries.length) {
     return new Map();
@@ -798,6 +783,7 @@ async function buildCdpRoleSnapshot(params: {
 
   const counts = new Map<string, number>();
   const refsByKey = new Map<string, string[]>();
+  const nodesByRef = new Map<string, RoleTreeNode>();
   const refs: Record<string, CdpRoleRef> = {};
   for (const node of tree) {
     const role = node.role.toLowerCase();
@@ -816,7 +802,13 @@ async function buildCdpRoleSnapshot(params: {
     params.nextRef.value += 1;
     node.ref = ref;
     node.nth = nth;
-    refsByKey.set(key, [...(refsByKey.get(key) ?? []), ref]);
+    const refsForKey = refsByKey.get(key);
+    if (refsForKey) {
+      refsForKey.push(ref);
+    } else {
+      refsByKey.set(key, [ref]);
+    }
+    nodesByRef.set(ref, node);
     refs[ref] = {
       role,
       ...(node.name ? { name: node.name } : {}),
@@ -832,7 +824,7 @@ async function buildCdpRoleSnapshot(params: {
     const ref = refList[0];
     if (ref) {
       delete refs[ref]?.nth;
-      const node = tree.find((entry) => entry.ref === ref);
+      const node = nodesByRef.get(ref);
       if (node) {
         delete node.nth;
       }

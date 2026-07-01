@@ -6,6 +6,7 @@ import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
 import { formatGoalDetail, formatGoalSummary } from "../session-goal.ts";
+import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import {
@@ -18,6 +19,7 @@ import type {
   GatewaySessionRow,
   SessionRunStatus,
   GatewayThinkingLevelOption,
+  FastMode,
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../types.ts";
@@ -65,7 +67,7 @@ export type SessionsProps = {
     patch: {
       label?: string | null;
       thinkingLevel?: string | null;
-      fastMode?: boolean | null;
+      fastMode?: FastMode | null;
       verboseLevel?: string | null;
       reasoningLevel?: string | null;
     },
@@ -86,7 +88,7 @@ export type SessionsProps = {
 
 const DEFAULT_THINK_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
 const VERBOSE_LEVEL_VALUES = ["", "off", "on", "full"] as const;
-const FAST_LEVEL_VALUES = ["", "on", "off"] as const;
+const FAST_LEVEL_VALUES = ["", "auto", "on", "off"] as const;
 const REASONING_LEVELS = ["", "off", "on", "stream"] as const;
 const PAGE_SIZES = [10, 25, 50, 100] as const;
 
@@ -97,31 +99,21 @@ function getAgentIdentity(
   return Object.hasOwn(agentIdentityById, agentId) ? (agentIdentityById[agentId] ?? null) : null;
 }
 
-function rowMatchesSessionDefaults(
-  row: GatewaySessionRow,
-  defaults: SessionsListResult["defaults"] | undefined,
-): boolean {
-  return (
-    (!row.modelProvider || row.modelProvider === defaults?.modelProvider) &&
-    (!row.model || row.model === defaults?.model)
-  );
-}
-
 function resolveThinkLevelOptions(
   row: GatewaySessionRow,
   defaults?: SessionsListResult["defaults"],
 ): readonly { value: string; label: string }[] {
-  const sessionModelMatchesDefaults = rowMatchesSessionDefaults(row, defaults);
+  const modelMatchesDefaults = sessionModelMatchesDefaults(row, defaults);
   const defaultLabel = formatInheritedThinkingLabel(
-    row.thinkingDefault ?? (sessionModelMatchesDefaults ? defaults?.thinkingDefault : undefined),
+    row.thinkingDefault ?? (modelMatchesDefaults ? defaults?.thinkingDefault : undefined),
   );
   const options: readonly GatewayThinkingLevelOption[] = row.thinkingLevels?.length
     ? row.thinkingLevels
-    : sessionModelMatchesDefaults && defaults?.thinkingLevels?.length
+    : modelMatchesDefaults && defaults?.thinkingLevels?.length
       ? defaults.thinkingLevels
       : (row.thinkingOptions?.length
           ? row.thinkingOptions
-          : sessionModelMatchesDefaults && defaults?.thinkingOptions?.length
+          : modelMatchesDefaults && defaults?.thinkingOptions?.length
             ? defaults.thinkingOptions
             : DEFAULT_THINK_LEVELS
         ).map((label) => ({
@@ -804,7 +796,14 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
     resolveThinkLevelOptions(row, props.result?.defaults),
     thinking,
   );
-  const fastMode = row.fastMode === true ? "on" : row.fastMode === false ? "off" : "";
+  const fastMode =
+    row.fastMode === "auto"
+      ? "auto"
+      : row.fastMode === true
+        ? "on"
+        : row.fastMode === false
+          ? "off"
+          : "";
   const fastLevels = withCurrentLabeledOption(buildFastLevelOptions(), fastMode);
   const verbose = row.verboseLevel ?? "";
   const verboseLevels = withCurrentLabeledOption(buildVerboseLevelOptions(), verbose);
@@ -1005,7 +1004,9 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
           style="padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); min-width: 90px;"
           @change=${(e: Event) => {
             const value = (e.target as HTMLSelectElement).value;
-            props.onPatch(row.key, { fastMode: value === "" ? null : value === "on" });
+            props.onPatch(row.key, {
+              fastMode: value === "" ? null : value === "auto" ? "auto" : value === "on",
+            });
           }}
         >
           ${fastLevels.map(

@@ -5,7 +5,10 @@ import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   loadRunCronIsolatedAgentTurn,
   makeCronSession,
+  callGatewayMock,
+  dispatchCronDeliveryMock,
   retireSessionMcpRuntimeMock,
+  resolveCronDeliveryPlanMock,
   resolveFastModeStateMock,
   resolveCronSessionMock,
   runEmbeddedAgentMock,
@@ -41,14 +44,16 @@ function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string
 }
 
 async function runFastModeCase(params: {
-  configFastMode: boolean;
-  expectedFastMode: boolean;
+  configFastMode: boolean | "auto";
+  configFastAutoOnSeconds?: number;
+  expectedFastMode: boolean | "auto";
+  expectedFastModeAutoOnSeconds?: number;
   expectedCleanupBundleMcpOnRunEnd?: boolean;
   expectedRetiredSessionId?: string;
   message: string;
   previousSessionId?: string;
   sessionId?: string;
-  sessionFastMode?: boolean;
+  sessionFastMode?: boolean | "auto";
   sessionTarget?: string;
 }) {
   const baseSession = makeCronSession();
@@ -66,11 +71,20 @@ async function runFastModeCase(params: {
   mockSuccessfulModelFallback();
   resolveFastModeStateMock.mockImplementation(({ cfg, sessionEntry }) => {
     const sessionFastMode = sessionEntry?.fastMode;
-    if (typeof sessionFastMode === "boolean") {
-      return { enabled: sessionFastMode };
+    if (typeof sessionFastMode === "boolean" || sessionFastMode === "auto") {
+      return {
+        mode: sessionFastMode,
+        enabled: sessionFastMode === "auto" ? true : sessionFastMode,
+        source: "session",
+        fastAutoOnSeconds: params.configFastAutoOnSeconds ?? 60,
+      };
     }
+    const mode = cfg.agents?.defaults?.models?.[OPENAI_GPT4_MODEL]?.params?.fastMode;
     return {
-      enabled: Boolean(cfg.agents?.defaults?.models?.[OPENAI_GPT4_MODEL]?.params?.fastMode),
+      mode,
+      enabled: mode === "auto" ? true : Boolean(mode),
+      source: "config",
+      fastAutoOnSeconds: params.configFastAutoOnSeconds ?? 60,
     };
   });
 
@@ -83,6 +97,9 @@ async function runFastModeCase(params: {
               [OPENAI_GPT4_MODEL]: {
                 params: {
                   fastMode: params.configFastMode,
+                  ...(params.configFastAutoOnSeconds === undefined
+                    ? {}
+                    : { fastAutoOnSeconds: params.configFastAutoOnSeconds }),
                 },
               },
             },
@@ -106,29 +123,27 @@ async function runFastModeCase(params: {
   expect(embeddedRunParams.provider).toBe("openai");
   expect(embeddedRunParams.model).toBe(EXPECTED_OPENAI_MODEL);
   expect(embeddedRunParams.fastMode).toBe(params.expectedFastMode);
+  expect(embeddedRunParams.fastModeAutoOnSeconds).toBe(params.expectedFastModeAutoOnSeconds ?? 60);
   expect(embeddedRunParams.cleanupBundleMcpOnRunEnd).toBe(
     params.expectedCleanupBundleMcpOnRunEnd ?? true,
   );
   expect(embeddedRunParams.allowGatewaySubagentBinding).toBe(true);
-  const isIsolated = (params.sessionTarget ?? "isolated") === "isolated";
+  const isDetached =
+    (params.sessionTarget ?? "isolated") === "isolated" ||
+    params.sessionTarget === "current" ||
+    params.sessionTarget?.startsWith("session:");
   if (params.expectedRetiredSessionId) {
-    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledOnce();
-    const [retireParams] = requireFirstMockCall(
-      retireSessionMcpRuntimeMock,
-      "retire session mcp runtime",
-    );
+    const retireParams = retireSessionMcpRuntimeMock.mock.calls[0]?.[0];
     expect(retireParams.sessionId).toBe(params.expectedRetiredSessionId);
     expect(retireParams.reason).toBe("cron-session-rollover");
-    return;
   }
-  if (isIsolated) {
-    // disposeCronRunContext now retires MCP for isolated sessions
-    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledOnce();
-    const [disposeRetireParams] = requireFirstMockCall(
-      retireSessionMcpRuntimeMock,
-      "dispose retire session mcp runtime",
+  if (isDetached) {
+    // disposeCronRunContext retires MCP for detached cron sessions.
+    expect(retireSessionMcpRuntimeMock).toHaveBeenCalledTimes(
+      params.expectedRetiredSessionId ? 2 : 1,
     );
-    expect(disposeRetireParams.reason).toBe("isolated-cron-dispose");
+    const disposeRetireParams = retireSessionMcpRuntimeMock.mock.calls.at(-1)?.[0];
+    expect(disposeRetireParams.reason).toBe("detached-cron-dispose");
   } else {
     expect(retireSessionMcpRuntimeMock).not.toHaveBeenCalled();
   }
@@ -137,11 +152,78 @@ async function runFastModeCase(params: {
 describe("runCronIsolatedAgentTurn — fast mode", () => {
   setupRunCronIsolatedAgentTurnSuite({ fast: true });
 
+  it("deletes the run-scoped cron session after delivery-none deleteAfterRun jobs", async () => {
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        job: makeIsolatedAgentJobFixture({
+          deleteAfterRun: true,
+          delivery: { mode: "none" },
+          payload: { kind: "agentTurn", message: "cleanup me", model: OPENAI_GPT4_MODEL },
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "sessions.delete",
+      params: {
+        key: "agent:default:cron:test",
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      },
+      timeoutMs: 10_000,
+    });
+  });
+
+  it("does not repeat deleteAfterRun cleanup after dispatch already handled it", async () => {
+    resolveCronDeliveryPlanMock.mockReturnValue({
+      requested: true,
+      mode: "announce",
+      channel: "messagechat",
+      to: "test-target",
+    });
+    dispatchCronDeliveryMock.mockImplementationOnce(
+      ({ deliveryPayloads, summary, outputText, synthesizedText }) => ({
+        delivered: true,
+        deliveryAttempted: true,
+        cronRunSessionCleanupAttempted: true,
+        summary,
+        outputText,
+        synthesizedText,
+        deliveryPayloads,
+      }),
+    );
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentParamsFixture({
+        job: makeIsolatedAgentJobFixture({
+          deleteAfterRun: true,
+          delivery: { mode: "announce", channel: "messagechat", to: "test-target" },
+          payload: { kind: "agentTurn", message: "cleanup once", model: OPENAI_GPT4_MODEL },
+        }),
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(dispatchCronDeliveryMock).toHaveBeenCalledOnce();
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("passes config-driven fast mode into embedded cron runs", async () => {
     await runFastModeCase({
       configFastMode: true,
       expectedFastMode: true,
       message: "test fast mode",
+    });
+  });
+
+  it("passes config-driven fast auto cutoff into embedded cron runs", async () => {
+    await runFastModeCase({
+      configFastMode: "auto",
+      configFastAutoOnSeconds: 30,
+      expectedFastMode: "auto",
+      expectedFastModeAutoOnSeconds: 30,
+      message: "test fast auto mode",
     });
   });
 
@@ -163,23 +245,21 @@ describe("runCronIsolatedAgentTurn — fast mode", () => {
     });
   });
 
-  it("preserves bundled MCP runtime state for persistent cron session targets", async () => {
+  it("cleans up bundled MCP runtime state for explicit session cron targets", async () => {
     await runFastModeCase({
       configFastMode: true,
       expectedFastMode: true,
-      expectedCleanupBundleMcpOnRunEnd: false,
-      message: "test persistent cron session",
+      message: "test explicit session cron target",
       sessionTarget: "session:agent:main:main:thread:9999",
     });
   });
 
-  it("retires the previous bundled MCP runtime when a persistent cron session rolls over", async () => {
+  it("cleans up bundled MCP runtime state when a detached cron session rolls over", async () => {
     await runFastModeCase({
       configFastMode: true,
       expectedFastMode: true,
-      expectedCleanupBundleMcpOnRunEnd: false,
       expectedRetiredSessionId: "stale-session-id",
-      message: "test persistent cron session rollover",
+      message: "test detached cron session rollover",
       previousSessionId: "stale-session-id",
       sessionId: "rotated-session-id",
       sessionTarget: "session:agent:main:main:thread:9999",

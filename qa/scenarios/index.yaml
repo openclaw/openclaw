@@ -29,6 +29,9 @@ title: OpenClaw QA Scenario Pack
 # - use `scenario.execution.kind: vitest`, `playwright`, or `script`
 #   plus `scenario.execution.path` for native tests or evidence producers that
 #   provide evidence without a top-level `flow`
+# - use `scenario.execution.suiteIsolation: isolated` for flow scenarios that
+#   mutate gateway/runtime state in non-obvious ways; add `isolationReason`
+#   so reviewers know why the suite scheduler must not share the worker
 # - use `runtimeParityTier` for runtime-pair gate membership: `standard`,
 #   `optional`, `live-only`, or `soak`
 # - treat the old `coverage: ["id"]` / `coverage: - id` list shape as invalid

@@ -220,7 +220,7 @@ jobs:
         with:
           name: ios-periphery-dead-code-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/ios-periphery
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 14
 
       - name: Fail on dead code

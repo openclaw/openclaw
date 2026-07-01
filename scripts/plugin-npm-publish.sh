@@ -2,16 +2,38 @@
 
 set -euo pipefail
 
-mode="${1:-}"
-package_dir="${2:-}"
+usage() {
+  echo "usage: bash scripts/plugin-npm-publish.sh [--dry-run|--pack-dry-run|--publish] <package-dir>"
+}
 
-if [[ "${mode}" != "--dry-run" && "${mode}" != "--pack-dry-run" && "${mode}" != "--publish" ]]; then
-  echo "usage: bash scripts/plugin-npm-publish.sh [--dry-run|--pack-dry-run|--publish] <package-dir>" >&2
-  exit 2
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  usage
+  exit 0
 fi
 
+mode="${1:-}"
+if [[ "${mode}" != "--dry-run" && "${mode}" != "--pack-dry-run" && "${mode}" != "--publish" ]]; then
+  usage >&2
+  exit 2
+fi
+shift
+
+if [[ "${1:-}" == "--" ]]; then
+  shift
+fi
+package_dir=""
+if [[ "$#" -gt 0 ]]; then
+  case "$1" in
+    -*) echo "unexpected plugin npm package-dir option: $1" >&2; exit 2 ;;
+    *) package_dir="$1"; shift ;;
+  esac
+fi
 if [[ -z "${package_dir}" ]]; then
   echo "missing package dir" >&2
+  exit 2
+fi
+if [[ "$#" -gt 0 ]]; then
+  echo "unexpected plugin npm publish argument: $1" >&2
   exit 2
 fi
 

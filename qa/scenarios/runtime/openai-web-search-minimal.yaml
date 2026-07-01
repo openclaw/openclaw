@@ -1,0 +1,29 @@
+title: OpenAI web_search minimal reasoning gate
+
+scenario:
+  id: openai-web-search-minimal
+  surface: model-provider
+  coverage:
+    primary:
+      - runtime.reasoning-and-cache-controls
+    secondary:
+      - web-search.openai-native-web-search
+      - tools.web-search
+  objective: Verify the OpenAI web_search minimal-reasoning E2E client distinguishes successful grounded turns from provider schema rejection.
+  successCriteria:
+    - Reject mode accepts the expected raw OpenAI schema rejection and the gateway schema wrapper.
+    - Reject mode fails if the agent run unexpectedly succeeds or fails for unrelated transport reasons.
+    - Success mode requires an `ok` agent result with the expected marker in visible reply payloads.
+    - Gateway ports are parsed strictly before connecting.
+  docsRefs:
+    - docs/tools/web.md
+    - docs/help/testing.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - scripts/e2e/lib/openai-web-search-minimal/client.mjs
+    - scripts/e2e/openai-web-search-minimal-docker.sh
+    - test/e2e/qa-lab/runtime/openai-web-search-minimal.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/openai-web-search-minimal.e2e.test.ts
+    summary: Vitest coverage for OpenAI web_search minimal-reasoning success and rejection validation.

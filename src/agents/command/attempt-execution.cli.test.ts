@@ -7,6 +7,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { saveAuthProfileStore } from "../auth-profiles/store.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { FailoverError } from "../failover-error.js";
@@ -50,8 +51,6 @@ const providerAuthAliasMocks = vi.hoisted(() => ({
     },
   ),
 }));
-const ORIGINAL_HOME = process.env.HOME;
-
 vi.mock("../cli-runner.js", () => ({
   runCliAgent: runCliAgentMock,
 }));
@@ -210,8 +209,62 @@ function firstEmbeddedAgentArg(callIndex = 0) {
 describe("CLI attempt execution", () => {
   let tmpDir: string;
   let storePath: string;
+  let homeEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
+
+  async function runOpenClawEmbeddedAttemptForTest(overrides?: {
+    opts?: Partial<RunAgentAttemptParams["opts"]>;
+    runId?: string;
+  }) {
+    const runId = overrides?.runId ?? "run-embedded-live-stream-gate";
+    const sessionKey = `agent:main:direct:${runId}`;
+    const sessionEntry: SessionEntry = {
+      sessionId: `session-${runId}`,
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedAgentRunResult);
+
+    await runAgentAttempt({
+      providerOverride: "openai",
+      originalProvider: "openai",
+      modelOverride: "gpt-5.4",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, `${runId}.jsonl`),
+      workspaceDir: tmpDir,
+      body: "stream gate",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId,
+      opts: {
+        message: "stream gate",
+        ...overrides?.opts,
+      } as RunAgentAttemptParams["opts"],
+      runContext: {} as RunAgentAttemptParams["runContext"],
+      spawnedBy: undefined,
+      messageChannel: "telegram",
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "openai",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    return firstEmbeddedAgentArg();
+  }
 
   beforeEach(async () => {
+    homeEnvSnapshot = captureEnv(["HOME"]);
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-attempt-"));
     storePath = path.join(tmpDir, "sessions.json");
     runCliAgentMock.mockReset();
@@ -222,11 +275,8 @@ describe("CLI attempt execution", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
-    if (ORIGINAL_HOME === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = ORIGINAL_HOME;
-    }
+    homeEnvSnapshot?.restore();
+    homeEnvSnapshot = undefined;
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -278,7 +328,7 @@ describe("CLI attempt execution", () => {
       workspaceDir: tmpDir,
       homeDir,
     });
-    process.env.HOME = homeDir;
+    setTestEnvValue("HOME", homeDir);
     await fs.mkdir(projectsDir, { recursive: true });
     await fs.writeFile(
       path.join(projectsDir, `${cliSessionId}.jsonl`),
@@ -315,7 +365,7 @@ describe("CLI attempt execution", () => {
       workspaceDir: tmpDir,
       homeDir,
     });
-    process.env.HOME = homeDir;
+    setTestEnvValue("HOME", homeDir);
     await fs.mkdir(projectsDir, { recursive: true });
     await fs.writeFile(
       path.join(projectsDir, "stale-cli-session.jsonl"),
@@ -555,7 +605,7 @@ describe("CLI attempt execution", () => {
   it("does not pass --resume when the stored Claude CLI transcript is missing", async () => {
     const sessionKey = "agent:main:direct:claude-missing-transcript";
     const homeDir = path.join(tmpDir, "home");
-    process.env.HOME = homeDir;
+    setTestEnvValue("HOME", homeDir);
     const sessionEntry: SessionEntry = {
       sessionId: "openclaw-session-123",
       updatedAt: Date.now(),
@@ -604,7 +654,7 @@ describe("CLI attempt execution", () => {
       workspaceDir: tmpDir,
       homeDir,
     });
-    process.env.HOME = homeDir;
+    setTestEnvValue("HOME", homeDir);
     await fs.mkdir(projectsDir, { recursive: true });
     await fs.writeFile(
       path.join(projectsDir, `${cliSessionId}.jsonl`),
@@ -660,7 +710,7 @@ describe("CLI attempt execution", () => {
       workspaceDir: cwd,
       homeDir,
     });
-    process.env.HOME = homeDir;
+    setTestEnvValue("HOME", homeDir);
     await fs.mkdir(projectsDir, { recursive: true });
     await fs.writeFile(
       path.join(projectsDir, `${cliSessionId}.jsonl`),
@@ -1638,6 +1688,11 @@ describe("CLI attempt execution", () => {
       } as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {
         currentChannelId: "channel:voice-room",
+        chatId: "voice-room",
+        channelContext: {
+          sender: { id: "sender-voice", unionId: "sender-union" },
+          chat: { id: "voice-room" },
+        },
         senderId: "sender-voice",
       } as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
@@ -1658,6 +1713,11 @@ describe("CLI attempt execution", () => {
       messageChannel: "discord",
       messageProvider: "discord-voice",
       currentChannelId: "channel:voice-room",
+      chatId: "voice-room",
+      channelContext: {
+        sender: { id: "sender-voice", unionId: "sender-union" },
+        chat: { id: "voice-room" },
+      },
       senderId: "sender-voice",
     });
   });
@@ -2082,7 +2142,14 @@ describe("CLI attempt execution", () => {
       timeoutMs: 1_000,
       runId: "run-canonical-codex-cli",
       opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
-      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      runContext: {
+        chatId: "chat-embedded",
+        channelContext: {
+          sender: { id: "sender-embedded", unionId: "embedded-union" },
+          chat: { id: "chat-embedded" },
+        },
+        senderId: "sender-embedded",
+      } as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
       messageChannel: "telegram",
       skillsSnapshot: undefined,
@@ -2099,7 +2166,31 @@ describe("CLI attempt execution", () => {
     expectMockArgFields(runEmbeddedAgentMock, {
       provider: "openai",
       model: "gpt-5.4",
+      chatId: "chat-embedded",
+      channelContext: {
+        sender: { id: "sender-embedded", unionId: "embedded-union" },
+        chat: { id: "chat-embedded" },
+      },
+      senderId: "sender-embedded",
     });
+  });
+
+  it("keeps live stream output for visible subagent lane runs", async () => {
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      opts: { lane: "subagent" },
+      runId: "visible-subagent-stream",
+    });
+
+    expect(embeddedArg.suppressLiveStreamOutput).toBe(false);
+  });
+
+  it("suppresses live stream output for hidden internal runs", async () => {
+    const embeddedArg = await runOpenClawEmbeddedAttemptForTest({
+      opts: { lane: "subagent", sessionEffects: "internal" },
+      runId: "internal-subagent-stream",
+    });
+
+    expect(embeddedArg.suppressLiveStreamOutput).toBe(true);
   });
 
   it("forwards selected auth profiles through metadata-scoped provider aliases", async () => {

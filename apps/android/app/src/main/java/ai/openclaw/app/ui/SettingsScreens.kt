@@ -4,6 +4,7 @@ import ai.openclaw.app.AppearanceThemeMode
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.GatewayAgentSummary
 import ai.openclaw.app.GatewayCronJobSummary
+import ai.openclaw.app.GatewayExecApprovalSummary
 import ai.openclaw.app.GatewayUsageProviderSummary
 import ai.openclaw.app.LocationMode
 import ai.openclaw.app.MainViewModel
@@ -14,6 +15,7 @@ import ai.openclaw.app.ui.design.ClawDetailRow
 import ai.openclaw.app.ui.design.ClawIconBadge
 import ai.openclaw.app.ui.design.ClawListPanel
 import ai.openclaw.app.ui.design.ClawPanel
+import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawSecondaryButton
@@ -90,7 +92,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
@@ -106,6 +107,7 @@ internal enum class SettingsRoute {
   Profile,
   Voice,
   Agents,
+  ProvidersModels,
   Approvals,
   CronJobs,
   Usage,
@@ -136,6 +138,7 @@ internal fun SettingsDetailScreen(
     SettingsRoute.Profile -> ProfileSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Voice -> VoiceSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Agents -> AgentsSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.ProvidersModels -> ProvidersModelsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Approvals -> ApprovalsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.CronJobs -> CronJobsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Usage -> UsageSettingsScreen(viewModel = viewModel, onBack = onBack)
@@ -299,29 +302,62 @@ private fun ApprovalsSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
+  val isConnected by viewModel.isConnected.collectAsState()
+  val execApprovals by viewModel.execApprovals.collectAsState()
+  val execApprovalsRefreshing by viewModel.execApprovalsRefreshing.collectAsState()
+  val execApprovalsErrorText by viewModel.execApprovalsErrorText.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
-  val waitingCount = pendingToolCalls.count { it.isError != true }
-  val issueCount = pendingToolCalls.count { it.isError == true }
+  val issueCount = execApprovals.count { it.errorText != null } + pendingToolCalls.count { it.isError == true }
+
+  LaunchedEffect(isConnected) {
+    if (isConnected) {
+      viewModel.refreshExecApprovals()
+    }
+  }
 
   SettingsDetailFrame(title = "Approvals", subtitle = "Review actions that need your attention.", icon = Icons.Default.Lock, onBack = onBack) {
     SettingsMetricPanel(
       rows =
         listOf(
-          SettingsMetric("Pending", waitingCount.toString()),
+          SettingsMetric("Gateway Pending", execApprovals.size.toString()),
+          SettingsMetric("Session Activity", pendingToolCalls.size.toString()),
           SettingsMetric("Issues", issueCount.toString()),
           SettingsMetric("Active Runs", pendingRunCount.toString()),
         ),
     )
-    if (pendingToolCalls.isEmpty()) {
+    ClawSecondaryButton(
+      text = if (execApprovalsRefreshing) "Refreshing" else "Refresh",
+      onClick = viewModel::refreshExecApprovals,
+      enabled = isConnected && !execApprovalsRefreshing,
+      modifier = Modifier.fillMaxWidth(),
+    )
+    if (execApprovalsErrorText != null) {
+      ClawPanel {
+        Text(text = execApprovalsErrorText ?: "", style = ClawTheme.type.body, color = ClawTheme.colors.warning)
+      }
+    }
+    if (!isConnected) {
       ClawPanel {
         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-          Text(text = "Nothing needs approval.", style = ClawTheme.type.section, color = ClawTheme.colors.text)
-          Text(text = "OpenClaw will show action requests here when a session pauses for review.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+          Text(text = "Gateway disconnected.", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+          Text(text = "Connect the gateway to load approval requests in the app.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        }
+      }
+    } else if (execApprovals.isEmpty()) {
+      ClawPanel {
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+          Text(text = "No gateway approvals.", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+          Text(text = "Exec approval requests will appear here while this phone is connected.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
       }
     } else {
-      ApprovalsPanel(toolCalls = pendingToolCalls)
+      ExecApprovalsPanel(approvals = execApprovals, onResolve = viewModel::resolveExecApproval)
+    }
+    if (pendingToolCalls.isNotEmpty()) {
+      Text(text = "Session activity", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      Text(text = "Chat tool calls waiting in the active session remain visible here.", style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+      SessionToolCallsPanel(toolCalls = pendingToolCalls)
     }
   }
 }
@@ -820,6 +856,7 @@ private fun GatewaySettingsScreen(
   var bootstrapTokenInput by remember { mutableStateOf("") }
   var passwordInput by remember { mutableStateOf("") }
   var validationText by remember { mutableStateOf<String?>(null) }
+  var showSetupCodeHelp by remember { mutableStateOf(false) }
 
   SettingsDetailFrame(title = "Gateway", subtitle = "Connection between this phone and OpenClaw.", icon = Icons.Default.Cloud, onBack = onBack) {
     SettingsMetricPanel(
@@ -840,7 +877,17 @@ private fun GatewaySettingsScreen(
       Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(text = "Pair New Gateway", style = ClawTheme.type.section, color = ClawTheme.colors.text)
         Text(text = "Clear this phone's saved gateway access and scan a fresh setup code.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        ClawSecondaryButton(text = "Pair New Gateway", onClick = viewModel::pairNewGateway, modifier = Modifier.fillMaxWidth(), icon = Icons.Default.QrCode2)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          ClawSecondaryButton(text = "Pair New Gateway", onClick = viewModel::pairNewGateway, modifier = Modifier.weight(1f), icon = Icons.Default.QrCode2)
+          ClawSecondaryButton(text = "Setup Code", onClick = { showSetupCodeHelp = !showSetupCodeHelp }, modifier = Modifier.weight(1f), icon = Icons.Default.Info)
+        }
+        if (showSetupCodeHelp) {
+          Text(
+            text = "Android can scan or paste an existing setup code, but this gateway does not expose setup-code generation to the app yet. Generate the QR/code on the gateway host with openclaw qr, then scan it here or paste the setup code below.",
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+          )
+        }
       }
     }
     ClawPanel {
@@ -960,6 +1007,8 @@ private fun gatewayStatusLabel(
     status.contains("connecting") || status.contains("reconnecting") -> "Connecting..."
     status.contains("pair") -> "Pairing needed"
     status.contains("auth") -> "Authentication needed"
+    status.contains("fingerprint verification timed out") -> "TLS timed out"
+    status.contains("no tls endpoint") -> "No TLS endpoint"
     status.contains("certificate") || status.contains("tls") -> "Certificate review needed"
     status.contains("failed") || status.contains("error") || status.contains("offline") || status.contains("not connected") -> "Cannot reach gateway"
     status.isBlank() -> "Not connected"
@@ -1061,7 +1110,11 @@ internal fun SettingsDetailFrame(
     LazyColumn(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 4.dp)) {
       item {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-          SettingsBackButton(onClick = onBack)
+          ClawPlainIconButton(
+            icon = Icons.AutoMirrored.Filled.ArrowBack,
+            contentDescription = "Back",
+            onClick = onBack,
+          )
           Text(text = title, style = ClawTheme.type.title, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
           SettingsIconMark(icon = icon)
         }
@@ -1098,7 +1151,70 @@ internal data class SettingsMetric(
 )
 
 @Composable
-private fun ApprovalsPanel(toolCalls: List<ChatPendingToolCall>) {
+private fun ExecApprovalsPanel(
+  approvals: List<GatewayExecApprovalSummary>,
+  onResolve: (String, String) -> Unit,
+) {
+  Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    approvals.forEach { approval ->
+      ExecApprovalCard(approval = approval, onResolve = onResolve)
+    }
+  }
+}
+
+@Composable
+private fun ExecApprovalCard(
+  approval: GatewayExecApprovalSummary,
+  onResolve: (String, String) -> Unit,
+) {
+  val resolving = approval.resolvingDecision != null
+  ClawPanel {
+    Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+      Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+          Text(text = approval.commandText, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+          approval.commandPreview?.let { preview ->
+            Text(text = preview, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 2, overflow = TextOverflow.Ellipsis)
+          }
+        }
+        ClawStatusPill(text = if (resolving) "Sending" else "Review", status = if (resolving) ClawStatus.Warning else ClawStatus.Success)
+      }
+      Text(text = execApprovalMetadata(approval), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 2, overflow = TextOverflow.Ellipsis)
+      approval.errorText?.let { errorText ->
+        Text(text = errorText, style = ClawTheme.type.caption, color = ClawTheme.colors.warning)
+      }
+      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if ("allow-once" in approval.allowedDecisions) {
+          ClawPrimaryButton(
+            text = if (approval.resolvingDecision == "allow-once") "Allowing" else "Allow Once",
+            onClick = { onResolve(approval.id, "allow-once") },
+            enabled = !resolving,
+            modifier = Modifier.weight(1f),
+          )
+        }
+        if ("allow-always" in approval.allowedDecisions) {
+          ClawSecondaryButton(
+            text = if (approval.resolvingDecision == "allow-always") "Saving" else "Always",
+            onClick = { onResolve(approval.id, "allow-always") },
+            enabled = !resolving,
+            modifier = Modifier.weight(1f),
+          )
+        }
+        if ("deny" in approval.allowedDecisions) {
+          ClawSecondaryButton(
+            text = if (approval.resolvingDecision == "deny") "Denying" else "Deny",
+            onClick = { onResolve(approval.id, "deny") },
+            enabled = !resolving,
+            modifier = Modifier.weight(1f),
+          )
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun SessionToolCallsPanel(toolCalls: List<ChatPendingToolCall>) {
   ClawListPanel(items = toolCalls) { toolCall ->
     ApprovalListRow(toolCall = toolCall)
   }
@@ -1229,6 +1345,30 @@ private fun approvalSubtitle(
   val ageMs = (System.currentTimeMillis() - toolCall.startedAtMs).coerceAtLeast(0L)
   val minutes = ageMs / 60_000L
   return if (minutes < 1) "Waiting for review" else "Waiting ${minutes}m"
+}
+
+private fun execApprovalMetadata(approval: GatewayExecApprovalSummary): String {
+  val target =
+    when {
+      approval.host == "node" && approval.nodeId != null -> "Node ${approval.nodeId.take(8)}"
+      approval.host != null -> approval.host.replaceFirstChar { it.uppercaseChar() }
+      else -> "Gateway"
+    }
+  val agent = approval.agentId?.let { "Agent ${it.take(8)}" }
+  val age = approval.createdAtMs?.let { "Waiting ${formatApprovalDuration(System.currentTimeMillis() - it)}" }
+  val expires = approval.expiresAtMs?.let { "Expires ${formatApprovalDuration(it - System.currentTimeMillis())}" }
+  return listOfNotNull(target, agent, age, expires).joinToString(" · ")
+}
+
+private fun formatApprovalDuration(deltaMs: Long): String {
+  val safeDelta = deltaMs.coerceAtLeast(0L)
+  val minutes = safeDelta / 60_000L
+  val hours = minutes / 60L
+  return when {
+    minutes < 1 -> "soon"
+    hours < 1 -> "${minutes}m"
+    else -> "${hours}h"
+  }
 }
 
 /** Builds the dense cron-job subtitle from schedule, next wake, and prompt preview. */
@@ -1390,15 +1530,6 @@ internal fun SettingsMetricPanel(rows: List<SettingsMetric>) {
         Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
         Text(text = row.value, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
       }
-    }
-  }
-}
-
-@Composable
-private fun SettingsBackButton(onClick: () -> Unit) {
-  Surface(onClick = onClick, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
-    Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", modifier = Modifier.size(18.dp))
     }
   }
 }

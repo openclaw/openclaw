@@ -19,24 +19,12 @@ vi.mock("./server-context.js", () => ({
   listKnownProfileNames: listKnownProfileNamesMock,
 }));
 
-const { ensureExtensionRelayForProfiles, stopKnownBrowserProfiles } =
-  await import("./server-lifecycle.js");
+const { stopKnownBrowserProfiles } = await import("./server-lifecycle.js");
 
 beforeEach(() => {
   createBrowserRouteContextMock.mockClear();
   listKnownProfileNamesMock.mockClear();
   stopOpenClawChromeMock.mockClear();
-});
-
-describe("ensureExtensionRelayForProfiles", () => {
-  it("is a no-op after removing the Chrome extension relay path", async () => {
-    await expect(
-      ensureExtensionRelayForProfiles({
-        resolved: { profiles: {} } as never,
-        onWarn: vi.fn(),
-      }),
-    ).resolves.toBeUndefined();
-  });
 });
 
 describe("stopKnownBrowserProfiles", () => {

@@ -1,5 +1,5 @@
+import { compareToolCallShape, stableHash } from "./parity-shared.js";
 // Qa Lab plugin module implements harness parity behavior.
-import { createHash } from "node:crypto";
 import type {
   RuntimeId,
   RuntimeParityCell,
@@ -98,20 +98,6 @@ export type HarnessParityResult = {
   firstDriftTurn?: number;
 };
 
-export type HarnessParityReport = {
-  generatedAt: string;
-  providerMode: string;
-  left: HarnessVariant;
-  right: HarnessVariant;
-  results: HarnessParityResult[];
-  pass: boolean;
-  failures: string[];
-};
-
-function sha256(value: string) {
-  return createHash("sha256").update(value).digest("hex");
-}
-
 function countComparableTranscriptRecords(transcriptBytes: string) {
   let count = 0;
   for (const line of transcriptBytes.split(/\r?\n/u)) {
@@ -135,25 +121,6 @@ function countComparableTranscriptRecords(transcriptBytes: string) {
     }
   }
   return count;
-}
-
-function normalizeForStableHash(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((entry) => normalizeForStableHash(entry));
-  }
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    return Object.fromEntries(
-      Object.keys(record)
-        .toSorted((left, right) => left.localeCompare(right))
-        .map((key) => [key, normalizeForStableHash(record[key])]),
-    );
-  }
-  return value;
-}
-
-function stableHash(value: unknown) {
-  return sha256(JSON.stringify(normalizeForStableHash(value)) ?? "null");
 }
 
 function readPositiveNumber(value: unknown) {
@@ -198,23 +165,6 @@ function estimateUsage(
 
 function normalizeTextForParity(text: string) {
   return text.replace(/\s+/gu, " ").trim();
-}
-
-function compareToolCallShape(left: RuntimeParityToolCall[], right: RuntimeParityToolCall[]) {
-  if (left.length !== right.length) {
-    return `tool call count differs (${left.length} vs ${right.length})`;
-  }
-  for (let index = 0; index < left.length; index += 1) {
-    const leftCall = left[index];
-    const rightCall = right[index];
-    if (!leftCall || !rightCall) {
-      return `tool call row ${index + 1} missing`;
-    }
-    if (leftCall.tool !== rightCall.tool || leftCall.argsHash !== rightCall.argsHash) {
-      return `tool call ${index + 1} differs (${leftCall.tool}/${leftCall.argsHash} vs ${rightCall.tool}/${rightCall.argsHash})`;
-    }
-  }
-  return undefined;
 }
 
 function compareToolResultShape(left: RuntimeParityToolCall[], right: RuntimeParityToolCall[]) {

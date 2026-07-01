@@ -17,7 +17,7 @@ function parseContentLengthHeader(headers) {
     return undefined;
   }
   const parsed = Number(raw);
-  return Number.isSafeInteger(parsed) ? parsed : undefined;
+  return Number.isSafeInteger(parsed) ? parsed : Number.POSITIVE_INFINITY;
 }
 
 export async function readBoundedResponseText(response, label, byteLimit, timeoutPromise) {

@@ -126,4 +126,25 @@ describe("scripts/e2e/lib/fixture.mjs config commands", () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("writes OpenAI web-search minimal config for the package scenario", () => {
+    const root = makeTempRoot();
+    try {
+      const result = runFixture(root, "openai-web-search-minimal-config");
+
+      expect(result.status).toBe(0);
+      const config = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
+      expect(config.agents.defaults.model.primary).toBe("openai/gpt-5");
+      expect(config.models.providers.openai).toMatchObject({
+        api: "openai-responses",
+        baseUrl: "http://api.openai.com/v1",
+        request: { allowPrivateNetwork: true },
+      });
+      expect(config.tools.web.search).toEqual({ enabled: true, maxResults: 3 });
+      expect(config.plugins.entries.openai).toEqual({ enabled: true });
+      expect(config.gateway.auth).toEqual({ mode: "token", token: "test-token" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

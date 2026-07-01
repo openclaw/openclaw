@@ -64,6 +64,7 @@ type RequestExecApprovalDecisionParams = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  approvalReviewerDeviceIds?: string[];
   requireDeliveryRoute?: boolean;
   suppressDelivery?: boolean;
 };
@@ -99,6 +100,7 @@ function buildExecApprovalRequestToolParams(
     turnSourceTo: params.turnSourceTo,
     turnSourceAccountId: params.turnSourceAccountId,
     turnSourceThreadId: params.turnSourceThreadId,
+    approvalReviewerDeviceIds: params.approvalReviewerDeviceIds,
     requireDeliveryRoute: params.requireDeliveryRoute,
     suppressDelivery: params.suppressDelivery,
     timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
@@ -158,13 +160,19 @@ export async function registerExecApprovalRequest(
   return { id, expiresAtMs };
 }
 
-/** Waits for a registered approval decision, returning null when it expires. */
-export async function waitForExecApprovalDecision(id: string): Promise<string | null> {
+/** Uses a pre-resolved decision or waits for the registered approval id. */
+export async function resolveRegisteredExecApprovalDecision(params: {
+  approvalId: string;
+  preResolvedDecision: string | null | undefined;
+}): Promise<string | null> {
+  if (params.preResolvedDecision !== undefined) {
+    return params.preResolvedDecision ?? null;
+  }
   try {
     const decisionResult = await callGatewayTool<{ decision: string }>(
       "exec.approval.waitDecision",
       { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
-      { id },
+      { id: params.approvalId },
     );
     return parseDecision(decisionResult).value;
   } catch (err) {
@@ -175,17 +183,6 @@ export async function waitForExecApprovalDecision(id: string): Promise<string | 
     }
     throw err;
   }
-}
-
-/** Uses a pre-resolved decision or waits for the registered approval id. */
-export async function resolveRegisteredExecApprovalDecision(params: {
-  approvalId: string;
-  preResolvedDecision: string | null | undefined;
-}): Promise<string | null> {
-  if (params.preResolvedDecision !== undefined) {
-    return params.preResolvedDecision ?? null;
-  }
-  return await waitForExecApprovalDecision(params.approvalId);
 }
 
 type HostExecApprovalParams = {
@@ -210,6 +207,7 @@ type HostExecApprovalParams = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  approvalReviewerDeviceIds?: string[];
   requireDeliveryRoute?: boolean;
   suppressDelivery?: boolean;
 };
@@ -318,6 +316,7 @@ async function buildHostApprovalDecisionParams(
     resolvedPath: params.resolvedPath,
     requireDeliveryRoute: params.requireDeliveryRoute,
     suppressDelivery: params.suppressDelivery,
+    approvalReviewerDeviceIds: params.approvalReviewerDeviceIds,
     ...buildExecApprovalTurnSourceContext(params),
   };
 }

@@ -1,9 +1,9 @@
 // Session target tests cover target resolution for cron-created sessions.
 import { describe, expect, it } from "vitest";
 import {
+  isDetachedCronSessionTarget,
   resolveCronCurrentSessionTarget,
   resolveCronDeliverySessionKey,
-  resolveCronFailureNotificationSessionKey,
   resolveCronNotificationSessionKey,
   resolveCronSessionTargetSessionKey,
 } from "./session-target.js";
@@ -28,6 +28,17 @@ describe("cron session target helpers", () => {
     expect(() => resolveCronSessionTargetSessionKey("session:bad\0id")).toThrow(
       "invalid cron sessionTarget session id",
     );
+  });
+
+  it.each(["isolated", "current", "session:agent:main:telegram:direct:123"] as const)(
+    "classifies %s as detached cron output",
+    (sessionTarget) => {
+      expect(isDetachedCronSessionTarget(sessionTarget)).toBe(true);
+    },
+  );
+
+  it("does not classify main as detached cron output", () => {
+    expect(isDetachedCronSessionTarget("main")).toBe(false);
   });
 
   it("resolves current targets to the creator session key", () => {
@@ -65,8 +76,5 @@ describe("cron session target helpers", () => {
     expect(resolveCronNotificationSessionKey({ jobId: "job-1", sessionKey: " " })).toBe(
       "cron:job-1:failure",
     );
-    expect(
-      resolveCronFailureNotificationSessionKey({ id: "job-2", sessionTarget: "isolated" }),
-    ).toBe("cron:job-2:failure");
   });
 });

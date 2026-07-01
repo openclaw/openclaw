@@ -1,12 +1,10 @@
-// Gateway startup session-store migration runner.
-// Keeps old orphaned session keys from surviving process upgrades.
+import {
+  runSessionStartupMigration,
+  type SessionStartupMigrationLogger,
+} from "../config/sessions/startup-migration.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { migrateOrphanedSessionKeys } from "../infra/state-migrations.js";
 
-type SessionMigrationLogger = {
-  info: (message: string) => void;
-  warn: (message: string) => void;
-};
+type SessionMigrationDeps = Parameters<typeof runSessionStartupMigration>[0]["deps"];
 
 /**
  * Run orphan-key session migration at gateway startup.
@@ -19,30 +17,8 @@ type SessionMigrationLogger = {
 export async function runStartupSessionMigration(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  log: SessionMigrationLogger;
-  deps?: {
-    migrateOrphanedSessionKeys?: typeof migrateOrphanedSessionKeys;
-  };
+  log: SessionStartupMigrationLogger;
+  deps?: SessionMigrationDeps;
 }): Promise<void> {
-  const migrate = params.deps?.migrateOrphanedSessionKeys ?? migrateOrphanedSessionKeys;
-  try {
-    const result = await migrate({
-      cfg: params.cfg,
-      env: params.env ?? process.env,
-    });
-    if (result.changes.length > 0) {
-      params.log.info(
-        `gateway: canonicalized orphaned session keys:\n${result.changes.map((c) => `- ${c}`).join("\n")}`,
-      );
-    }
-    if (result.warnings.length > 0) {
-      params.log.warn(
-        `gateway: session key migration warnings:\n${result.warnings.map((w) => `- ${w}`).join("\n")}`,
-      );
-    }
-  } catch (err) {
-    params.log.warn(
-      `gateway: orphaned session key migration failed during startup; continuing: ${String(err)}`,
-    );
-  }
+  await runSessionStartupMigration(params);
 }

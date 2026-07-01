@@ -467,10 +467,6 @@ function resolveLegacyWorkspaceStatePath(dir: string): string {
   return path.join(dir, LEGACY_WORKSPACE_STATE_DIRNAME, LEGACY_WORKSPACE_STATE_FILENAME);
 }
 
-export function resolveWorkspaceAttestationPath(dir: string): string {
-  return resolveWorkspaceAttestationPathInStateDir(dir, resolveStateDir());
-}
-
 function resolveWorkspaceAttestationPathInStateDir(dir: string, stateDir: string): string {
   const key = createHash("sha256").update(path.resolve(dir)).digest("hex");
   return path.join(stateDir, WORKSPACE_ATTESTATION_DIRNAME, `${key}.attested`);
@@ -523,17 +519,13 @@ export async function hasRecentWorkspaceAttestation(
   }
 }
 
-export async function isWorkspaceAttestationMarker(attestationPath: string): Promise<boolean> {
-  return (await readWorkspaceAttestationMarkerStatus(attestationPath)) === "marker";
-}
-
 export async function shouldRemoveWorkspaceAttestation(
   attestationPath: string,
   opts?: { trustUnknown?: boolean },
 ): Promise<boolean> {
   try {
     return (
-      (await isWorkspaceAttestationMarker(attestationPath)) ||
+      (await readWorkspaceAttestationMarkerStatus(attestationPath)) === "marker" ||
       (await hasRecentWorkspaceAttestation(attestationPath, opts))
     );
   } catch {

@@ -50,6 +50,9 @@ import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 
 export { CURRENT_SESSION_VERSION };
 
+const SESSION_HEADER_READ_CHUNK_BYTES = 4096;
+const MAX_SESSION_HEADER_BYTES = 64 * 1024;
+
 export interface SessionHeader {
   type: "session";
   version?: number; // v1 sessions don't have this
@@ -1141,31 +1144,61 @@ function recoverCorruptSessionEntries(filePath: string, cwd: string): FileEntry[
   return [header, ...recoveredEntries];
 }
 
-function isValidSessionFile(filePath: string): boolean {
+function readFirstSessionFileLine(filePath: string): string | undefined {
+  const fd = openSync(filePath, "r");
   try {
-    const fd = openSync(filePath, "r");
-    const buffer = Buffer.alloc(512);
-    const bytesRead = readSync(fd, buffer, 0, 512, 0);
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    while (totalBytes < MAX_SESSION_HEADER_BYTES) {
+      const buffer = Buffer.alloc(
+        Math.min(SESSION_HEADER_READ_CHUNK_BYTES, MAX_SESSION_HEADER_BYTES - totalBytes),
+      );
+      const bytesRead = readSync(fd, buffer, 0, buffer.length, totalBytes);
+      if (bytesRead === 0) {
+        break;
+      }
+      const newlineIndex = buffer.indexOf(0x0a);
+      if (newlineIndex >= 0 && newlineIndex < bytesRead) {
+        chunks.push(buffer.subarray(0, newlineIndex));
+        return Buffer.concat(chunks).toString("utf8");
+      }
+      chunks.push(buffer.subarray(0, bytesRead));
+      totalBytes += bytesRead;
+    }
+    return chunks.length > 0 ? Buffer.concat(chunks).toString("utf8") : undefined;
+  } finally {
     closeSync(fd);
-    const firstLine = buffer.toString("utf8", 0, bytesRead).split("\n")[0];
+  }
+}
+
+function readSessionHeaderFromFile(filePath: string): SessionHeader | undefined {
+  try {
+    const firstLine = readFirstSessionFileLine(filePath);
     if (!firstLine) {
-      return false;
+      return undefined;
     }
     const header = JSON.parse(firstLine);
-    return header.type === "session" && typeof header.id === "string";
+    if (header.type !== "session" || typeof header.id !== "string") {
+      return undefined;
+    }
+    return header as SessionHeader;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
 /** Exported for testing */
-export function findMostRecentSession(sessionDir: string): string | null {
+export function findMostRecentSession(sessionDir: string, cwd?: string): string | null {
   try {
     const files = readdirSync(sessionDir)
       .filter((f) => f.endsWith(".jsonl"))
       .map((f) => join(sessionDir, f))
-      .filter(isValidSessionFile)
-      .map((path) => ({ path, mtime: statSync(path).mtime }))
+      .map((path) => ({ path, header: readSessionHeaderFromFile(path) }))
+      .filter(
+        (candidate): candidate is { path: string; header: SessionHeader } =>
+          candidate.header !== undefined && (cwd === undefined || candidate.header.cwd === cwd),
+      )
+      .map((candidate) => ({ path: candidate.path, mtime: statSync(candidate.path).mtime }))
       .toSorted((a, b) => b.mtime.getTime() - a.mtime.getTime());
 
     return files[0]?.path || null;
@@ -1322,6 +1355,10 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
   }
 }
 
+function sessionInfoMatchesCwd(info: SessionInfo, cwd: string | undefined): boolean {
+  return cwd === undefined || info.cwd === cwd;
+}
+
 export type SessionListProgress = (loaded: number, total: number) => void;
 
 const MAX_CONCURRENT_SESSION_INFO_LOADS = 10;
@@ -1371,6 +1408,7 @@ async function listSessionsFromDir(
   onProgress?: SessionListProgress,
   progressOffset = 0,
   progressTotal?: number,
+  cwd?: string,
 ): Promise<SessionInfo[]> {
   const sessions: SessionInfo[] = [];
   if (!existsSync(dir)) {
@@ -1388,7 +1426,7 @@ async function listSessionsFromDir(
       onProgress?.(progressOffset + loaded, total);
     });
     for (const info of results) {
-      if (info) {
+      if (info && sessionInfoMatchesCwd(info, cwd)) {
         sessions.push(info);
       }
     }
@@ -2895,7 +2933,7 @@ export class SessionManager {
    */
   static continueRecent(cwd: string, sessionDir?: string): SessionManager {
     const dir = sessionDir ?? getDefaultSessionDir(cwd);
-    const mostRecent = findMostRecentSession(dir);
+    const mostRecent = findMostRecentSession(dir, cwd);
     if (mostRecent) {
       return new SessionManager(cwd, dir, mostRecent, true);
     }
@@ -2969,7 +3007,7 @@ export class SessionManager {
     onProgress?: SessionListProgress,
   ): Promise<SessionInfo[]> {
     const dir = sessionDir ?? getDefaultSessionDir(cwd);
-    const sessions = await listSessionsFromDir(dir, onProgress);
+    const sessions = await listSessionsFromDir(dir, onProgress, 0, undefined, cwd);
     sessions.sort((a, b) => b.modified.getTime() - a.modified.getTime());
     return sessions;
   }

@@ -1,11 +1,11 @@
 // Node-host daemon lifecycle commands for install, status, start, stop, and restart.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { colorize } from "../../../packages/terminal-core/src/theme.js";
-import { buildNodeInstallPlan } from "../../commands/node-daemon-install-helpers.js";
 import {
-  DEFAULT_NODE_DAEMON_RUNTIME,
-  isNodeDaemonRuntime,
-} from "../../commands/node-daemon-runtime.js";
+  DEFAULT_GATEWAY_DAEMON_RUNTIME,
+  isGatewayDaemonRuntime,
+} from "../../commands/daemon-runtime.js";
+import { buildNodeInstallPlan } from "../../commands/node-daemon-install-helpers.js";
 import {
   resolveNodeLaunchAgentLabel,
   resolveNodeSystemdServiceName,
@@ -40,6 +40,7 @@ import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-forma
 type NodeDaemonInstallOptions = {
   host?: string;
   port?: string | number;
+  contextPath?: string;
   tls?: boolean;
   tlsFingerprint?: string;
   nodeId?: string;
@@ -86,7 +87,12 @@ function resolveNodeDefaults(
     return { host, port: null };
   }
   const port = portOverride ?? config?.gateway?.port ?? 18789;
-  return { host, port };
+  const retargeted = opts.host !== undefined || opts.port !== undefined;
+  const explicitContextPath = opts.contextPath !== undefined;
+  const contextPath =
+    normalizeOptionalString(opts.contextPath) ||
+    (explicitContextPath || retargeted ? undefined : config?.gateway?.contextPath);
+  return { host, port, contextPath };
 }
 
 export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
@@ -96,7 +102,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   }
 
   const config = await loadNodeHostConfig();
-  const { host, port } = resolveNodeDefaults(opts, config);
+  const { host, port, contextPath } = resolveNodeDefaults(opts, config);
   if (!Number.isFinite(port ?? Number.NaN) || (port ?? 0) <= 0 || (port ?? 0) > 65_535) {
     fail(
       opts.port !== undefined
@@ -106,8 +112,8 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     return;
   }
 
-  const runtimeRaw = opts.runtime ? opts.runtime : DEFAULT_NODE_DAEMON_RUNTIME;
-  if (!isNodeDaemonRuntime(runtimeRaw)) {
+  const runtimeRaw = opts.runtime ? opts.runtime : DEFAULT_GATEWAY_DAEMON_RUNTIME;
+  if (!isGatewayDaemonRuntime(runtimeRaw)) {
     fail('Invalid --runtime (use "node" or "bun")');
     return;
   }
@@ -143,6 +149,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
       env: process.env,
       host,
       port: port ?? 18789,
+      contextPath,
       tls,
       tlsFingerprint: tlsFingerprint || undefined,
       nodeId: opts.nodeId,
@@ -156,6 +163,13 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
         }
       },
     });
+  const warn = (message: string) => {
+    if (json) {
+      warnings.push(message);
+    } else {
+      defaultRuntime.log(message);
+    }
+  };
 
   await installDaemonServiceAndEmit({
     serviceNoun: "Node",
@@ -167,6 +181,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
       await service.install({
         env: process.env,
         stdout,
+        warn,
         programArguments,
         workingDirectory,
         environment,

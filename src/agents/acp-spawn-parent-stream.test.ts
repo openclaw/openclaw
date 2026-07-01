@@ -509,6 +509,52 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
+  it("relays the latest replaceable assistant snapshot instead of superseded drafts", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-replaceable-assistant",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-replaceable-assistant",
+      agentId: "codex",
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+      emitStartNotice: false,
+    });
+
+    emitAgentEvent({
+      runId: "run-replaceable-assistant",
+      stream: "assistant",
+      data: {
+        text: "coordination draft",
+        delta: "coordination draft",
+        replaceable: true,
+      },
+    });
+    emitAgentEvent({
+      runId: "run-replaceable-assistant",
+      stream: "assistant",
+      data: {
+        text: "final answer",
+        delta: "",
+        replace: true,
+        replaceable: true,
+      },
+    });
+    emitAgentEvent({
+      runId: "run-replaceable-assistant",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: 1_000,
+        endedAt: 2_000,
+      },
+    });
+
+    const texts = collectedTexts();
+    expectNoTextWithFragment(texts, "coordination draft");
+    expectTextWithFragment(texts, "codex: final answer");
+    relay.dispose();
+  });
+
   it("relays commentary-phase assistant text in parent progress mode by default", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-commentary-default",
