@@ -31,6 +31,7 @@ import {
   resolveCodexSandboxEnvironmentSelection,
   shouldRequireCodexSandboxExecServerEnvironment,
 } from "./dynamic-tool-build.js";
+import type { CodexMcpThreadConfig } from "./mcp-thread-config.js";
 import {
   buildCodexAppServerRuntimeFingerprint,
   buildCodexPluginAppCacheKey,
@@ -105,6 +106,7 @@ export async function startCodexAttemptThread(params: {
   finalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["finalConfigPatch"];
   buildFinalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["buildFinalConfigPatch"];
   nativeHookRelayGeneration?: string;
+  mcpThreadConfig?: CodexMcpThreadConfig;
   bundleMcpThreadConfig: CodexBundleMcpThreadConfig;
   nativeToolSurfaceEnabled: boolean;
   nativeProviderWebSearchSupport: CodexNativeWebSearchSupport;
@@ -141,7 +143,15 @@ export async function startCodexAttemptThread(params: {
       operation: async () => {
         const threadConfig = mergeCodexThreadConfigs(
           params.bundleMcpThreadConfig?.configPatch as JsonObject | undefined,
+          params.mcpThreadConfig?.configPatch,
         );
+        const mcpServersFingerprint = mergeMcpThreadFingerprints(
+          params.bundleMcpThreadConfig.fingerprint,
+          params.mcpThreadConfig?.fingerprint,
+        );
+        const mcpServersFingerprintEvaluated =
+          params.bundleMcpThreadConfig.evaluated === true ||
+          params.mcpThreadConfig?.evaluated === true;
         const nativeToolSurfaceRestricted = !params.nativeToolSurfaceEnabled;
         const pluginThreadConfigRequired =
           nativeToolSurfaceRestricted || shouldBuildCodexPluginThreadConfig(params.pluginConfig);
@@ -327,8 +337,10 @@ export async function startCodexAttemptThread(params: {
                 nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
                 nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
                 userMcpServersEnabled: params.nativeToolSurfaceEnabled,
-                mcpServersFingerprint: params.bundleMcpThreadConfig.fingerprint,
-                mcpServersFingerprintEvaluated: params.bundleMcpThreadConfig.evaluated,
+                mcpServersFingerprint,
+                mcpServersFingerprintEvaluated,
+                mcpOwnershipDecisions: params.mcpThreadConfig?.ownershipDecisions,
+                geeRuntimePreparedFacts: params.mcpThreadConfig?.geeRuntimePreparedFacts,
                 environmentSelection: startupEnvironmentSelection,
                 appServerRuntimeFingerprint,
                 contextEngineProjection: params.contextEngineProjection,
@@ -485,6 +497,17 @@ export async function startCodexAttemptThread(params: {
   } finally {
     params.signal.removeEventListener("abort", abandonStartupAcquire);
   }
+}
+
+function mergeMcpThreadFingerprints(
+  bundleFingerprint: string | undefined,
+  geeFingerprint: string | undefined,
+): string | undefined {
+  const parts = [
+    bundleFingerprint ? `bundle:${bundleFingerprint}` : undefined,
+    geeFingerprint ? `gee:${geeFingerprint}` : undefined,
+  ].filter((part): part is string => Boolean(part));
+  return parts.length > 0 ? parts.join("\n") : undefined;
 }
 
 function shouldClearSharedClientAfterStartupAbandon(error: unknown): boolean {

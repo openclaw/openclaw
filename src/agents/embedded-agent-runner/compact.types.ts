@@ -12,6 +12,7 @@ import type { SkillSnapshot } from "../../skills/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.exec-types.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
+import type { EmbeddedRunGeeRuntimePreparedFacts } from "./run/types.js";
 
 export type CompactEmbeddedAgentSessionParams = {
   sessionId: string;
@@ -72,6 +73,8 @@ export type CompactEmbeddedAgentSessionParams = {
   agentHarnessId?: string;
   /** OpenClaw-owned runtime policy prepared for this compaction path. */
   runtimePlan?: AgentRuntimePlan;
+  /** Gee-owned prepared facts for a Gee-hosted OpenClaw turn. */
+  geeRuntimePreparedFacts?: EmbeddedRunGeeRuntimePreparedFacts;
   thinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
   execOverrides?: Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;

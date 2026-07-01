@@ -207,6 +207,7 @@ import {
   resolveCodexNativeHookRelayUnregisterGraceMs,
   scheduleCodexNativeHookRelayUnregister,
 } from "./native-hook-relay.js";
+import { buildCodexMcpThreadConfig } from "./mcp-thread-config.js";
 import { registerCodexNativeSubagentMonitor } from "./native-subagent-monitor.js";
 import { describeCodexNotificationCorrelation } from "./notification-correlation.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
@@ -642,10 +643,14 @@ export async function runCodexAppServerAttempt(
     configuredEvents: options.nativeHookRelay?.events,
     appServer,
   });
+  const mcpThreadConfig = buildCodexMcpThreadConfig(params.config);
   const runtimeParams = {
     ...params,
     sessionKey: contextSessionKey,
     ...(startupAuthProfileId ? { authProfileId: startupAuthProfileId } : {}),
+    ...(mcpThreadConfig.geeRuntimePreparedFacts
+      ? { geeRuntimePreparedFacts: mcpThreadConfig.geeRuntimePreparedFacts }
+      : {}),
   };
   const activeSessionId = params.sessionId;
   const activeSessionFile = params.sessionFile;
@@ -1491,6 +1496,7 @@ export async function runCodexAppServerAttempt(
       webSearchAllowed,
       developerInstructions: promptBuild.developerInstructions,
       buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
+      mcpThreadConfig,
       bundleMcpThreadConfig,
       nativeToolSurfaceEnabled,
       nativeProviderWebSearchSupport,

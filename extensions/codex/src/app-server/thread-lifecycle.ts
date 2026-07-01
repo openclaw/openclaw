@@ -23,6 +23,8 @@ import {
   type CodexAppServerClient,
 } from "./client.js";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
+import type { GeeRuntimePreparedFacts } from "./gee-runtime-envelope.js";
+import type { TurnOwnerDecision } from "./mcp-thread-config.js";
 import {
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
@@ -313,6 +315,8 @@ export async function startOrResumeThread(params: {
   userMcpServersEnabled?: boolean;
   mcpServersFingerprint?: string;
   mcpServersFingerprintEvaluated?: boolean;
+  mcpOwnershipDecisions?: Record<string, TurnOwnerDecision>;
+  geeRuntimePreparedFacts?: Record<string, GeeRuntimePreparedFacts>;
   environmentSelection?: CodexTurnEnvironmentParams[];
   appServerRuntimeFingerprint?: string;
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
@@ -680,6 +684,14 @@ export async function startOrResumeThread(params: {
           params.mcpServersFingerprintEvaluated === true
             ? params.mcpServersFingerprint
             : resumeBinding.mcpServersFingerprint;
+        const nextMcpOwnershipDecisions =
+          params.mcpServersFingerprintEvaluated === true
+            ? params.mcpOwnershipDecisions
+            : resumeBinding.mcpOwnershipDecisions;
+        const nextGeeRuntimePreparedFacts =
+          params.mcpServersFingerprintEvaluated === true
+            ? params.geeRuntimePreparedFacts
+            : resumeBinding.geeRuntimePreparedFacts;
         await lifecycleTiming.measure("thread-resume-write-binding", () =>
           writeCodexAppServerBinding(
             params.params.sessionFile,
@@ -694,6 +706,8 @@ export async function startOrResumeThread(params: {
               webSearchThreadConfigFingerprint,
               userMcpServersFingerprint,
               mcpServersFingerprint: nextMcpServersFingerprint,
+              mcpOwnershipDecisions: nextMcpOwnershipDecisions,
+              geeRuntimePreparedFacts: nextGeeRuntimePreparedFacts,
               networkProxyProfileName: params.appServer.networkProxy?.profileName,
               networkProxyConfigFingerprint,
               nativeHookRelayGeneration:
@@ -746,6 +760,8 @@ export async function startOrResumeThread(params: {
           webSearchThreadConfigFingerprint,
           userMcpServersFingerprint,
           mcpServersFingerprint: nextMcpServersFingerprint,
+          mcpOwnershipDecisions: nextMcpOwnershipDecisions,
+          geeRuntimePreparedFacts: nextGeeRuntimePreparedFacts,
           networkProxyProfileName: params.appServer.networkProxy?.profileName,
           networkProxyConfigFingerprint,
           nativeHookRelayGeneration:
@@ -833,6 +849,10 @@ export async function startOrResumeThread(params: {
   const createdAt = new Date().toISOString();
   const nextMcpServersFingerprint =
     params.mcpServersFingerprintEvaluated === true ? params.mcpServersFingerprint : undefined;
+  const nextMcpOwnershipDecisions =
+    params.mcpServersFingerprintEvaluated === true ? params.mcpOwnershipDecisions : undefined;
+  const nextGeeRuntimePreparedFacts =
+    params.mcpServersFingerprintEvaluated === true ? params.geeRuntimePreparedFacts : undefined;
   if (!preserveExistingBinding) {
     await lifecycleTiming.measure("thread-start-write-binding", () =>
       writeCodexAppServerBinding(
@@ -849,6 +869,8 @@ export async function startOrResumeThread(params: {
           webSearchThreadConfigFingerprint,
           userMcpServersFingerprint,
           mcpServersFingerprint: nextMcpServersFingerprint,
+          mcpOwnershipDecisions: nextMcpOwnershipDecisions,
+          geeRuntimePreparedFacts: nextGeeRuntimePreparedFacts,
           networkProxyProfileName: params.appServer.networkProxy?.profileName,
           networkProxyConfigFingerprint,
           nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
@@ -900,6 +922,8 @@ export async function startOrResumeThread(params: {
     dynamicToolsContainDeferred,
     userMcpServersFingerprint,
     mcpServersFingerprint: nextMcpServersFingerprint,
+    mcpOwnershipDecisions: nextMcpOwnershipDecisions,
+    geeRuntimePreparedFacts: nextGeeRuntimePreparedFacts,
     networkProxyProfileName: params.appServer.networkProxy?.profileName,
     networkProxyConfigFingerprint,
     nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,

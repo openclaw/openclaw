@@ -150,7 +150,10 @@ import {
   runBeforeCompactionHooks,
   runPostCompactionSideEffects,
 } from "./compaction-hooks.js";
-import { resolveEmbeddedCompactionTarget } from "./compaction-runtime-context.js";
+import {
+  resolveEmbeddedCompactionTarget,
+  resolveGeeRuntimeHostOwnedCompactionPolicy,
+} from "./compaction-runtime-context.js";
 import {
   compactWithSafetyTimeout,
   resolveCompactionTimeoutMs,
@@ -468,6 +471,22 @@ function fallbackFailureToCompactionResult(err: unknown): EmbeddedAgentCompactRe
   };
 }
 
+function hostOwnedCompactionSkipResult(params: {
+  owner: string;
+  sessionId: string;
+  sessionKey?: string;
+}): EmbeddedAgentCompactResult {
+  log.info(
+    `[compaction-diag] skipping OpenClaw compaction for ${params.sessionKey ?? params.sessionId}; ` +
+      `owner=${params.owner}`,
+  );
+  return {
+    ok: true,
+    compacted: false,
+    reason: `gee-runtime-compaction-${params.owner}`,
+  };
+}
+
 /**
  * Core compaction logic without lane queueing.
  * Use this when already inside a session/global lane to avoid deadlocks.
@@ -484,6 +503,16 @@ export async function compactEmbeddedAgentSessionDirect(
     sessionKey: paramsBase.sessionKey ?? runSessionTarget.sessionKey,
     sessionFile: runSessionTarget.sessionFile,
   };
+  const hostOwnedCompactionPolicy = resolveGeeRuntimeHostOwnedCompactionPolicy(
+    params.geeRuntimePreparedFacts,
+  );
+  if (hostOwnedCompactionPolicy) {
+    return hostOwnedCompactionSkipResult({
+      owner: hostOwnedCompactionPolicy.owner,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+    });
+  }
   if (hasExplicitCompactionModel(params) || !hasCompactionModelFallbackCandidates(params)) {
     return await compactEmbeddedAgentSessionDirectOnce(params);
   }
@@ -492,6 +521,7 @@ export async function compactEmbeddedAgentSessionDirect(
     provider: params.provider,
     modelId: params.model,
     authProfileId: params.authProfileId,
+    geeRuntimePreparedFacts: params.geeRuntimePreparedFacts,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
@@ -590,6 +620,7 @@ async function compactEmbeddedAgentSessionDirectOnce(
     provider: params.provider,
     modelId: params.model,
     authProfileId: params.authProfileId,
+    geeRuntimePreparedFacts: params.geeRuntimePreparedFacts,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });

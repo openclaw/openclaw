@@ -23,6 +23,11 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import {
+  isGeeRuntimeToolAllowed,
+  resolveGeeRuntimeToolAllowlist,
+  resolveGeeRuntimeToolPolicy,
+} from "./gee-runtime-prepared-facts.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import {
   isToolExplicitlyAllowedByFactoryPolicy,
@@ -35,6 +40,7 @@ import {
   collectPresentOpenClawTools,
   shouldIncludeUpdatePlanToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
+import type { EmbeddedRunGeeRuntimePreparedFacts } from "./embedded-agent-runner/run/types.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
@@ -108,6 +114,7 @@ export function createOpenClawTools(
     fsPolicy?: ToolFsPolicy;
     sandboxed?: boolean;
     config?: OpenClawConfig;
+    geeRuntimePreparedFacts?: EmbeddedRunGeeRuntimePreparedFacts;
     pluginToolAllowlist?: string[];
     pluginToolDenylist?: string[];
     /** Effective caller tool surface to persist on isolated cron agentTurn jobs. */
@@ -216,18 +223,32 @@ export function createOpenClawTools(
     accountId: options?.agentAccountId,
     threadId: options?.agentThreadId,
   });
+  const geeRuntimeToolPolicy = resolveGeeRuntimeToolPolicy(options?.geeRuntimePreparedFacts);
+  const runtimeToolAllowlist = resolveGeeRuntimeToolAllowlist(
+    geeRuntimeToolPolicy,
+    options?.pluginToolAllowlist,
+  );
   const runtimeWebTools = getActiveRuntimeWebToolsMetadata();
   const sandbox =
     options?.sandboxRoot && options?.sandboxFsBridge
       ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
       : undefined;
-  const optionalMediaTools = resolveOptionalMediaToolFactoryPlan({
-    config: availabilityConfig ?? resolvedConfig,
-    workspaceDir,
-    authStore: options?.authProfileStore,
-    toolAllowlist: options?.pluginToolAllowlist,
-    toolDenylist: options?.pluginToolDenylist,
-  });
+  const optionalMediaTools = ["image_generate", "video_generate", "music_generate", "pdf"].some(
+    (toolName) => isGeeRuntimeToolAllowed(geeRuntimeToolPolicy, toolName),
+  )
+    ? resolveOptionalMediaToolFactoryPlan({
+        config: availabilityConfig ?? resolvedConfig,
+        workspaceDir,
+        authStore: options?.authProfileStore,
+        toolAllowlist: runtimeToolAllowlist,
+        toolDenylist: options?.pluginToolDenylist,
+      })
+    : {
+        imageGenerate: false,
+        videoGenerate: false,
+        musicGenerate: false,
+        pdf: false,
+      };
   const trimmedRunSessionKey = options?.runSessionKey?.trim();
   const mediaGenerationAgentSessionKey =
     trimmedRunSessionKey && isCronRunSessionKey(trimmedRunSessionKey)
@@ -246,27 +267,29 @@ export function createOpenClawTools(
     options?.currentMessageId === undefined ? undefined : String(options.currentMessageId),
   );
   const imageToolAgentDir = options?.agentDir;
-  const imageTool = resolveImageToolFactoryAvailable({
-    config: availabilityConfig ?? resolvedConfig,
-    agentDir: imageToolAgentDir,
-    workspaceDir,
-    modelHasVision: options?.modelHasVision,
-    authStore: options?.authProfileStore,
-  })
-    ? createImageTool({
-        config: availabilityConfig ?? options?.config,
-        agentDir: imageToolAgentDir!,
-        authProfileStore: options?.authProfileStore,
-        workspaceDir,
-        sandbox,
-        fsPolicy: options?.fsPolicy,
-        agentChannel: options?.agentChannel,
-        agentAccountId: options?.agentAccountId,
-        currentChannelId: options?.currentChannelId,
-        modelHasVision: options?.modelHasVision,
-        deferAutoModelResolution: true,
-      })
-    : null;
+  const imageTool =
+    isGeeRuntimeToolAllowed(geeRuntimeToolPolicy, "image") &&
+    resolveImageToolFactoryAvailable({
+      config: availabilityConfig ?? resolvedConfig,
+      agentDir: imageToolAgentDir,
+      workspaceDir,
+      modelHasVision: options?.modelHasVision,
+      authStore: options?.authProfileStore,
+    })
+      ? createImageTool({
+          config: availabilityConfig ?? options?.config,
+          agentDir: imageToolAgentDir!,
+          authProfileStore: options?.authProfileStore,
+          workspaceDir,
+          sandbox,
+          fsPolicy: options?.fsPolicy,
+          agentChannel: options?.agentChannel,
+          agentAccountId: options?.agentAccountId,
+          currentChannelId: options?.currentChannelId,
+          modelHasVision: options?.modelHasVision,
+          deferAutoModelResolution: true,
+        })
+      : null;
   options?.recordToolPrepStage?.("openclaw-tools:image-tool");
   const imageGenerateTool = optionalMediaTools.imageGenerate
     ? createImageGenerateTool({
@@ -406,15 +429,21 @@ export function createOpenClawTools(
   const effectiveCallGateway = embedded
     ? createEmbeddedCallGateway()
     : openClawToolsDeps.callGateway;
-  const includeUpdatePlanTool = shouldIncludeUpdatePlanToolForOpenClawTools({
-    config: resolvedConfig,
-    agentSessionKey: options?.agentSessionKey,
-    agentId: options?.requesterAgentIdOverride,
-    modelProvider: options?.modelProvider,
-    modelId: options?.modelId,
-    pluginToolAllowlist: options?.pluginToolAllowlist,
-    pluginToolDenylist: options?.pluginToolDenylist,
-  });
+  const includeUpdatePlanTool = geeRuntimeToolPolicy
+    ? isToolExplicitlyAllowedByFactoryPolicy({
+        toolName: "update_plan",
+        allowlist: runtimeToolAllowlist,
+        denylist: mergeFactoryPolicyList(resolvedConfig?.tools?.deny, options?.pluginToolDenylist),
+      })
+    : shouldIncludeUpdatePlanToolForOpenClawTools({
+        config: resolvedConfig,
+        agentSessionKey: options?.agentSessionKey,
+        agentId: options?.requesterAgentIdOverride,
+        modelProvider: options?.modelProvider,
+        modelId: options?.modelId,
+        pluginToolAllowlist: options?.pluginToolAllowlist,
+        pluginToolDenylist: options?.pluginToolDenylist,
+      });
   const includeTranscriptsTool = resolveTranscriptsConfig(resolvedConfig?.transcripts).enabled;
   const tools: AnyAgentTool[] = [
     ...(embedded

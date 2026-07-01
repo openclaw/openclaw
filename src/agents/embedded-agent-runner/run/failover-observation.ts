@@ -25,6 +25,12 @@ type FailoverDecisionLoggerInput = {
   sourceModel?: string;
   profileId?: string;
   fallbackConfigured: boolean;
+  runtimePolicyOwner?: "openclaw" | "gee";
+  runtimePolicyEndpointIds?: string[];
+  runtimeRoutingPolicyIds?: string[];
+  runtimeFallbackPolicyIds?: string[];
+  runtimeCooldownPolicyIds?: string[];
+  runtimeAuthEligibility?: string;
   timedOut?: boolean;
   aborted?: boolean;
   status?: number;
@@ -70,6 +76,19 @@ export function createFailoverDecisionLogger(
   const profileText = safeProfileId ?? "-";
   const reasonText = normalizedBase.failoverReason ?? "none";
   const sourceChanged = safeSourceProvider !== safeProvider || safeSourceModel !== safeModel;
+  const sanitizeList = (values?: string[]) =>
+    values
+      ?.map((value) => sanitizeForConsole(value))
+      .filter((value): value is string => Boolean(value));
+  const safeRuntimePolicyEndpointIds = normalizedBase.runtimePolicyEndpointIds
+    ?.map((value) => redactIdentifier(value, { len: 16 }))
+    .filter((value): value is string => Boolean(value));
+  const safeRuntimeRoutingPolicyIds = sanitizeList(normalizedBase.runtimeRoutingPolicyIds);
+  const safeRuntimeFallbackPolicyIds = sanitizeList(normalizedBase.runtimeFallbackPolicyIds);
+  const safeRuntimeCooldownPolicyIds = sanitizeList(normalizedBase.runtimeCooldownPolicyIds);
+  const runtimePolicyConsoleSuffix = normalizedBase.runtimePolicyOwner
+    ? ` runtimeOwner=${normalizedBase.runtimePolicyOwner}${normalizedBase.runtimeAuthEligibility ? ` auth=${sanitizeForConsole(normalizedBase.runtimeAuthEligibility) ?? "unknown"}` : ""}`
+    : "";
   return (decision, extra) => {
     const observedError = buildApiErrorObservationFields(normalizedBase.rawError);
     const safeRawErrorPreview = sanitizeForConsole(observedError.rawErrorPreview);
@@ -95,6 +114,12 @@ export function createFailoverDecisionLogger(
       sourceModel: normalizedBase.sourceModel ?? normalizedBase.model,
       profileId: safeProfileId,
       fallbackConfigured: normalizedBase.fallbackConfigured,
+      runtimePolicyOwner: normalizedBase.runtimePolicyOwner,
+      runtimePolicyEndpointIds: safeRuntimePolicyEndpointIds,
+      runtimeRoutingPolicyIds: safeRuntimeRoutingPolicyIds,
+      runtimeFallbackPolicyIds: safeRuntimeFallbackPolicyIds,
+      runtimeCooldownPolicyIds: safeRuntimeCooldownPolicyIds,
+      runtimeAuthEligibility: normalizedBase.runtimeAuthEligibility,
       timedOut: normalizedBase.timedOut,
       aborted: normalizedBase.aborted,
       status: extra?.status,
@@ -102,7 +127,7 @@ export function createFailoverDecisionLogger(
       consoleMessage:
         `embedded run failover decision: runId=${safeRunId} stage=${normalizedBase.stage} decision=${decision} ` +
         `reason=${reasonText} from=${safeSourceProvider}/${safeSourceModel}` +
-        `${sourceChanged ? ` to=${safeProvider}/${safeModel}` : ""} profile=${profileText}${rawErrorConsoleSuffix}`,
+        `${sourceChanged ? ` to=${safeProvider}/${safeModel}` : ""} profile=${profileText}${runtimePolicyConsoleSuffix}${rawErrorConsoleSuffix}`,
     });
   };
 }

@@ -12,6 +12,8 @@ import {
   resolveSubscriptionAuthModeForProfiles,
 } from "../../auth-profiles.js";
 import { formatAuthProfileFailureMessage } from "../../auth-profiles/failure-copy.js";
+import type { GeeRuntimeProviderAuthPolicy } from "../../gee-runtime-prepared-facts.js";
+import { GEE_RUNTIME_CREDENTIAL_REF_MARKER } from "../../model-auth-markers.js";
 import {
   classifyFailoverReason,
   isFailoverErrorMessage,
@@ -66,6 +68,7 @@ export function createEmbeddedRunAuthController(params: {
   attemptedThinking: Set<ThinkLevel>;
   fallbackConfigured: boolean;
   allowTransientCooldownProbe: boolean;
+  geeRuntimeProviderAuthPolicy?: GeeRuntimeProviderAuthPolicy;
   getProvider(): string;
   getModelId(): string;
   getRuntimeModel(): Model;
@@ -152,6 +155,39 @@ export function createEmbeddedRunAuthController(params: {
     }
     params.setRuntimeAuthRefreshCancelled(true);
     clearRuntimeAuthRefreshTimer();
+  };
+
+  const applyGeeRuntimeProviderAuthPolicy = (): boolean => {
+    const policy = params.geeRuntimeProviderAuthPolicy;
+    if (!policy) {
+      return false;
+    }
+    const endpoints = policy.endpointIds.join('", "');
+    if (policy.authEligibility !== "ok") {
+      const message = `Gee-owned runtime auth for endpoints "${endpoints}" is ${policy.authEligibility}; OpenClaw will not fall back to standalone auth profiles.`;
+      throw new FailoverError(message, {
+        reason: "auth",
+        provider: params.getProvider(),
+        model: params.getModelId(),
+        status: resolveFailoverStatus("auth"),
+        code: "gee_runtime_auth_policy_ineligible",
+        rawError: message,
+      });
+    }
+    clearRuntimeAuthRefreshTimer();
+    const runtimeModel = params.getRuntimeModel();
+    params.setApiKeyInfo({
+      apiKey: GEE_RUNTIME_CREDENTIAL_REF_MARKER,
+      mode: "api-key",
+      source: `gee-runtime-credential-ref:${policy.credentialRefs.join(",")}`,
+    });
+    params.authStorage.setRuntimeApiKey(runtimeModel.provider, GEE_RUNTIME_CREDENTIAL_REF_MARKER);
+    params.setRuntimeAuthState(null);
+    params.setLastProfileId(undefined);
+    params.log.debug(
+      `Using Gee-owned provider/auth policy for ${runtimeModel.provider}; credential refs stay host-owned.`,
+    );
+    return true;
   };
 
   const refreshRuntimeAuth = async (reason: string): Promise<void> => {
@@ -465,7 +501,7 @@ export function createEmbeddedRunAuthController(params: {
   };
 
   const advanceAuthProfile = async (): Promise<boolean> => {
-    if (params.lockedProfileId) {
+    if (params.geeRuntimeProviderAuthPolicy || params.lockedProfileId) {
       return false;
     }
     let nextIndex = params.getProfileIndex() + 1;
@@ -495,6 +531,9 @@ export function createEmbeddedRunAuthController(params: {
   };
 
   const initializeAuthProfile = async () => {
+    if (applyGeeRuntimeProviderAuthPolicy()) {
+      return;
+    }
     try {
       const autoProfileCandidates = params.profileCandidates.filter(
         (candidate): candidate is string =>
@@ -561,7 +600,7 @@ export function createEmbeddedRunAuthController(params: {
     errorText: string,
     retried: boolean,
   ): Promise<boolean> => {
-    if (!params.getRuntimeAuthState() || retried) {
+    if (params.geeRuntimeProviderAuthPolicy || !params.getRuntimeAuthState() || retried) {
       return false;
     }
     if (!isFailoverErrorMessage(errorText, { provider: params.getProvider() })) {

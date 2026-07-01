@@ -18,6 +18,8 @@ export type OpenClawPluginToolContext = {
   runtimeConfig?: OpenClawConfig;
   /** Returns the latest runtime-resolved config snapshot for long-lived tool definitions. */
   getRuntimeConfig?: () => OpenClawConfig | undefined;
+  /** Gee-owned prepared facts for a Gee-hosted OpenClaw turn. */
+  geeRuntimePreparedFacts?: Record<string, unknown>;
   /** Effective filesystem policy for the active tool run. */
   fsPolicy?: ToolFsPolicy;
   workspaceDir?: string;
