@@ -606,17 +606,17 @@ describe("legacy memory search config migrate", () => {
     const res = migrateLegacyConfigForTest(raw);
 
     expect(res.config?.agents?.defaults?.memorySearch).toEqual({
-      provider: "openai",
+      provider: "auto",
       model: "text-embedding-3-small",
     });
     expect(res.config).not.toHaveProperty("memorySearch");
     expect(res.changes).toEqual([
       "Moved memorySearch → agents.defaults.memorySearch.",
-      'Moved agents.defaults.memorySearch.provider from legacy "auto" to "openai".',
+      'Preserved agents.defaults.memorySearch.provider="auto" (resolved at runtime).',
     ]);
   });
 
-  it("rewrites default and per-agent legacy auto memory providers", () => {
+  it("preserves legacy auto memory providers without rewriting", () => {
     const raw = {
       agents: {
         defaults: {
@@ -648,12 +648,12 @@ describe("legacy memory search config migrate", () => {
 
     const res = migrateLegacyConfigForTest(raw);
 
-    expect(res.config?.agents?.defaults?.memorySearch?.provider).toBe("openai");
-    expect(res.config?.agents?.list?.[0]?.memorySearch?.provider).toBe("openai");
+    expect(res.config?.agents?.defaults?.memorySearch?.provider).toBe("auto");
+    expect(res.config?.agents?.list?.[0]?.memorySearch?.provider).toBe("auto");
     expect(res.config?.agents?.list?.[1]?.memorySearch?.provider).toBe("openai-compatible");
     expect(res.changes).toEqual([
-      'Moved agents.defaults.memorySearch.provider from legacy "auto" to "openai".',
-      'Moved agents.list.0.memorySearch.provider from legacy "auto" to "openai".',
+      'Preserved agents.defaults.memorySearch.provider="auto" (resolved at runtime).',
+      'Preserved agents.list.0.memorySearch.provider="auto" (resolved at runtime).',
     ]);
   });
 });

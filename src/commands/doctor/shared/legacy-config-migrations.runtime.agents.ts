@@ -54,20 +54,20 @@ const LEGACY_MEMORY_SEARCH_AUTO_PROVIDER_RULES: LegacyConfigRule[] = [
   {
     path: ["memorySearch", "provider"],
     message:
-      'memorySearch.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
-    match: isLegacyMemorySearchAutoProvider,
+      'memorySearch.provider = "auto" is valid; the best available provider is selected at runtime.',
+    match: isAutoMemorySearchProvider,
   },
   {
     path: ["agents", "defaults", "memorySearch", "provider"],
     message:
-      'agents.defaults.memorySearch.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
-    match: isLegacyMemorySearchAutoProvider,
+      'agents.defaults.memorySearch.provider = "auto" is valid; the best available provider is selected at runtime.',
+    match: isAutoMemorySearchProvider,
   },
   {
     path: ["agents", "list"],
     message:
-      'agents.list[].memorySearch.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
-    match: hasAgentListLegacyMemorySearchAutoProvider,
+      'agents.list[].memorySearch.provider = "auto" is valid; the best available provider is selected at runtime.',
+    match: hasAnyAutoMemorySearchProvider,
   },
 ];
 
@@ -401,16 +401,16 @@ function migrateLegacyEmbeddedAgentKey(
   delete container.embeddedPi;
 }
 
-function isLegacyMemorySearchAutoProvider(value: unknown): boolean {
+function isAutoMemorySearchProvider(value: unknown): boolean {
   return typeof value === "string" && value.trim().toLowerCase() === "auto";
 }
 
-function hasAgentListLegacyMemorySearchAutoProvider(value: unknown): boolean {
+function hasAnyAutoMemorySearchProvider(value: unknown): boolean {
   if (!Array.isArray(value)) {
     return false;
   }
   return value.some((agent) =>
-    isLegacyMemorySearchAutoProvider(getRecord(getRecord(agent)?.memorySearch)?.provider),
+    isAutoMemorySearchProvider(getRecord(getRecord(agent)?.memorySearch)?.provider),
   );
 }
 
@@ -443,11 +443,13 @@ function rewriteLegacyMemorySearchAutoProvider(
   pathLabel: string,
   changes: string[],
 ): void {
-  if (!memorySearch || !isLegacyMemorySearchAutoProvider(memorySearch.provider)) {
+  if (!memorySearch || !isAutoMemorySearchProvider(memorySearch.provider)) {
     return;
   }
-  memorySearch.provider = "openai";
-  changes.push(`Moved ${pathLabel}.provider from legacy "auto" to "openai".`);
+  // "auto" is now resolved at runtime via the auto-selection loop in
+  // createEmbeddingProvider, so we keep it in the config instead of
+  // migrating to a specific provider.
+  changes.push(`Preserved ${pathLabel}.provider="auto" (resolved at runtime).`);
 }
 
 function migrateLegacySandboxPerSession(
@@ -1371,8 +1373,8 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
     },
   }),
   defineLegacyConfigMigration({
-    id: "memorySearch.provider-auto->openai",
-    describe: 'Rewrite legacy memorySearch provider "auto" to "openai"',
+    id: "memorySearch.provider-auto-preserve",
+    describe: 'Keep memorySearch provider "auto" (resolved at runtime)',
     legacyRules: LEGACY_MEMORY_SEARCH_AUTO_PROVIDER_RULES,
     apply: (raw, changes) => {
       const agents = getRecord(raw.agents);

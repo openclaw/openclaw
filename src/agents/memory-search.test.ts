@@ -191,7 +191,7 @@ describe("memory search config", () => {
     expect(resolved).toBeNull();
   });
 
-  it("defaults provider to openai when unspecified", () => {
+  it("defaults provider to auto when unspecified", () => {
     const cfg = asConfig({
       agents: {
         defaults: {
@@ -202,17 +202,17 @@ describe("memory search config", () => {
       },
     });
     const resolved = resolveMemorySearchConfig(cfg, "main");
-    expect(resolved?.provider).toBe("openai");
-    expect(resolved?.model).toBe("text-embedding-3-small");
+    expect(resolved?.provider).toBe("auto");
+    expect(resolved?.model).toBe("");
     expect(resolved?.fallback).toBe("none");
     expect(resolved?.store.databasePath).toBe(resolveOpenClawAgentSqlitePath({ agentId: "main" }));
   });
 
-  it("normalizes legacy auto provider config to openai", () => {
+  it("preserves auto provider config without resolving to a concrete provider", () => {
     const resolved = resolveMemorySearchConfig(configWithDefaultProvider("auto"), "main");
 
-    expect(resolved?.provider).toBe("openai");
-    expect(resolved?.model).toBe("text-embedding-3-small");
+    expect(resolved?.provider).toBe("auto");
+    expect(resolved?.model).toBe("");
   });
 
   it("resolves explicit concrete providers", () => {

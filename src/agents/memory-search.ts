@@ -130,7 +130,6 @@ const DEFAULT_TEMPORAL_DECAY_ENABLED = false;
 const DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS = 30;
 const DEFAULT_CACHE_ENABLED = true;
 const DEFAULT_SOURCES: Array<"memory" | "sessions"> = ["memory"];
-const DEFAULT_MEMORY_EMBEDDING_PROVIDER = "openai";
 const DEFAULT_REMOTE_BATCH_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_REMOTE_BATCH_TIMEOUT_MINUTES = 60;
 const MAX_REMOTE_BATCH_TIMEOUT_MINUTES = Math.floor(MAX_TIMER_TIMEOUT_MS / 60_000);
@@ -206,11 +205,9 @@ function mergeConfig(
   const sessionMemory =
     overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
   const rawProvider = overrides?.provider ?? defaults?.provider;
-  const provider =
-    rawProvider?.trim() === "auto"
-      ? DEFAULT_MEMORY_EMBEDDING_PROVIDER
-      : rawProvider?.trim() || DEFAULT_MEMORY_EMBEDDING_PROVIDER;
-  const primaryAdapter = getConfiguredMemoryEmbeddingProvider(provider, cfg);
+  const provider = rawProvider?.trim() || "auto";
+  const primaryAdapter =
+    provider === "auto" ? undefined : getConfiguredMemoryEmbeddingProvider(provider, cfg);
   const defaultRemote = defaults?.remote;
   const overrideRemote = overrides?.remote;
   const fallback = overrides?.fallback ?? defaults?.fallback ?? "none";
@@ -258,7 +255,7 @@ function mergeConfig(
         batch,
       }
     : undefined;
-  const modelDefault = primaryAdapter?.defaultModel;
+  const modelDefault = provider === "auto" ? undefined : primaryAdapter?.defaultModel;
   const model = overrides?.model ?? defaults?.model ?? modelDefault ?? "";
   const inputType = overrides?.inputType?.trim() || defaults?.inputType?.trim() || undefined;
   const queryInputType =
