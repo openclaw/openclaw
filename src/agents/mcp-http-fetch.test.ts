@@ -213,16 +213,20 @@ describe("MCP HTTP fetch helpers", () => {
   });
 
   it("returns fetch responses compatible with MCP SDK OAuth error parsing", async () => {
+    const body = '{"error":"invalid_client_metadata","error_description":"bad redirect"}';
     class ForeignResponse {
       status = 400;
       statusText = "Bad Request";
-      headers = new Headers({ "content-type": "application/json" });
+      headers = new Headers({
+        "content-length": String(Buffer.byteLength(body, "utf8")),
+        "content-type": "application/json",
+      });
       body = null;
       get ok() {
         return false;
       }
       async text() {
-        return '{"error":"invalid_client_metadata","error_description":"bad redirect"}';
+        return body;
       }
     }
 
@@ -244,5 +248,137 @@ describe("MCP HTTP fetch helpers", () => {
     const error = await parseErrorResponse(response);
     expect(error.message).toContain("bad redirect");
     expect(error.message).not.toContain("[object Response]");
+  });
+
+  it("drops body-less oversized OAuth error text to avoid OOM", async () => {
+    const text = vi.fn(async () => "x".repeat(1024 * 1024 + 1));
+    class OversizedForeignResponse {
+      status = 400;
+      statusText = "Bad Request";
+      headers = new Headers({
+        "content-length": String(1024 * 1024 + 1),
+        "content-type": "application/json",
+      });
+      body = null;
+      get ok() {
+        return false;
+      }
+      text = text;
+    }
+
+    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: TestAgent,
+      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+      ProxyAgent: TestProxyAgent,
+      fetch: async () => new OversizedForeignResponse() as unknown as Response,
+    };
+    const fetch = buildMcpHttpFetch({
+      resourceUrl: "https://mcp.example.com/mcp",
+    });
+
+    const response = await fetch("https://auth.example.com/oauth/register", { method: "POST" });
+    expect(response).toBeInstanceOf(Response);
+    expect(response.status).toBe(400);
+    expect(response.body).toBeNull();
+    expect(text).not.toHaveBeenCalled();
+  });
+
+  it("drops body-less OAuth error text without content length before reading", async () => {
+    const text = vi.fn(async () => '{"error_description":"too large"}');
+    class UnboundedForeignResponse {
+      status = 400;
+      statusText = "Bad Request";
+      headers = new Headers({ "content-type": "application/json" });
+      body = null;
+      get ok() {
+        return false;
+      }
+      text = text;
+    }
+
+    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: TestAgent,
+      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+      ProxyAgent: TestProxyAgent,
+      fetch: async () => new UnboundedForeignResponse() as unknown as Response,
+    };
+    const fetch = buildMcpHttpFetch({
+      resourceUrl: "https://mcp.example.com/mcp",
+    });
+
+    const response = await fetch("https://auth.example.com/oauth/register", { method: "POST" });
+    expect(response).toBeInstanceOf(Response);
+    expect(response.status).toBe(400);
+    expect(response.body).toBeNull();
+    expect(text).not.toHaveBeenCalled();
+  });
+
+  it.each(["1e3", "0x40"])(
+    "drops body-less OAuth error text with malformed content length %s before reading",
+    async (contentLength) => {
+      const text = vi.fn(async () => '{"error_description":"too large"}');
+      class MalformedLengthForeignResponse {
+        status = 400;
+        statusText = "Bad Request";
+        headers = new Headers({
+          "content-length": contentLength,
+          "content-type": "application/json",
+        });
+        body = null;
+        get ok() {
+          return false;
+        }
+        text = text;
+      }
+
+      testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+        Agent: TestAgent,
+        EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+        ProxyAgent: TestProxyAgent,
+        fetch: async () => new MalformedLengthForeignResponse() as unknown as Response,
+      };
+      const fetch = buildMcpHttpFetch({
+        resourceUrl: "https://mcp.example.com/mcp",
+      });
+
+      const response = await fetch("https://auth.example.com/oauth/register", { method: "POST" });
+      expect(response).toBeInstanceOf(Response);
+      expect(response.status).toBe(400);
+      expect(response.body).toBeNull();
+      expect(text).not.toHaveBeenCalled();
+    },
+  );
+
+  it("drops body-less text when declared content length is smaller than returned text", async () => {
+    const text = vi.fn(async () => "x".repeat(1024 * 1024 + 1));
+    class LyingForeignResponse {
+      status = 400;
+      statusText = "Bad Request";
+      headers = new Headers({
+        "content-length": "64",
+        "content-type": "application/json",
+      });
+      body = null;
+      get ok() {
+        return false;
+      }
+      text = text;
+    }
+
+    testGlobal[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: TestAgent,
+      EnvHttpProxyAgent: TestEnvHttpProxyAgent,
+      ProxyAgent: TestProxyAgent,
+      fetch: async () => new LyingForeignResponse() as unknown as Response,
+    };
+    const fetch = buildMcpHttpFetch({
+      resourceUrl: "https://mcp.example.com/mcp",
+    });
+
+    const response = await fetch("https://auth.example.com/oauth/register", { method: "POST" });
+    expect(response).toBeInstanceOf(Response);
+    expect(response.status).toBe(400);
+    expect(response.body).toBeNull();
+    expect(text).toHaveBeenCalledOnce();
   });
 });

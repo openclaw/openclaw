@@ -25,6 +25,7 @@ const fetchWithUndiciGuard = async (
 ): Promise<Response> => await fetchWithUndici(input instanceof Request ? input.url : input, init);
 
 const MCP_HTTP_MAX_REDIRECTS = 20;
+const MCP_HTTP_MAX_TEXT_RESPONSE_BYTES = 1024 * 1024;
 const managedMcpResponseCleanupRegistry = new FinalizationRegistry<{
   finalize: () => Promise<void>;
 }>((held) => {
@@ -66,10 +67,31 @@ async function ensureGlobalFetchResponse(response: Response): Promise<Response> 
     return new Response(null, init);
   }
   if (typeof response.text === "function") {
+    const contentLengthBytes = parseSafeContentLength(response.headers.get("content-length"));
+    if (contentLengthBytes === null || contentLengthBytes > MCP_HTTP_MAX_TEXT_RESPONSE_BYTES) {
+      return new Response(null, init);
+    }
+    // Bodyless foreign responses only expose text(); trust Content-Length to avoid
+    // no-size reads, then verify the returned UTF-8 size before preserving it.
     const text = await response.text();
+    if (Buffer.byteLength(text, "utf8") > MCP_HTTP_MAX_TEXT_RESPONSE_BYTES) {
+      return new Response(null, init);
+    }
     return new Response(text, init);
   }
   return new Response(null, init);
+}
+
+function parseSafeContentLength(value: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    return null;
+  }
+  const size = Number(trimmed);
+  return Number.isSafeInteger(size) && size >= 0 ? size : null;
 }
 
 async function buildManagedMcpResponse(
