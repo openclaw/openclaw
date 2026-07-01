@@ -16,6 +16,7 @@ import type {
   HostedOfficialExternalPluginCatalogMetadata,
   HostedOfficialExternalPluginCatalogSnapshot,
   HostedOfficialExternalPluginCatalogSnapshotStore,
+  HostedOfficialExternalPluginCatalogTrustState,
 } from "./official-external-plugin-catalog.js";
 
 export type HostedOfficialExternalPluginCatalogSnapshotStoreOptions = {
@@ -32,6 +33,11 @@ type HostedCatalogSnapshotRow = {
   last_modified: string | null;
   checksum: string;
   saved_at: string;
+  trust_mode: string | null;
+  trust_key_id: string | null;
+  trust_signature_count: number | bigint | null;
+  trust_threshold: number | bigint | null;
+  trust_verified_at: string | null;
 };
 
 type HostedCatalogSnapshotDatabase = Pick<
@@ -70,6 +76,27 @@ function resolveStateDatabasePath(
   return resolveOpenClawStateSqlitePath(resolveStoreEnv(options) ?? process.env);
 }
 
+function rowToTrustState(
+  row: HostedCatalogSnapshotRow,
+): HostedOfficialExternalPluginCatalogTrustState | undefined {
+  if (
+    row.trust_mode !== "signed" ||
+    !row.trust_key_id ||
+    row.trust_signature_count === null ||
+    row.trust_threshold === null ||
+    !row.trust_verified_at
+  ) {
+    return undefined;
+  }
+  return {
+    mode: "signed",
+    signedBy: row.trust_key_id,
+    signatureCount: Number(row.trust_signature_count),
+    threshold: Number(row.trust_threshold),
+    verifiedAt: row.trust_verified_at,
+  };
+}
+
 function rowToSnapshot(
   row: HostedCatalogSnapshotRow | undefined,
 ): HostedOfficialExternalPluginCatalogSnapshot | null {
@@ -83,10 +110,12 @@ function rowToSnapshot(
     ...(row.etag ? { etag: row.etag } : {}),
     ...(row.last_modified ? { lastModified: row.last_modified } : {}),
   };
+  const trust = rowToTrustState(row);
   return {
     body: row.body,
     metadata,
     savedAt: row.saved_at,
+    ...(trust ? { trust } : {}),
   };
 }
 
@@ -106,7 +135,20 @@ export function createSqliteHostedOfficialExternalPluginCatalogSnapshotStore(
         database.db,
         stateDb
           .selectFrom("official_external_plugin_catalog_snapshots")
-          .select(["feed_url", "body", "status", "etag", "last_modified", "checksum", "saved_at"])
+          .select([
+            "feed_url",
+            "body",
+            "status",
+            "etag",
+            "last_modified",
+            "checksum",
+            "saved_at",
+            "trust_mode",
+            "trust_key_id",
+            "trust_signature_count",
+            "trust_threshold",
+            "trust_verified_at",
+          ])
           .where("feed_url", "=", url),
       ) as HostedCatalogSnapshotRow | undefined;
       return rowToSnapshot(row);
@@ -128,6 +170,11 @@ export function createSqliteHostedOfficialExternalPluginCatalogSnapshotStore(
               checksum: snapshot.metadata.checksum,
               saved_at: snapshot.savedAt,
               updated_at_ms: now,
+              trust_mode: snapshot.trust?.mode ?? null,
+              trust_key_id: snapshot.trust?.signedBy ?? null,
+              trust_signature_count: snapshot.trust?.signatureCount ?? null,
+              trust_threshold: snapshot.trust?.threshold ?? null,
+              trust_verified_at: snapshot.trust?.verifiedAt ?? null,
             })
             .onConflict((conflict) =>
               conflict.column("feed_url").doUpdateSet({
@@ -138,6 +185,11 @@ export function createSqliteHostedOfficialExternalPluginCatalogSnapshotStore(
                 checksum: snapshot.metadata.checksum,
                 saved_at: snapshot.savedAt,
                 updated_at_ms: now,
+                trust_mode: snapshot.trust?.mode ?? null,
+                trust_key_id: snapshot.trust?.signedBy ?? null,
+                trust_signature_count: snapshot.trust?.signatureCount ?? null,
+                trust_threshold: snapshot.trust?.threshold ?? null,
+                trust_verified_at: snapshot.trust?.verifiedAt ?? null,
               }),
             ),
         );
