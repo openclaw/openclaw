@@ -86,7 +86,7 @@ function bestEffortChmodSync(target: string, mode: number): void {
   stateDbLog.warn(`skipped permission hardening for ${target}: ${String(result.error)}`);
 }
 
-function ensureOpenClawStatePermissions(pathname: string, env: NodeJS.ProcessEnv): void {
+export function ensureOpenClawStatePermissions(pathname: string, env: NodeJS.ProcessEnv): void {
   const dir = path.dirname(pathname);
   const defaultDir = resolveOpenClawStateSqliteDir(env);
   const isDefaultStateDatabase =
