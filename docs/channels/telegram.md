@@ -819,9 +819,9 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     `ackReaction` sends an acknowledgement emoji while OpenClaw is processing an inbound message. `ackReactionScope` decides *when* that emoji is actually sent.
 
     **Emoji (`ackReaction`) resolution order:**
-
     - `channels.telegram.accounts.<accountId>.ackReaction`
     - `channels.telegram.ackReaction`
+    - `channels["*"].ackReaction`
     - `messages.ackReaction`
     - agent identity emoji fallback (`agents.list[].identity.emoji`, else "👀")
 

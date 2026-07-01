@@ -3362,6 +3362,21 @@ describe("listConfiguredChannelIdsForReadOnlyScope", () => {
     ).toEqual(["demo-channel"]);
   });
 
+  it('ignores channels["*"] wildcard config when listing explicit configured channels', () => {
+    expect(
+      listExplicitConfiguredChannelIdsForConfig({
+        channels: {
+          "*": {
+            ackReaction: "🎯",
+          },
+          "demo-channel": {
+            token: "configured",
+          },
+        },
+      } as OpenClawConfig),
+    ).toEqual(["demo-channel"]);
+  });
+
   it("does not let disabled mixed-case channel config announce ambient matches", () => {
     listPotentialConfiguredChannelIds.mockReturnValue(["demo-channel"]);
     listPotentialConfiguredChannelPresenceSignals.mockReturnValue([

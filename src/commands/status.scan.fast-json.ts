@@ -13,7 +13,7 @@ import {
 import { collectStatusScanOverview } from "./status.scan-overview.ts";
 import type { StatusScanResult } from "./status.scan-result.ts";
 
-const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
+const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel", "*"]);
 const STATUS_JSON_CHANNEL_ENV_PREFIXES = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.filter(
   (entry) => entry.configurable !== false,
 ).map((entry) => `${entry.channelId.replace(/[^a-z0-9]+/gi, "_").toUpperCase()}_`);

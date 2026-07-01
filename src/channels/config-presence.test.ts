@@ -57,6 +57,21 @@ describe("config presence", () => {
     expect(hasMeaningfulChannelConfig({ homeserver: "https://matrix.example.org" })).toBe(true);
   });
 
+  it('ignores channels["*"] wildcard config when listing configured channels', () => {
+    const env = {} as NodeJS.ProcessEnv;
+    const cfg = {
+      channels: { "*": { ackReaction: "🎯" } },
+    } as unknown as OpenClawConfig;
+
+    expectPotentialConfiguredChannelCase({
+      cfg,
+      env,
+      expectedIds: [],
+      expectedConfigured: false,
+      options: { includePersistedAuthState: false },
+    });
+  });
+
   it("ignores enabled-only matrix config when listing configured channels", () => {
     const env = {} as NodeJS.ProcessEnv;
     const cfg = { channels: { matrix: { enabled: false } } };

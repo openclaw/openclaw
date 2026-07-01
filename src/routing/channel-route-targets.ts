@@ -14,7 +14,7 @@ export type ChannelRouteTarget = {
   channels: string[];
 };
 
-const CHANNELS_CONFIG_META_KEYS = new Set(["defaults", "modelByChannel"]);
+const CHANNELS_CONFIG_META_KEYS = new Set(["defaults", "modelByChannel", "*"]);
 
 function normalizeConfiguredChannelKey(raw?: string | null): string {
   return normalizeChatChannelId(raw) ?? normalizeLowercaseStringOrEmpty(raw);

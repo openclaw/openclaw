@@ -1211,6 +1211,101 @@ describe("config plugin validation", () => {
     expectNoPath(res.warnings, "channels.telegarm");
   });
 
+  it('accepts channels["*"].ackReaction as a valid wildcard channel id', () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "openclaw" }] },
+      channels: {
+        "*": { ackReaction: "🎯" },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it('rejects channels["*"].responsePrefix until a matching runtime fallback exists', () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "openclaw" }] },
+      channels: {
+        "*": { ackReaction: "👍", responsePrefix: "[bot] " },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expect(res.issues.filter((issue) => issue.path === "channels.*.responsePrefix")).toEqual([
+      {
+        path: "channels.*.responsePrefix",
+        message:
+          'unsupported wildcard channel field: responsePrefix (only ackReaction is supported under channels["*"])',
+      },
+    ]);
+  });
+
+  it('rejects unsupported fields under channels["*"] such as dmPolicy', () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "openclaw" }] },
+      channels: {
+        "*": { ackReaction: "🎯", dmPolicy: "allow" },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expect(res.issues.filter((issue) => issue.path === "channels.*.dmPolicy")).toEqual([
+      {
+        path: "channels.*.dmPolicy",
+        message:
+          'unsupported wildcard channel field: dmPolicy (only ackReaction is supported under channels["*"])',
+      },
+    ]);
+  });
+
+  it('rejects a non-string value for channels["*"].ackReaction', () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "openclaw" }] },
+      channels: {
+        "*": { ackReaction: 123 },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expect(res.issues.filter((issue) => issue.path === "channels.*.ackReaction")).toEqual([
+      {
+        path: "channels.*.ackReaction",
+        message: 'channels["*"].ackReaction must be a string',
+      },
+    ]);
+  });
+
+  it("still rejects unknown non-wildcard channel ids alongside a valid wildcard entry", () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "openclaw" }] },
+      channels: {
+        "*": { ackReaction: "🎯" },
+        notarealchannel: { token: "xxx" },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expect(res.issues.filter((issue) => issue.path === "channels.notarealchannel")).toEqual([
+      {
+        path: "channels.notarealchannel",
+        message: "unknown channel id: notarealchannel",
+      },
+    ]);
+    expectNoPath(res.issues, "channels.*");
+  });
+
   it("warns when plugins.allow contains a channel id without a plugin manifest (#76872)", () => {
     const res = validateConfigObjectWithPlugins(
       {
@@ -1756,6 +1851,26 @@ describe("config plugin validation", () => {
       expect(
         res.issues.some((issue) => issue.path === "agents.defaults.heartbeat.directPolicy"),
       ).toBe(true);
+    }
+  });
+  it("accepts wildcard * as a valid channel id in channels config", () => {
+    const res = validateInSuite({
+      channels: {
+        "*": { ackReaction: "🎯" },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("still rejects unknown non-wildcard channel ids", () => {
+    const res = validateInSuite({
+      channels: {
+        "not-a-real-channel": { ackReaction: "🎯" },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((issue) => issue.path === "channels.not-a-real-channel")).toBe(true);
     }
   });
 });

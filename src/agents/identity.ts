@@ -36,7 +36,9 @@ export function resolveAckReaction(
   // L2: Channel level
   if (opts?.channel) {
     const channelCfg = getChannelConfig(cfg, opts.channel);
-    const channelReaction = channelCfg?.ackReaction as string | undefined;
+    const channelReaction =
+      (channelCfg?.ackReaction as string | undefined) ??
+      (getChannelConfig(cfg, "*")?.ackReaction as string | undefined);
     if (channelReaction !== undefined) {
       return channelReaction.trim();
     }

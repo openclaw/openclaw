@@ -90,4 +90,18 @@ describe("collectChannelRouteTargets", () => {
     expect(targets.get("ios-agent")).toEqual(["imsg"]);
     expect(targets.get("main")).toEqual(["imessage"]);
   });
+
+  it('does not sample channels["*"] wildcard config as a configured channel route target', () => {
+    const targets = targetMap({
+      channels: {
+        "*": { ackReaction: "🎯" },
+        telegram: {},
+      },
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+    });
+
+    expect(targets.get("main")).toEqual(["telegram"]);
+  });
 });

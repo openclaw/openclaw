@@ -1088,6 +1088,7 @@ Resolution order:
 
 - `channels.slack.accounts.<accountId>.ackReaction`
 - `channels.slack.ackReaction`
+- `channels["*"].ackReaction`
 - `messages.ackReaction`
 - agent identity emoji fallback (`agents.list[].identity.emoji`, else `"eyes"` / 👀)
 
