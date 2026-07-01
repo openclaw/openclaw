@@ -4,6 +4,10 @@
     "target": "OpenClaw"
   },
   {
+    "source": "v2026.6.11",
+    "target": "v2026.6.11"
+  },
+  {
     "source": "macOS platform notes",
     "target": "macOS 平台说明"
   },
