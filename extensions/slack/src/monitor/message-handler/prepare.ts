@@ -66,6 +66,7 @@ import {
 } from "../context.js";
 import { resolveConversationLabel } from "../conversation.runtime.js";
 import { authorizeSlackDirectMessage } from "../dm-auth.js";
+import { authorizeSlackMemberPolicy } from "../member-policy.js";
 import { resolveSlackRoomContextHints } from "../room-context.js";
 import { sendMessageSlack } from "../send.runtime.js";
 import { resolveSlackThreadStarter, type SlackThreadStarter } from "../thread.js";
@@ -557,6 +558,12 @@ async function authorizeSlackInboundMessage(params: {
   const senderId = message.user ?? (isBotMessage ? message.bot_id : undefined);
   if (!senderId) {
     logVerbose("slack: drop message (missing sender id)");
+    return null;
+  }
+
+  const memberPolicy = await authorizeSlackMemberPolicy({ ctx, senderId });
+  if (!memberPolicy.allowed) {
+    logVerbose(`slack: drop message from ${senderId} (memberPolicy=${memberPolicy.reason})`);
     return null;
   }
 
