@@ -619,6 +619,13 @@ it("strips model-generated parameter XML wrappers from rich HTML (regression for
   expect(result).toContain("<summary>");
 });
 
+it("preserves escaped parameter tags inside code blocks (regression for #98557)", () => {
+  const input = '<pre><code>&lt;parameter name="x"&gt;val&lt;/parameter&gt;</code></pre>';
+  const result = sanitizeTelegramRichHtml(input);
+  expect(result).toContain("parameter");
+  expect(result).toContain("<pre><code>");
+});
+
 function containsLoneSurrogate(text: string): boolean {
   for (let index = 0; index < text.length; index += 1) {
     const code = text.charCodeAt(index);
