@@ -19,8 +19,8 @@ describe("quoteCliArg", () => {
     expect(quoteCliArg("it's")).toBe("'it'\\''s'");
   });
 
-  it("returns empty string unchanged", () => {
-    expect(quoteCliArg("")).toBe("");
+  it("wraps empty string in quotes", () => {
+    expect(quoteCliArg("")).toBe("''");
   });
 
   it("wraps string with dollar sign", () => {
