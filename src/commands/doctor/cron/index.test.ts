@@ -1,4 +1,5 @@
 // Doctor cron index tests cover cron doctor checks and repair entrypoints.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,14 +15,11 @@ import {
 } from "../../../cron/store.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
 import { withRestoredMocks } from "../../../test-utils/vitest-spies.js";
-import { migrateLegacyDreamingPayloadShape } from "./dreaming-payload-migration.js";
 import {
   collectLegacyWhatsAppCrontabHealthWarning,
   maybeRepairLegacyCronStore,
   noteLegacyWhatsAppCrontabHealthCheck,
 } from "./index.js";
-import { migrateLegacyNotifyFallback } from "./legacy-notify.js";
-import { normalizeStoredCronJobs } from "./store-migration.js";
 
 type TerminalNote = (message: string, title?: string) => void;
 
@@ -513,6 +511,186 @@ describe("maybeRepairLegacyCronStore", () => {
     expectNoNoteContaining("Legacy cron job storage detected", "Cron");
   });
 
+  it("refuses a migration plan when the legacy source changes during confirmation", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [createLegacyCronJob()]);
+    const changedJob = createLegacyCronJob({ jobId: "changed-job", name: "Changed job" });
+    const prompter = {
+      confirm: vi.fn(async () => {
+        await writeCronStore(storePath, [changedJob]);
+        return true;
+      }),
+    };
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter,
+    });
+
+    expect(await readPersistedJobs(storePath)).toHaveLength(0);
+    await expect(fs.readFile(storePath, "utf-8")).resolves.toContain("changed-job");
+    await expect(fs.stat(`${storePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+    expectNoteContaining("changed while doctor was preparing", "Doctor warnings");
+    expectNoNoteContaining("Cron store migrated to SQLite", "Doctor changes");
+
+    noteMock.mockClear();
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+    expect((await readPersistedJobs(storePath)).map((job) => job.id)).toEqual(["changed-job"]);
+    await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
+    expectNoteContaining("Cron store migrated to SQLite", "Doctor changes");
+  });
+
+  it("keeps a source that changes during an EXDEV copy and imports it on retry", async () => {
+    const storePath = await makeTempStorePath();
+    const archivePath = `${storePath}.migrated`;
+    await writeCronStore(storePath, [createLegacyCronJob()]);
+
+    const renameSpy = mockExdevRename(storePath);
+    const realCopyFile = fs.copyFile.bind(fs);
+    const copyFileSpy = vi.spyOn(fs, "copyFile").mockImplementation(async (src, dest, mode) => {
+      await realCopyFile(src, dest, mode);
+      if (src === storePath) {
+        await writeCronStore(storePath, [
+          createLegacyCronJob({ jobId: "late-job", name: "Late job" }),
+        ]);
+      }
+    });
+
+    await withRestoredMocks([copyFileSpy, renameSpy], async () => {
+      await maybeRepairLegacyCronStore({
+        cfg: createCronConfig(storePath),
+        options: {},
+        prompter: makePrompter(true),
+      });
+    });
+
+    expect((await readPersistedJobs(storePath)).map((job) => job.id)).toEqual(["legacy-job"]);
+    await expect(fs.readFile(storePath, "utf-8")).resolves.toContain("late-job");
+    await expect(fs.stat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+    expectNoteContaining("changed during archival", "Doctor warnings");
+
+    noteMock.mockClear();
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+    expect((await readPersistedJobs(storePath)).map((job) => job.id)).toEqual([
+      "legacy-job",
+      "late-job",
+    ]);
+    await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(archivePath)).resolves.toBeTruthy();
+  });
+
+  it("restores an archived state sidecar when the primary archive fails", async () => {
+    const storePath = await makeTempStorePath();
+    const statePath = storePath.replace(/\.json$/, "-state.json");
+    await writeCronStore(storePath, [createLegacyCronJob()]);
+    await fs.writeFile(statePath, JSON.stringify({ version: 1, jobs: {} }), "utf-8");
+
+    const realRename = fs.rename.bind(fs);
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (oldPath, newPath) => {
+      if (oldPath === storePath) {
+        throw createFsError("EIO", "primary archive failed");
+      }
+      return await realRename(oldPath, newPath);
+    });
+
+    await withRestoredMocks([renameSpy], async () => {
+      await maybeRepairLegacyCronStore({
+        cfg: createCronConfig(storePath),
+        options: {},
+        prompter: makePrompter(true),
+      });
+    });
+
+    await expect(fs.stat(storePath)).resolves.toBeTruthy();
+    await expect(fs.stat(statePath)).resolves.toBeTruthy();
+    await expect(fs.stat(`${statePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
+    expectNoteContaining("EIO", "Doctor warnings");
+    expectNoNoteContaining("Cron store migrated to SQLite", "Doctor changes");
+
+    noteMock.mockClear();
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+    await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(statePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(`${statePath}.migrated`)).resolves.toBeTruthy();
+    expectNoteContaining("Cron store migrated to SQLite", "Doctor changes");
+  });
+
+  it("restores the primary source when a state sidecar is recreated during archival", async () => {
+    const storePath = await makeTempStorePath();
+    const statePath = storePath.replace(/\.json$/, "-state.json");
+    await writeCronStore(storePath, [createLegacyCronJob()]);
+    await fs.writeFile(statePath, JSON.stringify({ version: 1, jobs: {} }), "utf-8");
+
+    const realRename = fs.rename.bind(fs);
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (oldPath, newPath) => {
+      if (oldPath === storePath) {
+        await fs.writeFile(
+          statePath,
+          JSON.stringify({ version: 1, jobs: { "legacy-job": { state: { lastRunAtMs: 2 } } } }),
+          "utf-8",
+        );
+      }
+      return await realRename(oldPath, newPath);
+    });
+
+    await withRestoredMocks([renameSpy], async () => {
+      await maybeRepairLegacyCronStore({
+        cfg: createCronConfig(storePath),
+        options: {},
+        prompter: makePrompter(true),
+      });
+    });
+
+    await expect(fs.stat(storePath)).resolves.toBeTruthy();
+    await expect(fs.readFile(statePath, "utf-8")).resolves.toContain("lastRunAtMs");
+    await expect(fs.stat(`${statePath}.migrated`)).resolves.toBeTruthy();
+    expectNoteContaining("state appeared after", "Doctor warnings");
+    expectNoteContaining("archive rollback failed", "Doctor warnings");
+    expectNoNoteContaining("Cron store migrated to SQLite", "Doctor changes");
+  });
+
+  it("reports a late state access failure without rejecting doctor", async () => {
+    const storePath = await makeTempStorePath();
+    const statePath = storePath.replace(/\.json$/, "-state.json");
+    await writeCronStore(storePath, [createLegacyCronJob()]);
+
+    const realAccess = fs.access.bind(fs);
+    let stateAccesses = 0;
+    const accessSpy = vi.spyOn(fs, "access").mockImplementation(async (...args) => {
+      if (args[0] === statePath && ++stateAccesses === 2) {
+        throw createFsError("EIO", "state access failed");
+      }
+      return await realAccess(...args);
+    });
+
+    await withRestoredMocks([accessSpy], async () => {
+      await expect(
+        maybeRepairLegacyCronStore({
+          cfg: createCronConfig(storePath),
+          options: {},
+          prompter: makePrompter(true),
+        }),
+      ).resolves.toBeUndefined();
+    });
+
+    await expect(fs.stat(storePath)).resolves.toBeTruthy();
+    expectNoteContaining("state access failed", "Doctor warnings");
+    expectNoNoteContaining("Cron store migrated to SQLite", "Doctor changes");
+  });
+
   it("removes a partial copy and warns honestly when archiving fails", async () => {
     const storePath = await makeTempStorePath();
     const archivePath = `${storePath}.migrated`;
@@ -754,42 +932,42 @@ describe("maybeRepairLegacyCronStore", () => {
     },
   );
 
-  it("reconciles a shipped random-id migration before archiving its leftover source", async () => {
+  it("does not resurrect a migrated job removed before an archive retry", async () => {
     const storePath = await makeTempStorePath();
-    const legacyJob = createLegacyCronJob({
-      id: undefined,
-      jobId: undefined,
-      description: "",
-      sessionKey: "",
-      createdAtMs: undefined,
-      updatedAtMs: undefined,
-      schedule: { kind: "every", everyMs: 60_000 },
-      payload: { kind: "agentTurn", message: "  Morning brief  ", thinking: null },
-    });
-    const previouslyMigrated = structuredClone(legacyJob);
-    previouslyMigrated.updatedAtMs = 1_000;
-    normalizeStoredCronJobs([previouslyMigrated]);
-    migrateLegacyNotifyFallback({
-      jobs: [previouslyMigrated],
-      legacyWebhook: "https://old.example.invalid/cron-finished",
-    });
-    migrateLegacyDreamingPayloadShape([previouslyMigrated]);
-    delete (previouslyMigrated.payload as Record<string, unknown>).thinking;
-    previouslyMigrated.id = "cron-11111111-2222-4333-8444-555555555555";
-    await writeCurrentCronStore(storePath, [previouslyMigrated]);
-    await writeCronStore(storePath, [legacyJob]);
+    const archivePath = `${storePath}.migrated`;
+    await writeCronStore(storePath, [createLegacyCronJob({ id: undefined, jobId: undefined })]);
 
+    const renameSpy = mockExdevRename(storePath);
+    const realUnlink = fs.unlink.bind(fs);
+    const unlinkSpy = vi.spyOn(fs, "unlink").mockImplementation(async (target) => {
+      if (target === storePath) {
+        throw createFsError("EBUSY", "resource busy, unlink");
+      }
+      return await realUnlink(target);
+    });
+
+    await withRestoredMocks([unlinkSpy, renameSpy], async () => {
+      await maybeRepairLegacyCronStore({
+        cfg: createCronConfig(storePath),
+        options: {},
+        prompter: makePrompter(true),
+      });
+      expectNoteContaining("EBUSY", "Doctor warnings");
+    });
+    expect(await readPersistedJobs(storePath)).toHaveLength(1);
+
+    // Simulate runtime-owned one-shot deletion after SQLite import but before cleanup retry.
+    await writeCurrentCronStore(storePath, []);
+    noteMock.mockClear();
     await maybeRepairLegacyCronStore({
       cfg: createCronConfig(storePath),
       options: {},
       prompter: makePrompter(true),
     });
 
-    const jobs = await readPersistedJobs(storePath);
-    expect(jobs).toHaveLength(1);
-    expect(jobs[0]?.id).toBe("cron-11111111-2222-4333-8444-555555555555");
+    expect(await readPersistedJobs(storePath)).toHaveLength(0);
     await expect(fs.stat(storePath)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(`${storePath}.migrated`)).resolves.toBeTruthy();
+    await expect(fs.stat(archivePath)).resolves.toBeTruthy();
     expectNoteContaining("Cron store migrated to SQLite", "Doctor changes");
   });
 
@@ -926,6 +1104,35 @@ describe("maybeRepairLegacyCronStore", () => {
     await expect(fs.stat(`${runLogPath}.migrated`)).resolves.toBeTruthy();
     expectNoteContaining("legacy JSON cron run logs will be imported into SQLite", "Cron");
     expectNoteContaining("Cron run logs migrated to SQLite", "Doctor changes");
+  });
+
+  it("does not report store normalization when run-log migration fails", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCurrentCronStore(storePath, [createCurrentCronJob()]);
+    const runLogPath = path.join(path.dirname(storePath), "runs", "sqlite-job.jsonl");
+    await fs.mkdir(path.dirname(runLogPath), { recursive: true });
+    await fs.writeFile(runLogPath, "{}\n", "utf-8");
+
+    const realReadFileSync = fsSync.readFileSync.bind(fsSync);
+    const readSpy = vi.spyOn(fsSync, "readFileSync").mockImplementation((filePath, options) => {
+      if (filePath === runLogPath) {
+        throw createFsError("EIO", "run-log read failed");
+      }
+      return realReadFileSync(filePath as never, options as never) as never;
+    });
+
+    await withRestoredMocks([readSpy], async () => {
+      await maybeRepairLegacyCronStore({
+        cfg: createCronConfig(storePath),
+        options: {},
+        prompter: makePrompter(true),
+      });
+    });
+
+    await expect(fs.stat(runLogPath)).resolves.toBeTruthy();
+    expectNoteContaining("run-log read failed", "Doctor warnings");
+    expectNoNoteContaining("Cron store normalized", "Doctor changes");
+    expectNoNoteContaining("Cron run logs migrated", "Doctor changes");
   });
 
   it("does not claim legacy store detected when only non-legacy issues exist (#92683)", async () => {

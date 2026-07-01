@@ -3,10 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalStringifiedId } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { normalizeCronJobInput } from "../../../cron/normalize.js";
 import type { CronJob } from "../../../cron/types.js";
-import { migrateLegacyDreamingPayloadShape } from "./dreaming-payload-migration.js";
-import { migrateLegacyNotifyFallback } from "./legacy-notify.js";
 import { resolveLegacyCronMigrationId } from "./legacy-store-migration.js";
-import { normalizeStoredCronJobs } from "./store-migration.js";
 
 type CronLegacyIssueCounts = Partial<Record<string, number>>;
 
@@ -130,112 +127,21 @@ function cronJobMigrationKey(job: Record<string, unknown>): string | undefined {
   );
 }
 
-function isPreFixGeneratedCronId(id: unknown): boolean {
-  return (
-    typeof id === "string" &&
-    /^cron-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
-  );
-}
-
-function legacyRetryShape(
-  job: Record<string, unknown>,
-  legacyWebhook?: string,
-  ignoreNotifyDestination = false,
-): Record<string, unknown> | undefined {
-  const jobs = [structuredClone(job)];
-  const normalized = normalizeStoredCronJobs(jobs).jobs[0];
-  if (!normalized) {
-    return undefined;
-  }
-  migrateLegacyNotifyFallback({ jobs, legacyWebhook });
-  migrateLegacyDreamingPayloadShape(jobs);
-  const hadDeleteAfterRun = Object.hasOwn(normalized, "deleteAfterRun");
-  const persisted = normalizeCronJobInput(normalized, { applyDefaults: true });
-  if (!persisted) {
-    return undefined;
-  }
-  const persistedPayload = persisted.payload;
-  if (
-    persistedPayload &&
-    typeof persistedPayload === "object" &&
-    !Array.isArray(persistedPayload) &&
-    (persistedPayload as Record<string, unknown>).thinking === null
-  ) {
-    // v2026.6.11 dropped explicit null thinking values during persistence.
-    delete (persistedPayload as Record<string, unknown>).thinking;
-  }
-  if (!hadDeleteAfterRun) {
-    delete persisted.deleteAfterRun;
-  }
-  // job_json crosses a JSON boundary before later doctor runs read it back.
-  const serializedPersisted = JSON.stringify(persisted);
-  const canonicalPersisted = JSON.parse(serializedPersisted) as Record<string, unknown>;
-  const {
-    id: _id,
-    jobId: _jobId,
-    state: _state,
-    createdAtMs: _createdAtMs,
-    updatedAtMs: _updatedAtMs,
-    notify: _notify,
-    ...shape
-  } = canonicalPersisted;
-  if (ignoreNotifyDestination) {
-    delete shape.delivery;
-  }
-  if (shape.schedule && typeof shape.schedule === "object" && !Array.isArray(shape.schedule)) {
-    const schedule = { ...(shape.schedule as Record<string, unknown>) };
-    if (schedule.kind === "every") {
-      // Missing legacy timestamps synthesized both updatedAtMs and an every-job anchor.
-      // Neither is stable across the pre-fix failed-archive retry we are reconciling.
-      delete schedule.anchorMs;
-    }
-    shape.schedule = schedule;
-  }
-  return shape;
-}
-
 /** Merge legacy JSON jobs into current jobs without duplicating matching ids/jobIds. */
 export function mergeLegacyCronJobs(params: {
   currentJobs: Array<Record<string, unknown>>;
   legacyJobs: Array<Record<string, unknown>>;
-  legacyWebhook?: string;
 }): { jobs: Array<Record<string, unknown>>; importedCount: number } {
   const merged = [...params.currentJobs];
   const currentKeys = new Set(
     params.currentJobs.map((job) => cronJobMigrationKey(job)).filter((key) => key !== undefined),
   );
-  // v2026.6.11 could persist a random cron-UUID before failing to archive the JSON source.
-  // Consume one matching row per leftover source row; this retires with legacy JSON migration.
-  const preFixRetryShapes = params.currentJobs.flatMap((job) => {
-    if (!isPreFixGeneratedCronId(job.id)) {
-      return [];
-    }
-    const strict = legacyRetryShape(job, params.legacyWebhook);
-    const notifyNeutral = legacyRetryShape(job, params.legacyWebhook, true);
-    return strict && notifyNeutral ? [{ strict, notifyNeutral }] : [];
-  });
   let importedCount = 0;
 
   for (const legacyJob of params.legacyJobs) {
     const key = cronJobMigrationKey(legacyJob);
     if (key && currentKeys.has(key)) {
       continue;
-    }
-    if (resolveLegacyCronMigrationId(legacyJob)) {
-      const notifyNeutral = legacyJob.notify === true;
-      const retryShape = legacyRetryShape(legacyJob, params.legacyWebhook, notifyNeutral);
-      const retryIndex = retryShape
-        ? preFixRetryShapes.findIndex((candidate) =>
-            isDeepStrictEqual(
-              notifyNeutral ? candidate.notifyNeutral : candidate.strict,
-              retryShape,
-            ),
-          )
-        : -1;
-      if (retryIndex >= 0) {
-        preFixRetryShapes.splice(retryIndex, 1);
-        continue;
-      }
     }
     if (key) {
       currentKeys.add(key);
