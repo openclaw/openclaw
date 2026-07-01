@@ -1827,6 +1827,24 @@ export function resolveExecApprovalAllowedDecisions(params?: {
   return DEFAULT_EXEC_APPROVAL_DECISIONS;
 }
 
+export type ExecApprovalAllowAlwaysUnavailableReason = "ask-always" | "no-reusable-pattern";
+
+/**
+ * Explain WHY "Allow Always" is unavailable for an exec approval prompt.
+ * `resolveExecApprovalAllowedDecisions` drops `allow-always` when EITHER the
+ * effective policy is `ask=always` OR the command is one-shot / non-persistable
+ * (no reusable approval pattern, e.g. shell redirection or inline evaluation).
+ * Callers invoke this only when `allow-always` is already known to be
+ * unavailable, so a non-`always` ask means the command simply has no reusable
+ * pattern rather than the policy being ask-always. Without this distinction the
+ * prompt wrongly blames the policy for one-shot commands. (#97069)
+ */
+export function resolveExecApprovalAllowAlwaysUnavailableReason(
+  ask?: string | null,
+): ExecApprovalAllowAlwaysUnavailableReason {
+  return normalizeExecAsk(ask) === "always" ? "ask-always" : "no-reusable-pattern";
+}
+
 export function resolveExecApprovalUnavailableDecisions(params?: {
   ask?: string | null;
   allowAlwaysPersistence?: AllowAlwaysPersistenceDecision | null;
