@@ -50,10 +50,10 @@ import {
   refreshChat,
   retryReconnectableQueuedChatSends,
 } from "../pages/chat/data.ts";
-import { shouldReloadHistoryForFinalEvent } from "../pages/chat/event-reload.ts";
 import {
   loadChatHistory,
   handleChatEvent,
+  shouldReloadHistoryForFinalEvent,
   type ChatEventPayload,
   type ChatState,
 } from "../pages/chat/gateway.ts";

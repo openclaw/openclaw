@@ -103,6 +103,18 @@ function isSilentReplyStream(text: string): boolean {
   return SILENT_REPLY_PATTERN.test(text);
 }
 
+export function shouldReloadHistoryForFinalEvent(payload?: ChatEventPayload): boolean {
+  if (payload?.state !== "final") {
+    return false;
+  }
+  const finalMessage = normalizeFinalAssistantMessage(payload.message);
+  if (!finalMessage) {
+    return true;
+  }
+  const text = extractText(finalMessage);
+  return typeof text !== "string" || text.trim() === "" || isAssistantSilentReply(finalMessage);
+}
+
 /** Client-side defense-in-depth: detect assistant messages whose text is purely NO_REPLY. */
 function isAssistantSilentReply(message: unknown): boolean {
   if (!message || typeof message !== "object") {
