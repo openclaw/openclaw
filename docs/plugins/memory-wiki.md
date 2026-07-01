@@ -130,11 +130,24 @@ Managed content stays inside generated blocks. Human note blocks are preserved.
 
 The main page groups are:
 
-- `sources/` for imported raw material and bridge-backed pages
+- `sources/` for source evidence, including structured imported source-page
+  wrappers and explicitly marked unmanaged raw Markdown
 - `entities/` for durable things, people, systems, projects, and objects
 - `concepts/` for ideas, abstractions, patterns, and policies
 - `syntheses/` for compiled summaries and maintained rollups
 - `reports/` for generated dashboards
+
+Managed imports still use source-page frontmatter. Ingest, bridge import, and
+unsafe-local import preserve the imported content inside a source-page body
+while wrapper frontmatter records identity, page type, freshness, and
+provenance for lint, compile, and search.
+
+Unmanaged raw Markdown can also live under `sources/` when you add
+`<!-- openclaw:wiki:raw-source -->` near the top of the page. That marker tells
+lint to treat the file as raw source evidence without requiring `id`,
+`pageType`, or freshness frontmatter. Unmarked bare Markdown remains visible to
+structure lint so malformed imports and accidental raw files are not silently
+accepted.
 
 ## Open Knowledge Format imports
 

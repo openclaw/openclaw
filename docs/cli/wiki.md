@@ -102,7 +102,12 @@ Import content into the wiki source layer.
 Notes:
 
 - URL ingest is controlled by `ingest.allowUrlIngest`
-- imported source pages keep provenance in frontmatter
+- imported source pages are structured wrappers: frontmatter keeps identity,
+  page type, freshness, and provenance while the body preserves the imported
+  content
+- unmanaged raw Markdown kept directly under `sources/` should include
+  `<!-- openclaw:wiki:raw-source -->` near the top of the page; unmarked bare
+  source files remain visible to structure lint
 - auto-compile can run after ingest when enabled
 
 ### `wiki okf import <path>`
