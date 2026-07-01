@@ -1,17 +1,4 @@
 // Retry logic for LINE API calls
-import { sleep } from "openclaw/plugin-sdk/runtime-env";
-
-export interface RetryConfig {
-  maxRetries: number;
-  baseDelayMs: number;
-  maxDelayMs: number;
-}
-
-export const DEFAULT_RETRY: RetryConfig = {
-  maxRetries: 4,
-  baseDelayMs: 1000,
-  maxDelayMs: 8000,
-};
 
 export type IsRetryableFn = (error: unknown, attempt: number) => boolean;
 
@@ -62,28 +49,4 @@ export function isRetryableError(error: unknown, _attempt: number): boolean {
     }
   }
   return true; // network/timeout: retry
-}
-
-export async function withRetry<T>(
-  fn: () => Promise<T>,
-  config: RetryConfig = DEFAULT_RETRY,
-  retryable: IsRetryableFn = isRetryableError,
-): Promise<T> {
-  let lastError: unknown;
-
-  for (let attempt = 0; attempt <= config.maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastError = err;
-      if (attempt < config.maxRetries && retryable(err, attempt)) {
-        const delay = Math.min(config.baseDelayMs * 2 ** attempt, config.maxDelayMs);
-        await sleep(delay);
-        continue;
-      }
-      throw err;
-    }
-  }
-
-  throw lastError;
 }

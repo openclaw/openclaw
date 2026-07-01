@@ -1,5 +1,5 @@
-import { describe, it, expect, vi } from "vitest";
-import { isRetryableError, withRetry } from "./retry.js";
+import { describe, it, expect } from "vitest";
+import { isRetryableError } from "./retry.js";
 
 describe("retry", () => {
   describe("isRetryableError", () => {
@@ -37,35 +37,11 @@ describe("retry", () => {
       expect(isRetryableError(new Error("ECONNREFUSED"), 0)).toBe(true);
       expect(isRetryableError({}, 0)).toBe(true);
     });
-  });
 
-  describe("withRetry", () => {
-    it("resolves on first attempt", async () => {
-      const fn = vi.fn().mockResolvedValue("ok");
-      await expect(withRetry(fn)).resolves.toBe("ok");
-      expect(fn).toHaveBeenCalledTimes(1);
-    });
-
-    it("retries and succeeds", async () => {
-      const fn = vi.fn().mockRejectedValueOnce(new Error("nope")).mockResolvedValueOnce("ok");
-      await expect(
-        withRetry(fn, { maxRetries: 2, baseDelayMs: 10, maxDelayMs: 100 }),
-      ).resolves.toBe("ok");
-      expect(fn).toHaveBeenCalledTimes(2);
-    });
-
-    it("throws after exhausting retries", async () => {
-      const fn = vi.fn().mockRejectedValue(new Error("persistent"));
-      await expect(
-        withRetry(fn, { maxRetries: 1, baseDelayMs: 10, maxDelayMs: 100 }),
-      ).rejects.toThrow("persistent");
-      expect(fn).toHaveBeenCalledTimes(2);
-    });
-
-    it("does not retry non-retryable errors", async () => {
-      const fn = vi.fn().mockRejectedValue({ statusCode: 400 });
-      await expect(withRetry(fn)).rejects.toEqual({ statusCode: 400 });
-      expect(fn).toHaveBeenCalledTimes(1);
+    it("handles string body from LINE SDK v11", () => {
+      expect(isRetryableError({ statusCode: 429, body: "monthly limit exceeded" }, 0)).toBe(false);
+      expect(isRetryableError({ statusCode: 429, body: "rate limit reached" }, 0)).toBe(true);
+      expect(isRetryableError({ statusCode: 400, body: "Invalid reply token" }, 0)).toBe(false);
     });
   });
 });

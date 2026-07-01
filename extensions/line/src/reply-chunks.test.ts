@@ -133,16 +133,12 @@ describe("sendLineReplyChunks", () => {
       ],
       { cfg: LINE_TEST_CFG, accountId: undefined },
     );
-    // Chunks 6 and 7 fit in one batch (5 messages at a time)
+    // Chunks 6 and 7 fit in one batch; last chunk (7) is sent via pushTextMessageWithQuickReplies
     expect(pushMessagesLine).toHaveBeenCalledTimes(1);
-    expect(pushMessagesLine).toHaveBeenCalledWith(
-      "line:group:1",
-      [
-        { type: "text", text: "6" },
-        { type: "text", text: "7" },
-      ],
-      { cfg: LINE_TEST_CFG, accountId: undefined },
-    );
+    expect(pushMessagesLine).toHaveBeenCalledWith("line:group:1", [{ type: "text", text: "6" }], {
+      cfg: LINE_TEST_CFG,
+      accountId: undefined,
+    });
     expect(pushTextMessageWithQuickReplies).toHaveBeenCalledTimes(1);
     expect(pushTextMessageWithQuickReplies).toHaveBeenCalledWith("line:group:1", "7", ["A"], {
       cfg: LINE_TEST_CFG,
@@ -181,14 +177,13 @@ describe("sendLineReplyChunks", () => {
 
     expect(result.replyTokenUsed).toBe(true);
     expect(onReplyError).toHaveBeenCalledWith(replyError);
-    // All 3 overflow chunks pushed in a single batch
+    // Overflow chunks pushed in a single batch; last chunk (3) is sent via pushTextMessageWithQuickReplies
     expect(pushMessagesLine).toHaveBeenCalledTimes(1);
     expect(pushMessagesLine).toHaveBeenCalledWith(
       "line:group:1",
       [
         { type: "text", text: "1" },
         { type: "text", text: "2" },
-        { type: "text", text: "3" },
       ],
       { cfg: LINE_TEST_CFG, accountId: "default" },
     );

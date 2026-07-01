@@ -4,13 +4,13 @@ import { messagingApi } from "@line/bot-sdk";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
-import { logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
+import { logVerbose, retryAsync, warn } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveLineAccount } from "./accounts.js";
 import { messageAction } from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 import { validateLineMediaUrl } from "./outbound-media.js";
-import { withRetry } from "./retry.js";
+import { isRetryableError } from "./retry.js";
 import { createLineSendReceipt } from "./send-receipt.js";
 import type { LineSendResult } from "./types.js";
 
@@ -216,23 +216,6 @@ function resolveLineReceiptKind(messages: readonly Message[]) {
   return "unknown";
 }
 
-// ── Local push counter (per-channel, per-process) ──
-let totalPushSent = 0;
-let monthlyPushSent = 0;
-
-export function incrementPushCount(n: number): void {
-  totalPushSent += n;
-  monthlyPushSent += n;
-}
-
-export function getPushCounts(): { total: number; monthly: number } {
-  return { total: totalPushSent, monthly: monthlyPushSent };
-}
-
-export function resetMonthlyPushCount(): void {
-  monthlyPushSent = 0;
-}
-
 async function pushLineMessages(
   to: string,
   messages: Message[],
@@ -247,14 +230,23 @@ async function pushLineMessages(
   const xLineRetryKey = randomUUID();
 
   try {
-    await withRetry(() =>
-      client.pushMessage(
-        {
-          to: chatId,
-          messages,
-        },
-        xLineRetryKey,
-      ),
+    await retryAsync(
+      () =>
+        client.pushMessage(
+          {
+            to: chatId,
+            messages,
+          },
+          xLineRetryKey,
+        ),
+      {
+        attempts: 5,
+        minDelayMs: 1000,
+        maxDelayMs: 8000,
+        jitter: 0.3,
+        shouldRetry: isRetryableError,
+        label: "line:push",
+      },
     );
   } catch (err) {
     if (behavior?.errorContext) {
@@ -264,7 +256,6 @@ async function pushLineMessages(
   }
 
   recordLineOutboundActivity(account.accountId);
-  incrementPushCount(messages.length);
 
   if (opts.verbose) {
     const logMessage =
@@ -380,7 +371,11 @@ export async function pushMessageLine(
   opts: LineSendOpts,
 ): Promise<LineSendResult> {
   const chatId = normalizeTarget(to);
-  const messages = [createTextMessage(text.trim())];
+  const trimmed = text.trim();
+  if (!trimmed) {
+    throw new Error("Message text must be non-empty for LINE push");
+  }
+  const messages = [createTextMessage(trimmed)];
   return pushLineMessages(chatId, messages, opts, {
     errorContext: "push message",
     verboseMessage: (resolvedChatId) => `line: pushed message to ${resolvedChatId}`,

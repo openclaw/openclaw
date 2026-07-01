@@ -445,7 +445,7 @@ describe("LINE send helpers", () => {
       sendModule.pushMessagesLine("U999", [{ type: "text", text: "hello" }], {
         cfg: LINE_TEST_CFG,
       }),
-    ).rejects.toEqual(err);
+    ).rejects.toMatchObject(err);
 
     expect(pushMessageMock).toHaveBeenCalledTimes(1);
   });
@@ -547,15 +547,13 @@ describe("LINE send helpers", () => {
     );
   });
 
-  it("incrementPushCount tracks message counts", async () => {
-    sendModule.resetMonthlyPushCount();
-    expect(sendModule.getPushCounts()).toEqual({ total: 0, monthly: 0 });
-
-    sendModule.incrementPushCount(3);
-    expect(sendModule.getPushCounts()).toEqual({ total: 3, monthly: 3 });
-
-    sendModule.resetMonthlyPushCount();
-    expect(sendModule.getPushCounts()).toEqual({ total: 3, monthly: 0 });
+  it("throws when push message text is empty", async () => {
+    await expect(sendModule.pushMessageLine("U999", "", { cfg: LINE_TEST_CFG })).rejects.toThrow(
+      "Message text must be non-empty for LINE push",
+    );
+    await expect(sendModule.pushMessageLine("U999", "   ", { cfg: LINE_TEST_CFG })).rejects.toThrow(
+      "Message text must be non-empty for LINE push",
+    );
   });
 
   it("pushes quick-reply text and caps to 13 buttons", async () => {
