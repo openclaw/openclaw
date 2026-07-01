@@ -170,6 +170,38 @@ describe("channel package-state probes", () => {
     ).toBe(true);
   });
 
+  it("treats unreadable package-state load failure metadata as nonblocking", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-state-load-failure-"));
+    tempDirs.push(root);
+    const sourceRoot = path.join(root, "extensions", "broken");
+    fs.mkdirSync(sourceRoot, { recursive: true });
+
+    listChannelCatalogEntriesMock.mockReturnValue([
+      {
+        get pluginId() {
+          throw new Error("package-state plugin id getter exploded");
+        },
+        origin: "bundled",
+        rootDir: sourceRoot,
+        channel: {
+          id: "broken",
+          persistedAuthState: {
+            specifier: "./missing-auth-presence",
+            exportName: "hasAnyBrokenAuth",
+          },
+        },
+      } satisfies PluginChannelCatalogEntry,
+    ]);
+
+    expect(
+      hasBundledChannelPackageState({
+        metadataKey: "persistedAuthState",
+        channelId: "broken",
+        cfg: {},
+      }),
+    ).toBe(false);
+  });
+
   it("preserves source overlay precedence over packaged package-state probes", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-state-overlay-"));
     tempDirs.push(root);
