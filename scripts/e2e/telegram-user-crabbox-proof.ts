@@ -239,11 +239,6 @@ function trimToValue(value: string | undefined) {
 }
 
 const positiveIntegerPattern = /^[1-9]\d*$/u;
-const SHORT_OPTION_TOKENS = new Set(["-h"]);
-
-function isMissingOptionValue(value: string | undefined) {
-  return !value || SHORT_OPTION_TOKENS.has(value) || value.startsWith("--");
-}
 
 function parsePositiveInteger(value: string, label: string) {
   const trimmed = value.trim();
