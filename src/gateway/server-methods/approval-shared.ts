@@ -58,6 +58,8 @@ type PendingApprovalListEntry<TPayload> = {
   expiresAtMs: number;
 };
 
+type ApprovalRequestDeliveryRoute = "approval-client" | "forwarder" | "turn-source" | "none";
+
 type ApprovalResolveParams = {
   id: string;
   decision: string;
@@ -463,16 +465,22 @@ export async function handlePendingApprovalRequest<
       : (params.context.hasExecApprovalClients?.(params.clientConnId) ?? false);
   const deliveredResult = suppressDelivery ? false : params.deliverRequest();
   const delivered = isPromiseLike(deliveredResult) ? await deliveredResult : deliveredResult;
-  // A turn-source route can approve without an active approval client, so keep
-  // the record alive when the originating channel/account can still receive it.
+  // Visible approval clients may still skip a native request, so keep the
+  // turn-source route explicit for timeout guidance when no delivery confirms.
   const hasTurnSourceRoute =
-    !hasApprovalClients &&
     !delivered &&
     hasApprovalTurnSourceRoute({
       turnSourceChannel: params.record.request.turnSourceChannel,
       turnSourceAccountId: params.record.request.turnSourceAccountId,
       approvalKind: params.approvalKind ?? "exec",
     });
+  const deliveryRoute: ApprovalRequestDeliveryRoute = delivered
+    ? "forwarder"
+    : hasTurnSourceRoute
+      ? "turn-source"
+      : hasApprovalClients
+        ? "approval-client"
+        : "none";
 
   if (
     params.requireDeliveryRoute !== false &&
@@ -501,6 +509,9 @@ export async function handlePendingApprovalRequest<
       {
         status: "accepted",
         id: params.record.id,
+        // Agent-side timeouts use this to distinguish delivered prompts from
+        // requests kept pending only because manual /approve routing may work.
+        deliveryRoute,
         createdAtMs: params.record.createdAtMs,
         expiresAtMs: params.record.expiresAtMs,
       },
