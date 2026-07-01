@@ -172,3 +172,99 @@ describe("feishu bitable create app cleanup", () => {
     expect(client.bitable.appTableRecord.list).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("feishu bitable write tool schemas", () => {
+  // AWS Bedrock enforces strict JSON Schema draft 2020-12 and rejects empty
+  // sub-schemas (`{}`). `Type.Record(Type.String(), Type.Any())` previously
+  // serialized to `patternProperties: { "^.*$": {} }` with an empty value
+  // sub-schema (Type.Any() -> `{}`), which Bedrock rejects, failing the
+  // entire tool list. Verify the bitable write tools emit a non-empty value
+  // sub-schema for every record-typed parameter.
+  function recordValueSchema(parameters: unknown, paramKey: string): unknown {
+    const param = (parameters as { properties?: Record<string, unknown> }).properties?.[paramKey];
+    // Type.Optional(Type.Record(...)) wraps the record in anyOf; unwrap it.
+    const recordSchema = (param as { anyOf?: unknown[] })?.anyOf?.[0] ?? param;
+    return (recordSchema as { patternProperties?: { "^.*$"?: unknown } }).patternProperties?.["^.*$"];
+  }
+
+  it("create_record fields value schema is non-empty (no empty patternProperties sub-schema)", () => {
+    const { api, resolveTool } = createToolFactoryHarness(createConfig());
+    registerFeishuBitableTools(api);
+    const tool = resolveTool("feishu_bitable_create_record");
+    const parameters = (tool as unknown as { parameters?: unknown }).parameters;
+
+    const valueSchema = recordValueSchema(parameters, "fields");
+    expect(valueSchema).not.toEqual({});
+    expect(valueSchema).toMatchObject({ anyOf: expect.any(Array) });
+    // No empty sub-schema as the patternProperties value anywhere in the tool.
+    expect(JSON.stringify(parameters)).not.toContain('"patternProperties":{"^.*$":{}}');
+  });
+
+  it("update_record fields value schema is non-empty", () => {
+    const { api, resolveTool } = createToolFactoryHarness(createConfig());
+    registerFeishuBitableTools(api);
+    const tool = resolveTool("feishu_bitable_update_record");
+    const parameters = (tool as unknown as { parameters?: unknown }).parameters;
+
+    const valueSchema = recordValueSchema(parameters, "fields");
+    expect(valueSchema).not.toEqual({});
+    expect(valueSchema).toMatchObject({ anyOf: expect.any(Array) });
+    expect(JSON.stringify(parameters)).not.toContain('"patternProperties":{"^.*$":{}}');
+  });
+
+  it("create_field property value schema is non-empty", () => {
+    const { api, resolveTool } = createToolFactoryHarness(createConfig());
+    registerFeishuBitableTools(api);
+    const tool = resolveTool("feishu_bitable_create_field");
+    const parameters = (tool as unknown as { parameters?: unknown }).parameters;
+
+    const valueSchema = recordValueSchema(parameters, "property");
+    expect(valueSchema).not.toEqual({});
+    expect(valueSchema).toMatchObject({ anyOf: expect.any(Array) });
+    expect(JSON.stringify(parameters)).not.toContain('"patternProperties":{"^.*$":{}}');
+  });
+
+  it("accepts Feishu user field value (array of objects)", () => {
+    // Feishu bitable user fields are arrays of objects: [{id:"ou_xxx"}].
+    // The value schema must accept open objects inside arrays, not just
+    // primitives, to avoid rejecting valid Feishu payloads.
+    const { api, resolveTool } = createToolFactoryHarness(createConfig());
+    registerFeishuBitableTools(api);
+    const tool = resolveTool("feishu_bitable_create_record");
+    const parameters = (tool as unknown as { parameters?: unknown }).parameters;
+    const serialized = JSON.stringify(parameters);
+
+    // The array branch items must include an open-object option
+    // (additionalProperties: true), not just primitive types.
+    expect(serialized).toContain('"additionalProperties":true');
+    // Verify the array items union has at least 5 branches (primitives + open object)
+    const valueSchema = recordValueSchema(parameters, "fields");
+    const anyOf = (valueSchema as { anyOf?: unknown[] })?.anyOf;
+    const arrayBranch = anyOf?.find(
+      (b) => (b as { type?: string })?.type === "array",
+    ) as { items?: { anyOf?: unknown[] } } | undefined;
+    expect(arrayBranch?.items?.anyOf?.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it("accepts Feishu create_field property.options (array of option objects)", () => {
+    // property.options for SingleSelect/MultiSelect fields is [{name:"A"}].
+    // The value schema must allow arrays containing objects.
+    const { api, resolveTool } = createToolFactoryHarness(createConfig());
+    registerFeishuBitableTools(api);
+    const tool = resolveTool("feishu_bitable_create_field");
+    const parameters = (tool as unknown as { parameters?: unknown }).parameters;
+    const valueSchema = recordValueSchema(parameters, "property");
+
+    const anyOf = (valueSchema as { anyOf?: unknown[] })?.anyOf;
+    const arrayBranch = anyOf?.find(
+      (b) => (b as { type?: string })?.type === "array",
+    ) as { items?: { anyOf?: unknown[] } } | undefined;
+    // Array items must include an open-object branch for option objects
+    const objectBranch = arrayBranch?.items?.anyOf?.find(
+      (b) =>
+        (b as { type?: string })?.type === "object" &&
+        (b as { additionalProperties?: unknown })?.additionalProperties === true,
+    );
+    expect(objectBranch).toBeDefined();
+  });
+});
