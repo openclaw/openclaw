@@ -1150,9 +1150,11 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const currentChannelIsInternal =
     normalizeMessageChannel(effectiveCurrentChannel.currentChannelProvider) ===
     INTERNAL_MESSAGE_CHANNEL;
-  const sourceReplyDeliveryMode =
-    options?.sourceReplyDeliveryMode ??
-    (currentChannelIsInternal ? "message_tool_only" : undefined);
+  // WebChat tool sends use the private sink without changing the run-level
+  // contract: ordinary final answers must remain automatic and visible.
+  const sourceReplySinkDeliveryMode = currentChannelIsInternal
+    ? "message_tool_only"
+    : options?.sourceReplyDeliveryMode;
   const resolvedAgentId =
     options?.agentId ??
     (options?.agentSessionKey
@@ -1187,7 +1189,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     sessionId: options?.sessionId,
     agentId: resolvedAgentId,
     requireExplicitTarget: options?.requireExplicitTarget,
-    sourceReplyDeliveryMode,
+    sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
     requesterSenderId: options?.requesterSenderId,
     senderIsOwner: options?.senderIsOwner,
   });
@@ -1393,7 +1395,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           sessionId: options?.sessionId,
           agentId: resolvedAgentId,
           sandboxRoot: options?.sandboxRoot,
-          sourceReplyDeliveryMode,
+          sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
           inboundEventKind: options?.inboundEventKind,
           inboundAudio: options?.currentInboundAudio,
           abortSignal: signal,

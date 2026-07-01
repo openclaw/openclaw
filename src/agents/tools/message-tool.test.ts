@@ -542,7 +542,7 @@ describe("message tool secret scoping", () => {
     expect(input?.params).toMatchObject({ action: "send", message: "hi" });
   });
 
-  it("preserves explicit automatic delivery for internal WebChat message tools", async () => {
+  it("keeps automatic WebChat final-answer guidance while selecting the tool-local sink", async () => {
     mockSendResult();
 
     const input = await executeSend({
@@ -554,8 +554,14 @@ describe("message tool secret scoping", () => {
       },
     });
 
-    expect(input?.sourceReplyDeliveryMode).toBe("automatic");
+    expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
+    const tool = createMessageTool({
+      currentChannelProvider: "webchat",
+      sourceReplyDeliveryMode: "automatic",
+      agentSessionKey: "agent:main:webchat:dm:dashboard",
+    });
+    expect(tool.description).not.toContain("Normal final answers stay private");
   });
 
   it("passes current inbound audio to the outbound runner", async () => {
