@@ -861,6 +861,15 @@ function resolveAutoEnableChannelId(params: {
   entry: PluginAutoEnableCandidate;
   manifestRegistry: PluginManifestRegistry;
 }): string | null {
+  if (params.entry.kind === "configured-plugin-repaired") {
+    return null;
+  }
+  const plugin = params.manifestRegistry.plugins.find(
+    (record) => record.id === params.entry.pluginId,
+  );
+  if (plugin && plugin.origin !== "bundled") {
+    return null;
+  }
   const builtInChannelId = normalizeChatChannelId(params.entry.pluginId);
   if (builtInChannelId) {
     return builtInChannelId;
@@ -868,9 +877,6 @@ function resolveAutoEnableChannelId(params: {
   if (params.entry.kind !== "channel-configured") {
     return null;
   }
-  const plugin = params.manifestRegistry.plugins.find(
-    (record) => record.id === params.entry.pluginId,
-  );
   if (plugin?.origin !== "bundled") {
     return null;
   }
