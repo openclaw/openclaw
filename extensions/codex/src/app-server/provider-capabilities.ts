@@ -21,21 +21,34 @@ async function readConfiguredProviderWebSearchSupport(params: {
   return response.webSearch ? "supported" : "unsupported";
 }
 
+function resolveProviderOverrideWebSearchSupport(
+  modelProviderOverride: string | undefined,
+): CodexNativeWebSearchSupport | undefined {
+  const normalizedProvider = modelProviderOverride?.trim().toLowerCase();
+  if (!normalizedProvider) {
+    return undefined;
+  }
+  if (normalizedProvider === "openai") {
+    return "supported";
+  }
+
+  // Codex's capability RPC only reports the configured provider, not a
+  // thread-scoped override. Keep managed search for overrides whose hosted
+  // capability cannot be proven from the configured-provider response.
+  return "unsupported";
+}
+
 export async function resolveCodexProviderWebSearchSupportForClient(params: {
   client: CodexAppServerClient;
   timeoutMs: number;
   modelProviderOverride: string | undefined;
   signal: AbortSignal;
 }): Promise<CodexNativeWebSearchSupport> {
-  const modelProviderOverride = params.modelProviderOverride?.trim().toLowerCase();
-  if (modelProviderOverride === "openai") {
-    return "supported";
-  }
-  if (modelProviderOverride) {
-    // Codex's capability RPC only reports the configured provider, not a
-    // thread-scoped override. Keep managed search for overrides whose hosted
-    // capability cannot be proven from the configured-provider response.
-    return "unsupported";
+  const providerOverrideSupport = resolveProviderOverrideWebSearchSupport(
+    params.modelProviderOverride,
+  );
+  if (providerOverrideSupport !== undefined) {
+    return providerOverrideSupport;
   }
   try {
     return await readConfiguredProviderWebSearchSupport(params);
@@ -53,6 +66,13 @@ export async function resolveCodexProviderWebSearchSupport(params: {
   modelProviderOverride: string | undefined;
   signal: AbortSignal;
 }): Promise<CodexNativeWebSearchSupport> {
+  const providerOverrideSupport = resolveProviderOverrideWebSearchSupport(
+    params.modelProviderOverride,
+  );
+  if (providerOverrideSupport !== undefined) {
+    return providerOverrideSupport;
+  }
+
   let client: CodexAppServerClient | undefined;
   try {
     client = await params.clientFactory(
@@ -65,7 +85,7 @@ export async function resolveCodexProviderWebSearchSupport(params: {
     return await resolveCodexProviderWebSearchSupportForClient({
       client,
       timeoutMs: params.appServer.requestTimeoutMs,
-      modelProviderOverride: params.modelProviderOverride,
+      modelProviderOverride: undefined,
       signal: params.signal,
     });
   } catch {
