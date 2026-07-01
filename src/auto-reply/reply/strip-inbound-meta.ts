@@ -37,11 +37,24 @@ const ACTIVE_MEMORY_OPEN_TAG = "<active_memory_plugin>";
 const ACTIVE_MEMORY_CLOSE_TAG = "</active_memory_plugin>";
 const [CONVERSATION_INFO_SENTINEL, SENDER_INFO_SENTINEL] = INBOUND_META_SENTINELS;
 
+// Per-line `System:` event prefixes emitted by `session-system-events.ts` are
+// AI-facing runtime events and must not surface in user-visible chat. Preserve
+// `System (untrusted):`, which marks spoof-neutralized user-authored text.
+const SYSTEM_EVENT_LINE_RE = /^\s*System:(?=\s|$)/;
+
+function isSystemEventLine(line: string): boolean {
+  return SYSTEM_EVENT_LINE_RE.test(line);
+}
+
 // Pre-compiled fast-path regex — avoids line-by-line parse when no blocks present.
 const SENTINEL_FAST_RE = new RegExp(
   [...INBOUND_META_SENTINELS, ...MESSAGE_TOOL_DELIVERY_HINTS, UNTRUSTED_CONTEXT_HEADER]
     .map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-    .join("|"),
+    .join("|")
+    // Line-anchored system-event prefixes; trigger the slow parse so the loop
+    // can drop them. `m` flag matches the prefix at any line start.
+    .concat("|^[ \\t]*System:"),
+  "m",
 );
 
 /** Fast check for whether text contains any inbound metadata sentinel. */
@@ -224,6 +237,12 @@ export function stripInboundMetadata(text: string): string {
       continue;
     }
 
+    // Drop per-line system-event prefixes so runtime events (exec completions,
+    // thinking traces, echoed query) never surface in user-visible chat.
+    if (!inMetaBlock && isSystemEventLine(line)) {
+      continue;
+    }
+
     // Detect start of a metadata block.
     if (!inMetaBlock && isInboundMetaSentinelLine(line)) {
       const next = strippedLeadingPrefixLines[i + 1];
@@ -293,9 +312,24 @@ export function stripLeadingInboundMetadata(text: string): string {
     return "";
   }
 
+  // Drop leading `System:` event lines (exec completions etc.) symmetrically with
+  // the main `stripInboundMetadata` loop, so the leading path is not a fail-open
+  // gap. Must run before the sentinel early-return below.
+  const strippedSystemEvent = isSystemEventLine(lines[index]);
+  while (index < lines.length && isSystemEventLine(lines[index])) {
+    index++;
+    while (index < lines.length && lines[index] === "") {
+      index++;
+    }
+  }
+  if (index >= lines.length) {
+    return "";
+  }
+
   if (!isInboundMetaSentinelLine(lines[index])) {
+    const advancedLeading = strippedDeliveryHint || strippedSystemEvent;
     const strippedNoLeading = stripTrailingUntrustedContextSuffix(
-      strippedDeliveryHint ? lines.slice(index) : lines,
+      advancedLeading ? lines.slice(index) : lines,
     );
     return strippedNoLeading.join("\n");
   }
