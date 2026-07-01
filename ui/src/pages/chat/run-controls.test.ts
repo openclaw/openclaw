@@ -10,7 +10,7 @@ import {
   resetContextNoticeThemeCacheForTest,
 } from "./context-notice.ts";
 import { renderChatRunControls, type ChatRunControlsProps } from "./run-controls.ts";
-import { renderSideResult } from "./side-result-render.ts";
+import { renderSideResult } from "./side-result.ts";
 import {
   renderChatRunStatusIndicator,
   renderCompactionIndicator,

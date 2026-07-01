@@ -71,8 +71,7 @@ import type { RealtimeTalkStatus } from "./realtime-talk.ts";
 import { renderChatRunControls } from "./run-controls.ts";
 import type { ChatRunUiStatus } from "./run-lifecycle.ts";
 import { getOrCreateSessionCacheValue } from "./session-cache.ts";
-import { renderSideResult } from "./side-result-render.ts";
-import type { ChatSideResult } from "./side-result.ts";
+import { renderSideResult, type ChatSideResult } from "./side-result.ts";
 import {
   renderChatRunStatusIndicator,
   renderCompactionIndicator,
