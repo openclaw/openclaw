@@ -5404,4 +5404,155 @@ describe("dispatchTelegramMessage draft streaming", () => {
       expect(finalDeliveryPayload().mediaUrls).toEqual(["/tmp/cat.jpg"]);
     });
   });
+
+  // Real-stream reproduction of the edit-vs-send bug: an in-flight (sent but not
+  // finalized) answer preamble must not be overwritten by post-tool text when a
+  // tool starts mid-stream with no fresh assistant-message boundary. Wires the
+  // REAL createTelegramDraftStream so sendRichMessage (new message) vs
+  // editMessageText (edit-in-place) reflect real transport behavior.
+  describe("in-flight preamble across tool boundary (real draft stream)", () => {
+    const PREAMBLE = "Let me actually check the current state of this file.";
+    const POST_TOOL = "Done — the stale version was already removed earlier.";
+
+    async function setupRealDraftStream() {
+      const realDraft =
+        await vi.importActual<typeof import("./draft-stream.js")>("./draft-stream.js");
+      let nextMessageId = 500;
+      const sendRichMessage = vi.fn(
+        async (_params: { rich_message?: { markdown?: string; html?: string } }) => ({
+          message_id: nextMessageId++,
+        }),
+      );
+      const editRichMessageText = vi.fn(async () => true);
+      const bot = {
+        api: {
+          sendMessage: vi.fn(async () => ({ message_id: 1001 })),
+          editMessageText: vi.fn(async () => ({ message_id: 1001 })),
+          deleteMessage: vi.fn(async () => true),
+          editForumTopic: vi.fn(async () => true),
+          raw: { sendRichMessage, editMessageText: editRichMessageText },
+        },
+      } as unknown as Bot;
+      createTelegramDraftStream.mockImplementation((streamParams: unknown) =>
+        realDraft.createTelegramDraftStream({
+          ...(streamParams as Parameters<typeof realDraft.createTelegramDraftStream>[0]),
+          api: bot.api,
+        }),
+      );
+      return { bot, sendRichMessage, editRichMessageText };
+    }
+
+    // The decisive repro: tool starts mid-stream, no fresh onAssistantMessageStart
+    // and tool progress suppressed. Post-tool text must land in a new message.
+    it("post-tool text starts a new message after an in-flight preamble (onToolStart, no boundary)", async () => {
+      const { bot, sendRichMessage, editRichMessageText } = await setupRealDraftStream();
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions?.onAssistantMessageStart?.();
+          await replyOptions?.onPartialReply?.({ text: PREAMBLE });
+          await replyOptions?.onToolStart?.({ name: "read_file", phase: "start" });
+          // No second onAssistantMessageStart: the runtime resumes the same lane.
+          await replyOptions?.onPartialReply?.({ text: POST_TOOL, replace: true });
+          await dispatcherOptions.deliver({ text: POST_TOOL }, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+
+      await dispatchWithContext({ context: createContext(), bot });
+
+      expect({
+        sends: sendRichMessage.mock.calls.length,
+        edits: editRichMessageText.mock.calls.length,
+      }).toEqual({ sends: 2, edits: 0 });
+    });
+
+    // Control: a fresh assistant-message boundary already rotates correctly.
+    it("post-tool text starts a new message when a fresh assistant boundary fires", async () => {
+      const { bot, sendRichMessage, editRichMessageText } = await setupRealDraftStream();
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions?.onAssistantMessageStart?.();
+          await replyOptions?.onPartialReply?.({ text: PREAMBLE });
+          await replyOptions?.onToolStart?.({ name: "read_file", phase: "start" });
+          await replyOptions?.onAssistantMessageStart?.();
+          await replyOptions?.onPartialReply?.({ text: POST_TOOL, replace: true });
+          await dispatcherOptions.deliver({ text: POST_TOOL }, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+
+      await dispatchWithContext({ context: createContext(), bot });
+
+      expect({
+        sends: sendRichMessage.mock.calls.length,
+        edits: editRichMessageText.mock.calls.length,
+      }).toEqual({ sends: 2, edits: 0 });
+    });
+
+    // P2 regression: a preamble shorter than the preview debounce (minInitialChars)
+    // is never sent. The tool-boundary rotation must NOT flush it into a spurious
+    // standalone message — only the resumed text becomes a message.
+    it("does not create a spurious message for a below-debounce never-sent preamble", async () => {
+      const { bot, sendRichMessage, editRichMessageText } = await setupRealDraftStream();
+      const SHORT = "Checking."; // under the ~30 char preview debounce -> never sent
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions?.onAssistantMessageStart?.();
+          await replyOptions?.onPartialReply?.({ text: SHORT });
+          await replyOptions?.onToolStart?.({ name: "read_file", phase: "start" });
+          await replyOptions?.onPartialReply?.({ text: POST_TOOL, replace: true });
+          await dispatcherOptions.deliver({ text: POST_TOOL }, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+
+      await dispatchWithContext({ context: createContext(), bot });
+
+      const sentTexts = sendRichMessage.mock.calls.map((c) => c[0]?.rich_message?.markdown);
+      expect({
+        sends: sendRichMessage.mock.calls.length,
+        edits: editRichMessageText.mock.calls.length,
+        spuriousPreamble: sentTexts.includes(SHORT),
+      }).toEqual({ sends: 1, edits: 0, spuriousPreamble: false });
+    });
+
+    // Regression for the eager-rotation staircase: a multi-tool turn streams
+    // cumulative full-snapshot partials with a tool boundary between each segment.
+    // No distinct sent message may be a superset re-render (prefix) of another —
+    // each tool boundary must NOT open a fresh bubble that re-prints prior content.
+    it("does not staircase: no sent message re-renders a previous one (multi-tool turn)", async () => {
+      const { bot, sendRichMessage } = await setupRealDraftStream();
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions?.onAssistantMessageStart?.();
+          let cumulative = "";
+          for (let i = 0; i < 3; i += 1) {
+            const seg = `Segment ${i + 1}: distinct answer content number ${i + 1} here.`;
+            cumulative = cumulative ? `${cumulative} ${seg}` : seg;
+            await replyOptions?.onPartialReply?.({ text: cumulative });
+            if (i < 2) {
+              await replyOptions?.onToolStart?.({ name: "read_file", phase: "start" });
+            }
+          }
+          await dispatcherOptions.deliver({ text: cumulative }, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+
+      await dispatchWithContext({ context: createContext(), bot });
+
+      const sent = sendRichMessage.mock.calls.map(
+        (c) => c[0]?.rich_message?.html ?? c[0]?.rich_message?.markdown ?? "",
+      );
+      const supersetPairs: Array<[string, string]> = [];
+      for (let i = 0; i < sent.length; i += 1) {
+        for (let j = 0; j < sent.length; j += 1) {
+          if (i !== j && sent[j].length > sent[i].length && sent[j].startsWith(sent[i])) {
+            supersetPairs.push([sent[i], sent[j]]);
+          }
+        }
+      }
+      expect(supersetPairs).toEqual([]);
+    });
+  });
 });
