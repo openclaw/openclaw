@@ -1,12 +1,14 @@
 /** Resolves session rollover and carried state for isolated cron runs. */
 import crypto from "node:crypto";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
+import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { resolveSessionLifecycleTimestamps } from "../../config/sessions/lifecycle.js";
 import { hasSessionAutoModelFallbackProvenance } from "../../config/sessions/model-override-provenance.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   evaluateSessionFreshness,
   resolveSessionResetPolicy,
+  type SessionFreshness,
 } from "../../config/sessions/reset-policy.js";
 import { loadSessionStore } from "../../config/sessions/store-load.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -108,6 +110,7 @@ function sanitizeFreshCronSessionEntry(
 export function resolveCronSession(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  sourceSessionKey?: string;
   nowMs: number;
   agentId: string;
   forceNew?: boolean;
@@ -118,7 +121,9 @@ export function resolveCronSession(params: {
     agentId: params.agentId,
   });
   const store = params.store ?? loadSessionStore(storePath);
-  const entry = store[params.sessionKey];
+  const sourceSessionKey = params.sourceSessionKey?.trim();
+  const sourceSessionDiffers = Boolean(sourceSessionKey && sourceSessionKey !== params.sessionKey);
+  const entry = store[sourceSessionKey || params.sessionKey];
 
   let sessionId: string;
   let isNewSession: boolean;
@@ -131,16 +136,19 @@ export function resolveCronSession(params: {
       sessionCfg,
       resetType: "direct",
     });
-    const freshness = evaluateSessionFreshness({
-      updatedAt: entry.updatedAt,
-      ...resolveSessionLifecycleTimestamps({
-        entry,
-        agentId: params.agentId,
-        storePath,
-      }),
-      now: params.nowMs,
-      policy: resetPolicy,
-    });
+    const skipImplicitExpiry = resetPolicy.configured !== true && hasProviderOwnedSession(entry);
+    const freshness = skipImplicitExpiry
+      ? ({ fresh: true } satisfies SessionFreshness)
+      : evaluateSessionFreshness({
+          updatedAt: entry.updatedAt,
+          ...resolveSessionLifecycleTimestamps({
+            entry,
+            agentId: params.agentId,
+            storePath,
+          }),
+          now: params.nowMs,
+          policy: resetPolicy,
+        });
 
     if (freshness.fresh) {
       sessionId = entry.sessionId;
@@ -157,7 +165,7 @@ export function resolveCronSession(params: {
     systemSent = false;
   }
 
-  const previousSessionId = isNewSession ? entry?.sessionId : undefined;
+  const previousSessionId = isNewSession && !sourceSessionDiffers ? entry?.sessionId : undefined;
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey: params.sessionKey,
     previousSessionId,

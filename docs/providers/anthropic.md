@@ -13,16 +13,18 @@ Anthropic builds the **Claude** model family. OpenClaw supports two auth routes:
 <Warning>
 OpenClaw's Claude CLI backend runs the installed Claude Code CLI in
 non-interactive print mode. Anthropic's current Claude Code docs describe
-`claude -p` as Agent SDK/programmatic usage. Starting June 15, 2026, Anthropic
-says subscription-plan `claude -p` usage no longer draws from normal Claude
-plan limits; it draws from a separate monthly Agent SDK credit first, then from
-usage credits at standard API rates when those credits are enabled.
+`claude -p` as Agent SDK/programmatic usage. Anthropic's June 15, 2026 support
+update paused the announced Agent SDK billing change. For now, Anthropic says
+Claude Agent SDK, `claude -p`, and third-party app usage still draw from a
+subscription's usage limits. The previously announced monthly Agent SDK credit
+is not available while Anthropic revises that plan.
 
 Interactive Claude Code still draws from the signed-in Claude plan limits. API
 key auth remains direct pay-as-you-go API billing. For long-lived gateway hosts,
 shared automation, and predictable production spend, use an Anthropic API key.
 
-Anthropic's current public docs:
+Check Anthropic's current support articles before relying on subscription
+billing behavior:
 
 - [Claude Code CLI reference](https://code.claude.com/docs/en/cli-usage)
 - [Use the Claude Agent SDK with your Claude plan](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
@@ -141,13 +143,22 @@ Anthropic's current public docs:
     OpenClaw uses Claude Code's non-interactive `claude -p` path for Claude CLI
     runs. Anthropic currently treats that path as Agent SDK/programmatic usage:
 
-    - Until June 15, 2026, subscription-plan handling follows Anthropic's active
-      Claude Code rules for the signed-in account.
-    - Starting June 15, 2026, subscription-plan `claude -p` usage draws from the
-      user's monthly Agent SDK credit first, then from usage credits at standard
-      API rates if usage credits are enabled.
+    - Anthropic's June 15, 2026 support update paused the previously announced
+      separate Agent SDK credit plan.
+    - For now, subscription-plan Claude Agent SDK, `claude -p`, and third-party
+      app usage still draw from the signed-in subscription's usage limits.
+    - The previously announced monthly Agent SDK credit is not available while
+      Anthropic revises that plan.
     - Console/API-key logins use pay-as-you-go API billing and do not receive
       the subscription Agent SDK credit.
+
+    See Anthropic's [Agent SDK plan
+    article](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
+    for the pause notice, and the Claude Code plan articles for
+    [Pro/Max](https://support.claude.com/en/articles/11145838-use-claude-code-with-your-pro-or-max-plan)
+    and
+    [Team/Enterprise](https://support.claude.com/en/articles/11845131-use-claude-code-with-your-team-or-enterprise-plan)
+    subscription behavior.
 
     Anthropic can change Claude Code billing and rate-limit behavior without an
     OpenClaw release. Check `claude auth status`, `/status`, and

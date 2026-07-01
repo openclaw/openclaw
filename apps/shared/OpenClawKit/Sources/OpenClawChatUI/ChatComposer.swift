@@ -55,6 +55,7 @@ struct OpenClawChatComposer: View {
     #else
     @State private var shouldFocusTextView = false
     #endif
+    @ScaledMetric(relativeTo: .body) private var scaledBodyLineHeight: CGFloat = 22
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -332,12 +333,13 @@ struct OpenClawChatComposer: View {
 
     private var cleanEditor: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .center, spacing: 8) {
+            HStack(alignment: .bottom, spacing: 8) {
                 self.compactAccessory(self.attachmentPicker)
 
-                HStack(alignment: .center, spacing: 8) {
+                HStack(alignment: .bottom, spacing: 8) {
                     self.editorOverlay
-                        .frame(minHeight: self.cleanControlHeight)
+                        .padding(.vertical, self.cleanEditorTextPadding)
+                        .frame(minHeight: self.cleanEditorMinHeight)
 
                     if let talkControl {
                         self.compactTalkButton(talkControl)
@@ -345,18 +347,18 @@ struct OpenClawChatComposer: View {
                 }
                 .padding(.leading, 14)
                 .padding(.trailing, 6)
-                .frame(height: self.cleanControlHeight)
+                .frame(minHeight: self.cleanEditorMinHeight)
                 .background(
-                    Capsule(style: .continuous)
+                    RoundedRectangle(cornerRadius: self.cleanEditorCornerRadius, style: .continuous)
                         .fill(OpenClawChatTheme.composerField)
                         .overlay(
-                            Capsule(style: .continuous)
+                            RoundedRectangle(cornerRadius: self.cleanEditorCornerRadius, style: .continuous)
                                 .strokeBorder(OpenClawChatTheme.composerBorder)))
 
                 self.sendButton
                     .frame(width: self.cleanControlHeight, height: self.cleanControlHeight)
             }
-            .frame(height: self.cleanControlHeight)
+            .frame(minHeight: self.cleanEditorMinHeight)
 
             if self.showsConnectionPill {
                 self.connectionPill
@@ -488,6 +490,7 @@ struct OpenClawChatComposer: View {
         ZStack(alignment: self.editorOverlayAlignment) {
             if self.viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(self.placeholderText)
+                    .font(.body)
                     .foregroundStyle(.tertiary)
                     .padding(.horizontal, self.cleanFieldTextInset)
                     .padding(.vertical, self.composerChrome == .clean ? 0 : 4)
@@ -513,17 +516,14 @@ struct OpenClawChatComposer: View {
                 "",
                 text: self.$viewModel.input,
                 axis: .vertical)
-                .font(.system(size: 15))
+                .font(.body)
+                .textFieldStyle(.plain)
                 .lineLimit(1...4)
+                .fixedSize(horizontal: false, vertical: true)
                 .submitLabel(.send)
                 .onSubmit {
                     self.sendDraftIfEnabled()
                 }
-                .frame(
-                    minHeight: self.textMinHeight,
-                    idealHeight: self.textMinHeight,
-                    maxHeight: self.textMaxHeight,
-                    alignment: self.editorTextAlignment)
                 .padding(.horizontal, self.cleanFieldTextInset)
                 .padding(.vertical, self.composerChrome == .clean ? 0 : 6)
                 .focused(self.$isFocused)
@@ -614,13 +614,33 @@ struct OpenClawChatComposer: View {
     }
 
     private var textMinHeight: CGFloat {
-        if self.style == .onboarding { return 24 }
-        return self.composerChrome == .clean ? 24 : 28
+        let base: CGFloat = if self.style == .onboarding {
+            24
+        } else {
+            self.composerChrome == .clean ? 24 : 28
+        }
+        return max(base, self.scaledBodyLineHeight)
     }
 
     private var textMaxHeight: CGFloat {
-        if self.style == .onboarding { return 52 }
-        return self.composerChrome == .clean ? 48 : 64
+        let base: CGFloat = if self.style == .onboarding {
+            52
+        } else {
+            self.composerChrome == .clean ? 48 : 64
+        }
+        return max(base, self.scaledBodyLineHeight * 4)
+    }
+
+    private var cleanEditorMinHeight: CGFloat {
+        max(self.cleanControlHeight, self.textMinHeight)
+    }
+
+    private var cleanEditorCornerRadius: CGFloat {
+        self.cleanControlHeight / 2
+    }
+
+    private var cleanEditorTextPadding: CGFloat {
+        6
     }
 
     private var sendButtonSize: CGFloat {
@@ -645,10 +665,6 @@ struct OpenClawChatComposer: View {
 
     private var editorOverlayAlignment: Alignment {
         self.composerChrome == .clean ? .leading : .topLeading
-    }
-
-    private var editorTextAlignment: Alignment {
-        self.composerChrome == .clean ? .leading : .top
     }
 
     private var sendButtonFill: Color {

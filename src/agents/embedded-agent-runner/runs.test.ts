@@ -47,6 +47,11 @@ function createRunHandle(
     abort?: () => void;
     isCompacting?: boolean;
     isStreaming?: boolean;
+    isStopped?: () => boolean;
+    queueMessage?: (
+      text: string,
+      options?: Parameters<RunHandle["queueMessage"]>[1],
+    ) => Promise<void>;
     supportsTranscriptCommitWait?: boolean;
   } = {},
 ): RunHandle {
@@ -54,8 +59,9 @@ function createRunHandle(
   // behavior; individual tests supply queue/abort behavior when needed.
   const abort = overrides.abort ?? (() => {});
   return {
-    queueMessage: async () => {},
+    queueMessage: overrides.queueMessage ?? (async () => {}),
     isStreaming: () => overrides.isStreaming ?? true,
+    ...(overrides.isStopped ? { isStopped: overrides.isStopped } : {}),
     isCompacting: () => overrides.isCompacting ?? false,
     supportsTranscriptCommitWait: overrides.supportsTranscriptCommitWait,
     abort,
@@ -229,6 +235,68 @@ describe("embedded-agent runner run registry", () => {
     );
 
     expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "all" });
+  });
+
+  it("queues into active non-streaming handles that expose live stopped state", () => {
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun(
+      "session-active-non-streaming",
+      createRunHandle({
+        isStreaming: false,
+        isStopped: () => false,
+        queueMessage,
+      }),
+    );
+
+    expect(
+      queueEmbeddedAgentMessageWithOutcome("session-active-non-streaming", "continue").queued,
+    ).toBe(true);
+    expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "all" });
+  });
+
+  it("does not queue into stopped handles", () => {
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun(
+      "session-stopped",
+      createRunHandle({
+        isStreaming: true,
+        isStopped: () => true,
+        queueMessage,
+      }),
+    );
+
+    const outcome = queueEmbeddedAgentMessageWithOutcome("session-stopped", "continue");
+
+    expect(outcome).toEqual({
+      queued: false,
+      sessionId: "session-stopped",
+      reason: "not_streaming",
+      gatewayHealth: "live",
+    });
+    expect(queueMessage).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when stopped state checks throw", () => {
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun(
+      "session-bad-state",
+      createRunHandle({
+        isStopped: () => {
+          throw new Error("bad stopped state");
+        },
+        queueMessage,
+      }),
+    );
+
+    const outcome = queueEmbeddedAgentMessageWithOutcome("session-bad-state", "continue");
+
+    expect(outcome).toEqual({
+      queued: false,
+      sessionId: "session-bad-state",
+      reason: "not_streaming",
+      gatewayHealth: "live",
+    });
+    expect(queueMessage).not.toHaveBeenCalled();
   });
 
   it("returns a structured no-active-run queue failure", () => {
@@ -588,5 +656,4 @@ describe("embedded-agent runner run registry", () => {
     clearActiveEmbeddedRun("session-snapshot", handle);
     expect(getActiveEmbeddedRunSnapshot("session-snapshot")).toBeUndefined();
   });
-
 });

@@ -6,6 +6,7 @@
  */
 
 import type { Server } from "node:http";
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import { toErrorObject } from "../../../infra/errors.js";
 import {
   generateOAuthState,
@@ -52,6 +53,10 @@ const CALLBACK_PATH = "/callback";
 const REDIRECT_URI = `http://localhost:${CALLBACK_PORT}${CALLBACK_PATH}`;
 const SCOPES =
   "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
+
+/** Max response body bytes for Anthropic OAuth token endpoint (16 MiB). */
+const OAUTH_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+
 async function getNodeApis(): Promise<NodeApis> {
   if (nodeApis) {
     return nodeApis;
@@ -233,7 +238,10 @@ async function postJson(
     signal: buildOAuthRequestSignal({ signal: options.signal, timeoutMs }),
   });
 
-  const responseBody = await response.text();
+  const buffer = await readResponseWithLimit(response, OAUTH_RESPONSE_MAX_BYTES, {
+    onOverflow: ({ size }) => new Error(`Anthropic OAuth response too large: ${size} bytes`),
+  });
+  const responseBody = new TextDecoder().decode(buffer);
 
   if (!response.ok) {
     throw new Error(
