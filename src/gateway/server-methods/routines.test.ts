@@ -31,9 +31,9 @@ function createRoutineContext() {
       if (!current) {
         throw new Error(`missing cron job: ${id}`);
       }
-      const updated = {
+      const updated: CronJob = {
         ...current,
-        ...patch,
+        enabled: typeof patch.enabled === "boolean" ? patch.enabled : current.enabled,
         state: { ...current.state, ...patch.state },
         updatedAtMs: Date.now(),
       };

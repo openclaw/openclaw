@@ -20,6 +20,7 @@ type FakeCronService = CronServiceContract & {
   add: ReturnType<typeof vi.fn<CronServiceContract["add"]>>;
   update: ReturnType<typeof vi.fn<CronServiceContract["update"]>>;
   remove: ReturnType<typeof vi.fn<CronServiceContract["remove"]>>;
+  readJob: ReturnType<typeof vi.fn<CronServiceContract["readJob"]>>;
 };
 
 function createRoutineInput(overrides: Partial<RoutineCreateInput> = {}): RoutineCreateInput {
