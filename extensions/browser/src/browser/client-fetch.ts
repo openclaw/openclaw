@@ -6,7 +6,7 @@
  */
 import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-config";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -105,9 +105,6 @@ const BROWSER_TOOL_MODEL_HINT =
   "Do NOT retry the browser tool — it will keep failing. " +
   "Use an alternative approach or inform the user that the browser is currently unavailable.";
 
-/** Max bytes to read from a non-ok browser-control error body before cancelling the stream.
- *  Kept small to avoid OOM on malformed upstream error pages while preserving a
- *  useful diagnostic snippet. */
 const BROWSER_ERROR_BODY_LIMIT_BYTES = 16 * 1024;
 
 function isRateLimitStatus(status: number): boolean {
@@ -273,9 +270,11 @@ async function fetchHttpJson<T>(
           `${resolveBrowserRateLimitMessage(url)} ${BROWSER_TOOL_MODEL_HINT}`,
         );
       }
-      const text = await readResponseTextLimited(res, BROWSER_ERROR_BODY_LIMIT_BYTES).catch(
-        () => "",
+      // Overflow cancels the stream and releases its reader lock before the guarded fetch below.
+      const body = await readResponseWithLimit(res, BROWSER_ERROR_BODY_LIMIT_BYTES).catch(
+        () => undefined,
       );
+      const text = body ? new TextDecoder().decode(body) : "";
       throw new BrowserServiceError(text || `HTTP ${res.status}`);
     }
     return (await res.json()) as T;
