@@ -90,6 +90,7 @@ const mocks = vi.hoisted(() => ({
       requirement: hit.reason,
     }),
   ),
+  collectStalePluginRuntimeSymlinkHealthFindings: vi.fn(async () => [] as unknown[]),
   applyWizardMetadata: vi.fn((cfg: unknown) => cfg),
   logConfigUpdated: vi.fn(),
   isRecord: vi.fn(
@@ -104,6 +105,11 @@ const DOCTOR_GATEWAY_HEALTH_ID = "doctor:gateway-health";
 
 vi.mock("../commands/doctor/shared/release-configured-plugin-installs.js", () => ({
   maybeRunConfiguredPluginInstallReleaseStep: mocks.maybeRunConfiguredPluginInstallReleaseStep,
+}));
+
+vi.mock("../commands/doctor/shared/plugin-runtime-symlinks.js", () => ({
+  collectStalePluginRuntimeSymlinkHealthFindings:
+    mocks.collectStalePluginRuntimeSymlinkHealthFindings,
 }));
 
 vi.mock("./bundled-health-checks.js", () => ({
@@ -473,6 +479,8 @@ describe("doctor health contributions", () => {
     mocks.scanConfiguredChannelPluginBlockers.mockReset();
     mocks.scanConfiguredChannelPluginBlockers.mockReturnValue([]);
     mocks.channelPluginBlockerHitToHealthFinding.mockClear();
+    mocks.collectStalePluginRuntimeSymlinkHealthFindings.mockReset();
+    mocks.collectStalePluginRuntimeSymlinkHealthFindings.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -1189,9 +1197,57 @@ describe("doctor health contributions", () => {
     expect(contributionIds).toContain("core/doctor/session-snapshots");
     expect(contributionIds).toContain("core/doctor/plugin-registry");
     expect(contributionIds).toContain("core/doctor/configured-plugin-installs");
+    expect(contributionIds).toContain("core/doctor/stale-plugin-runtime-symlinks");
     expect(contributionIds).toContain("core/doctor/device-pairing");
     expect(contributionIds).toContain("core/doctor/channel-plugin-blockers");
     expect(contributionChecks.map((check) => check.id)).toEqual(contributionIds);
+  });
+
+  it("keeps stale plugin-runtime symlinks opt-in for structured lint selection", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const check = contributionChecks.find(
+      (entry) => entry.id === "core/doctor/stale-plugin-runtime-symlinks",
+    );
+    expect(check).toMatchObject({ defaultEnabled: false });
+    expect(check).toBeDefined();
+    mocks.collectStalePluginRuntimeSymlinkHealthFindings.mockResolvedValueOnce([
+      {
+        checkId: "core/doctor/stale-plugin-runtime-symlinks",
+        severity: "warning",
+        message: "Stale plugin-runtime symlink left-pad points at plugin-runtime-deps.",
+        path: "/tmp/node_modules/left-pad",
+        target: "/tmp/node_modules/left-pad",
+      },
+    ]);
+
+    const ctx = {
+      cfg: {},
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+
+    await expect(runDoctorLintChecks(ctx, { checks: [check!] })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    expect(mocks.collectStalePluginRuntimeSymlinkHealthFindings).not.toHaveBeenCalled();
+
+    await expect(
+      runDoctorLintChecks(ctx, {
+        checks: [check!],
+        onlyIds: ["core/doctor/stale-plugin-runtime-symlinks"],
+      }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [
+        expect.objectContaining({
+          checkId: "core/doctor/stale-plugin-runtime-symlinks",
+          path: "/tmp/node_modules/left-pad",
+        }),
+      ],
+    });
+    expect(mocks.collectStalePluginRuntimeSymlinkHealthFindings).toHaveBeenCalledTimes(1);
   });
 
   it("keeps state integrity opt-in for default lint selection", async () => {
