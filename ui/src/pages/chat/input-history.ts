@@ -1,6 +1,6 @@
+import { extractText } from "../../lib/chat/message-extract.ts";
 // Control UI chat module implements input history behavior.
 import { CHAT_HISTORY_RENDER_LIMIT } from "./history-limits.ts";
-import { extractText } from "./message-extract.ts";
 
 type ChatLocalInputHistoryEntry = {
   text: string;

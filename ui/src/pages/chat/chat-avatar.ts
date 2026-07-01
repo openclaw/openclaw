@@ -10,6 +10,7 @@ import {
 } from "../../app/user-identity.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
+import { normalizeRoleForGrouping } from "../../lib/chat/role-normalizer.ts";
 import {
   DEFAULT_AGENT_ID,
   isUiGlobalSessionKey,
@@ -20,7 +21,6 @@ import {
   assistantAvatarFallbackUrl,
   resolveAssistantTextAvatar,
 } from "../../ui/views/agents-utils.ts";
-import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 
 export function renderChatAvatar(
   role: string,

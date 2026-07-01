@@ -15,6 +15,7 @@ import type {
   ModelCatalogEntry,
   SessionsListResult,
 } from "../../api/types.ts";
+import { extractText } from "../../lib/chat/message-extract.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { unsubscribeSessionMessages, type SessionCapability } from "../../lib/sessions/index.ts";
 import {
@@ -43,7 +44,6 @@ import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
 } from "./heartbeat-display.ts";
-import { extractText } from "./message-extract.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import {
   appendChatMessageToCache,

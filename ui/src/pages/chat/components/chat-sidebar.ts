@@ -9,12 +9,12 @@ import {
   toSanitizedMarkdownHtml,
 } from "../../../components/markdown.ts";
 import "../../../components/tooltip.ts";
+import { extractRawText } from "../../../lib/chat/message-extract.ts";
 import {
   resolveCanvasIframeUrl,
   resolveEmbedSandbox,
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
-import { extractRawText } from "../message-extract.ts";
 
 const FULL_MESSAGE_DETAIL_MAX_CHARS = 500_000;
 

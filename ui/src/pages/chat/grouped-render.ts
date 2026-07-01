@@ -7,29 +7,27 @@ import { icons, type IconName } from "../../components/icons.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../../components/markdown.ts";
 import { t } from "../../i18n/index.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
-import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
-import { resolveToolDisplay } from "../../lib/chat/tool-display.ts";
-import { resolveUiHourCycleOptions } from "../../lib/format.ts";
-import { detectTextDirection } from "../../lib/text-direction.ts";
-import { getSafeLocalStorage } from "../../local-storage.ts";
-import { openExternalUrlSafe } from "../../ui/open-external-url.ts";
 import type {
   ChatItem,
   MessageContentItem,
   MessageGroup,
   NormalizedMessage,
   ToolCard,
-} from "./chat-types.ts";
+} from "../../lib/chat/chat-types.ts";
+import type { EmbedSandboxMode } from "../../lib/chat/tool-display.ts";
+import { resolveToolDisplay } from "../../lib/chat/tool-display.ts";
+import { resolveUiHourCycleOptions } from "../../lib/format.ts";
+import { detectTextDirection } from "../../lib/text-direction.ts";
+import { getSafeLocalStorage } from "../../local-storage.ts";
+import { openExternalUrlSafe } from "../../ui/open-external-url.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
 export { resolveAssistantTextAvatar } from "../../ui/views/agents-utils.ts";
 import { renderCopyAsMarkdownButton } from "../../components/copy-button.ts";
 import "../../components/tooltip.ts";
-import {
-  extractThinkingCached,
-  formatReasoningMarkdown,
-} from "../../pages/chat/message-extract.ts";
-import { isToolResultMessage, normalizeMessage } from "../../pages/chat/message-normalizer.ts";
-import { normalizeRoleForGrouping } from "../../pages/chat/role-normalizer.ts";
+import { extractThinkingCached, formatReasoningMarkdown } from "../../lib/chat/message-extract.ts";
+import { isToolResultMessage, normalizeMessage } from "../../lib/chat/message-normalizer.ts";
+import { normalizeRoleForGrouping } from "../../lib/chat/role-normalizer.ts";
+import { formatCompactTokenCount } from "../../lib/chat/token-format.ts";
 import {
   extractToolCardsCached,
   formatCollapsedToolPreviewText,
@@ -42,7 +40,6 @@ import {
   resolveCollapsedToolDetail,
 } from "../../pages/chat/tool-cards.ts";
 import { renderChatAvatar } from "./chat-avatar.ts";
-import { formatCompactTokenCount } from "./token-format.ts";
 
 function renderChatIcon(name: string) {
   return icons[name as IconName] ?? icons.zap;

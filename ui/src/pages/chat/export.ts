@@ -1,6 +1,6 @@
 // Control UI chat module implements export behavior.
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
-import { extractTextCached } from "../../pages/chat/message-extract.ts";
+import { extractTextCached } from "../../lib/chat/message-extract.ts";
 
 /**
  * Export chat history as markdown file.

@@ -2,15 +2,15 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { MessageGroup } from "../../lib/chat/chat-types.ts";
+import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { setUiTimeFormatPreference } from "../../lib/format.ts";
-import type { MessageGroup } from "./chat-types.ts";
 import {
   formatChatTimestampForDisplay,
   renderMessageGroup,
   renderStreamGroup,
   resetAssistantAttachmentAvailabilityCacheForTest,
 } from "./grouped-render.ts";
-import { normalizeMessage } from "./message-normalizer.ts";
 
 const localStorageValues = vi.hoisted(() => new Map<string, string>());
 const markdownRenderMock = vi.hoisted(() =>

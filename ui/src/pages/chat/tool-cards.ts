@@ -6,6 +6,9 @@ import { icons, type IconName } from "../../components/icons.ts";
 import { isMarkdownBlockArtText } from "../../components/markdown.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import type { ToolCard } from "../../lib/chat/chat-types.ts";
+import { extractTextCached } from "../../lib/chat/message-extract.ts";
+import { isToolResultMessage } from "../../lib/chat/role-normalizer.ts";
 import {
   formatToolDetail,
   resolveCanvasIframeUrl,
@@ -13,10 +16,7 @@ import {
   resolveToolDisplay,
   type EmbedSandboxMode,
 } from "../../lib/chat/tool-display.ts";
-import type { ToolCard } from "./chat-types.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
-import { extractTextCached } from "./message-extract.ts";
-import { isToolResultMessage } from "./role-normalizer.ts";
 import { formatToolOutputForSidebar, getTruncatedPreview } from "./tool-helpers.ts";
 
 export type ToolPreview = NonNullable<ToolCard["preview"]>;

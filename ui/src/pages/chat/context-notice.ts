@@ -2,7 +2,7 @@
 import { html, nothing } from "lit";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { icons } from "../../components/icons.ts";
-import { formatCompactTokenCount } from "./token-format.ts";
+import { formatCompactTokenCount } from "../../lib/chat/token-format.ts";
 
 const CONTEXT_NOTICE_RATIO = 0.85;
 const CONTEXT_COMPACT_RATIO = 0.9;

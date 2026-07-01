@@ -27,6 +27,7 @@ import {
   normalizeThinkLevel,
   resolveThinkingDefaultForModel,
 } from "../../lib/chat/thinking.ts";
+import { formatCompactTokenCount } from "../../lib/chat/token-format.ts";
 import { sessionModelMatchesDefaults } from "../../lib/session-model-defaults.ts";
 import type { SessionCapability, SessionPatch } from "../../lib/sessions/index.ts";
 import {
@@ -39,7 +40,6 @@ import {
   normalizeOptionalLowercaseString,
 } from "../../lib/string-coerce.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import { formatCompactTokenCount } from "./token-format.ts";
 
 export type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */

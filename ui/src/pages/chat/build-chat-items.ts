@@ -1,14 +1,22 @@
 // Control UI chat module implements build chat items behavior.
-import type { ChatItem, MessageGroup, NormalizedMessage, ToolCard } from "./chat-types.ts";
+import type {
+  ChatItem,
+  MessageGroup,
+  NormalizedMessage,
+  ToolCard,
+} from "../../lib/chat/chat-types.ts";
+import { extractTextCached } from "../../lib/chat/message-extract.ts";
+import {
+  normalizeMessage,
+  stripMessageDisplayMetadataText,
+} from "../../lib/chat/message-normalizer.ts";
+import { normalizeRoleForGrouping } from "../../lib/chat/role-normalizer.ts";
+import { messageMatchesSearchQuery } from "../../lib/chat/search-match.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
 } from "./heartbeat-display.ts";
 import { CHAT_HISTORY_RENDER_CHAR_BUDGET, CHAT_HISTORY_RENDER_LIMIT } from "./history-limits.ts";
-import { extractTextCached } from "./message-extract.ts";
-import { normalizeMessage, stripMessageDisplayMetadataText } from "./message-normalizer.ts";
-import { normalizeRoleForGrouping } from "./role-normalizer.ts";
-import { messageMatchesSearchQuery } from "./search-match.ts";
 import {
   streamSegmentHasItemId,
   streamSegmentUsesAccumulatedText,
