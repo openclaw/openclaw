@@ -18,13 +18,15 @@ import {
   removeTelegramRichNativeQuoteParam,
   toTelegramRichMessageContextParams,
 } from "../rich-message.js";
-import { isTelegramRichEntityInvalidError } from "../send-error-predicates.js";
+import {
+  isTelegramHtmlParseError,
+  isTelegramRichEntityInvalidError,
+} from "../send-error-predicates.js";
 import { buildInlineKeyboard } from "../send.js";
 import type { TelegramThreadSpec } from "./helpers.js";
 
 export { buildTelegramSendParams } from "../reply-parameters.js";
 
-const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const EMPTY_TEXT_ERR_RE = /message text is empty/i;
 const QUOTE_PARAM_RE = /\bquote not found\b|\bQUOTE_TEXT_INVALID\b|\bquote text invalid\b/i;
 const GrammyErrorCtor: typeof GrammyError | undefined =
@@ -196,7 +198,7 @@ export async function sendTelegramText(
       requestParams: baseParams,
       shouldLog: (err) => {
         const errText = formatErrorMessage(err);
-        return !PARSE_ERR_RE.test(errText) && !EMPTY_TEXT_ERR_RE.test(errText);
+        return !isTelegramHtmlParseError(err) && !EMPTY_TEXT_ERR_RE.test(errText);
       },
       send: (effectiveParams) =>
         bot.api.sendMessage(chatId, htmlText, {
@@ -210,7 +212,7 @@ export async function sendTelegramText(
     return res.message_id;
   } catch (err) {
     const errText = formatErrorMessage(err);
-    if (PARSE_ERR_RE.test(errText) || EMPTY_TEXT_ERR_RE.test(errText)) {
+    if (isTelegramHtmlParseError(err) || EMPTY_TEXT_ERR_RE.test(errText)) {
       if (!hasFallbackText) {
         throw err;
       }

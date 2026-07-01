@@ -292,6 +292,12 @@ function createRichEntityInvalidError(entity = "EMAIL", operation = "sendRichMes
   );
 }
 
+function createHtmlParseError(operation = "sendMessage"): Error {
+  return new Error(
+    `GrammyError: Call to '${operation}' failed! (400: Bad Request: can't parse entities: Can't find end of the entity)`,
+  );
+}
+
 function expectPersistedTarget(fields: Record<string, unknown>): void {
   const [target] = requireMockCall(
     mockCall(maybePersistResolvedTelegramTarget, -1, "persisted Telegram target"),
@@ -1878,6 +1884,53 @@ describe("sendMessageTelegram", () => {
       caption: "hi <b>boss</b>",
       parse_mode: "HTML",
     });
+  });
+
+  it("falls back to a plain media caption when Telegram rejects caption HTML", async () => {
+    const chatId = "123";
+    const caption = "hi **boss**";
+    const sendPhoto = vi
+      .fn()
+      .mockRejectedValueOnce(createHtmlParseError("sendPhoto"))
+      .mockResolvedValueOnce({
+        message_id: 91,
+        chat: { id: chatId },
+      });
+    const api = { sendPhoto } as unknown as {
+      sendPhoto: typeof sendPhoto;
+    };
+
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
+
+    const result = await sendMessageTelegram(chatId, caption, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/photo.jpg",
+    });
+
+    expectMediaSendCall(
+      firstMockCall(sendPhoto, "first send photo call"),
+      "send photo call",
+      chatId,
+      {
+        caption: "hi <b>boss</b>",
+        parse_mode: "HTML",
+      },
+    );
+    expectMediaSendCall(
+      mockCall(sendPhoto, 1, "second send photo call"),
+      "send photo retry call",
+      chatId,
+      {
+        caption,
+      },
+    );
+    expect(result).toEqual({ messageId: "91", chatId });
   });
 
   it("sends video notes when requested and regular videos otherwise", async () => {

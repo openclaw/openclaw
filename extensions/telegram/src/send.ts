@@ -55,7 +55,10 @@ import {
   type TelegramRichMessageContextParams,
   type TelegramRichTextChunk,
 } from "./rich-message.js";
-import { isTelegramRichEntityInvalidError } from "./send-error-predicates.js";
+import {
+  isTelegramHtmlParseError,
+  isTelegramRichEntityInvalidError,
+} from "./send-error-predicates.js";
 import {
   buildOutboundMediaLoadOptions,
   getImageMetadata,
@@ -323,7 +326,6 @@ function resolveAcceptedReplyToMessageId(
   return params.reply_parameters?.message_id;
 }
 
-const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const MESSAGE_NOT_MODIFIED_RE =
   /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
 const MESSAGE_HAS_NO_TEXT_RE = /400:\s*Bad Request:\s*there is no text in the message to edit/i;
@@ -526,10 +528,6 @@ function isTelegramMessageHasNoTextError(err: unknown): boolean {
 
 function isTelegramMessageDeleteNoopError(err: unknown): boolean {
   return MESSAGE_DELETE_NOOP_RE.test(formatErrorMessage(err));
-}
-
-function isTelegramHtmlParseError(err: unknown): boolean {
-  return PARSE_ERR_RE.test(formatErrorMessage(err));
 }
 
 async function withTelegramHtmlParseFallback<T>(params: {
@@ -1177,6 +1175,8 @@ export async function sendMessageTelegram(
       followUpText = split.followUpText;
     }
     const htmlCaption = caption ? renderHtmlText(caption) : undefined;
+    const plainCaption =
+      caption && textMode === "html" ? telegramHtmlToPlainTextFallback(caption) : caption;
     // If text exceeds Telegram's caption limit, send media without caption
     // then send text as a separate follow-up message.
     const needsSeparateText = Boolean(followUpText);
@@ -1198,12 +1198,31 @@ export async function sendMessageTelegram(
       ...(opts.silent === true ? { disable_notification: true } : {}),
       ...(videoDimensions ? { width: videoDimensions.width, height: videoDimensions.height } : {}),
     };
+    const plainMediaParams = {
+      ...(plainCaption ? { caption: plainCaption } : {}),
+      ...baseMediaParams,
+      ...(opts.silent === true ? { disable_notification: true } : {}),
+      ...(videoDimensions ? { width: videoDimensions.width, height: videoDimensions.height } : {}),
+    };
     const sendMedia = async (
       label: string,
       sender: (
         effectiveParams: TelegramThreadScopedParams | undefined,
       ) => Promise<TelegramMessageLike>,
-    ) => await requestWithChatNotFound(() => sender(mediaParams), label);
+    ) => {
+      if (!htmlCaption || !plainCaption) {
+        return await requestWithChatNotFound(() => sender(mediaParams), label);
+      }
+      // Same contract as text sends: Telegram HTML parse failures retry once
+      // with the already visible plain caption so final media replies survive.
+      return await withTelegramHtmlParseFallback({
+        label,
+        verbose: opts.verbose,
+        requestHtml: (retryLabel) => requestWithChatNotFound(() => sender(mediaParams), retryLabel),
+        requestPlain: (retryLabel) =>
+          requestWithChatNotFound(() => sender(plainMediaParams), retryLabel),
+      });
+    };
 
     const mediaSender = (() => {
       if (isGif && deliveryKind !== "document") {
