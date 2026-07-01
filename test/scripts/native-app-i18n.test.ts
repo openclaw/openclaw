@@ -197,6 +197,50 @@ describe("native app i18n inventory", () => {
     }
   });
 
+  it("rejects native printf placeholder drift", async () => {
+    const translationsDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-native-i18n-"));
+    const cases = [
+      {
+        entry: {
+          id: "native.android.certificate",
+          kind: "ui-call",
+          line: 1,
+          path: "apps/android/example.kt",
+          source: "Old fingerprint: %1$s\nNew fingerprint: %2$s",
+          surface: "android",
+        },
+        translated: "Gammalt fingeravtryck: %1$s",
+      },
+      {
+        entry: {
+          id: "native.apple.failure",
+          kind: "ui-call",
+          line: 1,
+          path: "apps/ios/example.swift",
+          source: "Send failed: %@",
+          surface: "apple",
+        },
+        translated: "Sändningen misslyckades",
+      },
+    ] satisfies Array<{ entry: NativeI18nEntry; translated: string }>;
+
+    try {
+      for (const { entry, translated } of cases) {
+        await expect(
+          syncNativeLocale("sv", [entry], {
+            glossary: [],
+            translationsDir,
+            translate: async () => new Map([[entry.id, translated]]),
+          }),
+        ).rejects.toThrow(
+          `native translation changed placeholders or line breaks for sv:${entry.id}`,
+        );
+      }
+    } finally {
+      await rm(translationsDir, { force: true, recursive: true });
+    }
+  });
+
   it("validates locale refresh arguments before write paths run", () => {
     expect(parseNativeI18nCommand(["sync", "--write", "--locale", "sv"])).toEqual({
       command: "sync",

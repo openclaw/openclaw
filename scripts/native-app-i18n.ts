@@ -72,6 +72,7 @@ const SOURCE_ROOTS: Record<NativeI18nSurface, string[]> = {
 
 const ANDROID_EXTENSIONS = new Set([".kt", ".kts"]);
 const APPLE_EXTENSIONS = new Set([".swift", ".plist"]);
+const NATIVE_FORMAT_RE = /%(?:\d+\$)?[@a-z]/giu;
 const APPLE_UI_MULTILINE_CALLS =
   /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*"""([\s\S]*?)"""/gu;
 const APPLE_CALL_START = /\b([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*/gu;
@@ -530,9 +531,10 @@ function enclosingCallName(source: string, offset: number): string | null {
 function structuralTokenSignature(source: string): string {
   const swift = extractSwiftInterpolations(source)?.toSorted();
   const kotlin = extractKotlinInterpolations(source)?.toSorted();
+  const nativeFormat = [...source.matchAll(NATIVE_FORMAT_RE)].map((match) => match[0]).toSorted();
   const buildSettings = (source.match(BUILD_SETTING_RE) ?? []).toSorted();
   const lineBreaks = (source.match(/\n/gu) ?? []).length;
-  return JSON.stringify({ swift, kotlin, buildSettings, lineBreaks });
+  return JSON.stringify({ swift, kotlin, nativeFormat, buildSettings, lineBreaks });
 }
 
 function addCandidate(
