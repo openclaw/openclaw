@@ -1,5 +1,6 @@
 /** Tests Gateway errorKind to ACP stopReason mapping. */
 import { describe, expect, it } from "vitest";
+import { RequestError } from "@agentclientprotocol/sdk";
 import {
   createChatEvent,
   createPendingPromptHarness,
@@ -24,7 +25,24 @@ describe("acp translator errorKind mapping", () => {
     await expect(promptPromise).resolves.toEqual({ stopReason: "refusal" });
   });
 
-  it("maps errorKind: timeout to stopReason: end_turn", async () => {
+  it("maps errorKind: context_length to stopReason: max_tokens", async () => {
+    const { agent, promptPromise, runId } = await createPendingPromptHarness();
+
+    await agent.handleGatewayEvent(
+      createChatEvent({
+        runId,
+        sessionKey: DEFAULT_SESSION_KEY,
+        seq: 1,
+        state: "error",
+        errorKind: "context_length",
+        errorMessage: "Context length exceeded",
+      }),
+    );
+
+    await expect(promptPromise).resolves.toEqual({ stopReason: "max_tokens" });
+  });
+
+  it("maps errorKind: timeout to a RequestError", async () => {
     const { agent, promptPromise, runId } = await createPendingPromptHarness();
 
     await agent.handleGatewayEvent(
@@ -38,10 +56,41 @@ describe("acp translator errorKind mapping", () => {
       }),
     );
 
-    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+    await expect(promptPromise).rejects.toSatisfy((err: any) => {
+      return (
+        err instanceof RequestError &&
+        err.code === -32001 &&
+        err.message === "gateway timeout" &&
+        (err.data as any)?.errorKind === "timeout"
+      );
+    });
   });
 
-  it("maps unknown errorKind to stopReason: end_turn", async () => {
+  it("maps errorKind: rate_limit to a RequestError", async () => {
+    const { agent, promptPromise, runId } = await createPendingPromptHarness();
+
+    await agent.handleGatewayEvent(
+      createChatEvent({
+        runId,
+        sessionKey: DEFAULT_SESSION_KEY,
+        seq: 1,
+        state: "error",
+        errorKind: "rate_limit",
+        errorMessage: "rate limit exceeded",
+      }),
+    );
+
+    await expect(promptPromise).rejects.toSatisfy((err: any) => {
+      return (
+        err instanceof RequestError &&
+        err.code === -32002 &&
+        err.message === "rate limit exceeded" &&
+        (err.data as any)?.errorKind === "rate_limit"
+      );
+    });
+  });
+
+  it("maps unknown errorKind to a RequestError", async () => {
     const { agent, promptPromise, runId } = await createPendingPromptHarness();
 
     await agent.handleGatewayEvent(
@@ -55,6 +104,13 @@ describe("acp translator errorKind mapping", () => {
       }),
     );
 
-    await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+    await expect(promptPromise).rejects.toSatisfy((err: any) => {
+      return (
+        err instanceof RequestError &&
+        err.code === -32603 &&
+        err.message === "something went wrong" &&
+        (err.data as any)?.errorKind === "unknown"
+      );
+    });
   });
 });
