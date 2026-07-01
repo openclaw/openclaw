@@ -92,7 +92,7 @@ describe("OpenClaw provider index", () => {
               {
                 id: "kimi-k2.6",
                 name: "Kimi K2.6",
-                input: ["text", "image"],
+                input: ["text", "image", "audio"],
                 contextWindow: 262144,
                 status: "preview",
               },

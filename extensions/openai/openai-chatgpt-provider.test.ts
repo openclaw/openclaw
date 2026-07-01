@@ -180,6 +180,38 @@ describe("OpenAI provider Codex transport hooks", () => {
     });
   });
 
+  it("adds Codex image capability without dropping existing audio input", () => {
+    const provider = buildOpenAIProvider();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      providerConfig: { api: "openai-chatgpt-responses" },
+      modelRegistry: {
+        find: () => ({
+          provider: "openai",
+          id: "gpt-5.5",
+          name: "gpt-5.5",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          reasoning: true,
+          input: ["text", "audio"],
+          cost: { input: 1, output: 1, cacheRead: 1, cacheWrite: 1 },
+          contextWindow: 400_000,
+          maxTokens: 128_000,
+        }),
+      },
+    } as never);
+
+    expect(model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.5",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      input: ["text", "audio", "image"],
+    });
+  });
+
   it("keeps cloned Codex-backed OpenAI models on the Codex Responses transport", () => {
     const provider = buildOpenAIProvider();
 

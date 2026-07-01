@@ -503,6 +503,34 @@ describe("normalizePluginDiscoveryResult", () => {
         },
       },
     },
+    {
+      name: "preserves audio and video model inputs from static catalog rows",
+      provider: makeProvider({ id: "ignored" }),
+      result: {
+        providers: {
+          healthy: makeModelProviderConfig({
+            baseUrl: "http://healthy.example/v1",
+            models: [
+              {
+                ...makeModel("multimodal-model"),
+                input: ["text", "image", "audio", "video"],
+              },
+            ],
+          }),
+        },
+      },
+      expected: {
+        healthy: {
+          baseUrl: "http://healthy.example/v1",
+          models: [
+            {
+              ...makeModel("multimodal-model"),
+              input: ["text", "image", "audio", "video"],
+            },
+          ],
+        },
+      },
+    },
   ];
 
   it.each(cases)("$name", ({ provider, result, expected }) => {

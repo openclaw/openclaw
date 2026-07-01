@@ -211,13 +211,8 @@ async function appendVisibleRow(params: {
 
 function resolveConfiguredModelInput(params: {
   model: Partial<ModelDefinitionConfig>;
-}): Array<"text" | "image"> {
-  const input = Array.isArray(params.model.input)
-    ? params.model.input.filter(
-        (item): item is "text" | "image" => item === "text" || item === "image",
-      )
-    : [];
-  return input.length > 0 ? input : ["text"];
+}): ListRowModel["input"] {
+  return toListRowInput(params.model.input);
 }
 
 function toConfiguredProviderListModel(params: {
@@ -239,7 +234,11 @@ function toConfiguredProviderListModel(params: {
 function toListRowInput(input: readonly string[] | undefined): ListRowModel["input"] {
   const parsed = input?.filter(
     (item): item is ListRowModel["input"][number] =>
-      item === "text" || item === "image" || item === "document",
+      item === "text" ||
+      item === "image" ||
+      item === "document" ||
+      item === "audio" ||
+      item === "video",
   );
   return parsed?.length ? parsed : ["text"];
 }

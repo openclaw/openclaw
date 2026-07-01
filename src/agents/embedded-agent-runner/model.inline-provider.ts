@@ -104,6 +104,8 @@ function isLegacyFoundryVisionModelCandidate(params: {
   );
 }
 
+type ResolvedProviderModelInput = Array<"text" | "image" | "audio" | "video">;
+
 /** Resolves model input modalities with Foundry legacy vision-model compatibility. */
 export function resolveProviderModelInput(params: {
   provider?: string;
@@ -111,17 +113,20 @@ export function resolveProviderModelInput(params: {
   modelName?: string;
   input?: unknown;
   fallbackInput?: unknown;
-}): Array<"text" | "image"> {
+}): ResolvedProviderModelInput {
   const resolvedInput = Array.isArray(params.input) ? params.input : params.fallbackInput;
   const normalizedInput = Array.isArray(resolvedInput)
-    ? resolvedInput.filter((item): item is "text" | "image" => item === "text" || item === "image")
+    ? resolvedInput.filter(
+        (item): item is ResolvedProviderModelInput[number] =>
+          item === "text" || item === "image" || item === "audio" || item === "video",
+      )
     : [];
   if (
     normalizedInput.length > 0 &&
     !normalizedInput.includes("image") &&
     isLegacyFoundryVisionModelCandidate(params)
   ) {
-    return ["text", "image"];
+    return [...normalizedInput, "image"];
   }
   return normalizedInput.length > 0 ? normalizedInput : ["text"];
 }
