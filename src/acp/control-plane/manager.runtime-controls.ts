@@ -13,9 +13,10 @@ import { createUnsupportedControlError } from "./manager.utils.js";
 import type { CachedRuntimeState } from "./runtime-cache.js";
 import {
   buildRuntimeConfigOptionPairs,
-  buildRuntimeControlSignature,
+  normalizeRuntimeOptions,
   normalizeText,
   resolveRuntimeOptionsFromMeta,
+  runtimeOptionsEqual,
 } from "./runtime-options.js";
 
 const OPTIONAL_TIMEOUT_CONFIG_KEYS = new Set(["timeout", "timeout_seconds"]);
@@ -119,7 +120,7 @@ export async function resolveManagerRuntimeCapabilities(params: {
   };
 }
 
-/** Applies persisted runtime options to a live handle once per unique option signature. */
+/** Applies the delta between persisted runtime options and controls already pushed to the handle. */
 export async function applyManagerRuntimeControls(params: {
   sessionKey: string;
   runtime: AcpRuntime;
@@ -128,9 +129,9 @@ export async function applyManagerRuntimeControls(params: {
   getCachedRuntimeState: (sessionKey: string) => CachedRuntimeState | null;
 }): Promise<void> {
   const options = resolveRuntimeOptionsFromMeta(params.meta);
-  const signature = buildRuntimeControlSignature(options);
   const cached = params.getCachedRuntimeState(params.sessionKey);
-  if (cached?.appliedControlSignature === signature) {
+  const applied = cached?.appliedRuntimeOptions;
+  if (applied && runtimeOptionsEqual(applied, options)) {
     return;
   }
 
@@ -142,7 +143,16 @@ export async function applyManagerRuntimeControls(params: {
   });
   const backend = params.handle.backend || params.meta.backend;
   const runtimeMode = normalizeText(options.runtimeMode);
-  const configOptions = buildRuntimeConfigOptionPairs(options, capabilities.configOptionKeys);
+  // Skip controls already applied to this handle (e.g. model/thinking set at session
+  // creation) so the first turn reconciles only the delta against the live backend.
+  const appliedRuntimeMode = normalizeText(applied?.runtimeMode);
+  const appliedConfigOptions = new Map(
+    buildRuntimeConfigOptionPairs(normalizeRuntimeOptions(applied), capabilities.configOptionKeys),
+  );
+  const configOptions = buildRuntimeConfigOptionPairs(
+    options,
+    capabilities.configOptionKeys,
+  ).filter(([key, value]) => appliedConfigOptions.get(key) !== value);
   const advertisedKeys = new Set(
     (capabilities.configOptionKeys ?? [])
       .map((entry) => normalizeLowercaseStringOrEmpty(entry))
@@ -151,7 +161,7 @@ export async function applyManagerRuntimeControls(params: {
 
   await withAcpRuntimeErrorBoundary({
     run: async () => {
-      if (runtimeMode) {
+      if (runtimeMode && runtimeMode !== appliedRuntimeMode) {
         if (!capabilities.controls.includes("session/set_mode") || !params.runtime.setMode) {
           throw createUnsupportedControlError({
             backend,
@@ -204,6 +214,6 @@ export async function applyManagerRuntimeControls(params: {
   });
 
   if (cached) {
-    cached.appliedControlSignature = signature;
+    cached.appliedRuntimeOptions = options;
   }
 }

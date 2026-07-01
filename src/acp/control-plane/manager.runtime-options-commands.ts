@@ -17,6 +17,7 @@ import {
   normalizeRuntimeOptions,
   resolveRuntimeConfigOptionKey,
   resolveRuntimeOptionsFromMeta,
+  retainUnchangedAppliedRuntimeOptions,
 } from "./runtime-options.js";
 
 /** Manager services required by runtime-option command handlers. */
@@ -238,7 +239,12 @@ async function persistManagerRuntimeOptions(
     params.runtimeHandles.clear(params.sessionKey);
     return;
   }
-  // Persisting options does not guarantee this process pushed all controls to the runtime.
-  // Force the next turn to reconcile runtime controls from persisted metadata.
-  cached.appliedControlSignature = undefined;
+  // Persisting options does not guarantee this process pushed the changed controls to the
+  // runtime. Keep the still-matching applied baseline (e.g. startup model/thinking already
+  // pushed via ensureSession) so the next turn reconciles only the changed controls instead
+  // of resending startup options the backend may reject.
+  cached.appliedRuntimeOptions = retainUnchangedAppliedRuntimeOptions({
+    applied: cached.appliedRuntimeOptions,
+    persisted: normalized,
+  });
 }

@@ -4,6 +4,7 @@ import type {
   AcpRuntimeHandle,
   AcpRuntimeSessionMode,
 } from "@openclaw/acp-core/runtime/types";
+import type { AcpSessionRuntimeOptions } from "../../config/sessions/types.js";
 
 /** Cached runtime handle plus the configuration signature that made it reusable. */
 export type CachedRuntimeState = {
@@ -14,7 +15,10 @@ export type CachedRuntimeState = {
   mode: AcpRuntimeSessionMode;
   cwd?: string;
   configSignature: string;
-  appliedControlSignature?: string;
+  // Runtime options already pushed to the live handle. Controls applied at session
+  // creation (model/thinking via ensureSession) seed this so the first turn reconciles
+  // only the remaining controls instead of resending startup options the backend may reject.
+  appliedRuntimeOptions?: AcpSessionRuntimeOptions;
 };
 
 type RuntimeCacheEntry = {

@@ -272,6 +272,19 @@ export function normalizeRuntimeOptions(
   };
 }
 
+export function sanitizeRuntimeOptionsForAcpAgent(
+  options: AcpSessionRuntimeOptions | undefined,
+  agent: string | undefined,
+): AcpSessionRuntimeOptions {
+  const normalized = normalizeRuntimeOptions(options);
+  if (normalizeLowercaseStringOrEmpty(agent) !== "claude") {
+    return normalized;
+  }
+
+  const { model: _model, thinking: _thinking, ...safeOptions } = normalized;
+  return normalizeRuntimeOptions(safeOptions);
+}
+
 export function mergeRuntimeOptions(params: {
   current?: AcpSessionRuntimeOptions;
   patch?: Partial<AcpSessionRuntimeOptions>;
@@ -307,18 +320,40 @@ export function runtimeOptionsEqual(
   return JSON.stringify(normalizeRuntimeOptions(a)) === JSON.stringify(normalizeRuntimeOptions(b));
 }
 
-export function buildRuntimeControlSignature(options: AcpSessionRuntimeOptions): string {
-  const normalized = normalizeRuntimeOptions(options);
-  const extras = Object.entries(normalized.backendExtras ?? {}).toSorted(([a], [b]) =>
-    a.localeCompare(b),
+/**
+ * Keeps applied-option entries whose values still match the newly persisted options.
+ * Unchanged entries (e.g. startup model/thinking already pushed via ensureSession) stay
+ * marked applied so the next turn does not resend them; changed or removed entries drop
+ * out so the next turn reconciles only those against the live backend.
+ */
+export function retainUnchangedAppliedRuntimeOptions(params: {
+  applied: AcpSessionRuntimeOptions | undefined;
+  persisted: AcpSessionRuntimeOptions;
+}): AcpSessionRuntimeOptions {
+  const applied = normalizeRuntimeOptions(params.applied);
+  const persisted = normalizeRuntimeOptions(params.persisted);
+  const retainedExtras = Object.fromEntries(
+    Object.entries(applied.backendExtras ?? {}).filter(
+      ([key, value]) => persisted.backendExtras?.[key] === value,
+    ),
   );
-  return JSON.stringify({
-    runtimeMode: normalized.runtimeMode ?? null,
-    model: normalized.model ?? null,
-    thinking: normalized.thinking ?? null,
-    permissionProfile: normalized.permissionProfile ?? null,
-    timeoutSeconds: normalized.timeoutSeconds ?? null,
-    backendExtras: extras,
+  return normalizeRuntimeOptions({
+    ...(applied.runtimeMode && applied.runtimeMode === persisted.runtimeMode
+      ? { runtimeMode: applied.runtimeMode }
+      : {}),
+    ...(applied.model && applied.model === persisted.model ? { model: applied.model } : {}),
+    ...(applied.thinking && applied.thinking === persisted.thinking
+      ? { thinking: applied.thinking }
+      : {}),
+    ...(applied.cwd && applied.cwd === persisted.cwd ? { cwd: applied.cwd } : {}),
+    ...(applied.permissionProfile && applied.permissionProfile === persisted.permissionProfile
+      ? { permissionProfile: applied.permissionProfile }
+      : {}),
+    ...(typeof applied.timeoutSeconds === "number" &&
+    applied.timeoutSeconds === persisted.timeoutSeconds
+      ? { timeoutSeconds: applied.timeoutSeconds }
+      : {}),
+    ...(Object.keys(retainedExtras).length > 0 ? { backendExtras: retainedExtras } : {}),
   });
 }
 
