@@ -406,6 +406,29 @@ class ShellScreenLogicTest {
   }
 
   @Test
+  fun gatewaySummaryMatchesRealGatewayUnauthorizedFailureText() {
+    // "unauthorized" contains "auth" — this locks in that the real server-formatted
+    // message (formatGatewayAuthFailureMessage in ws-connection/auth-messages.ts) hits
+    // the status.contains("auth") gate, not just synthetic test strings.
+    assertEquals(
+      "Gateway token needed",
+      gatewaySummary(
+        "Gateway error: unauthorized: gateway token missing (set gateway.remote.token to match gateway.auth.token)",
+        isConnected = false,
+        gatewayConnectionProblem = authProblem("AUTH_TOKEN_MISSING"),
+      ),
+    )
+    assertEquals(
+      "Setup code expired",
+      gatewaySummary(
+        "Gateway error: unauthorized: bootstrap token invalid or expired (scan a fresh setup code)",
+        isConnected = false,
+        gatewayConnectionProblem = authProblem("AUTH_BOOTSTRAP_TOKEN_INVALID"),
+      ),
+    )
+  }
+
+  @Test
   fun gatewaySummaryFallsBackToGenericAuthLabelWithoutAKnownReason() {
     assertEquals("Authentication needed", gatewaySummary("auth failed", isConnected = false, gatewayConnectionProblem = null))
     assertEquals("Authentication needed", gatewaySummary("auth failed", isConnected = false, gatewayConnectionProblem = authProblem("SOME_UNMAPPED_CODE")))

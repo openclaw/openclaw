@@ -33,6 +33,21 @@ class SettingsScreensTest {
   }
 
   @Test
+  fun gatewayStatusLabelMatchesRealGatewayUnauthorizedFailureText() {
+    // "unauthorized" contains "auth" — this locks in that the real server-formatted
+    // message (formatGatewayAuthFailureMessage in ws-connection/auth-messages.ts) hits
+    // the status.contains("auth") gate, not just synthetic test strings.
+    assertEquals(
+      "Gateway password invalid",
+      gatewayStatusLabel(
+        "Gateway error: unauthorized: gateway password mismatch (enter the password in Control UI settings)",
+        isConnected = false,
+        gatewayConnectionProblem = authProblem("AUTH_PASSWORD_MISMATCH"),
+      ),
+    )
+  }
+
+  @Test
   fun gatewayStatusLabelFallsBackToGenericAuthLabelWithoutAKnownReason() {
     assertEquals("Authentication needed", gatewayStatusLabel("auth failed", isConnected = false, gatewayConnectionProblem = null))
     assertEquals(
