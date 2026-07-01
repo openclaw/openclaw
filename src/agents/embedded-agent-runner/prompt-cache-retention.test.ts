@@ -63,15 +63,43 @@ describe("prompt cache retention", () => {
     ).toBe("none");
   });
 
-  it("does not honor explicit cacheRetention for openai-completions without supportsPromptCacheKey", () => {
-    // Providers that route via openai-completions but do not advertise prompt
-    // caching must keep retention out of outgoing payloads.
+  it("passes explicit cacheRetention through for supported Bedrock Nova models", () => {
     expect(
       resolveCacheRetention(
         { cacheRetention: "long" },
         "amazon-bedrock",
         "openai-completions",
         "amazon.nova-micro-v1:0",
+      ),
+    ).toBe("long");
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "short" },
+        "amazon-bedrock",
+        "openai-completions",
+        "us.amazon.nova-lite-v1:0",
+      ),
+    ).toBe("short");
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "none" },
+        "amazon-bedrock",
+        "openai-completions",
+        "amazon.nova-2-lite-v1:0",
+      ),
+    ).toBe("none");
+  });
+
+  it("does not honor explicit cacheRetention for unrelated openai-completions models without supportsPromptCacheKey", () => {
+    // Providers that route via openai-completions but do not advertise prompt
+    // caching must keep retention out of outgoing payloads unless a provider
+    // family has a native cache-point contract.
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "long" },
+        "amazon-bedrock",
+        "openai-completions",
+        "amazon.titan-text-express-v1",
       ),
     ).toBeUndefined();
     expect(
@@ -94,6 +122,20 @@ describe("prompt cache retention", () => {
     ).toBeUndefined();
     expect(
       resolveCacheRetention({}, "omlx-local", "openai-completions", "local_model", true),
+    ).toBeUndefined();
+  });
+
+  it("does not default cacheRetention for Bedrock Nova models", () => {
+    expect(
+      resolveCacheRetention(
+        undefined,
+        "amazon-bedrock",
+        "openai-completions",
+        "amazon.nova-micro-v1:0",
+      ),
+    ).toBeUndefined();
+    expect(
+      resolveCacheRetention({}, "amazon-bedrock", "openai-completions", "amazon.nova-pro-v1:0"),
     ).toBeUndefined();
   });
 

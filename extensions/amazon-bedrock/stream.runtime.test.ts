@@ -151,6 +151,28 @@ describe("Bedrock reasoning replay", () => {
   });
 });
 
+describe("Bedrock Nova prompt caching", () => {
+  it("adds default cache points to Nova user messages", () => {
+    const messages = testing.convertMessages(
+      { messages: [{ role: "user", content: "Hello", timestamp: 0 }] } as never,
+      bedrockModel({ id: "amazon.nova-micro-v1:0", name: "Nova Micro" }),
+      "short",
+    );
+
+    expect(messages[0]?.content).toEqual([{ text: "Hello" }, { cachePoint: { type: "default" } }]);
+  });
+
+  it("does not add Claude one-hour TTL fields to Nova cache points", () => {
+    const messages = testing.convertMessages(
+      { messages: [{ role: "user", content: "Hello", timestamp: 0 }] } as never,
+      bedrockModel({ id: "amazon.nova-pro-v1:0", name: "Nova Pro" }),
+      "long",
+    );
+
+    expect(messages[0]?.content).toEqual([{ text: "Hello" }, { cachePoint: { type: "default" } }]);
+  });
+});
+
 describe("Bedrock profile endpoint resolution", () => {
   it("treats request profiles as configured profiles for standard endpoints", () => {
     const endpoint = "https://bedrock-runtime.us-west-2.amazonaws.com";
