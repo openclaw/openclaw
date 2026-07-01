@@ -47,6 +47,7 @@ const GOOGLE_VERTEX_OAUTH_SCOPE = "https://www.googleapis.com/auth/cloud-platfor
 const GOOGLE_VERTEX_TOKEN_EXPIRY_BUFFER_MS = 60_000;
 const GOOGLE_VERTEX_DEFAULT_TOKEN_LIFETIME_SECONDS = 3600;
 const GOOGLE_VERTEX_AUTHLIB_TOKEN_CACHE_MS = 5 * 60_000;
+const MAX_DECODED_TOKEN_BODY_BYTES = 16 * 1024 * 1024;
 
 let cachedGoogleVertexAuthorizedUserToken: GoogleVertexAuthorizedUserToken | undefined;
 let cachedGoogleAuthClient:
@@ -294,11 +295,22 @@ export async function readGoogleOauthTokenResponsePayload(
 
 function decodeGoogleOauthTokenResponseBody(bytes: Buffer, contentEncoding: string | null): string {
   if (shouldGunzipGoogleOauthTokenResponse(bytes, contentEncoding)) {
+    let decoded: Buffer;
     try {
-      return gunzipSync(bytes).toString("utf8");
+      decoded = gunzipSync(bytes);
     } catch {
+      // gunzip failure (malformed input): fall back to raw bytes
       return bytes.toString("utf8");
     }
+    // decoded-output cap: a gzip token response can be far under the 16 MiB wire
+    // cap and still inflate past it during gunzipSync, leaving an OOM path in code
+    // meant to harden against oversized responses.
+    if (decoded.length > MAX_DECODED_TOKEN_BODY_BYTES) {
+      throw new Error(
+        `google-vertex-adc: decompressed token response exceeds ${MAX_DECODED_TOKEN_BODY_BYTES} bytes`,
+      );
+    }
+    return decoded.toString("utf8");
   }
   return bytes.toString("utf8");
 }

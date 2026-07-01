@@ -111,6 +111,26 @@ describe("readGoogleOauthTokenResponsePayload", () => {
     );
   });
 
+  it("throws on gzip response that decompresses past decoded cap", async () => {
+    // A small compressed payload that decompresses to > 16 MiB should be
+    // caught by the decoded-output cap, even though the wire payload is
+    // well under the 16 MiB wire limit.
+    const oversized = new Uint8Array(SIXTEEN_MIB + 1).fill(0x41);
+    const compressed = gzipSync(oversized);
+    expect(compressed.length).toBeLessThan(oversized.length);
+    await expect(
+      readGoogleOauthTokenResponsePayload(
+        new Response(compressed, {
+          status: 200,
+          headers: {
+            "content-type": "application/json",
+            "content-encoding": "gzip",
+          },
+        }),
+      ),
+    ).rejects.toThrow("decompressed token response exceeds");
+  });
+
   it("handles whitespace-only body gracefully", async () => {
     const result = await readGoogleOauthTokenResponsePayload(
       new Response("   \n  ", { status: 200 }),
