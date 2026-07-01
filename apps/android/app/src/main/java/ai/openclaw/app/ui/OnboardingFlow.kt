@@ -2197,6 +2197,7 @@ internal fun recoveryGatewayDetail(
 
 internal fun recoveryGatewayAuthDetail(gatewayConnectionProblem: GatewayConnectionProblem): String =
   when (gatewayConnectionProblem.code) {
+    "PROTOCOL_MISMATCH" -> recoveryGatewayProtocolMismatchDetail(gatewayConnectionProblem)
     "AUTH_BOOTSTRAP_TOKEN_INVALID" -> "The code may have expired or been generated for another Gateway."
     "AUTH_DEVICE_TOKEN_MISMATCH",
     "AUTH_TOKEN_MISMATCH",
@@ -2215,6 +2216,40 @@ internal fun recoveryGatewayAuthDetail(gatewayConnectionProblem: GatewayConnecti
         else -> gatewayConnectionProblem.message.takeIf { it.isNotBlank() } ?: "Gateway authentication needs attention."
       }
   }
+
+private fun recoveryGatewayProtocolMismatchDetail(gatewayConnectionProblem: GatewayConnectionProblem): String {
+  val clientMin = gatewayConnectionProblem.clientMinProtocol
+  val clientMax = gatewayConnectionProblem.clientMaxProtocol
+  val expected = gatewayConnectionProblem.expectedProtocol
+  val summary =
+    when {
+      clientMax != null && expected != null && clientMax < expected ->
+        "This app is older than the Gateway. Update OpenClaw on this device, then retry."
+      clientMin != null && expected != null && clientMin > expected ->
+        "The Gateway is older than this app. Update OpenClaw on the Gateway host, then retry."
+      else -> "The app and Gateway use incompatible protocol versions. Update OpenClaw on both, then retry."
+    }
+  return protocolMismatchVersions(clientMin, clientMax, expected)?.let { "$summary $it" } ?: summary
+}
+
+private fun protocolMismatchVersions(
+  clientMin: Int?,
+  clientMax: Int?,
+  expected: Int?,
+): String? {
+  val clientRange =
+    when {
+      clientMin == null && clientMax == null -> null
+      clientMin != null && clientMin == clientMax -> "app protocol v$clientMin"
+      clientMin != null && clientMax != null -> "app protocols v$clientMin-v$clientMax"
+      clientMin != null -> "app protocol min v$clientMin"
+      else -> "app protocol max v$clientMax"
+    }
+  val gatewayVersion = expected?.let { "gateway protocol v$it" }
+  return listOfNotNull(clientRange, gatewayVersion)
+    .takeIf { it.isNotEmpty() }
+    ?.joinToString(prefix = "(", postfix = ").")
+}
 
 private fun recoveryGatewayApprovalCommand(gatewayConnectionProblem: GatewayConnectionProblem?): String? {
   if (gatewayConnectionProblem?.isPairingRequired != true || gatewayConnectionProblem.canAutoRetry) return null

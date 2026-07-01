@@ -458,6 +458,27 @@ class OnboardingFlowLogicTest {
   }
 
   @Test
+  fun recoveryGatewayAuthDetailPreservesProtocolMismatchGuidance() {
+    assertEquals(
+      "This app is older than the Gateway. Update OpenClaw on this device, then retry. (app protocol v4, gateway protocol v5).",
+      recoveryGatewayAuthDetail(
+        GatewayConnectionProblem(
+          code = "PROTOCOL_MISMATCH",
+          message = "protocol mismatch",
+          reason = null,
+          requestId = null,
+          recommendedNextStep = null,
+          pauseReconnect = true,
+          retryable = false,
+          clientMinProtocol = 4,
+          clientMaxProtocol = 4,
+          expectedProtocol = 5,
+        ),
+      ),
+    )
+  }
+
+  @Test
   fun recoveryGatewayAuthDetailUsesRecommendedNextStepFallbacks() {
     assertEquals(
       "Gateway authentication is not configured. Edit this connection and try again.",
