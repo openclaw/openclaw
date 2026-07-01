@@ -17,7 +17,7 @@ const mcpRuntimeMocks = vi.hoisted(() => ({
     }) => Pick<SessionMcpRuntime, "configFingerprint" | "peekCatalog" | "workspaceDir"> | undefined
   >(() => undefined),
   resolveSessionMcpConfigSummary: vi.fn(() => ({
-    fingerprint: "mcp:0",
+    fingerprint: "mcp:1",
     serverNames: [] as string[],
   })),
 }));
@@ -87,7 +87,7 @@ describe("handleCommands /mcp", () => {
     await workspaceHarness.cleanupWorkspaces();
     mcpRuntimeMocks.peekSessionMcpRuntime.mockReset().mockReturnValue(undefined);
     mcpRuntimeMocks.resolveSessionMcpConfigSummary.mockReset().mockReturnValue({
-      fingerprint: "mcp:0",
+      fingerprint: "mcp:1",
       serverNames: [],
     });
   });
@@ -183,9 +183,6 @@ describe("handleCommands /mcp", () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
       const workspaceDir = await workspaceHarness.createWorkspace();
       mcpServers.set("context7", { command: "uvx", args: ["context7-mcp"], enabled: false });
-      // The bundle-MCP runtime excludes enabled:false servers entirely, so the
-      // warm catalog it built never mentions "context7" — not in servers, not
-      // in diagnostics. That absence must read as "disabled", not "pending".
       const catalog = makeCatalog({ servers: {} });
       mcpRuntimeMocks.peekSessionMcpRuntime.mockReturnValue({
         configFingerprint: "mcp:1",
@@ -237,6 +234,58 @@ describe("handleCommands /mcp", () => {
     });
   });
 
+  it("marks cold live state stale when the session runtime predates the current config", async () => {
+    await withTempHome("openclaw-command-mcp-home-", async () => {
+      const workspaceDir = await workspaceHarness.createWorkspace();
+      mcpServers.set("context7", { command: "uvx", args: ["context7-mcp"] });
+      mcpRuntimeMocks.peekSessionMcpRuntime.mockReturnValue({
+        configFingerprint: "mcp:old",
+        workspaceDir,
+        peekCatalog: () => null,
+      });
+      mcpRuntimeMocks.resolveSessionMcpConfigSummary.mockReturnValue({
+        fingerprint: "mcp:new",
+        serverNames: ["context7"],
+      });
+
+      const showParams = buildCommandTestParams("/mcp show", buildCfg(), undefined, {
+        workspaceDir,
+      });
+      showParams.command.senderIsOwner = true;
+      const result = expectMcpResult(await handleMcpCommand(showParams, true));
+      expect(result.reply?.text).toContain(
+        "context7: ♻️ config changed since last connect (stale)",
+      );
+      expect(result.reply?.text).not.toContain("not yet discovered");
+    });
+  });
+
+  it("marks disabled current config stale when an existing runtime predates the edit", async () => {
+    await withTempHome("openclaw-command-mcp-home-", async () => {
+      const workspaceDir = await workspaceHarness.createWorkspace();
+      mcpServers.set("context7", { command: "uvx", args: ["context7-mcp"], enabled: false });
+      mcpRuntimeMocks.peekSessionMcpRuntime.mockReturnValue({
+        configFingerprint: "mcp:old",
+        workspaceDir,
+        peekCatalog: () => null,
+      });
+      mcpRuntimeMocks.resolveSessionMcpConfigSummary.mockReturnValue({
+        fingerprint: "mcp:new",
+        serverNames: [],
+      });
+
+      const showParams = buildCommandTestParams("/mcp show", buildCfg(), undefined, {
+        workspaceDir,
+      });
+      showParams.command.senderIsOwner = true;
+      const result = expectMcpResult(await handleMcpCommand(showParams, true));
+      expect(result.reply?.text).toContain(
+        "context7: ♻️ config changed since last connect (stale)",
+      );
+      expect(result.reply?.text).not.toContain("disabled (enabled: false");
+    });
+  });
+
   it("computes staleness against the runtime's own workspaceDir, not the command's raw workspaceDir", async () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
       const commandWorkspaceDir = await workspaceHarness.createWorkspace();
@@ -245,10 +294,6 @@ describe("handleCommands /mcp", () => {
       const catalog = makeCatalog({
         servers: { context7: { serverName: "context7", launchSummary: "uvx", toolCount: 3 } },
       });
-      // Simulates a sandboxed session: the runtime was built from a different
-      // effective workspace than the raw command workspaceDir threaded
-      // through get-reply.ts. Regression guard for the sandbox-fingerprint
-      // fix — staleness must compare against runtime.workspaceDir.
       mcpRuntimeMocks.peekSessionMcpRuntime.mockReturnValue({
         configFingerprint: "mcp:1",
         workspaceDir: runtimeWorkspaceDir,
@@ -283,6 +328,10 @@ describe("handleCommands /mcp", () => {
         workspaceDir,
         peekCatalog: () => null,
       });
+      mcpRuntimeMocks.resolveSessionMcpConfigSummary.mockReturnValue({
+        fingerprint: "mcp:1",
+        serverNames: ["context7"],
+      });
 
       const showParams = buildCommandTestParams("/mcp show", buildCfg(), undefined, {
         workspaceDir,
@@ -300,13 +349,14 @@ describe("handleCommands /mcp", () => {
     await withTempHome("openclaw-command-mcp-home-", async () => {
       const workspaceDir = await workspaceHarness.createWorkspace();
       mcpServers.set("context7", { command: "uvx", args: ["context7-mcp"], enabled: false });
-      // Session runtime exists but hasn't built a catalog yet (cold path) —
-      // the disabled check must still win over the generic "connects on next
-      // agent MCP tool use" fallback, since a disabled server never connects.
       mcpRuntimeMocks.peekSessionMcpRuntime.mockReturnValue({
         configFingerprint: "mcp:1",
         workspaceDir,
         peekCatalog: () => null,
+      });
+      mcpRuntimeMocks.resolveSessionMcpConfigSummary.mockReturnValue({
+        fingerprint: "mcp:1",
+        serverNames: [],
       });
 
       const showParams = buildCommandTestParams("/mcp show", buildCfg(), undefined, {
@@ -332,10 +382,6 @@ describe("handleCommands /mcp", () => {
       });
       showParams.command.senderIsOwner = true;
       const result = expectMcpResult(await handleMcpCommand(showParams, true));
-      // Exact match against what /mcp show rendered before this PR (a single
-      // JSON block, no live-state block appended) — not just a substring
-      // check — so a future regression that always appends a live-state
-      // section (even an empty one) would be caught.
       const expectedLegacyText = `🔌 MCP servers (/tmp/openclaw.json)\n\`\`\`json\n${JSON.stringify(
         { context7: server },
         null,
