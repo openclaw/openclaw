@@ -821,6 +821,14 @@ export function createSessionMcpRuntime(params: {
                   // Timed-out connects can still leave the SDK client bound to a
                   // transport. Delete before async close so future catalogs start fresh.
                   await retireSessionIfCurrent(serverName, session);
+                } else if (reusedSession && !session.connected && !sharedWithNewerGeneration) {
+                  // A reused, previously-connected session died mid-refresh (e.g. the
+                  // child process was killed between ensureSessionConnected() returning
+                  // and listAllToolsBestEffort() finishing) — client.onclose already
+                  // flipped session.connected. Retire now instead of waiting for the
+                  // next catalog pass to notice, so a disconnected session is never
+                  // left reachable to a future reuse check.
+                  await retireSessionIfCurrent(serverName, session);
                 } else if (!reusedSession && !sharedWithNewerGeneration) {
                   // Catalog invalidation can overlap generations; an older failed
                   // generation must not dispose a session a newer one already reused.

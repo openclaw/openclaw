@@ -1166,6 +1166,139 @@ process.stdin.on("data", (chunk) => {
     }
   });
 
+  it("retires a reused session that dies mid-refresh instead of leaving it reachable", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-die-mid-refresh-"));
+    const serverPath = path.join(tempDir, "die-mid-refresh.mjs");
+    const logPath = path.join(tempDir, "server.log");
+    await writeExecutable(
+      serverPath,
+      `#!/usr/bin/env node
+import fs from "node:fs/promises";
+
+const logPath = ${JSON.stringify(logPath)};
+let buffer = "";
+let listCount = 0;
+function log(line) {
+  void fs.appendFile(logPath, line + "\\n", "utf8").catch(() => {});
+}
+function send(message) {
+  process.stdout.write(JSON.stringify(message) + "\\n");
+}
+function handle(message) {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  if (message.method === "initialize") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+        capabilities: { tools: { listChanged: true } },
+        serverInfo: { name: "die-mid-refresh", version: "1.0.0" },
+      },
+    });
+    return;
+  }
+  if (message.method === "notifications/initialized") {
+    return;
+  }
+  if (message.method === "tools/list") {
+    listCount += 1;
+    if (listCount === 1) {
+      send({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: {
+          tools: [{ name: "ok_tool", inputSchema: { type: "object", properties: {} } }],
+        },
+      });
+      setTimeout(() => {
+        send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
+        log("sent tools/list_changed");
+      }, 10);
+      return;
+    }
+    // Second tools/list: die without responding, simulating the child
+    // process crashing mid-refresh (after the reused session was already
+    // marked connected, before this catalog pass finishes).
+    log("dying mid tools/list");
+    process.exit(1);
+  }
+  if (message.method === "tools/call") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: { isError: false, content: [{ type: "text", text: "still connected" }] },
+    });
+  }
+}
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const newline = buffer.indexOf("\\n");
+    if (newline < 0) {
+      return;
+    }
+    const line = buffer.slice(0, newline).replace(/\\r$/, "");
+    buffer = buffer.slice(newline + 1);
+    if (line.trim()) {
+      handle(JSON.parse(line));
+    }
+  }
+});`,
+    );
+
+    const runtime = await getOrCreateSessionMcpRuntime({
+      sessionId: "session-die-mid-refresh",
+      sessionKey: "agent:test:session-die-mid-refresh",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            volatile: {
+              command: process.execPath,
+              args: [serverPath],
+            },
+          },
+        },
+      },
+    });
+
+    try {
+      const firstCatalog = await runtime.getCatalog();
+      expect(firstCatalog.tools.map((tool) => tool.toolName)).toEqual(["ok_tool"]);
+
+      await waitForFileText(logPath, "sent tools/list_changed", LIST_TOOLS_SERVER_LOG_TIMEOUT_MS);
+      await waitForPredicate(
+        () => runtime.peekCatalog() === null,
+        "list_changed to invalidate the catalog",
+        LIST_TOOLS_SERVER_LOG_TIMEOUT_MS,
+      );
+
+      // Refresh reuses the still-"connected" session; the child dies mid
+      // tools/list, flipping session.connected via onclose before this
+      // refresh's catch block runs.
+      const refreshedCatalog = await runtime.getCatalog();
+      expect(refreshedCatalog.tools).toEqual([]);
+      expect(refreshedCatalog.diagnostics?.[0]?.serverName).toBe("volatile");
+
+      // The dead session must be retired within this same refresh, not left
+      // dangling for a future rebuild to notice. If it were left dangling,
+      // callTool would find the stale session object and throw "is
+      // disconnected: mcp transport closed"; a properly retired session is
+      // simply absent, so callTool throws the plain "not connected" message
+      // (a fresh session gets created on the next successful catalog build).
+      await expect(runtime.callTool("volatile", "ok_tool", {})).rejects.toThrow(
+        'bundle-mcp server "volatile" is not connected',
+      );
+    } finally {
+      await runtime.dispose();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not cache a catalog invalidated while discovery is in flight", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "bundle-mcp-inflight-invalidated-"));
     const serverPath = path.join(tempDir, "inflight-invalidated.mjs");
