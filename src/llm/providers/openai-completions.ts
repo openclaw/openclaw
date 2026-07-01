@@ -19,6 +19,12 @@ import {
 } from "../../agents/openai-tool-projection.js";
 import { buildGuardedModelFetch } from "../../agents/provider-transport-fetch.js";
 import {
+  createFirstStreamEventAbortController,
+  getFirstStreamEventTimeoutHandler,
+  getFirstStreamEventTimeoutMs,
+  withFirstStreamEventTimeout,
+} from "../../agents/stream-first-event-timeout.js";
+import {
   splitSystemPromptCacheBoundary,
   stripSystemPromptCacheBoundary,
 } from "../../agents/system-prompt-cache-boundary.js";
@@ -153,6 +159,7 @@ export const streamOpenAICompletions: StreamFunction<
       timestamp: Date.now(),
     };
 
+    let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
     try {
       const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
       const compat = getCompat(model);
@@ -164,8 +171,9 @@ export const streamOpenAICompletions: StreamFunction<
       if (nextParams !== undefined) {
         params = nextParams as typeof params;
       }
+      firstEventAbort = createFirstStreamEventAbortController(options?.signal);
       const requestOptions = {
-        ...(options?.signal ? { signal: options.signal } : {}),
+        signal: firstEventAbort.signal,
         ...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
         ...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
       };
@@ -363,7 +371,18 @@ export const streamOpenAICompletions: StreamFunction<
         }
       };
 
-      for await (const chunk of openaiStream) {
+      const guardedOpenaiStream = withFirstStreamEventTimeout(openaiStream, {
+        provider: model.provider,
+        api: model.api,
+        model: model.id,
+        timeoutMs: getFirstStreamEventTimeoutMs(options) ?? 0,
+        stage: "completions",
+        abort: firstEventAbort.abort,
+        onTimeout: getFirstStreamEventTimeoutHandler(options),
+        hint: "The provider may be stalled while parsing the tool payload; retry with a smaller tool surface or enable OPENCLAW_DEBUG_MODEL_PAYLOAD=tools to inspect exposed tools.",
+      });
+
+      for await (const chunk of guardedOpenaiStream) {
         if (!chunk || typeof chunk !== "object") {
           continue;
         }
@@ -536,6 +555,8 @@ export const streamOpenAICompletions: StreamFunction<
       }
       stream.push({ type: "error", reason: output.stopReason, error: output });
       stream.end();
+    } finally {
+      firstEventAbort?.dispose();
     }
   })();
 

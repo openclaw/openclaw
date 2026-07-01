@@ -1,6 +1,9 @@
 // OpenAI Responses shared tests cover tool conversion and response item mapping.
-import type { Tool as OpenAIResponsesTool } from "openai/resources/responses/responses.js";
-import { describe, expect, it } from "vitest";
+import type {
+  ResponseStreamEvent,
+  Tool as OpenAIResponsesTool,
+} from "openai/resources/responses/responses.js";
+import { describe, expect, it, vi } from "vitest";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-boundary.js";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model, Tool } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
@@ -11,6 +14,7 @@ import {
   type OpenAIResponsesStreamEvent,
   processResponsesStream,
   resolveResponsesReasoningEffort,
+  runResponsesStreamLifecycle,
 } from "./openai-responses-shared.js";
 import { convertResponsesTools } from "./openai-responses-tools.js";
 
@@ -22,6 +26,20 @@ async function* streamResponsesEvents(
   for (const event of events) {
     yield event;
   }
+}
+
+function createNeverYieldingResponsesStream<
+  T extends OpenAIResponsesStreamEvent = OpenAIResponsesStreamEvent,
+>(): AsyncIterable<T> {
+  return {
+    [Symbol.asyncIterator]() {
+      return {
+        async next() {
+          return new Promise<IteratorResult<T>>(() => {});
+        },
+      };
+    },
+  };
 }
 
 function createCapturedAssistantMessageEventStream(): {
@@ -749,6 +767,75 @@ describe("convertResponsesMessages", () => {
 });
 
 describe("processResponsesStream", () => {
+  it("aborts the Responses request signal when the first SSE event never arrives", async () => {
+    vi.useFakeTimers();
+    try {
+      let requestSignal: AbortSignal | undefined;
+      const output = createAssistantOutput();
+      const stream = new AssistantMessageEventStream();
+      const onFirstEventTimeout = vi.fn();
+      const resultPromise = runResponsesStreamLifecycle({
+        stream,
+        model: nativeOpenAIModel,
+        output,
+        options: { firstEventTimeoutMs: 5, onFirstEventTimeout },
+        createClient: () => ({
+          responses: {
+            create: (_params, requestOptions) => {
+              requestSignal = requestOptions.signal;
+              return {
+                withResponse: async () => ({
+                  data: createNeverYieldingResponsesStream<ResponseStreamEvent>(),
+                  response: new Response(null, { status: 200 }),
+                }),
+              };
+            },
+          },
+        }),
+        buildParams: () => ({ model: nativeOpenAIModel.id, input: [], stream: true }),
+        formatError: (error) => (error instanceof Error ? error.message : String(error)),
+      });
+
+      await vi.advanceTimersByTimeAsync(5);
+      await resultPromise;
+
+      expect(output.stopReason).toBe("error");
+      expect(requestSignal?.aborted).toBe(true);
+      expect(requestSignal?.reason).toBeInstanceOf(Error);
+      expect(onFirstEventTimeout).toHaveBeenCalledWith(requestSignal?.reason);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails when streaming headers arrive but no first SSE event follows", async () => {
+    vi.useFakeTimers();
+    try {
+      const output = createAssistantOutput();
+      const stream = new AssistantMessageEventStream();
+      const abortFirstEventStream = vi.fn();
+      const onFirstEventTimeout = vi.fn();
+      const resultPromise = processResponsesStream(
+        createNeverYieldingResponsesStream(),
+        output,
+        stream,
+        nativeOpenAIModel,
+        { firstEventTimeoutMs: 5, abortFirstEventStream, onFirstEventTimeout },
+      );
+      const rejection = expect(resultPromise).rejects.toThrow(
+        /responses HTTP stream opened but did not deliver a first SSE event within 5ms/,
+      );
+
+      await vi.advanceTimersByTimeAsync(5);
+      await rejection;
+      expect(abortFirstEventStream).toHaveBeenCalledTimes(1);
+      expect(abortFirstEventStream.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+      expect(onFirstEventTimeout).toHaveBeenCalledWith(abortFirstEventStream.mock.calls[0]?.[0]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     ["omits arguments", undefined],
     ["sends empty arguments", ""],

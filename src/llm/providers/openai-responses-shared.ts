@@ -17,6 +17,13 @@ import {
   resolveOpenAIReasoningEffortForModel,
   supportsOpenAIReasoningEffort,
 } from "../../agents/openai-reasoning-effort.js";
+import {
+  createFirstStreamEventAbortController,
+  getFirstStreamEventTimeoutHandler,
+  getFirstStreamEventTimeoutMs,
+  type FirstStreamEventInternalOptions,
+  withFirstStreamEventTimeout,
+} from "../../agents/stream-first-event-timeout.js";
 import { stripSystemPromptCacheBoundary } from "../../agents/system-prompt-cache-boundary.js";
 import {
   AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE,
@@ -204,7 +211,11 @@ type ResponsesStreamClient = {
 type ResponsesLifecycleStreamOptions = Pick<
   StreamOptions,
   "signal" | "timeoutMs" | "maxRetries" | "onPayload" | "onResponse"
->;
+> &
+  FirstStreamEventInternalOptions;
+
+type OpenAIResponsesProcessStreamOptions = OpenAIResponsesStreamOptions &
+  FirstStreamEventInternalOptions;
 
 export type ResponsesReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -569,11 +580,12 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
   options?: ResponsesLifecycleStreamOptions;
   createClient: () => ResponsesStreamClient;
   buildParams: () => ResponseCreateParamsStreaming;
-  processStreamOptions?: OpenAIResponsesStreamOptions;
+  processStreamOptions?: OpenAIResponsesProcessStreamOptions;
   formatError: (error: unknown) => string;
 }): Promise<void> {
   const { stream, model, output, options } = params;
 
+  let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
   try {
     const client = params.createClient();
     let requestParams = params.buildParams();
@@ -582,8 +594,12 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
       requestParams = nextParams as ResponseCreateParamsStreaming;
     }
 
+    firstEventAbort = createFirstStreamEventAbortController(options?.signal);
     const { data: openaiStream, response } = await client.responses
-      .create(requestParams, buildResponsesRequestOptions(options))
+      .create(requestParams, {
+        ...buildResponsesRequestOptions(options),
+        signal: firstEventAbort.signal,
+      })
       .withResponse();
     await options?.onResponse?.(
       { status: response.status, headers: headersToRecord(response.headers) },
@@ -591,7 +607,23 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     );
     stream.push({ type: "start", partial: output });
 
-    await processResponsesStream(openaiStream, output, stream, model, params.processStreamOptions);
+    const firstEventTimeoutMs = getFirstStreamEventTimeoutMs(options);
+    const onFirstEventTimeout = getFirstStreamEventTimeoutHandler(options);
+    const processStreamOptions =
+      params.processStreamOptions ||
+      firstEventTimeoutMs !== undefined ||
+      onFirstEventTimeout !== undefined
+        ? {
+            ...params.processStreamOptions,
+            firstEventTimeoutMs:
+              params.processStreamOptions?.firstEventTimeoutMs ?? firstEventTimeoutMs,
+            abortFirstEventStream:
+              params.processStreamOptions?.abortFirstEventStream ?? firstEventAbort.abort,
+            onFirstEventTimeout:
+              params.processStreamOptions?.onFirstEventTimeout ?? onFirstEventTimeout,
+          }
+        : undefined;
+    await processResponsesStream(openaiStream, output, stream, model, processStreamOptions);
 
     if (options?.signal?.aborted) {
       throw new Error("Request was aborted");
@@ -609,6 +641,8 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     output.errorMessage = params.formatError(error);
     stream.push({ type: "error", reason: output.stopReason, error: output });
     stream.end();
+  } finally {
+    firstEventAbort?.dispose();
   }
 }
 
@@ -621,7 +655,7 @@ export async function processResponsesStream<TApi extends Api>(
   output: AssistantMessage,
   stream: AssistantMessageEventStream,
   model: Model<TApi>,
-  options?: OpenAIResponsesStreamOptions,
+  options?: OpenAIResponsesProcessStreamOptions,
 ): Promise<void> {
   let currentItem:
     | ResponseReasoningItem
@@ -661,7 +695,17 @@ export async function processResponsesStream<TApi extends Api>(
     pendingMessageText = null;
   };
 
-  for await (const event of openaiStream) {
+  const guardedStream = withFirstStreamEventTimeout(openaiStream, {
+    provider: model.provider,
+    api: model.api,
+    model: model.id,
+    timeoutMs: options?.firstEventTimeoutMs ?? 0,
+    stage: "responses",
+    abort: options?.abortFirstEventStream,
+    onTimeout: options?.onFirstEventTimeout,
+    hint: "The provider may be stalled while parsing the tool payload; retry with a smaller tool surface or enable OPENCLAW_DEBUG_MODEL_PAYLOAD=tools to inspect exposed tools.",
+  });
+  for await (const event of guardedStream) {
     if (event.type === "response.created") {
       output.responseId = event.response.id;
     } else if (event.type === "response.output_item.added") {

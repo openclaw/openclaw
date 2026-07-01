@@ -245,6 +245,10 @@ export function createOpencodeGoStalledStreamWrapper(
     ]);
     const wrappedOptions = {
       ...callOptions,
+      // This provider owns the raw SSE stall policy. Preserve that longer first
+      // event window when delegating to OpenAI-compatible streams so the generic
+      // embedded-runner default cannot shorten opencode-go prompt evaluation.
+      firstEventTimeoutMs,
       signal: combinedSignal.signal,
     };
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
