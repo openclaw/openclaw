@@ -25,6 +25,37 @@ function stubAbortSignalTimeout() {
   return vi.spyOn(AbortSignal, "timeout").mockReturnValue(controller.signal);
 }
 
+function makeOversizedJsonResponse(): {
+  response: Response;
+  getReadCount: () => number;
+  wasCanceled: () => boolean;
+} {
+  const chunkSize = 1024 * 1024;
+  const chunkCount = 20;
+  let readCount = 0;
+  let canceled = false;
+  return {
+    response: new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (readCount >= chunkCount) {
+            controller.close();
+            return;
+          }
+          readCount += 1;
+          controller.enqueue(new Uint8Array(chunkSize));
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { headers: { "Content-Type": "application/json" } },
+    ),
+    getReadCount: () => readCount,
+    wasCanceled: () => canceled,
+  };
+}
+
 afterEach(() => {
   restoreEnv("VITEST", ORIGINAL_VITEST);
   restoreEnv("NODE_ENV", ORIGINAL_NODE_ENV);
@@ -106,6 +137,23 @@ describe("huggingface models", () => {
     await discoverHuggingfaceModels("hf_test_token", Number.MAX_SAFE_INTEGER);
 
     expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("bounds oversized live discovery responses and falls back to the static catalog", async () => {
+    process.env.VITEST = "false";
+    process.env.NODE_ENV = "development";
+    stubAbortSignalTimeout();
+    const streamed = makeOversizedJsonResponse();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => streamed.response),
+    );
+
+    const models = await discoverHuggingfaceModels("hf_test_token");
+
+    expect(models.map((m) => m.id)).toEqual(HUGGINGFACE_MODEL_CATALOG.map((m) => m.id));
+    expect(streamed.wasCanceled()).toBe(true);
+    expect(streamed.getReadCount()).toBeLessThan(20);
   });
 
   describe("isHuggingfacePolicyLocked", () => {
