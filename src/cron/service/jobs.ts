@@ -1005,6 +1005,8 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   applyAgentTurnToolsAllowPatch(next, patch, existing);
   if (typeof patch.thinking === "string") {
     next.thinking = patch.thinking;
+  } else if (patch.thinking === null) {
+    delete next.thinking;
   }
   if (typeof patch.timeoutSeconds === "number") {
     next.timeoutSeconds = patch.timeoutSeconds;
@@ -1051,7 +1053,7 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     message: patch.message,
     model: typeof patch.model === "string" ? patch.model : undefined,
     fallbacks: Array.isArray(patch.fallbacks) ? patch.fallbacks : undefined,
-    thinking: patch.thinking,
+    thinking: typeof patch.thinking === "string" ? patch.thinking : undefined,
     timeoutSeconds: patch.timeoutSeconds,
     lightContext: patch.lightContext,
     allowUnsafeExternalContent: patch.allowUnsafeExternalContent,
