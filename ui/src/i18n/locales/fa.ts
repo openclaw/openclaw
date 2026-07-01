@@ -1379,9 +1379,9 @@ export const fa: TranslationMap = {
       retryQueuedMessage: "تلاش دوباره برای پیام در صف",
     },
     pairingQrExpired: {
-      title: "Pairing QR expired",
-      reason: "Run /pair qr again to generate a fresh setup code.",
-      badge: "Expired",
+      title: "کد QR جفت‌سازی منقضی شد",
+      reason: "برای ساخت کد راه‌اندازی جدید، دوباره /pair qr را اجرا کنید.",
+      badge: "منقضی‌شده",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",
