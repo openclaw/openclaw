@@ -36,18 +36,18 @@ function normalizeAliasKey(raw: string): string | undefined {
 function resolveAliasMap(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
-}): Record<string, string> {
+}): Map<string, string> {
   const account = resolveSignalAccount({
     cfg: params.cfg,
     accountId: params.accountId,
   });
-  const aliases: Record<string, string> = {};
+  const aliases = new Map<string, string>();
   for (const [rawKey, rawValue] of Object.entries(account.config.aliases ?? {})) {
     const key = normalizeAliasKey(rawKey);
     if (!key) {
       continue;
     }
-    aliases[key] = rawValue;
+    aliases.set(key, rawValue);
   }
   return aliases;
 }
@@ -76,7 +76,7 @@ export function resolveSignalAliasTarget(params: {
 }): ResolvedSignalAliasTarget | null {
   const aliases = resolveAliasMap(params);
   const initialAlias = normalizeAliasKey(params.input);
-  if (!initialAlias || !(initialAlias in aliases)) {
+  if (!initialAlias || !aliases.has(initialAlias)) {
     return null;
   }
 
@@ -88,7 +88,7 @@ export function resolveSignalAliasTarget(params: {
     }
     visited.add(alias);
 
-    const rawValue = aliases[alias];
+    const rawValue = aliases.get(alias);
     if (typeof rawValue !== "string" || !rawValue.trim()) {
       throw new Error(`Signal alias "${alias}" must point to a non-empty Signal target.`);
     }
@@ -102,7 +102,7 @@ export function resolveSignalAliasTarget(params: {
     }
 
     const nextAlias = normalizeAliasKey(rawValue);
-    if (nextAlias && nextAlias in aliases) {
+    if (nextAlias && aliases.has(nextAlias)) {
       alias = nextAlias;
       continue;
     }
@@ -143,13 +143,8 @@ export function listSignalAliasDirectoryEntries(params: {
   const query = normalizeLowercaseStringOrEmpty(params.query);
   const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : undefined;
   const exactAlias = params.query ? normalizeAliasKey(params.query) : undefined;
-  if (exactAlias && exactAlias in aliases) {
-    let target: ResolvedSignalAliasTarget | null;
-    try {
-      target = resolveSignalAliasTarget({ ...params, input: exactAlias });
-    } catch {
-      target = null;
-    }
+  if (exactAlias && aliases.has(exactAlias)) {
+    const target = resolveSignalAliasTarget({ ...params, input: exactAlias });
     if (target?.kind === params.kind) {
       return [{ kind: params.kind, id: target.to, name: target.alias }];
     }
@@ -158,7 +153,7 @@ export function listSignalAliasDirectoryEntries(params: {
     }
   }
   const entries: ChannelDirectoryEntry[] = [];
-  for (const alias of Object.keys(aliases)) {
+  for (const alias of aliases.keys()) {
     let target: ResolvedSignalAliasTarget | null;
     try {
       target = resolveSignalAliasTarget({ ...params, input: alias });

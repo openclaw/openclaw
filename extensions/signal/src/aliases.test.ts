@@ -105,6 +105,42 @@ describe("resolveSignalAliasTarget", () => {
       alias: "home",
     });
   });
+
+  it("resolves own prototype-shaped aliases without inheriting prototype keys", () => {
+    const cfg = {
+      channels: {
+        signal: {
+          aliases: {
+            constructor: "+15551234567",
+            toString: "group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSignalAliasTarget({ cfg, input: "constructor" })).toEqual({
+      kind: "user",
+      to: "+15551234567",
+      alias: "constructor",
+    });
+    expect(resolveSignalAliasTarget({ cfg, input: "toString" })).toEqual({
+      kind: "group",
+      to: "group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
+      alias: "tostring",
+    });
+
+    const ordinaryCfg = {
+      channels: {
+        signal: {
+          aliases: {
+            me: "+15551234567",
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveSignalAliasTarget({ cfg: ordinaryCfg, input: "constructor" })).toBeNull();
+  });
 });
 
 describe("resolveSignalTarget", () => {
@@ -209,7 +245,7 @@ describe("listSignalAliasDirectoryEntries", () => {
     ]);
   });
 
-  it("lets invalid exact aliases fall through to valid fuzzy matches", () => {
+  it("fails invalid exact aliases instead of falling through to fuzzy matches", () => {
     const cfg = {
       channels: {
         signal: {
@@ -221,8 +257,8 @@ describe("listSignalAliasDirectoryEntries", () => {
       },
     } as OpenClawConfig;
 
-    expect(listSignalAliasDirectoryEntries({ cfg, kind: "user", query: "ops" })).toEqual([
-      { kind: "user", id: "+15551234567", name: "ops-dm" },
-    ]);
+    expect(() => listSignalAliasDirectoryEntries({ cfg, kind: "user", query: "ops" })).toThrow(
+      'Signal alias "ops" must point to an E.164 number, uuid:<id>, username:<name>, or group:<id>.',
+    );
   });
 });

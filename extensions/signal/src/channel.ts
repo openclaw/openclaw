@@ -385,7 +385,12 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
           looksLikeId: looksLikeSignalTargetId,
           hint: "<E.164|uuid:ID|group:ID|signal:group:ID|signal:+E.164>",
           resolveTarget: async ({ cfg, accountId, input }) => {
-            const target = resolveSignalTarget({ cfg, accountId, input });
+            let target: ReturnType<typeof resolveSignalTarget>;
+            try {
+              target = resolveSignalTarget({ cfg, accountId, input });
+            } catch {
+              return null;
+            }
             if (!target) {
               return null;
             }

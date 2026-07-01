@@ -18,6 +18,7 @@ import type {
 } from "openclaw/plugin-sdk/approval-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveDefaultSignalAccountId } from "./accounts.js";
 import { resolveSignalTarget } from "./aliases.js";
 import {
   hasSignalApprovalReactionApprovers,
@@ -112,10 +113,15 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
   },
   transport: {
     prepareTarget: ({ cfg, plannedTarget, accountId, context }) => {
-      const preparedAccountId = resolvePreparedApprovalAccountId({
-        plannedAccountId: (plannedTarget.target as { accountId?: string | null }).accountId,
+      const plannedAccountId = (plannedTarget.target as { accountId?: string | null }).accountId;
+      const explicitAccountId = resolvePreparedApprovalAccountId({
+        plannedAccountId,
         contextAccountId: accountId,
-        fallbackAccountId: DEFAULT_ACCOUNT_ID,
+      });
+      const preparedAccountId = resolvePreparedApprovalAccountId({
+        plannedAccountId,
+        contextAccountId: accountId,
+        fallbackAccountId: cfg ? resolveDefaultSignalAccountId(cfg) : DEFAULT_ACCOUNT_ID,
       });
       const rawTo = plannedTarget.target.to;
       let to = normalizeSignalMessagingTarget(rawTo);
@@ -124,7 +130,7 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
           to =
             resolveSignalTarget({
               cfg,
-              accountId: preparedAccountId,
+              accountId: explicitAccountId,
               input: rawTo,
             })?.to ?? to;
         } catch {

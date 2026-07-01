@@ -365,6 +365,26 @@ describe("signal outbound", () => {
     }
   });
 
+  it("returns target resolver misses for recursive aliases", async () => {
+    const resolved = await signalPlugin.messaging?.targetResolver?.resolveTarget?.({
+      cfg: {
+        channels: {
+          signal: {
+            aliases: {
+              home: "signal:me",
+              me: "home",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      input: "signal:home",
+      normalized: "home",
+      preferredKind: "user",
+    });
+
+    expect(resolved).toBeNull();
+  });
+
   it("returns clear outbound errors for recursive defaultTo aliases", () => {
     const cfg = {
       channels: {
