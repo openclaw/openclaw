@@ -31,33 +31,39 @@ enum LaunchAgentManager {
     }
 
     static func plistContents(bundlePath: String) -> String {
-        """
-        <?xml version="1.0" encoding="UTF-8"?>
-        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-        <plist version="1.0">
-        <dict>
-          <key>Label</key>
-          <string>ai.openclaw.mac</string>
-          <key>ProgramArguments</key>
-          <array>
-            <string>\(bundlePath)/Contents/MacOS/OpenClaw</string>
-          </array>
-          <key>WorkingDirectory</key>
-          <string>\(FileManager().homeDirectoryForCurrentUser.path)</string>
-          <key>RunAtLoad</key>
-          <true/>
-          <key>EnvironmentVariables</key>
-          <dict>
-            <key>PATH</key>
-            <string>\(CommandResolver.preferredPaths().joined(separator: ":"))</string>
-          </dict>
-          <key>StandardOutPath</key>
-          <string>\(LogLocator.launchdLogPath)</string>
-          <key>StandardErrorPath</key>
-          <string>\(LogLocator.launchdLogPath)</string>
-        </dict>
-        </plist>
-        """
+        let plist: [String: Any] = [
+            "Label": "ai.openclaw.mac",
+            "ProgramArguments": [
+                "\(bundlePath)/Contents/MacOS/OpenClaw",
+            ],
+            "WorkingDirectory": FileManager().homeDirectoryForCurrentUser.path,
+            "RunAtLoad": true,
+            "EnvironmentVariables": self.launchEnvironmentVariables(),
+            "StandardOutPath": LogLocator.launchdLogPath,
+            "StandardErrorPath": LogLocator.launchdLogPath,
+        ]
+        guard
+            let data = try? PropertyListSerialization.data(
+                fromPropertyList: plist,
+                format: .xml,
+                options: 0),
+            let contents = String(data: data, encoding: .utf8)
+        else {
+            return ""
+        }
+        return contents
+    }
+
+    private static func launchEnvironmentVariables() -> [String: String] {
+        var environment = [
+            "PATH": CommandResolver.preferredPaths().joined(separator: ":"),
+        ]
+        for key in ["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"] {
+            if let value = OpenClawEnv.path(key) {
+                environment[key] = value
+            }
+        }
+        return environment
     }
 
     @discardableResult
