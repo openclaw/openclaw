@@ -89,6 +89,40 @@ The first search may be slow -- QMD auto-downloads GGUF models (~2 GB) for
 reranking and query expansion on the first `qmd query` run.
 </Info>
 
+## MCPorter integration
+
+When `memory.qmd.mcporter.enabled` is `true`, OpenClaw routes QMD searches
+through [MCPorter](https://github.com/openclaw/mcporter) instead of spawning a
+new `qmd` process for every search. This keeps the QMD MCP server warm and
+eliminates cold-start overhead on large models.
+
+OpenClaw asks mcporter for the active server definition. Use one of
+mcporter's supported config locations:
+
+1. `MCPORTER_CONFIG`, if set. It may point to `.json` or `.jsonc`; relative
+   paths resolve from `<workspaceDir>`.
+2. The user config layer: `$XDG_CONFIG_HOME/mcporter/mcporter.json` or `.jsonc`
+   when `XDG_CONFIG_HOME` is set, otherwise the legacy
+   `~/.mcporter/mcporter.json` or `.jsonc`.
+3. `<workspaceDir>/config/mcporter.json` or `.jsonc` for project-scoped config.
+   Project entries with the same server name override the user layer.
+
+For a bare QMD stdio entry (`command` or `executable` ending in `qmd`,
+`qmd.exe`, or `qmd.cmd` with `args: ["mcp"]`), OpenClaw generates a per-agent
+config under `~/.openclaw/agents/<id>/qmd/mcporter/mcporter.json` and preserves
+QMD lifecycle or daemon logging metadata such as `logging.daemon.enabled`. If
+your existing server entry has user-owned material -- path-changing or
+auth-like environment variables, auth headers, command arrays, `cwd`/`path`, a
+non-QMD command, or authenticated remote config -- OpenClaw treats it as
+**external** and routes through your original mcporter config. If OpenClaw must
+inject agent-scoped QMD environment into an external server, it disables
+MCPorter keep-alive for that server so warmed QMD state is not shared across
+agents. Safe QMD tuning environment variables, such as model and context-size
+overrides, are copied into the generated per-agent config.
+
+The per-agent generated config is rewritten only when its contents actually
+change, so repeated searches do not thrash the filesystem.
+
 ## Search performance and compatibility
 
 OpenClaw keeps the QMD search path compatible with both current and older QMD

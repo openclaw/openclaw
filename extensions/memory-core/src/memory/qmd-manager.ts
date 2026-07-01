@@ -175,8 +175,51 @@ function buildQmdProcessPath(rawPath: string | undefined): string {
 
 type McporterState = {
   coldStartWarned: boolean;
-  daemonStart: Promise<void> | null;
+  daemonStarts: Map<string, Promise<void>>;
 };
+
+type McporterConfigMode = "generated" | "external";
+type McporterEnvMode = "discovery" | McporterConfigMode;
+
+type ConfiguredMcporterServer =
+  | { mode: "generated"; server: Record<string, unknown> }
+  | { mode: "external"; useAgentQmdEnv?: boolean };
+
+type RawMcporterEntry = {
+  lifecycle?: unknown;
+  logging?: unknown;
+  cwd?: unknown;
+  path?: unknown;
+};
+
+const GENERATED_QMD_ENV_OVERRIDE_KEYS = new Set([
+  "NO_COLOR",
+  "QMD_EMBED_CONTEXT_SIZE",
+  "QMD_EMBED_MODEL",
+  "QMD_EXPAND_CONTEXT_SIZE",
+  "QMD_GENERATE_MODEL",
+  "QMD_LLAMA_GPU",
+  "QMD_RERANK_CONTEXT_SIZE",
+  "QMD_RERANK_MODEL",
+]);
+
+const MCPORTER_REMOTE_AUTH_KEYS = new Set(
+  [
+    "auth",
+    "authProvider",
+    "authProviderEnv",
+    "bearerToken",
+    "bearerTokenEnv",
+    "oauth",
+    "oauthClientId",
+    "oauthClientSecret",
+    "oauthClientSecretEnv",
+    "refresh",
+    "refreshToken",
+    "refreshTokenEnv",
+    "tokenCacheDir",
+  ].map(normalizeMcporterConfigKey),
+);
 
 function normalizePositiveInteger(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value)
@@ -192,11 +235,598 @@ type QmdUpdateQueueState = {
   tails: Map<string, Promise<void>>;
 };
 
+type JsonExtractionResult = { found: true; value: unknown } | { found: false };
+
 function getMcporterState(): McporterState {
   return resolveGlobalSingleton<McporterState>(MCPORTER_STATE_KEY, () => ({
     coldStartWarned: false,
-    daemonStart: null,
+    daemonStarts: new Map(),
   }));
+}
+
+function normalizeMcporterConfigKey(key: string): string {
+  return key.toLowerCase().replace(/[_-]/g, "");
+}
+
+function isMcporterAuthLikeKey(key: string): boolean {
+  const normalized = normalizeMcporterConfigKey(key);
+  return (
+    MCPORTER_REMOTE_AUTH_KEYS.has(normalized) ||
+    normalized.includes("apikey") ||
+    normalized.includes("auth") ||
+    normalized.includes("bearer") ||
+    normalized.includes("credential") ||
+    normalized.includes("header") ||
+    normalized.includes("jwt") ||
+    normalized.includes("password") ||
+    normalized.includes("passwd") ||
+    normalized.includes("secret") ||
+    normalized.includes("signature") ||
+    normalized.includes("token") ||
+    normalized === "key" ||
+    normalized === "pwd" ||
+    normalized === "sig"
+  );
+}
+
+function hasMcporterHeaderAuthMaterial(value: unknown): boolean {
+  const headers = asRecord(value);
+  if (!headers) {
+    return true;
+  }
+  for (const [key, headerValue] of Object.entries(headers)) {
+    const normalized = normalizeMcporterConfigKey(key);
+    if (
+      normalized === "accept" &&
+      typeof headerValue === "string" &&
+      hasRequiredMcporterAcceptTokens(headerValue)
+    ) {
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+function hasRequiredMcporterAcceptTokens(value: string): boolean {
+  const lower = value.toLowerCase();
+  return lower.includes("application/json") && lower.includes("text/event-stream");
+}
+
+function hasMcporterRemoteAuthMaterial(server: Record<string, unknown>): boolean {
+  if (hasMcporterRemoteUrlCredentials(server)) {
+    return true;
+  }
+  return Object.entries(server).some(([key, value]) => {
+    if (normalizeMcporterConfigKey(key) === "env") {
+      return true;
+    }
+    if (normalizeMcporterConfigKey(key) === "headers") {
+      return hasMcporterHeaderAuthMaterial(value);
+    }
+    return isMcporterAuthLikeKey(key);
+  });
+}
+
+function hasMcporterStdioUserOwnedMaterial(server: Record<string, unknown>): boolean {
+  return Object.entries(server).some(([key, value]) => {
+    const normalizedKey = normalizeMcporterConfigKey(key);
+    if (normalizedKey === "env") {
+      return getGeneratedQmdEnvOverrides(value) === null;
+    }
+    if (normalizedKey === "allowedtools" || normalizedKey === "blockedtools") {
+      return true;
+    }
+    if (normalizedKey === "command") {
+      return hasMcporterAuthLikeText(value);
+    }
+    if (normalizedKey === "args") {
+      return hasMcporterAuthLikeArgs(value);
+    }
+    return isMcporterAuthLikeKey(key);
+  });
+}
+
+function getGeneratedQmdEnvOverrides(value: unknown): Record<string, string> | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const env = asRecord(value);
+  if (!env) {
+    return null;
+  }
+  const overrides: Record<string, string> = {};
+  for (const [key, envValue] of Object.entries(env)) {
+    if (!GENERATED_QMD_ENV_OVERRIDE_KEYS.has(key)) {
+      return null;
+    }
+    if (typeof envValue !== "string") {
+      return null;
+    }
+    overrides[key] = envValue;
+  }
+  return overrides;
+}
+
+function isGeneratedMcporterQmdStdioServer(server: Record<string, unknown>): boolean {
+  const command = server.command;
+  if (!isQmdExecutableCommand(command)) {
+    return false;
+  }
+  if (typeof command === "string" && isRelativeMcporterCommandPath(command)) {
+    return false;
+  }
+  const args = server.args;
+  return Array.isArray(args) && args.length === 1 && args[0] === "mcp";
+}
+
+function isQmdMcpStdioServer(server: Record<string, unknown>): boolean {
+  const stdioServer = normalizeMcporterSerializedStdioServer(server);
+  if (stdioServer && isQmdExecutableCommand(stdioServer.command)) {
+    const args = stdioServer.args;
+    return Array.isArray(args) && args.length === 1 && args[0] === "mcp";
+  }
+  const command = server.command;
+  if (Array.isArray(command) && command.length >= 2 && isQmdExecutableCommand(command[0])) {
+    return command.slice(1).includes("mcp");
+  }
+  return false;
+}
+
+function hasMcporterStdioQmdPathEnv(server: Record<string, unknown>): boolean {
+  const env = asRecord(server.env);
+  if (!env) {
+    return false;
+  }
+  return ["QMD_CONFIG_DIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"].some((key) => {
+    const value = env[key];
+    return typeof value === "string" && value.length > 0;
+  });
+}
+
+function isRelativeMcporterCommandPath(command: string): boolean {
+  const normalized = command.replace(/\\/g, "/");
+  if (!normalized.includes("/")) {
+    return false;
+  }
+  if (path.isAbsolute(command) || path.isAbsolute(normalized)) {
+    return false;
+  }
+  return !/^[A-Za-z]:\//.test(normalized);
+}
+
+function appendMcporterServerEnvList(value: string | undefined, serverName: string): string {
+  const existing = value?.trim();
+  if (!existing) {
+    return serverName;
+  }
+  const names = new Set(existing.split(/[,\s]+/).filter(Boolean));
+  if (names.has(serverName) || names.has("*")) {
+    return existing;
+  }
+  return `${existing},${serverName}`;
+}
+
+function normalizeMcporterSerializedStdioServer(
+  server: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const command = server.command ?? server.executable;
+  if (typeof command !== "string" || command.length === 0) {
+    return null;
+  }
+  const normalized: Record<string, unknown> = { command };
+  if (server.args !== undefined) {
+    normalized.args = server.args;
+  }
+  if (server.env !== undefined) {
+    normalized.env = server.env;
+  }
+  return normalized;
+}
+
+function normalizeMcporterSerializedRemoteServer(
+  server: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const normalized: Record<string, unknown> = {};
+  let hasEndpoint = false;
+  for (const key of ["baseUrl", "base_url", "url", "serverUrl", "server_url"]) {
+    const value = server[key];
+    if (typeof value === "string" && value.length > 0) {
+      normalized[key] = value;
+      hasEndpoint = true;
+    }
+  }
+  for (const [key, value] of Object.entries(server)) {
+    if (
+      key === "transport" ||
+      key === "baseUrl" ||
+      key === "base_url" ||
+      key === "url" ||
+      key === "serverUrl" ||
+      key === "server_url"
+    ) {
+      continue;
+    }
+    if (key === "headers" || key === "httpFetch" || key === "http_fetch") {
+      normalized[key] = value;
+      continue;
+    }
+    return null;
+  }
+  return hasEndpoint ? normalized : null;
+}
+
+function isQmdExecutableCommand(command: unknown): boolean {
+  if (typeof command !== "string" || command.length === 0) {
+    return false;
+  }
+  const normalized = command.replace(/\\/g, "/");
+  const commandName = normalized.split("/").findLast(Boolean) ?? normalized;
+  const commandBaseName = commandName.replace(/\.(?:cmd|exe)$/i, "");
+  return normalizeMcporterConfigKey(commandBaseName) === "qmd";
+}
+
+function hasMcporterAuthLikeArgs(value: unknown): boolean {
+  return Array.isArray(value) && value.some((entry) => hasMcporterAuthLikeText(entry));
+}
+
+function hasMcporterAuthLikeText(value: unknown): boolean {
+  return typeof value === "string" && isMcporterAuthLikeKey(value);
+}
+
+function hasMcporterRemoteUrlCredentials(server: Record<string, unknown>): boolean {
+  for (const key of ["baseUrl", "base_url", "url", "serverUrl", "server_url"]) {
+    const value = server[key];
+    if (typeof value !== "string" || value.length === 0) {
+      continue;
+    }
+    try {
+      const parsed = new URL(value);
+      if (parsed.username.length > 0 || parsed.password.length > 0) {
+        return true;
+      }
+      for (const queryKey of parsed.searchParams.keys()) {
+        if (isMcporterAuthLikeKey(queryKey)) {
+          return true;
+        }
+      }
+    } catch {
+      if (/^[a-z][a-z0-9+.-]*:\/\/[^/?#@]+@/i.test(value)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function parseMcporterResponseJson(stdout: string): unknown {
+  const trimmed = stdout.trim();
+  try {
+    return JSON.parse(trimmed) as unknown;
+  } catch (err) {
+    const payload = extractLastJsonValue(trimmed);
+    if (payload.found) {
+      return payload.value;
+    }
+    throw err;
+  }
+}
+
+// Scan stdout for the last syntactically valid top-level JSON value.
+// mcporter/daemon log lines can themselves be valid JSON objects; the actual
+// response is the final top-level value in the stream, so a preceding log
+// line must not shadow it. We walk the text at root depth and parse each
+// complete top-level value, keeping the last one that successfully parses.
+function extractLastJsonValue(raw: string): JsonExtractionResult {
+  let lastResult: JsonExtractionResult = { found: false };
+  let i = 0;
+  const len = raw.length;
+  while (i < len) {
+    const ch = raw[i];
+    if (ch !== "{" && ch !== "[") {
+      i += 1;
+      continue;
+    }
+    const opening = ch;
+    const closing = opening === "{" ? "}" : "]";
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let closed = -1;
+    for (let index = i; index < len; index += 1) {
+      const c = raw[index];
+      if (c === undefined) {
+        break;
+      }
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        if (c === "\\") {
+          escaped = true;
+        } else if (c === '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (c === '"') {
+        inString = true;
+        continue;
+      }
+      if (c === opening) {
+        depth += 1;
+      } else if (c === closing) {
+        depth -= 1;
+        if (depth === 0) {
+          closed = index;
+          break;
+        }
+      }
+    }
+    if (closed === -1) {
+      // Unbalanced; no more complete top-level values to find.
+      return lastResult;
+    }
+    try {
+      lastResult = {
+        found: true,
+        value: JSON.parse(raw.slice(i, closed + 1)) as unknown,
+      };
+    } catch {
+      // Skip this malformed candidate and look for the next top-level value.
+    }
+    i = closed + 1;
+  }
+  return lastResult;
+}
+
+function expandMcporterHome(input: string): string {
+  if (!input.startsWith("~")) {
+    return input;
+  }
+  const home = os.homedir();
+  if (input === "~") {
+    return home;
+  }
+  if (input.startsWith("~/") || input.startsWith("~\\")) {
+    return path.join(home, input.slice(2));
+  }
+  return input;
+}
+
+function resolveMcporterConfigPath(input: string, workspaceDir: string): string {
+  // mcporter resolves relative config paths from its cwd; OpenClaw runs it in
+  // workspaceDir, so the raw probe has to use the same base directory.
+  return path.resolve(workspaceDir, expandMcporterHome(input.trim()));
+}
+
+function resolveMcporterConfigCandidates(env: NodeJS.ProcessEnv, workspaceDir: string): string[] {
+  // Match mcporter's config discovery precedence (mcporter source:
+  // src/config/path-discovery.ts): explicit override -> XDG/home -> project ->
+  // legacy home fallback. Project config must be checked before the legacy home
+  // fallback so workspace-scoped lifecycle/logging settings win.
+  const candidates: string[] = [];
+
+  const explicitConfig = env.MCPORTER_CONFIG;
+  if (explicitConfig && explicitConfig.trim().length > 0) {
+    candidates.push(resolveMcporterConfigPath(explicitConfig, workspaceDir));
+  }
+
+  const xdgConfigHome = env.XDG_CONFIG_HOME;
+  if (xdgConfigHome && xdgConfigHome.trim().length > 0) {
+    const resolved = expandMcporterHome(xdgConfigHome.trim());
+    if (path.isAbsolute(resolved)) {
+      candidates.push(path.join(resolved, "mcporter", "mcporter.json"));
+      candidates.push(path.join(resolved, "mcporter", "mcporter.jsonc"));
+    }
+  }
+  const projectConfigDir = path.resolve(workspaceDir, "config");
+  candidates.push(path.join(projectConfigDir, "mcporter.json"));
+  candidates.push(path.join(projectConfigDir, "mcporter.jsonc"));
+  if (!xdgConfigHome || xdgConfigHome.trim().length === 0) {
+    candidates.push(path.join(os.homedir(), ".mcporter", "mcporter.json"));
+    candidates.push(path.join(os.homedir(), ".mcporter", "mcporter.jsonc"));
+  }
+
+  return candidates;
+}
+
+function extractMcporterSourcePath(serialized: Record<string, unknown>): string | undefined {
+  const source = serialized.source;
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    return undefined;
+  }
+  const sourceRecord = source as Record<string, unknown>;
+  if (sourceRecord.kind !== "local") {
+    return undefined;
+  }
+  if (typeof sourceRecord.path === "string") {
+    return sourceRecord.path;
+  }
+  return undefined;
+}
+
+// String-aware JSONC comment and trailing-comma stripper. Walks the source
+// respecting string boundaries so URLs containing "//" and similar tokens
+// are not mistaken for line comments. Used only for the read-only probe of
+// raw mcporter entries; mcporter itself is the source of truth for runtime
+// config loading.
+function stripJsoncCommentsAndTrailingCommas(text: string): string {
+  let out = "";
+  let i = 0;
+  const len = text.length;
+  while (i < len) {
+    const ch = text[i];
+    if (ch === '"') {
+      // Copy the entire string literal verbatim, honoring backslash escapes.
+      let j = i + 1;
+      while (j < len) {
+        if (text[j] === "\\") {
+          j += 2;
+          continue;
+        }
+        if (text[j] === '"') {
+          j += 1;
+          break;
+        }
+        j += 1;
+      }
+      out += text.slice(i, j);
+      i = j;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "/") {
+      const newline = text.indexOf("\n", i);
+      i = newline === -1 ? len : newline;
+      continue;
+    }
+    if (ch === "/" && text[i + 1] === "*") {
+      const close = text.indexOf("*/", i + 2);
+      i = close === -1 ? len : close + 2;
+      continue;
+    }
+    out += ch;
+    i += 1;
+  }
+  // Strip trailing commas before closing brackets/braces. The preceding
+  // comment pass already removed any "//" inside string values, so the
+  // remaining "," characters only appear in structural positions.
+  return out.replace(/,(\s*[}\]])/g, "$1");
+}
+
+async function readRawMcporterEntryFromFile(
+  serverName: string,
+  filePath: string,
+): Promise<RawMcporterEntry | null> {
+  let text: string;
+  try {
+    text = await fs.readFile(filePath, "utf8");
+  } catch (err) {
+    if (isFileMissingError(err)) {
+      return null;
+    }
+    throw err;
+  }
+  // Try strict JSON first; then mirror mcporter config parsing by accepting
+  // comments and trailing commas for both mcporter.json and mcporter.jsonc.
+  // The cleanup is string-aware so URLs containing "//" are not comments.
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch {
+    try {
+      parsed = JSON.parse(stripJsoncCommentsAndTrailingCommas(text)) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  const record = asRecord(parsed);
+  const servers = record ? asRecord(record.mcpServers) : null;
+  const entry = servers ? asRecord(servers[serverName]) : null;
+  if (entry) {
+    return entry as RawMcporterEntry;
+  }
+  return null;
+}
+
+async function canUseGeneratedMcporterFallback(
+  serverName: string,
+  env: NodeJS.ProcessEnv,
+  workspaceDir: string,
+): Promise<boolean> {
+  for (const candidate of resolveMcporterConfigCandidates(env, workspaceDir)) {
+    let text: string;
+    try {
+      text = await fs.readFile(candidate, "utf8");
+    } catch (err) {
+      if (isFileMissingError(err)) {
+        continue;
+      }
+      return false;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text) as unknown;
+    } catch {
+      try {
+        parsed = JSON.parse(stripJsoncCommentsAndTrailingCommas(text)) as unknown;
+      } catch {
+        return false;
+      }
+    }
+    const record = asRecord(parsed);
+    const servers = record ? asRecord(record.mcpServers) : null;
+    if (servers && asRecord(servers[serverName])) {
+      return false;
+    }
+  }
+  return true;
+}
+
+async function readRawMcporterEntry(
+  serverName: string,
+  env: NodeJS.ProcessEnv,
+  workspaceDir: string,
+  sourcePath?: string,
+): Promise<RawMcporterEntry | null> {
+  // Prefer the file mcporter actually reported via source.path; it is the
+  // authoritative layer for this server. Fall back to enumerating layers in
+  // mcporter's documented precedence order.
+  if (sourcePath) {
+    const resolved = resolveMcporterConfigPath(sourcePath, workspaceDir);
+    const entry = await readRawMcporterEntryFromFile(serverName, resolved);
+    if (entry) {
+      return entry;
+    }
+  }
+
+  for (const candidate of resolveMcporterConfigCandidates(env, workspaceDir)) {
+    const entry = await readRawMcporterEntryFromFile(serverName, candidate);
+    if (entry) {
+      return entry;
+    }
+  }
+  return null;
+}
+
+function hasMcporterStdioLifecycleOrLogging(server: RawMcporterEntry): boolean {
+  return hasMcporterStdioLifecycleOrDaemonLogging(server) || hasMcporterStdioContextPath(server);
+}
+
+function hasMcporterStdioContextPath(server: RawMcporterEntry): boolean {
+  // A user-set cwd or path is context-dependent and must not be copied into
+  // the per-agent generated config under OpenClaw state, where it would
+  // resolve against a different working directory.
+  return (
+    (typeof server.cwd === "string" && server.cwd.length > 0) ||
+    (typeof server.path === "string" && server.path.length > 0)
+  );
+}
+
+function hasMcporterStdioLifecycleOrDaemonLogging(server: RawMcporterEntry): boolean {
+  if (server.lifecycle !== undefined) {
+    return true;
+  }
+  const logging =
+    typeof server.logging === "object" && server.logging !== null
+      ? (server.logging as Record<string, unknown>)
+      : null;
+  if (logging) {
+    // Detect top-level logging.enabled (mcporter legacy shape) and nested
+    // logging.daemon.enabled (mcporter current shape: src/config-schema.ts:39-49).
+    if (logging.enabled === true) {
+      return true;
+    }
+    const daemon =
+      typeof logging.daemon === "object" && logging.daemon !== null
+        ? (logging.daemon as Record<string, unknown>)
+        : null;
+    if (daemon?.enabled === true) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function getQmdEmbedQueueState(): QmdEmbedQueueState {
@@ -434,10 +1064,13 @@ export class QmdMemoryManager implements MemorySearchManager {
   private readonly xdgConfigHome: string;
   private readonly xdgCacheHome: string;
   private readonly indexPath: string;
+  private readonly mcporterConfigPath: string;
   private readonly env: NodeJS.ProcessEnv;
+  private readonly mcporterEnv: NodeJS.ProcessEnv;
   private readonly syncSettings: ReturnType<typeof resolveMemorySearchSyncConfig>;
   private readonly managedCollectionNames: string[];
   private readonly collectionRoots = new Map<string, CollectionRoot>();
+  private externalMcporterConfigPath: string | null = null;
   private readonly sources = new Set<MemorySource>();
   private readonly docPathCache = new Map<string, DocLocation>();
   private readonly exportedSessionState = new Map<
@@ -474,6 +1107,9 @@ export class QmdMemoryManager implements MemorySearchManager {
   private vectorStatusDetail: string | null = null;
   private attemptedNullByteCollectionRepair = false;
   private attemptedDuplicateDocumentRepair = false;
+  private mcporterConfigMode: McporterConfigMode | null = null;
+  private mcporterConfigModePromise: Promise<McporterConfigMode> | null = null;
+  private externalMcporterUsesAgentQmdEnv = false;
   private readonly sessionWarm = new Set<string>();
   private collectionPatternFlag: QmdCollectionPatternFlag | null = "--mask";
   private multiCollectionFilterSupported: boolean | null = null;
@@ -499,6 +1135,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.xdgConfigHome = path.join(this.qmdDir, "xdg-config");
     this.xdgCacheHome = path.join(this.qmdDir, "xdg-cache");
     this.indexPath = path.join(this.xdgCacheHome, "qmd", "index.sqlite");
+    this.mcporterConfigPath = path.join(this.qmdDir, "mcporter", "mcporter.json");
 
     this.env = {
       ...process.env,
@@ -508,6 +1145,11 @@ export class QmdMemoryManager implements MemorySearchManager {
       // Point it at the nested qmd config directory so per-agent collections are visible.
       QMD_CONFIG_DIR: path.join(this.xdgConfigHome, "qmd"),
       XDG_CACHE_HOME: this.xdgCacheHome,
+      NO_COLOR: "1",
+    };
+    this.mcporterEnv = {
+      ...process.env,
+      PATH: buildQmdProcessPath(process.env.PATH),
       NO_COLOR: "1",
     };
     this.closeSignal = new Promise<void>((resolve) => {
@@ -2562,9 +3204,16 @@ export class QmdMemoryManager implements MemorySearchManager {
     return /(?:^|\n|:\s)(?:MCP error [^:\n]+:\s*)?Tool ['"]?query['"]? not found\b/i.test(detail);
   }
 
-  private async ensureMcporterDaemonStarted(mcporter: ResolvedQmdMcporterConfig): Promise<void> {
+  private async ensureMcporterDaemonStarted(
+    mcporter: ResolvedQmdMcporterConfig,
+    signal?: AbortSignal,
+  ): Promise<void> {
     if (!mcporter.enabled) {
       return;
+    }
+    const configMode = await this.ensureMcporterConfig(signal);
+    if (signal?.aborted) {
+      throw asAbortError(signal);
     }
     const state = getMcporterState();
     if (!mcporter.startDaemon) {
@@ -2576,39 +3225,399 @@ export class QmdMemoryManager implements MemorySearchManager {
       }
       return;
     }
-    if (!state.daemonStart) {
-      state.daemonStart = (async () => {
+    if (configMode === "external" && this.externalMcporterUsesAgentQmdEnv) {
+      log.warn(
+        "mcporter qmd bridge uses an external QMD server with agent-scoped QMD env; skipping daemon auto-start to avoid sharing warmed QMD state across agents.",
+      );
+      return;
+    }
+    const daemonKey = this.mcporterDaemonKey(configMode);
+    let daemonStart = state.daemonStarts.get(daemonKey);
+    if (!daemonStart) {
+      daemonStart = (async () => {
         try {
-          await this.runMcporter(["daemon", "start"], { timeoutMs: 10_000 });
+          await this.runMcporterCommand(["daemon", "start"], {
+            envMode: configMode,
+            includeGeneratedConfig: configMode === "generated",
+            timeoutMs: 10_000,
+            signal,
+          });
         } catch (err) {
           log.warn(`mcporter daemon start failed: ${String(err)}`);
           // Allow future searches to retry daemon start on transient failures.
-          state.daemonStart = null;
+          state.daemonStarts.delete(daemonKey);
         }
       })();
+      state.daemonStarts.set(daemonKey, daemonStart);
     }
-    await state.daemonStart;
+    await daemonStart;
+  }
+
+  private async ensureMcporterConfig(signal?: AbortSignal): Promise<McporterConfigMode> {
+    if (signal?.aborted) {
+      throw asAbortError(signal);
+    }
+    if (this.mcporterConfigMode) {
+      return this.mcporterConfigMode;
+    }
+    if (signal) {
+      const mode = await this.resolveMcporterConfigMode(signal);
+      this.mcporterConfigMode = mode;
+      return mode;
+    }
+    if (this.mcporterConfigModePromise) {
+      return await this.mcporterConfigModePromise;
+    }
+    const modePromise = this.resolveMcporterConfigMode();
+    this.mcporterConfigModePromise = modePromise;
+    try {
+      const mode = await modePromise;
+      this.mcporterConfigMode = mode;
+      return mode;
+    } finally {
+      if (this.mcporterConfigModePromise === modePromise) {
+        this.mcporterConfigModePromise = null;
+      }
+    }
+  }
+
+  private async resolveMcporterConfigMode(signal?: AbortSignal): Promise<McporterConfigMode> {
+    await fs.mkdir(path.dirname(this.mcporterConfigPath), { recursive: true });
+    const configured = await this.resolveConfiguredMcporterServer(signal);
+    if (configured?.mode === "external") {
+      this.externalMcporterUsesAgentQmdEnv = configured.useAgentQmdEnv === true;
+      return "external";
+    }
+    this.externalMcporterUsesAgentQmdEnv = false;
+    const server = configured?.server ?? this.buildDefaultMcporterQmdServer();
+    const config = {
+      imports: [],
+      mcpServers: {
+        [this.qmd.mcporter.serverName]: server,
+      },
+    };
+    await this.writeMcporterConfigIfChanged(`${JSON.stringify(config, null, 2)}\n`);
+    return "generated";
+  }
+
+  private async writeMcporterConfigIfChanged(contents: string): Promise<void> {
+    try {
+      if ((await fs.readFile(this.mcporterConfigPath, "utf8")) === contents) {
+        return;
+      }
+    } catch (err) {
+      if (!isFileMissingError(err)) {
+        throw err;
+      }
+    }
+    await fs.writeFile(this.mcporterConfigPath, contents, "utf8");
+  }
+
+  private buildDefaultMcporterQmdServer(): Record<string, unknown> {
+    const server: Record<string, unknown> = {
+      command: this.resolveGeneratedQmdCommand(this.qmd.command),
+      args: ["mcp"],
+      env: this.buildMcporterQmdEnv(),
+    };
+    // Only keep the QMD MCP server warm when the resolved config enables daemon management.
+    if (this.qmd.mcporter.startDaemon) {
+      server.lifecycle = { mode: "keep-alive", idleTimeoutMs: 300_000 };
+    }
+    return server;
+  }
+
+  private resolveGeneratedQmdCommand(command: string): string {
+    if (isRelativeMcporterCommandPath(command)) {
+      return path.resolve(this.workspaceDir, command);
+    }
+    return command;
+  }
+
+  private async resolveConfiguredMcporterServer(
+    signal?: AbortSignal,
+  ): Promise<ConfiguredMcporterServer | null> {
+    const serverName = this.qmd.mcporter.serverName;
+    const explicitMcporterConfig = this.mcporterEnv.MCPORTER_CONFIG;
+    const canUseGeneratedFallback =
+      serverName === "qmd" &&
+      (typeof explicitMcporterConfig !== "string" || explicitMcporterConfig.trim().length === 0);
+    let result: { stdout: string; stderr: string };
+    try {
+      result = await this.runMcporterCommand(["config", "get", serverName, "--json"], {
+        envMode: "discovery",
+        includeGeneratedConfig: false,
+        timeoutMs: 5_000,
+        signal,
+      });
+    } catch (err) {
+      if (signal?.aborted) {
+        throw asAbortError(signal);
+      }
+      if (
+        canUseGeneratedFallback &&
+        (await canUseGeneratedMcporterFallback(serverName, this.mcporterEnv, this.workspaceDir))
+      ) {
+        return null;
+      }
+      throw new Error(
+        `mcporter server "${serverName}" is not configured or could not be read: ${formatErrorMessage(
+          err,
+        )}`,
+        { cause: err },
+      );
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = parseMcporterResponseJson(result.stdout);
+    } catch (err) {
+      if (
+        canUseGeneratedFallback &&
+        (await canUseGeneratedMcporterFallback(serverName, this.mcporterEnv, this.workspaceDir))
+      ) {
+        return null;
+      }
+      throw new Error(`mcporter server "${serverName}" returned invalid JSON`, { cause: err });
+    }
+    const serialized = asRecord(parsed);
+    if (!serialized) {
+      if (
+        canUseGeneratedFallback &&
+        (await canUseGeneratedMcporterFallback(serverName, this.mcporterEnv, this.workspaceDir))
+      ) {
+        return null;
+      }
+      throw new Error(`mcporter server "${serverName}" returned an invalid JSON definition`);
+    }
+
+    const rawEntry = await readRawMcporterEntry(
+      serverName,
+      this.mcporterEnv,
+      this.workspaceDir,
+      extractMcporterSourcePath(serialized),
+    );
+    this.externalMcporterConfigPath = extractMcporterSourcePath(serialized) ?? null;
+    const server = this.toMcporterRawServerEntry(serialized, rawEntry);
+    if (!server) {
+      if (
+        canUseGeneratedFallback &&
+        (await canUseGeneratedMcporterFallback(serverName, this.mcporterEnv, this.workspaceDir))
+      ) {
+        return null;
+      }
+      throw new Error(`mcporter server "${serverName}" returned an unsupported definition`);
+    }
+    return server;
+  }
+
+  private toMcporterRawServerEntry(
+    serialized: Record<string, unknown>,
+    rawEntry: RawMcporterEntry | null,
+  ): ConfiguredMcporterServer | null {
+    const server: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(serialized)) {
+      if (key === "name" || key === "source" || value === undefined) {
+        continue;
+      }
+      server[key] = value;
+    }
+
+    if (
+      (server.command !== undefined && server.command !== null) ||
+      (server.executable !== undefined && server.executable !== null)
+    ) {
+      // mcporter accepts stdio definitions as `command`, command arrays, or
+      // `executable` plus args. We can only regenerate the string command form,
+      // so preserve anything else as external and let mcporter handle it.
+      const stdioServer = normalizeMcporterSerializedStdioServer(server);
+      if (!stdioServer) {
+        return {
+          mode: "external",
+          useAgentQmdEnv: isQmdMcpStdioServer(server) && !hasMcporterStdioQmdPathEnv(server),
+        };
+      }
+      const isGeneratedQmdServer = isGeneratedMcporterQmdStdioServer(stdioServer);
+      const hasUserOwnedMaterial = hasMcporterStdioUserOwnedMaterial(server);
+      const contextPathSource = rawEntry ?? server;
+      const hasContextPathFields = hasMcporterStdioContextPath(contextPathSource);
+      if (!isGeneratedQmdServer || hasUserOwnedMaterial || hasContextPathFields) {
+        return {
+          mode: "external",
+          useAgentQmdEnv: isQmdMcpStdioServer(server) && !hasMcporterStdioQmdPathEnv(server),
+        };
+      }
+      return {
+        mode: "generated",
+        server: this.toGeneratedMcporterStdioServer(stdioServer, rawEntry),
+      };
+    }
+
+    const hasRemoteEndpoint =
+      typeof server.baseUrl === "string" ||
+      typeof server.base_url === "string" ||
+      typeof server.url === "string" ||
+      typeof server.serverUrl === "string" ||
+      typeof server.server_url === "string";
+    if (hasRemoteEndpoint) {
+      // The generated per-agent config is persisted under OpenClaw state. Do not
+      // copy remote auth material from a user's mcporter config into that file;
+      // keep using the original mcporter config for authenticated remotes.
+      if (
+        hasMcporterRemoteAuthMaterial(server) ||
+        (rawEntry !== null && hasMcporterStdioLifecycleOrLogging(rawEntry))
+      ) {
+        return { mode: "external" };
+      }
+      const remoteServer = normalizeMcporterSerializedRemoteServer(server);
+      if (!remoteServer) {
+        return { mode: "external" };
+      }
+      return { mode: "generated", server: remoteServer };
+    }
+
+    return null;
+  }
+
+  private toGeneratedMcporterStdioServer(
+    server: Record<string, unknown>,
+    rawEntry?: RawMcporterEntry | null,
+  ): Record<string, unknown> {
+    const envOverrides = getGeneratedQmdEnvOverrides(server.env);
+    const generated: Record<string, unknown> = {
+      ...server,
+      env: {
+        ...this.buildMcporterQmdEnv(),
+        ...envOverrides,
+      },
+    };
+    if (rawEntry?.lifecycle !== undefined) {
+      generated.lifecycle = rawEntry.lifecycle;
+    } else if (generated.lifecycle === undefined && this.qmd.mcporter.startDaemon) {
+      generated.lifecycle = { mode: "keep-alive", idleTimeoutMs: 300_000 };
+    }
+    if (rawEntry?.logging !== undefined) {
+      generated.logging = rawEntry.logging;
+    }
+    return generated;
+  }
+
+  private buildMcporterQmdEnv(): Record<string, string> {
+    const keys = [
+      "PATH",
+      "XDG_CONFIG_HOME",
+      "QMD_CONFIG_DIR",
+      "XDG_CACHE_HOME",
+      "QMD_EMBED_MODEL",
+      "QMD_RERANK_MODEL",
+      "QMD_GENERATE_MODEL",
+      "QMD_LLAMA_GPU",
+      "QMD_EMBED_CONTEXT_SIZE",
+      "QMD_RERANK_CONTEXT_SIZE",
+      "QMD_EXPAND_CONTEXT_SIZE",
+      "NO_COLOR",
+    ];
+    const env: Record<string, string> = {};
+    for (const key of keys) {
+      const value = this.env[key];
+      if (typeof value === "string" && value.length > 0) {
+        env[key] = value;
+      }
+    }
+    return env;
+  }
+
+  private buildMcporterProcessEnv(mode: McporterEnvMode): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = { ...this.mcporterEnv };
+    delete env.QMD_CONFIG_DIR;
+    if (mode === "generated") {
+      delete env.XDG_CONFIG_HOME;
+      delete env.MCPORTER_CONFIG;
+    }
+    if (mode === "external" && this.externalMcporterUsesAgentQmdEnv) {
+      const hasMcporterConfigOverride =
+        Boolean(this.externalMcporterConfigPath) ||
+        (typeof env.MCPORTER_CONFIG === "string" && env.MCPORTER_CONFIG.trim().length > 0);
+      for (const [key, value] of Object.entries(this.buildMcporterQmdEnv())) {
+        if (key === "XDG_CONFIG_HOME" && !hasMcporterConfigOverride) {
+          continue;
+        }
+        env[key] = value;
+      }
+      env.MCPORTER_DISABLE_KEEPALIVE = appendMcporterServerEnvList(
+        env.MCPORTER_DISABLE_KEEPALIVE,
+        this.qmd.mcporter.serverName,
+      );
+    }
+    if (mode === "external" && this.externalMcporterConfigPath) {
+      // Point mcporter at the exact user/project config that defined the
+      // external server, so calls do not fall back to agent-scoped dirs.
+      env.MCPORTER_CONFIG = this.externalMcporterConfigPath;
+    }
+    return env;
+  }
+
+  private mcporterDaemonKey(configMode: McporterConfigMode): string {
+    if (configMode === "generated") {
+      return this.mcporterConfigPath;
+    }
+    const keyParts = [
+      "external",
+      this.qmd.mcporter.serverName,
+      this.mcporterEnv.MCPORTER_CONFIG ?? "",
+      this.mcporterEnv.XDG_CONFIG_HOME ?? "",
+      this.workspaceDir,
+    ];
+    if (this.externalMcporterUsesAgentQmdEnv) {
+      keyParts.push(
+        "agent-qmd-env",
+        this.externalMcporterConfigPath ?? "",
+        this.env.QMD_CONFIG_DIR ?? "",
+        this.env.XDG_CACHE_HOME ?? "",
+      );
+    }
+    return keyParts.join(":");
+  }
+
+  private async runMcporterCommand(
+    args: string[],
+    opts?: {
+      envMode?: McporterEnvMode;
+      includeGeneratedConfig?: boolean;
+      timeoutMs?: number;
+      signal?: AbortSignal;
+    },
+  ): Promise<{ stdout: string; stderr: string }> {
+    const mcporterArgs =
+      opts?.includeGeneratedConfig === false
+        ? args
+        : [...args, "--config", this.mcporterConfigPath];
+    const env = this.buildMcporterProcessEnv(opts?.envMode ?? "generated");
+    const spawnInvocation = resolveCliSpawnInvocation({
+      command: "mcporter",
+      args: mcporterArgs,
+      env,
+      packageName: "mcporter",
+    });
+    return await runCliCommand({
+      commandSummary: `${spawnInvocation.command} ${spawnInvocation.argv.join(" ")}`,
+      spawnInvocation,
+      env,
+      cwd: this.workspaceDir,
+      timeoutMs: opts?.timeoutMs,
+      maxOutputChars: this.maxQmdOutputChars,
+      signal: opts?.signal,
+    });
   }
 
   private async runMcporter(
     args: string[],
     opts?: { timeoutMs?: number; signal?: AbortSignal },
   ): Promise<{ stdout: string; stderr: string }> {
-    const spawnInvocation = resolveCliSpawnInvocation({
-      command: "mcporter",
-      args,
-      env: this.env,
-      packageName: "mcporter",
-    });
-    return await runCliCommand({
-      commandSummary: `${spawnInvocation.command} ${spawnInvocation.argv.join(" ")}`,
-      spawnInvocation,
-      // Keep mcporter and direct qmd commands on the same agent-scoped XDG state.
-      env: this.env,
-      cwd: this.workspaceDir,
-      timeoutMs: opts?.timeoutMs,
-      maxOutputChars: this.maxQmdOutputChars,
-      signal: opts?.signal,
+    const configMode = await this.ensureMcporterConfig(opts?.signal);
+    return await this.runMcporterCommand(args, {
+      ...opts,
+      envMode: configMode,
+      includeGeneratedConfig: configMode === "generated",
     });
   }
 
@@ -2618,7 +3627,10 @@ export class QmdMemoryManager implements MemorySearchManager {
     if (params.signal?.aborted) {
       throw asAbortError(params.signal);
     }
-    await this.ensureMcporterDaemonStarted(params.mcporter);
+    await this.ensureMcporterDaemonStarted(params.mcporter, params.signal);
+    if (params.signal?.aborted) {
+      throw asAbortError(params.signal);
+    }
 
     // If the version is already known as v1 but we received a stale "query" tool name
     // (e.g. from runMcporterAcrossCollections iterating after the first collection
@@ -2719,7 +3731,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       throw err;
     }
 
-    const parsedUnknown: unknown = JSON.parse(result.stdout);
+    const parsedUnknown = parseMcporterResponseJson(result.stdout);
     const parsedRecord = asRecord(parsedUnknown);
     const structuredContent = parsedRecord ? asRecord(parsedRecord.structuredContent) : null;
     const structured: unknown = structuredContent ?? parsedUnknown;

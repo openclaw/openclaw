@@ -4,7 +4,10 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { resolveUserPath } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import {
+  resolveUserPath,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   ensureMemoryIndexSchema,
   loadSqliteVecExtension,
@@ -1271,3 +1274,18 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     },
   },
 ];
+
+type LegacyConfigRule = {
+  path: Array<string | number>;
+  message: string;
+  match: (value: unknown) => boolean;
+};
+
+export const legacyConfigRules: LegacyConfigRule[] = [];
+
+export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): {
+  config: OpenClawConfig;
+  changes: string[];
+} {
+  return { config: cfg, changes: [] };
+}
