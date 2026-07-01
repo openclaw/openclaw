@@ -1329,6 +1329,8 @@ export const id: TranslationMap = {
     settings: "Pengaturan chat",
     thinkingToggle: "Alihkan output berpikir/bekerja asisten",
     toolCallsToggle: "Alihkan panggilan alat dan hasil alat",
+    commentaryToggle: "Simpan komentar setelah jawaban akhir",
+    commentaryLabel: "Komentar",
     autoScrollMode: "Mode gulir otomatis",
     autoScrollAlways: "Selalu",
     autoScrollNearBottom: "Dekat bagian bawah",

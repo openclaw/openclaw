@@ -2,7 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { readRuntimeToolCoverageMetadata } from "./runtime-tool-metadata.js";
+import {
+  type QaRuntimeToolCoverageMetadata,
+  readRuntimeToolCoverageMetadata,
+} from "./runtime-tool-metadata.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
@@ -555,6 +558,37 @@ function formatCodexNativeWorkspaceDetails(params: {
     .join("\n");
 }
 
+function formatReportOnlyMockDetails(params: {
+  toolName: string;
+  happyRequest: QaRuntimeToolFixtureRequest;
+  failureRequest: QaRuntimeToolFixtureRequest;
+}) {
+  return [
+    `${params.toolName} mock provider report-only: direct tool output is not required by this fixture`,
+    `${params.toolName} mock provider happy planned args (diagnostic only): ${formatPlannedToolArgs(params.happyRequest.plannedToolArgs)}`,
+    `${params.toolName} mock provider failure planned args (diagnostic only): ${formatPlannedToolArgs(params.failureRequest.plannedToolArgs)}`,
+  ].join("\n");
+}
+
+function isAsyncReportOnlyMockCoverage(metadata: QaRuntimeToolCoverageMetadata) {
+  return !metadata.required && /\basync\b/iu.test(metadata.action ?? "");
+}
+
+function plannedRequestHasDeniedInputFailure(request: QaRuntimeToolFixtureRequest) {
+  return (
+    isRecord(request.plannedToolArgs) &&
+    request.plannedToolArgs["__qaFailureMode"] === "denied-input"
+  );
+}
+
+function plannedRequestHasPrompt(request: QaRuntimeToolFixtureRequest) {
+  return (
+    isRecord(request.plannedToolArgs) &&
+    typeof request.plannedToolArgs.prompt === "string" &&
+    request.plannedToolArgs.prompt.trim().length > 0
+  );
+}
+
 function formatKnownHarnessGapDetails(toolName: string, config: QaRuntimeToolFixtureConfig) {
   const knownHarnessGap = isKnownHarnessGap(config.knownHarnessGap) ? config.knownHarnessGap : {};
   const issue = readString(knownHarnessGap.issue);
@@ -722,6 +756,39 @@ export async function runRuntimeToolFixture(
     excludedPromptSnippet: failurePromptSnippet,
     toolName,
   });
+  const failurePlannedRequest = findPlannedRequest({
+    requests,
+    requestCountBefore,
+    promptSnippet: failurePromptSnippet,
+    toolName,
+  });
+  const failureRequest = findExecutedRequest({
+    requests,
+    requestCountBefore,
+    promptSnippet: failurePromptSnippet,
+    toolName,
+  });
+  if (
+    isAsyncReportOnlyMockCoverage(metadata) &&
+    happyPlannedRequest &&
+    failurePlannedRequest &&
+    !happyRequest
+  ) {
+    if (!plannedRequestHasPrompt(happyPlannedRequest)) {
+      throw new Error(`expected mock happy-path prompt args for ${toolName}`);
+    }
+    if (!plannedRequestHasDeniedInputFailure(failurePlannedRequest)) {
+      throw new Error(`expected mock failure-path denied-input args for ${toolName}`);
+    }
+    if (failureRequest && !requestHasFailureLikeToolOutput(failureRequest.outputRequest)) {
+      throw new Error(`expected mock failure-path tool failure output for ${toolName}`);
+    }
+    return formatReportOnlyMockDetails({
+      toolName,
+      happyRequest: happyPlannedRequest,
+      failureRequest: failurePlannedRequest,
+    });
+  }
   // Async runtime tools prove the start call here; completion is covered by
   // their task lifecycle scenarios.
   const happyPlannedOnly = Boolean(happyPlannedRequest && !happyPathOutputRequired);
@@ -749,18 +816,6 @@ export async function runRuntimeToolFixture(
     }
     throw new Error(`expected mock happy-path successful tool output for ${toolName}`);
   }
-  const failurePlannedRequest = findPlannedRequest({
-    requests,
-    requestCountBefore,
-    promptSnippet: failurePromptSnippet,
-    toolName,
-  });
-  const failureRequest = findExecutedRequest({
-    requests,
-    requestCountBefore,
-    promptSnippet: failurePromptSnippet,
-    toolName,
-  });
   if (!failureRequest) {
     if (dynamicExposureIntentionallyExcluded) {
       return formatCodexNativeWorkspaceDetails({

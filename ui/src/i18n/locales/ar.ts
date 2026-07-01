@@ -1313,6 +1313,8 @@ export const ar: TranslationMap = {
     settings: "إعدادات الدردشة",
     thinkingToggle: "تبديل مخرجات تفكير/عمل المساعد",
     toolCallsToggle: "تبديل استدعاءات الأدوات ونتائج الأدوات",
+    commentaryToggle: "الاحتفاظ بالتعليق بعد الإجابة النهائية",
+    commentaryLabel: "التعليق",
     autoScrollMode: "وضع التمرير التلقائي",
     autoScrollAlways: "دائمًا",
     autoScrollNearBottom: "قرب الأسفل",

@@ -2851,6 +2851,9 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = requireRunReplyAgentCall();
     expect(call?.followupRun.run.senderIsOwner).toBe(true);
+    expect(call?.followupRun.userTurnTranscriptRecorder?.message).toMatchObject({
+      __openclaw: { senderIsOwner: true },
+    });
   });
 
   it("keeps sender ownership when drained system events are present", async () => {

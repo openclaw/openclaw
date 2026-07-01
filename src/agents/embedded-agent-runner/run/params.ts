@@ -40,6 +40,13 @@ export type { ClientToolDefinition } from "../../command/shared-types.js";
 
 export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
 
+type ReasoningStreamPayload = Pick<
+  ReplyPayload,
+  "text" | "mediaUrls" | "isReasoning" | "isReasoningSnapshot"
+> & {
+  requiresReasoningProgressOptIn?: boolean;
+};
+
 export type CurrentInboundPromptContext = {
   text: string;
   resumableText?: string;
@@ -228,11 +235,8 @@ export type RunEmbeddedAgentParams = {
   onBlockReplyFlush?: () => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";
   blockReplyChunking?: BlockReplyChunking;
-  onReasoningStream?: (payload: {
-    text?: string;
-    mediaUrls?: string[];
-    isReasoningSnapshot?: boolean;
-  }) => void | Promise<void>;
+  onReasoningStream?: (payload: ReasoningStreamPayload) => void | Promise<void>;
+  streamReasoningInNonStreamModes?: boolean;
   onReasoningEnd?: () => void | Promise<void>;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
   /** Synchronous private observer for the sanitized per-tool result. */

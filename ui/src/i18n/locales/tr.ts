@@ -1335,6 +1335,8 @@ export const tr: TranslationMap = {
     settings: "Sohbet ayarları",
     thinkingToggle: "Asistanın düşünme/çalışma çıktısını aç/kapat",
     toolCallsToggle: "Araç çağrılarını ve araç sonuçlarını aç/kapat",
+    commentaryToggle: "Nihai yanıttan sonra yorumu koru",
+    commentaryLabel: "Yorum",
     autoScrollMode: "Otomatik kaydırma modu",
     autoScrollAlways: "Her zaman",
     autoScrollNearBottom: "Alta yakın",

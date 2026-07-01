@@ -1331,6 +1331,8 @@ export const fa: TranslationMap = {
     settings: "تنظیمات چت",
     thinkingToggle: "تغییر وضعیت خروجی فکر/کار دستیار",
     toolCallsToggle: "تغییر وضعیت نمایش فراخوانی‌های ابزار و نتایج ابزار",
+    commentaryToggle: "حفظ توضیحات پس از پاسخ نهایی",
+    commentaryLabel: "توضیحات",
     autoScrollMode: "حالت پیمایش خودکار",
     autoScrollAlways: "همیشه",
     autoScrollNearBottom: "نزدیک پایین",

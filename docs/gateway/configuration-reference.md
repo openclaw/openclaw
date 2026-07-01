@@ -1260,6 +1260,7 @@ Metadata written by CLI guided setup flows (`onboard`, `configure`, `doctor`):
     lastRunCommit: "abc1234",
     lastRunCommand: "configure",
     lastRunMode: "local",
+    securityAcknowledgedAt: "2026-01-01T00:00:00.000Z",
   },
 }
 ```

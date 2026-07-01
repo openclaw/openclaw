@@ -112,6 +112,11 @@ export function registerCronEditCommand(cron: Command) {
         "--thinking <level>",
         "Thinking level for agent jobs (off|minimal|low|medium|high|xhigh)",
       )
+      .option(
+        "--clear-thinking",
+        "Remove the per-job thinking override (restore normal cron thinking precedence)",
+        false,
+      )
       .option("--model <model>", "Model override for agent jobs")
       .option("--fallbacks <list>", "Fallback model list for agent jobs")
       .option("--clear-fallbacks", "Remove per-job fallback override", false)
@@ -292,6 +297,9 @@ export function registerCronEditCommand(cron: Command) {
             throw new Error("Use --model or --clear-model, not both");
           }
           const thinking = normalizeOptionalString(opts.thinking);
+          if (thinking && opts.clearThinking) {
+            throw new Error("Use --thinking or --clear-thinking, not both");
+          }
           const fallbacks = parseCronFallbacks(opts.fallbacks);
           if (typeof opts.fallbacks === "string" && opts.clearFallbacks) {
             throw new Error("Use --fallbacks or --clear-fallbacks, not both");
@@ -370,6 +378,7 @@ export function registerCronEditCommand(cron: Command) {
             typeof opts.fallbacks !== "string" &&
             !opts.clearFallbacks &&
             !thinking &&
+            !opts.clearThinking &&
             typeof opts.lightContext !== "boolean" &&
             typeof opts.tools !== "string" &&
             !Array.isArray(opts.tools) &&
@@ -385,6 +394,7 @@ export function registerCronEditCommand(cron: Command) {
             typeof opts.fallbacks === "string" ||
             Boolean(opts.clearFallbacks) ||
             Boolean(thinking) ||
+            Boolean(opts.clearThinking) ||
             (hasTimeoutSeconds &&
               !hasCommandSpecificPayloadField &&
               timeoutOnlyPayloadKind !== "command") ||
@@ -418,7 +428,11 @@ export function registerCronEditCommand(cron: Command) {
             }
             assignIf(payload, "fallbacks", fallbacks, typeof opts.fallbacks === "string");
             assignIf(payload, "fallbacks", null, Boolean(opts.clearFallbacks));
-            assignIf(payload, "thinking", thinking, Boolean(thinking));
+            if (opts.clearThinking) {
+              payload.thinking = null;
+            } else {
+              assignIf(payload, "thinking", thinking, Boolean(thinking));
+            }
             assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
             assignIf(
               payload,

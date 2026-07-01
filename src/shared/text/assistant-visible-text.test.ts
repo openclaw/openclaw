@@ -763,6 +763,23 @@ describe("stripToolCallXmlTags", () => {
       "Checking.  Done.",
     );
   });
+
+  it("strips antml:invoke/parameter tool call XML from visible content", () => {
+    const input =
+      'before <antml:invoke name="exec"><antml:parameter name="command">ls</antml:parameter></antml:invoke> after';
+    expect(stripToolCallXmlTags(input)).toBe("before  after");
+  });
+
+  it("strips antml:invoke with function_call payload", () => {
+    const input =
+      'prefix <antml:invoke name="exec"><function_call>test</function_call></antml:invoke> suffix';
+    expect(stripToolCallXmlTags(input)).toBe("prefix  suffix");
+  });
+
+  it("does not strip non-namespaced invoke tags (unrelated XML)", () => {
+    const input = 'keep <invoke name="something">content</invoke> keep';
+    expect(stripToolCallXmlTags(input)).toBe(input);
+  });
 });
 
 describe("stripMinimaxToolCallXml", () => {

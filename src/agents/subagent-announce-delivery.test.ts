@@ -395,6 +395,27 @@ async function deliverSlackChannelAnnouncement(params: {
 }
 
 describe("resolveAnnounceOrigin threaded route targets", () => {
+  it("does not inherit a target or thread from another account on the same channel", () => {
+    expect(
+      resolveAnnounceOrigin(
+        {
+          lastChannel: "telegram",
+          lastTo: "peer-b",
+          lastAccountId: "bot-b",
+          lastThreadId: 99,
+        },
+        {
+          channel: "telegram",
+          accountId: "bot-a",
+        },
+      ),
+    ).toEqual({
+      channel: "telegram",
+      to: undefined,
+      accountId: "bot-a",
+    });
+  });
+
   it("preserves stored thread ids when requester origin omits one for the same chat", () => {
     expect(
       resolveAnnounceOrigin(

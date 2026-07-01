@@ -209,6 +209,38 @@ describe("searchMemoryWiki", () => {
     expect(getActiveMemorySearchManagerMock).not.toHaveBeenCalled();
   });
 
+  it("skips malformed pages while searching the rest of the vault (#96125)", async () => {
+    const { rootDir, config } = await createQueryVault({ initialize: true });
+    await fs.writeFile(
+      path.join(rootDir, "sources", "broken.md"),
+      [
+        "---",
+        "pageType: source",
+        "id: source.broken",
+        "sourceIds:",
+        '  - **MEMORY.md line 235**:"some quoted, value"',
+        "---",
+        "",
+        "# Broken",
+        "",
+        "poison needle",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "healthy.md"),
+      renderWikiMarkdown({
+        frontmatter: { pageType: "source", id: "source.healthy", title: "Healthy Source" },
+        body: "# Healthy Source\n\nhealthy needle\n",
+      }),
+      "utf8",
+    );
+
+    const results = await searchMemoryWiki({ config, query: "needle" });
+
+    expect(collectWikiResultPaths(results)).toEqual(["sources/healthy.md"]);
+  });
+
   it("uses the default search limit for non-finite maxResults", async () => {
     const { rootDir, config } = await createQueryVault({
       initialize: true,
