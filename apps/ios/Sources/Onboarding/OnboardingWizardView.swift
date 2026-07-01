@@ -620,7 +620,7 @@ struct OnboardingWizardView: View {
 extension OnboardingWizardView {
     private var setupCodeSection: some View {
         Section {
-            TextField("Paste setup code", text: self.$setupCode)
+            TextField("Paste setup or short code", text: self.$setupCode)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .onSubmit {
@@ -652,7 +652,7 @@ extension OnboardingWizardView {
         } header: {
             Text("Setup Code")
         } footer: {
-            Text("Use this if you received a setup code instead of a QR code.")
+            Text("Use this if you received a setup code or short code instead of a QR code.")
         }
     }
 
@@ -709,10 +709,7 @@ extension OnboardingWizardView {
             return
         }
 
-        guard let link = GatewayConnectDeepLink.fromSetupInput(raw) else {
-            self.setupCodeStatus = "Setup code not recognized or uses an insecure ws:// gateway URL."
-            return
-        }
+        guard let link = await self.resolveSetupInput(raw) else { return }
 
         self.connectingGatewayID = "setup-code"
         self.applyGatewayLink(link)
@@ -722,6 +719,47 @@ extension OnboardingWizardView {
         self.statusLine = "Setup code loaded. Connecting to \(link.host):\(link.port)..."
         self.step = .connect
         await self.connectManual()
+    }
+
+    private func resolveSetupInput(_ raw: String) async -> GatewayConnectDeepLink? {
+        if let link = GatewayConnectDeepLink.fromSetupInput(raw) {
+            return link
+        }
+        guard GatewaySetupShortCode.looksLikeShortCode(raw) else {
+            self.setupCodeStatus = "Setup code not recognized or uses an insecure ws:// gateway URL."
+            return nil
+        }
+        guard let gateway = self.shortCodeRedemptionGateway() else {
+            self.setupCodeStatus = "Choose or enter a Gateway host before using a short code."
+            return nil
+        }
+        self.connectingGatewayID = "setup-code"
+        self.setupCodeStatus = "Redeeming setup short code..."
+        do {
+            return try await GatewaySetupShortCodeRedeemer().redeem(raw, through: gateway)
+        } catch {
+            self.connectingGatewayID = nil
+            self.setupCodeStatus = Self.shortCodeRedeemMessage(error)
+            return nil
+        }
+    }
+
+    private func shortCodeRedemptionGateway() -> GatewayConnectDeepLink? {
+        let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !host.isEmpty, self.manualPort > 0, self.manualPort <= 65535 {
+            let scheme = self.manualTLS ? "wss" : "ws"
+            if let link = GatewayConnectDeepLink.fromGatewayURL("\(scheme)://\(host):\(self.manualPort)") {
+                return link
+            }
+        }
+        return nil
+    }
+
+    private static func shortCodeRedeemMessage(_ error: Error) -> String {
+        if let error = error as? LocalizedError, let message = error.errorDescription {
+            return message
+        }
+        return "Could not redeem setup short code."
     }
 
     private func handleScannedLink(_ link: GatewayConnectDeepLink) {

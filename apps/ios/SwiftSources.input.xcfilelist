@@ -144,6 +144,7 @@ WatchApp/Sources/WatchInboxView.swift
 ../shared/OpenClawKit/Sources/OpenClawKit/Capabilities.swift
 ../shared/OpenClawKit/Sources/OpenClawKit/OpenClawKitResources.swift
 ../shared/OpenClawKit/Sources/OpenClawKit/DeepLinks.swift
+../shared/OpenClawKit/Sources/OpenClawKit/GatewaySetupShortCodeRedeemer.swift
 ../shared/OpenClawKit/Sources/OpenClawKit/JPEGTranscoder.swift
 ../shared/OpenClawKit/Sources/OpenClawKit/NodeError.swift
 ../shared/OpenClawKit/Sources/OpenClawKit/ScreenCommands.swift

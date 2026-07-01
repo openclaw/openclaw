@@ -717,7 +717,7 @@ extension SettingsProTab {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Setup Code")
                     .font(.subheadline.weight(.semibold))
-                TextField("Paste setup code", text: self.$setupCode)
+                TextField("Paste setup or short code", text: self.$setupCode)
                     .textInputAutocapitalization(.never)
                     .autocorrectionDisabled()
                     .textFieldStyle(.roundedBorder)

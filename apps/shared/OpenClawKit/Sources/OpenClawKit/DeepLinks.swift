@@ -65,6 +65,20 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
             password: nil)
     }
 
+    /// Parse a gateway WebSocket/HTTP URL with optional auth fields from a setup source.
+    public static func fromGatewayURL(
+        _ urlString: String,
+        bootstrapToken: String? = nil,
+        token: String? = nil,
+        password: String? = nil) -> GatewayConnectDeepLink?
+    {
+        self.fromGatewayURLString(
+            urlString,
+            bootstrapToken: bootstrapToken,
+            token: token,
+            password: password)
+    }
+
     /// Parse a gateway setup payload from a device-pair setup code or copied setup text.
     ///
     /// Accepted inputs are:

@@ -186,7 +186,10 @@ extension SettingsProTab {
 
     func applySetupCodeAndConnect() async {
         self.setupStatusText = nil
-        guard self.applySetupCode() else { return }
+        guard let link = await self.resolveSetupInputForConnect() else { return }
+        self.stagedGatewaySetupLink = nil
+        self.setupCode = ""
+        self.applyGatewayLink(link)
         let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard self.resolvedManualPort(host: host) != nil else {
             self.setupStatusText = "Failed: invalid port"
@@ -195,6 +198,44 @@ extension SettingsProTab {
         guard await self.preflightGateway(host: host) else { return }
         self.setupStatusText = "Setup code applied. Connecting..."
         await self.connectManual()
+    }
+
+    func resolveSetupInputForConnect() async -> GatewayConnectDeepLink? {
+        let raw = self.setupCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let stagedGatewaySetupLink, raw.isEmpty {
+            return stagedGatewaySetupLink
+        }
+        guard !raw.isEmpty else {
+            self.setupStatusText = "Paste a setup code to continue."
+            return nil
+        }
+        if AppleReviewDemoMode.isSetupCode(raw) {
+            self.stagedGatewaySetupLink = nil
+            self.setupCode = ""
+            self.setupStatusText = "Apple Review demo mode enabled."
+            self.appModel.enterAppleReviewDemoMode()
+            return nil
+        }
+        if let link = GatewayConnectDeepLink.fromSetupInput(raw) {
+            return link
+        }
+        guard GatewaySetupShortCode.looksLikeShortCode(raw) else {
+            self.setupStatusText = "Setup code not recognized or uses an insecure ws:// gateway URL."
+            return nil
+        }
+        guard let gateway = self.shortCodeRedemptionGateway() else {
+            self.setupStatusText = "Choose or enter a Gateway host before using a short code."
+            return nil
+        }
+        self.connectingGatewayID = "manual"
+        self.setupStatusText = "Redeeming setup short code..."
+        defer { self.connectingGatewayID = nil }
+        do {
+            return try await GatewaySetupShortCodeRedeemer().redeem(raw, through: gateway)
+        } catch {
+            self.setupStatusText = Self.shortCodeRedeemMessage(error)
+            return nil
+        }
     }
 
     func applyPendingGatewaySetupLinkIfNeeded() {
@@ -258,6 +299,24 @@ extension SettingsProTab {
             }
         }
         self.pendingManualAuthOverride = setupAuth.manualAuthOverride
+    }
+
+    func shortCodeRedemptionGateway() -> GatewayConnectDeepLink? {
+        let host = self.manualGatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !host.isEmpty, let port = self.resolvedManualPort(host: host) {
+            let scheme = self.manualGatewayTLS ? "wss" : "ws"
+            if let link = GatewayConnectDeepLink.fromGatewayURL("\(scheme)://\(host):\(port)") {
+                return link
+            }
+        }
+        return nil
+    }
+
+    static func shortCodeRedeemMessage(_ error: Error) -> String {
+        if let error = error as? LocalizedError, let message = error.errorDescription {
+            return message
+        }
+        return "Could not redeem setup short code."
     }
 
     func openGatewayQRScanner() {
