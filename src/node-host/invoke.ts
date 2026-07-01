@@ -375,7 +375,14 @@ function resolveExecutable(bin: string, env?: Record<string, string>) {
   }
   const extensions =
     process.platform === "win32"
-      ? (process.env.PATHEXT ?? process.env.PathExt ?? ".EXE;.CMD;.BAT;.COM")
+      ? (
+          env?.PATHEXT ??
+          env?.PathExt ??
+          env?.Pathext ??
+          process.env.PATHEXT ??
+          process.env.PathExt ??
+          ".EXE;.CMD;.BAT;.COM"
+        )
           .split(";")
           .map((ext) => normalizeLowercaseStringOrEmpty(ext))
       : [""];
