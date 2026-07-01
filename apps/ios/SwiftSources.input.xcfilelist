@@ -48,6 +48,7 @@ Sources/Gateway/GatewayConnectionIssue.swift
 Sources/Gateway/GatewayDiscoveryDebugLogView.swift
 Sources/Gateway/GatewayDiscoveryModel.swift
 Sources/Gateway/GatewayHealthMonitor.swift
+Sources/Gateway/GatewayProblemPrimaryAction.swift
 Sources/Gateway/GatewayProblemView.swift
 Sources/Gateway/GatewayQuickSetupSheet.swift
 Sources/Gateway/NotificationPermissionGuidanceDialog.swift
@@ -99,6 +100,7 @@ Sources/Status/VoiceWakeToast.swift
 Sources/Voice/TalkGatewayPermissionState.swift
 Sources/Voice/TalkDefaults.swift
 Sources/Voice/RealtimeTalkRelaySession.swift
+Sources/Voice/TalkGatewaySpeechClient.swift
 Sources/Voice/TalkModeGatewayConfig.swift
 Sources/Voice/TalkModeManager.swift
 Sources/Voice/TalkModeManager+Permissions.swift

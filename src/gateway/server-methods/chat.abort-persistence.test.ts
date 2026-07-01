@@ -2,10 +2,10 @@
  * Tests persistence effects when chat abort requests complete.
  */
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import {
   createActiveRun,
@@ -164,8 +164,10 @@ function setMockSessionEntry(transcriptPath: string, sessionId: string, hasEntry
   sessionEntryState.loadCalls = [];
 }
 
+const abortTempDirs: string[] = [];
+
 async function createTranscriptFixture(prefix: string) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  const dir = makeTempDir(abortTempDirs, prefix);
   const sessionId = "sess-main";
   const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
   await writeTranscriptHeader(transcriptPath, sessionId);
@@ -174,12 +176,16 @@ async function createTranscriptFixture(prefix: string) {
 }
 
 async function createMissingEntryFixture(prefix: string) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  const dir = makeTempDir(abortTempDirs, prefix);
   const transcriptPath = path.join(dir, "missing.jsonl");
   const sessionId = "client-supplied-session";
   setMockSessionEntry(transcriptPath, sessionId, false);
   return { sessionId };
 }
+
+afterAll(() => {
+  cleanupTempDirs(abortTempDirs);
+});
 
 afterEach(() => {
   vi.restoreAllMocks();

@@ -71,6 +71,15 @@ export type StatusPluginHealthSnapshot = {
   // is not in the runtime-loaded set. Absent on compact/hand-built snapshots, where
   // no drift line is rendered (back-compat).
   shouldRunPluginIds?: string[];
+  // Configured memory embedding providers (memorySearch provider/fallback) that no
+  // loaded plugin registers, so semantic memory recall silently falls back to
+  // keyword/FTS-only. Detailed-status only; absent on compact/hand-built snapshots and
+  // whenever the live runtime registry is unavailable, so no line renders (back-compat).
+  // `source` mirrors MemoryEmbeddingStartupProviderSource ("provider" | "fallback").
+  unregisteredMemoryEmbeddingProviders?: Array<{
+    configuredId: string;
+    source: "provider" | "fallback";
+  }>;
 };
 
 /** Keeps the first record per key; later duplicates are dropped. */
@@ -307,6 +316,12 @@ export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot)
   const channelPluginFailures = (snapshot.channelPluginFailures ?? []).toSorted((left, right) =>
     byLocale(left.channelId, right.channelId),
   );
+  const unregisteredMemoryProviders = (
+    snapshot.unregisteredMemoryEmbeddingProviders ?? []
+  ).toSorted(
+    (left, right) =>
+      byLocale(left.configuredId, right.configuredId) || byLocale(left.source, right.source),
+  );
   const lines = [
     formatCompactPluginHealthLine(snapshot),
     `Loaded: ${loaded.length}${loaded.length > 0 ? ` (${formatPluginList(loaded, 8)})` : ""}`,
@@ -329,6 +344,18 @@ export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot)
     // not counted in the compact line.
     lines.push(
       `Configured to run but not loaded: ${shouldRunNotLoaded.length} (${formatPluginList(shouldRunNotLoaded, 8)})`,
+    );
+  }
+
+  if (unregisteredMemoryProviders.length > 0) {
+    // A configured memory embedding provider that no loaded plugin registers: semantic
+    // memory recall silently falls back to keyword/FTS-only. Observer-only signal, distinct
+    // from plugin load/error state and not counted in the compact line.
+    const display = unregisteredMemoryProviders.map(
+      (entry) => `${entry.configuredId} (memorySearch.${entry.source})`,
+    );
+    lines.push(
+      `Configured memory provider not registered: ${unregisteredMemoryProviders.length} (${formatPluginList(display, 8)})`,
     );
   }
 
