@@ -21,6 +21,7 @@ class ChatTimelineTest {
 
     assertEquals(listOf("thinking", "message:user-1"), timeline.items.map(::chatTimelineItemKey))
     assertEquals(1, timeline.scrollTargetIndex)
+    assertEquals(0, timeline.latestContentIndex)
     assertEquals(1, timeline.initialScrollIndex)
     assertEquals("user-1", timeline.latestUserMessageId)
   }
@@ -49,6 +50,7 @@ class ChatTimelineTest {
       timeline.items.map(::chatTimelineItemKey),
     )
     assertEquals(3, timeline.scrollTargetIndex)
+    assertEquals(0, timeline.latestContentIndex)
     assertEquals(3, timeline.initialScrollIndex)
     assertEquals("user-1", timeline.latestUserMessageId)
   }
@@ -68,6 +70,7 @@ class ChatTimelineTest {
 
     assertEquals(listOf("message:assistant-1", "message:user-1"), timeline.items.map(::chatTimelineItemKey))
     assertEquals(0, timeline.scrollTargetIndex)
+    assertEquals(0, timeline.latestContentIndex)
     assertEquals(1, timeline.initialScrollIndex)
     assertEquals("user-1", timeline.latestUserMessageId)
   }
@@ -84,6 +87,7 @@ class ChatTimelineTest {
 
     assertEquals(emptyList<String>(), timeline.items.map(::chatTimelineItemKey))
     assertEquals(null, timeline.scrollTargetIndex)
+    assertEquals(null, timeline.latestContentIndex)
     assertEquals(null, timeline.initialScrollIndex)
     assertEquals(null, timeline.latestUserMessageId)
     assertEquals("", timeline.contentVersion)

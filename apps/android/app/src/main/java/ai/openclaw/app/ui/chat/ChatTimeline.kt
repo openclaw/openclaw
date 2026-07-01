@@ -22,6 +22,7 @@ internal sealed class ChatTimelineItem {
 internal data class ChatTimeline(
   val items: List<ChatTimelineItem>,
   val scrollTargetIndex: Int?,
+  val latestContentIndex: Int?,
   val initialScrollIndex: Int?,
   val latestUserMessageId: String?,
   val contentVersion: String,
@@ -46,6 +47,7 @@ internal fun buildChatTimeline(
     return ChatTimeline(
       items = items,
       scrollTargetIndex = null,
+      latestContentIndex = null,
       initialScrollIndex = null,
       latestUserMessageId = null,
       contentVersion = "",
@@ -75,11 +77,13 @@ internal fun buildChatTimeline(
       item is ChatTimelineItem.Message &&
         item.message.id == latestUserMessage?.id
     }
-  val scrollTargetIndex = activePromptIndex.takeIf { it >= 0 } ?: 0
+  val latestContentIndex = 0
+  val scrollTargetIndex = activePromptIndex.takeIf { it >= 0 } ?: latestContentIndex
 
   return ChatTimeline(
     items = items,
     scrollTargetIndex = scrollTargetIndex,
+    latestContentIndex = latestContentIndex,
     initialScrollIndex = latestUserIndex.takeIf { it >= 0 } ?: scrollTargetIndex,
     latestUserMessageId = latestUserMessage?.id,
     contentVersion = items.joinToString(separator = "|", transform = ::chatTimelineItemVersion),

@@ -15,6 +15,11 @@ import kotlinx.coroutines.launch
 
 private const val FollowTargetOffsetPx = 24
 
+private enum class ChatScrollFollowTarget {
+  ReadAnchor,
+  LatestContent,
+}
+
 internal data class ChatReaderScrollController(
   val listState: LazyListState,
   val showJumpToLatest: Boolean,
@@ -28,21 +33,24 @@ internal fun rememberChatReaderScrollController(
 ): ChatReaderScrollController {
   val listState = rememberLazyListState()
   val scope = rememberCoroutineScope()
-  val currentFollowTarget by rememberUpdatedState(timeline.scrollTargetIndex)
+  val currentReadAnchorTarget by rememberUpdatedState(timeline.scrollTargetIndex)
+  val currentLatestContentTarget by rememberUpdatedState(timeline.latestContentIndex)
   var hasAppliedInitialScroll by rememberSaveable(sessionKey) { mutableStateOf(false) }
-  var isFollowingLiveEdge by rememberSaveable(sessionKey) { mutableStateOf(false) }
+  var followTarget by rememberSaveable(sessionKey) { mutableStateOf<ChatScrollFollowTarget?>(null) }
   var hasNewerContent by rememberSaveable(sessionKey) { mutableStateOf(false) }
   var observedContentVersion by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
   var observedLatestUserMessageId by rememberSaveable(sessionKey) { mutableStateOf<String?>(null) }
 
   LaunchedEffect(sessionKey, timeline.initialScrollIndex, timeline.items.isNotEmpty()) {
     if (hasAppliedInitialScroll || timeline.items.isEmpty()) return@LaunchedEffect
-    listState.scrollToItem(index = timeline.initialScrollIndex ?: timeline.scrollTargetIndex ?: 0)
+    val initialIndex =
+      timeline.initialScrollIndex ?: timeline.scrollTargetIndex ?: timeline.latestContentIndex ?: 0
+    listState.scrollToItem(index = initialIndex)
     hasAppliedInitialScroll = true
     observedContentVersion = timeline.contentVersion
     observedLatestUserMessageId = timeline.latestUserMessageId
     hasNewerContent = false
-    isFollowingLiveEdge = timeline.initialScrollIndex == timeline.scrollTargetIndex
+    followTarget = timeline.followTargetForIndex(initialIndex)
   }
 
   LaunchedEffect(sessionKey, timeline.contentVersion) {
@@ -57,15 +65,17 @@ internal fun rememberChatReaderScrollController(
       previousUserMessageId != null &&
         timeline.latestUserMessageId != null &&
         previousUserMessageId != timeline.latestUserMessageId
-    val target = timeline.scrollTargetIndex ?: return@LaunchedEffect
     when {
       hasNewUserTurn -> {
-        isFollowingLiveEdge = true
+        val target = timeline.scrollTargetIndex ?: timeline.latestContentIndex ?: return@LaunchedEffect
+        followTarget = ChatScrollFollowTarget.ReadAnchor
         hasNewerContent = false
         listState.animateScrollToItem(index = target)
       }
-      isFollowingLiveEdge -> {
-        hasNewerContent = false
+      followTarget != null -> {
+        val followedTarget = followTarget ?: return@LaunchedEffect
+        val target = timeline.indexForFollowTarget(followedTarget) ?: return@LaunchedEffect
+        hasNewerContent = followedTarget == ChatScrollFollowTarget.ReadAnchor && target != timeline.latestContentIndex
         listState.scrollToItem(index = target)
       }
       else -> {
@@ -77,10 +87,15 @@ internal fun rememberChatReaderScrollController(
   LaunchedEffect(sessionKey) {
     snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
       .collect { (index, offset) ->
-        if (!hasAppliedInitialScroll || currentFollowTarget == null) return@collect
-        val isAtFollowTarget = index == currentFollowTarget && offset <= FollowTargetOffsetPx
-        isFollowingLiveEdge = isAtFollowTarget
-        if (isAtFollowTarget) hasNewerContent = false
+        if (!hasAppliedInitialScroll) return@collect
+        val nextFollowTarget =
+          when {
+            isAtTarget(index, offset, currentLatestContentTarget) -> ChatScrollFollowTarget.LatestContent
+            isAtTarget(index, offset, currentReadAnchorTarget) -> ChatScrollFollowTarget.ReadAnchor
+            else -> null
+          }
+        followTarget = nextFollowTarget
+        if (nextFollowTarget == ChatScrollFollowTarget.LatestContent) hasNewerContent = false
       }
   }
 
@@ -89,11 +104,30 @@ internal fun rememberChatReaderScrollController(
     showJumpToLatest = hasNewerContent && timeline.items.isNotEmpty(),
     jumpToLatest = {
       scope.launch {
-        val target = currentFollowTarget ?: return@launch
-        isFollowingLiveEdge = true
+        val target = currentLatestContentTarget ?: currentReadAnchorTarget ?: return@launch
+        followTarget = ChatScrollFollowTarget.LatestContent
         hasNewerContent = false
         listState.animateScrollToItem(index = target)
       }
     },
   )
 }
+
+private fun ChatTimeline.indexForFollowTarget(target: ChatScrollFollowTarget): Int? =
+  when (target) {
+    ChatScrollFollowTarget.ReadAnchor -> scrollTargetIndex
+    ChatScrollFollowTarget.LatestContent -> latestContentIndex
+  }
+
+private fun ChatTimeline.followTargetForIndex(index: Int): ChatScrollFollowTarget? =
+  when (index) {
+    latestContentIndex -> ChatScrollFollowTarget.LatestContent
+    scrollTargetIndex -> ChatScrollFollowTarget.ReadAnchor
+    else -> null
+  }
+
+private fun isAtTarget(
+  index: Int,
+  offset: Int,
+  target: Int?,
+): Boolean = target != null && index == target && offset <= FollowTargetOffsetPx
