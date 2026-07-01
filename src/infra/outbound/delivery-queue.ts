@@ -20,6 +20,7 @@ export {
   drainPendingDeliveries,
   isEntryEligibleForRecoveryRetry,
   isPermanentDeliveryError,
+  isRecoveryEntryInProgress,
   MAX_RETRIES,
   recoverPendingDeliveries,
   withActiveDeliveryClaim,
@@ -28,6 +29,7 @@ export type {
   ActiveDeliveryClaimResult,
   DeliverFn,
   PendingDeliveryDrainDecision,
+  ReconnectDrainResult,
   RecoveryLogger,
   RecoverySummary,
 } from "./delivery-queue-recovery.js";

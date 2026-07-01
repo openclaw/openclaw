@@ -140,6 +140,7 @@ const TELEGRAM_SPOOLED_SESSION_INIT_CONFLICT_RETRY_MAX_MS = 60_000;
 const TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS = Math.ceil(
   TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS / 1000,
 );
+// No time-based cooldown: suppression is tied to the active delivery claim lifecycle.
 const MISSING_AGENT_HARNESS_ERROR_NAME = "MissingAgentHarnessError";
 const MISSING_AGENT_HARNESS_MESSAGE_RE = /Requested agent harness "[^"]+" is not registered\./u;
 const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
@@ -381,6 +382,8 @@ export class TelegramPollingSession {
   #spooledUpdateHandlerTimeoutMs: number;
   #spooledUpdateHandlerAbortGraceMs: number;
   #deliveryDrainInFlight = false;
+  /** One-shot suppression: skip the next drain if the previous drain found only in-progress entries. */
+  #deliveryDrainSuppressNext = false;
 
   constructor(private readonly opts: TelegramPollingSessionOpts) {
     this.#transportState = new TelegramPollingTransportState({
@@ -492,6 +495,15 @@ export class TelegramPollingSession {
     if (this.#deliveryDrainInFlight) {
       return;
     }
+    // One-shot suppression: if the previous drain found only in-progress
+    // entries (nothing new to drain), skip this cycle to reduce log noise
+    // from repeated "already being recovered" messages (openclaw#89953).
+    // Clear after one suppression so newly pending entries get recovered
+    // within at most one additional poll interval.
+    if (this.#deliveryDrainSuppressNext) {
+      this.#deliveryDrainSuppressNext = false;
+      return;
+    }
     if (!this.opts.config) {
       return;
     }
@@ -513,9 +525,16 @@ export class TelegramPollingSession {
         bypassBackoff: false,
       }),
     })
-      .catch((err: unknown) => {
-        this.opts.log(`[telegram] reconnect delivery drain failed: ${formatErrorMessage(err)}`);
-      })
+      .then(
+        (drainResult) => {
+          if (drainResult.skippedInProgress > 0 && drainResult.drained === 0) {
+            this.#deliveryDrainSuppressNext = true;
+          }
+        },
+        (err: unknown) => {
+          this.opts.log(`[telegram] reconnect delivery drain failed: ${formatErrorMessage(err)}`);
+        },
+      )
       .finally(() => {
         this.#deliveryDrainInFlight = false;
       });
