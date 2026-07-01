@@ -149,8 +149,9 @@ OpenClaw only needs `bot:write` for normal agent chat.
   cd ~/.openclaw/workspace/tools/clickclack-proxy
   go build -o clickclack-proxy .
   cp clickclack-proxy ~/.local/bin/clickclack-proxy
-  openclaw gateway restart
+  launchctl stop chat.clickclack.proxy
   ```
   This can happen after an OpenClaw update when the proxy binary is out of
   date relative to its source. Direct ClickClack access works; only the
-  proxy path is affected.
+  proxy path is affected. See [#98362](https://github.com/openclaw/openclaw/issues/98362)
+  for the durable packaging fix.
