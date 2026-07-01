@@ -570,6 +570,7 @@ describe("generateVoiceResponse", () => {
       userMessage: "hello there",
       onEarlyText: async (text) => {
         onEarlyTextCalls.push(text);
+        return true;
       },
     });
 
@@ -613,6 +614,100 @@ describe("generateVoiceResponse", () => {
     expect(directResult.earlyTextSpoken).toBeUndefined();
     expect(onEarlyText).not.toHaveBeenCalled();
     expect(directResult.text).toBe("Fallback text.");
+  });
+
+  it("leaves earlyTextSpoken false when onEarlyText reports delivery failure", async () => {
+    const blockPayloads: Array<Record<string, unknown>> = [
+      { text: '{"spoken":"TTS attempt that fails."}' },
+    ];
+    const basePayloads: Array<Record<string, unknown>> = [
+      { text: '{"spoken":"Final text for fallback."}' },
+    ];
+
+    const runEmbeddedAgent = vi.fn(
+      async (
+        args: EmbeddedAgentArgs & {
+          onBlockReply?: (payload: Record<string, unknown>) => void;
+        },
+      ) => {
+        args.onBlockReply?.(blockPayloads[0]);
+        return {
+          payloads: basePayloads,
+          meta: { durationMs: 12, aborted: false },
+        };
+      },
+    );
+
+    const { runtime: baseRuntime } = createAgentRuntime(basePayloads);
+    const runtime = {
+      ...baseRuntime,
+      runEmbeddedAgent,
+    } as CoreAgentDeps;
+
+    const onEarlyText = vi.fn(async (_text: string) => false);
+
+    const result = await generateVoiceResponse({
+      voiceConfig: VoiceCallConfigSchema.parse({ responseTimeoutMs: 5000 }),
+      coreConfig: {} as CoreConfig,
+      agentRuntime: runtime,
+      callId: "call-fail",
+      from: "+15550003333",
+      transcript: [],
+      userMessage: "test delivery failure",
+      onEarlyText,
+    });
+
+    expect(onEarlyText).toHaveBeenCalledWith("TTS attempt that fails.");
+    // earlyTextSpoken must stay false so the fallback speak path still fires.
+    expect(result.earlyTextSpoken).toBeUndefined();
+    expect(result.text).toBe("TTS attempt that fails.");
+  });
+
+  it("leaves earlyTextSpoken false when onEarlyText throws", async () => {
+    const blockPayloads: Array<Record<string, unknown>> = [
+      { text: '{"spoken":"TTS attempt that throws."}' },
+    ];
+    const basePayloads: Array<Record<string, unknown>> = [{ text: '{"spoken":"Backup text."}' }];
+
+    const runEmbeddedAgent = vi.fn(
+      async (
+        args: EmbeddedAgentArgs & {
+          onBlockReply?: (payload: Record<string, unknown>) => void;
+        },
+      ) => {
+        args.onBlockReply?.(blockPayloads[0]);
+        return {
+          payloads: basePayloads,
+          meta: { durationMs: 12, aborted: false },
+        };
+      },
+    );
+
+    const { runtime: baseRuntime } = createAgentRuntime(basePayloads);
+    const runtime = {
+      ...baseRuntime,
+      runEmbeddedAgent,
+    } as CoreAgentDeps;
+
+    const onEarlyText = vi.fn(async (_text: string) => {
+      throw new Error("TTS transport error");
+    });
+
+    const result = await generateVoiceResponse({
+      voiceConfig: VoiceCallConfigSchema.parse({ responseTimeoutMs: 5000 }),
+      coreConfig: {} as CoreConfig,
+      agentRuntime: runtime,
+      callId: "call-throw",
+      from: "+15550004444",
+      transcript: [],
+      userMessage: "test delivery throw",
+      onEarlyText,
+    });
+
+    expect(onEarlyText).toHaveBeenCalledWith("TTS attempt that throws.");
+    // earlyTextSpoken must stay false so the fallback speak path still fires.
+    expect(result.earlyTextSpoken).toBeUndefined();
+    expect(result.text).toBe("TTS attempt that throws.");
   });
 
   it("passes the routed voice agent explicit tool allowlist to the embedded run", async () => {

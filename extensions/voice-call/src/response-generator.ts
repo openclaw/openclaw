@@ -36,8 +36,12 @@ export type VoiceResponseParams = {
    * before the embedded run waits for post-turn compaction.
    * Lets the voice-call transport start TTS without waiting for the full
    * run to settle (#79521).
+   *
+   * Must return true when TTS delivery succeeded, false otherwise.
+   * The final post-run fallback speak is skipped only when early delivery
+   * is confirmed successful.
    */
-  onEarlyText?: (text: string) => Promise<void>;
+  onEarlyText?: (text: string) => Promise<boolean>;
 };
 
 export type VoiceResponseResult = {
@@ -366,10 +370,20 @@ export async function generateVoiceResponse(
         if (!earlyTextSpoken && onEarlyText) {
           const earlyText = extractSpokenTextFromPayloads([payload]);
           if (earlyText) {
-            earlyTextSpoken = true;
-            onEarlyText(earlyText).catch((err) => {
-              console.error("[voice-call] Early TTS delivery failed:", err);
-            });
+            onEarlyText(earlyText)
+              .then((delivered) => {
+                // Only suppress the final post-run fallback speak when
+                // early TTS delivery is confirmed successful.  If the
+                // provider reports failure or the callback throws, the
+                // caller still gets the full text via the fallback path
+                // after the run settles.
+                if (delivered) {
+                  earlyTextSpoken = true;
+                }
+              })
+              .catch((err: unknown) => {
+                console.error("[voice-call] Early TTS delivery failed:", err);
+              });
           }
         }
       },

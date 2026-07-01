@@ -1048,7 +1048,8 @@ export class VoiceCallWebhookServer {
         // without waiting for post-turn compaction (#79521).
         onEarlyText: async (text) => {
           console.log(`[voice-call] Early AI response: "${text}"`);
-          await this.manager.speak(callId, text);
+          const speakResult = await this.manager.speak(callId, text);
+          return speakResult.success;
         },
       });
 
