@@ -789,6 +789,9 @@ export async function buildSessionEntry(
       opts.generatedByCronRun ?? sessionStoreClassification?.generatedByCronRun ?? false;
     const allowArchiveContentCronClassification =
       isUsageCountedSessionArchiveTranscriptPath(absPath);
+    const sessionStoreAlreadyClassifiedCron =
+      sessionStoreClassification?.generatedByCronRun === true;
+    let hasSeenPriorUserMessage = false;
     for (let jsonlIdx = 0, lineStart = 0; lineStart <= raw.length; jsonlIdx++) {
       await yieldSessionEntryParseIfNeeded(jsonlIdx, parseYieldEveryLines);
       const newlineIndex = raw.indexOf("\n", lineStart);
@@ -843,13 +846,17 @@ export async function buildSessionEntry(
       if (
         !generatedByCronRun &&
         allowArchiveContentCronClassification &&
-        collected.length === 0 &&
+        !sessionStoreAlreadyClassifiedCron &&
+        !hasSeenPriorUserMessage &&
         isGeneratedCronPromptMessage(normalizeSessionText(rawText), message.role)
       ) {
         generatedByCronRun = true;
         collected.length = 0;
         lineMap.length = 0;
         messageTimestampsMs.length = 0;
+      }
+      if (message.role === "user") {
+        hasSeenPriorUserMessage = true;
       }
       const text = sanitizeSessionText(rawText, message.role);
       if (!text) {
