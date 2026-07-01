@@ -6,6 +6,7 @@ import {
   pickLastDeliverablePayload,
   pickLastNonEmptyTextFromPayloads,
   pickSummaryFromPayloads,
+  resolveCronPayloadOutcome,
 } from "./helpers.js";
 
 type TextPayload = { text?: string | undefined; isError?: boolean | undefined };
@@ -226,5 +227,101 @@ describe("isHeartbeatOnlyResponse", () => {
         ACK_MAX,
       ),
     ).toBe(false);
+  });
+});
+
+describe("resolveCronPayloadOutcome", () => {
+  it("treats a recovered early tool error as non-fatal when later payloads succeed (#94846)", () => {
+    // Scenario: early sed error (isError:true) → later apply_patch success → final assistant text
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "⚠️ 🛠️ sed: can't read file: No such file or directory", isError: true },
+        { text: "Patch applied successfully." },
+      ],
+      runLevelError: new Error("sed: can't read file"),
+      finalAssistantVisibleText: "REPRO_FINAL_OUTPUT_PRESENT",
+    });
+    // The recovered run should not be fatal
+    expect(result.hasFatalErrorPayload).toBe(false);
+    // Output fields should reflect the recovered answer (final assistant text), not the formatted run-level error
+    expect(result.summary).toContain("REPRO_FINAL_OUTPUT_PRESENT");
+    expect(result.outputText).toContain("REPRO_FINAL_OUTPUT_PRESENT");
+    expect(result.deliveryPayloads).toEqual([{ text: "REPRO_FINAL_OUTPUT_PRESENT" }]);
+  });
+
+  it("still treats a genuine fatal error as fatal when no recovery occurs", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [{ text: "Fatal: connection refused", isError: true }],
+      runLevelError: new Error("connection refused"),
+    });
+    expect(result.hasFatalErrorPayload).toBe(true);
+  });
+
+  it("treats a recovered error as non-fatal even without finalAssistantVisibleText", () => {
+    // Later successful payload (deliverable content) proves recovery
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "⚠️ 🛠️ sed: file missing", isError: true },
+        { text: "Task completed successfully. Here are the results." },
+      ],
+      runLevelError: new Error("sed: file missing"),
+    });
+    expect(result.hasFatalErrorPayload).toBe(false);
+  });
+
+  it("keeps a generic run-level error fatal even when later payloads succeed", () => {
+    // Non-tool-warning run-level error (e.g. connection refused) remains fatal
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "Fatal: connection refused", isError: true },
+        { text: "Retried and got partial result." },
+      ],
+      runLevelError: new Error("connection refused"),
+    });
+    expect(result.hasFatalErrorPayload).toBe(true);
+  });
+
+  it("recovers a tool-warning run with only finalAssistantVisibleText and no successful payloads", () => {
+    // Trajectory: early tool warning → final assistant text only (no successful payload after error)
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "⚠️ 🛠️ sed: file missing", isError: true },
+      ],
+      runLevelError: new Error("sed: file missing"),
+      finalAssistantVisibleText: "Task completed despite missing file.",
+      preferFinalAssistantVisibleText: true,
+    });
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.summary).toContain("Task completed despite missing file.");
+  });
+
+  it("delivers the recovered answer for no-preference channels when finalAssistantVisibleText exists", () => {
+    // No preferFinalAssistantVisibleText (default false) — recovered tool-warning should still use the final answer
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "⚠️ 🛠️ sed: file missing", isError: true },
+      ],
+      runLevelError: new Error("sed: file missing"),
+      finalAssistantVisibleText: "Task completed despite missing file.",
+    });
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.summary).toContain("Task completed despite missing file.");
+    expect(result.outputText).toContain("Task completed despite missing file.");
+    expect(result.deliveryPayloads).toEqual([{ text: "Task completed despite missing file." }]);
+  });
+
+  it("preserves original error payload text for generic fatal run-level errors with later success", () => {
+    // Generic fatal (not tool warning) with later success-looking payload
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        { text: "Fatal: connection refused", isError: true },
+        { text: "Partial result obtained." },
+      ],
+      runLevelError: new Error("connection refused"),
+    });
+    expect(result.hasFatalErrorPayload).toBe(true);
+    // Should preserve the original error payload text, not the formatted run-level error
+    expect(result.summary).toContain("Fatal: connection refused");
+    expect(result.outputText).toContain("Fatal: connection refused");
   });
 });

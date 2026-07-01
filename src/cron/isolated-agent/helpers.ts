@@ -257,11 +257,9 @@ export function resolveCronPayloadOutcome(params: {
     params.finalAssistantVisibleText,
   );
   const hasSuccessfulPayloadAfterLastError =
-    !params.runLevelError &&
     lastErrorPayloadIndex >= 0 &&
     params.payloads.slice(lastErrorPayloadIndex + 1).some(isSuccessfulCronPayload);
   const hasSuccessfulPayloadBeforeLastError =
-    !params.runLevelError &&
     lastErrorPayloadIndex > 0 &&
     params.payloads.slice(0, lastErrorPayloadIndex).some(isSuccessfulCronPayload);
   const lastErrorPayload =
@@ -294,14 +292,16 @@ export function resolveCronPayloadOutcome(params: {
     !hasStructuredDeliveryPayloads &&
     errorPayloads.length > 0 &&
     errorPayloads.every((payload) => isCronToolWarning(payload?.text));
-  // Structured error payloads are fatal unless later successful output or a
-  // known non-terminal warning proves the agent recovered.
+  // Structured error payloads are fatal unless later successful output, a
+  // known non-terminal warning, or a final assistant text proves the agent recovered.
+  const isLastErrorAToolWarning = isCronToolWarning(lastErrorPayloadText);
   const hasFatalStructuredErrorPayload =
     hasErrorPayload &&
     !hasSuccessfulPayloadAfterLastError &&
     !hasPendingPresentationWarning &&
     !hasNonTerminalToolErrorWarning &&
-    !hasRecoveredToolWarning;
+    !hasRecoveredToolWarning &&
+    !(hasRecoveringTerminalOutput && isLastErrorAToolWarning);
   // Fatal structured errors own the final delivery payload unless later output
   // proves recovery; otherwise cron would announce stale partial success text.
   // Keep structured/media announce payloads intact. Only collapse purely textual
@@ -309,10 +309,11 @@ export function resolveCronPayloadOutcome(params: {
   // A final assistant answer can replace textual warning payloads, but never
   // structured/media payloads that carry the actual delivery content.
   const shouldUseFinalAssistantVisibleText =
-    params.preferFinalAssistantVisibleText === true &&
     normalizedFinalAssistantVisibleText !== undefined &&
     !hasFatalStructuredErrorPayload &&
-    !hasStructuredDeliveryPayloads;
+    !hasStructuredDeliveryPayloads &&
+    (params.preferFinalAssistantVisibleText === true ||
+      (hasRecoveringTerminalOutput && isLastErrorAToolWarning));
   const summary = shouldUseFinalAssistantVisibleText
     ? (pickSummaryFromOutput(normalizedFinalAssistantVisibleText) ?? fallbackSummary)
     : fallbackSummary;
@@ -330,16 +331,28 @@ export function resolveCronPayloadOutcome(params: {
   const failureSignal = normalizeCronFailureSignal(params.failureSignal);
   const runLevelError = formatCronRunLevelError(params.runLevelError);
   const hasFatalErrorPayload =
-    hasFatalStructuredErrorPayload || failureSignal !== undefined || runLevelError !== undefined;
+    hasFatalStructuredErrorPayload ||
+    failureSignal !== undefined ||
+    (runLevelError !== undefined && !(hasRecoveringTerminalOutput && isLastErrorAToolWarning));
   const structuredErrorText = hasFatalStructuredErrorPayload
     ? (lastErrorPayloadText ?? "cron isolated run returned an error payload")
     : undefined;
   const shouldUseRunLevelErrorPayload =
-    runLevelError !== undefined && structuredErrorText === undefined && failureSignal === undefined;
-  const fatalDeliveryText =
-    structuredErrorText ??
-    failureSignal?.message ??
-    (shouldUseRunLevelErrorPayload ? runLevelError : undefined);
+    hasFatalErrorPayload &&
+    runLevelError !== undefined &&
+    structuredErrorText === undefined &&
+    failureSignal === undefined;
+  // For generic fatal run-level errors with later success-looking payloads,
+  // preserve the original error payload text rather than the formatted run-level error.
+  const fallbackRunLevelErrorText =
+    hasFatalErrorPayload && !structuredErrorText && !failureSignal && lastErrorPayloadText
+      ? lastErrorPayloadText
+      : shouldUseRunLevelErrorPayload
+        ? runLevelError
+        : undefined;
+  const fatalDeliveryText = hasFatalErrorPayload
+    ? (structuredErrorText ?? failureSignal?.message ?? fallbackRunLevelErrorText)
+    : undefined;
   const fatalDeliveryPayload = fatalDeliveryText
     ? ({ text: fatalDeliveryText, isError: true } satisfies DeliveryPayload)
     : undefined;
