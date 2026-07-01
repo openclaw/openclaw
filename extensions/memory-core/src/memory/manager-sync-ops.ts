@@ -74,6 +74,8 @@ import {
 } from "./manager-provider-state.js";
 import { acquireMemoryReindexLock, type MemoryReindexLockHandle } from "./manager-reindex-lock.js";
 import {
+  MEMORY_FTS_TEXT_FORMAT_CURRENT,
+  isMemoryIndexFtsTextFormatOnlyMismatch,
   resolveConfiguredScopeHash,
   resolveConfiguredSourcesForMeta,
   resolveMemoryIndexProviderIdentities,
@@ -334,6 +336,12 @@ export abstract class MemoryManagerSyncOps {
   protected memoryWatchPressureStartupTimer: NodeJS.Timeout | null = null;
   protected closed = false;
   protected dirty = false;
+  // True when the only index-identity issue is a self-healable FTS text-format
+  // mismatch (legacy body-only rows). A clean sessions-only index can be in this
+  // state with dirty/sessionsDirty false, so search uses this to still trigger the
+  // sync that runs the format self-heal. Provider/model/scope mismatches do NOT
+  // set this, so they keep their existing (cli/force-gated) behavior.
+  protected ftsTextFormatSelfHealPending = false;
   // Failed full memory reindexes must retry as full rebuilds, not incremental
   // dirty syncs that can skip unchanged files against the still-live index.
   protected memoryFullRetryDirty = false;
@@ -589,7 +597,7 @@ export abstract class MemoryManagerSyncOps {
         ? initializedProviderIdentities
         : configuredProviderIdentities;
     const configuredProviderKeyKnown = configuredProviderIdentities.length > 0;
-    return resolveMemoryIndexIdentityState({
+    const identityParams = {
       meta: params && "meta" in params ? params.meta! : this.readMeta(),
       provider,
       providerKey: configuredProviderKeyKnown
@@ -617,7 +625,14 @@ export abstract class MemoryManagerSyncOps {
           ? Boolean(params.hasIndexedChunks)
           : this.hasIndexedChunks(),
       ftsTokenizer: this.settings.store.fts.tokenizer,
-    });
+      ftsTextFormat: MEMORY_FTS_TEXT_FORMAT_CURRENT,
+    };
+    const state = resolveMemoryIndexIdentityState(identityParams);
+    // Track whether the mismatch is purely an FTS text-format issue so search can
+    // trigger the self-heal sync without broadening to provider/model mismatches.
+    this.ftsTextFormatSelfHealPending =
+      state.status === "mismatched" && isMemoryIndexFtsTextFormatOnlyMismatch(identityParams);
+    return state;
   }
 
   protected resetVectorState(): void {
@@ -2450,6 +2465,7 @@ export abstract class MemoryManagerSyncOps {
       vectorReady,
       hasIndexedChunks: this.hasIndexedChunks(),
       ftsTokenizer: this.settings.store.fts.tokenizer,
+      ftsTextFormat: MEMORY_FTS_TEXT_FORMAT_CURRENT,
     });
     const hasIndexedChunks = this.hasIndexedChunks();
     const needsInitialIndex = indexIdentity.status !== "valid" && !hasIndexedChunks;
@@ -2476,6 +2492,34 @@ export abstract class MemoryManagerSyncOps {
       indexIdentity.status === "missing" && !hasTargetSessionFiles && canRebuildMissingIdentity;
     const needsExplicitIdentityReindex =
       params?.reason === "cli" && indexIdentity.status !== "valid" && !hasTargetSessionFiles;
+    // FTS payload format mismatches (e.g. legacy body-only chunks_fts.text rows from
+    // before #94135) are safe to self-heal on any sync path: rebuilding FTS rows never
+    // discards embeddings or chunk content. Provider/model/scope mismatches stay
+    // gated on cli/force/missing identity so we do not silently invalidate a user's
+    // semantically incompatible index.
+    const needsFtsTextFormatSelfHeal =
+      isMemoryIndexFtsTextFormatOnlyMismatch({
+        meta,
+        provider: this.provider ? { id: this.provider.id, model: this.provider.model } : null,
+        providerKey: this.providerKey ?? undefined,
+        providerAliases: this.resolveProviderIndexIdentities().slice(1),
+        configuredSources: resolveConfiguredSourcesForMeta(this.sources),
+        configuredScopeHash: resolveConfiguredScopeHash({
+          workspaceDir: this.workspaceDir,
+          extraPaths: this.settings.extraPaths,
+          multimodal: {
+            enabled: this.settings.multimodal.enabled,
+            modalities: this.settings.multimodal.modalities,
+            maxFileBytes: this.settings.multimodal.maxFileBytes,
+          },
+        }),
+        chunkTokens: this.settings.chunking.tokens,
+        chunkOverlap: this.settings.chunking.overlap,
+        vectorReady,
+        hasIndexedChunks,
+        ftsTokenizer: this.settings.store.fts.tokenizer,
+        ftsTextFormat: MEMORY_FTS_TEXT_FORMAT_CURRENT,
+      }) && !hasTargetSessionFiles;
     const canRunRetryFullReindex =
       indexIdentity.status !== "missing" || needsInitialIndex || canRebuildMissingIdentity;
     const needsFullReindex =
@@ -2483,6 +2527,7 @@ export abstract class MemoryManagerSyncOps {
       needsInitialIndex ||
       needsMissingIdentityReindex ||
       needsExplicitIdentityReindex ||
+      needsFtsTextFormatSelfHeal ||
       (this.memoryFullRetryDirty && canRunRetryFullReindex) ||
       (this.sessionsFullRetryDirty && indexIdentity.status !== "valid" && canRunRetryFullReindex);
     const needsFullSessionReindex = needsFullReindex || this.sessionsFullRetryDirty;
@@ -2771,6 +2816,7 @@ export abstract class MemoryManagerSyncOps {
         chunkTokens: this.settings.chunking.tokens,
         chunkOverlap: this.settings.chunking.overlap,
         ftsTokenizer: this.settings.store.fts.tokenizer,
+        ftsTextFormat: MEMORY_FTS_TEXT_FORMAT_CURRENT,
       };
       if (this.vector.available && this.vector.dims) {
         nextMeta.vectorDims = this.vector.dims;

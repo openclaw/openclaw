@@ -54,6 +54,49 @@ describe("memory search async sync", () => {
     expect(queryMock).toHaveBeenCalledTimes(1);
   });
 
+  it("self-heals a format-stale sessions-only index on search even when not file-dirty", async () => {
+    // Regression: a clean sessions-only legacy index (dirty/sessionsDirty false)
+    // with a stale FTS text-format is identity-dirty. search() must still trigger
+    // sync so the format self-heal runs, instead of returning stale/empty results.
+    const syncMock = vi.fn(async () => {});
+    const queryMock = vi.fn(async () => []);
+    const manager = Object.create(MemoryIndexManager.prototype) as MemoryIndexManager;
+    Object.assign(manager as unknown as Record<string, unknown>, {
+      providerRequirement: { mode: "fts-only", provider: "none" },
+      hasIndexedContent: () => true,
+      settings: {
+        sync: { onSearch: true },
+        query: {
+          minScore: 0,
+          maxResults: 5,
+          hybrid: {
+            enabled: true,
+            candidateMultiplier: 2,
+            temporalDecay: { enabled: false, halfLifeDays: 30 },
+          },
+        },
+      },
+      warmSession: vi.fn(),
+      ensureProviderInitialized: vi.fn(async () => {}),
+      assertRequiredProviderAvailable: vi.fn(),
+      dirty: false,
+      sessionsDirty: false,
+      ftsTextFormatSelfHealPending: true,
+      sync: syncMock,
+      provider: null,
+      providerLifecycle: { mode: "fts-only", reason: "test" },
+      refreshIndexIdentityDirty: () => ({ status: "valid" }),
+      sources: new Set(["sessions"]),
+      fts: { enabled: true, available: true },
+      searchKeywordWithFallback: queryMock,
+      workspaceDir: "",
+    });
+
+    await manager.search("2026-06-17-1701");
+
+    expect(syncMock).toHaveBeenCalledWith({ reason: "search" });
+  });
+
   it("waits for in-flight search sync during close", async () => {
     let releaseSync = () => {};
     const pendingSync = new Promise<void>((resolve) => {
@@ -78,6 +121,35 @@ describe("memory search async sync", () => {
       enabled: false,
       dirty: true,
       sessionsDirty: false,
+      ftsTextFormatSelfHealPending: false,
+      sync: syncMock,
+      onError: vi.fn(),
+    });
+    expect(syncMock).not.toHaveBeenCalled();
+  });
+
+  it("triggers search sync when an FTS format self-heal is pending", async () => {
+    // A clean sessions-only legacy index (memory/session flags false) whose FTS
+    // text-format is stale must still self-heal via search-triggered sync.
+    const syncMock = vi.fn(async () => {});
+    await startAsyncSearchSync({
+      enabled: true,
+      dirty: false,
+      sessionsDirty: false,
+      ftsTextFormatSelfHealPending: true,
+      sync: syncMock,
+      onError: vi.fn(),
+    });
+    expect(syncMock).toHaveBeenCalledWith({ reason: "search" });
+  });
+
+  it("skips search sync when nothing is dirty", async () => {
+    const syncMock = vi.fn(async () => {});
+    await startAsyncSearchSync({
+      enabled: true,
+      dirty: false,
+      sessionsDirty: false,
+      ftsTextFormatSelfHealPending: false,
       sync: syncMock,
       onError: vi.fn(),
     });

@@ -5,6 +5,13 @@ import {
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
+// Stored FTS payload format identity. Bump when chunks_fts.text semantics change so
+// existing clean indexes from older builds get rebuilt instead of silently serving
+// stale rows. Current value: chunk text is prefixed with `${entry.path}\n` so filename/
+// date tokens participate in MATCH ranking; older indexes wrote chunk body only.
+export const MEMORY_FTS_TEXT_FORMAT_PATH_PREFIXED_V1 = "path-prefixed-v1";
+export const MEMORY_FTS_TEXT_FORMAT_CURRENT = MEMORY_FTS_TEXT_FORMAT_PATH_PREFIXED_V1;
+
 export type MemoryIndexMeta = {
   model: string;
   provider: string;
@@ -15,6 +22,7 @@ export type MemoryIndexMeta = {
   chunkOverlap: number;
   vectorDims?: number;
   ftsTokenizer?: string;
+  ftsTextFormat?: string;
 };
 
 export type MemoryIndexIdentityState =
@@ -137,8 +145,45 @@ export function isMemoryIndexIdentityDirty(params: {
   vectorReady: boolean;
   hasIndexedChunks?: boolean;
   ftsTokenizer: string;
+  ftsTextFormat?: string;
 }): boolean {
   return resolveMemoryIndexIdentityState(params).status !== "valid";
+}
+
+// Returns true when meta is mismatched against the configured identity *only* because
+// of the persisted FTS text-format payload version. Provider/model/scope/tokenizer
+// mismatches still return false so callers preserve the existing pause-and-wait
+// behavior for semantically incompatible indexes; only the FTS payload format is
+// safe to self-heal automatically because rebuilding it never throws away embeddings
+// or user data — it just re-emits chunks_fts.text in the current shape.
+export function isMemoryIndexFtsTextFormatOnlyMismatch(params: {
+  meta: MemoryIndexMeta | null;
+  provider: { id: string; model: string } | null;
+  providerKey?: string;
+  providerAliases?: Array<Pick<MemoryIndexProviderIdentity, "model" | "providerKey">>;
+  providerKeyKnown?: boolean;
+  configuredSources: MemorySource[];
+  configuredScopeHash: string;
+  chunkTokens: number;
+  chunkOverlap: number;
+  vectorReady: boolean;
+  hasIndexedChunks?: boolean;
+  ftsTokenizer: string;
+  ftsTextFormat?: string;
+}): boolean {
+  if (!params.meta) {
+    return false;
+  }
+  if (resolveMemoryIndexIdentityState(params).status !== "mismatched") {
+    return false;
+  }
+  // Re-run identity with the configured FTS text format pinned to whatever the index
+  // already has. If everything else is fine, only ftsTextFormat differs.
+  const probe = resolveMemoryIndexIdentityState({
+    ...params,
+    ftsTextFormat: params.meta.ftsTextFormat ?? "legacy-body-only",
+  });
+  return probe.status === "valid";
 }
 
 export function resolveMemoryIndexIdentityState(params: {
@@ -154,6 +199,7 @@ export function resolveMemoryIndexIdentityState(params: {
   vectorReady: boolean;
   hasIndexedChunks?: boolean;
   ftsTokenizer: string;
+  ftsTextFormat?: string;
 }): MemoryIndexIdentityState {
   const { meta } = params;
   if (!meta) {
@@ -219,6 +265,16 @@ export function resolveMemoryIndexIdentityState(params: {
     return {
       status: "mismatched",
       reason: "index FTS tokenizer changed",
+    };
+  }
+  // Old indexes wrote chunk body only into chunks_fts.text; the current format prefixes
+  // the path so filename/date tokens MATCH. Without rebuilding, filename queries on
+  // upgraded clean indexes would still return textScore: 0 — see issue #94102.
+  const expectedFtsTextFormat = params.ftsTextFormat ?? MEMORY_FTS_TEXT_FORMAT_CURRENT;
+  if ((meta.ftsTextFormat ?? "legacy-body-only") !== expectedFtsTextFormat) {
+    return {
+      status: "mismatched",
+      reason: "index FTS text format changed",
     };
   }
   return { status: "valid" };
