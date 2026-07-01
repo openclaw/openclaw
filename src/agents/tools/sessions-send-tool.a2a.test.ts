@@ -243,6 +243,34 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
   });
 
+  it("preserves visited agent provenance on internal reply and announce steps", async () => {
+    vi.mocked(runAgentStep)
+      .mockResolvedValueOnce("reply from requester")
+      .mockResolvedValueOnce("ANNOUNCE_SKIP");
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:gamma:discord:channel:target-room",
+      displayKey: "agent:gamma:discord:channel:target-room",
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 1,
+      requesterSessionKey: "agent:beta:discord:channel:requester-room",
+      requesterChannel: "discord",
+      visitedAgentIds: ["alpha", "beta", "gamma"],
+      roundOneReply: "Substantive channel reply",
+    });
+
+    expect(runAgentStep).toHaveBeenCalledTimes(2);
+    const replyInput = vi.mocked(runAgentStep).mock.calls[0]?.[0] as
+      | { visitedAgentIds?: string[] }
+      | undefined;
+    const announceInput = vi.mocked(runAgentStep).mock.calls[1]?.[0] as
+      | { visitedAgentIds?: string[] }
+      | undefined;
+    expect(replyInput?.visitedAgentIds).toEqual(["alpha", "beta", "gamma"]);
+    expect(announceInput?.visitedAgentIds).toEqual(["alpha", "beta", "gamma"]);
+  });
+
   it.each([
     {
       source: "deliveryContext.accountId",

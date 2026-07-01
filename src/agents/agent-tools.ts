@@ -21,6 +21,7 @@ import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runt
 import { logWarn } from "../logger.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
+import type { InputProvenance } from "../sessions/input-provenance.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
@@ -404,6 +405,8 @@ export function createOpenClawCodingTools(options?: {
   messageThreadId?: string | number;
   sandbox?: SandboxContext | null;
   sessionKey?: string;
+  /** Provenance for the current model-visible user turn; tool calls can extend it across handoffs. */
+  inputProvenance?: InputProvenance;
   /**
    * The actual live run session key. When the tool set is constructed with a
    * sandbox/policy session key, this allows `session_status({sessionKey:"current"})`
@@ -1022,6 +1025,7 @@ export function createOpenClawCodingTools(options?: {
           sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
           allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
           agentSessionKey: options?.sessionKey,
+          inputProvenance: options?.inputProvenance,
           runId: options?.runId,
           runSessionKey: options?.runSessionKey,
           agentChannel: resolveGatewayMessageChannel(options?.messageProvider),

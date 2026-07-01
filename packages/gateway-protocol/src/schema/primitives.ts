@@ -41,6 +41,7 @@ export const InputProvenanceSchema = Type.Object(
     sourceSessionKey: Type.Optional(Type.String()),
     sourceChannel: Type.Optional(Type.String()),
     sourceTool: Type.Optional(Type.String()),
+    visitedAgentIds: Type.Optional(Type.Array(Type.String())),
   },
   { additionalProperties: false },
 );

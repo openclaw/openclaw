@@ -5,7 +5,11 @@
  */
 import crypto from "node:crypto";
 import { callGateway } from "../../gateway/call.js";
-import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  annotateInterSessionPromptText,
+  extendInputProvenanceVisitedAgentIds,
+} from "../../sessions/input-provenance.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { retireSessionMcpRuntimeForSessionKey } from "../agent-bundle-mcp-tools.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
@@ -44,6 +48,10 @@ function extractAgentCommandReply(result: unknown): string | undefined {
   return texts.length > 0 ? texts.join("\n\n") : undefined;
 }
 
+function resolveExplicitAgentIdFromSessionKey(sessionKey: string | undefined): string | undefined {
+  return sessionKey?.trim() ? resolveAgentIdFromSessionKey(sessionKey) : undefined;
+}
+
 /** Sends one annotated message to a target session and returns the resulting assistant text. */
 export async function runAgentStep(params: {
   sessionKey: string;
@@ -56,13 +64,24 @@ export async function runAgentStep(params: {
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
+  visitedAgentIds?: readonly string[];
 }): Promise<string | undefined> {
   const stepIdem = crypto.randomUUID();
+  const visitedAgentIds = extendInputProvenanceVisitedAgentIds(
+    params.visitedAgentIds
+      ? { kind: "inter_session", visitedAgentIds: [...params.visitedAgentIds] }
+      : undefined,
+    [
+      resolveExplicitAgentIdFromSessionKey(params.sourceSessionKey),
+      resolveAgentIdFromSessionKey(params.sessionKey),
+    ],
+  );
   const inputProvenance = {
     kind: "inter_session" as const,
     sourceSessionKey: params.sourceSessionKey,
     sourceChannel: params.sourceChannel,
     sourceTool: params.sourceTool ?? "sessions_send",
+    visitedAgentIds,
   };
   // Mark inter-session prompts so downstream transcripts can distinguish tool-routed text.
   const message = annotateInterSessionPromptText(params.message, inputProvenance);

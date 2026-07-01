@@ -58,7 +58,7 @@ describe("runAgentStep", () => {
           deliver?: boolean;
           sourceReplyDeliveryMode?: string;
           lane?: string;
-          inputProvenance?: { kind?: string; sourceTool?: string };
+          inputProvenance?: { kind?: string; sourceTool?: string; visitedAgentIds?: string[] };
         }
       | undefined;
     expect(params?.message).toContain("[Inter-session message");
@@ -68,6 +68,7 @@ describe("runAgentStep", () => {
     expect(params?.lane).toBe("nested:agent:main:subagent:child");
     expect(params?.inputProvenance?.kind).toBe("inter_session");
     expect(params?.inputProvenance?.sourceTool).toBe("sessions_send");
+    expect(params?.inputProvenance?.visitedAgentIds).toEqual(["main"]);
     expect(params?.message).toContain("isUser=false");
     expect(params?.message).toContain("hello");
     expect(bundleMcpRuntimeMocks.retireSessionMcpRuntimeForSessionKey).toHaveBeenCalledWith({
@@ -120,16 +121,26 @@ describe("runAgentStep", () => {
       transcriptMessage: "",
       extraSystemPrompt: "announce only",
       timeoutMs: 10_000,
+      sourceSessionKey: "agent:alpha:main",
+      visitedAgentIds: ["root", "alpha"],
     });
 
     expect(gatewayCalls).toStrictEqual([]);
     expect(agentCommandFromIngress).toHaveBeenCalledTimes(1);
     const ingressCalls = agentCommandFromIngress.mock.calls as unknown as Array<
-      [{ message?: string; sourceReplyDeliveryMode?: string; transcriptMessage?: string }]
+      [
+        {
+          message?: string;
+          sourceReplyDeliveryMode?: string;
+          transcriptMessage?: string;
+          inputProvenance?: { visitedAgentIds?: string[] };
+        },
+      ]
     >;
     const ingress = ingressCalls[0]?.[0];
     expect(ingress?.message).toContain("internal announce step");
     expect(ingress?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(ingress?.transcriptMessage).toBe("");
+    expect(ingress?.inputProvenance?.visitedAgentIds).toEqual(["root", "alpha", "main"]);
   });
 });
