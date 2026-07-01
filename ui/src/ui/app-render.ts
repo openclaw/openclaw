@@ -37,6 +37,7 @@ import {
   resolvePreferredSessionForAgent,
 } from "./chat/session-controls.ts";
 import { clearChatMessagesFromCache } from "./chat/session-message-cache.ts";
+import { copyToClipboard } from "./chat/clipboard.ts";
 import {
   controlUiNowMs,
   recordControlUiRenderTiming,
@@ -2247,7 +2248,7 @@ export function renderApp(state: AppViewState) {
     }, 160);
   };
   const copyChatWorkspacePath = (filePath: string) => {
-    void globalThis.navigator?.clipboard?.writeText?.(filePath);
+    void copyToClipboard(filePath);
   };
   function loadChatWorkspaceFiles(opts?: { force?: boolean }) {
     if (!state.client || !state.connected) {
