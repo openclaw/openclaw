@@ -1464,8 +1464,18 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       customType: "model-snapshot",
       data: modelSnapshotData,
     };
-    hoisted.sessionManager.getLeafEntry.mockReturnValueOnce(modelSnapshotEntry);
+    const labelEntry = {
+      id: "label-leaf",
+      parentId: "model-snapshot-leaf",
+      type: "label",
+      targetId: "model-snapshot-leaf",
+      label: "model snapshot",
+    };
+    hoisted.sessionManager.getLeafEntry.mockReturnValueOnce(labelEntry);
     hoisted.sessionManager.getEntry.mockImplementation((id: unknown) => {
+      if (id === "model-snapshot-leaf") {
+        return modelSnapshotEntry;
+      }
       if (id === "model-leaf") {
         return modelEntry;
       }
@@ -1488,6 +1498,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         replayedEntries.push(`custom:${args[0]}:${JSON.stringify(args[1])}`);
       }
       return "replayed-custom";
+    });
+    hoisted.sessionManager.appendLabelChange.mockImplementation((...args: unknown[]) => {
+      replayedEntries.push(`label:${String(args[0])}/${String(args[1])}`);
+      return "replayed-label";
     });
     const seen: { modelInputPrompt?: string } = {};
 
@@ -1523,6 +1537,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       "thinking:high",
       "model:deepseek/deepseek-chat",
       `custom:model-snapshot:${JSON.stringify(modelSnapshotData)}`,
+      "label:replayed-custom/model snapshot",
     ]);
   });
 

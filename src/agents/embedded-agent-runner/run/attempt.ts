@@ -696,25 +696,27 @@ function findTrailingMessageEntryForOrphanRepair(
 function appendTrailingEntryForOrphanRepair(
   sessionManager: OrphanRepairSessionManager,
   entry: SessionManagerEntry,
+  replayedEntryIds: Map<string, string>,
 ): void {
   if (entry.type === "thinking_level_change") {
-    sessionManager.appendThinkingLevelChange(entry.thinkingLevel);
+    replayedEntryIds.set(entry.id, sessionManager.appendThinkingLevelChange(entry.thinkingLevel));
     return;
   }
   if (entry.type === "model_change") {
-    sessionManager.appendModelChange(entry.provider, entry.modelId);
+    replayedEntryIds.set(entry.id, sessionManager.appendModelChange(entry.provider, entry.modelId));
     return;
   }
   if (entry.type === "custom") {
-    sessionManager.appendCustomEntry(entry.customType, entry.data);
+    replayedEntryIds.set(entry.id, sessionManager.appendCustomEntry(entry.customType, entry.data));
     return;
   }
   if (entry.type === "session_info") {
-    sessionManager.appendSessionInfo(entry.name ?? "");
+    replayedEntryIds.set(entry.id, sessionManager.appendSessionInfo(entry.name ?? ""));
     return;
   }
   if (entry.type === "label") {
-    sessionManager.appendLabelChange(entry.targetId, entry.label);
+    const targetId = replayedEntryIds.get(entry.targetId) ?? entry.targetId;
+    replayedEntryIds.set(entry.id, sessionManager.appendLabelChange(targetId, entry.label));
   }
 }
 
@@ -722,8 +724,9 @@ function replayTrailingEntriesForOrphanRepair(
   sessionManager: OrphanRepairSessionManager,
   trailingEntries: SessionManagerEntry[],
 ): void {
+  const replayedEntryIds = new Map<string, string>();
   for (const entry of trailingEntries) {
-    appendTrailingEntryForOrphanRepair(sessionManager, entry);
+    appendTrailingEntryForOrphanRepair(sessionManager, entry, replayedEntryIds);
   }
 }
 
