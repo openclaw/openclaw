@@ -82,6 +82,7 @@ export function resolveSessionDisplayName(
   key: string,
   row?: SessionsListResult["sessions"][number],
 ): string {
+  const title = normalizeOptionalString(row?.title) ?? "";
   const label = normalizeOptionalString(row?.label) ?? "";
   const displayName = normalizeOptionalString(row?.displayName) ?? "";
   const { prefix, fallbackName } = parseSessionKey(key);
@@ -90,10 +91,12 @@ export function resolveSessionDisplayName(
     if (!prefix) {
       return name;
     }
-    const prefixPattern = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}\\s*`, "i");
-    return prefixPattern.test(name) ? name : `${prefix} ${name}`;
+    return name.toLowerCase().startsWith(prefix.toLowerCase()) ? name : `${prefix} ${name}`;
   };
 
+  if (title && title !== key) {
+    return applyTypedPrefix(title);
+  }
   if (label && label !== key) {
     return applyTypedPrefix(label);
   }

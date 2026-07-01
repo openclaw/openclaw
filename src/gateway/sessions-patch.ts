@@ -51,7 +51,14 @@ import {
 } from "../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
-import { parseSessionLabel } from "../sessions/session-label.js";
+import {
+  applySessionTitle,
+  getSessionTitleFromEntry,
+  normalizeSessionTitleText,
+  parseSessionLabel,
+  parseSessionTitle,
+  sessionTitlesEqual,
+} from "../sessions/session-label.js";
 
 function invalid(message: string): { ok: false; error: ErrorShape } {
   return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
@@ -135,7 +142,6 @@ type SessionPatchProjectionEntry = {
   sessionKey: string;
 };
 
-/** Project a validated gateway session patch for one session entry. */
 export async function projectSessionsPatchEntry(params: {
   cfg: OpenClawConfig;
   entries: readonly SessionPatchProjectionEntry[];
@@ -169,7 +175,6 @@ export async function projectSessionsPatchEntry(params: {
   };
 
   const existing = params.existingEntry;
-  // Existing entries without session ids are placeholder aliases; assigning an id makes them real.
   const next: SessionEntry = existing?.sessionId
     ? {
         ...existing,
@@ -182,6 +187,7 @@ export async function projectSessionsPatchEntry(params: {
         updatedAt: Math.max(existing?.updatedAt ?? 0, now),
       };
   if (existing && !existing.sessionId) {
+    delete next.title;
     delete next.label;
     delete next.displayName;
   }
@@ -278,11 +284,10 @@ export async function projectSessionsPatchEntry(params: {
       if (!Number.isInteger(numeric) || numeric < 0) {
         return invalid("invalid spawnDepth (use an integer >= 0)");
       }
-      const normalized = numeric;
-      if (typeof existing?.spawnDepth === "number" && existing.spawnDepth !== normalized) {
+      if (typeof existing?.spawnDepth === "number" && existing.spawnDepth !== numeric) {
         return invalid("spawnDepth cannot be changed once set");
       }
-      next.spawnDepth = normalized;
+      next.spawnDepth = numeric;
     }
   }
 
@@ -348,31 +353,60 @@ export async function projectSessionsPatchEntry(params: {
     }
   }
 
-  if ("label" in patch) {
-    const raw = patch.label;
+  if ("title" in patch || "label" in patch) {
+    const rawTitle =
+      patch.title === undefined
+        ? undefined
+        : patch.title === null
+          ? null
+          : normalizeSessionTitleText(patch.title);
+    const rawLabel =
+      patch.label === undefined
+        ? undefined
+        : patch.label === null
+          ? null
+          : normalizeSessionTitleText(patch.label);
+    // Reject mixed null/string pairs: clearing one while setting the other
+    // is ambiguous and likely a client bug.
+    if (
+      (rawTitle === null && rawLabel !== undefined && rawLabel !== null) ||
+      (rawLabel === null && rawTitle !== undefined && rawTitle !== null)
+    ) {
+      return invalid("cannot clear title or label while setting the other");
+    }
+    if (
+      rawTitle !== undefined &&
+      rawTitle !== null &&
+      rawLabel !== undefined &&
+      rawLabel !== null &&
+      rawTitle !== rawLabel
+    ) {
+      return invalid("title and label must match when both are provided");
+    }
+    const raw = rawTitle !== undefined ? rawTitle : rawLabel;
     if (raw === null) {
-      delete next.label;
+      applySessionTitle(next, null);
     } else if (raw !== undefined) {
-      const parsed = parseSessionLabel(raw);
+      const parsed = rawTitle !== undefined ? parseSessionTitle(raw) : parseSessionLabel(raw);
       if (!parsed.ok) {
         return invalid(parsed.error);
       }
+      const title = "title" in parsed ? parsed.title : parsed.label;
       for (const { sessionKey, entry } of params.entries) {
         if (sessionKey === storeKey) {
           continue;
         }
-        if (entry?.label === parsed.label) {
-          return invalid(`label already in use: ${parsed.label}`);
+        if (sessionTitlesEqual(getSessionTitleFromEntry(entry), title)) {
+          return invalid(`title already in use: ${title}`);
         }
       }
-      next.label = parsed.label;
+      applySessionTitle(next, title);
     }
   }
 
   if ("thinkingLevel" in patch) {
     const raw = patch.thinkingLevel;
     if (raw === null) {
-      // Clear the override and fall back to model default
       delete next.thinkingLevel;
     } else if (raw !== undefined) {
       const normalized = normalizeThinkLevel(raw);
@@ -429,8 +463,6 @@ export async function projectSessionsPatchEntry(params: {
       if (!normalized) {
         return invalid('invalid reasoningLevel (use "on"|"off"|"stream")');
       }
-      // Persist "off" explicitly so that resolveDefaultReasoningLevel()
-      // does not re-enable reasoning for capable models (#24406).
       next.reasoningLevel = normalized;
     }
   }
@@ -457,7 +489,6 @@ export async function projectSessionsPatchEntry(params: {
       if (!normalized) {
         return invalid('invalid elevatedLevel (use "on"|"off"|"ask"|"full")');
       }
-      // Persist "off" explicitly so patches can override defaults.
       next.elevatedLevel = normalized;
     }
   }
@@ -642,7 +673,6 @@ export async function projectSessionsPatchEntry(params: {
   return { ok: true, entry: next };
 }
 
-/** Apply a validated gateway session patch to an in-memory session store entry. */
 export async function applySessionsPatchToStore(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;

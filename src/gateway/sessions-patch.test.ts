@@ -333,6 +333,78 @@ describe("gateway sessions patch", () => {
     expect(entry.fastMode).toBe(true);
   });
 
+  test("clears title and label when patch sets title: null", async () => {
+    const store = mainStoreEntry({ title: "Named Session", label: "Named Session" });
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, title: null },
+      }),
+    );
+    expect(entry.title).toBeUndefined();
+    expect(entry.label).toBeUndefined();
+  });
+
+  test("clears title and label when patch sets label: null", async () => {
+    const store = mainStoreEntry({ title: "Named Session", label: "Named Session" });
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, label: null },
+      }),
+    );
+    expect(entry.title).toBeUndefined();
+    expect(entry.label).toBeUndefined();
+  });
+
+  test("clears title and label when both title: null and label: null", async () => {
+    const store = mainStoreEntry({ title: "Named Session", label: "Named Session" });
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, title: null, label: null },
+      }),
+    );
+    expect(entry.title).toBeUndefined();
+    expect(entry.label).toBeUndefined();
+  });
+
+  test("rejects title: null with label set to a string", async () => {
+    const store = mainStoreEntry({ title: "Named Session", label: "Named Session" });
+    const result = await runPatch({
+      store,
+      patch: { key: MAIN_SESSION_KEY, title: null, label: "New Name" },
+    });
+    expectPatchError(result, "cannot clear title or label while setting the other");
+  });
+
+  test("rejects label: null with title set to a string", async () => {
+    const store = mainStoreEntry({ title: "Named Session", label: "Named Session" });
+    const result = await runPatch({
+      store,
+      patch: { key: MAIN_SESSION_KEY, title: "New Name", label: null },
+    });
+    expectPatchError(result, "cannot clear title or label while setting the other");
+  });
+
+  test("rejects title: null with label set to a different string when both provided", async () => {
+    const store = mainStoreEntry({ title: "Named Session", label: "Named Session" });
+    const result = await runPatch({
+      store,
+      patch: { key: MAIN_SESSION_KEY, title: null, label: "Other Name" },
+    });
+    expectPatchError(result, "cannot clear title or label while setting the other");
+  });
+
+  test("rejects title set to a string with label: null when both provided", async () => {
+    const store = mainStoreEntry({ title: "Named Session", label: "Named Session" });
+    const result = await runPatch({
+      store,
+      patch: { key: MAIN_SESSION_KEY, title: "Other Name", label: null },
+    });
+    expectPatchError(result, "cannot clear title or label while setting the other");
+  });
+
   test("clears fastMode when patch sets null", async () => {
     const store = mainStoreEntry({ fastMode: true });
     const entry = expectPatchOk(

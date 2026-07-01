@@ -1636,6 +1636,7 @@ public struct SessionsListParams: Codable, Sendable {
     public let configuredagentsonly: Bool?
     public let includederivedtitles: Bool?
     public let includelastmessage: Bool?
+    public let title: String?
     public let label: String?
     public let spawnedby: String?
     public let agentid: String?
@@ -1650,6 +1651,7 @@ public struct SessionsListParams: Codable, Sendable {
         configuredagentsonly: Bool?,
         includederivedtitles: Bool?,
         includelastmessage: Bool?,
+        title: String?,
         label: String?,
         spawnedby: String?,
         agentid: String? = nil,
@@ -1663,6 +1665,7 @@ public struct SessionsListParams: Codable, Sendable {
         self.configuredagentsonly = configuredagentsonly
         self.includederivedtitles = includederivedtitles
         self.includelastmessage = includelastmessage
+        self.title = title
         self.label = label
         self.spawnedby = spawnedby
         self.agentid = agentid
@@ -1678,6 +1681,7 @@ public struct SessionsListParams: Codable, Sendable {
         case configuredagentsonly = "configuredAgentsOnly"
         case includederivedtitles = "includeDerivedTitles"
         case includelastmessage = "includeLastMessage"
+        case title
         case label
         case spawnedby = "spawnedBy"
         case agentid = "agentId"
@@ -1766,6 +1770,7 @@ public struct SessionsDescribeParams: Codable, Sendable {
 public struct SessionsResolveParams: Codable, Sendable {
     public let key: String?
     public let sessionid: String?
+    public let title: String?
     public let label: String?
     public let agentid: String?
     public let spawnedby: String?
@@ -1776,6 +1781,7 @@ public struct SessionsResolveParams: Codable, Sendable {
     public init(
         key: String?,
         sessionid: String?,
+        title: String?,
         label: String?,
         agentid: String? = nil,
         spawnedby: String?,
@@ -1785,6 +1791,7 @@ public struct SessionsResolveParams: Codable, Sendable {
     {
         self.key = key
         self.sessionid = sessionid
+        self.title = title
         self.label = label
         self.agentid = agentid
         self.spawnedby = spawnedby
@@ -1796,6 +1803,7 @@ public struct SessionsResolveParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case key
         case sessionid = "sessionId"
+        case title
         case label
         case agentid = "agentId"
         case spawnedby = "spawnedBy"
@@ -2294,6 +2302,7 @@ public struct SessionsFilesGetResult: Codable, Sendable {
 public struct SessionsCreateParams: Codable, Sendable {
     public let key: String?
     public let agentid: String?
+    public let title: String?
     public let label: String?
     public let model: String?
     public let parentsessionkey: String?
@@ -2304,6 +2313,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     public init(
         key: String?,
         agentid: String? = nil,
+        title: String?,
         label: String?,
         model: String?,
         parentsessionkey: String?,
@@ -2313,6 +2323,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     {
         self.key = key
         self.agentid = agentid
+        self.title = title
         self.label = label
         self.model = model
         self.parentsessionkey = parentsessionkey
@@ -2324,6 +2335,7 @@ public struct SessionsCreateParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case key
         case agentid = "agentId"
+        case title
         case label
         case model
         case parentsessionkey = "parentSessionKey"
@@ -2432,6 +2444,7 @@ public struct SessionsAbortParams: Codable, Sendable {
 public struct SessionsPatchParams: Codable, Sendable {
     public let key: String
     public let agentid: String?
+    public let title: AnyCodable?
     public let label: AnyCodable?
     public let thinkinglevel: AnyCodable?
     public let fastmode: AnyCodable?
@@ -2459,6 +2472,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public init(
         key: String,
         agentid: String? = nil,
+        title: AnyCodable?,
         label: AnyCodable?,
         thinkinglevel: AnyCodable?,
         fastmode: AnyCodable?,
@@ -2485,6 +2499,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     {
         self.key = key
         self.agentid = agentid
+        self.title = title
         self.label = label
         self.thinkinglevel = thinkinglevel
         self.fastmode = fastmode
@@ -2513,6 +2528,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case key
         case agentid = "agentId"
+        case title
         case label
         case thinkinglevel = "thinkingLevel"
         case fastmode = "fastMode"

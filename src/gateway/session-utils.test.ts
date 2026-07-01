@@ -231,6 +231,58 @@ describe("gateway session utils", () => {
     expect(listed.sessions[0]?.displayName).toBe("openclaw-tui");
   });
 
+  test("session lists project and filter canonical title with legacy label compatibility", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const store = {
+      "agent:main:new-title": {
+        sessionId: "sess-new",
+        updatedAt: 3,
+        title: "  Billing rework  ",
+        label: "Billing rework",
+      } satisfies SessionEntry,
+      "agent:main:legacy-label": {
+        sessionId: "sess-legacy",
+        updatedAt: 2,
+        label: "Legacy Support",
+      } satisfies SessionEntry,
+      "agent:main:other": {
+        sessionId: "sess-other",
+        updatedAt: 1,
+        title: "Other Work",
+        label: "Other Work",
+      } satisfies SessionEntry,
+    };
+
+    const listedByTitle = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { title: "Billing rework" },
+    });
+    expect(listedByTitle.sessions.map((session) => session.key)).toEqual(["agent:main:new-title"]);
+    expect(listedByTitle.sessions[0]?.title).toBe("Billing rework");
+    expect(listedByTitle.sessions[0]?.label).toBe("Billing rework");
+
+    const listedByLegacyLabelAsTitle = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { title: "Legacy Support" },
+    });
+    expect(listedByLegacyLabelAsTitle.sessions.map((session) => session.key)).toEqual([
+      "agent:main:legacy-label",
+    ]);
+    expect(listedByLegacyLabelAsTitle.sessions[0]?.title).toBe("Legacy Support");
+
+    const listedByLabel = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { label: "Billing rework" },
+    });
+    expect(listedByLabel.sessions.map((session) => session.key)).toEqual(["agent:main:new-title"]);
+  });
+
   test("session lists mark the final offset page without hasMore", () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
     const store = Object.fromEntries(
@@ -806,6 +858,8 @@ describe("gateway session utils", () => {
       key: "agent:main:telegram:direct:42",
       entry,
     });
+    expect(row.title).toBe("Alice");
+    expect(row.label).toBe("Alice");
     expect(row.displayName).toBe("Alice");
   });
 

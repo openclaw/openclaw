@@ -1422,6 +1422,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           agentId: targetAgentId,
           patch: {
             key: target.canonicalKey,
+            title: normalizeOptionalString(p.title),
             label: normalizeOptionalString(p.label),
             model: normalizeOptionalString(p.model),
           },

@@ -1,7 +1,7 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import { Type } from "typebox";
 import { PluginJsonValueSchema } from "./plugins.js";
-import { NonEmptyString, SessionLabelString } from "./primitives.js";
+import { NonEmptyString, SessionLabelString, SessionTitleString } from "./primitives.js";
 
 /**
  * Session protocol schemas.
@@ -154,33 +154,18 @@ export const SessionsFilesGetResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
-/** Lists sessions with optional scope, activity, label, and preview filters. */
+/** Lists sessions with optional scope, activity, title, label, and preview filters. */
 export const SessionsListParamsSchema = Type.Object(
   {
-    /**
-     * Maximum rows to return. Omitted Gateway RPC calls use a bounded default
-     * to keep large session stores from monopolizing the event loop.
-     */
     limit: Type.Optional(Type.Integer({ minimum: 1 })),
     offset: Type.Optional(Type.Integer({ minimum: 0 })),
     activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
     includeGlobal: Type.Optional(Type.Boolean()),
     includeUnknown: Type.Optional(Type.Boolean()),
-    /**
-     * Limit returned agent-scoped rows to agents currently present in config.
-     * Broad disk discovery remains the default for recovery/ACP consumers.
-     */
     configuredAgentsOnly: Type.Optional(Type.Boolean()),
-    /**
-     * Read first 8KB of each session transcript to derive title from first user message.
-     * Performs a file read per session - use `limit` to bound result set on large stores.
-     */
     includeDerivedTitles: Type.Optional(Type.Boolean()),
-    /**
-     * Read last 16KB of each session transcript to extract most recent message preview.
-     * Performs a file read per session - use `limit` to bound result set on large stores.
-     */
     includeLastMessage: Type.Optional(Type.Boolean()),
+    title: Type.Optional(SessionTitleString),
     label: Type.Optional(SessionLabelString),
     spawnedBy: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
@@ -222,11 +207,12 @@ export const SessionsDescribeParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-/** Resolves a session by key, raw session id, label, or parent/agent scope. */
+/** Resolves a session by key, raw session id, title, label, or parent/agent scope. */
 export const SessionsResolveParamsSchema = Type.Object(
   {
     key: Type.Optional(NonEmptyString),
     sessionId: Type.Optional(NonEmptyString),
+    title: Type.Optional(SessionTitleString),
     label: Type.Optional(SessionLabelString),
     agentId: Type.Optional(NonEmptyString),
     spawnedBy: Type.Optional(NonEmptyString),
@@ -238,11 +224,12 @@ export const SessionsResolveParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-/** Creates or adopts a session with optional model, label, and parent linkage. */
+/** Creates or adopts a session with optional model, title, label, and parent linkage. */
 export const SessionsCreateParamsSchema = Type.Object(
   {
     key: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
+    title: Type.Optional(SessionTitleString),
     label: Type.Optional(SessionLabelString),
     model: Type.Optional(NonEmptyString),
     parentSessionKey: Type.Optional(NonEmptyString),
@@ -300,6 +287,7 @@ export const SessionsPatchParamsSchema = Type.Object(
   {
     key: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
+    title: Type.Optional(Type.Union([SessionTitleString, Type.Null()])),
     label: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
     thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Null()])),
@@ -311,7 +299,6 @@ export const SessionsPatchParamsSchema = Type.Object(
         Type.Literal("off"),
         Type.Literal("tokens"),
         Type.Literal("full"),
-        // Backward compat with older clients/stores.
         Type.Literal("on"),
         Type.Null(),
       ]),
@@ -382,7 +369,6 @@ export const SessionsDeleteParamsSchema = Type.Object(
     key: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
     deleteTranscript: Type.Optional(Type.Boolean()),
-    // Internal control: when false, still unbind thread bindings but skip hook emission.
     emitLifecycleHooks: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
@@ -497,21 +483,14 @@ export const SessionsCompactionRestoreResultSchema = Type.Object(
 /** Usage report query across one session, one agent, or all agent sessions. */
 export const SessionsUsageParamsSchema = Type.Object(
   {
-    /** Specific session key to analyze; if omitted returns sessions for the effective agent. */
     key: Type.Optional(NonEmptyString),
-    /** Agent scope for list-style usage queries. */
     agentId: Type.Optional(NonEmptyString),
-    /** Explicit all-agent scope for list-style usage queries. */
     agentScope: Type.Optional(Type.Literal("all")),
-    /** Start date for range filter (YYYY-MM-DD). */
     startDate: Type.Optional(Type.String({ pattern: "^\\d{4}-\\d{2}-\\d{2}$" })),
-    /** End date for range filter (YYYY-MM-DD). */
     endDate: Type.Optional(Type.String({ pattern: "^\\d{4}-\\d{2}-\\d{2}$" })),
-    /** How start/end dates should be interpreted. Defaults to UTC when omitted. */
     mode: Type.Optional(
       Type.Union([Type.Literal("utc"), Type.Literal("gateway"), Type.Literal("specific")]),
     ),
-    /** Preset range for usage queries when explicit start/end dates are omitted. */
     range: Type.Optional(
       Type.Union([
         Type.Literal("7d"),
@@ -521,15 +500,10 @@ export const SessionsUsageParamsSchema = Type.Object(
         Type.Literal("all"),
       ]),
     ),
-    /** Usage row grouping. `family` rolls up known rotated session ids for a logical key. */
     groupBy: Type.Optional(Type.Union([Type.Literal("instance"), Type.Literal("family")])),
-    /** Backward-compatible alias for requesting family grouping. */
     includeHistorical: Type.Optional(Type.Boolean()),
-    /** UTC offset to use when mode is `specific` (for example, UTC-4 or UTC+5:30). */
     utcOffset: Type.Optional(Type.String({ pattern: "^UTC[+-]\\d{1,2}(?::[0-5]\\d)?$" })),
-    /** Maximum sessions to return (default 50). */
     limit: Type.Optional(Type.Integer({ minimum: 1 })),
-    /** Include context weight breakdown (systemPromptReport). */
     includeContextWeight: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },

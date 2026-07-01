@@ -398,6 +398,8 @@ export type SessionEntry = {
   cliSessionIds?: Record<string, string>;
   cliSessionBindings?: Record<string, CliSessionBinding>;
   claudeCliSessionId?: string;
+  /** Canonical user-editable session name; label mirrors it for legacy clients. */
+  title?: string;
   label?: string;
   displayName?: string;
   channel?: string;
