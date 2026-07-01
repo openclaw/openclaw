@@ -2725,12 +2725,13 @@ export class QmdMemoryManager implements MemorySearchManager {
     } catch (err) {
       // mcporter (subprocess) can emit non-JSON stdout when output is truncated
       // by maxOutputChars, a daemon warning bleeds onto stdout, or the CLI is
-      // killed early. Wrap the SyntaxError so callers get a typed domain error
-      // with a stdout snippet instead of a raw SyntaxError with no context.
-      throw new Error(
-        `qmd mcporter returned non-JSON stdout: ${(err as Error).message}; first 200 chars: ${result.stdout.slice(0, 200)}`,
-        { cause: err },
-      );
+      // killed early. Wrap the SyntaxError so callers get a typed domain error.
+      // Do NOT embed raw stdout in the message: it is surfaced before session
+      // visibility filtering and could leak sensitive content; the original
+      // SyntaxError is preserved as `cause` for diagnostics.
+      throw new Error(`qmd mcporter returned non-JSON stdout: ${(err as Error).message}`, {
+        cause: err,
+      });
     }
     const parsedRecord = asRecord(parsedUnknown);
     const structuredContent = parsedRecord ? asRecord(parsedRecord.structuredContent) : null;
