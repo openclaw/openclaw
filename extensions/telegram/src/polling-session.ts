@@ -35,7 +35,7 @@ import { TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS } from "./request-timeouts.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import {
   claimNextTelegramSpooledUpdate,
-  deleteTelegramSpooledUpdate,
+  completeTelegramSpooledUpdate,
   failTelegramSpooledUpdateClaim,
   isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
   listTelegramSpooledUpdateClaims,
@@ -689,7 +689,7 @@ export class TelegramPollingSession {
     }
     try {
       params.stopClaimRefresh();
-      await deleteTelegramSpooledUpdate(params.update);
+      await completeTelegramSpooledUpdate(params.update);
       return true;
     } catch (err) {
       this.opts.log(
@@ -740,7 +740,7 @@ export class TelegramPollingSession {
         return;
       }
       try {
-        await deleteTelegramSpooledUpdate(params.update);
+        await completeTelegramSpooledUpdate(params.update);
       } catch (err) {
         this.opts.log(
           `[telegram][diag] spooled update ${params.update.updateId} completed after buffered processing but processing marker cleanup failed: ${formatErrorMessage(err)}`,
@@ -1399,7 +1399,9 @@ export class TelegramPollingSession {
         drainActive = false;
         if (drainRequested && !restartRequested && !this.opts.abortSignal?.aborted) {
           drainRequested = false;
-          void drainOnce();
+          // Handler finalizers clear active lane guards in microtasks; redrain
+          // after them so newly unblocked same-lane rows can claim immediately.
+          void Promise.resolve().then(drainOnce);
         }
       }
     };

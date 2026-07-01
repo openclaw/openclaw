@@ -1650,6 +1650,41 @@ describe("TelegramPollingSession", () => {
     });
   });
 
+  it("does not re-dispatch refetched updates after spooled completion", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await withTempSpool(async (tempDir) => {
+        const abort = new AbortController();
+        const events: number[] = [];
+        await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "first delivery")]);
+
+        const { runPromise, stopWorker } = startIsolatedIngressSession({
+          abort,
+          spoolDir: tempDir,
+          drainIntervalMs: 10,
+          handleUpdate: async (update) => {
+            events.push(Number(update.update_id));
+          },
+        });
+
+        await vi.waitFor(() => expect(events).toEqual([42]));
+        expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+
+        await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "telegram refetch")]);
+        await vi.advanceTimersByTimeAsync(50);
+
+        expect(events).toEqual([42]);
+        expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+
+        abort.abort();
+        stopWorker();
+        await runPromise;
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("refreshes active spooled claims while the handler is still running", async () => {
     const refreshHarness = installSpooledClaimRefreshHarness();
     await withTempSpool(async (tempDir) => {
