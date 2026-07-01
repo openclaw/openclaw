@@ -724,7 +724,15 @@ function buildParams(
   }
 
   if (compat.thinkingFormat === "zai" && model.reasoning) {
-    params.enable_thinking = Boolean(options?.reasoningEffort);
+    // ZAI/Zhipu GLM-4.5+ (including GLM-5.2) dropped the legacy `enable_thinking`
+    // top-level boolean in favor of `thinking: { type: "enabled" | "disabled" }`,
+    // matching the DeepSeek thinking contract. The legacy param was silently ignored,
+    // so `/reasoning on` produced no `reasoning_content` in responses.
+    params.thinking = { type: options?.reasoningEffort ? "enabled" : "disabled" };
+    if (options?.reasoningEffort) {
+      params.reasoning_effort =
+        model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
+    }
   } else if (compat.thinkingFormat === "qwen" && model.reasoning) {
     params.enable_thinking = Boolean(options?.reasoningEffort);
   } else if (compat.thinkingFormat === "qwen-chat-template" && model.reasoning) {
