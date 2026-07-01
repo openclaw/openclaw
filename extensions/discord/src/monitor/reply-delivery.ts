@@ -195,6 +195,9 @@ export async function deliverDiscordReply(params: {
     kind: params.kind,
   }).map(formatDiscordReasoningPayload);
   if (payloads.length === 0) {
+    if (params.kind === "final") {
+      throw new Error(`discord final reply sanitized to empty for ${delivery.to}`);
+    }
     return;
   }
 
