@@ -155,10 +155,18 @@ class WizardSessionPrompter implements WizardPrompter {
     return Boolean(res);
   }
 
-  progress(_label: string): WizardProgress {
+  progress(label: string): WizardProgress {
+    // Emit progress as non-interactive steps so remote clients see live status
+    // during slow operations. Clients render the message and re-poll wizard.next
+    // WITHOUT an answer to continue. Local CLI keeps using the clack prompter.
+    this.session.emitProgress(label);
     return {
-      update: (_message) => {},
-      stop: (_message) => {},
+      update: (message) => this.session.emitProgress(message),
+      stop: (message) => {
+        if (message !== undefined) {
+          this.session.emitProgress(message);
+        }
+      },
     };
   }
 
@@ -176,6 +184,9 @@ export class WizardSession {
   private currentStep: WizardStep | null = null;
   private stepDeferred: Deferred<WizardStep | null> | null = null;
   private pendingTerminalResolution = false;
+  // Latest undelivered progress step. Progress is non-interactive and "latest
+  // wins", so it is held as a single slot rather than an unbounded queue.
+  private pendingProgress: WizardStep | null = null;
   private answerDeferred = new Map<string, Deferred<unknown>>();
   private status: WizardSessionStatus = "running";
   private error: string | undefined;
@@ -186,24 +197,39 @@ export class WizardSession {
   }
 
   async next(): Promise<WizardNextResult> {
-    if (this.currentStep) {
-      return { done: false, step: this.currentStep, status: this.status };
+    // Loop so a progress wake never decides completion. A progress emit resolves
+    // the shared step waiter with null while the session is still running; with
+    // concurrent next() callers, one consumes the progress and the rest must
+    // re-classify state (and re-wait) rather than surface a spurious done.
+    for (;;) {
+      // Deliver any in-flight progress before the pending prompt so remote
+      // clients see live status during slow operations (installs, auth waits).
+      // This cannot starve an interactive prompt: the runner is sequential, so
+      // while it awaits a prompt it is not emitting progress, and latest-wins
+      // keeps at most one progress step pending.
+      const progress = this.takePendingProgress();
+      if (progress) {
+        return { done: false, step: progress, status: this.status };
+      }
+      if (this.currentStep) {
+        return { done: false, step: this.currentStep, status: this.status };
+      }
+      if (this.pendingTerminalResolution) {
+        this.pendingTerminalResolution = false;
+        return { done: true, status: this.status, error: this.error };
+      }
+      if (this.status !== "running") {
+        return { done: true, status: this.status, error: this.error };
+      }
+      if (!this.stepDeferred) {
+        this.stepDeferred = createDeferred();
+      }
+      // Wait for the next event (prompt pushed, progress emitted, or terminal),
+      // then re-loop to classify it via the checks above. The resolved value is
+      // intentionally ignored: a real step is read back from currentStep, and a
+      // null resolution falls through to progress/terminal/status handling.
+      await this.stepDeferred.promise;
     }
-    if (this.pendingTerminalResolution) {
-      this.pendingTerminalResolution = false;
-      return { done: true, status: this.status, error: this.error };
-    }
-    if (this.status !== "running") {
-      return { done: true, status: this.status, error: this.error };
-    }
-    if (!this.stepDeferred) {
-      this.stepDeferred = createDeferred();
-    }
-    const step = await this.stepDeferred.promise;
-    if (step) {
-      return { done: false, step, status: this.status };
-    }
-    return { done: true, status: this.status, error: this.error };
   }
 
   async answer(stepId: string, value: unknown): Promise<void> {
@@ -223,6 +249,7 @@ export class WizardSession {
     this.status = "cancelled";
     this.error = "cancelled";
     this.currentStep = null;
+    this.pendingProgress = null;
     for (const [, deferred] of this.answerDeferred) {
       // Reject all pending prompt promises so the runner can unwind through its
       // normal cancellation path.
@@ -262,6 +289,41 @@ export class WizardSession {
     const deferred = createDeferred<unknown>();
     this.answerDeferred.set(step.id, deferred);
     return await deferred.promise;
+  }
+
+  /**
+   * Emits a non-interactive progress step for remote clients. Fire-and-forget:
+   * the runner does not block, and clients re-poll wizard.next without an answer
+   * to continue. Latest-wins, so an undelivered progress step is replaced.
+   */
+  emitProgress(message: string): void {
+    if (this.status !== "running") {
+      return;
+    }
+    this.pendingProgress = {
+      id: randomUUID(),
+      type: "progress",
+      message,
+      executor: "client",
+    };
+    this.wakePendingProgress();
+  }
+
+  private takePendingProgress(): WizardStep | null {
+    const step = this.pendingProgress;
+    this.pendingProgress = null;
+    return step;
+  }
+
+  private wakePendingProgress(): void {
+    // Wake a long-polling next() so live progress is delivered mid-operation.
+    // Resolves with null; next() re-checks the pending progress slot on wake.
+    if (!this.stepDeferred) {
+      return;
+    }
+    const deferred = this.stepDeferred;
+    this.stepDeferred = null;
+    deferred.resolve(null);
   }
 
   private resolveStep(step: WizardStep | null) {
