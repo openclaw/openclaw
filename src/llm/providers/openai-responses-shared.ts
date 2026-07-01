@@ -13,6 +13,10 @@ import type {
   ResponseReasoningItem,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
+import {
+  resolveOpenAIReasoningEffortForModel,
+  supportsOpenAIReasoningEffort,
+} from "../../agents/openai-reasoning-effort.js";
 import { stripSystemPromptCacheBoundary } from "../../agents/system-prompt-cache-boundary.js";
 import {
   AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE,
@@ -198,7 +202,20 @@ type ResponsesLifecycleStreamOptions = Pick<
   "signal" | "timeoutMs" | "maxRetries" | "onPayload" | "onResponse"
 >;
 
-export type ResponsesReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ResponsesReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
+function isResponsesReasoningEffort(
+  effort: string | undefined,
+): effort is ResponsesReasoningEffort {
+  return (
+    effort === "minimal" ||
+    effort === "low" ||
+    effort === "medium" ||
+    effort === "high" ||
+    effort === "xhigh" ||
+    effort === "max"
+  );
+}
 export type ResponsesReasoningSummary = "auto" | "detailed" | "concise" | null;
 
 type ResponsesCommonParamsOptions = Pick<StreamOptions, "maxTokens" | "temperature"> & {
@@ -465,7 +482,18 @@ export function resolveResponsesReasoningEffort<TApi extends Api>(
   if (!clampedReasoning || clampedReasoning === "off") {
     return undefined;
   }
-  return clampedReasoning === "max" ? "xhigh" : clampedReasoning;
+  if (clampedReasoning === "max") {
+    return supportsOpenAIReasoningEffort(model, "max") ? "max" : "xhigh";
+  }
+  if (
+    clampedReasoning === "minimal" &&
+    model.provider === "openai" &&
+    supportsOpenAIReasoningEffort(model, "max")
+  ) {
+    const effort = resolveOpenAIReasoningEffortForModel({ model, effort: "minimal" });
+    return isResponsesReasoningEffort(effort) ? effort : undefined;
+  }
+  return clampedReasoning;
 }
 
 export function applyCommonResponsesParams<TApi extends Api>(

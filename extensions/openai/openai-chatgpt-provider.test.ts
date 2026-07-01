@@ -89,6 +89,32 @@ describe("OpenAI provider Codex transport hooks", () => {
     });
   });
 
+  it.each(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])(
+    "resolves %s through the Codex Responses transport without live catalog metadata",
+    (modelId) => {
+      const provider = buildOpenAIProvider();
+
+      const model = provider.resolveDynamicModel?.({
+        provider: "openai",
+        modelId,
+        authProfileMode: "oauth",
+        modelRegistry: { find: () => null },
+      } as never);
+
+      expect(model).toMatchObject({
+        provider: "openai",
+        id: modelId,
+        api: "openai-chatgpt-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        input: ["text", "image"],
+        contextWindow: 372_000,
+        contextTokens: 372_000,
+        maxTokens: 128_000,
+        thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+      });
+    },
+  );
+
   it("keeps default Codex-backed OpenAI catalog models on the Codex Responses transport", () => {
     const provider = buildOpenAIProvider();
 

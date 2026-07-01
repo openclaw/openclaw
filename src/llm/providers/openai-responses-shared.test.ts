@@ -10,6 +10,7 @@ import {
   convertResponsesMessages,
   type OpenAIResponsesStreamEvent,
   processResponsesStream,
+  resolveResponsesReasoningEffort,
 } from "./openai-responses-shared.js";
 import { convertResponsesTools } from "./openai-responses-tools.js";
 
@@ -60,6 +61,13 @@ const proxyOpenAIModel = {
   id: "custom-model",
   name: "Custom Model",
   baseUrl: "https://proxy.example.com/v1",
+} satisfies Model<"openai-responses">;
+
+const gpt56SolModel = {
+  ...nativeOpenAIModel,
+  id: "gpt-5.6-sol",
+  name: "GPT-5.6 Sol",
+  thinkingLevelMap: { xhigh: "xhigh", max: "max" },
 } satisfies Model<"openai-responses">;
 
 function createAssistantOutput(): AssistantMessage {
@@ -235,6 +243,36 @@ describe("convertResponsesTools", () => {
     } as never);
 
     expect(params).not.toHaveProperty("tools");
+  });
+});
+
+describe("Responses reasoning effort", () => {
+  it("passes max through for GPT-5.6 Sol", () => {
+    expect(resolveResponsesReasoningEffort(gpt56SolModel, "max")).toBe("max");
+
+    const params = {} as never;
+    applyCommonResponsesParams(
+      params,
+      gpt56SolModel,
+      { messages: [] },
+      {
+        reasoningEffort: "max",
+      },
+    );
+    expect(params).toMatchObject({ reasoning: { effort: "max", summary: "auto" } });
+  });
+
+  it("raises unsupported minimal reasoning to low for GPT-5.6 Sol", () => {
+    expect(resolveResponsesReasoningEffort(gpt56SolModel, "minimal")).toBe("low");
+  });
+
+  it("keeps max clamped to xhigh for earlier models", () => {
+    const gpt55WithXHigh = {
+      ...nativeOpenAIModel,
+      thinkingLevelMap: { xhigh: "xhigh" },
+    } satisfies Model<"openai-responses">;
+
+    expect(resolveResponsesReasoningEffort(gpt55WithXHigh, "max")).toBe("xhigh");
   });
 });
 

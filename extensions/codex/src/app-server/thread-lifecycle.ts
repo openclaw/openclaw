@@ -10,7 +10,13 @@ import {
 import { buildCodexUserMcpServersThreadConfigPatch } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
 import { CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY } from "../../prompt-overlay.js";
-import { isModernCodexModel } from "../../provider.js";
+import {
+  isMaxReasoningCodexModel,
+  isModernCodexModel,
+  readCodexSupportedReasoningEfforts,
+  resolveCodexSupportedReasoningEffort,
+  type CodexReasoningEffort,
+} from "../../provider.js";
 import {
   CodexAppServerRpcError,
   isCodexAppServerConnectionClosedError,
@@ -1443,7 +1449,11 @@ export function buildTurnStartParams(
     ...(options.appServer.serviceTier !== undefined
       ? { serviceTier: options.appServer.serviceTier }
       : {}),
-    effort: resolveReasoningEffort(params.thinkLevel, modelSelection.model),
+    effort: resolveReasoningEffort(
+      params.thinkLevel,
+      modelSelection.model,
+      readCodexSupportedReasoningEfforts(params.model?.compat),
+    ),
     ...(options.environmentSelection ? { environments: options.environmentSelection } : {}),
     collaborationMode: buildTurnCollaborationMode(params, {
       model: modelSelection.model,
@@ -1501,7 +1511,11 @@ export function buildTurnCollaborationMode(
     mode: "default",
     settings: {
       model,
-      reasoning_effort: resolveReasoningEffort(params.thinkLevel, model),
+      reasoning_effort: resolveReasoningEffort(
+        params.thinkLevel,
+        model,
+        readCodexSupportedReasoningEfforts(params.model?.compat),
+      ),
       developer_instructions: buildTurnScopedCollaborationInstructions(params, options),
     },
   };
@@ -1795,7 +1809,19 @@ export function resolveCodexAppServerModelProvider(params: {
 export function resolveReasoningEffort(
   thinkLevel: EmbeddedRunAttemptParams["thinkLevel"],
   modelId: string,
-): "minimal" | "low" | "medium" | "high" | "xhigh" | null {
+  supportedReasoningEfforts?: readonly string[],
+): CodexReasoningEffort | null {
+  if (thinkLevel === "off" || thinkLevel === "adaptive") {
+    return null;
+  }
+  if (supportedReasoningEfforts) {
+    return (
+      resolveCodexSupportedReasoningEffort({
+        requested: thinkLevel,
+        supportedReasoningEfforts,
+      }) ?? null
+    );
+  }
   if (thinkLevel === "minimal") {
     return isModernCodexModel(modelId) ? "low" : "minimal";
   }
@@ -1806,6 +1832,9 @@ export function resolveReasoningEffort(
     thinkLevel === "xhigh"
   ) {
     return thinkLevel;
+  }
+  if (thinkLevel === "max" && isMaxReasoningCodexModel(modelId)) {
+    return "max";
   }
   return null;
 }
