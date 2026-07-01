@@ -640,9 +640,10 @@ export function createSessionsSendTool(opts?: {
       // the reply (when present) is returned inline via the `reply` field.
       // Reflect that in the metadata so the parent LLM does not wait for a
       // second result that will never arrive.
-      const delivery = skipA2AFlow
-        ? ({ status: "skipped", mode: "announce" } as const)
-        : ({ status: "pending", mode: "announce" } as const);
+      // When the A2A flow runs asynchronously, omit `delivery` entirely —
+      // returning `{ status: "pending" }` is misleading because the status
+      // is never updated after the async flow completes (#96020).
+      const delivery = skipA2AFlow ? ({ status: "skipped", mode: "announce" } as const) : undefined;
 
       const startA2AFlow = (
         roundOneReply?: string,
@@ -687,7 +688,7 @@ export function createSessionsSendTool(opts?: {
           runId,
           status: "accepted",
           sessionKey: displayKey,
-          delivery,
+          ...(delivery ? { delivery } : {}),
         });
       }
 
@@ -720,7 +721,7 @@ export function createSessionsSendTool(opts?: {
             error: result.error,
             sentBeforeError: true,
             sessionKey: displayKey,
-            delivery,
+            ...(delivery ? { delivery } : {}),
           });
         }
         if (!isTerminalAgentWaitTimeout(result)) {
@@ -729,7 +730,7 @@ export function createSessionsSendTool(opts?: {
             runId,
             status: "accepted",
             sessionKey: displayKey,
-            delivery,
+            ...(delivery ? { delivery } : {}),
           });
         }
         return jsonResult({
@@ -757,7 +758,7 @@ export function createSessionsSendTool(opts?: {
         status: "ok",
         reply,
         sessionKey: displayKey,
-        delivery,
+        ...(delivery ? { delivery } : {}),
       });
     },
   };
