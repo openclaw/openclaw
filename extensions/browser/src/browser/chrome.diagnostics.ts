@@ -115,7 +115,7 @@ export async function readChromeVersion(
       // oversized CDP responses. Falls back to response.json() when the
       // response body stream is unavailable (e.g. test mocks).
       let data: ChromeVersion;
-      const useBodyRead = typeof (response as Response).body?.getReader === "function";
+      const useBodyRead = typeof response.body?.getReader === "function";
       if (useBodyRead) {
         const bytes = await readResponseWithLimit(response, 16 * 1024 * 1024, {
           onOverflow: () => new Error("CDP /json/version body exceeds 16 MiB"),
