@@ -108,6 +108,23 @@ function resolveResetSessionFile(params: {
   );
 }
 
+function resolveResetUsageFamilySessionIds(params: {
+  currentEntry?: SessionEntry;
+  nextSessionId: string;
+}): string[] | undefined {
+  const currentSessionId = params.currentEntry?.sessionId;
+  if (!currentSessionId) {
+    return undefined;
+  }
+  return Array.from(
+    new Set([
+      ...(params.currentEntry?.usageFamilySessionIds ?? []),
+      currentSessionId,
+      params.nextSessionId,
+    ]),
+  );
+}
+
 function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined {
   if (!entry) {
     return entry;
@@ -1000,6 +1017,10 @@ export async function performGatewaySessionReset(params: {
         storePath,
         agentId: sessionAgentId,
       });
+      const usageFamilySessionIds = resolveResetUsageFamilySessionIds({
+        currentEntry,
+        nextSessionId,
+      });
       const nextEntry: SessionEntry = {
         sessionId: nextSessionId,
         sessionFile,
@@ -1029,6 +1050,10 @@ export async function performGatewaySessionReset(params: {
         contextTokens: resetEntry?.contextTokens,
         compactionCount: currentEntry?.compactionCount,
         compactionCheckpoints: currentEntry?.compactionCheckpoints,
+        usageFamilyKey: usageFamilySessionIds
+          ? (currentEntry?.usageFamilyKey ?? primaryKey)
+          : currentEntry?.usageFamilyKey,
+        usageFamilySessionIds,
         sendPolicy: currentEntry?.sendPolicy,
         queueMode: currentEntry?.queueMode,
         queueDebounceMs: currentEntry?.queueDebounceMs,

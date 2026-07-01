@@ -133,9 +133,10 @@ export function createChannelProgressDraftCompositor(params: {
 
   const noteProgress = async (
     line?: ChannelProgressDraftCompositorLine,
-    options?: { toolName?: string; startImmediately?: boolean },
+    options?: { toolName?: string; startImmediately?: boolean; allowAfterFinal?: boolean },
   ) => {
-    if (!params.active || finalReplyStarted || finalReplyDelivered) {
+    const afterFinal = finalReplyStarted || finalReplyDelivered;
+    if (!params.active || (afterFinal && !options?.allowAfterFinal)) {
       return false;
     }
     if (options?.toolName !== undefined && !isChannelProgressDraftWorkToolName(options.toolName)) {
@@ -179,6 +180,15 @@ export function createChannelProgressDraftCompositor(params: {
       }
     }
     lines = nextLines;
+    if (afterFinal && options?.allowAfterFinal) {
+      const text = formatDraftText();
+      if (!text || text === lastRenderedText) {
+        return false;
+      }
+      lastRenderedText = text;
+      await params.update(text, { flush: true });
+      return true;
+    }
     if (params.mode !== "progress") {
       if (!shouldStoreLine) {
         return false;

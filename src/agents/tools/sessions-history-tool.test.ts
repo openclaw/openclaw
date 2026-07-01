@@ -126,6 +126,22 @@ describe("sessions_history redaction", () => {
     );
   });
 
+  it("rejects includeFamily with offset before calling chat.history", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const tool = createSessionsHistoryTool({
+      config: {},
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        requests.push(request);
+        return { messages: [] } as T;
+      },
+    });
+
+    await expect(
+      tool.execute("call-1", { sessionKey: "main", includeFamily: true, offset: 0 }),
+    ).rejects.toThrow("includeFamily cannot be combined with offset");
+    expect(requests).toEqual([]);
+  });
+
   it("preserves the bounded default history request", async () => {
     const requests: CallGatewayRequest[] = [];
     const tool = createSessionsHistoryTool({

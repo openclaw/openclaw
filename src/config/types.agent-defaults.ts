@@ -292,6 +292,13 @@ export type AgentDefaultsConfig = {
      * model backends. Experimental preview only.
      */
     localModelLean?: boolean;
+    /**
+     * Allow embedded-agent prompts to prepend a compaction summary from reset
+     * family transcripts when the active session has no summary. Experimental
+     * preview only; off by default because this can send archived context to
+     * the selected model provider.
+     */
+    sessionFamilyCarryover?: boolean;
   };
   /**
    * Agent-visible bootstrap truncation warning mode:

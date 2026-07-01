@@ -7189,19 +7189,22 @@ public struct ChatHistoryParams: Codable, Sendable {
     public let limit: Int?
     public let offset: Int?
     public let maxchars: Int?
+    public let includefamily: Bool?
 
     public init(
         sessionkey: String,
         agentid: String? = nil,
         limit: Int?,
         offset: Int? = nil,
-        maxchars: Int?)
+        maxchars: Int?,
+        includefamily: Bool? = nil)
     {
         self.sessionkey = sessionkey
         self.agentid = agentid
         self.limit = limit
         self.offset = offset
         self.maxchars = maxchars
+        self.includefamily = includefamily
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -7210,6 +7213,7 @@ public struct ChatHistoryParams: Codable, Sendable {
         case limit
         case offset
         case maxchars = "maxChars"
+        case includefamily = "includeFamily"
     }
 }
 
