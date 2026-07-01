@@ -146,11 +146,15 @@ export const systemHandlers: GatewayRequestHandlers = {
           enqueueSystemEvent(deltaText, {
             sessionKey,
             contextKey: presenceUpdate.key,
+            quarantineInPrompt: true,
           });
         }
       }
     } else {
-      enqueueSystemEvent(text, { sessionKey });
+      // The `system-event` RPC is reached only by inbound node/device presence
+      // producers, so any non-"Node:" text here is attacker-reachable and must
+      // render as quarantined untrusted context, not an actionable System line.
+      enqueueSystemEvent(text, { sessionKey, quarantineInPrompt: true });
     }
     // Presence changes are observable even when noisy node heartbeat text is
     // suppressed from the transcript-style system event queue.

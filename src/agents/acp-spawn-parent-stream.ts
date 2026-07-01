@@ -411,6 +411,9 @@ export function startAcpSpawnParentStreamRelay(params: {
       sessionKey: resolveEventSessionKeyForPolicy(parentSessionKey, eventRouting),
       contextKey,
       deliveryContext: params.deliveryContext,
+      // Child-process stderr is attacker-reachable (spawned tool/subagent output);
+      // render it as quarantined untrusted context, not an actionable System line.
+      quarantineInPrompt: true,
     });
     wake();
   };
