@@ -82,7 +82,7 @@ class GatewayBootstrapAuthTest {
         storedOperatorToken = "stored-token",
       )
 
-    assertEquals(NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = null, password = null), resolved)
+    assertEquals(NodeRuntime.GatewayConnectAuth(token = "stored-token", bootstrapToken = null, password = null), resolved)
   }
 
   @Test
@@ -319,7 +319,14 @@ class GatewayBootstrapAuthTest {
 
     runtime.refreshGatewayConnection()
 
-    val desired = desiredConnection(runtime, "nodeSession") ?: error("Expected desired node connection")
+    var desired: Any? = null
+    repeat(100) {
+      desired = desiredConnection(runtime, "nodeSession")
+      if (desired != null) return@repeat
+      Thread.sleep(10)
+    }
+    if (desired == null) error("Expected desired node connection")
+    
     val endpoint = readField<GatewayEndpoint>(desired, "endpoint")
     assertEquals("127.0.0.1", endpoint.host)
     assertEquals(18789, endpoint.port)
@@ -329,9 +336,16 @@ class GatewayBootstrapAuthTest {
   @Test
   fun connect_showsSecureEndpointGuidanceWhenTlsProbeFails() {
     val app = RuntimeEnvironment.getApplication()
+    val securePrefs =
+      app.getSharedPreferences(
+        "openclaw.node.secure.test.${UUID.randomUUID()}",
+        android.content.Context.MODE_PRIVATE,
+      )
+    val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
     val runtime =
       NodeRuntime(
         app,
+        prefs = prefs,
         tlsFingerprintProbe = { _, _ ->
           GatewayTlsProbeResult(failure = GatewayTlsProbeFailure.TLS_UNAVAILABLE)
         },

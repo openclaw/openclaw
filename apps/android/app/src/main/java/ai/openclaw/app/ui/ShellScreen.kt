@@ -1410,7 +1410,7 @@ private fun SettingsShellScreen(
   }
 
   if (route != SettingsRoute.Home) {
-    SettingsDetailScreen(viewModel = viewModel, route = route, onBack = onRouteBack)
+    SettingsDetailScreen(viewModel = viewModel, route = route, onBack = onRouteBack, onNavigate = onRouteChange)
     return
   }
 
