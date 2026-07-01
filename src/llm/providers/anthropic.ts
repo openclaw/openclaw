@@ -1180,9 +1180,8 @@ function convertMessages(
 
   // Transform messages for cross-provider compatibility
   const transformedMessages = transformMessages(messages, model, normalizeToolCallId);
-  const activeToolTurnAssistantIndex = replayThinkingEnabled
-    ? -1
-    : findActiveAnthropicToolTurnAssistantIndex(transformedMessages);
+  const activeToolTurnAssistantIndex =
+    findActiveAnthropicToolTurnAssistantIndex(transformedMessages);
 
   for (let i = 0; i < transformedMessages.length; i++) {
     const msg = transformedMessages[i];
@@ -1240,7 +1239,13 @@ function convertMessages(
             text: sanitizeSurrogates(block.text),
           });
         } else if (block.type === "thinking") {
-          if (!replayThinkingEnabled && i !== activeToolTurnAssistantIndex) {
+          // Strip thinking blocks from completed prior assistant turns:
+          // only the active tool-use cycle needs preserved signatures for
+          // tool-result continuity. Completed turns without pending tool
+          // calls do not need signatures, and re-emitting stale signatures
+          // can cause 400 "Invalid signature in thinking block" on long
+          // multi-turn sessions (#94228).
+          if (i !== activeToolTurnAssistantIndex) {
             omittedThinking = true;
             continue;
           }
