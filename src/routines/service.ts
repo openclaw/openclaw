@@ -44,6 +44,10 @@ type RoutineTarget = {
 
 type RoutineSchedule = Extract<CronSchedule, { kind: "at" | "every" | "cron" }>;
 type RoutineCronJobCreate = CronJobCreate & { schedule: RoutineSchedule };
+type RoutineBackingCronJob = CronJob & {
+  schedule: RoutineSchedule;
+  deleteAfterRun: false;
+};
 
 type RoutineScheduleTrigger = {
   kind: "schedule";
@@ -704,7 +708,20 @@ function assertNewRoutineScheduleIsValid(schedule: CronSchedule): void {
   }
 }
 
+function assertRoutineBackingCronJobCanRemainLinked(
+  cronJob: CronJob,
+): asserts cronJob is RoutineBackingCronJob {
+  if (cronJob.deleteAfterRun !== false) {
+    throw routineInvalidRequest(`routine backing cron job changed deleteAfterRun: ${cronJob.id}`);
+  }
+  assertRoutineScheduleSupported(
+    cronJob.schedule,
+    `routine backing cron job changed to unsupported schedule: ${cronJob.id}`,
+  );
+}
+
 function assertRoutineCanBeEnabled(cronJob: CronJob): void {
+  assertRoutineBackingCronJobCanRemainLinked(cronJob);
   if (cronJob.schedule.kind !== "at") {
     return;
   }
@@ -950,15 +967,7 @@ function assertRoutineBackingCronJobMatches(
   normalized: NormalizedRoutineCreate,
   cronJob: CronJob,
 ): void {
-  if (cronJob.deleteAfterRun !== false) {
-    throw routineInvalidRequest(
-      `routine backing cron job changed deleteAfterRun: ${record.trigger.cronJobId}`,
-    );
-  }
-  assertRoutineScheduleSupported(
-    cronJob.schedule,
-    `routine backing cron job changed to unsupported schedule: ${record.trigger.cronJobId}`,
-  );
+  assertRoutineBackingCronJobCanRemainLinked(cronJob);
   assertGeneratedEveryAnchorMatchesBaseline(record, cronJob);
   const comparable = createRoutineRecordFromCronJob(record, cronJob);
   if (
@@ -1086,11 +1095,14 @@ async function maybeApplyRoutineToggleStage(params: {
       : params.record.disableStage === "disabling"
         ? false
         : undefined;
-  if (enabled === undefined || params.cronJob.enabled === enabled) {
+  if (enabled === undefined) {
     return params.cronJob;
   }
   if (enabled) {
     assertRoutineCanBeEnabled(params.cronJob);
+  }
+  if (params.cronJob.enabled === enabled) {
+    return params.cronJob;
   }
   return await params.context.cron.update(params.cronJob.id, { enabled });
 }
@@ -1333,10 +1345,10 @@ export async function setRoutineEnabled(
         changed: record.enabled,
       };
     }
-    if (enabled && !cronJob.enabled) {
+    const changed = record.enabled !== enabled || cronJob.enabled !== enabled;
+    if (enabled && changed) {
       assertRoutineCanBeEnabled(cronJob);
     }
-    const changed = record.enabled !== enabled || cronJob.enabled !== enabled;
     if (!changed) {
       const cleanRecord = hasRoutineInternalStage(record)
         ? toPublicRoutineRecord({

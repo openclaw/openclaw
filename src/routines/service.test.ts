@@ -1210,6 +1210,61 @@ describe("routine service", () => {
     });
   });
 
+  it.each([
+    {
+      label: "event-driven schedule",
+      patch: { schedule: { kind: "on-exit" as const, command: "echo done" } },
+      message: "unsupported schedule",
+    },
+    {
+      label: "delete-after-run",
+      patch: { deleteAfterRun: true },
+      message: "deleteAfterRun",
+    },
+  ])("rejects enabling when backing cron drifts to $label", async ({ patch, message }) => {
+    await withOpenClawTestState({ prefix: "routine-enable-drift-" }, async () => {
+      const cron = createFakeCronService();
+      const created = await createRoutine(createRoutineInput({ enabled: false }), { cron });
+      const cronJob = cron.jobs.get(created.routine.trigger.cronJobId);
+      if (!cronJob) {
+        throw new Error("expected backing cron job");
+      }
+      cron.jobs.set(cronJob.id, { ...cronJob, ...patch });
+      cron.update.mockClear();
+
+      await expect(setRoutineEnabled(created.routine.id, true, { cron })).rejects.toThrow(message);
+      expect(cron.update).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects staged enable replay when backing cron drifts to event-driven", async () => {
+    await withOpenClawTestState({ prefix: "routine-enable-stage-drift-" }, async () => {
+      const cron = createFakeCronService();
+      const created = await createRoutine(createRoutineInput({ enabled: false }), { cron });
+      const cronJobId = created.routine.trigger.cronJobId;
+      cron.update.mockRejectedValueOnce(new Error("interrupted before enable"));
+
+      await expect(setRoutineEnabled(created.routine.id, true, { cron })).rejects.toThrow(
+        "interrupted before enable",
+      );
+      const cronJob = cron.jobs.get(cronJobId);
+      if (!cronJob) {
+        throw new Error("expected backing cron job");
+      }
+      cron.jobs.set(cronJob.id, {
+        ...cronJob,
+        schedule: { kind: "on-exit", command: "echo done" },
+      });
+      cron.update.mockClear();
+
+      await expect(setRoutineEnabled(created.routine.id, true, { cron })).rejects.toThrow(
+        "unsupported schedule",
+      );
+      expect(cron.update).not.toHaveBeenCalled();
+      expect(readStoredRoutineJson()).toMatchObject({ enableStage: "enabling" });
+    });
+  });
+
   it("recovers a staged enable during idempotent create replay", async () => {
     await withOpenClawTestState({ prefix: "routine-enable-stage-create-replay-" }, async () => {
       const cron = createFakeCronService();
