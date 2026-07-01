@@ -35,6 +35,11 @@ export function repairJson(json: string): string {
   let repaired = "";
   let inString = false;
   let stringValuePrefix = "";
+  // Once a string contains a properly escaped backslash, the model demonstrably
+  // escapes correctly, so later \n/\t/etc. are genuine control escapes — not
+  // unescaped Windows path separators. Tracking this stops the path heuristic
+  // below from corrupting a real newline that follows an escaped path.
+  let sawEscapedBackslash = false;
 
   for (let index = 0; index < json.length; index++) {
     const char = json[index];
@@ -44,6 +49,7 @@ export function repairJson(json: string): string {
       if (char === '"') {
         inString = true;
         stringValuePrefix = "";
+        sawEscapedBackslash = false;
       }
       continue;
     }
@@ -52,6 +58,7 @@ export function repairJson(json: string): string {
       repaired += char;
       inString = false;
       stringValuePrefix = "";
+      sawEscapedBackslash = false;
       continue;
     }
 
@@ -79,7 +86,11 @@ export function repairJson(json: string): string {
         continue;
       }
 
-      if (JSON_CONTROL_ESCAPES.has(nextChar) && looksLikeWindowsPathPrefix(stringValuePrefix)) {
+      if (
+        JSON_CONTROL_ESCAPES.has(nextChar) &&
+        !sawEscapedBackslash &&
+        looksLikeWindowsPathPrefix(stringValuePrefix)
+      ) {
         repaired += "\\\\";
         stringValuePrefix += "\\";
         continue;
@@ -87,7 +98,12 @@ export function repairJson(json: string): string {
 
       if (VALID_JSON_ESCAPES.has(nextChar)) {
         repaired += `\\${nextChar}`;
-        stringValuePrefix += nextChar === "\\" ? "\\" : `\\${nextChar}`;
+        if (nextChar === "\\") {
+          stringValuePrefix += "\\";
+          sawEscapedBackslash = true;
+        } else {
+          stringValuePrefix += `\\${nextChar}`;
+        }
         index += 1;
         continue;
       }

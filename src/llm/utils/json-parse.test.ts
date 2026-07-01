@@ -31,6 +31,20 @@ describe("json-parse repairJson invalid \\u escapes", () => {
     });
   });
 
+  it("preserves a real control escape after an escaped Windows path", () => {
+    // Valid JSON whose path uses escaped \\ separators and whose \n is a genuine
+    // newline. The Windows-path repair heuristic must not fire here — doing so
+    // turned the real newline into a literal backslash-n, corrupting tool-call
+    // arguments (e.g. a multi-line shell command containing a Windows path).
+    const wire = JSON.stringify({ text: "Saved to C:\\Users\\me\nDone." });
+    expect(parseJsonWithRepair(wire)).toEqual(JSON.parse(wire));
+    expect((parseJsonWithRepair(wire) as { text: string }).text).toContain("\n");
+    expect((parseStreamingJson(wire) as { text: string }).text).toContain("\n");
+    // A real tab after an escaped path is likewise a genuine control escape.
+    const tabbed = JSON.stringify({ p: "D:\\a\\b\tEND" });
+    expect(parseJsonWithRepair(tabbed)).toEqual(JSON.parse(tabbed));
+  });
+
   it("recovers streaming tool-call arguments instead of dropping them to {}", () => {
     // LaTeX-style \u (\underline) is a valid string value the model may emit in args.
     const args = '{"cmd":"\\underline{x}"}';
