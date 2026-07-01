@@ -227,6 +227,23 @@ describe("Codex app-server dynamic tool build", () => {
     ]);
   });
 
+  it("preserves explicitly allowlisted OpenClaw fallback tools when Codex native tools are unavailable", () => {
+    const tools = ["read", "write", "exec", "process", "update_plan", "tool_search", "message"].map(
+      (name) => ({ name }),
+    );
+
+    expect(
+      filterCodexDynamicTools(tools, {}, process.env, {
+        preserveExplicitFallbackToolNames: ["exec", "read", "update_plan", "tool_search"],
+      }).map((tool) => tool.name),
+    ).toEqual(["read", "exec", "update_plan", "message"]);
+    expect(
+      filterCodexDynamicTools(tools, { codexDynamicToolsExclude: ["exec"] }, process.env, {
+        preserveExplicitFallbackToolNames: ["exec", "read"],
+      }).map((tool) => tool.name),
+    ).toEqual(["read", "message"]);
+  });
+
   it("removes managed web_search when domain-restricted Codex hosted search is active", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
@@ -815,6 +832,28 @@ describe("Codex app-server dynamic tool build", () => {
     expect(tools.find((tool) => tool.name === "sandbox_exec")?.description).toContain(
       "Docker container-path bind layout",
     );
+  });
+
+  it("exposes explicitly allowlisted OpenClaw shell and file tools when Codex native surface is disabled", async () => {
+    setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("read"),
+      createRuntimeDynamicTool("write"),
+      createRuntimeDynamicTool("web_search"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = ["exec", "read", "write"];
+
+    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      nativeToolSurfaceEnabled: false,
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["exec", "read", "write"]);
   });
 
   it("does not expose sandbox shell tools when sandbox routing is disabled", async () => {

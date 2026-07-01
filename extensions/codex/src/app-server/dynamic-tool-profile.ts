@@ -22,6 +22,16 @@ export const CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES = [
   "tool_search_code",
 ] as const;
 
+const CODEX_DYNAMIC_OPENCLAW_FALLBACK_TOOL_NAMES = new Set<string>([
+  "read",
+  "write",
+  "edit",
+  "apply_patch",
+  "exec",
+  "process",
+  "update_plan",
+]);
+
 const DYNAMIC_TOOL_NAME_ALIASES: Record<string, string> = {
   bash: "exec",
   "apply-patch": "apply_patch",
@@ -104,20 +114,36 @@ export function filterCodexDynamicTools<T extends { name: string }>(
   tools: T[],
   config: Pick<CodexPluginConfig, "codexDynamicToolsExclude">,
   env: CodexDynamicToolProfileEnv = process.env,
+  options: { preserveExplicitFallbackToolNames?: readonly string[] } = {},
 ): T[] {
-  const excludes = new Set<string>();
+  const defaultExcludes = new Set<string>();
   if (!isForcedPrivateQaCodexRuntime(env)) {
     for (const name of CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES) {
-      excludes.add(name);
+      defaultExcludes.add(name);
     }
   }
+  const explicitExcludes = new Set<string>();
   for (const name of config.codexDynamicToolsExclude ?? []) {
     const trimmed = normalizeCodexDynamicToolName(name);
     if (trimmed) {
-      excludes.add(trimmed);
+      explicitExcludes.add(trimmed);
     }
   }
-  return excludes.size === 0
+  const preservedFallbackTools = new Set(
+    (options.preserveExplicitFallbackToolNames ?? [])
+      .map((name) => normalizeCodexDynamicToolName(name))
+      .filter((name) => CODEX_DYNAMIC_OPENCLAW_FALLBACK_TOOL_NAMES.has(name)),
+  );
+  return defaultExcludes.size === 0 && explicitExcludes.size === 0
     ? tools
-    : tools.filter((tool) => !excludes.has(normalizeCodexDynamicToolName(tool.name)));
+    : tools.filter((tool) => {
+        const normalized = normalizeCodexDynamicToolName(tool.name);
+        if (explicitExcludes.has(normalized)) {
+          return false;
+        }
+        if (preservedFallbackTools.has(normalized)) {
+          return true;
+        }
+        return !defaultExcludes.has(normalized);
+      });
 }
