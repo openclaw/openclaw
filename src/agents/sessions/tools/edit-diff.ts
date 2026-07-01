@@ -206,9 +206,9 @@ function getNoChangeError(path: string, totalEdits: number): EditNoChangeError {
  * line. The other fuzzy normalizations (trimEnd, smart quotes, dashes,
  * special spaces) are same-length replacements that do not shift positions.
  *
- * This function groups each base character with its following combining marks
- * and normalizes the complete segment, so cross-code-point NFKC composition
- * is handled correctly.
+ * This function groups code points into composition blocks by checking
+ * whether adjacent code points interact under NFKC (combining marks,
+ * Hangul Jamo L+V+T composition, and any other cross-code-point merges).
  */
 function mapLineOffsetThroughNfkc(origLine: string, normOffset: number, snapToEnd = false): number {
   const nfkcLine = origLine.normalize("NFKC");
@@ -220,9 +220,10 @@ function mapLineOffsetThroughNfkc(origLine: string, normOffset: number, snapToEn
     return Math.min(normOffset, origLine.length);
   }
 
-  // Walk through original code points, grouping each base character with its
-  // following combining marks. Normalize each complete group with NFKC to
-  // find how many normalized code units it produces.
+  // Walk through original code points, grouping each base character with
+  // all following code points that participate in NFKC composition with it.
+  // This handles combining marks, Hangul Jamo (L+V+T → syllable), and any
+  // other cross-code-point compositions that NFKC performs.
   let origPos = 0;
   let nfkcPos = 0;
   const codePoints = Array.from(origLine);
@@ -233,12 +234,19 @@ function mapLineOffsetThroughNfkc(origLine: string, normOffset: number, snapToEn
       return origPos;
     }
 
-    // Collect base code point + any following combining marks as one segment.
+    // Greedily extend the segment as long as the next code point
+    // participates in NFKC composition with the current segment.
     let segment = codePoints[i];
     let segOrigLen = codePoints[i].length;
     i++;
-    while (i < codePoints.length && /^\p{M}/u.test(codePoints[i])) {
-      segment += codePoints[i];
+    while (i < codePoints.length) {
+      const extended = segment + codePoints[i];
+      const extNfkc = extended.normalize("NFKC");
+      const separateNfkc = segment.normalize("NFKC") + codePoints[i].normalize("NFKC");
+      if (extNfkc === separateNfkc) {
+        break; // next code point does not compose with segment
+      }
+      segment = extended;
       segOrigLen += codePoints[i].length;
       i++;
     }

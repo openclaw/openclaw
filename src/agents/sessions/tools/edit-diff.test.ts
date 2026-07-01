@@ -194,6 +194,30 @@ describe("applyEditsToNormalizedContent", () => {
     expect(lines[1]).toBe("footer");
   });
 
+  it("fuzzy match handles Hangul Jamo composition (non-combining-mark NFKC merge)", () => {
+    // Hangul Compatibility Jamo ㄱ (U+3131) + ㅏ (U+314F) compose to 가
+    // under NFKC (2 code points -> 1), but ㅏ is NOT a combining mark
+    // (\p{M}), so the old segment-only mapper that only grouped base +
+    // combining marks would treat them as separate segments and miscount
+    // the NFKC offsets.
+    const content = [
+      "\u3131\u314F X = \u2018val\u2019;",
+      "footer",
+    ].join("\n");
+
+    // Smart quotes trigger fuzzy matching; ㄱㅏ -> 가 shifts positions
+    const result = applyEditsToNormalizedContent(
+      normalizeToLF(content),
+      [{ oldText: "X = 'val';", newText: "Y = 'new';" }],
+      "test.ts",
+    );
+
+    const lines = result.newContent.split("\n");
+    // X must be consumed (replaced); Hangul Jamo preserved
+    expect(lines[0]).toBe("\u3131\u314F Y = 'new';");
+    expect(lines[1]).toBe("footer");
+  });
+
   it("baseContent is always the original content", () => {
     const content = "line with smart\u2019s\nline with trailing   ";
 
