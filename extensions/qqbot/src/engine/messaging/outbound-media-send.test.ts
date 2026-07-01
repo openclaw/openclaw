@@ -55,7 +55,12 @@ vi.mock("./sender.js", () => ({
 
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import * as securityRuntime from "openclaw/plugin-sdk/security-runtime";
-import { resolveOutboundMediaPath, sendPhoto, sendVoice } from "./outbound-media-send.js";
+import {
+  resolveOutboundMediaPath,
+  sendDocument,
+  sendPhoto,
+  sendVoice,
+} from "./outbound-media-send.js";
 import { OUTBOUND_ERROR_CODES } from "./outbound-types.js";
 import { sendMedia as senderSendMedia } from "./sender.js";
 
@@ -196,6 +201,26 @@ describe("trySendViaHostRead error handling", () => {
     expect(result).toMatchObject({ channel: "qqbot", error: expect.any(String) });
     expect(result.error).toContain("sandbox host read failed");
     expect(mockedSenderSendMedia).not.toHaveBeenCalled();
+  });
+
+  it("falls back to normal local sends for trusted media paths outside host-read roots", async () => {
+    const trustedMediaDir = path.join(openclawHome, ".openclaw", "media", "qqbot");
+    await fs.mkdir(trustedMediaDir, { recursive: true });
+    const trustedMediaPath = path.join(trustedMediaDir, "trusted-report.docx");
+    await fs.writeFile(trustedMediaPath, Buffer.from("trusted report"));
+    mockedLoadOutboundMediaFromUrl.mockRejectedValue(new Error("sandbox host read failed"));
+    mockedSenderSendMedia.mockResolvedValue({ id: "media-1", timestamp: 123 });
+
+    const result = await sendDocument(makeCtx(), trustedMediaPath);
+
+    expect(result).toMatchObject({ channel: "qqbot", messageId: "media-1" });
+    expect(mockedLoadOutboundMediaFromUrl).not.toHaveBeenCalled();
+    expect(mockedSenderSendMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "file",
+        source: { localPath: trustedMediaPath },
+      }),
+    );
   });
 
   it("returns OutboundResult.error when senderSendMedia rejects", async () => {

@@ -274,11 +274,14 @@ function senderKindForLoadedMedia(
 
 function resolveHostReadMediaPath(ctx: MediaTargetContext, mediaPath: string): string | null {
   const normalizedPath = normalizePath(mediaPath);
-  if (
-    path.isAbsolute(normalizedPath) &&
-    isPathWithinAnyRoot(normalizedPath, resolveOutboundMediaLocalRoots(ctx))
-  ) {
-    return normalizedPath;
+  if (path.isAbsolute(normalizedPath)) {
+    if (isPathWithinAnyRoot(normalizedPath, resolveOutboundMediaLocalRoots(ctx))) {
+      return normalizedPath;
+    }
+    if (normalizedPath === "/workspace" || normalizedPath.startsWith("/workspace/")) {
+      return resolveWorkspacePathCandidate(normalizedPath, ctx.mediaAccess?.workspaceDir);
+    }
+    return null;
   }
   return resolveWorkspacePathCandidate(normalizedPath, ctx.mediaAccess?.workspaceDir);
 }
