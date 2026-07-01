@@ -45,23 +45,14 @@ export function createChannelProgressDraftCompositor(params: {
   formatLine?: (line: string) => string;
   isEmptyLine?: (line: ChannelProgressDraftCompositorLine | undefined) => boolean;
   shouldStartNow?: (line: ChannelProgressDraftCompositorLine | undefined) => boolean;
-  /** Marker prepended to each window reasoning line. */
   reasoningLinePrefix?: string;
-  /** Marker prepended to each window commentary line. */
   commentaryLinePrefix?: string;
-  /** Whether the window reasoning lane may render. */
   reasoningGate?: boolean;
-  /**
-   * Wrap window commentary lines in `_…_` italic markup. Reasoning stays italic
-   * either way; commentary italics are opt-out for channels that prefer plain
-   * narration (Discord). Defaults to on.
-   */
   commentaryItalics?: boolean;
 }) {
   const reasoningLinePrefix = params.reasoningLinePrefix ?? "";
   const commentaryLinePrefix = params.commentaryLinePrefix ?? "";
   const commentaryItalics = params.commentaryItalics ?? true;
-  // Strip the `_…_` italic wrapper the normalize helpers add, per line.
   const stripLaneItalics = (text: string): string =>
     text
       .split("\n")
@@ -71,7 +62,8 @@ export function createChannelProgressDraftCompositor(params: {
     params.active && resolveChannelStreamingPreviewToolProgress(params.entry);
   const commentaryProgressEnabled =
     params.active && resolveChannelStreamingProgressCommentary(params.entry);
-  const thinkingProgressEnabled = params.active && (params.reasoningGate ?? true);
+  const thinkingProgressEnabled =
+    params.active && (params.reasoningGate ?? previewToolProgressEnabled);
   const suppressDefaultToolProgressMessages =
     params.active &&
     resolveChannelStreamingSuppressDefaultToolProgressMessages(params.entry, {
@@ -289,8 +281,6 @@ export function createChannelProgressDraftCompositor(params: {
         !text ||
         progressSuppressed ||
         finalReplyDelivered ||
-        // The thinking lane has its own window flag; it must not piggyback on
-        // the tools flag, or a tools-quiet window could never show thoughts.
         !thinkingProgressEnabled
       ) {
         return false;

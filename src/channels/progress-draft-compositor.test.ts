@@ -38,7 +38,25 @@ describe("createChannelProgressDraftCompositor", () => {
     await hidden.pushReasoningProgress("Reading files");
     expect(hiddenUpdate.mock.calls.every(([text]) => !String(text).includes("Reading"))).toBe(true);
 
-    // …and a tools-quiet window can still show thoughts (no piggybacking).
+    const defaultUpdate = vi.fn();
+    const sharedDefault = createChannelProgressDraftCompositor({
+      entry: {
+        streaming: {
+          mode: "progress",
+          progress: { label: "Shelling", toolProgress: false },
+        },
+      },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update: defaultUpdate,
+    });
+    await sharedDefault.pushToolProgress("🛠️ Exec", { startImmediately: true });
+    await sharedDefault.pushReasoningProgress("Reading files");
+    expect(defaultUpdate.mock.calls.every(([text]) => !String(text).includes("Reading"))).toBe(
+      true,
+    );
+
     const update = vi.fn();
     const progress = createChannelProgressDraftCompositor({
       entry: {
@@ -51,6 +69,7 @@ describe("createChannelProgressDraftCompositor", () => {
       active: true,
       seed: "test",
       reasoningLinePrefix: "🧠 ",
+      reasoningGate: true,
       update,
     });
     await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });

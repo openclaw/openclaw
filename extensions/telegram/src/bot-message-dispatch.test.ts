@@ -3242,6 +3242,36 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.flush).toHaveBeenCalled();
   });
 
+  it("keeps streamed reasoning visible when tool progress lines are hidden", async () => {
+    const draftStream = createSequencedDraftStream(2001);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onReplyStart?.();
+      await replyOptions?.onAssistantMessageStart?.();
+      await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await replyOptions?.onReasoningStream?.({ text: "<think>Checking files</think>" });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({
+      context: createReasoningStreamContext(),
+      streamMode: "progress",
+      telegramCfg: {
+        streaming: {
+          mode: "progress",
+          progress: { label: "Shelling", toolProgress: false },
+        },
+      },
+    });
+
+    expect(draftStream.updatePreview).toHaveBeenCalledWith(
+      telegramProgressPreview(
+        "Shelling\n\n• Checking files",
+        "<b>Shelling</b>\n<i>Checking files</i>",
+      ),
+    );
+  });
+
   it.each([{ label: false }, { label: "Shelling", maxLines: 1 }] as const)(
     "does not duplicate Telegram progress HTML rows without a visible label",
     async (progress) => {
