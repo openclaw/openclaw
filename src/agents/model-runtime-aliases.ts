@@ -189,20 +189,38 @@ function resolveProfileRuntimeAlias(params: {
   })?.runtime;
 }
 
+function isDirectAuthProfileForProvider(params: {
+  cfg?: OpenClawConfig;
+  providerAuthKey: string;
+  profileId: string;
+}): boolean {
+  const profileProvider = params.cfg?.auth?.profiles?.[params.profileId]?.provider;
+  if (!profileProvider) {
+    return false;
+  }
+  return resolveProviderIdForAuth(profileProvider, { config: params.cfg }) === params.providerAuthKey;
+}
+
 function listRuntimeOrderKeysForProvider(params: {
   cfg?: OpenClawConfig;
   provider: string;
 }): string[] {
   const provider = normalizeProviderId(params.provider);
-  if (!provider) {
+  const order = params.cfg?.auth?.order;
+  if (!provider || !order) {
     return [];
   }
-  return listCliRuntimeModelBackendBindings({
-    config: params.cfg,
-    includeSetupRegistry: params.cfg !== undefined,
-  })
-    .filter((binding) => binding.provider === provider)
-    .map((binding) => binding.runtime);
+  return Object.keys(order)
+    .map((runtime) => normalizeProviderId(runtime))
+    .filter(
+      (runtime) =>
+        runtime !== provider &&
+        resolveCliRuntimeModelBackendBinding({
+          config: params.cfg,
+          provider,
+          runtime,
+        })?.runtime === runtime,
+    );
 }
 
 function resolveCliRuntimeFromAuthProfile(params: {
@@ -234,6 +252,9 @@ function resolveCliRuntimeFromAuthProfile(params: {
     const runtimeAlias = resolveProfileRuntimeAlias({ cfg: params.cfg, provider, profileId });
     if (runtimeAlias) {
       return runtimeAlias;
+    }
+    if (isDirectAuthProfileForProvider({ cfg: params.cfg, providerAuthKey, profileId })) {
+      return undefined;
     }
   }
 
