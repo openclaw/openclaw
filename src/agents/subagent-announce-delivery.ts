@@ -499,10 +499,6 @@ function hasDirectAnnounceSendEvidence(error: unknown): boolean {
   return error.sentBeforeError === true || error.visibleReplySent === true;
 }
 
-function didVisibleSendFailAfterPartialDelivery(error: unknown): boolean {
-  return hasAnnounceSendEvidence(error);
-}
-
 function hasAnnounceSendEvidence(error: unknown): boolean {
   return hasAnnounceErrorMatch(error, hasDirectAnnounceSendEvidence);
 }
@@ -959,7 +955,7 @@ async function deliverGeneratedMediaCompletionDirect(params: {
       path: "direct",
     };
   } catch (err) {
-    const terminal = didVisibleSendFailAfterPartialDelivery(err);
+    const terminal = hasAnnounceSendEvidence(err);
     return {
       delivered: false,
       path: "direct",

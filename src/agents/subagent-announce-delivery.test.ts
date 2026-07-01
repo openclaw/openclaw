@@ -4974,11 +4974,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       cause: new Error("outbound delivery failed"),
       results: [{ channel: "telegram", messageId: "msg-1" }],
     });
-    const callGateway = vi.fn(async () => {
+    const callGateway: typeof runtimeCallGateway = vi.fn(async () => {
       throw new Error("session file changed while embedded prompt lock was released", {
         cause: sendErr,
       });
-    }) as unknown as typeof runtimeCallGateway;
+    });
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock(["no_active_run"]);
     const result = await deliverSlackChannelAnnouncement({
       callGateway,
@@ -5010,9 +5010,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       promptError: promptErr,
     });
 
-    const callGateway = vi.fn(async () => {
+    const callGateway: typeof runtimeCallGateway = vi.fn(async () => {
       throw wrapperErr;
-    }) as unknown as typeof runtimeCallGateway;
+    });
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock(["no_active_run"]);
     const result = await deliverSlackChannelAnnouncement({
       callGateway,
@@ -5034,7 +5034,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 
   it("retries session-file-changed failures without send evidence", async () => {
     let attempts = 0;
-    const callGateway = vi.fn(async () => {
+    const callGatewaySpy = vi.fn();
+    const callGateway: typeof runtimeCallGateway = async <
+      T = Record<string, unknown>,
+    >(): Promise<T> => {
+      callGatewaySpy();
       attempts++;
       if (attempts <= 1) {
         throw new Error("session file changed while embedded prompt lock was released");
@@ -5043,8 +5047,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         result: {
           payloads: [{ text: "recovered after retry" }],
         },
-      };
-    }) as unknown as typeof runtimeCallGateway;
+      } as T;
+    };
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock(["no_active_run"]);
     const result = await deliverSlackChannelAnnouncement({
       callGateway,
@@ -5057,7 +5061,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 
     expect(result.delivered).toBe(true);
     expect(result.path).toBe("direct");
-    expect(callGateway).toHaveBeenCalledTimes(2);
+    expect(callGatewaySpy).toHaveBeenCalledTimes(2);
   });
 
   it("detects send evidence from OutboundDeliveryError in the error chain", () => {
