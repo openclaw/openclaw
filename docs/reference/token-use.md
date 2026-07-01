@@ -76,6 +76,8 @@ Use these in chat:
   configured for the active model.
 - `/usage off|tokens|full` → appends a **per-response usage footer** to every reply.
   - Persists per session (stored as `responseUsage`).
+  - `/usage reset` (aliases: `inherit`, `clear`, `default`) — clears the session
+    override so the session re-inherits the configured default.
   - `/usage full` shows estimated cost only when OpenClaw has usage metadata and
     local pricing for the active model. Otherwise it shows tokens only.
 - `/usage cost` → shows a local cost summary from OpenClaw session logs.

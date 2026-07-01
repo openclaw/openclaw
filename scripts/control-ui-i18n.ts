@@ -10,6 +10,19 @@ import * as ts from "typescript";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
+const { formatGeneratedModule } = (await import(
+  new URL("./lib/format-generated-module.mjs", import.meta.url).href
+)) as {
+  formatGeneratedModule: (
+    source: string,
+    options: {
+      errorLabel: string;
+      outputPath: string;
+      repoRoot: string;
+    },
+  ) => string;
+};
+
 interface TranslationMap {
   [key: string]: string | TranslationMap;
 }
@@ -151,6 +164,7 @@ const LOCALE_ENTRIES: readonly LocaleEntry[] = [
   { locale: "ja-JP", fileName: "ja-JP.ts", exportName: "ja_JP", languageKey: "jaJP" },
   { locale: "ko", fileName: "ko.ts", exportName: "ko", languageKey: "ko" },
   { locale: "fr", fileName: "fr.ts", exportName: "fr", languageKey: "fr" },
+  { locale: "hi", fileName: "hi.ts", exportName: "hi", languageKey: "hi" },
   { locale: "ar", fileName: "ar.ts", exportName: "ar", languageKey: "ar" },
   { locale: "it", fileName: "it.ts", exportName: "it", languageKey: "it" },
   { locale: "tr", fileName: "tr.ts", exportName: "tr", languageKey: "tr" },
@@ -161,6 +175,7 @@ const LOCALE_ENTRIES: readonly LocaleEntry[] = [
   { locale: "vi", fileName: "vi.ts", exportName: "vi", languageKey: "vi" },
   { locale: "nl", fileName: "nl.ts", exportName: "nl", languageKey: "nl" },
   { locale: "fa", fileName: "fa.ts", exportName: "fa", languageKey: "fa" },
+  { locale: "ru", fileName: "ru.ts", exportName: "ru", languageKey: "ru" },
 ];
 
 const DEFAULT_GLOSSARY: readonly GlossaryEntry[] = [
@@ -243,6 +258,8 @@ function prettyLanguageLabel(locale: string): string {
       return "Korean";
     case "fr":
       return "French";
+    case "hi":
+      return "Hindi";
     case "ar":
       return "Arabic";
     case "it":
@@ -263,6 +280,8 @@ function prettyLanguageLabel(locale: string): string {
       return "Dutch";
     case "fa":
       return "Persian";
+    case "ru":
+      return "Russian";
     case "de":
       return "German";
     case "es":
@@ -589,6 +608,8 @@ function buildSystemPrompt(targetLocale: string, glossary: readonly GlossaryEntr
     "- The JSON must be an object whose keys exactly match the provided ids.",
     "- Translate all English prose; keep code, URLs, product names, CLI commands, config keys, and env vars in English.",
     "- Preserve placeholders exactly, including {count}, {time}, {shown}, {total}, and similar tokens.",
+    "- Preserve Swift interpolation expressions such as \\(name) exactly, including the backslash and parentheses.",
+    "- Preserve Kotlin interpolation expressions such as $name and ${value} exactly.",
     "- Preserve punctuation, ellipses, arrows, and casing when they are part of literal UI text.",
     "- Preserve Markdown, inline code, HTML tags, and slash commands when present.",
     "- Use fluent, neutral product UI language.",
@@ -1222,18 +1243,12 @@ export async function runProcess(
 }
 
 async function formatGeneratedTypeScript(filePath: string, source: string): Promise<string> {
-  const directFormatterPath = path.join(ROOT, "node_modules", ".bin", "oxfmt");
-  const formatterCommand =
-    process.platform !== "win32" && existsSync(directFormatterPath) ? directFormatterPath : "pnpm";
-  const formatterArgs =
-    formatterCommand === directFormatterPath
-      ? ["--stdin-filepath", path.relative(ROOT, filePath)]
-      : ["exec", "oxfmt", "--stdin-filepath", path.relative(ROOT, filePath)];
-  const result = await runProcess(formatterCommand, formatterArgs, {
-    input: source,
-    rejectOnFailure: true,
+  const formatted = formatGeneratedModule(source, {
+    errorLabel: "control ui locale",
+    outputPath: filePath,
+    repoRoot: ROOT,
   });
-  return restoreReplacementCorruptedStringLiterals(source, result.stdout);
+  return restoreReplacementCorruptedStringLiterals(source, formatted);
 }
 
 function restoreReplacementCorruptedStringLiterals(source: string, formatted: string): string {

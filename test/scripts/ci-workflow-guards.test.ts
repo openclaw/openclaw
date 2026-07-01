@@ -182,12 +182,12 @@ describe("ci workflow guards", () => {
     expect(workflow.concurrency["cancel-in-progress"]).toContain(
       "github.event_name == 'pull_request'",
     );
-    expect(workflow.jobs["checks-fast-core"].strategy["max-parallel"]).toBe(8);
-    expect(workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"]).toBe(16);
-    expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy["max-parallel"]).toBe(8);
-    expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(8);
-    expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(8);
-    expect(workflow.jobs["check-additional-shard"].strategy["max-parallel"]).toBe(8);
+    expect(workflow.jobs["checks-fast-core"].strategy["max-parallel"]).toBe(12);
+    expect(workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"]).toBe(24);
+    expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy["max-parallel"]).toBe(12);
+    expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(12);
+    expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(12);
+    expect(workflow.jobs["check-additional-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["checks-windows"].strategy["max-parallel"]).toBe(2);
     expect(workflow.jobs.android.strategy["max-parallel"]).toBe(2);
   });
@@ -396,12 +396,19 @@ describe("ci workflow guards", () => {
   });
 
   it("bounds platform checkout fetches without GNU timeout", () => {
+    const source = readFileSync(".github/workflows/ci.yml", "utf8");
     const workflow = readCiWorkflow();
+
+    expect(source.match(/&platform_checkout_step/gu) ?? []).toHaveLength(1);
+    expect(source.match(/\*platform_checkout_step/gu) ?? []).toHaveLength(3);
+    expect(source.match(/fetch_checkout_ref_once\(\)/gu) ?? []).toHaveLength(1);
 
     for (const jobName of ["checks-windows", "macos-node", "macos-swift", "ios-build"]) {
       const checkoutStep = workflow.jobs[jobName].steps.find((step) => step.name === "Checkout");
 
       expect(checkoutStep.run, jobName).toContain("fetch_checkout_ref()");
+      expect(checkoutStep.run, jobName).toContain("fetch_checkout_ref_once()");
+      expect(checkoutStep.run, jobName).toContain("for attempt in 1 2 3");
       expect(checkoutStep.run, jobName).toContain("fetch_timeout_seconds=90");
       expect(checkoutStep.run, jobName).toContain("-c protocol.version=2");
       expect(checkoutStep.run, jobName).toContain(
@@ -412,6 +419,10 @@ describe("ci workflow guards", () => {
       );
       expect(checkoutStep.run, jobName).toContain('kill -TERM "$fetch_pid"');
       expect(checkoutStep.run, jobName).toContain('kill -KILL "$fetch_pid"');
+      expect(checkoutStep.run, jobName).toContain(
+        'if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then',
+      );
+      expect(checkoutStep.run, jobName).toContain("timed out on attempt $attempt; retrying");
       expect(checkoutStep.run, jobName).not.toContain(
         'git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1',
       );
@@ -573,7 +584,11 @@ describe("ci workflow guards", () => {
     expect(runStep.run).toContain("childEnv[key] = value");
   });
 
-  it("uploads a CI timing summary after the run lanes finish", () => {
+  it("keeps the CI timing summary parked for timing optimization work", () => {
+    expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
+      "Re-enable this job when we want to collect CI timing data for timing optimization.",
+    );
+
     const workflow = readCiWorkflow();
     const timingJob = workflow.jobs["ci-timings-summary"];
 
@@ -598,6 +613,7 @@ describe("ci workflow guards", () => {
       "ios-build",
       "android",
     ]);
+    expect(timingJob.if).toContain("false");
     expect(timingJob.if).toContain("always()");
     expect(timingJob.if).toContain("!cancelled()");
 
@@ -664,6 +680,7 @@ describe("ci workflow guards", () => {
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs).not.toHaveProperty("fail_on_qa_failure");
     expect(qaEvidenceWorkflow.on.workflow_call.inputs).not.toHaveProperty("fail_on_qa_failure");
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile).not.toHaveProperty("options");
+    expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile.default).toBe("all");
     expect(qaEvidenceWorkflow.on.workflow_call.inputs.qa_profile.type).toBe("string");
     const validateProfileStep = qaRunJob.steps.find(
       (step) => step.name === "Validate QA profile input",
@@ -682,7 +699,7 @@ describe("ci workflow guards", () => {
       // Keep the caller's ref while the callee verifies it against expected_sha.
       ref: "${{ inputs.ref }}",
       expected_sha: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
-      qa_profile: "release",
+      qa_profile: "all",
     });
     expect(generateJob.with).not.toHaveProperty("fail_on_qa_failure");
 
@@ -713,6 +730,8 @@ describe("ci workflow guards", () => {
       (step) => step.name === "Validate QA evidence manifest",
     );
     expect(validateManifestStep.run).toContain("qa-profile-evidence-manifest.json");
+    expect(validateManifestStep.run).toContain("qa-evidence.json profile must be all");
+    expect(validateManifestStep.run).toContain("QA evidence manifest profile must be all");
     expect(validateManifestStep.run).toContain("manifest.targetSha !== targetSha");
 
     expect(qaRunJob.outputs.artifact_name).toBe("${{ steps.evidence.outputs.artifact_name }}");
@@ -795,13 +814,55 @@ describe("ci workflow guards", () => {
 
   it("keeps workflow guards in fast CI-routing checks", () => {
     const workflow = readCiWorkflow();
+    const preflightStep = workflow.jobs.preflight.steps.find(
+      (step) => step.name === "Build CI manifest",
+    );
+    const taxonomy = parse(readFileSync("taxonomy.yaml", "utf8")) as {
+      profiles: Array<{ id: string; categoryIds: string[] }>;
+    };
+    const smokeProfile = taxonomy.profiles.find((profile) => profile.id === "smoke-ci");
+    if (!smokeProfile) {
+      throw new Error("taxonomy.yaml is missing the smoke-ci profile");
+    }
     const fastCoreJob = workflow.jobs["checks-fast-core"];
     const runStep = fastCoreJob.steps.find(
       (step) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
     );
+    const uploadStep = fastCoreJob.steps.find(
+      (step) => step.name === "Upload QA smoke profile evidence",
+    );
 
+    const ciWorkflowText = readFileSync(".github/workflows/ci.yml", "utf8");
+
+    expect(preflightStep.run).not.toContain("qa-smoke-profile");
+    expect(preflightStep.run).not.toContain("qa_category");
+    expect(smokeProfile.categoryIds).toHaveLength(30);
+    for (const categoryId of smokeProfile.categoryIds) {
+      expect(ciWorkflowText).not.toContain(`"${categoryId}"`);
+    }
+    expect(runStep.run).toContain("bundled-protocol)");
+    expect(runStep.run).toContain("qa-smoke-ci)");
     expect(runStep.run).toContain("contracts-plugins-ci-routing)");
     expect(runStep.run).toContain("ci-routing)");
+    expect(ciWorkflowText).toContain(
+      '{ check_name: "QA Smoke CI", runtime: "node", task: "qa-smoke-ci" }',
+    );
+    expect(runStep.run).toContain("--qa-profile smoke-ci");
+    expect(runStep.run).toContain("--concurrency 8");
+    expect(runStep.run).not.toContain("--category");
+    expect(runStep.run).not.toContain("--allow-failures");
+    expect(runStep.run).toContain("qa_exit_code=0");
+    expect(runStep.run).toContain('exit "$qa_exit_code"');
+    expect(runStep.run).toContain("scripts/build-all.mjs qaRuntime");
+    expect(runStep.run).not.toContain("OPENAI_API_KEY");
+    expect(runStep.run).toMatch(
+      /bundled-protocol\)\s+pnpm test:bundled\s+pnpm protocol:check\s+;;\s+qa-smoke-ci\)/,
+    );
+    expect(uploadStep.if).toBe("always() && matrix.task == 'qa-smoke-ci'");
+    expect(uploadStep.with).toMatchObject({
+      path: ".artifacts/qa-e2e/smoke-ci-profile/",
+      "if-no-files-found": "warn",
+    });
     expect(runStep.run.match(/test\/scripts\/ci-workflow-guards\.test\.ts/g)?.length).toBe(2);
   });
 

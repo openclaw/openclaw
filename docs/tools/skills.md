@@ -104,6 +104,9 @@ regardless of where they are loaded from.
       merge with defaults.
     - The effective allowlist applies across prompt building, slash-command
       discovery, sandbox sync, and skill snapshots.
+    - This is not a host shell authorization boundary. If the same agent can
+      use `exec`, constrain that shell separately with sandboxing, OS-user
+      isolation, exec deny/allowlists, and per-resource credentials.
   </Accordion>
 </AccordionGroup>
 

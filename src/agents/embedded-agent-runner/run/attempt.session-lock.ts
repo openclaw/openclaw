@@ -1171,6 +1171,9 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   let fenceGeneration = 0;
   let fenceActive = false;
   let takeoverDetected = false;
+  // Set when an active retained write prevents immediate held-lock release.
+  // The scope completion path retries release after the retained use unwinds.
+  let releaseHeldLockDeferred = false;
   let retainedLockUseCount = 0;
   const retainedLockIdleWaiters = new Set<() => void>();
   let heldLockDraining = false;
@@ -1603,6 +1606,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     const drainOwner = await beginHeldLockDrain();
     try {
       if (!(await waitForRetainedLockIdle())) {
+        releaseHeldLockDeferred = true;
         return;
       }
       if (!heldLock) {
@@ -1639,6 +1643,8 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     const drainOwner = await beginHeldLockDrain();
     try {
       if (!(await waitForRetainedLockIdle())) {
+        // Do not wait for retained idle from inside the active scope; that
+        // scope must unwind before the retained-use waiter can resolve.
         return undefined;
       }
       if (!heldLock) {
@@ -1660,6 +1666,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     const drainOwner = await beginHeldLockDrain();
     try {
       if (!(await waitForRetainedLockIdle())) {
+        // Same active-scope self-deadlock guard as takeHeldLockAfterRetainedIdle.
         return;
       }
       if (!heldLock) {
@@ -1721,6 +1728,12 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       }
     }
     await releaseHeldLockAfterTakeover();
+    // Retained use has been released and the active scope is no longer live,
+    // so a prior active-scope release bailout can drain the held file lock now.
+    if (releaseHeldLockDeferred) {
+      releaseHeldLockDeferred = false;
+      await releaseHeldLockWithFence();
+    }
     if (!outcome.ok) {
       throw outcome.error;
     }

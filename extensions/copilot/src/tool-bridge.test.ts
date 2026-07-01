@@ -107,6 +107,29 @@ describe("createCopilotToolBridge", () => {
     expect(createOpenClawCodingTools).toHaveBeenCalledTimes(0);
   });
 
+  it("allows vetted BYOK providers to expose model tools", async () => {
+    const sourceTools = [makeTool()];
+    const createOpenClawCodingTools = vi.fn(async () => sourceTools);
+
+    const result = await createCopilotToolBridge({
+      agentId: "agent-1",
+      allowModelTools: true,
+      createOpenClawCodingTools,
+      modelId: "gpt-test",
+      modelProvider: "custom-openai",
+      sessionId: "session-1",
+    });
+
+    expect(createOpenClawCodingTools).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelId: "gpt-test",
+        modelProvider: "custom-openai",
+      }),
+    );
+    expect(result.sourceTools).toEqual(sourceTools);
+    expect(result.sdkTools.map((tool) => tool.name)).toEqual(["tool-a"]);
+  });
+
   it("forwards supported fields to injected createOpenClawCodingTools", async () => {
     const controller = new AbortController();
     const createOpenClawCodingTools = vi.fn(async () => [makeTool()]);

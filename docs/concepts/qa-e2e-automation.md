@@ -68,13 +68,13 @@ Slim evidence omits per-entry `execution` and sets `evidenceMode: "slim"`;
 ```bash
 pnpm openclaw qa run \
   --qa-profile smoke-ci \
-  --category agent-runtime-and-provider-execution.agent-turn-execution \
+  --category channel-framework.conversation-routing-and-delivery \
   --provider-mode mock-openai \
   --output-dir .artifacts/qa-e2e/smoke-ci-profile-dispatch
 ```
 
 Use `smoke-ci` for deterministic profile proof with mock model providers and
-Crabline fake provider servers. Use `release` for Stable/LTS proof against live
+Crabline local provider servers. Use `release` for Stable/LTS proof against live
 channels. Use `all` only for explicit full-taxonomy evidence runs; it selects
 every active maturity category and can be dispatched through the `QA Profile
 Evidence` workflow with `qa_profile=all`. When a command also needs an OpenClaw
@@ -178,10 +178,21 @@ QA Lab, so package Docker release lanes do not run `qa` commands. Use
 `pnpm qa:observability:smoke` from a built source checkout when changing
 diagnostics instrumentation.
 
-For a transport-real Matrix smoke lane, run:
+For a transport-real Matrix smoke lane that does not require model-provider
+credentials, run the fast profile with the deterministic mock OpenAI provider:
 
 ```bash
-pnpm openclaw qa matrix --profile fast --fail-fast
+OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000 \
+  pnpm openclaw qa matrix --provider-mode mock-openai --profile fast --fail-fast
+```
+
+For the live-frontier provider lane, supply OpenAI-compatible credentials
+explicitly:
+
+```bash
+OPENCLAW_LIVE_OPENAI_KEY="${OPENAI_API_KEY}" \
+OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000 \
+  pnpm openclaw qa matrix --provider-mode live-frontier --profile fast --fail-fast
 ```
 
 The full CLI reference, profile/scenario catalog, env vars, and artifact layout for this lane live in [Matrix QA](/concepts/qa-matrix). At a glance: it provisions a disposable Tuwunel homeserver in Docker, registers temporary driver/SUT/observer users, runs the real Matrix plugin inside a child QA gateway scoped to that transport (no `qa-channel`), then writes a Markdown report, JSON summary, observed-events artifact, and combined output log under `.artifacts/qa-e2e/matrix-<timestamp>/`.
@@ -201,9 +212,10 @@ environment. That viewer profile is only for visual capture; the pass/fail
 decision still comes from the Discord REST oracle.
 
 CI uses the same command surface in `.github/workflows/qa-live-transports-convex.yml`.
-Scheduled and default manual runs execute the fast Matrix profile with live
-frontier credentials, `--fast`, and `OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000`.
-Manual `matrix_profile=all` fans out into the five profile shards.
+Scheduled and default manual runs execute the fast Matrix profile with
+QA-provided live-frontier credentials, `--fast`, and
+`OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS=3000`. Manual `matrix_profile=all` fans
+out into the five profile shards.
 
 For transport-real Telegram, Discord, Slack, and WhatsApp smoke lanes:
 
@@ -723,42 +735,70 @@ Required env when `--credential-source env`:
 Optional:
 
 - `OPENCLAW_QA_WHATSAPP_GROUP_JID` enables group scenarios such as
-  `whatsapp-mention-gating` and `whatsapp-group-allowlist-block`.
+  `whatsapp-mention-gating`, `whatsapp-group-pending-history-context`,
+  `whatsapp-broadcast-group-fanout`, `whatsapp-group-activation-always`,
+  `whatsapp-group-reply-to-bot-triggers`, group action/media/poll scenarios, and
+  `whatsapp-group-allowlist-block`.
 - `OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT=1` keeps message bodies in
   observed-message artifacts.
 
 Scenario catalog (`extensions/qa-lab/src/live-transports/whatsapp/whatsapp-live.runtime.ts`):
 
 - Baseline and group gating: `whatsapp-canary`, `whatsapp-pairing-block`,
-  `whatsapp-mention-gating`, `whatsapp-top-level-reply-shape`,
-  `whatsapp-restart-resume`, `whatsapp-group-allowlist-block`.
+  `whatsapp-mention-gating`, `whatsapp-group-pending-history-context`,
+  `whatsapp-group-activation-always`,
+  `whatsapp-group-reply-to-bot-triggers`,
+  `whatsapp-top-level-reply-shape`, `whatsapp-restart-resume`,
+  `whatsapp-group-allowlist-block`.
 - Native commands: `whatsapp-help-command`, `whatsapp-status-command`,
   `whatsapp-commands-command`, `whatsapp-tools-compact-command`,
   `whatsapp-whoami-command`, `whatsapp-context-command`,
   `whatsapp-native-new-command`.
 - Reply and final-output behavior: `whatsapp-tool-only-usage-footer`,
   `whatsapp-reply-to-message`, `whatsapp-group-reply-to-message`,
-  `whatsapp-reply-context-isolation`, `whatsapp-reply-delivery-shape`,
-  `whatsapp-stream-final-message-accounting`.
+  `whatsapp-reply-to-mode-batched`, `whatsapp-reply-context-isolation`,
+  `whatsapp-reply-delivery-shape`, `whatsapp-stream-final-message-accounting`.
+- User-path message actions: `whatsapp-agent-message-action-react` starts from
+  a real driver DM, lets the model call the `message` tool, and observes the
+  native WhatsApp reaction. `whatsapp-agent-message-action-upload-file` uses
+  the same posture for `message(action=upload-file)` and observes native
+  WhatsApp media. `whatsapp-group-agent-message-action-react` and
+  `whatsapp-group-agent-message-action-upload-file` prove the same user-visible
+  actions in a real WhatsApp group.
+- Group fanout: `whatsapp-broadcast-group-fanout` starts from one mentioned
+  WhatsApp group message and verifies distinct visible replies from `main` and
+  `qa-second`.
+- Group activation: `whatsapp-group-activation-always` changes a real group
+  session to `/activation always`, proves an unmentioned group message wakes
+  the agent, then restores `/activation mention`. `whatsapp-group-reply-to-bot-triggers`
+  seeds a bot reply, sends a native quoted reply to it without an explicit
+  mention, and verifies the agent wakes from that reply context.
 - Inbound media and structured messages: `whatsapp-inbound-image-caption`,
   `whatsapp-audio-preflight`, `whatsapp-inbound-structured-messages`,
-  `whatsapp-group-audio-gating`. These send real WhatsApp image, audio,
-  document, location, contact, and sticker events through the driver.
-- Outbound Gateway and message action coverage:
+  `whatsapp-group-audio-gating`, `whatsapp-inbound-reaction-no-trigger`.
+  These send real WhatsApp image, audio, document, location, contact, sticker,
+  and reaction events through the driver.
+- Direct Gateway contract probes:
   `whatsapp-outbound-media-matrix`,
   `whatsapp-outbound-document-preserves-filename`, `whatsapp-outbound-poll`,
-  `whatsapp-message-actions`.
+  `whatsapp-group-outbound-media`, `whatsapp-group-outbound-poll`,
+  `whatsapp-message-actions`, `whatsapp-reply-context-isolation`,
+  `whatsapp-reply-delivery-shape`. These bypass model prompting on purpose and
+  prove deterministic Gateway/channel `send`, `poll`, and `message.action`
+  contracts.
 - Access-control coverage: `whatsapp-access-control-dm-open`,
   `whatsapp-access-control-dm-disabled`, `whatsapp-access-control-group-open`,
   `whatsapp-access-control-group-disabled`, `whatsapp-group-allowlist-block`.
 - Native approvals: `whatsapp-approval-exec-deny-native`,
   `whatsapp-approval-exec-native`, `whatsapp-approval-exec-reaction-native`,
+  `whatsapp-approval-exec-group-reaction-native`,
   `whatsapp-approval-plugin-native`.
-- Status reactions: `whatsapp-status-reactions`.
+- Status reactions: `whatsapp-status-reactions`,
+  `whatsapp-status-reaction-lifecycle`.
 
-The catalog currently contains 36 scenarios. The `live-frontier` default lane is
+The catalog currently contains 50 scenarios. The `live-frontier` default lane is
 kept small at 10 scenarios for fast smoke coverage. The `mock-openai` default
-lane runs 31 deterministic scenarios through the real WhatsApp transport while
+lane runs 44 deterministic scenarios through the real WhatsApp transport while
 mocking only model output. Approval scenarios and a few heavier/blocking checks
 remain explicit by scenario id.
 
@@ -766,9 +806,18 @@ The WhatsApp QA driver observes structured live events (`text`, `media`,
 `location`, `reaction`, and `poll`) and can actively send media, polls,
 contacts, locations, and stickers. QA Lab imports that driver through the
 `@openclaw/whatsapp/api.js` package surface instead of reaching into private
-WhatsApp runtime files. Message content is redacted by default. Outbound
-poll and upload-file coverage run through deterministic gateway `poll` and
-`message.action` calls instead of model-prompt-only tool invocation.
+WhatsApp runtime files. For group observations, `fromJid` is the group JID while
+`participantJid` and `fromPhoneE164` identify the participant sender. Message
+content is redacted by default. Direct Gateway
+poll, upload-file, media, group poll, group media, and reply-shape probes are transport/API contract
+checks; they are not treated as proof that a user prompt made the agent choose
+the same action. User-path action proof comes from scenarios such as
+`whatsapp-agent-message-action-react` and
+`whatsapp-group-agent-message-action-react`, where the driver sends a normal
+WhatsApp message and QA Lab observes the resulting native WhatsApp artifact.
+WhatsApp reports include each scenario's posture (`user-path`, `direct-gateway`,
+or `native-approval`) so evidence cannot be mistaken for a stronger contract
+than it actually proves.
 
 Output artifacts:
 
@@ -878,7 +927,7 @@ At the architecture level, the split is:
 
 Adding a channel to the YAML QA system requires the channel implementation plus
 a scenario pack that exercises the channel contract. For smoke CI coverage, add
-the matching Crabline fake provider server and expose it through the `crabline`
+the matching Crabline local provider server and expose it through the `crabline`
 driver.
 
 Do not add a new top-level QA command root when the shared `qa-lab` host can own the flow.
@@ -966,6 +1015,7 @@ output and whose artifact paths are resolved relative to that producer
 `qa run --qa-profile`, the same `qa-evidence.json` also includes the profile
 scorecard summary for the selected taxonomy categories.
 Treat it as a discovery aid, not a gate replacement; the selected scenario still needs the right provider mode, live transport, Multipass, Testbox, or release lane for the behavior under test.
+For scorecard context, see [Maturity scorecard](/maturity/scorecard).
 
 For character and style checks, run the same scenario across multiple live model
 refs and write a judged Markdown report:
@@ -1023,6 +1073,7 @@ When no `--judge-model` is passed, the judges default to
 ## Related docs
 
 - [Matrix QA](/concepts/qa-matrix)
+- [Maturity scorecard](/maturity/scorecard)
 - [Personal agent benchmark pack](/concepts/personal-agent-benchmark-pack)
 - [QA Channel](/channels/qa-channel)
 - [Testing](/help/testing)

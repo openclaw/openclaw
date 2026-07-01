@@ -141,7 +141,9 @@ function buildChromiumLaunchOptions(params: QaWebOpenPageParams) {
 
 export async function qaWebOpenPage(params: QaWebOpenPageParams) {
   const timeoutMs = resolveTimeoutMs(params.timeoutMs);
-  ensureChromiumAvailable(params.repoRoot ?? process.cwd());
+  if (!params.channel) {
+    ensureChromiumAvailable(params.repoRoot ?? process.cwd());
+  }
   const browser = await chromium.launch(buildChromiumLaunchOptions(params));
   const context = await browser.newContext({
     ignoreHTTPSErrors: true,

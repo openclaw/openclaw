@@ -382,7 +382,7 @@ function buildOpenShellPolicyYaml(params: {
 
 filesystem_policy:
   include_workdir: true
-  read_only: [/usr, /lib, /proc, /dev/urandom, /app, /etc, /var/log]
+  read_only: [/usr, /lib, /proc, /dev/urandom, /app, /etc, /var/log, /opt]
   read_write: [/sandbox, /tmp, /dev/null]
 
 landlock:

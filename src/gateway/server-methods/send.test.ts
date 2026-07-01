@@ -923,6 +923,37 @@ describe("gateway send mirroring", () => {
     expect(response?.[2]?.message).toContain("Use `chat.send`");
   });
 
+  it("accepts bundled channels before plugin registry normalization for message actions", async () => {
+    const { respond } = await runMessageActionRequest({
+      channel: "TELEGRAM",
+      action: "send",
+      params: { target: "123", message: "hi" },
+      idempotencyKey: "idem-telegram-message-action",
+    });
+
+    const call = lastDispatchChannelMessageActionCall();
+    expect(call?.channel).toBe("telegram");
+    expect(firstRespondCall(respond)[0]).toBe(true);
+  });
+
+  it("rejects unknown send channels without delivering", async () => {
+    mocks.getChannelPlugin.mockReturnValue(undefined);
+
+    const { respond } = await runSend({
+      to: "x",
+      message: "hi",
+      channel: "definitely-not-a-real-channel-xyz",
+      idempotencyKey: "idem-unknown-channel",
+    });
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    const response = firstRespondCall(respond);
+    expect(response?.[0]).toBe(false);
+    expect(response?.[2]?.message).toContain(
+      "unsupported channel: definitely-not-a-real-channel-xyz",
+    );
+  });
+
   it("auto-picks the single configured channel for send", async () => {
     mockDeliverySuccess("m-single-send");
 

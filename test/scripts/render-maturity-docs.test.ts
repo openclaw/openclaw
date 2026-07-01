@@ -3,10 +3,31 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { parse as parseYaml } from "yaml";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = path.resolve(__dirname, "../..");
 const tempDirs = createTempDirTracker();
+
+type TaxonomyFixture = {
+  surfaces?: TaxonomySurfaceFixture[];
+};
+
+type TaxonomySurfaceFixture = {
+  id?: string;
+  status?: string;
+  categories?: TaxonomyCategoryFixture[];
+};
+
+type TaxonomyCategoryFixture = {
+  id?: string;
+  name?: string;
+  features?: TaxonomyFeatureFixture[];
+};
+
+type TaxonomyFeatureFixture = {
+  coverageIds?: string[];
+};
 
 afterEach(() => {
   tempDirs.cleanup();
@@ -26,7 +47,33 @@ function runCli(...args: string[]) {
 function writeQaEvidence(params: {
   dir: string;
   entries: Array<{ id: string; status: "pass" | "fail" | "blocked" | "skipped" }>;
+  scorecard?: unknown;
 }) {
+  const scorecard = params.scorecard ?? {
+    filters: { surface: null, category: null },
+    run: { evidenceEntryCount: params.entries.length },
+    categories: {
+      total: 0,
+      fulfilled: 0,
+      partial: 0,
+      missing: 0,
+      fulfillmentPercent: 0,
+    },
+    features: {
+      total: 0,
+      fulfilled: 0,
+      partial: 0,
+      missing: 0,
+      fulfillmentPercent: 0,
+    },
+    coverageIds: {
+      total: 0,
+      fulfilled: 0,
+      missing: 0,
+      fulfillmentPercent: 0,
+    },
+    categoryReports: [],
+  };
   fs.mkdirSync(params.dir, { recursive: true });
   fs.writeFileSync(
     path.join(params.dir, "qa-evidence.json"),
@@ -47,30 +94,80 @@ function writeQaEvidence(params: {
           coverage: [{ id: "tools.evidence", role: "primary" }],
           result: { status: entry.status },
         })),
-        scorecard: {
-          filters: { surface: null, category: null },
-          run: { evidenceEntryCount: params.entries.length },
-          categories: {
-            total: 0,
-            fulfilled: 0,
-            partial: 0,
-            missing: 0,
-            fulfillmentPercent: 0,
-          },
-          features: {
-            total: 0,
-            fulfilled: 0,
-            missing: 0,
-            fulfillmentPercent: 0,
-          },
-          categoryReports: [],
-        },
+        scorecard,
       },
       null,
       2,
     )}\n`,
     "utf8",
   );
+}
+
+function allProfileScorecardFixture() {
+  const taxonomy = parseYaml(
+    fs.readFileSync(path.join(repoRoot, "taxonomy.yaml"), "utf8"),
+  ) as TaxonomyFixture;
+  const activeSurfaces = (taxonomy.surfaces ?? []).filter(
+    (surface) => surface.status !== "retired",
+  );
+  const categoryReports = activeSurfaces.flatMap((surface) =>
+    (surface.categories ?? []).map((category) => {
+      const coverageIds = [
+        ...new Set((category.features ?? []).flatMap((feature) => feature.coverageIds ?? [])),
+      ].sort();
+      return {
+        id: `${surface.id}.${category.id}`,
+        surfaceId: surface.id,
+        name: category.name,
+        status: "missing",
+        features: {
+          total: category.features.length,
+          fulfilled: 0,
+          partial: 0,
+          missing: category.features.length,
+          fulfillmentPercent: 0,
+        },
+        coverageIds: {
+          total: coverageIds.length,
+          fulfilled: 0,
+          missing: coverageIds.length,
+          fulfillmentPercent: 0,
+          secondaryOnly: 0,
+        },
+        missingCoverageIds: coverageIds,
+      };
+    }),
+  );
+  const featureCount = categoryReports.reduce((count, report) => count + report.features.total, 0);
+  const coverageIdCount = categoryReports.reduce(
+    (count, report) => count + report.coverageIds.total,
+    0,
+  );
+  return {
+    filters: { surface: null, category: null },
+    run: { evidenceEntryCount: 1 },
+    categories: {
+      total: categoryReports.length,
+      fulfilled: 0,
+      partial: 0,
+      missing: categoryReports.length,
+      fulfillmentPercent: 0,
+    },
+    features: {
+      total: featureCount,
+      fulfilled: 0,
+      partial: 0,
+      missing: featureCount,
+      fulfillmentPercent: 0,
+    },
+    coverageIds: {
+      total: coverageIdCount,
+      fulfilled: 0,
+      missing: coverageIdCount,
+      fulfillmentPercent: 0,
+    },
+    categoryReports,
+  };
 }
 
 describe("maturity docs renderer CLI", () => {
@@ -133,5 +230,24 @@ describe("maturity docs renderer CLI", () => {
     expect(scorecard).toContain("1 passed, 1 skipped");
     expect(scorecard).not.toContain("0 failed");
     expect(scorecard).not.toContain("0 blocked");
+  });
+
+  it("renders the maturity score from quality and completeness without coverage", () => {
+    const outputDir = tempDirs.make("openclaw-maturity-docs-output-");
+    const evidenceDir = tempDirs.make("openclaw-maturity-docs-evidence-");
+    writeQaEvidence({
+      dir: evidenceDir,
+      entries: [{ id: "passing-scenario", status: "pass" }],
+      scorecard: allProfileScorecardFixture(),
+    });
+
+    const result = runCli("--output-dir", outputDir, "--evidence-dir", evidenceDir);
+
+    expect(result.status).toBe(0);
+    const scorecard = fs.readFileSync(path.join(outputDir, "maturity", "scorecard.md"), "utf8");
+    expect(scorecard).toContain("<span>Maturity score</span>");
+    expect(scorecard).toContain('<span className="maturity-summary-value">67%</span>');
+    expect(scorecard).toContain("Coverage Experimental - 0%");
+    expect(scorecard).toContain("end-to-end coverage above 90%");
   });
 });

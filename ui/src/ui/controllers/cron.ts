@@ -631,8 +631,8 @@ function buildCronPayload(form: CronFormState) {
   const payload: {
     kind: "agentTurn";
     message: string;
-    model?: string;
-    thinking?: string;
+    model?: string | null;
+    thinking?: string | null;
     timeoutSeconds?: number;
     lightContext?: boolean;
   } = { kind: "agentTurn", message };
@@ -721,14 +721,22 @@ export async function addCronJob(state: CronState): Promise<boolean> {
       state.cronEditingJobId && form.payloadLocked && editingPayload?.kind === "command",
     );
     const payload = preserveLockedPayload ? undefined : buildCronPayload(form);
-    if (payload?.kind === "agentTurn") {
-      const existingLightContext =
-        editingPayload?.kind === "agentTurn" ? editingPayload.lightContext : undefined;
-      if (
-        !form.payloadLightContext &&
-        state.cronEditingJobId &&
-        existingLightContext !== undefined
-      ) {
+    if (
+      payload?.kind === "agentTurn" &&
+      state.cronEditingJobId &&
+      editingPayload?.kind === "agentTurn"
+    ) {
+      // When editing, a blanked field that previously held a stored override must
+      // send an explicit clear; an omitted key means "leave unchanged" on merge.
+      // The form only shows stored overrides (not inherited defaults), so a blank
+      // input with a stored value is an intentional clear.
+      if (!form.payloadModel.trim() && editingPayload.model !== undefined) {
+        payload.model = null;
+      }
+      if (!form.payloadThinking.trim() && editingPayload.thinking !== undefined) {
+        payload.thinking = null;
+      }
+      if (!form.payloadLightContext && editingPayload.lightContext !== undefined) {
         payload.lightContext = false;
       }
     }

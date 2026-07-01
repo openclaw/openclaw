@@ -40,8 +40,6 @@ import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   getSessionEntry,
-  loadSessionStore,
-  resolveSessionStoreEntry,
   resolveStorePath,
   type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -255,8 +253,7 @@ function resolveTelegramCommandMenuModelContext(params: {
       cfg: params.cfg,
       agentId: params.agentId,
     });
-    const store = loadSessionStore(storePath);
-    const entry = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing;
+    const entry = getSessionEntry({ storePath, sessionKey: params.sessionKey });
     const thinkingLevel = normalizeOptionalString(entry?.thinkingLevel);
     const fastMode = entry?.fastMode;
     if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {
@@ -269,7 +266,7 @@ function resolveTelegramCommandMenuModelContext(params: {
     }
     const override = resolveStoredModelOverride({
       sessionEntry: entry,
-      sessionStore: store,
+      loadSessionEntry: (sessionKey) => getSessionEntry({ storePath, sessionKey }),
       sessionKey: params.sessionKey,
       defaultProvider: defaultModel.provider,
     });
@@ -318,14 +315,13 @@ function resolveTelegramFastCommandModelContext(params: {
   }
   try {
     const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
-    const store = loadSessionStore(storePath);
-    const entry = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing;
+    const entry = getSessionEntry({ storePath, sessionKey: params.sessionKey });
     if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {
       return fallback();
     }
     const override = resolveStoredModelOverride({
       sessionEntry: entry,
-      sessionStore: store,
+      loadSessionEntry: (sessionKey) => getSessionEntry({ storePath, sessionKey }),
       sessionKey: params.sessionKey,
       defaultProvider: defaultModel.provider,
     });
@@ -359,8 +355,7 @@ function resolveTelegramFastCommandState(params: {
   }
   try {
     const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
-    const store = loadSessionStore(storePath);
-    const entry = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing;
+    const entry = getSessionEntry({ storePath, sessionKey: params.sessionKey });
     const modelContext = resolveTelegramFastCommandModelContext(params);
     return resolveFastModeState({
       cfg: params.cfg,

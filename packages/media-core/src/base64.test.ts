@@ -14,6 +14,16 @@ describe("base64 helpers", () => {
       expected: "SGVsbG8=",
     },
     {
+      name: "canonicalizeBase64 pads valid unpadded base64",
+      actual: canonicalizeBase64("SGVsbG8"),
+      expected: "SGVsbG8=",
+    },
+    {
+      name: "canonicalizeBase64 rejects impossible unpadded length",
+      actual: canonicalizeBase64("S"),
+      expected: undefined,
+    },
+    {
       name: "canonicalizeBase64 rejects invalid base64 characters",
       actual: canonicalizeBase64('SGVsbG8=" onerror="alert(1)'),
       expected: undefined,
