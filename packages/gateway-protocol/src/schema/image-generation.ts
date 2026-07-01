@@ -6,6 +6,7 @@ import { Type } from "typebox";
  */
 export const ImageProviderCapabilitySupportSchema = Type.Object({
   maxCount: Type.Optional(Type.Number()),
+  maxInputImages: Type.Optional(Type.Number()),
   supportsSize: Type.Optional(Type.Boolean()),
   supportsAspectRatio: Type.Optional(Type.Boolean()),
   supportsResolution: Type.Optional(Type.Boolean()),
@@ -64,6 +65,7 @@ export const ImageProvidersResultSchema = Type.Object({
 
 export type ImageProviderCapabilitySupport = {
   maxCount?: number;
+  maxInputImages?: number;
   supportsSize?: boolean;
   supportsAspectRatio?: boolean;
   supportsResolution?: boolean;
