@@ -484,6 +484,7 @@ final class GatewayConnectionController {
             token: cfg.token,
             bootstrapToken: cfg.bootstrapToken,
             password: cfg.password,
+            additionalHeaders: cfg.additionalHeaders,
             nodeOptions: nodeOptions)
         appModel.applyGatewayConnectConfig(refreshedConfig)
     }
@@ -574,6 +575,7 @@ final class GatewayConnectionController {
                 token: cfg.token,
                 bootstrapToken: cfg.bootstrapToken,
                 password: cfg.password,
+                additionalHeaders: cfg.additionalHeaders,
                 nodeOptions: cfg.nodeOptions)
             appModel.applyGatewayConnectConfig(refreshedConfig)
         } else {
@@ -816,6 +818,12 @@ final class GatewayConnectionController {
     {
         guard let appModel else { return }
         appModel.gatewayStatusText = "Connecting…"
+        // Reverse-proxy Basic auth (if configured) is applied to every connect path
+        // through here, so all callers pick it up without threading it individually.
+        let proxyInstanceId = GatewaySettingsStore.currentInstanceID()
+        let additionalHeaders = GatewayProxyAuth.basicAuthHeaders(
+            username: GatewaySettingsStore.loadGatewayProxyUsername(instanceId: proxyInstanceId),
+            password: GatewaySettingsStore.loadGatewayProxyPassword(instanceId: proxyInstanceId))
         Task { [weak self, weak appModel] in
             guard let self, let appModel else { return }
             if forceReconnect {
@@ -829,6 +837,7 @@ final class GatewayConnectionController {
                 token: token,
                 bootstrapToken: bootstrapToken,
                 password: password,
+                additionalHeaders: additionalHeaders,
                 nodeOptions: nodeOptions)
             appModel.applyGatewayConnectConfig(cfg, forceReconnect: forceReconnect)
         }
