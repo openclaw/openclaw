@@ -134,6 +134,7 @@ describe("createPersistCronSessionEntry", () => {
     const cronSession = makeCronSession();
     const persistSessionEntry = vi.fn(async () => {});
     const persistedEntry = {
+      sessionId: "run-session-id",
       updatedAt: 1000,
       systemSent: true,
     };

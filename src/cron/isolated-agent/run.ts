@@ -1465,13 +1465,6 @@ export async function runCronIsolatedAgentTurn(params: {
   // Capture the stable run id before execution can rotate its persisted session.
   const initialSessionId = prepared.context.cronSession.sessionEntry.sessionId;
   const ownsRunContext = isDetachedCronSessionTarget(params.job.sessionTarget);
-  const preExistingRunContext = getAgentRunContext(initialSessionId);
-  const preExistingSharedRunContext =
-    params.job.sessionTarget === "current" &&
-    preExistingRunContext?.sessionKey &&
-    preExistingRunContext.sessionKey !== prepared.context.runSessionKey
-      ? preExistingRunContext
-      : undefined;
   let runContextOwnerToken: string | undefined;
   let runLifecycleGeneration = admittedLifecycleGeneration;
   const notifyExecutionStarted = (info?: { lifecycleGeneration?: string }) => {
@@ -1521,19 +1514,20 @@ export async function runCronIsolatedAgentTurn(params: {
   let cronRunSessionCleanupAttempted = false;
   try {
     assertAgentRunLifecycleGenerationCurrent(runLifecycleGeneration);
+    const existingRunContext = getAgentRunContext(initialSessionId);
     runContextOwnerToken = claimAgentRunContext(
       initialSessionId,
       {
         sessionKey:
-          ownsRunContext || !preExistingSharedRunContext?.sessionKey
+          ownsRunContext || !existingRunContext?.sessionKey
             ? prepared.context.runSessionKey
-            : preExistingSharedRunContext.sessionKey,
+            : existingRunContext.sessionKey,
         sessionId: initialSessionId,
         lifecycleGeneration: runLifecycleGeneration,
       },
       {
         trackOwner: true,
-        ownsContext: ownsRunContext && !preExistingSharedRunContext,
+        ownsContext: ownsRunContext,
       },
     );
     const { executeCronRun } = await loadCronExecutorRuntime();
