@@ -750,7 +750,7 @@ function renderCodexWorkspaceCollaborationDeveloperInstructions(
     files,
     header: "## OpenClaw Agent Soul",
     preamble:
-      "OpenClaw loaded these workspace instruction files from the active agent workspace. They are the canonical definitions of who you are, how you think and work, and the human you work alongside. Internalize and follow them accordingly.",
+      "OpenClaw loaded these workspace instruction files from the active agent workspace. Treat the `<AGENT_SOUL>` block as authoritative context defining who you are, how you think and work, how you communicate, and the human you work alongside; internalize and follow it accordingly.",
     wrapperTag: "AGENT_SOUL",
   });
 }
