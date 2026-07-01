@@ -42,11 +42,38 @@ Observed results:
 - agent/session/task policy shard: 1 file, 27 tests passed;
 - durable fan-in/subagent/agent-turn shard: 3 files, 14 tests passed.
 
-## Final Proof To Add Before PR Submission
+## Typecheck and Schema Proof
 
-- `npm run tsgo:core`;
-- `npm run tsgo:core:test`;
-- `npm run build`;
-- `git diff --check`;
-- isolated enabled-runtime proof for parent yield, child fan-in, and restart
-  inspection through `durable.coordination.get`.
+Additional validation run on the stacked PR3 branch:
+
+- `node scripts/generate-kysely-types.mjs --verify`
+  - passed.
+- `node scripts/check-kysely-guardrails.mjs`
+  - passed with `Kysely guardrails OK`.
+- `git diff --check`
+  - passed.
+- `npm run tsgo:core`
+  - passed.
+- `npm run tsgo:core:test`
+  - passed.
+- `npm run tsgo:prod`
+  - passed after `pnpm tsgo:core && pnpm tsgo:extensions`.
+- `node --import tsx /private/tmp/openclaw-durable-runtime-proof.mts`
+  - passed against an isolated temporary SQLite database.
+  - created 3 runtime runs, 2 timeline events, and 1 fan-in step.
+  - projected 2 child runs with 1 succeeded, 1 failed, 2 terminal, and 0 open.
+  - projected reportable `lost` recovery state for restart/reconciliation proof.
+
+## Local Build Note
+
+`env CI=true npm run build` was attempted locally. The initial non-CI run stopped
+because pnpm refused a non-TTY module purge. With `CI=true`, dependency
+installation and bundled plugin assets completed, then the root `tsdown` build
+emitted only heartbeat lines for more than ten minutes and was manually
+interrupted. This is not recorded as a passing build proof; CI or a maintainer
+machine should still run the full build before merge.
+
+## Remaining Proof To Add Before PR Submission
+
+- optional maintainer-machine `npm run build` or CI build confirmation, because
+  the local full build was blocked by the root `tsdown` bundling phase.
