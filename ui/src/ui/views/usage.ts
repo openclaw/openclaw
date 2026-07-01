@@ -163,6 +163,8 @@ export function renderUsage(props: UsageProps) {
   const isTokenMode = display.chartMode === "tokens";
   const hasQuery = filters.query.trim().length > 0;
   const hasDraftQuery = filters.queryDraft.trim().length > 0;
+  const selectedDaySet = new Set(filters.selectedDays);
+  const selectedSessionSet = new Set(filters.selectedSessions);
 
   // Sort sessions by tokens or cost depending on mode
   const sortedSessions = [...data.sessions].toSorted((a, b) => {
@@ -179,17 +181,17 @@ export function renderUsage(props: UsageProps) {
 
   // Filter sessions by selected days
   const dayFilteredSessions =
-    filters.selectedDays.length > 0
+    selectedDaySet.size > 0
       ? agentScopedSessions.filter((s) => {
           if (s.usage?.activityDates?.length) {
-            return s.usage.activityDates.some((d) => filters.selectedDays.includes(d));
+            return s.usage.activityDates.some((d) => selectedDaySet.has(d));
           }
           if (!s.updatedAt) {
             return false;
           }
           const d = new Date(s.updatedAt);
           const sessionDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-          return filters.selectedDays.includes(sessionDate);
+          return selectedDaySet.has(sessionDate);
         })
       : agentScopedSessions;
 
@@ -261,8 +263,8 @@ export function renderUsage(props: UsageProps) {
   };
 
   // Compute totals from daily data for selected days (more accurate than session totals)
-  const computeDailyTotals = (days: string[]): UsageTotals => {
-    const matchingDays = data.costDaily.filter((d) => days.includes(d.date));
+  const computeDailyTotals = (days: ReadonlySet<string>): UsageTotals => {
+    const matchingDays = data.costDaily.filter((d) => days.has(d.date));
     return matchingDays.reduce((acc, day) => addUsageTotals(acc, day), createEmptyUsageTotals());
   };
 
@@ -273,14 +275,12 @@ export function renderUsage(props: UsageProps) {
 
   if (filters.selectedSessions.length > 0) {
     // Sessions selected - compute totals from selected sessions
-    const selectedSessionEntries = filteredSessions.filter((s) =>
-      filters.selectedSessions.includes(s.key),
-    );
+    const selectedSessionEntries = filteredSessions.filter((s) => selectedSessionSet.has(s.key));
     displayTotals = computeSessionTotals(selectedSessionEntries);
     displaySessionCount = selectedSessionEntries.length;
   } else if (filters.selectedDays.length > 0 && filters.selectedHours.length === 0) {
     // Days selected - use daily aggregates for accurate per-day totals
-    displayTotals = computeDailyTotals(filters.selectedDays);
+    displayTotals = computeDailyTotals(selectedDaySet);
     displaySessionCount = filteredSessions.length;
   } else if (filters.selectedHours.length > 0) {
     displayTotals = computeSessionTotals(filteredSessions);
@@ -299,7 +299,7 @@ export function renderUsage(props: UsageProps) {
 
   const aggregateSessions =
     filters.selectedSessions.length > 0
-      ? filteredSessions.filter((s) => filters.selectedSessions.includes(s.key))
+      ? filteredSessions.filter((s) => selectedSessionSet.has(s.key))
       : hasQuery || filters.selectedHours.length > 0
         ? filteredSessions
         : filters.selectedDays.length > 0
@@ -326,9 +326,7 @@ export function renderUsage(props: UsageProps) {
   const filteredDaily =
     filters.selectedSessions.length > 0
       ? (() => {
-          const selectedEntries = filteredSessions.filter((s) =>
-            filters.selectedSessions.includes(s.key),
-          );
+          const selectedEntries = filteredSessions.filter((s) => selectedSessionSet.has(s.key));
           const allActivityDates = new Set<string>();
           for (const entry of selectedEntries) {
             for (const date of entry.usage?.activityDates ?? []) {

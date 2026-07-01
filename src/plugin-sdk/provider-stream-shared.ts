@@ -138,6 +138,7 @@ function createProviderToolNameMatcher(toolNames: Set<string>): PlainTextToolCal
 
 function normalizeProviderDoneMessage(
   message: unknown,
+  reason: unknown,
   toolNames: Set<string>,
   matcher: PlainTextToolCallNameMatcher,
 ): PlainTextToolCallMessageNormalization {
@@ -148,6 +149,11 @@ function normalizeProviderDoneMessage(
   });
   if (scrubbedMessage) {
     return { kind: "scrubbed", message: scrubbedMessage };
+  }
+  // Token-limit and error terminals can leave complete-looking tool syntax.
+  // Only normal completion or explicit tool use may promote it into an executable call.
+  if (reason !== "stop" && reason !== "toolUse") {
+    return undefined;
   }
   const promotedMessage = promotePlainTextToolCalls(message, toolNames);
   return promotedMessage ? { kind: "promoted", message: promotedMessage } : undefined;
@@ -184,8 +190,8 @@ function wrapPlainTextToolCallStream(
             return events;
           },
           matcher,
-          normalizeDoneMessage: ({ message }) =>
-            normalizeProviderDoneMessage(message, toolNames, matcher),
+          normalizeDoneMessage: ({ message, reason }) =>
+            normalizeProviderDoneMessage(message, reason, toolNames, matcher),
           stopAfterDone: true,
         },
       );

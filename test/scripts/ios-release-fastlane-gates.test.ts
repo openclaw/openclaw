@@ -74,6 +74,27 @@ describe("iOS Fastlane release upload gates", () => {
     expect(uploadCall).toBeGreaterThan(validationCall);
   });
 
+  it("preflights and records mobile release refs around TestFlight upload", () => {
+    const fastfile = readFastfile();
+    const releaseUpload = laneBody(fastfile, "release_upload");
+
+    expect(fastfile).toContain("def mobile_release_ref_command");
+    expect(fastfile).toContain("def release_git_sha");
+    expect(fastfile).toContain('"--root"');
+    expect(fastfile).toContain('"--sha"');
+    expect(fastfile).toContain("repo_root");
+    expect(releaseUpload).toContain("release_sha = release_git_sha");
+    expect(releaseUpload).toContain("ensure_mobile_release_ref_available!");
+    expect(releaseUpload).toContain("record_mobile_release_ref!");
+    expect(releaseUpload.match(/sha: release_sha/g)).toHaveLength(2);
+    expect(releaseUpload.indexOf("ensure_mobile_release_ref_available!")).toBeLessThan(
+      releaseUpload.indexOf("\n    metadata\n"),
+    );
+    expect(releaseUpload.indexOf("record_mobile_release_ref!")).toBeGreaterThan(
+      releaseUpload.indexOf("upload_to_testflight("),
+    );
+  });
+
   it("normalizes Watch screenshots as opaque RGB PNGs for App Store upload", () => {
     const fastfile = readFastfile();
 

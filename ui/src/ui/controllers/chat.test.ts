@@ -31,6 +31,7 @@ function createState(overrides: Partial<ChatState> = {}): ChatState {
     chatStream: null,
     chatStreamStartedAt: null,
     chatThinkingLevel: null,
+    chatVerboseLevel: null,
     client: null,
     connected: true,
     lastError: null,
@@ -582,6 +583,68 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(null);
   });
 
+  it("clears keyed commentary with the final answer by default", () => {
+    const user = { role: "user", content: [{ type: "text", text: "Ask" }], timestamp: 1 };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [user],
+      chatStream: null,
+      chatStreamStartedAt: null,
+    }) as ChatState & {
+      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
+    };
+    state.chatStreamSegments = [{ text: "Looking into it.", ts: 2, itemId: "preamble-1" }];
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer." }],
+        timestamp: 5,
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toHaveLength(2);
+    expectTextChatMessage(state.chatMessages[0], "user", "Ask");
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Final answer.");
+    expect(state.chatStreamSegments).toEqual([]);
+  });
+
+  it("persists keyed commentary alongside the final answer when chatPersistCommentary is true", () => {
+    const user = { role: "user", content: [{ type: "text", text: "Ask" }], timestamp: 1 };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [user],
+      chatStream: null,
+      chatStreamStartedAt: null,
+      settings: { chatPersistCommentary: true },
+    }) as ChatState & {
+      chatStreamSegments: Array<{ text: string; ts: number; itemId: string }>;
+    };
+    state.chatStreamSegments = [{ text: "Looking into it.", ts: 2, itemId: "preamble-1" }];
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Final answer." }],
+        timestamp: 5,
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toHaveLength(3);
+    expectTextChatMessage(state.chatMessages[0], "user", "Ask");
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Looking into it.");
+    expectTextChatMessage(state.chatMessages[2], "assistant", "Final answer.");
+    expect(state.chatStreamSegments).toEqual([]);
+  });
+
   it("reconciles cached run and indicator state on terminal events", () => {
     vi.useFakeTimers();
     try {
@@ -1066,7 +1129,7 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(null);
   });
 
-  it("does not materialize stream segments when final payload is renderable", () => {
+  it("keeps pre-final stream segments when final payload is renderable", () => {
     const state = createState({
       sessionKey: "main",
       chatRunId: "run-1",
@@ -1086,10 +1149,12 @@ describe("handleChatEvent", () => {
     };
 
     expect(handleChatEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toEqual([payload.message]);
+    expect(state.chatMessages).toHaveLength(2);
+    expectTextChatMessage(state.chatMessages[0], "assistant", "before tool");
+    expect(state.chatMessages[1]).toEqual(payload.message);
     expect(state.chatRunId).toBe(null);
     expect(state.chatStream).toBe(null);
-    expect(state.chatStreamSegments).toEqual([{ text: "before tool", ts: 1 }]);
+    expect(state.chatStreamSegments).toEqual([]);
   });
 
   it("processes aborted from own run and keeps partial assistant message", () => {
@@ -1603,7 +1668,7 @@ describe("loadChatHistory filtering", () => {
       { role: "assistant", text: "  NO_REPLY  " },
     ];
     const mockClient = {
-      request: vi.fn().mockResolvedValue({ messages, thinkingLevel: "low" }),
+      request: vi.fn().mockResolvedValue({ messages, thinkingLevel: "low", verboseLevel: "full" }),
     };
     const state = createState({
       client: mockClient as unknown as ChatState["client"],
@@ -1619,6 +1684,7 @@ describe("loadChatHistory filtering", () => {
     expect(state.chatMessages[3]).toEqual(messages[4]);
     expect(state.chatMessages[4]).toEqual(messages[5]);
     expect(state.chatThinkingLevel).toBe("low");
+    expect(state.chatVerboseLevel).toBe("full");
     expect(state.chatLoading).toBe(false);
   });
 
@@ -3379,12 +3445,14 @@ describe("loadChatHistory retry handling", () => {
       client: { request } as unknown as ChatState["client"],
       chatMessages: [{ role: "assistant", content: [{ type: "text", text: "old" }] }],
       chatThinkingLevel: "high",
+      chatVerboseLevel: "full",
     });
 
     await loadChatHistory(state);
 
     expect(state.chatMessages).toStrictEqual([]);
     expect(state.chatThinkingLevel).toBeNull();
+    expect(state.chatVerboseLevel).toBeNull();
     expect(state.lastError).toBe(
       "This connection is missing operator.read, so existing chat history cannot be loaded yet.",
     );
@@ -3557,8 +3625,16 @@ describe("loadChatHistory retry handling", () => {
   });
 
   it("ignores stale history responses after switching sessions", async () => {
-    const mainRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
-    const otherRequest = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const mainRequest = createDeferred<{
+      messages: Array<unknown>;
+      thinkingLevel?: string;
+      verboseLevel?: string;
+    }>();
+    const otherRequest = createDeferred<{
+      messages: Array<unknown>;
+      thinkingLevel?: string;
+      verboseLevel?: string;
+    }>();
     const request = vi.fn((_method: string, params?: { sessionKey?: string }) => {
       if (params?.sessionKey === "main") {
         return mainRequest.promise;
@@ -3581,6 +3657,7 @@ describe("loadChatHistory retry handling", () => {
     mainRequest.resolve({
       messages: [{ role: "assistant", content: [{ type: "text", text: "main history" }] }],
       thinkingLevel: "high",
+      verboseLevel: "full",
     });
     await firstLoad;
 
@@ -3589,10 +3666,12 @@ describe("loadChatHistory retry handling", () => {
       { role: "assistant", content: [{ type: "text", text: "visible old" }] },
     ]);
     expect(state.chatThinkingLevel).toBeNull();
+    expect(state.chatVerboseLevel).toBeNull();
 
     otherRequest.resolve({
       messages: [{ role: "assistant", content: [{ type: "text", text: "other history" }] }],
       thinkingLevel: "low",
+      verboseLevel: "full",
     });
     await secondLoad;
 
@@ -3601,6 +3680,7 @@ describe("loadChatHistory retry handling", () => {
       { role: "assistant", content: [{ type: "text", text: "other history" }] },
     ]);
     expect(state.chatThinkingLevel).toBe("low");
+    expect(state.chatVerboseLevel).toBe("full");
   });
 
   it("ignores stale global history responses after switching selected agents", async () => {

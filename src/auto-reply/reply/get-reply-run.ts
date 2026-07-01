@@ -31,6 +31,8 @@ import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
+import { resolveHeartbeatRunScope } from "../../infra/heartbeat-run-scope.js";
+import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import {
   isAcpSessionKey,
@@ -61,7 +63,7 @@ import {
   type VerboseLevel,
 } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
-import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { ReplyPayload } from "../types.js";
 import { applySessionHints } from "./body.js";
 import type { buildCommandContext } from "./commands.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
@@ -69,7 +71,10 @@ import type { InlineDirectives } from "./directive-handling.js";
 import { isSystemEventProvider, resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import { resolvePreparedReplyQueueState } from "./get-reply-run-queue.js";
-import type { ReplySessionBinding } from "./get-reply.types.js";
+import type {
+  InternalGetReplyOptions as BaseInternalGetReplyOptions,
+  ReplySessionBinding,
+} from "./get-reply.types.js";
 import {
   buildDirectChatContext,
   buildGroupChatContext,
@@ -110,7 +115,7 @@ import { resolveTypingMode } from "./typing-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 import type { TypingController } from "./typing.js";
 
-type InternalGetReplyOptions = GetReplyOptions & {
+type InternalGetReplyOptions = BaseInternalGetReplyOptions & {
   /**
    * Dispatch-owned pre-run operation. This is intentionally not part of the
    * public reply API; it lets dispatch prep and hook work share the same
@@ -123,6 +128,7 @@ type InternalGetReplyOptions = GetReplyOptions & {
    */
   queuedFollowupAbortSignal?: AbortSignal;
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
+  extractedFileImages?: ExtractedFileImage[];
 };
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
@@ -438,7 +444,7 @@ type RunPreparedReplyParams = {
     dropPolicy?: InlineDirectives["dropPolicy"];
   };
   typing: TypingController;
-  opts?: GetReplyOptions;
+  opts?: InternalGetReplyOptions;
   defaultModel: string;
   timeoutMs: number;
   isNewSession: boolean;
@@ -510,6 +516,7 @@ export async function runPreparedReply(
   } = params;
   let { sessionEntry, resolvedThinkLevel } = params;
   const isHeartbeat = opts?.isHeartbeat === true;
+  const heartbeatRunScope = resolveHeartbeatRunScope(opts);
   const traceAttributes = {
     provider,
     hasSessionKey: Boolean(sessionKey),
@@ -769,16 +776,21 @@ export async function runPreparedReply(
     sourceReplyDeliveryMode,
   });
   const effectiveBaseBody = promptEnvelopeBase.effectiveBaseBody;
-  let prefixedBodyBase = await applySessionHints({
-    baseBody: effectiveBaseBody,
-    abortedLastRun,
-    sessionEntry,
-    sessionEntryHandle,
-    sessionStore,
-    sessionKey,
-    storePath,
-    abortKey: command.abortKey,
-  });
+  // A commitment-only wake must not consume the one-shot aborted-run hint;
+  // that recovery context belongs to the next normal conversation turn.
+  let prefixedBodyBase =
+    heartbeatRunScope === "commitment-only"
+      ? effectiveBaseBody
+      : await applySessionHints({
+          baseBody: effectiveBaseBody,
+          abortedLastRun,
+          sessionEntry,
+          sessionEntryHandle,
+          sessionStore,
+          sessionKey,
+          storePath,
+          abortKey: command.abortKey,
+        });
   sessionEntry = sessionEntryHandle?.getCurrent() ?? sessionEntry;
   const isGroupSession = sessionEntry?.chatType === "group" || sessionEntry?.chatType === "channel";
   const isMainSession = !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
@@ -817,7 +829,7 @@ export async function runPreparedReply(
     transcriptCommandBody: string;
     currentInboundContext?: typeof promptEnvelopeBase.currentInboundContext;
   }> => {
-    if (!useFastReplyRuntime) {
+    if (!useFastReplyRuntime && heartbeatRunScope !== "commitment-only") {
       const eventsBlock = await drainFormattedSystemEvents({
         cfg,
         sessionKey,
@@ -935,8 +947,19 @@ export async function runPreparedReply(
       resolvedThinkLevel = fallbackThinkLevel;
     }
   }
-  const internalOpts = opts as InternalGetReplyOptions | undefined;
-  const providedReplyOperation = internalOpts?.replyOperation;
+  const providedReplyOperation = opts?.replyOperation;
+  if (
+    providedReplyOperation !== undefined &&
+    providedReplyOperation.result === null &&
+    providedReplyOperation.phase === "queued" &&
+    sessionId !== undefined &&
+    sessionId !== providedReplyOperation.sessionId
+  ) {
+    // Dispatch reserves a queued operation before session init. If stale init
+    // rotates the session, move the reservation so later steer/abort paths
+    // target the session that will actually run.
+    providedReplyOperation.updateSessionId(sessionId);
+  }
   const isOwnPreDispatchOperationSession = (candidateSessionId: string | undefined): boolean =>
     providedReplyOperation !== undefined &&
     providedReplyOperation.result === null &&
@@ -957,7 +980,7 @@ export async function runPreparedReply(
           }).existing ?? sessionEntry)
         : sessionEntry;
     const latestSessionId = latestSessionEntry?.sessionId ?? sessionIdFinal;
-    internalOpts?.onSessionPrepared?.({
+    opts?.onSessionPrepared?.({
       sessionKey,
       sessionId: latestSessionId,
       storePath,
@@ -1214,11 +1237,12 @@ export async function runPreparedReply(
       cfg,
       images: opts?.images,
       imageOrder: opts?.imageOrder,
+      extractedFileImages: opts?.extractedFileImages,
     }),
   );
   const queuedFollowupAbortSignal =
     inboundEventKind === "room_event"
-      ? (internalOpts?.queuedFollowupAbortSignal ?? opts?.abortSignal)
+      ? (opts?.queuedFollowupAbortSignal ?? opts?.abortSignal)
       : undefined;
   const userTurnMediaForPersistence = buildPersistedUserTurnMediaInputsFromFields(ctx);
   const inputProvenance = ctx.InputProvenance ?? sessionCtx.InputProvenance;
@@ -1230,6 +1254,7 @@ export async function runPreparedReply(
     userTurnTranscriptText !== undefined || userTurnMediaForPersistence.length > 0
       ? {
           text: userTurnTranscriptText,
+          senderIsOwner: command.senderIsOwner,
           ...(inputProvenance ? { provenance: inputProvenance } : {}),
           ...(userTurnMediaForPersistence.length > 0
             ? {

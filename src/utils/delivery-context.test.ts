@@ -53,6 +53,31 @@ describe("delivery context helpers", () => {
     });
   });
 
+  it("does not inherit route fields from a different account on the same channel", () => {
+    const merged = mergeDeliveryContext(
+      { channel: "telegram", accountId: "bot-a" },
+      { channel: "telegram", to: "123", accountId: "bot-b", threadId: "99" },
+    );
+
+    expect(merged).toEqual({
+      channel: "telegram",
+      to: undefined,
+      accountId: "bot-a",
+    });
+    expect(merged?.threadId).toBeUndefined();
+
+    expect(
+      mergeDeliveryContext(
+        { accountId: "bot-a" },
+        { channel: "telegram", to: "123", accountId: "bot-b", threadId: "99" },
+      ),
+    ).toEqual({
+      channel: undefined,
+      to: undefined,
+      accountId: "bot-a",
+    });
+  });
+
   it("uses fallback route fields when fallback has no channel", () => {
     const merged = mergeDeliveryContext(
       { channel: "demo-channel" },
