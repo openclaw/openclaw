@@ -23,6 +23,14 @@ function sha256(input: string): string {
   return createHash("sha256").update(input).digest("hex");
 }
 
+function readReportField<T>(read: () => T): T | undefined {
+  try {
+    return read();
+  } catch {
+    return undefined;
+  }
+}
+
 function extractBetween(input: string, startMarker: string, endMarker: string): string {
   const start = input.indexOf(startMarker);
   if (start === -1) {
@@ -69,11 +77,13 @@ function buildToolSchemaStats(
     schemaHash: sha256(schemaJson),
     propertiesCount: (() => {
       const schema = parameters as Record<string, unknown>;
-      const props = typeof schema.properties === "object" ? schema.properties : null;
+      const props = readReportField(() =>
+        typeof schema.properties === "object" ? schema.properties : null,
+      );
       if (!props || typeof props !== "object") {
         return null;
       }
-      return Object.keys(props as Record<string, unknown>).length;
+      return readReportField(() => Object.keys(props as Record<string, unknown>).length) ?? null;
     })(),
   };
   // Tool parameter objects are reused across runs; cache their stable size/hash
@@ -88,10 +98,17 @@ function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools
     if (cached) {
       return cached;
     }
-    const name = tool.name;
-    const summary = tool.description?.trim() || tool.label?.trim() || "";
+    const rawName = readReportField(() => tool.name);
+    const name = typeof rawName === "string" && rawName.trim() ? rawName.trim() : "(unknown)";
+    const rawDescription = readReportField(() => tool.description);
+    const rawLabel = readReportField(() => tool.label);
+    const summary =
+      (typeof rawDescription === "string" ? rawDescription.trim() : "") ||
+      (typeof rawLabel === "string" ? rawLabel.trim() : "");
     const summaryChars = summary.length;
-    const schemaStats = buildToolSchemaStats(tool.parameters);
+    const schemaStats = buildToolSchemaStats(
+      readReportField(() => tool.parameters) as AgentTool["parameters"],
+    );
     const entry = { name, summaryChars, summaryHash: sha256(summary), ...schemaStats };
     toolReportEntryCache.set(tool, entry);
     return entry;
