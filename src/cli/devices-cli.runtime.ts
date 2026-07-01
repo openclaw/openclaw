@@ -308,7 +308,6 @@ function isDevicePairingApprovalDenied(error: unknown): boolean {
   );
 }
 
-<<<<<<< HEAD
 function isUnknownRequestIdError(error: unknown): boolean {
   const maybeGatewayError =
     typeof error === "object" && error !== null
@@ -323,26 +322,10 @@ function isUnknownRequestIdError(error: unknown): boolean {
       ? maybeGatewayError.message
       : normalizeErrorMessage(error);
   return normalizeLowercaseStringOrEmpty(message).includes("unknown requestid");
-=======
-// True when an approve failed because the device lacks approval permission, not for a
-// transport or "request not found" reason — i.e. the user needs owner credentials.
-function isApprovalAuthorizationError(error: unknown): boolean {
-  const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
-  return (
-    message.includes("scope upgrade pending approval") ||
-    message.includes("device pairing approval denied") ||
-    message.includes("missing scope")
-  );
 }
 
-// Guidance for when a device can't approve its own scope upgrade (needs operator.approvals).
-function formatApprovalDeadlockGuidance(): string {
-  return [
-    "This device can't approve its own scope upgrade (needs the operator.approvals scope).",
-    `Run ${formatCliCommand("openclaw devices list")}, then rerun with --token/--password ` +
-      "(owner credentials) or approve from a device that has it, e.g. the Control UI.",
-  ].join("\n");
->>>>>>> d38578a248f (fix(cli): explain how to recover from device approve deadlock)
+function isScopeUpgradePendingApproval(error: unknown): boolean {
+  return readConnectPairingRequiredMessage(normalizeErrorMessage(error))?.reason === "scope-upgrade";
 }
 
 function resolveLocalPairingFallback(
@@ -1127,35 +1110,23 @@ export async function runDevicesApproveCommand(
   try {
     result = await approvePairingWithFallback(opts, resolvedRequestId);
   } catch (error) {
-    // Auth denial: the device can't approve itself, so show owner-credential
-    // guidance instead of rethrowing the raw, dead-end error.
-    if (isApprovalAuthorizationError(error)) {
-      defaultRuntime.error(normalizeErrorMessage(error));
-      defaultRuntime.error(formatApprovalDeadlockGuidance());
-      const authReminder = formatAuthFlagReminder(opts);
-      if (authReminder) {
-        defaultRuntime.error(authReminder);
-      }
+    if (isScopeUpgradePendingApproval(error)) {
+      defaultRuntime.error(
+        "This device can't approve its own scope upgrade. Retry with owner credentials (--token or --password), or approve it from the Control UI.",
+      );
       defaultRuntime.exit(1);
       return;
     }
     throw error;
   }
   if (!result) {
-<<<<<<< HEAD
-    defaultRuntime.error("unknown requestId");
+    defaultRuntime.error(
+      `No pending device request matches ${sanitizeForLog(resolvedRequestId)}. Run ${formatCliCommand("openclaw devices list")} and retry with the current request ID.`,
+    );
     const nodeApprovalNotices = await findQueryPendingNodeApprovalNotices(opts, resolvedRequestId);
     for (const notice of nodeApprovalNotices) {
       defaultRuntime.error(formatNodeApprovalNotice(notice));
     }
-=======
-    defaultRuntime.error(
-      [
-        `No pending request matches ${sanitizeForLog(resolvedRequestId)} (already approved, expired, or superseded).`,
-        `Run ${formatCliCommand("openclaw devices list")} and approve the latest with ${formatCliCommand("openclaw devices approve --latest")}.`,
-      ].join("\n"),
-    );
->>>>>>> d38578a248f (fix(cli): explain how to recover from device approve deadlock)
     defaultRuntime.exit(1);
     return;
   }
