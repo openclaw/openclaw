@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_WINDOWS_GATEWAY_FIREWALL_TIMEOUT_MS,
+  QUICK_WINDOWS_GATEWAY_FIREWALL_TIMEOUT_MS,
   inspectWindowsGatewayFirewall,
   parseWindowsGatewayFirewallState,
   classifyWindowsGatewayFirewallState,
@@ -101,6 +102,18 @@ function ruleJson(params?: {
   remoteAddress?: string;
 }) {
   return JSON.stringify([ruleRow(params)]);
+}
+
+function quickPayloadJson(params?: {
+  state?: string;
+  activeRules?: Array<Record<string, unknown>>;
+  localRules?: Array<Record<string, unknown>>;
+}) {
+  return JSON.stringify({
+    State: JSON.parse(params?.state ?? stateJson({ localAllowRules: "True" })),
+    ActiveRules: params?.activeRules ?? [],
+    LocalRules: params?.localRules ?? [ruleRow()],
+  });
 }
 
 function rulesPayloadJson(params: { active?: unknown[]; local?: unknown[] }) {
@@ -527,7 +540,75 @@ describe("Windows Gateway firewall diagnostics", () => {
     });
   });
 
-  it("runs bounded read-only Windows probes for LAN binding", async () => {
+  it("runs a quick bounded Windows probe without netsh or follow-up commands", async () => {
+    const runner = vi.fn<WindowsGatewayFirewallCommandRunner>(async (argv) => {
+      const command = argv.join(" ");
+      expect(command).toContain("Get-NetConnectionProfile");
+      expect(command).toContain("HNetCfg.FwPolicy2");
+      expect(command).toContain("Get-NetFirewallRule");
+      expect(command).toContain("PolicyStore ActiveStore");
+      expect(command).toContain("foreach ($entry in @($value))");
+      expect(command).not.toContain("advfirewall");
+      expect(command).not.toContain("PolicyStore PersistentStore");
+      return { code: 0, stdout: quickPayloadJson() };
+    });
+
+    await expect(
+      inspectWindowsGatewayFirewall({
+        bind: "lan",
+        mode: "quick",
+        port: 18789,
+        platform: "win32",
+        runCommandWithTimeout: runner,
+      }),
+    ).resolves.toMatchObject({
+      code: "windows_firewall_rule_present",
+    });
+    expect(runner).toHaveBeenCalledTimes(1);
+    expect(runner.mock.calls[0]?.[0][0]).toBe(getWindowsPowerShellExePath());
+    expect(runner.mock.calls[0]?.[1]).toMatchObject({
+      timeoutMs: QUICK_WINDOWS_GATEWAY_FIREWALL_TIMEOUT_MS,
+    });
+  });
+
+  it("preserves managed ActiveStore allow rules during quick inspection", async () => {
+    const runner = vi.fn<WindowsGatewayFirewallCommandRunner>(async (argv) => {
+      const command = argv.join(" ");
+      expect(command).toContain("Get-NetFirewallRule");
+      expect(command).toContain("GroupPolicy");
+      expect(command).toContain("MDM");
+      return {
+        code: 0,
+        stdout: quickPayloadJson({
+          state: stateJson({ activeAllowLocalRules: "False" }),
+          activeRules: [
+            ruleRow({
+              displayName: "MDM-managed Gateway allow",
+              policyStoreSource: "Intune",
+              policyStoreSourceType: "MDM",
+            }),
+          ],
+          localRules: [ruleRow({ displayName: "Ignored local allow" })],
+        }),
+      };
+    });
+
+    await expect(
+      inspectWindowsGatewayFirewall({
+        bind: "lan",
+        mode: "quick",
+        port: 18789,
+        platform: "win32",
+        runCommandWithTimeout: runner,
+      }),
+    ).resolves.toMatchObject({
+      severity: "info",
+      code: "windows_firewall_rule_present",
+    });
+    expect(runner).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs bounded read-only full Windows probes for LAN binding", async () => {
     const runner = vi.fn<WindowsGatewayFirewallCommandRunner>(async (argv) => {
       const command = argv.join(" ");
       if (command.includes("Get-NetConnectionProfile")) {

@@ -373,7 +373,7 @@ describe("gatherDaemonStatus", () => {
     });
 
     expect(inspectWindowsGatewayFirewall).toHaveBeenCalledWith(
-      expect.objectContaining({ bind: "lan", port: 19001 }),
+      expect.objectContaining({ bind: "lan", mode: "quick", port: 19001 }),
     );
     expect(status.gateway?.windowsFirewall).toMatchObject({
       severity: "warning",

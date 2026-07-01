@@ -3,6 +3,7 @@ import { runCommandWithTimeout as defaultRunCommandWithTimeout } from "../proces
 import { getWindowsPowerShellExePath, getWindowsSystem32ExePath } from "./windows-install-roots.js";
 
 export const DEFAULT_WINDOWS_GATEWAY_FIREWALL_TIMEOUT_MS = 5_000;
+export const QUICK_WINDOWS_GATEWAY_FIREWALL_TIMEOUT_MS = 5_000;
 const DEFAULT_OUTPUT_BYTES = 2 * 1024 * 1024;
 const WINDOWS_MANAGED_FIREWALL_POLICY_SOURCE_TYPES = [
   "GroupPolicy",
@@ -161,6 +162,115 @@ $matchingRules | ConvertTo-Json -Depth 4 -Compress
 `.trim();
 }
 
+function buildWindowsQuickFirewallCommand(port: number): string {
+  const sourceTypeNames = WINDOWS_MANAGED_FIREWALL_POLICY_SOURCE_TYPES.map(
+    (name) => `'${name}'`,
+  ).join(", ");
+  return `
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$targetPort = ${port}
+function Test-OpenClawPortMatch($value) {
+  foreach ($entry in @($value)) {
+    $text = ([string]$entry).Trim()
+    if ($text -eq '' -or $text -eq '*' -or $text -eq 'Any') { return $true }
+    foreach ($part in $text -split ',') {
+      $range = $part.Trim()
+      if ($range -eq ([string]$targetPort)) { return $true }
+      if ($range -match '^(\\d+)-(\\d+)$') {
+        $start = [int]$Matches[1]
+        $end = [int]$Matches[2]
+        if ($start -le $targetPort -and $targetPort -le $end) { return $true }
+      }
+    }
+  }
+  return $false
+}
+function Resolve-OpenClawProgramScope($rule) {
+  $program = ([string]$rule.ApplicationName).Trim()
+  if ($program) { return $program }
+  foreach ($field in @('serviceName', 'LocalAppPackageId', 'LocalUserOwner')) {
+    $value = ([string]$rule.$field).Trim()
+    if ($value) { return $value }
+  }
+  $ports = ([string]$rule.LocalPorts).Trim()
+  if ($ports -ne '' -and $ports -ne '*') { return 'Any' }
+  return 'Any'
+}
+function Get-OpenClawManagedRules {
+  try {
+    $getRule = Get-Command Get-NetFirewallRule -ErrorAction Stop
+    $sourceTypeParameter = $getRule.Parameters['PolicyStoreSourceType']
+    if ($null -eq $sourceTypeParameter) { return @() }
+    $sourceType = $sourceTypeParameter.ParameterType
+    if ($sourceType.IsArray) { $sourceType = $sourceType.GetElementType() }
+    $requestedPolicyStoreSourceTypes = @(${sourceTypeNames})
+    $supportedPolicyStoreSourceTypes = [enum]::GetNames($sourceType)
+    $policyStoreSourceTypes = @(
+      foreach ($requestedPolicyStoreSourceType in $requestedPolicyStoreSourceTypes) {
+        $supportedPolicyStoreSourceTypes | Where-Object { $_ -ieq $requestedPolicyStoreSourceType } | Select-Object -First 1
+      }
+    )
+    if ($policyStoreSourceTypes.Count -eq 0) { return @() }
+    $rules = @(Get-NetFirewallRule -Direction Inbound -Enabled True -Action Allow -PolicyStore ActiveStore -PolicyStoreSourceType $policyStoreSourceTypes -ErrorAction SilentlyContinue)
+    $matchingRules = New-Object System.Collections.ArrayList
+    foreach ($rule in $rules) {
+      foreach ($portFilter in @($rule | Get-NetFirewallPortFilter)) {
+        $protocol = $portFilter.Protocol.ToString()
+        if (($protocol -eq 'Any' -or $protocol -eq 'TCP') -and (Test-OpenClawPortMatch $portFilter.LocalPort)) {
+          $appFilter = $rule | Get-NetFirewallApplicationFilter
+          $addressFilter = $rule | Get-NetFirewallAddressFilter
+          [void]$matchingRules.Add([pscustomobject]@{
+            DisplayName = [string]$rule.DisplayName
+            Name = [string]$rule.Name
+            Profile = [string]$rule.Profile
+            PolicyStoreSource = [string]$rule.PolicyStoreSource
+            PolicyStoreSourceType = $rule.PolicyStoreSourceType.ToString()
+            Program = [string]$appFilter.Program
+            LocalAddress = [string]$addressFilter.LocalAddress
+            RemoteAddress = [string]$addressFilter.RemoteAddress
+          })
+        }
+      }
+    }
+    return $matchingRules
+  } catch {
+    return @()
+  }
+}
+$connections = Get-NetConnectionProfile | Select-Object InterfaceAlias, @{Name='NetworkCategory';Expression={$_.NetworkCategory.ToString()}}
+$activeProfiles = Get-NetFirewallProfile -PolicyStore ActiveStore | Select-Object Name, @{Name='Enabled';Expression={$_.Enabled.ToString()}}, @{Name='DefaultInboundAction';Expression={$_.DefaultInboundAction.ToString()}}, @{Name='AllowInboundRules';Expression={$_.AllowInboundRules.ToString()}}, @{Name='AllowLocalFirewallRules';Expression={$_.AllowLocalFirewallRules.ToString()}}
+$localProfiles = Get-NetFirewallProfile -PolicyStore localhost | Select-Object Name, @{Name='Enabled';Expression={$_.Enabled.ToString()}}, @{Name='DefaultInboundAction';Expression={$_.DefaultInboundAction.ToString()}}, @{Name='AllowInboundRules';Expression={$_.AllowInboundRules.ToString()}}, @{Name='AllowLocalFirewallRules';Expression={$_.AllowLocalFirewallRules.ToString()}}
+$managedMatchingRules = @(Get-OpenClawManagedRules)
+$policy = New-Object -ComObject HNetCfg.FwPolicy2
+$matchingRules = New-Object System.Collections.ArrayList
+foreach ($rule in $policy.Rules) {
+  if (-not $rule.Enabled -or $rule.Direction -ne 1 -or $rule.Action -ne 1) { continue }
+  $protocol = if ($rule.Protocol -eq 6) { 'TCP' } elseif ($rule.Protocol -eq 256) { 'Any' } else { [string]$rule.Protocol }
+  if (($protocol -ne 'TCP' -and $protocol -ne 'Any') -or -not (Test-OpenClawPortMatch $rule.LocalPorts)) { continue }
+  [void]$matchingRules.Add([pscustomobject]@{
+    DisplayName = [string]$rule.Name
+    Name = [string]$rule.Name
+    Profile = [string]$rule.Profiles
+    PolicyStoreSource = 'PersistentStore'
+    PolicyStoreSourceType = 'Local'
+    Program = (Resolve-OpenClawProgramScope $rule)
+    LocalAddress = [string]$rule.LocalAddresses
+    RemoteAddress = [string]$rule.RemoteAddresses
+  })
+}
+[pscustomobject]@{
+  State = [pscustomobject]@{
+    ConnectionProfiles = $connections
+    ActiveFirewallProfiles = $activeProfiles
+    LocalFirewallProfiles = $localProfiles
+  }
+  ActiveRules = $managedMatchingRules
+  LocalRules = $matchingRules
+} | ConvertTo-Json -Depth 5 -Compress
+`.trim();
+}
+
 export type WindowsGatewayFirewallDiagnosticCode =
   | "windows_firewall_not_applicable"
   | "windows_firewall_unrestricted"
@@ -197,6 +307,7 @@ export type WindowsGatewayFirewallCommandRunner = (
 export type InspectWindowsGatewayFirewallParams = {
   bind: string | undefined;
   port: number;
+  mode?: "quick" | "full";
   platform?: NodeJS.Platform;
   runCommandWithTimeout?: WindowsGatewayFirewallCommandRunner;
   timeoutMs?: number;
@@ -233,6 +344,12 @@ type ClassifiedFirewallState = {
   matchingRules: FirewallRule[];
   localMatchingRules: FirewallRule[];
   netshOutput: string;
+};
+
+type QuickFirewallPayload = {
+  State?: unknown;
+  ActiveRules?: unknown;
+  LocalRules?: unknown;
 };
 
 function powershell(command: string): string[] {
@@ -710,7 +827,79 @@ export async function inspectWindowsGatewayFirewall(
   }
 
   const runCommandWithTimeout = params.runCommandWithTimeout ?? defaultRunCommandWithTimeout;
-  const timeoutMs = params.timeoutMs ?? DEFAULT_WINDOWS_GATEWAY_FIREWALL_TIMEOUT_MS;
+  const mode = params.mode ?? "full";
+  const timeoutMs =
+    params.timeoutMs ??
+    (mode === "quick"
+      ? QUICK_WINDOWS_GATEWAY_FIREWALL_TIMEOUT_MS
+      : DEFAULT_WINDOWS_GATEWAY_FIREWALL_TIMEOUT_MS);
+  if (mode === "quick") {
+    const quickJson = await runBestEffortCommand(
+      runCommandWithTimeout,
+      powershell(buildWindowsQuickFirewallCommand(params.port)),
+      timeoutMs,
+    );
+    if (quickJson === null) {
+      return {
+        applies: true,
+        severity: "warning",
+        code: "windows_firewall_inspection_failed",
+        message: "OpenClaw could not quickly inspect Windows Firewall LAN Gateway policy.",
+        details: [
+          "Run `openclaw gateway status --deep` again, or verify the advertised LAN URL from another device.",
+        ],
+      };
+    }
+    const quickPayload = parseJsonPayload(quickJson) as QuickFirewallPayload | null;
+    if (!quickPayload || typeof quickPayload !== "object" || Array.isArray(quickPayload)) {
+      return {
+        applies: true,
+        severity: "warning",
+        code: "windows_firewall_inspection_failed",
+        message: "OpenClaw could not parse Windows Firewall LAN Gateway policy.",
+        details: [
+          "Run `openclaw gateway status --deep` again, or verify the advertised LAN URL from another device.",
+        ],
+      };
+    }
+    const managedActiveRules = parseFirewallRules(quickPayload.ActiveRules);
+    const localRules = parseFirewallRules(quickPayload.LocalRules);
+    const stateJson = JSON.stringify(quickPayload.State ?? null);
+    const policyState = parseWindowsGatewayFirewallState({
+      stateJson,
+      rulesJson: JSON.stringify({
+        ActiveRules: [],
+        LocalRules: [],
+      }),
+    });
+    if (!policyState) {
+      return {
+        applies: true,
+        severity: "warning",
+        code: "windows_firewall_inspection_failed",
+        message: "OpenClaw could not parse Windows Firewall LAN Gateway policy.",
+        details: [
+          "Run `openclaw gateway status --deep` again, or verify the advertised LAN URL from another device.",
+        ],
+      };
+    }
+    const activeRules = [
+      ...managedActiveRules,
+      ...(localRulesAreAllowed(policyState) ? localRules : []),
+    ];
+    const state = buildClassifiedState(stateJson, "", activeRules, localRules);
+    return state
+      ? classifyWindowsGatewayFirewallState(state)
+      : {
+          applies: true,
+          severity: "warning",
+          code: "windows_firewall_inspection_failed",
+          message: "OpenClaw could not parse Windows Firewall LAN Gateway policy.",
+          details: [
+            "Run `openclaw gateway status --deep` again, or verify the advertised LAN URL from another device.",
+          ],
+        };
+  }
   const [stateJson, rulesJson, netshOutput] = await Promise.all([
     runBestEffortCommand(
       runCommandWithTimeout,
@@ -823,6 +1012,19 @@ export async function inspectWindowsGatewayFirewall(
   }
 
   return classifyWindowsGatewayFirewallState(state);
+}
+
+export function formatWindowsGatewayFirewallGuidance(params: {
+  bind: string | undefined;
+  platform?: NodeJS.Platform;
+}): string[] {
+  const platform = params.platform ?? process.platform;
+  if (platform !== "win32" || params.bind !== "lan") {
+    return [];
+  }
+  return [
+    "Windows firewall: if another device cannot connect to the LAN URL, run `openclaw gateway status --deep` from this Windows host.",
+  ];
 }
 
 export function formatWindowsGatewayFirewallDiagnostic(

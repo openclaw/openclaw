@@ -111,16 +111,10 @@ vi.mock("../commands/onboard-helpers.js", () => ({
 
 vi.mock("../infra/windows-gateway-firewall-diagnostics.js", () => ({
   inspectWindowsGatewayFirewall,
-  formatWindowsGatewayFirewallDiagnostic: (diagnostic: {
-    applies: boolean;
-    severity: string;
-    message: string;
-    details: string[];
-  }) =>
-    diagnostic.applies && diagnostic.severity === "warning"
+  formatWindowsGatewayFirewallGuidance: (params: { bind?: string }) =>
+    params.bind === "lan"
       ? [
-          `Windows firewall: ${diagnostic.message}`,
-          ...diagnostic.details.map((line) => `  ${line}`),
+          "Windows firewall: if another device cannot connect to the LAN URL, run `openclaw gateway status --deep` from this Windows host.",
         ]
       : [],
 }));
@@ -538,14 +532,7 @@ describe("finalizeSetupWizard", () => {
     expectNoteContains(prompter, "ws://10.211.55.3:18789", "Control UI");
   });
 
-  it("warns when Windows Firewall may block advertised LAN Control UI links", async () => {
-    inspectWindowsGatewayFirewall.mockResolvedValueOnce({
-      applies: true,
-      severity: "warning",
-      code: "windows_firewall_local_rules_ignored",
-      message: "Windows Firewall may ignore local Gateway allow rules for this network profile.",
-      details: ["Windows reports LocalFirewallRules as N/A (GPO-store only)."],
-    });
+  it("shows static Windows Firewall guidance for LAN Control UI links without inspection", async () => {
     const prompter = createLaterPrompter();
     const args = createAdvancedFinalizeArgs({
       nextConfig: {
@@ -569,11 +556,12 @@ describe("finalizeSetupWizard", () => {
       },
     });
 
-    expect(inspectWindowsGatewayFirewall).toHaveBeenCalledWith(
-      expect.objectContaining({ bind: "lan", port: 18789 }),
+    expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
+    expectNoteContains(
+      prompter,
+      "Windows firewall: if another device cannot connect to the LAN URL",
+      "Control UI",
     );
-    expectNoteContains(prompter, "Windows firewall: Windows Firewall may ignore", "Control UI");
-    expectNoteContains(prompter, "GPO-store only", "Control UI");
   });
 
   it("bounds the bootstrap hatch TUI run timeout", async () => {

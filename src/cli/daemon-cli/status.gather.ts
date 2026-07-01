@@ -609,6 +609,7 @@ export async function gatherDaemonStatus(
     opts.deep === true && shouldInspectLocalGateway
       ? await inspectWindowsGatewayFirewall({
           bind: gateway.bindMode,
+          mode: "quick",
           port: daemonPort,
           platform: process.platform,
         })

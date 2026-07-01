@@ -94,16 +94,10 @@ vi.mock("../infra/control-ui-assets.js", () => ({
 
 vi.mock("../infra/windows-gateway-firewall-diagnostics.js", () => ({
   inspectWindowsGatewayFirewall: mocks.inspectWindowsGatewayFirewall,
-  formatWindowsGatewayFirewallDiagnostic: (diagnostic: {
-    applies: boolean;
-    severity: string;
-    message: string;
-    details: string[];
-  }) =>
-    diagnostic.applies && diagnostic.severity === "warning"
+  formatWindowsGatewayFirewallGuidance: (params: { bind?: string }) =>
+    params.bind === "lan"
       ? [
-          `Windows firewall: ${diagnostic.message}`,
-          ...diagnostic.details.map((line) => `  ${line}`),
+          "Windows firewall: if another device cannot connect to the LAN URL, run `openclaw gateway status --deep` from this Windows host.",
         ]
       : [],
 }));
@@ -433,7 +427,7 @@ describe("runConfigureWizard", () => {
     );
   });
 
-  it("warns when Windows Firewall may block configured LAN Gateway links", async () => {
+  it("shows static Windows Firewall guidance for LAN Gateway links without inspection", async () => {
     setupBaseWizardState({
       gateway: {
         mode: "local",
@@ -441,25 +435,12 @@ describe("runConfigureWizard", () => {
         auth: { token: "token" },
       },
     });
-    mocks.inspectWindowsGatewayFirewall.mockResolvedValueOnce({
-      applies: true,
-      severity: "warning",
-      code: "windows_firewall_local_rules_ignored",
-      message: "Windows Firewall may ignore local Gateway allow rules for this network profile.",
-      details: ["Windows reports LocalFirewallRules as N/A (GPO-store only)."],
-    });
 
     await runConfigureWizard({ command: "configure", sections: ["gateway"] }, createRuntime());
 
-    expect(mocks.inspectWindowsGatewayFirewall).toHaveBeenCalledWith(
-      expect.objectContaining({ bind: "lan", port: 18789 }),
-    );
+    expect(mocks.inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
     expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("Windows firewall: Windows Firewall may ignore"),
-      "Control UI",
-    );
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("GPO-store only"),
+      expect.stringContaining("Windows firewall: if another device cannot connect to the LAN URL"),
       "Control UI",
     );
   });

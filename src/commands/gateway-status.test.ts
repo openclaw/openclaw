@@ -389,7 +389,7 @@ describe("gateway-status command", () => {
     requireRecord(firstTarget.summary, "first target summary");
   });
 
-  it("includes Windows LAN firewall diagnostics in gateway status warnings", async () => {
+  it("does not run Windows LAN firewall diagnostics during fast gateway status", async () => {
     readBestEffortConfig.mockResolvedValueOnce({
       gateway: {
         mode: "local",
@@ -397,28 +397,16 @@ describe("gateway-status command", () => {
         auth: { token: "ltok" },
       },
     } as never);
-    inspectWindowsGatewayFirewall.mockResolvedValueOnce({
-      applies: true,
-      severity: "warning",
-      code: "windows_firewall_local_rules_ignored",
-      message: "Windows Firewall may ignore local Gateway allow rules for this network profile.",
-      details: ["Windows reports LocalFirewallRules as N/A (GPO-store only)."],
-    });
     const { runtime, runtimeLogs } = createRuntimeCapture();
 
     await runGatewayStatus(runtime, { timeout: "1000", json: true });
 
-    expect(inspectWindowsGatewayFirewall).toHaveBeenCalledWith(
-      expect.objectContaining({ bind: "lan", port: 18789 }),
-    );
+    expect(inspectWindowsGatewayFirewall).not.toHaveBeenCalled();
     const parsed = JSON.parse(runtimeLogs.join("\n")) as {
-      warnings: Array<{ code: string; details?: string[] }>;
+      warnings: Array<{ code?: string }>;
     };
-    expect(parsed.warnings).toContainEqual(
-      expect.objectContaining({
-        code: "windows_firewall_local_rules_ignored",
-        details: ["Windows reports LocalFirewallRules as N/A (GPO-store only)."],
-      }),
+    expect(parsed.warnings.some((warning) => warning.code?.startsWith("windows_firewall_"))).toBe(
+      false,
     );
   });
 
