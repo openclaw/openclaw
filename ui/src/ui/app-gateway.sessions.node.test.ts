@@ -76,6 +76,7 @@ vi.mock("./controllers/exec-approval.ts", () => ({
   parseExecApprovalResolved: vi.fn(() => null),
   parsePluginApprovalRequested: vi.fn(() => null),
   pruneExecApprovalQueue: vi.fn((queue) => queue),
+  refreshPendingApprovalQueue: vi.fn(async () => undefined),
   removeExecApproval: vi.fn(),
 }));
 vi.mock("./controllers/nodes.ts", () => ({

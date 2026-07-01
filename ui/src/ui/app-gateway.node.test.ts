@@ -964,6 +964,53 @@ describe("connectGateway", () => {
     expect(host.execApprovalQueue[0]?.id).toBe("approval-1");
   });
 
+  it("loads pending approval requests after reconnect hello", async () => {
+    const now = Date.now();
+    const { host, client } = connectHostGateway();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "exec.approval.list") {
+        return [
+          {
+            id: "approval-exec-reconnected",
+            request: {
+              command: "pnpm check:changed",
+              host: "gateway",
+            },
+            createdAtMs: now,
+            expiresAtMs: now + 60_000,
+          },
+        ];
+      }
+      if (method === "plugin.approval.list") {
+        return [
+          {
+            id: "approval-plugin-reconnected",
+            request: {
+              title: "Allow plugin action",
+              description: "Plugin action requires confirmation.",
+              pluginId: "calendar",
+            },
+            createdAtMs: now + 1,
+            expiresAtMs: now + 60_000,
+          },
+        ];
+      }
+      return {};
+    });
+
+    client.emitHello();
+
+    await vi.waitFor(() => {
+      expect(host.execApprovalQueue.map((entry) => entry.id)).toEqual([
+        "approval-plugin-reconnected",
+        "approval-exec-reconnected",
+      ]);
+    });
+    expect(client.request).toHaveBeenCalledWith("exec.approval.list", {});
+    expect(client.request).toHaveBeenCalledWith("plugin.approval.list", {});
+    expect(host.execApprovalQueue.map((entry) => entry.kind)).toEqual(["plugin", "exec"]);
+  });
+
   it("maps generic fetch-failed auth errors to actionable token mismatch message", () => {
     const host = createHost();
 
