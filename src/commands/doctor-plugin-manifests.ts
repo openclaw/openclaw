@@ -6,6 +6,7 @@ import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-
 import { z } from "zod";
 import { note } from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { HealthFinding } from "../flows/health-checks.js";
 import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
@@ -18,6 +19,7 @@ const LEGACY_MANIFEST_CONTRACT_KEYS = [
   "imageGenerationProviders",
   "tools",
 ] as const;
+const LEGACY_PLUGIN_MANIFESTS_CHECK_ID = "core/doctor/legacy-plugin-manifests";
 
 type LegacyManifestContractMigration = {
   manifestPath: string;
@@ -150,6 +152,21 @@ export function collectLegacyPluginManifestContractMigrations(params?: {
   }
 
   return migrations.toSorted((left, right) => left.manifestPath.localeCompare(right.manifestPath));
+}
+
+export function legacyPluginManifestContractMigrationToHealthFinding(
+  migration: LegacyManifestContractMigration,
+): HealthFinding {
+  return {
+    checkId: LEGACY_PLUGIN_MANIFESTS_CHECK_ID,
+    severity: "warning",
+    message: `Plugin manifest ${migration.pluginId} uses legacy top-level capability keys.`,
+    path: migration.manifestPath,
+    target: migration.pluginId,
+    requirement: "contracts-capability-keys",
+    fixHint:
+      "Run `openclaw doctor --fix` to rewrite legacy plugin manifest capability keys under contracts.*.",
+  };
 }
 
 /** Prompts and rewrites legacy plugin manifest contract fields when doctor repair is enabled. */

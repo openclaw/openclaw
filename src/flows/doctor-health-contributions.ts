@@ -1339,6 +1339,21 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:legacy-plugin-manifests",
       label: "Legacy plugin manifests",
+      healthChecks: {
+        id: "core/doctor/legacy-plugin-manifests",
+        description: "Legacy plugin manifest capability keys are reported as findings.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const {
+            collectLegacyPluginManifestContractMigrations,
+            legacyPluginManifestContractMigrationToHealthFinding,
+          } = await import("../commands/doctor-plugin-manifests.js");
+          return collectLegacyPluginManifestContractMigrations({
+            config: ctx.cfg,
+            env: process.env,
+          }).map(legacyPluginManifestContractMigrationToHealthFinding);
+        },
+      },
       run: runLegacyPluginManifestHealth,
     }),
     createDoctorHealthContribution({
