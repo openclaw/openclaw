@@ -155,7 +155,9 @@ struct RootTabs: View {
                 .tabItem { Label("Chat", systemImage: "bubble.left.fill") }
                 .tag(AppTab.chat)
 
-            TalkProTab(openSettings: { self.selectSidebarDestination(.gateway) })
+            TalkProTab(
+                openSettings: { self.selectSidebarDestination(.gateway) },
+                openVoiceSettings: { self.selectSettingsRoute(.voice) })
                 .tabItem {
                     Label(
                         "Talk",
@@ -408,7 +410,8 @@ struct RootTabs: View {
             TalkProTab(
                 headerLeadingAction: self.sidebarHeaderLeadingAction,
                 ownsNavigationStack: false,
-                openSettings: { self.selectSidebarDestination(.gateway) })
+                openSettings: { self.selectSidebarDestination(.gateway) },
+                openVoiceSettings: { self.selectSettingsRoute(.voice) })
         case .overview:
             CommandCenterTab(
                 ownsNavigationStack: false,

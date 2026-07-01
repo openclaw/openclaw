@@ -75,7 +75,7 @@ struct RootTabsSourceGuardTests {
             to: "private var sidebarSplitContent: some View")
 
         let chatRange = try #require(phoneTabContent.range(of: "ChatProTab(openSettings:"))
-        let talkRange = try #require(phoneTabContent.range(of: "TalkProTab(openSettings:"))
+        let talkRange = try #require(phoneTabContent.range(of: "TalkProTab("))
         let controlRange = try #require(phoneTabContent.range(of: "RootTabsPhoneControlHub("))
         let agentRange = try #require(phoneTabContent.range(of: "AgentProTab("))
         let settingsRange = try #require(phoneTabContent.range(of: "SettingsProTab("))
@@ -536,6 +536,7 @@ struct RootTabsSourceGuardTests {
             encoding: .utf8)
 
         #expect(rootSource.matches(of: /openSettings: \{ self\.selectSidebarDestination\(\.gateway\) \}/).count >= 2)
+        #expect(rootSource.matches(of: /openVoiceSettings: \{ self\.selectSettingsRoute\(\.voice\) \}/).count == 2)
         #expect(rootSource.matches(of: /gatewayAction: \{ self\.selectSidebarDestination\(\.gateway\) \}/).count == 1)
         #expect(!rootSource.contains("showGatewayActions"))
         #expect(!rootSource.contains("gatewayActionsDialog"))
