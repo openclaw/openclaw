@@ -658,4 +658,123 @@ describe("subagent-orphan-recovery", () => {
     expect(finalizeParams.error).toContain("Automatic recovery failed after 2 attempts");
     expect(finalizeParams.error).toContain("service restart");
   });
+
+  // ── Stale-run liveness gate ──────────────────────────────────────────
+
+  it("finalizes stale restart-aborted runs inline instead of resuming", async () => {
+    const staleStartedAt = Date.now() - 3 * 60 * 60 * 1_000;
+    vi.mocked(sessions.loadSessionStore).mockReturnValue({
+      "agent:main:subagent:test-session-1": {
+        sessionId: "session-abc",
+        updatedAt: Date.now(),
+        abortedLastRun: true,
+      },
+    });
+
+    const activeRuns = createActiveRuns(
+      createTestRunRecord({
+        // started 3 hours ago — exceeds the 2-hour STALE_UNENDED_SUBAGENT_RUN_MS window
+        startedAt: staleStartedAt,
+        sessionStartedAt: staleStartedAt,
+        createdAt: staleStartedAt - 60_000,
+      }),
+    );
+
+    const result = await recoverOrphanedSubagentSessions({
+      getActiveRuns: () => activeRuns,
+    });
+
+    expect(result.recovered).toBe(0);
+    expect(result.failed).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(gateway.callGateway).not.toHaveBeenCalled();
+    expect(
+      subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun,
+    ).toHaveBeenCalledOnce();
+    const finalizeParams = requireRecord(
+      firstCallParam(
+        vi.mocked(subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun)
+          .mock.calls,
+        "stale run finalization",
+      ),
+      "stale run finalization params",
+    );
+    expect(finalizeParams.runId).toBe("run-1");
+    expect(finalizeParams.childSessionKey).toBe(
+      "agent:main:subagent:test-session-1",
+    );
+    expect(finalizeParams.error).toContain(
+      "Subagent run was orphaned past the run-liveness window",
+    );
+  });
+
+  it("recovers fresh restart-aborted runs that are within the liveness window", async () => {
+    const freshStartedAt = Date.now() - 30 * 60 * 1_000;
+    vi.mocked(gateway.callGateway).mockResolvedValue({ runId: "resumed-fresh" } as never);
+    vi.mocked(sessions.loadSessionStore).mockReturnValue({
+      "agent:main:subagent:test-session-1": {
+        sessionId: "session-abc",
+        updatedAt: Date.now(),
+        abortedLastRun: true,
+      },
+    });
+
+    const activeRuns = createActiveRuns(
+      createTestRunRecord({
+        // 30 minutes ago — well within the 2-hour window
+        startedAt: freshStartedAt,
+        sessionStartedAt: freshStartedAt,
+        createdAt: freshStartedAt - 60_000,
+      }),
+    );
+
+    const result = await recoverOrphanedSubagentSessions({
+      getActiveRuns: () => activeRuns,
+    });
+
+    expect(result.failed).toBe(0);
+    expect(result.skipped).toBe(0);
+    expect(result.recovered).toBe(1);
+    expect(gateway.callGateway).toHaveBeenCalledOnce();
+    expect(
+      subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun,
+    ).not.toHaveBeenCalled();
+  });
+
+  it("recovers old restart-aborted runs that carry an explicit long timeout extending the window", async () => {
+    const extendedStartedAt = Date.now() - 4 * 60 * 60 * 1_000;
+    vi.mocked(gateway.callGateway).mockResolvedValue({ runId: "resumed-extended" } as never);
+    vi.mocked(sessions.loadSessionStore).mockReturnValue({
+      "agent:main:subagent:test-session-1": {
+        sessionId: "session-abc",
+        updatedAt: Date.now(),
+        abortedLastRun: true,
+      },
+    });
+
+    const activeRuns = createActiveRuns(
+      createTestRunRecord({
+        // 4 hours ago — exceeds the default 2h window,
+        // but the explicit 6-hour runTimeoutSeconds extends the cutoff to ~6h 1m
+        startedAt: extendedStartedAt,
+        sessionStartedAt: extendedStartedAt,
+        createdAt: extendedStartedAt - 60_000,
+        runTimeoutSeconds: 6 * 60 * 60,
+      }),
+    );
+
+    const result = await recoverOrphanedSubagentSessions({
+      getActiveRuns: () => activeRuns,
+    });
+
+    expect(result.failed).toBe(0);
+    expect(result.skipped).toBe(0);
+    expect(result.recovered).toBe(1);
+    expect(result.failed).toBe(0);
+    expect(result.skipped).toBe(0);
+    expect(gateway.callGateway).toHaveBeenCalledOnce();
+    expect(
+      subagentRegistrySteerRuntime.finalizeInterruptedSubagentRun,
+    ).not.toHaveBeenCalled();
+  });
 });
