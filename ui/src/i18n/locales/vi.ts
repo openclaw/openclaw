@@ -1369,9 +1369,9 @@ export const vi: TranslationMap = {
       retryQueuedMessage: "Thử lại tin nhắn trong hàng đợi",
     },
     pairingQrExpired: {
-      title: "Pairing QR expired",
-      reason: "Run /pair qr again to generate a fresh setup code.",
-      badge: "Expired",
+      title: "Mã QR ghép nối đã hết hạn",
+      reason: "Chạy /pair qr một lần nữa để tạo mã thiết lập mới.",
+      badge: "Đã hết hạn",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",
