@@ -3,6 +3,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { deferDeliveryRecovery } from "./delivery-queue-storage.js";
 import {
   ackDelivery,
   enqueueDelivery,
@@ -175,6 +176,25 @@ describe("delivery-queue storage", () => {
       expect(typeof entry.lastAttemptAt).toBe("number");
       expect((entry.lastAttemptAt as number) > 0).toBe(true);
       expect(entry.lastError).toBe("connection refused");
+    });
+
+    it("records a recovery deferral without spending retry budget", async () => {
+      const id = await enqueueTextDelivery(
+        {
+          channel: "forum",
+          to: "123",
+          payloads: [{ text: "test" }],
+        },
+        tmpDir(),
+      );
+
+      await deferDeliveryRecovery(id, "adapter missing", tmpDir());
+
+      const entry = readQueuedEntry(tmpDir(), id);
+      expect(entry.retryCount).toBe(0);
+      expect(typeof entry.lastAttemptAt).toBe("number");
+      expect((entry.lastAttemptAt as number) > 0).toBe(true);
+      expect(entry.lastError).toBe("adapter missing");
     });
   });
 

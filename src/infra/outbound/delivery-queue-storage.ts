@@ -145,6 +145,19 @@ export async function failDelivery(id: string, error: string, stateDir?: string)
   }));
 }
 
+/** Record a recovery deferral that did not attempt delivery or reconciliation. */
+export async function deferDeliveryRecovery(
+  id: string,
+  error: string,
+  stateDir?: string,
+): Promise<void> {
+  updateQueuedDelivery(id, stateDir, (entry) => ({
+    ...entry,
+    lastAttemptAt: Date.now(),
+    lastError: error,
+  }));
+}
+
 function updateQueuedDelivery(
   id: string,
   stateDir: string | undefined,

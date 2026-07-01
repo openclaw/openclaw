@@ -134,7 +134,14 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     await drainMatrixReconnect({ deliver, stateDir: tmpDir });
 
     expect(deliver).not.toHaveBeenCalled();
-    expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
+    const afterDrain = await loadPendingDeliveries(tmpDir);
+    expect(afterDrain).toHaveLength(1);
+    expect(afterDrain[0]?.recoveryState).toBe("unknown_after_send");
+    expect(afterDrain[0]?.retryCount).toBe(beforeDrain[0]?.retryCount);
+    expect(afterDrain[0]?.lastAttemptAt).toBeTypeOf("number");
+    expect(afterDrain[0]?.lastError).toContain(
+      "refusing blind replay without adapter reconciliation",
+    );
   });
 
   it("leaves entry for retry in send_attempt_started when no send evidence exists", async () => {
