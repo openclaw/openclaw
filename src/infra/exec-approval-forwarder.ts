@@ -33,6 +33,7 @@ import {
 import { formatExecApprovalExpiresIn } from "./exec-approval-reply.js";
 import {
   resolveExecApprovalRequestAllowedDecisions,
+  resolveExecApprovalAllowAlwaysUnavailableReason,
   type ExecApprovalRequest,
   type ExecApprovalResolved,
 } from "./exec-approvals.js";
@@ -294,7 +295,9 @@ export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, no
   lines.push(`Reply with: /approve ${request.id} ${decisionText}`);
   if (!allowedDecisions.includes("allow-always")) {
     lines.push(
-      "Allow Always is unavailable because the effective policy requires approval every time.",
+      resolveExecApprovalAllowAlwaysUnavailableReason(request.request.ask) === "ask-always"
+        ? "Allow Always is unavailable because the effective policy requires approval every time."
+        : "Allow Always is unavailable because this command has no reusable approval pattern, so it can only be approved once.",
     );
   }
   return lines.join("\n");

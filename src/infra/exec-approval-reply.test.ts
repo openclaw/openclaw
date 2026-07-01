@@ -316,6 +316,24 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).not.toContain("C:\\Users\\alice");
   });
 
+  it("explains one-shot commands as no-reusable-pattern, not ask-always, when Allow Always is unavailable (#97069)", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-oneshot",
+      approvalSlug: "slug-oneshot",
+      ask: "on-miss",
+      allowedDecisions: ["allow-once", "deny"],
+      command: "openclaw --version 2>&1",
+      host: "gateway",
+    });
+
+    // Allow Always is unavailable because the redirected command is one-shot
+    // (no reusable pattern) under ask=on-miss, NOT because the policy is ask-always.
+    expect(payload.text).not.toContain(
+      "The effective approval policy requires approval every time",
+    );
+    expect(payload.text).toContain("no reusable approval pattern");
+  });
+
   it("omits allow-always actions when the effective policy requires approval every time", () => {
     const payload = buildExecApprovalPendingReplyPayload({
       approvalId: "req-ask-always",
