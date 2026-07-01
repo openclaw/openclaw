@@ -6,6 +6,7 @@ export {
   SAFE_BIN_PROFILES,
   buildLongFlagPrefixMap,
   collectKnownLongFlags,
+  isBuiltinSafeBinProfile,
   normalizeSafeBinProfileFixtures,
   renderDefaultSafeBinsDocText,
   renderSafeBinDeniedFlagsDocBullets,

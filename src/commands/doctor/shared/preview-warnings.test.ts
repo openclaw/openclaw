@@ -493,6 +493,19 @@ describe("doctor preview warnings", () => {
     expect(warning).toContain("Move the affected model/provider defaults manually");
   });
 
+  it("warns about an empty built-in safeBin override even without an explicit safeBins list", async () => {
+    const warnings = await collectDoctorPreviewWarnings({
+      cfg: {
+        tools: { exec: { safeBinProfiles: { head: {} } } },
+      } as OpenClawConfig,
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(warnings.join("\n")).toContain(
+      "tools.exec.safeBinProfiles.head: empty profile overrides built-in defaults (positional limits, allowedValueFlags, and deniedFlags are lost).",
+    );
+  });
+
   it("sanitizes empty-allowlist warning paths before returning preview output", async () => {
     const warnings = await collectDoctorPreviewWarnings({
       cfg: {

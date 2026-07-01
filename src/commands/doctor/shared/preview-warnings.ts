@@ -95,6 +95,25 @@ function hasConfiguredSafeBins(cfg: OpenClawConfig): boolean {
   });
 }
 
+function hasConfiguredSafeBinProfiles(cfg: OpenClawConfig): boolean {
+  const globalExec = cfg.tools?.exec;
+  if (
+    hasRecord(globalExec) &&
+    hasRecord(globalExec.safeBinProfiles) &&
+    Object.keys(globalExec.safeBinProfiles).length > 0
+  ) {
+    return true;
+  }
+  return listAgentRecords(cfg).some((agent) => {
+    const agentExec = hasRecord(agent) && hasRecord(agent.tools) ? agent.tools.exec : undefined;
+    return (
+      hasRecord(agentExec) &&
+      hasRecord(agentExec.safeBinProfiles) &&
+      Object.keys(agentExec.safeBinProfiles).length > 0
+    );
+  });
+}
+
 type VisibleReplyPolicyProvenance = "default" | "global-explicit" | "group-explicit";
 function resolveMessageToolAvailability(params: {
   cfg: OpenClawConfig;
@@ -867,8 +886,11 @@ export async function collectDoctorPreviewNotes(params: {
     }
   }
 
-  if (hasConfiguredSafeBins(params.cfg)) {
+  // Also run when only safeBinProfiles are configured: default safeBins are active at runtime, so a
+  // stale empty `{}` override of a built-in still disables it even without an explicit safeBins list.
+  if (hasConfiguredSafeBins(params.cfg) || hasConfiguredSafeBinProfiles(params.cfg)) {
     const {
+      collectExecSafeBinCoverageInfoNotes,
       collectExecSafeBinCoverageWarnings,
       collectExecSafeBinTrustedDirHintWarnings,
       scanExecSafeBinCoverage,
@@ -876,12 +898,17 @@ export async function collectDoctorPreviewNotes(params: {
     } = await import("./exec-safe-bins.js");
     const safeBinCoverage = scanExecSafeBinCoverage(params.cfg);
     if (safeBinCoverage.length > 0) {
-      warnings.push(
-        collectExecSafeBinCoverageWarnings({
-          hits: safeBinCoverage,
-          doctorFixCommand: params.doctorFixCommand,
-        }).join("\n"),
-      );
+      const coverageWarnings = collectExecSafeBinCoverageWarnings({
+        hits: safeBinCoverage,
+        doctorFixCommand: params.doctorFixCommand,
+      });
+      if (coverageWarnings.length > 0) {
+        warnings.push(coverageWarnings.join("\n"));
+      }
+      const coverageInfoNotes = collectExecSafeBinCoverageInfoNotes({ hits: safeBinCoverage });
+      if (coverageInfoNotes.length > 0) {
+        infoNotes.push(coverageInfoNotes.join("\n"));
+      }
     }
 
     const safeBinTrustedDirHints = scanExecSafeBinTrustedDirHints(params.cfg);
