@@ -102,6 +102,44 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
   }
   if (!recoveryOutcomeMutatesSessionState(params.outcome)) {
     emitSessionRecoveryCompleted({ request: params.request, outcome: params.outcome });
+    // When recovery fails (status "failed"), the diagnostic entry stays non-idle
+    // forever.  Transition it to idle and clear queued work so stale-idle pruning
+    // can eventually remove it instead of accumulating a ghost entry.
+    // Other non-mutating outcomes (e.g. skipped, already-in-flight) keep their
+    // current state because the session may still be active.
+    if (params.outcome.status === "failed") {
+      // Only transition to idle when the diagnostic state hasn't been
+      // modified by a newer recovery since this request was created.
+      // A stale generation means another recovery already owns this entry.
+      if (
+        isDiagnosticSessionStateCurrent({
+          sessionId: params.request.sessionId,
+          sessionKey: params.request.sessionKey,
+          generation: params.request.stateGeneration,
+        })
+      ) {
+        // Only transition to idle when no new embedded run started after
+        // recovery was initiated.  A fresh embedded run means the session
+        // is still active and should not be idled.
+        const activityClear = clearDiagnosticEmbeddedRunActivityForSession({
+          sessionId: params.request.sessionId,
+          sessionKey: params.request.sessionKey,
+          recoveryStartedAfterEmbeddedRunSequence:
+            params.recoveryStartedAfterEmbeddedRunSequence,
+          recoveryStartedAfterDiagnosticEventSequence:
+            params.recoveryStartedAfterDiagnosticEventSequence,
+        });
+        if (activityClear.blockedByActiveEmbeddedRun) {
+          return;
+        }
+        const ghostState = peekDiagnosticSessionState(params.request);
+        if (ghostState && ghostState.state !== "idle") {
+          ghostState.state = "idle";
+          ghostState.queueDepth = 0;
+          ghostState.lastActivity = Date.now();
+        }
+      }
+    }
     return;
   }
   const expectedState = params.request.expectedState ?? "processing";
