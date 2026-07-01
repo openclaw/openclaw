@@ -1,10 +1,24 @@
 // Telegram tests cover webhook plugin behavior.
 import { createHash } from "node:crypto";
 import { once } from "node:events";
+import fs from "node:fs/promises";
 import { request, type IncomingMessage } from "node:http";
+import os from "node:os";
+import nodePath from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests as createChannelIngressQueue,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { WEBHOOK_RATE_LIMIT_DEFAULTS } from "openclaw/plugin-sdk/webhook-ingress";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
+import type { TelegramRuntime } from "./runtime.types.js";
+import { TELEGRAM_SPOOLED_RETRY_DEAD_LETTER_MIN_AGE_MS } from "./spooled-update-retry-policy.js";
+import {
+  listTelegramSpooledUpdates,
+  writeTelegramSpooledUpdate,
+} from "./telegram-ingress-spool.js";
 
 const handleUpdateSpy = vi.hoisted(() => vi.fn((..._args: unknown[]): unknown => undefined));
 const setWebhookSpy = vi.hoisted(() => vi.fn());
@@ -104,6 +118,26 @@ vi.mock("./bot.js", () => ({
 }));
 
 let startTelegramWebhook: typeof import("./webhook.js").startTelegramWebhook;
+let webhookStateDir: string | undefined;
+let webhookSpoolDir: string | undefined;
+
+function installTelegramIngressQueueRuntime(resolveStateDir: () => string): void {
+  setTelegramRuntime({
+    state: {
+      resolveStateDir,
+      openChannelIngressQueue: (
+        options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
+      ) => createChannelIngressQueue({ ...options, channelId: "telegram" }),
+    },
+  } as TelegramRuntime);
+}
+
+function requireWebhookSpoolDir(): string {
+  if (!webhookSpoolDir) {
+    throw new Error("webhook spool dir not initialized");
+  }
+  return webhookSpoolDir;
+}
 
 function resetTelegramWebhookMocks(): void {
   handleUpdateSpy.mockReset();
@@ -169,8 +203,23 @@ beforeAll(async () => {
   ({ startTelegramWebhook } = await import("./webhook.js"));
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   resetTelegramWebhookMocks();
+  webhookStateDir = await fs.mkdtemp(nodePath.join(os.tmpdir(), "openclaw-telegram-webhook-"));
+  webhookSpoolDir = nodePath.join(webhookStateDir, "telegram", "ingress-spool-test");
+  await fs.mkdir(webhookSpoolDir, { recursive: true });
+  installTelegramIngressQueueRuntime(() => webhookStateDir ?? os.tmpdir());
+});
+
+afterEach(async () => {
+  clearTelegramRuntime();
+  closeOpenClawStateDatabaseForTest();
+  const stateDir = webhookStateDir;
+  webhookStateDir = undefined;
+  webhookSpoolDir = undefined;
+  if (stateDir) {
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
 });
 
 async function fetchWithTimeout(
@@ -401,6 +450,7 @@ async function withStartedWebhook<T>(
     token: TELEGRAM_TOKEN,
     port: 0,
     abortSignal: abort.signal,
+    spoolDir: options.spoolDir ?? requireWebhookSpoolDir(),
     ...options,
   });
   try {
@@ -659,9 +709,16 @@ describe("startTelegramWebhook", () => {
     );
   });
 
-  it("logs update processing failures after acknowledging Telegram", async () => {
+  it("durably retries a webhook update after acknowledging Telegram", async () => {
     const runtimeLog = vi.fn();
-    handleUpdateSpy.mockRejectedValueOnce(new Error("agent turn failed"));
+    const seenUpdates: unknown[] = [];
+    handleUpdateSpy.mockImplementation(async (update: unknown) => {
+      seenUpdates.push(update);
+      if (seenUpdates.length === 1) {
+        throw new Error("agent turn failed");
+      }
+    });
+    const payload = JSON.stringify({ update_id: 3, message: { text: "boom" } });
 
     await withStartedWebhook(
       {
@@ -672,18 +729,149 @@ describe("startTelegramWebhook", () => {
       async ({ port }) => {
         const response = await postWebhookJson({
           url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
-          payload: JSON.stringify({ update_id: 3, message: { text: "boom" } }),
+          payload,
           secret: TELEGRAM_SECRET,
         });
 
         expect(response.status).toBe(200);
         expect(await response.text()).toBe("");
+        await vi.waitFor(() => expect(seenUpdates).toEqual([JSON.parse(payload)]));
+        await vi.waitFor(async () =>
+          expect(
+            (await listTelegramSpooledUpdates({ spoolDir: requireWebhookSpoolDir() })).length,
+          ).toBe(1),
+        );
+        expectMockMessageContains(runtimeLog, "webhook spooled update 3 failed; keeping for retry");
+        await sleep(1_100);
         await vi.waitFor(() =>
-          expectMockMessageContains(
-            runtimeLog,
-            "webhook update processing failed after ack: agent turn failed",
+          expect(seenUpdates).toEqual([JSON.parse(payload), JSON.parse(payload)]),
+        );
+        await vi.waitFor(async () =>
+          expect(await listTelegramSpooledUpdates({ spoolDir: requireWebhookSpoolDir() })).toEqual(
+            [],
           ),
         );
+      },
+    );
+  });
+
+  it("drains spooled webhook updates left by a previous process on startup", async () => {
+    const update = { update_id: 30, message: { text: "leftover" } };
+    await writeTelegramSpooledUpdate({
+      spoolDir: requireWebhookSpoolDir(),
+      update,
+    });
+
+    await withStartedWebhook(
+      {
+        secret: TELEGRAM_SECRET,
+        path: TELEGRAM_WEBHOOK_PATH,
+      },
+      async () => {
+        await vi.waitFor(() => expect(handleUpdateSpy).toHaveBeenCalledWith(update));
+        await vi.waitFor(async () =>
+          expect(await listTelegramSpooledUpdates({ spoolDir: requireWebhookSpoolDir() })).toEqual(
+            [],
+          ),
+        );
+      },
+    );
+  });
+
+  it("keeps retry-limit webhook updates pending until they are old enough to dead-letter", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(10_000_000);
+      const runtimeLog = vi.fn();
+      const update = { update_id: 31, message: { text: "young poison" } };
+      await writeTelegramSpooledUpdate({
+        spoolDir: requireWebhookSpoolDir(),
+        update,
+        now: Date.now(),
+      });
+      handleUpdateSpy.mockRejectedValue(new Error("deterministic handler failure"));
+
+      const started = await startTelegramWebhook({
+        token: TELEGRAM_TOKEN,
+        port: 0,
+        secret: TELEGRAM_SECRET,
+        path: TELEGRAM_WEBHOOK_PATH,
+        spoolDir: requireWebhookSpoolDir(),
+        runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
+      });
+      try {
+        await vi.waitFor(() => expect(handleUpdateSpy).toHaveBeenCalled());
+        await vi.advanceTimersByTimeAsync(130_000);
+        await vi.waitFor(async () =>
+          expect(
+            (await listTelegramSpooledUpdates({ spoolDir: requireWebhookSpoolDir() })).map(
+              (spooled) => spooled.updateId,
+            ),
+          ).toEqual([31]),
+        );
+        expect(mockMessages(runtimeLog).join("\n")).not.toContain("dead-lettered");
+      } finally {
+        await started.stop();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("dead-letters retry-limit webhook updates after the minimum age", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(10_000_000);
+      const runtimeLog = vi.fn();
+      const update = { update_id: 32, message: { text: "old poison" } };
+      await writeTelegramSpooledUpdate({
+        spoolDir: requireWebhookSpoolDir(),
+        update,
+        now: Date.now() - TELEGRAM_SPOOLED_RETRY_DEAD_LETTER_MIN_AGE_MS,
+      });
+      handleUpdateSpy.mockRejectedValue(new Error("deterministic handler failure"));
+
+      const started = await startTelegramWebhook({
+        token: TELEGRAM_TOKEN,
+        port: 0,
+        secret: TELEGRAM_SECRET,
+        path: TELEGRAM_WEBHOOK_PATH,
+        spoolDir: requireWebhookSpoolDir(),
+        runtime: { log: runtimeLog, error: vi.fn(), exit: vi.fn() },
+      });
+      try {
+        await vi.waitFor(() => expect(handleUpdateSpy).toHaveBeenCalled());
+        await vi.advanceTimersByTimeAsync(130_000);
+        await vi.waitFor(async () =>
+          expect(await listTelegramSpooledUpdates({ spoolDir: requireWebhookSpoolDir() })).toEqual(
+            [],
+          ),
+        );
+        expectMockMessageContains(runtimeLog, "reached retry limit after 8 attempts; dead-lettered");
+      } finally {
+        await started.stop();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns non-200 when the webhook update cannot be spooled durably", async () => {
+    handleUpdateSpy.mockClear();
+    await withStartedWebhook(
+      {
+        secret: TELEGRAM_SECRET,
+        path: TELEGRAM_WEBHOOK_PATH,
+      },
+      async ({ port }) => {
+        const response = await postWebhookJson({
+          url: webhookUrl(port, TELEGRAM_WEBHOOK_PATH),
+          payload: JSON.stringify({ message: { text: "missing update id" } }),
+          secret: TELEGRAM_SECRET,
+        });
+
+        expect(response.status).toBe(500);
+        expect(handleUpdateSpy).not.toHaveBeenCalled();
       },
     );
   });
@@ -814,6 +1002,7 @@ describe("startTelegramWebhook", () => {
       abortSignal: firstAbort.signal,
       secret: TELEGRAM_SECRET,
       path: TELEGRAM_WEBHOOK_PATH,
+      spoolDir: requireWebhookSpoolDir(),
     });
     const second = await startTelegramWebhook({
       token: TELEGRAM_TOKEN,
@@ -821,6 +1010,7 @@ describe("startTelegramWebhook", () => {
       abortSignal: secondAbort.signal,
       secret: TELEGRAM_SECRET,
       path: TELEGRAM_WEBHOOK_PATH,
+      spoolDir: nodePath.join(requireWebhookSpoolDir(), "second"),
     });
 
     try {
@@ -1052,6 +1242,7 @@ describe("startTelegramWebhook", () => {
       port: 0,
       abortSignal: abort.signal,
       path: TELEGRAM_WEBHOOK_PATH,
+      spoolDir: requireWebhookSpoolDir(),
     });
 
     abort.abort();
