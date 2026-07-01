@@ -265,11 +265,12 @@ describe("Codex plugin thread config", () => {
     const apps = config.configPatch?.apps as Record<string, unknown> | undefined;
     expect(apps?.["google-calendar-app"]).toEqual({
       enabled: true,
+      approvals_reviewer: "user",
       destructive_enabled: true,
       open_world_enabled: true,
       default_tools_approval_mode: "auto",
     });
-    expect(config.configPatch?.approvals_reviewer).toBe("user");
+    expect(config.configPatch).not.toHaveProperty("approvals_reviewer");
     expect(config.policyContext.apps["google-calendar-app"]).toMatchObject({
       allowDestructiveActions: true,
       destructiveApprovalMode: "ask",
@@ -315,7 +316,9 @@ describe("Codex plugin thread config", () => {
         },
       });
 
-      expect(config.configPatch?.approvals_reviewer).toBe(expectedReviewer);
+      const apps = config.configPatch?.apps as Record<string, unknown> | undefined;
+      const app = apps?.["google-calendar-app"] as Record<string, unknown> | undefined;
+      expect(app?.approvals_reviewer).toBe(expectedReviewer);
       expect(config.policyContext.apps["google-calendar-app"]?.destructiveApprovalMode).toBe(
         pluginOverride === true ? "allow" : pluginOverride === false ? "deny" : pluginOverride,
       );
@@ -350,7 +353,6 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(configPatch).toEqual({
-      approvals_reviewer: "user",
       apps: {
         _default: {
           enabled: false,
@@ -359,6 +361,7 @@ describe("Codex plugin thread config", () => {
         },
         "ask-app": {
           enabled: true,
+          approvals_reviewer: "user",
           destructive_enabled: true,
           open_world_enabled: true,
           default_tools_approval_mode: "auto",
@@ -371,6 +374,7 @@ describe("Codex plugin thread config", () => {
         },
       },
     });
+    expect(configPatch).not.toHaveProperty("approvals_reviewer");
   });
 
   it("omits ask policy apps when cwd effective approval overrides remain after cleanup", async () => {

@@ -150,7 +150,6 @@ function createDeferredNamedDynamicTool(
 
 function createPluginAppConfigPatch(options: { approvalsReviewer?: "user" } = {}) {
   return {
-    ...(options.approvalsReviewer ? { approvals_reviewer: options.approvalsReviewer } : {}),
     apps: {
       _default: {
         enabled: false,
@@ -162,6 +161,7 @@ function createPluginAppConfigPatch(options: { approvalsReviewer?: "user" } = {}
         destructive_enabled: true,
         open_world_enabled: true,
         default_tools_approval_mode: "auto",
+        ...(options.approvalsReviewer ? { approvals_reviewer: options.approvalsReviewer } : {}),
       },
     },
   };
@@ -1796,8 +1796,8 @@ describe("Codex app-server thread lifecycle bindings", () => {
     >;
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
     expect(requestCalls.map(([, requestParams]) => requestParams.approvalsReviewer)).toEqual([
-      "user",
-      "user",
+      "auto_review",
+      "auto_review",
     ]);
     expect(requestCalls[0]?.[1].config).toEqual({
       "features.hooks": true,

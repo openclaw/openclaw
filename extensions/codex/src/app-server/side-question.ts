@@ -87,7 +87,6 @@ import {
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerRequestModelSelection,
   resolveCodexAppServerModelProvider,
-  resolveCodexThreadApprovalsReviewer,
   resolveCodexBindingModelProviderFallback,
   resolveReasoningEffort,
 } from "./thread-lifecycle.js";
@@ -437,11 +436,7 @@ export async function runCodexAppServerSideQuestion(
           personality: CODEX_NATIVE_PERSONALITY_NONE,
           cwd,
           approvalPolicy,
-          approvalsReviewer: resolveCodexThreadApprovalsReviewer(
-            modelScopedAppServer,
-            undefined,
-            binding.pluginAppPolicyContext,
-          ),
+          approvalsReviewer: modelScopedAppServer.approvalsReviewer,
           ...(modelScopedAppServer.networkProxy ? {} : { sandbox }),
           ...(serviceTier ? { serviceTier } : {}),
           config: threadConfig,

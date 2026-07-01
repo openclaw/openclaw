@@ -229,10 +229,10 @@ plugins, while unsafe schemas and ambiguous ownership still fail closed:
   gating as `"auto"`, clears durable Codex per-tool approval overrides for the
   app before the thread starts, and only offers one-shot approval or denial so
   durable approvals cannot suppress later write-action prompts.
-- If any admitted app uses `"ask"`, OpenClaw selects Codex's human approvals
-  reviewer for the thread so Codex sends approval elicitations to OpenClaw.
-  The approval bridge still evaluates each app's own effective policy, so other
-  apps in the thread keep their configured `true`, `false`, or `"auto"` behavior.
+- For each admitted app that uses `"ask"`, OpenClaw selects Codex's human
+  approvals reviewer for that app so Codex sends its approval elicitations to
+  OpenClaw. Other apps and non-app thread approvals keep their configured
+  reviewer and policy.
 - Missing plugin identity, ambiguous ownership, a missing turn id, a wrong turn
   id, or an unsafe elicitation schema declines instead of prompting.
 
