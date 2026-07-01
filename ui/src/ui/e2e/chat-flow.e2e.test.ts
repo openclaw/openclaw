@@ -266,6 +266,14 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
       await gateway.emitChatFinal({ runId, text: "Harness verified." });
 
       await page.getByText("Harness verified.").waitFor({ timeout: 10_000 });
+
+      const spacedPairCommand = "/ pair qr";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(spacedPairCommand);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const commandRequests = await waitForRequests(gateway, "chat.send", 2);
+      const commandParams = requireRecord(commandRequests[1]?.params);
+      expect(commandParams.message).toBe(spacedPairCommand);
     } finally {
       await closeBrowserContext(context);
     }
