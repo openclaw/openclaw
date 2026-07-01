@@ -32,6 +32,7 @@ describe("secrets runtime state", () => {
         fetch: { providerSource: "none", diagnostics: [] },
         diagnostics: [],
       },
+      webToolsProvenance: "resolved",
     };
 
     activateSecretsRuntimeSnapshotState({

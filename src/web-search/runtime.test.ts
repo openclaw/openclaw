@@ -491,6 +491,7 @@ describe("web search runtime", () => {
         },
         diagnostics: [],
       },
+      webToolsProvenance: "resolved",
     });
 
     await expect(
@@ -667,6 +668,7 @@ describe("web search runtime", () => {
         },
         diagnostics: [],
       },
+      webToolsProvenance: "resolved",
     });
 
     await expect(
@@ -708,6 +710,7 @@ describe("web search runtime", () => {
         },
         diagnostics: [],
       },
+      webToolsProvenance: "resolved",
     });
 
     await expect(
@@ -752,6 +755,7 @@ describe("web search runtime", () => {
         },
         diagnostics: [],
       },
+      webToolsProvenance: "resolved",
     });
 
     await expect(

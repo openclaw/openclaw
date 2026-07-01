@@ -269,6 +269,7 @@ describe("createOpenClawTools browser plugin integration", () => {
         },
         diagnostics: [],
       },
+      webToolsProvenance: "resolved",
     });
 
     resolveOpenClawPluginToolsForOptions({

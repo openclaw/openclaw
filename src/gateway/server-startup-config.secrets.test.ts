@@ -87,6 +87,7 @@ function preparedSnapshot(config: OpenClawConfig): PreparedSecretsRuntimeSnapsho
       },
       diagnostics: [],
     },
+    webToolsProvenance: "resolved",
   };
 }
 

@@ -111,6 +111,7 @@ describe("secrets runtime fast path", () => {
         store: emptyAuthStore(),
       },
     ]);
+    expect(snapshot.webToolsProvenance).toBe("canonical-fast-path");
   });
 
   it("uses the fast path when web fetch only configures runtime limits", async () => {
@@ -140,6 +141,7 @@ describe("secrets runtime fast path", () => {
 
     expect(runtimePrepareImportMock).not.toHaveBeenCalled();
     expect(snapshot.webTools.fetch.providerSource).toBe("none");
+    expect(snapshot.webToolsProvenance).toBe("canonical-fast-path");
   });
 
   it("uses the fast path when web fetch is explicitly disabled", async () => {
@@ -167,7 +169,7 @@ describe("secrets runtime fast path", () => {
   it("uses the resolver path when an auth profile store contains a SecretRef", async () => {
     const { prepareSecretsRuntimeSnapshot } = await import("./runtime.js");
 
-    await prepareSecretsRuntimeSnapshot({
+    const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({}),
       env: {},
       agentDirs: ["/tmp/openclaw-agent-main"],
@@ -184,12 +186,13 @@ describe("secrets runtime fast path", () => {
     });
 
     expect(resolveRuntimeWebToolsMock).toHaveBeenCalledTimes(1);
+    expect(snapshot.webToolsProvenance).toBe("resolved");
   });
 
   it("keeps explicit web fetch provider config on the resolver path", async () => {
     const { prepareSecretsRuntimeSnapshot } = await import("./runtime.js");
 
-    await prepareSecretsRuntimeSnapshot({
+    const snapshot = await prepareSecretsRuntimeSnapshot({
       config: asConfig({
         tools: {
           web: {
@@ -205,6 +208,20 @@ describe("secrets runtime fast path", () => {
     });
 
     expect(resolveRuntimeWebToolsMock).toHaveBeenCalledTimes(1);
+    expect(snapshot.webToolsProvenance).toBe("resolved");
+  });
+
+  it("marks startup-only fast-path snapshots as fast-path web metadata", async () => {
+    const { prepareSecretsRuntimeFastPathSnapshot } = await import("./runtime-fast-path.js");
+
+    const result = prepareSecretsRuntimeFastPathSnapshot({
+      config: asConfig({}),
+      env: {},
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: emptyAuthStore,
+    });
+
+    expect(result?.snapshot.webToolsProvenance).toBe("canonical-fast-path");
   });
 
   it.each([

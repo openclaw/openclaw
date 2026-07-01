@@ -39,10 +39,14 @@ import type { RuntimeWebToolsMetadata } from "./runtime-web-tools.types.js";
 export type { SecretResolverWarning } from "./runtime-shared.js";
 export type { PreparedSecretsRuntimeSnapshot } from "./runtime-state.js";
 
-registerSecretsRuntimeStateClearHook(clearRuntimeAuthProfileStoreSnapshots);
-
 let runtimeManifestPromise: Promise<typeof import("./runtime-manifest.runtime.js")> | null = null;
 let runtimePreparePromise: Promise<typeof import("./runtime-prepare.runtime.js")> | null = null;
+
+function clearSecretsRuntimeActivationAuxState(): void {
+  clearRuntimeAuthProfileStoreSnapshots();
+}
+
+registerSecretsRuntimeStateClearHook(clearSecretsRuntimeActivationAuxState);
 
 function loadRuntimeManifestHelpers() {
   runtimeManifestPromise ??= import("./runtime-manifest.runtime.js");
@@ -116,6 +120,50 @@ function shouldLoadPluginMetadataForSecrets(config: OpenClawConfig): boolean {
   );
 }
 
+function hasResolvedRuntimeWebToolsMetadata(metadata: RuntimeWebToolsMetadata): boolean {
+  return (
+    metadata.search.providerSource !== "none" ||
+    metadata.fetch.providerSource !== "none" ||
+    Boolean(metadata.search.providerConfigured) ||
+    Boolean(metadata.search.selectedProvider) ||
+    Boolean(metadata.fetch.providerConfigured) ||
+    Boolean(metadata.fetch.selectedProvider) ||
+    metadata.search.diagnostics.length > 0 ||
+    metadata.fetch.diagnostics.length > 0 ||
+    metadata.diagnostics.length > 0
+  );
+}
+
+function shouldPreserveActiveRuntimeWebToolsMetadata(
+  snapshot: PreparedSecretsRuntimeSnapshot,
+  activeWebTools: RuntimeWebToolsMetadata | null,
+): activeWebTools is RuntimeWebToolsMetadata {
+  // Only a stripped fast-path refresh of an already-active snapshot may keep the
+  // prior metadata. A `canonical-fast-path` prepare (initial activation or a real
+  // web-config deletion) is authoritative and must clear, so deleted web surfaces
+  // do not leave stale `web_search`/`web_fetch` tools active. Provenance, not the
+  // incoming config shape, drives this: an unrelated plugin-entry stripped refresh
+  // still preserves because the decision never inspects the incoming containers.
+  return (
+    snapshot.webToolsProvenance === "stripped-refresh" &&
+    activeWebTools !== null &&
+    hasResolvedRuntimeWebToolsMetadata(activeWebTools)
+  );
+}
+
+function snapshotWithRuntimeWebToolsForActivation(
+  snapshot: PreparedSecretsRuntimeSnapshot,
+): PreparedSecretsRuntimeSnapshot {
+  const activeWebTools = getActiveRuntimeWebToolsMetadataFromState();
+  if (!shouldPreserveActiveRuntimeWebToolsMetadata(snapshot, activeWebTools)) {
+    return snapshot;
+  }
+  return {
+    ...snapshot,
+    webTools: activeWebTools,
+  };
+}
+
 /** Prepares a secrets runtime snapshot and records refresh context for later activation. */
 export async function prepareSecretsRuntimeSnapshot(params: {
   config: OpenClawConfig;
@@ -127,6 +175,12 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins" | "manifestRegistry">;
   /** Test override for discovered loadable plugins and their origins. */
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
+  /**
+   * Set only by the refresh path re-preparing an already-active snapshot. Marks
+   * a resulting fast-path snapshot as a stripped refresh so activation may keep
+   * prior web metadata; fresh (canonical) prepares omit it and clear instead.
+   */
+  refreshOrigin?: boolean;
 }): Promise<PreparedSecretsRuntimeSnapshot> {
   const runtimeEnv = mergeSecretsRuntimeEnv(params.env);
   const sourceConfig = structuredClone(params.config);
@@ -154,6 +208,9 @@ export async function prepareSecretsRuntimeSnapshot(params: {
       authStores,
       warnings: [],
       webTools: createEmptyRuntimeWebToolsMetadata(),
+      webToolsProvenance: params.refreshOrigin
+        ? ("stripped-refresh" as const)
+        : ("canonical-fast-path" as const),
     };
     setPreparedSecretsRuntimeSnapshotRefreshContext(snapshot, {
       env: runtimeEnv,
@@ -240,6 +297,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
       resolvedConfig,
       context,
     }),
+    webToolsProvenance: "resolved" as const,
   };
   setPreparedSecretsRuntimeSnapshotRefreshContext(snapshot, {
     env: runtimeEnv,
@@ -254,13 +312,15 @@ export async function prepareSecretsRuntimeSnapshot(params: {
 
 /** Activates a prepared secrets runtime snapshot for fast runtime lookup. */
 export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): void {
+  const snapshotToActivate = snapshotWithRuntimeWebToolsForActivation(snapshot);
   const refreshContext =
+    getPreparedSecretsRuntimeSnapshotRefreshContext(snapshotToActivate) ??
     getPreparedSecretsRuntimeSnapshotRefreshContext(snapshot) ??
     getActiveSecretsRuntimeRefreshContext() ??
     ({
       env: { ...process.env } as Record<string, string | undefined>,
       explicitAgentDirs: null,
-      includeAuthStoreRefs: snapshot.authStores.length > 0,
+      includeAuthStoreRefs: snapshotToActivate.authStores.length > 0,
       loadAuthStore: loadAuthProfileStoreForSecretsRuntime,
       loadablePluginOrigins: new Map<string, PluginOrigin>(),
     } satisfies SecretsRuntimeRefreshContext);
@@ -275,7 +335,7 @@ export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeS
     return isDeepStrictEqual(candidate.sourceConfig, sourceConfig) ? candidate : null;
   };
   activateSecretsRuntimeSnapshotState({
-    snapshot,
+    snapshot: snapshotToActivate,
     refreshContext,
     refreshHandler: {
       preflight: async ({ sourceConfig, includeAuthStoreRefs }) => {
@@ -290,6 +350,7 @@ export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeS
           agentDirs: resolveRefreshAgentDirs(sourceConfig, activeRefreshContext),
           includeAuthStoreRefs: includeAuthStoreRefs ?? activeRefreshContext.includeAuthStoreRefs,
           loadablePluginOrigins: activeRefreshContext.loadablePluginOrigins,
+          refreshOrigin: true,
           ...(activeRefreshContext.manifestRegistry
             ? { manifestRegistry: activeRefreshContext.manifestRegistry }
             : {}),
@@ -314,6 +375,7 @@ export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeS
             agentDirs: resolveRefreshAgentDirs(sourceConfig, activeRefreshContext),
             includeAuthStoreRefs: includeAuthStoreRefs ?? activeRefreshContext.includeAuthStoreRefs,
             loadablePluginOrigins: activeRefreshContext.loadablePluginOrigins,
+            refreshOrigin: true,
             ...(activeRefreshContext.manifestRegistry
               ? { manifestRegistry: activeRefreshContext.manifestRegistry }
               : {}),
@@ -344,6 +406,7 @@ export async function refreshActiveSecretsRuntimeSnapshot(): Promise<boolean> {
     agentDirs: resolveRefreshAgentDirs(activeSnapshot.sourceConfig, activeRefreshContext),
     includeAuthStoreRefs: activeRefreshContext.includeAuthStoreRefs,
     loadablePluginOrigins: activeRefreshContext.loadablePluginOrigins,
+    refreshOrigin: true,
     ...(activeRefreshContext.manifestRegistry
       ? { manifestRegistry: activeRefreshContext.manifestRegistry }
       : {}),

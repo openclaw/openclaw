@@ -68,6 +68,7 @@ function activateMinimalSecretsRuntimeSnapshot(params: {
     authStores: [],
     warnings: [],
     webTools: createEmptyRuntimeWebToolsMetadata(),
+    webToolsProvenance: "resolved",
   };
   activateSecretsRuntimeSnapshotState({
     snapshot,
