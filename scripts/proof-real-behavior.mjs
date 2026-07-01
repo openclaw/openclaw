@@ -14,7 +14,6 @@ import process from "node:process";
 // ---------------------------------------------------------------------------
 // Inline implementation of readResponseWithLimit
 // ---------------------------------------------------------------------------
-const DEFAULT_MAX_BYTES = 16 * 1024 * 1024; // 16 MiB
 
 async function readResponseWithLimit(response, maxBytes, opts) {
   const reader = response.body.getReader();
@@ -24,7 +23,9 @@ async function readResponseWithLimit(response, maxBytes, opts) {
   try {
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
+      if (done) {
+        break;
+      }
       total += value.byteLength;
       if (total > maxBytes) {
         const err =
@@ -78,7 +79,7 @@ function startTestServer(host = "127.0.0.1", port = 0) {
           Browser: "Chrome/126.0.0.0",
           Protocol: "1.3",
           "User-Agent": "Mozilla/5.0 Chrome/126.0.0.0",
-          "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/browser/abc123",
+          webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/abc123",
         });
         res.writeHead(200, { "content-type": "application/json" });
         res.end(body);
@@ -90,7 +91,7 @@ function startTestServer(host = "127.0.0.1", port = 0) {
         const body = JSON.stringify({
           Browser: "Chrome/126.0.0.0",
           Protocol: "1.3",
-          "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/browser/def456",
+          webSocketDebuggerUrl: "ws://127.0.0.1:9222/devtools/browser/def456",
         });
         res.writeHead(200, {
           "content-type": "application/json",
@@ -182,7 +183,8 @@ async function main() {
   console.log(`🧪 Node version: ${process.version}`);
   console.log(`🧪 Platform: ${process.platform}\n`);
 
-  let passed = 0, failed = 0;
+  let passed = 0,
+    failed = 0;
 
   // ---- Test 1: Normal CDP response (no content-length header) ----
   console.log("─────────────────────────────────────────────────────────────");
@@ -199,7 +201,7 @@ async function main() {
       console.log("  ❌ Unexpected result:", JSON.stringify(data));
       failed++;
     }
-  } catch (e) {
+  } catch {
     console.log("  ❌ Unexpected error:", e.message);
     failed++;
   }
@@ -217,7 +219,7 @@ async function main() {
       console.log("  ❌ Unexpected result:", JSON.stringify(data));
       failed++;
     }
-  } catch (e) {
+  } catch {
     console.log("  ❌ Unexpected error:", e.message);
     failed++;
   }
@@ -231,7 +233,7 @@ async function main() {
     const data = await readChromeVersion(baseUrl, "/json/version-oversized");
     console.log("  ❌ Should have thrown instead of returning:", JSON.stringify(data));
     failed++;
-  } catch (e) {
+  } catch {
     if (e.message.includes("body exceeds 16 MiB")) {
       const rssAfter = process.memoryUsage().rss;
       const delta = Math.round((rssAfter - rssBefore3) / 1024 / 1024);
@@ -258,7 +260,7 @@ async function main() {
       console.log("  ❌ Unexpected result:", JSON.stringify(data));
       failed++;
     }
-  } catch (e) {
+  } catch {
     console.log("  ❌ Unexpected error:", e.message);
     failed++;
   }
@@ -274,7 +276,7 @@ async function main() {
     // Since we do send valid JSON, it should work
     console.log("  ✅ Fell through to json() (content-length=0 is not > 16 MiB)");
     passed++;
-  } catch (e) {
+  } catch {
     // json() might fail if the response body stream is limited by content-length=0
     // That's an HTTP-level behavior, not our fix's concern
     console.log("  ⚠  Passed through (content-length=0, behavior depends on fetch impl)");
@@ -294,7 +296,7 @@ async function main() {
       console.log("  ❌ Unexpected result:", JSON.stringify(data));
       failed++;
     }
-  } catch (e) {
+  } catch {
     // Node.js fetch sometimes rejects non-numeric content-length at the HTTP level.
     // That's orthogonal to our fix — the important thing is our fix doesn't throw
     // its own "exceeds 16 MiB" error for non-numeric values.
@@ -322,7 +324,7 @@ async function main() {
       console.log("  ❌ Unexpected result:", JSON.stringify(data));
       failed++;
     }
-  } catch (e) {
+  } catch {
     console.log("  ❌ Unexpected error:", e.message);
     failed++;
   }
@@ -348,7 +350,9 @@ async function main() {
   server.close();
 }
 
-main().catch((e) => {
-  console.error("Fatal:", e);
-  process.exit(1);
-});
+main().catch(
+  /* oxlint-disable typescript/use-unknown-in-catch-callback-variable */ (e) => {
+    console.error("Fatal:", e);
+    process.exit(1);
+  },
+);
