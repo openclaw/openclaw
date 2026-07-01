@@ -118,6 +118,17 @@ export type CodexAppServerExperimentalConfig = {
   sandboxExecServer?: boolean;
 };
 
+export type CodexNativeHookRelayMemoryGuardConfig = {
+  enabled?: boolean;
+  minAvailableMemoryMb?: number;
+  maxProcessRssMb?: number;
+  maxActiveRelays?: number;
+};
+
+export type CodexNativeHookRelayConfig = {
+  memoryGuard?: CodexNativeHookRelayMemoryGuardConfig;
+};
+
 export type CodexAppServerNetworkProxyDomainPermission = "allow" | "deny";
 export type CodexAppServerNetworkProxyUnixSocketPermission = "allow" | "none";
 export type CodexAppServerNetworkProxyBaseProfile = "read-only" | "workspace";
@@ -230,6 +241,7 @@ export type CodexPluginConfig = {
     approvalsReviewer?: CodexAppServerApprovalsReviewer;
     serviceTier?: CodexServiceTier | null;
     networkProxy?: CodexAppServerNetworkProxyConfig;
+    nativeHookRelay?: CodexNativeHookRelayConfig;
     defaultWorkspaceDir?: string;
     experimental?: CodexAppServerExperimentalConfig;
   };
@@ -264,6 +276,7 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "approvalsReviewer",
   "serviceTier",
   "networkProxy",
+  "nativeHookRelay",
   "defaultWorkspaceDir",
   "experimental",
 ] as const;
@@ -351,6 +364,21 @@ const codexAppServerNetworkProxySchema = z
   })
   .strict();
 
+const codexNativeHookRelayMemoryGuardSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    minAvailableMemoryMb: z.number().positive().optional(),
+    maxProcessRssMb: z.number().positive().optional(),
+    maxActiveRelays: z.number().int().positive().optional(),
+  })
+  .strict();
+
+const codexNativeHookRelaySchema = z
+  .object({
+    memoryGuard: codexNativeHookRelayMemoryGuardSchema.optional(),
+  })
+  .strict();
+
 const codexPluginEntryConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -413,6 +441,7 @@ const codexPluginConfigSchema = z
         approvalsReviewer: codexAppServerApprovalsReviewerSchema.optional(),
         serviceTier: codexAppServerServiceTierSchema,
         networkProxy: codexAppServerNetworkProxySchema.optional(),
+        nativeHookRelay: codexNativeHookRelaySchema.optional(),
         defaultWorkspaceDir: z.string().optional(),
         experimental: codexAppServerExperimentalSchema.optional(),
       })

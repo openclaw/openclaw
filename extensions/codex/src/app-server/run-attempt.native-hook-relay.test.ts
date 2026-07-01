@@ -30,9 +30,7 @@ const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
   web_search: "disabled",
 });
 
-function writeCodexAppServerBinding(
-  ...args: Parameters<typeof writeRawCodexAppServerBinding>
-) {
+function writeCodexAppServerBinding(...args: Parameters<typeof writeRawCodexAppServerBinding>) {
   const [sessionFile, binding, lookup] = args;
   return writeRawCodexAppServerBinding(
     sessionFile,
@@ -716,6 +714,42 @@ describe("runCodexAppServerAttempt native hook relay", () => {
     expect(startConfig?.["hooks.PostToolUse"]).toEqual([]);
     expect(startConfig?.["hooks.PermissionRequest"]).toEqual([]);
     expect(startConfig?.["hooks.Stop"]).toEqual([]);
+  });
+
+  it("suppresses only OpenClaw relay hook state when memory guard denies relay admission", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      nativeHookRelay: {
+        enabled: true,
+        memoryGuard: {
+          enabled: true,
+          minAvailableMemoryMb: 1024,
+          getAvailableMemoryBytesForTests: () => 512 * 1024 * 1024,
+          memoryUsageForTests: () => ({ rss: 128 * 1024 * 1024 }),
+        },
+      },
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const startConfig = (startRequest?.params as { config?: Record<string, unknown> } | undefined)
+      ?.config;
+    expect(startConfig?.["features.hooks"]).not.toBe(false);
+    expect(startConfig).not.toHaveProperty("hooks.PreToolUse");
+    expect(startConfig).not.toHaveProperty("hooks.PostToolUse");
+    expect(startConfig).not.toHaveProperty("hooks.PermissionRequest");
+    expect(startConfig).not.toHaveProperty("hooks.Stop");
+    expect(startConfig?.["hooks.state"]).toMatchObject({
+      "/<session-flags>/config.toml:pre_tool_use:0:0": { enabled: false },
+      "/<session-flags>/config.toml:post_tool_use:0:0": { enabled: false },
+      "/<session-flags>/config.toml:permission_request:0:0": { enabled: false },
+      "/<session-flags>/config.toml:stop:0:0": { enabled: false },
+    });
   });
 
   it("cleans up native hook relay state when turn/start fails", async () => {

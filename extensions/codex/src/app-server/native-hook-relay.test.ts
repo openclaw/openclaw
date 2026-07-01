@@ -3,11 +3,16 @@ import type { NativeHookRelayRegistrationHandle } from "openclaw/plugin-sdk/agen
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { describe, expect, it } from "vitest";
 import {
+  acquireCodexNativeHookRelayAdmission,
+  attachCodexNativeHookRelayAdmissionRelease,
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayDisabledConfig,
+  buildCodexNativeHookRelaySuppressedConfig,
+  resetCodexNativeHookRelayAdmissionsForTests,
   resolveCodexNativeHookRelayCommandTimeoutMs,
   resolveCodexNativeHookRelayUnregisterGraceMs,
 } from "./native-hook-relay.js";
+import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 
 describe("Codex native hook relay config", () => {
   it("builds deterministic Codex config overrides with command hooks", () => {
@@ -297,10 +302,146 @@ describe("Codex native hook relay config", () => {
     });
   });
 
+  it("builds scoped suppression config without disabling unrelated hooks", () => {
+    expect(buildCodexNativeHookRelaySuppressedConfig()).toEqual({
+      "hooks.state": {
+        "/<session-flags>/config.toml:pre_tool_use:0:0": { enabled: false },
+        "<session-flags>/config.toml:pre_tool_use:0:0": { enabled: false },
+        "/<session-flags>/config.toml:post_tool_use:0:0": { enabled: false },
+        "<session-flags>/config.toml:post_tool_use:0:0": { enabled: false },
+        "/<session-flags>/config.toml:permission_request:0:0": { enabled: false },
+        "<session-flags>/config.toml:permission_request:0:0": { enabled: false },
+        "/<session-flags>/config.toml:stop:0:0": { enabled: false },
+        "<session-flags>/config.toml:stop:0:0": { enabled: false },
+      },
+    });
+  });
+
+  it("preserves existing Codex hooks when suppression config is merged last", () => {
+    expect(
+      mergeCodexThreadConfigs(
+        {
+          "features.hooks": true,
+          "hooks.PreToolUse": [
+            {
+              hooks: [
+                {
+                  type: "command",
+                  command: "echo user-pre-tool-use",
+                  timeout: 5,
+                },
+              ],
+            },
+          ],
+        },
+        buildCodexNativeHookRelaySuppressedConfig(),
+      ),
+    ).toMatchObject({
+      "features.hooks": true,
+      "hooks.PreToolUse": [
+        {
+          hooks: [
+            {
+              type: "command",
+              command: "echo user-pre-tool-use",
+              timeout: 5,
+            },
+          ],
+        },
+      ],
+      "hooks.state": {
+        "/<session-flags>/config.toml:pre_tool_use:0:0": { enabled: false },
+      },
+    });
+  });
+
   it("caps oversized native hook cleanup grace before scheduling", () => {
     expect(resolveCodexNativeHookRelayUnregisterGraceMs(Number.MAX_SAFE_INTEGER)).toBe(
       MAX_TIMER_TIMEOUT_MS,
     );
+  });
+
+  it("denies relay admission when available memory is below the configured floor", () => {
+    const admission = acquireCodexNativeHookRelayAdmission({
+      enabled: true,
+      minAvailableMemoryMb: 1024,
+      getAvailableMemoryBytesForTests: () => 512 * 1024 * 1024,
+      memoryUsageForTests: () => ({ rss: 128 * 1024 * 1024 }),
+    });
+
+    expect(admission).toMatchObject({
+      allowed: false,
+      reason: "available_memory",
+      availableMemoryBytes: 512 * 1024 * 1024,
+      thresholdBytes: 1024 * 1024 * 1024,
+    });
+  });
+
+  it("denies relay admission when process rss exceeds the configured ceiling", () => {
+    const admission = acquireCodexNativeHookRelayAdmission({
+      enabled: true,
+      maxProcessRssMb: 512,
+      getAvailableMemoryBytesForTests: () => 4096 * 1024 * 1024,
+      memoryUsageForTests: () => ({ rss: 768 * 1024 * 1024 }),
+    });
+
+    expect(admission).toMatchObject({
+      allowed: false,
+      reason: "process_rss",
+      processRssBytes: 768 * 1024 * 1024,
+      thresholdBytes: 512 * 1024 * 1024,
+    });
+  });
+
+  it("caps concurrent admitted native hook relays", () => {
+    resetCodexNativeHookRelayAdmissionsForTests();
+    const config = {
+      enabled: true,
+      maxActiveRelays: 1,
+      getAvailableMemoryBytesForTests: () => 4096 * 1024 * 1024,
+      memoryUsageForTests: () => ({ rss: 128 * 1024 * 1024 }),
+    };
+    const first = acquireCodexNativeHookRelayAdmission(config);
+    const second = acquireCodexNativeHookRelayAdmission(config);
+
+    expect(first.allowed).toBe(true);
+    expect(second).toMatchObject({
+      allowed: false,
+      reason: "max_active_relays",
+      activeRelays: 1,
+      thresholdRelays: 1,
+    });
+    if (first.allowed) {
+      first.release?.();
+    }
+    const afterRelease = acquireCodexNativeHookRelayAdmission(config);
+    expect(afterRelease.allowed).toBe(true);
+    if (afterRelease.allowed) {
+      afterRelease.release?.();
+    }
+  });
+
+  it("releases an admission cap when the wrapped relay unregisters", () => {
+    resetCodexNativeHookRelayAdmissionsForTests();
+    const config = {
+      enabled: true,
+      maxActiveRelays: 1,
+      getAvailableMemoryBytesForTests: () => 4096 * 1024 * 1024,
+      memoryUsageForTests: () => ({ rss: 128 * 1024 * 1024 }),
+    };
+    const admission = acquireCodexNativeHookRelayAdmission(config);
+    if (!admission.allowed) {
+      throw new Error("Expected relay admission");
+    }
+    const relay = attachCodexNativeHookRelayAdmissionRelease(createRelay(), admission.release);
+
+    relay.unregister();
+
+    const afterRelease = acquireCodexNativeHookRelayAdmission(config);
+    expect(afterRelease.allowed).toBe(true);
+    if (afterRelease.allowed) {
+      afterRelease.release?.();
+    }
   });
 });
 

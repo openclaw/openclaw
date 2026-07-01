@@ -259,6 +259,28 @@ describe("Codex app-server config", () => {
     });
   });
 
+  it("parses native hook relay memory guard config", () => {
+    const config = readCodexPluginConfig({
+      appServer: {
+        nativeHookRelay: {
+          memoryGuard: {
+            enabled: true,
+            minAvailableMemoryMb: 1024,
+            maxProcessRssMb: 1536,
+            maxActiveRelays: 1,
+          },
+        },
+      },
+    });
+
+    expect(config.appServer?.nativeHookRelay?.memoryGuard).toEqual({
+      enabled: true,
+      minAvailableMemoryMb: 1024,
+      maxProcessRssMb: 1536,
+      maxActiveRelays: 1,
+    });
+  });
+
   it("falls back for non-positive app-server timer config", () => {
     const runtime = resolveRuntimeForTest({
       pluginConfig: {

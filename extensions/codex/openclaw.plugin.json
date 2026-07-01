@@ -237,6 +237,34 @@
               "dangerouslyAllowAllUnixSockets": { "type": "boolean" }
             }
           },
+          "nativeHookRelay": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "memoryGuard": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "enabled": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "minAvailableMemoryMb": {
+                    "type": "number",
+                    "minimum": 1
+                  },
+                  "maxProcessRssMb": {
+                    "type": "number",
+                    "minimum": 1
+                  },
+                  "maxActiveRelays": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              }
+            }
+          },
           "defaultWorkspaceDir": {
             "type": "string"
           },
@@ -516,6 +544,36 @@
     "appServer.networkProxy.dangerouslyAllowAllUnixSockets": {
       "label": "Allow All Unix Sockets",
       "help": "Bypass Codex's Unix socket allowlist for tightly controlled environments.",
+      "advanced": true
+    },
+    "appServer.nativeHookRelay": {
+      "label": "Native Hook Relay",
+      "help": "Controls Codex native hook relay admission for native tool policy and finalization hooks.",
+      "advanced": true
+    },
+    "appServer.nativeHookRelay.memoryGuard": {
+      "label": "Memory Guard",
+      "help": "Disable Codex native hook relay for a turn when configured memory or active-relay thresholds are exceeded.",
+      "advanced": true
+    },
+    "appServer.nativeHookRelay.memoryGuard.enabled": {
+      "label": "Enable Memory Guard",
+      "help": "When true, OpenClaw checks memory pressure and active relay count before installing Codex native hook relay commands.",
+      "advanced": true
+    },
+    "appServer.nativeHookRelay.memoryGuard.minAvailableMemoryMb": {
+      "label": "Minimum Available Memory",
+      "help": "Do not install Codex native hook relay commands when available memory is below this MiB floor.",
+      "advanced": true
+    },
+    "appServer.nativeHookRelay.memoryGuard.maxProcessRssMb": {
+      "label": "Maximum Process RSS",
+      "help": "Do not install Codex native hook relay commands when Gateway process RSS is above this MiB ceiling.",
+      "advanced": true
+    },
+    "appServer.nativeHookRelay.memoryGuard.maxActiveRelays": {
+      "label": "Maximum Active Relays",
+      "help": "Do not install another Codex native hook relay when this many guarded relays are already active.",
       "advanced": true
     },
     "appServer.defaultWorkspaceDir": {
