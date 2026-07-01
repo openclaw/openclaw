@@ -60,6 +60,7 @@ import {
 import type { PendingFinalDeliveryPayload, SubagentRunRecord } from "./subagent-registry.types.js";
 import { resolveSubagentRunDeadlineMs } from "./subagent-run-timeout.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
+import { selectDeliverableSessionsReply } from "./tools/sessions-send-tokens.js";
 
 type CaptureSubagentCompletionReply =
   (typeof import("./subagent-announce.js"))["captureSubagentCompletionReply"];
@@ -70,6 +71,28 @@ type BrowserCleanupModule = Pick<
 >;
 
 const DELIVERY_MIRROR_HISTORY_MAX_CHARS = 128 * 1024;
+
+type FinalDeliveryGiveUpMode = "suspend" | "finalize";
+
+function resolveFinalDeliveryGiveUpMode(entry: SubagentRunRecord): FinalDeliveryGiveUpMode {
+  if (
+    entry.expectsCompletionMessage !== true ||
+    entry.endedReason !== SUBAGENT_ENDED_REASON_COMPLETE ||
+    entry.outcome?.status !== "ok"
+  ) {
+    return "finalize";
+  }
+  if (entry.cleanup === "keep") {
+    return "suspend";
+  }
+  const payload = entry.delivery?.payload;
+  const completion = entry.completion;
+  const result = selectDeliverableSessionsReply(
+    payload?.frozenResultText ?? completion?.resultText,
+    payload?.fallbackFrozenResultText ?? completion?.fallbackResultText,
+  );
+  return result ? "suspend" : "finalize";
+}
 
 const browserCleanupLoader = createLazyImportLoader<BrowserCleanupModule>(
   () => import("../browser-lifecycle-cleanup.js"),
@@ -612,62 +635,69 @@ export function createSubagentRegistryLifecycleController(params: {
     params.persist();
   };
 
-  const shouldSuspendPendingFinalDelivery = (entry: SubagentRunRecord) =>
-    entry.expectsCompletionMessage === true &&
-    entry.cleanup === "keep" &&
-    entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE &&
-    entry.outcome?.status === "ok";
-
-  const finalizeResumedAnnounceGiveUp = async (giveUpParams: {
+  const finalizeAnnounceGiveUp = async (args: {
     runId: string;
     entry: SubagentRunRecord;
     reason: "retry-limit" | "expiry";
+    retryCount?: number;
+    completedAt?: number;
   }) => {
-    if (shouldSuspendPendingFinalDelivery(giveUpParams.entry)) {
+    if (resolveFinalDeliveryGiveUpMode(args.entry) === "suspend") {
       suspendPendingFinalDelivery({
-        runId: giveUpParams.runId,
-        entry: giveUpParams.entry,
-        reason: giveUpParams.reason,
-        error: getDeliveryLastError(giveUpParams.entry),
+        runId: args.runId,
+        entry: args.entry,
+        reason: args.reason,
+        error: getDeliveryLastError(args.entry),
       });
       return;
     }
-    const deliveryError = getDeliveryLastError(giveUpParams.entry) ?? giveUpParams.reason;
-    clearPendingFinalDelivery(giveUpParams.entry);
-    const failedDelivery = ensureDeliveryState(giveUpParams.entry);
+    const completedAt = args.completedAt ?? Date.now();
+    const deliveryError = getDeliveryLastError(args.entry) ?? args.reason;
+    clearPendingFinalDelivery(args.entry);
+    const failedDelivery = ensureDeliveryState(args.entry);
     failedDelivery.status = "failed";
     failedDelivery.lastError = deliveryError;
+    if (args.retryCount != null) {
+      failedDelivery.attemptCount = args.retryCount;
+      failedDelivery.lastAttemptAt = completedAt;
+    }
     safeSetSubagentTaskDeliveryStatus({
-      runId: giveUpParams.runId,
-      childSessionKey: giveUpParams.entry.childSessionKey,
+      runId: args.runId,
+      childSessionKey: args.entry.childSessionKey,
       deliveryStatus: "failed",
       deliveryError,
     });
     safeMarkRequiredCompletionDeliveryBlocked({
-      entry: giveUpParams.entry,
+      entry: args.entry,
       reason: deliveryError,
     });
-    giveUpParams.entry.wakeOnDescendantSettle = undefined;
-    const completion = ensureCompletionState(giveUpParams.entry);
+    args.entry.wakeOnDescendantSettle = undefined;
+    const completion = ensureCompletionState(args.entry);
     completion.fallbackResultText = undefined;
     completion.fallbackCapturedAt = undefined;
     const shouldDeleteAttachments =
-      giveUpParams.entry.cleanup === "delete" || !giveUpParams.entry.retainAttachmentsOnKeep;
+      args.entry.cleanup === "delete" || !args.entry.retainAttachmentsOnKeep;
     if (shouldDeleteAttachments) {
-      await safeRemoveAttachmentsDir(giveUpParams.entry);
+      await safeRemoveAttachmentsDir(args.entry);
     }
-    const completionReason = resolveCleanupCompletionReason(giveUpParams.entry);
-    logAnnounceGiveUp(giveUpParams.entry, giveUpParams.reason);
+    const completionReason = resolveCleanupCompletionReason(args.entry);
+    logAnnounceGiveUp(args.entry, args.reason);
     // Retry-limit / expiry give-up should not leave cleanup stuck behind the
     // best-effort ended hook. Mark the run cleaned first, then fire the hook.
     completeCleanupBookkeeping({
-      runId: giveUpParams.runId,
-      entry: giveUpParams.entry,
-      cleanup: giveUpParams.entry.cleanup,
-      completedAt: Date.now(),
+      runId: args.runId,
+      entry: args.entry,
+      cleanup: args.entry.cleanup,
+      completedAt,
     });
-    await emitCompletionEndedHookIfNeeded(giveUpParams.entry, completionReason);
+    await emitCompletionEndedHookIfNeeded(args.entry, completionReason);
   };
+
+  const finalizeResumedAnnounceGiveUp = (giveUpParams: {
+    runId: string;
+    entry: SubagentRunRecord;
+    reason: "retry-limit" | "expiry";
+  }) => finalizeAnnounceGiveUp(giveUpParams);
 
   const beginSubagentCleanup = (runId: string) => {
     const entry = params.runs.get(runId);
@@ -900,53 +930,13 @@ export function createSubagentRegistryLifecycleController(params: {
     }
 
     if (deferredDecision.kind === "give-up") {
-      if (shouldSuspendPendingFinalDelivery(entry)) {
-        suspendPendingFinalDelivery({
-          runId,
-          entry,
-          reason: deferredDecision.reason,
-          error: getDeliveryLastError(entry),
-        });
-        return;
-      }
-      const deliveryError = getDeliveryLastError(entry) ?? deferredDecision.reason;
-      clearPendingFinalDelivery(entry);
-      const failedDelivery = ensureDeliveryState(entry);
-      failedDelivery.status = "failed";
-      failedDelivery.lastError = deliveryError;
-      if (deferredDecision.retryCount != null) {
-        failedDelivery.attemptCount = deferredDecision.retryCount;
-        failedDelivery.lastAttemptAt = now;
-      }
-      safeSetSubagentTaskDeliveryStatus({
-        runId,
-        childSessionKey: entry.childSessionKey,
-        deliveryStatus: "failed",
-        deliveryError,
-      });
-      safeMarkRequiredCompletionDeliveryBlocked({
-        entry,
-        reason: deliveryError,
-      });
-      entry.wakeOnDescendantSettle = undefined;
-      const completion = ensureCompletionState(entry);
-      completion.fallbackResultText = undefined;
-      completion.fallbackCapturedAt = undefined;
-      const shouldDeleteAttachments = cleanup === "delete" || !entry.retainAttachmentsOnKeep;
-      if (shouldDeleteAttachments) {
-        await safeRemoveAttachmentsDir(entry);
-      }
-      const completionReason = resolveCleanupCompletionReason(entry);
-      logAnnounceGiveUp(entry, deferredDecision.reason);
-      // Giving up on announce delivery is terminal for cleanup even if the
-      // best-effort hook is still resolving.
-      completeCleanupBookkeeping({
+      await finalizeAnnounceGiveUp({
         runId,
         entry,
-        cleanup,
+        reason: deferredDecision.reason,
+        retryCount: deferredDecision.retryCount,
         completedAt: now,
       });
-      await emitCompletionEndedHookIfNeeded(entry, completionReason);
       return;
     }
 

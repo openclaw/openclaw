@@ -3098,7 +3098,7 @@ describe("subagent registry seam flow", () => {
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
 
-  it("deletes delete-mode completion runs when announce cleanup gives up after retry limit", async () => {
+  it("surfaces delete-mode completion results after announce cleanup gives up", async () => {
     mocks.runSubagentAnnounceFlow.mockResolvedValue(false);
     const endedAt = Date.parse("2026-03-24T12:00:00Z");
     mocks.callGateway.mockResolvedValueOnce({
@@ -3135,11 +3135,34 @@ describe("subagent registry seam flow", () => {
 
     await vi.advanceTimersByTimeAsync(4_000);
     expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(3);
+    const giveUpRun = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-delete-give-up");
+    expect(giveUpRun?.delivery?.status).toBe("suspended");
+    expect(giveUpRun?.cleanupCompletedAt).toBeUndefined();
+
+    const requesterTurn = mod.leasePendingAgentSteeringItems({
+      requesterSessionKey: "agent:main:main",
+      leaseId: "requester-turn-1",
+      now: endedAt + 10_000,
+    });
+    expect(requesterTurn?.runIds).toEqual(["run-delete-give-up"]);
+    expect(requesterTurn?.prompt).toContain("final completion reply");
+
     expect(
-      mod
-        .listSubagentRunsForRequester("agent:main:main")
-        .find((entry) => entry.runId === "run-delete-give-up"),
-    ).toBeUndefined();
+      mod.ackPendingAgentSteeringItems({
+        runIds: requesterTurn?.runIds ?? [],
+        leaseId: "requester-turn-1",
+        now: endedAt + 10_001,
+      }),
+    ).toBe(1);
+    await waitForFast(() => {
+      expect(
+        mod
+          .listSubagentRunsForRequester("agent:main:main")
+          .find((entry) => entry.runId === "run-delete-give-up"),
+      ).toBeUndefined();
+    });
   });
 
   it("finalizes retry-budgeted completion delete runs during resume", async () => {
