@@ -115,6 +115,40 @@ describe("provider transport stream contracts", () => {
     }
   });
 
+  it("routes rate-limited models through the managed OpenClaw transport seam", () => {
+    const model = attachModelProviderRequestTransport(
+      buildModel("openai-responses", {
+        id: "gpt-5.4",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+      }),
+      {
+        rateLimit: { requestsPerMinute: 60, maxQueueSize: 2 },
+      },
+    );
+
+    expect(createTransportAwareStreamFnForModel(model)).toBeTypeOf("function");
+    expect(buildTransportAwareSimpleStreamFn(model)).toBeTypeOf("function");
+    expect(prepareTransportAwareSimpleModel(model).api).toBe("openclaw-openai-responses-transport");
+  });
+
+  it("ignores maxQueueSize-only rate limits when choosing managed transport", () => {
+    const model = attachModelProviderRequestTransport(
+      buildModel("openai-responses", {
+        id: "gpt-5.4",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+      }),
+      {
+        rateLimit: { maxQueueSize: 2 },
+      },
+    );
+
+    expect(createTransportAwareStreamFnForModel(model)).toBeUndefined();
+    expect(buildTransportAwareSimpleStreamFn(model)).toBeUndefined();
+    expect(prepareTransportAwareSimpleModel(model)).toBe(model);
+  });
+
   it("fails closed when unsupported apis carry transport overrides", () => {
     const model = attachModelProviderRequestTransport(
       buildModel("ollama", {
@@ -134,13 +168,13 @@ describe("provider transport stream contracts", () => {
     expect(resolveTransportAwareSimpleApi(model.api)).toBeUndefined();
     expect(createBoundaryAwareStreamFnForModel(model)).toBeUndefined();
     expect(() => createTransportAwareStreamFnForModel(model)).toThrow(
-      'Model-provider request.proxy/request.tls/localService is not yet supported for api "ollama"',
+      'Model-provider request.proxy/request.tls/request.rateLimit/localService is not yet supported for api "ollama"',
     );
     expect(() => buildTransportAwareSimpleStreamFn(model)).toThrow(
-      'Model-provider request.proxy/request.tls/localService is not yet supported for api "ollama"',
+      'Model-provider request.proxy/request.tls/request.rateLimit/localService is not yet supported for api "ollama"',
     );
     expect(() => prepareTransportAwareSimpleModel(model)).toThrow(
-      'Model-provider request.proxy/request.tls/localService is not yet supported for api "ollama"',
+      'Model-provider request.proxy/request.tls/request.rateLimit/localService is not yet supported for api "ollama"',
     );
   });
 

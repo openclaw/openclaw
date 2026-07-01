@@ -101,7 +101,17 @@ function createSupportedTransportStreamFn(
 
 function hasOpenClawTransportRequirement(model: Model): boolean {
   const request = getModelProviderRequestTransport(model);
-  return Boolean(request?.proxy || request?.tls || getModelProviderLocalService(model));
+  const rateLimit = request?.rateLimit;
+  const hasActiveRateLimit =
+    (typeof rateLimit?.requestsPerMinute === "number" &&
+      Number.isFinite(rateLimit.requestsPerMinute) &&
+      rateLimit.requestsPerMinute > 0) ||
+    (typeof rateLimit?.minIntervalMs === "number" &&
+      Number.isFinite(rateLimit.minIntervalMs) &&
+      rateLimit.minIntervalMs > 0);
+  return Boolean(
+    request?.proxy || request?.tls || hasActiveRateLimit || getModelProviderLocalService(model),
+  );
 }
 
 /** Returns whether OpenClaw has a managed transport implementation for this API. */
@@ -124,7 +134,7 @@ export function createTransportAwareStreamFnForModel(
   }
   if (!isTransportAwareApiSupported(model.api)) {
     throw new Error(
-      `Model-provider request.proxy/request.tls/localService is not yet supported for api "${model.api}"`,
+      `Model-provider request.proxy/request.tls/request.rateLimit/localService is not yet supported for api "${model.api}"`,
     );
   }
   return createSupportedTransportStreamFn(model, ctx);
