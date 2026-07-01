@@ -146,14 +146,22 @@ async function fetchJson(params: {
     let json: TelegramGetUpdatesJson;
     try {
       json = JSON.parse(raw) as TelegramGetUpdatesJson;
-    } catch (err) {
+    } catch {
       if (!response.ok) {
         throw createTelegramGetUpdatesError({
           message: `Telegram getUpdates failed with HTTP ${response.status}`,
           errorCode: response.status,
         });
       }
-      throw err;
+      // HTTP 200 with a non-JSON body (CDN/reverse-proxy/TLS-MITM truncation or
+      // rewrite). A bare SyntaxError is judged non-recoverable, exiting the
+      // isolated ingress worker and silently dropping the channel. The message
+      // matches the "malformed json" entry in RECOVERABLE_MESSAGE_SNIPPETS so the
+      // polling/webhook loop backs off and retries; send stays conservative.
+      throw Object.assign(
+        new Error(`Telegram getUpdates returned malformed JSON (HTTP ${response.status})`),
+        { statusCode: response.status },
+      );
     }
     if (!response.ok || json.ok !== true) {
       const message =
