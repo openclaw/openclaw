@@ -20,6 +20,9 @@ import { getMediaDir, MEDIA_MAX_BYTES } from "../../media/store.js";
 import { CONFIG_DIR } from "../../utils.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 
+/** Timeout for scp file transfers to sandbox hosts. */
+const SCP_TIMEOUT_MS = 30_000;
+
 const STAGED_MEDIA_MAX_BYTES = MEDIA_MAX_BYTES;
 export const SCP_STDERR_TAIL_CHARS = 16_384;
 
@@ -367,6 +370,7 @@ async function scpFile(remoteHost: string, remotePath: string, localPath: string
     throw new Error("invalid remote path for SCP");
   }
   return new Promise((resolve, reject) => {
+    let settled = false;
     const child = spawn(
       "scp",
       [
@@ -381,14 +385,32 @@ async function scpFile(remoteHost: string, remotePath: string, localPath: string
       { stdio: ["ignore", "ignore", "pipe"] },
     );
 
+    const timeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill("SIGKILL");
+      reject(new Error(`scp timed out after ${SCP_TIMEOUT_MS}ms`));
+    }, SCP_TIMEOUT_MS);
+    timeout.unref?.();
+
     let stderr = "";
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk) => {
       stderr = appendScpStderrTail(stderr, chunk);
     });
 
-    child.once("error", reject);
+    const finish = (err: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      reject(err);
+    };
+
+    child.once("error", finish);
     child.once("exit", (code) => {
+      clearTimeout(timeout);
+      if (settled) return;
+      settled = true;
       if (code === 0) {
         resolve();
       } else {
