@@ -1577,6 +1577,15 @@
     max-height: 56px;
     overflow-y: auto;
   }
+
+  .agent-chat__input > .slash-menu {
+    flex: 0 0 auto;
+    position: sticky;
+    top: 0;
+    bottom: auto;
+    max-height: min(28vh, 88px);
+    margin-bottom: 6px;
+  }
 }
 
 .chat-queue__item--steered {
