@@ -877,8 +877,15 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               throw new Error("Feishu edit requires messageId.");
             }
             const text = readFirstString(ctx.params, ["text", "message"]);
-            const card =
-              ctx.params.card && typeof ctx.params.card === "object"
+            const presentation = normalizeMessagePresentation(ctx.params.presentation);
+            // Agent tools produce a "presentation" field with card metadata.
+            // Convert it to a Feishu card so edits preserve the interactive
+            // message type.  When presentation has no blocks / empty title,
+            // normalizeMessagePresentation returns undefined and we fall back
+            // to the regular text+card parameters.
+            const card = presentation
+              ? buildFeishuPresentationCard({ presentation, fallbackText: text })
+              : ctx.params.card && typeof ctx.params.card === "object"
                 ? (ctx.params.card as Record<string, unknown>)
                 : undefined;
             const { editMessageFeishu } = await loadFeishuChannelRuntime();

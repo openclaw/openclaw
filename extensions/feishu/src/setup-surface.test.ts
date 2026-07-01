@@ -46,6 +46,7 @@ const baseStatusContext = {
   accountOverrides: {},
 };
 
+// nosemgrep: ghsa-82g8-464f-2mv7.openclaw-skill-env-host-injection
 async function withEnvVars(values: Record<string, string | undefined>, run: () => Promise<void>) {
   const previous = new Map<string, string | undefined>();
   for (const [key, value] of Object.entries(values)) {
@@ -290,7 +291,7 @@ describe("feishu setup wizard status", () => {
     });
 
     expect(status.configured).toBe(true);
-    expect(status.statusLines).toEqual(["Feishu: connected as Feishu Main"]);
+    expect(status.statusLines).toEqual(["Feishu: 已连接为 Feishu Main"]);
     expect(probeFeishuMock).toHaveBeenCalledWith({
       accountId: "main-bot",
       selectionSource: "explicit-default",

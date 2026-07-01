@@ -713,6 +713,115 @@ describe("feishuPlugin actions", () => {
     expect(details.contentType).toBe("post");
   });
 
+  // FIX #93197: edit with presentation should convert to Feishu card
+  it("edits messages with presentation blocks as card", async () => {
+    editMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_card_edit",
+      contentType: "interactive",
+    });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "edit",
+      params: {
+        messageId: "om_2",
+        text: "updated text",
+        presentation: {
+          title: "Edit Title",
+          blocks: [{ type: "text", text: "Updated content" }],
+        },
+      },
+      cfg,
+      accountId: undefined,
+    } as never);
+
+    expect(editMessageFeishuMock).toHaveBeenCalledTimes(1);
+    const editArgs = requireRecord(
+      mockCallArg(editMessageFeishuMock, 0, 0, "editMessageFeishu"),
+      "edit args",
+    );
+    expect(editArgs.cfg).toBe(cfg);
+    expect(editArgs.messageId).toBe("om_2");
+    expect(editArgs.text).toBe("updated text");
+    expect(editArgs.accountId).toBeUndefined();
+    const card = requireRecord(editArgs.card, "card");
+    expect(card.schema).toBe("2.0");
+    expect(card.header).toEqual({
+      title: { tag: "plain_text", content: "Edit Title" },
+      template: "blue",
+    });
+    expect(card.body).toEqual({
+      elements: [
+        { tag: "markdown", content: "updated text" },
+        { tag: "markdown", content: "Updated content" },
+      ],
+    });
+    const details = resultDetails(result);
+    expect(details.ok).toBe(true);
+    expect(details.messageId).toBe("om_card_edit");
+    expect(details.contentType).toBe("interactive");
+  });
+
+  // FIX #93197: edit with empty presentation (no blocks, no title) falls back to text
+  it("edits messages falling back when presentation has empty blocks and no title", async () => {
+    editMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_text_edit", contentType: "post" });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "edit",
+      params: {
+        messageId: "om_2",
+        text: "plain update",
+        presentation: { title: "", blocks: [] },
+      },
+      cfg,
+      accountId: undefined,
+    } as never);
+
+    expect(editMessageFeishuMock).toHaveBeenCalledWith({
+      cfg,
+      messageId: "om_2",
+      text: "plain update",
+      card: undefined,
+      accountId: undefined,
+    });
+    const details = resultDetails(result);
+    expect(details.ok).toBe(true);
+    expect(details.messageId).toBe("om_text_edit");
+  });
+
+  // FIX #93197: edit with presentation (title only, no blocks) still produces a card
+  it("edits messages with title-only presentation as card", async () => {
+    editMessageFeishuMock.mockResolvedValueOnce({
+      messageId: "om_title_edit",
+      contentType: "interactive",
+    });
+
+    const result = await feishuPlugin.actions?.handleAction?.({
+      action: "edit",
+      params: {
+        messageId: "om_2",
+        text: "body text",
+        presentation: { title: "Just Title", tone: "info", blocks: [] },
+      },
+      cfg,
+      accountId: undefined,
+    } as never);
+
+    expect(editMessageFeishuMock).toHaveBeenCalledTimes(1);
+    const editArgs = requireRecord(
+      mockCallArg(editMessageFeishuMock, 0, 0, "editMessageFeishu"),
+      "edit args",
+    );
+    const card = requireRecord(editArgs.card, "card");
+    expect(card.schema).toBe("2.0");
+    expect(card.header).toEqual({
+      title: { tag: "plain_text", content: "Just Title" },
+      template: "blue",
+    });
+    expect(card.body).toEqual({ elements: [{ tag: "markdown", content: "body text" }] });
+    const details = resultDetails(result);
+    expect(details.ok).toBe(true);
+  });
+
   it("sends explicit thread replies with reply_in_thread semantics", async () => {
     sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_reply", chatId: "oc_group_1" });
 
