@@ -182,7 +182,7 @@ struct ConfigureRemoteCommandTests {
         }
     }
 
-    @Test @MainActor func `configure remote rejects plaintext public prefix bypass`() async throws {
+    @Test @MainActor func `configure remote rejects plaintext public prefix bypass`() async {
         let configURL = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-configure-direct-reject-\(UUID().uuidString).json")
         defer { try? FileManager().removeItem(at: configURL) }
@@ -194,6 +194,49 @@ struct ConfigureRemoteCommandTests {
             #expect(throws: Error.self) {
                 try configureRemote(.init(directUrl: "ws://192.168.0.202.attacker.example:18789"))
             }
+        }
+    }
+
+    @Test func `resolveOpenClawConfigURL prefers explicit config path`() async {
+        let configURL = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-test-\(UUID().uuidString).json")
+        defer { try? FileManager().removeItem(at: configURL) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": configURL.path,
+            "OPENCLAW_STATE_DIR": nil,
+        ]) {
+            let resolved = resolveOpenClawConfigURL()
+            #expect(resolved.path == configURL.path)
+        }
+    }
+
+    @Test func `resolveOpenClawConfigURL falls back to state dir`() async throws {
+        let stateDir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-state-\(UUID().uuidString)")
+        try FileManager().createDirectory(at: stateDir, withIntermediateDirectories: true)
+        let expectedConfig = stateDir.appendingPathComponent("openclaw.json")
+        try "{}".write(to: expectedConfig, atomically: true, encoding: .utf8)
+        defer { try? FileManager().removeItem(at: stateDir) }
+
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": nil,
+            "OPENCLAW_STATE_DIR": stateDir.path,
+        ]) {
+            let resolved = resolveOpenClawConfigURL()
+            #expect(resolved.path == expectedConfig.path)
+        }
+    }
+
+    @Test func `resolveOpenClawConfigURL uses default home when no overrides`() async {
+        await TestIsolation.withEnvValues([
+            "OPENCLAW_CONFIG_PATH": nil,
+            "OPENCLAW_STATE_DIR": nil,
+        ]) {
+            let resolved = resolveOpenClawConfigURL()
+            let expected = FileManager().homeDirectoryForCurrentUser
+                .appendingPathComponent(".openclaw/openclaw.json")
+            #expect(resolved.path == expected.path)
         }
     }
 }
