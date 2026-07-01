@@ -19,11 +19,11 @@ import {
   resolveAgentAvatarUrl,
   resolveChatAvatarRenderUrl,
 } from "../../lib/avatar.ts";
+import { buildQualifiedChatModelValue } from "../../lib/chat/model-ref.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../lib/string-coerce.ts";
-import { buildQualifiedChatModelValue } from "../chat-model-ref.ts";
 import { controlUiPublicAssetPath } from "../public-assets.ts";
 
 export type AgentToolEntry = {

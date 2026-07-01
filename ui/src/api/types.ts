@@ -322,8 +322,6 @@ export type GatewayThinkingLevelOption = {
   label: string;
 };
 
-export type ChatModelOverride = import("./chat-model-ref.types.ts").ChatModelOverride;
-
 export type GatewayAgentRow = SharedGatewayAgentRow;
 
 export type AgentsListResult = {

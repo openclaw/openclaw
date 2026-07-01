@@ -7,12 +7,13 @@ import type {
   ToolsEffectiveResult,
 } from "../../api/types.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { resolveAgentIdFromSessionKey } from "../../lib/sessions/session-key.ts";
 import {
-  normalizeChatModelOverrideValue,
-  resolvePreferredServerChatModelValue,
-} from "../../ui/chat-model-ref.ts";
+  buildToolsEffectiveRequestKey,
+  loadToolsEffective as loadToolsEffectiveShared,
+  refreshVisibleToolsEffectiveForCurrentSession,
+  resetToolsEffectiveState,
+} from "../../lib/agents/tools-effective.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
@@ -161,118 +162,21 @@ export async function loadToolsCatalog(state: AgentsState, agentId: string) {
   }
 }
 
+export {
+  buildToolsEffectiveRequestKey,
+  refreshVisibleToolsEffectiveForCurrentSession,
+  resetToolsEffectiveState,
+};
+
 export async function loadToolsEffective(
   state: AgentsState,
   params: { agentId: string; sessionKey: string },
 ) {
-  const resolvedAgentId = params.agentId.trim();
-  const resolvedSessionKey = params.sessionKey.trim();
-  const requestKey = buildToolsEffectiveRequestKey(state, {
-    agentId: resolvedAgentId,
-    sessionKey: resolvedSessionKey,
+  await loadToolsEffectiveShared(state, params, {
+    ignoreResponse: (agentId, requestKey) =>
+      state.toolsEffectiveLoadingKey !== requestKey || hasSelectedAgentMismatch(state, agentId),
+    onError: (err) => resolveToolsErrorMessage(err, "effective tools"),
   });
-  if (
-    !state.client ||
-    !state.connected ||
-    !resolvedAgentId ||
-    !resolvedSessionKey ||
-    (state.toolsEffectiveLoading && state.toolsEffectiveLoadingKey === requestKey)
-  ) {
-    return;
-  }
-  const shouldIgnoreResponse = () =>
-    state.toolsEffectiveLoadingKey !== requestKey ||
-    hasSelectedAgentMismatch(state, resolvedAgentId);
-  state.toolsEffectiveLoading = true;
-  state.toolsEffectiveLoadingKey = requestKey;
-  state.toolsEffectiveResultKey = null;
-  state.toolsEffectiveError = null;
-  state.toolsEffectiveResult = null;
-  try {
-    const res = await state.client.request<ToolsEffectiveResult>("tools.effective", {
-      agentId: resolvedAgentId,
-      sessionKey: resolvedSessionKey,
-    });
-    if (shouldIgnoreResponse()) {
-      return;
-    }
-    state.toolsEffectiveResultKey = requestKey;
-    state.toolsEffectiveResult = res;
-  } catch (err) {
-    if (shouldIgnoreResponse()) {
-      return;
-    }
-    state.toolsEffectiveError = resolveToolsErrorMessage(err, "effective tools");
-  } finally {
-    if (state.toolsEffectiveLoadingKey === requestKey) {
-      state.toolsEffectiveLoadingKey = null;
-      state.toolsEffectiveLoading = false;
-    }
-  }
-}
-
-export function resetToolsEffectiveState(state: AgentsState) {
-  state.toolsEffectiveResult = null;
-  state.toolsEffectiveResultKey = null;
-  state.toolsEffectiveError = null;
-  state.toolsEffectiveLoading = false;
-  state.toolsEffectiveLoadingKey = null;
-}
-
-export function buildToolsEffectiveRequestKey(
-  state: Pick<AgentsState, "sessions" | "sessionsResult" | "chatModelCatalog">,
-  params: { agentId: string; sessionKey: string },
-): string {
-  const resolvedAgentId = params.agentId.trim();
-  const resolvedSessionKey = params.sessionKey.trim();
-  const modelKey = resolveEffectiveToolsModelKey(state, resolvedSessionKey);
-  return `${resolvedAgentId}:${resolvedSessionKey}:model=${modelKey || "(default)"}`;
-}
-
-export function refreshVisibleToolsEffectiveForCurrentSession(
-  state: AgentsState,
-): Promise<void> | undefined {
-  const resolvedSessionKey = state.sessionKey?.trim();
-  if (!resolvedSessionKey || state.agentsPanel !== "tools" || !state.agentsSelectedId) {
-    return undefined;
-  }
-  const sessionAgentId = resolveAgentIdFromSessionKey(resolvedSessionKey);
-  if (!sessionAgentId || state.agentsSelectedId !== sessionAgentId) {
-    return undefined;
-  }
-  return loadToolsEffective(state, {
-    agentId: sessionAgentId,
-    sessionKey: resolvedSessionKey,
-  });
-}
-
-function resolveEffectiveToolsModelKey(
-  state: Pick<AgentsState, "sessions" | "sessionsResult" | "chatModelCatalog">,
-  sessionKey: string,
-): string {
-  const resolvedSessionKey = sessionKey.trim();
-  if (!resolvedSessionKey) {
-    return "";
-  }
-  const catalog = state.chatModelCatalog ?? [];
-  const cachedOverride = state.sessions.state.modelOverrides[resolvedSessionKey];
-  const defaults = state.sessionsResult?.defaults;
-  const defaultModel = resolvePreferredServerChatModelValue(
-    defaults?.model,
-    defaults?.modelProvider,
-    catalog,
-  );
-  if (cachedOverride === null) {
-    return defaultModel;
-  }
-  if (cachedOverride) {
-    return normalizeChatModelOverrideValue(cachedOverride, catalog);
-  }
-  const activeRow = state.sessionsResult?.sessions?.find((row) => row.key === resolvedSessionKey);
-  if (activeRow?.model) {
-    return resolvePreferredServerChatModelValue(activeRow.model, activeRow.modelProvider, catalog);
-  }
-  return defaultModel;
 }
 
 export async function saveAgentsConfig(state: AgentsConfigSaveState) {

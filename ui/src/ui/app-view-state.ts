@@ -134,13 +134,6 @@ export type AppViewState = {
   chatModelCatalog: ModelCatalogEntry[];
   sessionSwitchNotice: { id: number; text: string } | null;
   sessionSwitchFlashKey: string | null;
-  chatSessionPickerOpen: boolean;
-  chatSessionPickerSurface: "desktop" | "mobile" | "sidebar" | null;
-  chatSessionPickerQuery: string;
-  chatSessionPickerAppliedQuery: string;
-  chatSessionPickerLoading: boolean;
-  chatSessionPickerError: string | null;
-  chatSessionPickerResult: SessionsListResult | null;
   sessionsResultAgentId?: string | null;
   sessionsResultShowArchived?: boolean;
   selectedChatSessionArchived?: boolean;

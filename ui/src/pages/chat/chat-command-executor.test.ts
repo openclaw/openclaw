@@ -2,13 +2,13 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import type { SessionCapability, SessionPatch } from "../../lib/sessions/index.ts";
 import {
   createResolvedModelPatch,
   createModelCatalog,
   DEEPSEEK_CHAT_MODEL,
   OPENAI_GPT5_MINI_MODEL,
-} from "../../ui/chat-model.test-helpers.ts";
+} from "../../lib/chat/model.test-helpers.ts";
+import type { SessionCapability, SessionPatch } from "../../lib/sessions/index.ts";
 import { executeSlashCommand as executeSlashCommandImpl } from "./chat-command-executor.ts";
 
 function createSessionCapability(client: GatewayBrowserClient): SessionCapability {

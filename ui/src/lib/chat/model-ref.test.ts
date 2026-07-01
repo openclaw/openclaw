@@ -9,13 +9,13 @@ import {
   normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue,
   resolveServerChatModelValue,
-} from "./chat-model-ref.ts";
+} from "./model-ref.ts";
 import {
   createAmbiguousModelCatalog,
   createModelCatalog,
   DEEPSEEK_CHAT_MODEL,
   OPENAI_GPT5_MINI_MODEL,
-} from "./chat-model.test-helpers.ts";
+} from "./model.test-helpers.ts";
 
 const catalog = createModelCatalog(OPENAI_GPT5_MINI_MODEL, {
   id: "claude-sonnet-4-5",

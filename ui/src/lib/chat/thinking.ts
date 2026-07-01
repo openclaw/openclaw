@@ -1,5 +1,5 @@
 // Control UI module implements thinking behavior.
-import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
+import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 
 export type ThinkingCatalogEntry = {
   provider: string;

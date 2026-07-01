@@ -3,13 +3,13 @@ import { describe, expect, it } from "vitest";
 import {
   resolveChatModelOverrideValue,
   resolveChatModelSelectState,
-} from "./chat-model-select-state.ts";
+} from "./model-select-state.ts";
 import {
   createModelCatalog,
   createSessionsListResult,
   DEEPSEEK_CHAT_MODEL,
   DEFAULT_CHAT_MODEL_CATALOG,
-} from "./chat-model.test-helpers.ts";
+} from "./model.test-helpers.ts";
 
 type ChatModelStateInput = Parameters<typeof resolveChatModelSelectState>[0];
 

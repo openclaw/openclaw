@@ -10,7 +10,6 @@ import {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsListResult,
-  ChatModelOverride,
   GatewaySessionRow,
   GatewayThinkingLevelOption,
   FastMode,
@@ -18,6 +17,16 @@ import type {
   SessionsListResult,
 } from "../../api/types.ts";
 import { SLASH_COMMANDS } from "../../lib/chat/commands.ts";
+import {
+  type ChatModelOverride,
+  createChatModelOverride,
+  resolvePreferredServerChatModelValue,
+} from "../../lib/chat/model-ref.ts";
+import {
+  formatThinkingLevels,
+  normalizeThinkLevel,
+  resolveThinkingDefaultForModel,
+} from "../../lib/chat/thinking.ts";
 import { sessionModelMatchesDefaults } from "../../lib/session-model-defaults.ts";
 import type { SessionCapability, SessionPatch } from "../../lib/sessions/index.ts";
 import {
@@ -30,15 +39,6 @@ import {
   normalizeOptionalLowercaseString,
 } from "../../lib/string-coerce.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import {
-  createChatModelOverride,
-  resolvePreferredServerChatModelValue,
-} from "../../ui/chat-model-ref.ts";
-import {
-  formatThinkingLevels,
-  normalizeThinkLevel,
-  resolveThinkingDefaultForModel,
-} from "../../ui/thinking.ts";
 import { formatCompactTokenCount } from "./token-format.ts";
 
 export type SlashCommandResult = {

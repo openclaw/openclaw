@@ -1,10 +1,10 @@
-// Control UI module implements chat model helpers behavior.
+// Chat model test helpers.
 import type {
   GatewaySessionRow,
   ModelCatalogEntry,
   SessionsListResult,
   SessionsPatchResult,
-} from "../api/types.ts";
+} from "../../api/types.ts";
 
 export const OPENAI_GPT5_MODEL: ModelCatalogEntry = {
   id: "gpt-5",

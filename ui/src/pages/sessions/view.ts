@@ -13,6 +13,11 @@ import { pathForRoute, searchForSession } from "../../app-routes.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import {
+  formatInheritedThinkingLabel,
+  formatThinkingOverrideLabel,
+  normalizeThinkingOptionValue,
+} from "../../lib/chat/thinking-labels.ts";
 import { formatRelativeTimestamp, parseSessionKeyParts } from "../../lib/format.ts";
 import { formatSessionTokens } from "../../lib/presenter.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
@@ -23,11 +28,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../lib/string-coerce.ts";
-import {
-  formatInheritedThinkingLabel,
-  formatThinkingOverrideLabel,
-  normalizeThinkingOptionValue,
-} from "../../ui/thinking-labels.ts";
 import { resolveAgentRuntimeLabel } from "../../ui/views/agents-utils.ts";
 
 export type SessionsProps = {

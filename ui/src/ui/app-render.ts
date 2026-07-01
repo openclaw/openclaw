@@ -1,11 +1,9 @@
 // Control UI module implements app render behavior.
 import { html } from "lit";
 import { styleMap } from "lit/directives/style-map.js";
-import type { GatewaySessionRow } from "../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../app-navigation.ts";
 import {
   appRouter,
-  pathForRoute,
   resolveAppNotFound,
   searchForSession,
   type ApplicationContext,
@@ -26,81 +24,11 @@ import "../components/login-gate.ts";
 import "../components/page-header.ts";
 import "../components/update-banner.ts";
 import { t } from "../i18n/index.ts";
-import { formatRelativeTimestamp } from "../lib/format.ts";
-import { isCronSessionKey, resolveSessionDisplayName } from "../lib/session-display.ts";
-import {
-  isSessionKeyTiedToAgent,
-  normalizeAgentId,
-  isSubagentSessionKey,
-  parseAgentSessionKey,
-} from "../lib/sessions/session-key.ts";
-import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { resolveAgentIdForSession } from "../pages/chat/chat-avatar.ts";
 import { refreshSlashCommands } from "../pages/chat/chat-commands.ts";
 import { runUpdate } from "../pages/config/data.ts";
 import { resolveDashboardHeaderContext } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
-import { renderChatSessionSelect } from "./chat/session-controls.ts";
-
-function isSidebarSessionBusy(state: AppViewState) {
-  return (
-    state.chatLoading ||
-    state.chatSending ||
-    Boolean(state.chatRunId) ||
-    state.chatStream !== null ||
-    state.chatQueue.length > 0
-  );
-}
-
-function resolveSidebarDefaultAgentId(state: AppViewState): string {
-  const snapshot = state.hello?.snapshot as
-    | { sessionDefaults?: { defaultAgentId?: string } }
-    | undefined;
-  return normalizeAgentId(
-    state.agentsList?.defaultId ?? snapshot?.sessionDefaults?.defaultAgentId ?? "main",
-  );
-}
-
-function resolveSidebarSelectedAgentId(state: AppViewState): string {
-  const parsed = parseAgentSessionKey(state.sessionKey);
-  if (parsed) {
-    return normalizeAgentId(parsed.agentId);
-  }
-  const sessionKey = normalizeOptionalString(state.sessionKey)?.toLowerCase();
-  const fallbackAgentId =
-    sessionKey === "global" || sessionKey === "unknown"
-      ? (state.assistantAgentId ?? resolveSidebarDefaultAgentId(state))
-      : resolveSidebarDefaultAgentId(state);
-  return normalizeAgentId(fallbackAgentId);
-}
-
-function isSidebarSessionForSelectedAgent(
-  state: AppViewState,
-  row: GatewaySessionRow,
-  selectedAgentId: string,
-): boolean {
-  return isSessionKeyTiedToAgent(row.key, selectedAgentId, resolveSidebarDefaultAgentId(state));
-}
-
-function resolveSidebarRecentSessions(state: AppViewState): GatewaySessionRow[] {
-  const selectedAgentId = resolveSidebarSelectedAgentId(state);
-  const shouldFilterByAgent =
-    normalizeOptionalString(state.sessionKey)?.toLowerCase() !== "unknown";
-  return (state.sessionsResult?.sessions ?? [])
-    .filter(
-      (row) =>
-        !row.archived &&
-        row.kind !== "global" &&
-        row.kind !== "unknown" &&
-        row.kind !== "cron" &&
-        !isCronSessionKey(row.key) &&
-        !isSubagentSessionKey(row.key) &&
-        !row.spawnedBy &&
-        (!shouldFilterByAgent || isSidebarSessionForSelectedAgent(state, row, selectedAgentId)),
-    )
-    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
-    .slice(0, 5);
-}
 
 export function renderApp(state: AppViewState, application: ApplicationContext) {
   if (!state.connected) {
@@ -194,22 +122,6 @@ function renderConnectedApp(
   const navigateToChatSession = (sessionKey: string) => {
     navigate("chat", { search: searchForSession(sessionKey) });
   };
-  const recentSessions = resolveSidebarRecentSessions(state).map((row) => ({
-    key: row.key,
-    label: resolveSessionDisplayName(row.key, row),
-    meta: row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a",
-    href: `${pathForRoute("chat", basePath)}${searchForSession(row.key)}`,
-    active: row.key === state.sessionKey,
-    hasActiveRun: Boolean(row.hasActiveRun),
-  }));
-  const sidebarBusy = isSidebarSessionBusy(state);
-  const newSessionDisabled =
-    !state.connected || state.sessionsLoading || sidebarBusy || !state.client;
-  const newSessionTitle = !state.connected
-    ? "Connect to create a new session"
-    : sidebarBusy
-      ? "Finish the active run before creating a new session"
-      : "New session";
   const routedPage = renderRouterOutlet(appRouter, context, routeView, {
     retryContext: application.routeLoadContext,
   });
@@ -288,19 +200,7 @@ function renderConnectedApp(
           .collapsed=${navCollapsed}
           .connected=${state.connected}
           .navGroupsCollapsed=${state.settings.navGroupsCollapsed}
-          .recentSessions=${recentSessions}
           .recentSessionsCollapsed=${state.settings.recentSessionsCollapsed}
-          .newSessionDisabled=${newSessionDisabled}
-          .newSessionTitle=${newSessionTitle}
-          .sessionSelector=${renderChatSessionSelect(
-            state,
-            (_state, sessionKey) => navigateToChatSession(sessionKey),
-            {
-              compact: navCollapsed,
-              sessionSwitcherOnly: true,
-              surface: "sidebar",
-            },
-          )}
           .themeMode=${state.themeMode}
           .onToggleCollapsed=${() => {
             if (navDrawerOpen) {
@@ -343,9 +243,6 @@ function renderConnectedApp(
               }
             }
             navigate(routeId);
-          }}
-          .onRecentSession=${(session: { key: string }) => {
-            navigateToChatSession(session.key);
           }}
           .onPreloadRoute=${application.preload}
           @theme-change=${(

@@ -1,7 +1,15 @@
-import type { ModelCatalogEntry } from "../api/types.ts";
-// Control UI module implements chat model ref behavior.
-import type { ChatModelOverride } from "./chat-model-ref.types.ts";
-export type { ChatModelOverride } from "./chat-model-ref.types.ts";
+// Chat model reference normalization.
+import type { ModelCatalogEntry } from "../../api/types.ts";
+
+export type ChatModelOverride =
+  | {
+      kind: "qualified";
+      value: string;
+    }
+  | {
+      kind: "raw";
+      value: string;
+    };
 
 export function buildQualifiedChatModelValue(model: string, provider?: string | null): string {
   const trimmedModel = model.trim();

@@ -281,13 +281,6 @@ export class OpenClawApp extends LitElement {
   @state() chatModelCatalog: ModelCatalogEntry[] = [];
   @state() sessionSwitchNotice: { id: number; text: string } | null = null;
   @state() sessionSwitchFlashKey: string | null = null;
-  @state() chatSessionPickerOpen = false;
-  @state() chatSessionPickerSurface: "desktop" | "mobile" | "sidebar" | null = null;
-  @state() chatSessionPickerQuery = "";
-  @state() chatSessionPickerAppliedQuery = "";
-  @state() chatSessionPickerLoading = false;
-  @state() chatSessionPickerError: string | null = null;
-  @state() chatSessionPickerResult: SessionsListResult | null = null;
   private sessionSwitchNoticeSeq = 0;
   private sessionSwitchNoticeTimer: number | null = null;
   private sessionSwitchFlashTimer: number | null = null;
@@ -744,12 +737,6 @@ export class OpenClawApp extends LitElement {
     if (e.key !== "Escape") {
       return;
     }
-    if (this.chatSessionPickerOpen) {
-      e.preventDefault();
-      this.chatSessionPickerOpen = false;
-      this.chatSessionPickerSurface = null;
-      return;
-    }
     const openComposerDetails = this.querySelectorAll<HTMLDetailsElement>(
       ".chat-controls__inline-select[open], .agent-chat__talk-select[open], .agent-chat__talk-options-advanced[open]",
     );
@@ -788,15 +775,6 @@ export class OpenClawApp extends LitElement {
       ).some((node) => path.includes(node));
       if (!insideTalkOptions) {
         this.realtimeTalkOptionsOpen = false;
-      }
-    }
-    if (this.chatSessionPickerOpen) {
-      const insidePicker = Array.from(
-        this.querySelectorAll(".chat-controls__session-picker, .sidebar-session-search"),
-      ).some((node) => path.includes(node));
-      if (!insidePicker) {
-        this.chatSessionPickerOpen = false;
-        this.chatSessionPickerSurface = null;
       }
     }
     if (!this.chatMobileControlsOpen) {
@@ -968,10 +946,6 @@ export class OpenClawApp extends LitElement {
 
     const focusTarget = options?.restoreFocus ? this.chatMobileControlsTrigger : null;
     this.chatMobileControlsOpen = false;
-    if (this.chatSessionPickerSurface === "mobile") {
-      this.chatSessionPickerOpen = false;
-      this.chatSessionPickerSurface = null;
-    }
     this.chatMobileControlsTrigger = null;
     if (!(focusTarget instanceof HTMLElement) || !focusTarget.isConnected) {
       return;

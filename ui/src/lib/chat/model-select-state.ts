@@ -1,7 +1,7 @@
-import type { ModelCatalogEntry } from "../api/types.ts";
-// Control UI module implements chat model select state behavior.
-import type { SessionCapability } from "../lib/sessions/index.ts";
-import type { AppViewState } from "./app-view-state.ts";
+// Chat model select state derivation.
+import type { ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
+import { pushUniqueTrimmedSelectOption } from "../select-options.ts";
+import type { SessionCapability } from "../sessions/index.ts";
 import {
   buildCatalogDisplayLookup,
   buildChatModelOptionFromLookup,
@@ -9,14 +9,13 @@ import {
   formatCatalogChatModelDisplayFromLookup,
   normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue,
-} from "./chat-model-ref.ts";
-import { pushUniqueTrimmedSelectOption } from "./select-options.ts";
+} from "./model-ref.ts";
 
-type ChatModelSelectStateInput = Pick<
-  AppViewState,
-  "sessionKey" | "chatModelCatalog" | "sessionsResult"
-> & {
+type ChatModelSelectStateInput = {
+  chatModelCatalog: ModelCatalogEntry[];
+  sessionKey: string;
   sessions: Pick<SessionCapability, "state">;
+  sessionsResult: SessionsListResult | null;
 };
 
 export type ChatModelSelectOption = {

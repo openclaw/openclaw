@@ -29,6 +29,7 @@ import {
 import "../../components/tooltip.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { refreshVisibleToolsEffectiveForCurrentSession } from "../../lib/agents/tools-effective.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -55,16 +56,12 @@ import {
   type FallbackStatus,
   type ToolStreamEntry,
 } from "../../ui/app-tool-stream.ts";
-import {
-  renderChatModelSelect,
-  renderChatQuotaPill,
-  resetChatSessionPickerState,
-} from "../../ui/chat/session-controls.ts";
 import { applyModelCatalogResult, loadModels } from "../../ui/controllers/models.ts";
 import type { EmbedSandboxMode } from "../../ui/embed-sandbox.ts";
 import type { SidebarContent } from "../../ui/sidebar-content.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
 import { applyRemoteSlashCommandsResult, refreshSlashCommands } from "./chat-commands.ts";
+import { renderChatQuotaPill, renderChatModelSelect } from "./components/chat-model-controls.ts";
 import {
   CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS,
   persistChatComposerState,
@@ -213,13 +210,6 @@ type ChatPageHost = ChatHost &
     splitRatio: number;
     querySelector: (selectors: string) => Element | null;
     updateComplete: Promise<unknown>;
-    chatSessionPickerOpen: boolean;
-    chatSessionPickerSurface: "desktop" | "mobile" | "sidebar" | null;
-    chatSessionPickerQuery: string;
-    chatSessionPickerAppliedQuery: string;
-    chatSessionPickerLoading: boolean;
-    chatSessionPickerError: string | null;
-    chatSessionPickerResult: SessionsListResult | null;
     realtimeTalkActive: boolean;
     realtimeTalkStatus: RealtimeTalkStatus;
     realtimeTalkDetail: string | null;
@@ -231,6 +221,7 @@ type ChatPageHost = ChatHost &
     realtimeTalkSession: RealtimeTalkSession | null;
     realtimeTalkConversationState: RealtimeTalkConversationState;
     requestUpdate: () => void;
+    onModelChanged: () => Promise<void> | undefined;
     resetToolStream: () => void;
     resetChatScroll: () => void;
     scrollToBottom: (opts?: { smooth?: boolean }) => void;
@@ -671,9 +662,6 @@ function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: string) 
   saveChatQueueForSession(state, previousSessionKey);
   saveChatMessagesForSession(state, previousSessionKey);
   state.sessionKey = sessionKey;
-  if (previousSessionKey !== sessionKey) {
-    resetChatSessionPickerState(state as never);
-  }
   state.currentSessionId = null;
   state.reconnectResumeSessionId = null;
   state.chatMessage = "";
@@ -1037,13 +1025,6 @@ function createPageState(
     chatHeaderControlsHidden: false,
     chatIsProgrammaticScroll: false,
     chatProgrammaticScrollTarget: 0,
-    chatSessionPickerOpen: false,
-    chatSessionPickerSurface: null,
-    chatSessionPickerQuery: "",
-    chatSessionPickerAppliedQuery: "",
-    chatSessionPickerLoading: false,
-    chatSessionPickerError: null,
-    chatSessionPickerResult: null,
     sidebarOpen: false,
     sidebarContent: null,
     splitRatio: settings.splitRatio,
@@ -1081,6 +1062,7 @@ function createPageState(
   });
 
   state.resetToolStream = () => resetToolStream(state as never);
+  state.onModelChanged = () => refreshVisibleToolsEffectiveForCurrentSession(state);
   state.resetChatInputHistoryNavigation = () => resetChatInputHistoryNavigation(state);
   state.resetChatScroll = () => resetChatScroll(state);
   state.scrollToBottom = (options) => {
@@ -1105,10 +1087,6 @@ function createPageState(
     }
     const focusTarget = options?.restoreFocus ? state.chatMobileControlsTrigger : null;
     state.chatMobileControlsOpen = false;
-    if (state.chatSessionPickerSurface === "mobile") {
-      state.chatSessionPickerOpen = false;
-      state.chatSessionPickerSurface = null;
-    }
     state.chatMobileControlsTrigger = null;
     requestUpdate();
     if (!(focusTarget instanceof HTMLElement) || !focusTarget.isConnected) {
@@ -1320,9 +1298,7 @@ export class ChatPage extends LitElement {
     }
     const previousSessionKey = state.sessionKey;
     const previousSessionsResult = state.sessionsResult;
-    const nextSessionRow =
-      state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey) ??
-      state.chatSessionPickerResult?.sessions.find((row) => row.key === nextSessionKey);
+    const nextSessionRow = state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey);
     const nextSessionLabel = resolveSessionDisplayName(nextSessionKey, nextSessionRow);
     resetChatStateForRouteSession(state, nextSessionKey);
     if (previousSessionKey !== nextSessionKey) {
@@ -1478,13 +1454,6 @@ export class ChatPage extends LitElement {
     if (!state) {
       return;
     }
-    if (state.chatSessionPickerOpen) {
-      event.preventDefault();
-      state.chatSessionPickerOpen = false;
-      state.chatSessionPickerSurface = null;
-      state.requestUpdate();
-      return;
-    }
     const openDetails = this.querySelectorAll<HTMLDetailsElement>(CHAT_OPEN_DETAILS_SELECTOR);
     if (openDetails.length > 0) {
       event.preventDefault();
@@ -1527,16 +1496,6 @@ export class ChatPage extends LitElement {
       ).some((node) => path.includes(node));
       if (!insideTalkOptions) {
         state.realtimeTalkOptionsOpen = false;
-        changed = true;
-      }
-    }
-    if (state.chatSessionPickerOpen) {
-      const insidePicker = Array.from(this.querySelectorAll(".chat-controls__session-picker")).some(
-        (node) => path.includes(node),
-      );
-      if (!insidePicker) {
-        state.chatSessionPickerOpen = false;
-        state.chatSessionPickerSurface = null;
         changed = true;
       }
     }
