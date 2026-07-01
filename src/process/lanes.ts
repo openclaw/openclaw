@@ -6,3 +6,10 @@ export const enum CommandLane {
   Subagent = "subagent",
   Nested = "nested",
 }
+
+/**
+ * After this many milliseconds a queued entry is promoted above all standard
+ * priorities so low-priority work is never starved indefinitely by a steady
+ * stream of higher-priority enqueues.
+ */
+export const STARVATION_PROMOTION_MS = 30_000;
