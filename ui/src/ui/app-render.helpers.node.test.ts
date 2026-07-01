@@ -389,6 +389,28 @@ describe("resolveSessionDisplayName", () => {
     ).toBe("General");
   });
 
+  it("falls back to derivedTitle when label and displayName are absent", () => {
+    expect(
+      resolveSessionDisplayName(
+        "agent:main:dashboard:abc",
+        row({ key: "agent:main:dashboard:abc", derivedTitle: "Project plan" }),
+      ),
+    ).toBe("Project plan");
+  });
+
+  it("prefers label over derivedTitle when both are present", () => {
+    expect(
+      resolveSessionDisplayName(
+        "agent:main:dashboard:abc",
+        row({
+          key: "agent:main:dashboard:abc",
+          label: "My label",
+          derivedTitle: "Generated title",
+        }),
+      ),
+    ).toBe("My label");
+  });
+
   it("falls back to displayName when label is absent", () => {
     expect(
       resolveSessionDisplayName(
