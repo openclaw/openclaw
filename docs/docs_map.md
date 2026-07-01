@@ -1707,6 +1707,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Examples
   - H2: Locale
   - H3: Non-interactive Z.AI endpoint choices
+  - H2: Additional non-interactive flags
   - H2: Flow notes
   - H2: Common follow-up commands
 
