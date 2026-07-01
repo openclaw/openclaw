@@ -1,5 +1,6 @@
 // Covers provider-driven plugin auto-enable decisions.
 import { afterAll, describe, expect, it } from "vitest";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import {
   applyPluginAutoEnable,
   materializePluginAutoEnableCandidates,
@@ -306,6 +307,43 @@ describe("applyPluginAutoEnable providers", () => {
     });
 
     expect(result.config.plugins?.entries?.acme?.enabled).toBe(true);
+  });
+
+  it("skips unreadable provider auto-enable manifest rows", () => {
+    const poisonedRecord = {
+      id: "poisoned-provider-auto-enable",
+      get autoEnableWhenConfiguredProviders() {
+        throw new Error("provider auto-enable metadata exploded");
+      },
+    } as unknown as PluginManifestRecord;
+    const healthyRegistry = makeRegistry([
+      {
+        id: "acme",
+        channels: [],
+        autoEnableWhenConfiguredProviders: ["acme-oauth"],
+      },
+    ]);
+
+    const result = applyPluginAutoEnable({
+      config: {
+        auth: {
+          profiles: {
+            "acme-oauth:default": {
+              provider: "acme-oauth",
+              mode: "oauth",
+            },
+          },
+        },
+      },
+      env,
+      manifestRegistry: {
+        plugins: [poisonedRecord, ...healthyRegistry.plugins],
+        diagnostics: [],
+      },
+    });
+
+    expect(result.config.plugins?.entries?.acme?.enabled).toBe(true);
+    expect(result.changes).toContain("acme-oauth auth configured, enabled automatically.");
   });
 
   it("auto-enables third-party provider plugins when manifest-owned web search config exists", () => {
