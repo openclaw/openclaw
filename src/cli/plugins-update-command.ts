@@ -7,6 +7,10 @@ import {
   readConfigFileSnapshotForWrite,
   replaceConfigFile,
 } from "../config/config.js";
+import {
+  createInvalidConfigError,
+  formatInvalidConfigDetails,
+} from "../config/io.invalid-config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
 import { createMergePatch } from "../config/io.write-prepare.js";
 import { applyMergePatch } from "../config/merge-patch.js";
@@ -156,6 +160,12 @@ async function assertRecordsOnlyUpdateConfigFresh(params: {
     expected: params.writeOptions?.includeFileHashesForWrite,
     message: "included config changed since last load",
   });
+  if (!prepared.snapshot.valid) {
+    throw createInvalidConfigError(
+      prepared.snapshot.path,
+      formatInvalidConfigDetails(prepared.snapshot.issues),
+    );
+  }
 }
 
 /** Run plugin/hook-pack updates, persist changed install records, and refresh runtime registry. */
