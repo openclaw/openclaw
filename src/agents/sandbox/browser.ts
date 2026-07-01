@@ -58,8 +58,10 @@ import { validateNetworkMode } from "./validate-sandbox-security.js";
 import {
   appendReadOnlyWorkspaceSkillMountArgs,
   appendWorkspaceMountArgs,
+  filterBindsConflictingWithProtectedMounts,
   formatReadOnlyWorkspaceSkillMountHashState,
   resolveReadOnlyWorkspaceSkillMounts,
+  resolveProtectedSkillMountContainerPaths,
   SANDBOX_MOUNT_FORMAT_VERSION,
 } from "./workspace-mounts.js";
 
@@ -363,7 +365,14 @@ export async function ensureSandboxBrowser(params: {
       includeReadOnlyWorkspaceSkillMounts: false,
     });
     if (browserDockerCfg.binds?.length) {
-      for (const bind of browserDockerCfg.binds) {
+      // Skip user binds that conflict with protected skill mount container paths so
+      // the read-only skill overlay remains authoritative.
+      const protectedPaths = resolveProtectedSkillMountContainerPaths(readOnlyWorkspaceSkillMounts);
+      const safeBinds =
+        protectedPaths.size > 0
+          ? filterBindsConflictingWithProtectedMounts(browserDockerCfg.binds, protectedPaths)
+          : browserDockerCfg.binds;
+      for (const bind of safeBinds) {
         args.push("-v", bind);
       }
     }
