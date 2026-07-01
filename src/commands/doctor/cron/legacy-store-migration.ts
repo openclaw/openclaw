@@ -1,8 +1,12 @@
 // Legacy cron JSON/state store loader and archiver for doctor migration.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "../../../../packages/normalization-core/src/record-coerce.js";
-import { normalizeOptionalString } from "../../../../packages/normalization-core/src/string-coerce.js";
+import {
+  normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+} from "../../../../packages/normalization-core/src/string-coerce.js";
 import { coerceFiniteScheduleNumber } from "../../../cron/schedule-number.js";
 import { normalizeCronStaggerMs } from "../../../cron/stagger.js";
 import type {
@@ -14,6 +18,19 @@ import type { CronStoreFile } from "../../../cron/types.js";
 import { parseJsonWithJson5Fallback } from "../../../utils/parse-json-compat.js";
 
 const LEGACY_CRON_ARCHIVE_SUFFIX = ".migrated";
+const legacyCronMigrationIds = new WeakMap<Record<string, unknown>, string>();
+
+export function resolveLegacyCronMigrationId(job: Record<string, unknown>): string | undefined {
+  return legacyCronMigrationIds.get(job);
+}
+
+function markLegacyCronMigrationIdentity(job: Record<string, unknown>, sourceIndex: number): void {
+  if (normalizeOptionalStringifiedId(job.id) ?? normalizeOptionalStringifiedId(job.jobId)) {
+    return;
+  }
+  const digest = createHash("sha256").update(JSON.stringify(job)).digest("hex");
+  legacyCronMigrationIds.set(job, `cron-migrated-${sourceIndex}-${digest}`);
+}
 
 function resolveLegacyCronStatePath(storePath: string): string {
   if (storePath.endsWith(".json")) {
@@ -23,40 +40,162 @@ function resolveLegacyCronStatePath(storePath: string): string {
 }
 
 async function legacyCronFileExists(filePath: string): Promise<boolean> {
-  return fs
-    .access(filePath)
-    .then(() => true)
-    .catch(() => false);
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return false;
+    }
+    throw err;
+  }
 }
 
 type ArchiveOutcome = { ok: true } | { ok: false; reason: string };
 
-async function archiveLegacyCronFile(filePath: string): Promise<ArchiveOutcome> {
-  if (!(await legacyCronFileExists(filePath))) {
+function formatArchiveError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function isUnsupportedDirectorySyncError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException).code;
+  if (code === "EINVAL" || code === "ENOTSUP" || code === "ENOSYS") {
+    return true;
+  }
+  return (
+    process.platform === "win32" && (code === "EISDIR" || code === "EPERM" || code === "EACCES")
+  );
+}
+
+async function syncArchiveDirectory(dirPath: string): Promise<void> {
+  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  try {
+    handle = await fs.open(dirPath, "r");
+    await handle.sync();
+  } catch (err) {
+    if (!isUnsupportedDirectorySyncError(err)) {
+      throw err;
+    }
+  } finally {
+    await handle?.close();
+  }
+}
+
+async function copyLegacyCronFileAcrossDevices(
+  filePath: string,
+  initialArchivePath: string,
+): Promise<ArchiveOutcome> {
+  let archivePath = initialArchivePath;
+  let archiveCreated = false;
+  let sourceRemoved = false;
+  try {
+    const sourceStat = await fs.stat(filePath);
+    const sourceMode = sourceStat.mode & 0o777;
+    for (let index = 2; ; index += 1) {
+      try {
+        const archiveHandle = await fs.open(archivePath, "wx", sourceMode | 0o600);
+        archiveCreated = true;
+        await archiveHandle.close();
+        break;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
+          throw err;
+        }
+        archivePath = `${filePath}${LEGACY_CRON_ARCHIVE_SUFFIX}.${index}`;
+      }
+    }
+
+    // Claim the destination before copyFile so any partial output from a failed,
+    // non-atomic copy is owned by this attempt and removed by the catch path.
+    await fs.copyFile(filePath, archivePath);
+    await fs.chmod(archivePath, sourceMode | 0o600);
+    const archiveHandle = await fs.open(archivePath, "r+");
+    try {
+      await archiveHandle.chmod(sourceMode);
+      await archiveHandle.utimes(sourceStat.atime, sourceStat.mtime);
+      await archiveHandle.sync();
+    } finally {
+      await archiveHandle.close();
+    }
+    await syncArchiveDirectory(path.dirname(archivePath));
+    await fs.unlink(filePath);
+    sourceRemoved = true;
+    await syncArchiveDirectory(path.dirname(filePath));
     return { ok: true };
+  } catch (err) {
+    if (sourceRemoved) {
+      return {
+        ok: false,
+        reason: `${formatArchiveError(err)}; the durable archive is preserved at ${archivePath} because the source was already removed`,
+      };
+    }
+    if (archiveCreated) {
+      let archiveRemoved = false;
+      try {
+        try {
+          await fs.unlink(archivePath);
+        } catch (cleanupErr) {
+          if ((cleanupErr as NodeJS.ErrnoException).code !== "ENOENT") {
+            throw cleanupErr;
+          }
+        }
+        archiveRemoved = true;
+        await syncArchiveDirectory(path.dirname(archivePath));
+      } catch (cleanupErr) {
+        return {
+          ok: false,
+          reason: archiveRemoved
+            ? `${formatArchiveError(err)}; the partial archive was removed, but cleanup directory sync failed: ${formatArchiveError(cleanupErr)}`
+            : `${formatArchiveError(err)}; partial archive remains at ${archivePath} because cleanup failed: ${formatArchiveError(cleanupErr)}`,
+        };
+      }
+    }
+    return { ok: false, reason: formatArchiveError(err) };
   }
+}
+
+async function archiveLegacyCronFile(filePath: string): Promise<ArchiveOutcome> {
   let archivePath = `${filePath}${LEGACY_CRON_ARCHIVE_SUFFIX}`;
-  for (let index = 2; await legacyCronFileExists(archivePath); index += 1) {
-    archivePath = `${filePath}${LEGACY_CRON_ARCHIVE_SUFFIX}.${index}`;
+  try {
+    if (!(await legacyCronFileExists(filePath))) {
+      return { ok: true };
+    }
+    for (let index = 2; await legacyCronFileExists(archivePath); index += 1) {
+      archivePath = `${filePath}${LEGACY_CRON_ARCHIVE_SUFFIX}.${index}`;
+    }
+  } catch (err) {
+    return { ok: false, reason: formatArchiveError(err) };
   }
+
   try {
     await fs.rename(filePath, archivePath);
-    return { ok: true };
   } catch (err) {
-    // A cross-device rename (EXDEV) is common when the cron store lives on a Docker
-    // bind mount; fall back to copy+unlink below so the legacy file is still archived.
-    // Any other rename failure is surfaced so doctor reports it instead of silently
-    // leaving the legacy file to be re-detected on every run.
+    // A cross-device rename can occur when the configured store is a mounted file.
+    // Fsync before source removal and roll back failed cleanup so retries stay idempotent.
     if ((err as { code?: unknown })?.code !== "EXDEV") {
-      return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+      return { ok: false, reason: formatArchiveError(err) };
     }
+    return await copyLegacyCronFileAcrossDevices(filePath, archivePath);
   }
+
   try {
-    await fs.copyFile(filePath, archivePath);
-    await fs.unlink(filePath);
+    await syncArchiveDirectory(path.dirname(filePath));
     return { ok: true };
   } catch (err) {
-    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+    let sourceRestored = false;
+    try {
+      await fs.rename(archivePath, filePath);
+      sourceRestored = true;
+      await syncArchiveDirectory(path.dirname(filePath));
+    } catch (rollbackErr) {
+      return {
+        ok: false,
+        reason: sourceRestored
+          ? `${formatArchiveError(err)}; the source was restored, but rollback directory sync failed: ${formatArchiveError(rollbackErr)}`
+          : `${formatArchiveError(err)}; archive remains at ${archivePath} because restoring the source failed: ${formatArchiveError(rollbackErr)}`,
+      };
+    }
+    return { ok: false, reason: formatArchiveError(err) };
   }
 }
 
@@ -247,25 +386,15 @@ export type LegacyCronArchiveResult =
   | { ok: true }
   | { ok: false; failures: Array<{ path: string; reason: string }> };
 
-/**
- * Archive legacy cron JSON/state files after successful migration. Uses rename, then a
- * copy+unlink fallback for cross-device (EXDEV) moves, and reports any file that could
- * not be archived so the caller does not claim a finished migration while a leftover
- * legacy file would be re-detected on the next doctor run.
- */
+/** Archive legacy cron JSON/state files after successful migration. */
 export async function archiveLegacyCronStoreForMigration(
   storePath: string,
 ): Promise<LegacyCronArchiveResult> {
   const resolvedStorePath = path.resolve(storePath);
   const targets = [resolvedStorePath, resolveLegacyCronStatePath(resolvedStorePath)];
-  const failures: Array<{ path: string; reason: string }> = [];
-  await Promise.all(
-    targets.map(async (target) => {
-      const outcome = await archiveLegacyCronFile(target);
-      if (!outcome.ok) {
-        failures.push({ path: target, reason: outcome.reason });
-      }
-    }),
+  const outcomes = await Promise.all(targets.map(archiveLegacyCronFile));
+  const failures = outcomes.flatMap((outcome, index) =>
+    outcome.ok ? [] : [{ path: targets[index], reason: outcome.reason }],
   );
   return failures.length === 0 ? { ok: true } : { ok: false, failures };
 }
@@ -290,6 +419,9 @@ export async function loadLegacyCronStoreForMigration(storePath: string): Promis
     const invalidConfigRows: QuarantinedCronConfigJob[] = [];
     for (const [index, row] of rawJobs.entries()) {
       if (isRecord(row)) {
+        // The source position distinguishes identical id-less rows, while the raw digest
+        // prevents an edited retry from being mistaken for the row previously imported.
+        markLegacyCronMigrationIdentity(row, index);
         configJobIndexes.push(index);
         configRows.push(row);
       } else {

@@ -111,6 +111,7 @@ async function loadLegacyCronRepairState(params: {
     const merged = mergeLegacyCronJobs({
       currentJobs: rawJobs,
       legacyJobs: legacyStore.jobs as unknown as Array<Record<string, unknown>>,
+      legacyWebhook: normalizeOptionalString(params.cfg.cron?.webhook),
     });
     rawJobs = merged.jobs;
     legacyImportCount = merged.importedCount;
