@@ -159,8 +159,10 @@ vi.mock("@opentelemetry/resources", () => ({
 
 vi.mock("@opentelemetry/semantic-conventions", () => ({
   ATTR_SERVICE_NAME: "service.name",
+  ATTR_SERVICE_INSTANCE_ID: "service.instance.id",
 }));
 
+import { resourceFromAttributes } from "@opentelemetry/resources";
 import {
   createDiagnosticTraceContext,
   emitTrustedDiagnosticEvent,
@@ -1982,6 +1984,27 @@ describe("diagnostics-otel service", () => {
     });
     expect(JSON.stringify(genAiTokenUsage?.record.mock.calls)).not.toContain("session-key");
     await service.stop?.(ctx);
+  });
+
+  test("sets service.instance.id on the resource from OTEL_SERVICE_INSTANCE_ID", async () => {
+    const ORIGINAL_INSTANCE_ID = process.env.OTEL_SERVICE_INSTANCE_ID;
+    process.env.OTEL_SERVICE_INSTANCE_ID = "pod-abc-123";
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
+    try {
+      await service.start(ctx);
+      const resourceAttrs = vi.mocked(resourceFromAttributes).mock.calls.at(-1)?.[0] as
+        | Record<string, unknown>
+        | undefined;
+      expect(resourceAttrs?.["service.instance.id"]).toBe("pod-abc-123");
+    } finally {
+      await service.stop?.(ctx);
+      if (ORIGINAL_INSTANCE_ID === undefined) {
+        delete process.env.OTEL_SERVICE_INSTANCE_ID;
+      } else {
+        process.env.OTEL_SERVICE_INSTANCE_ID = ORIGINAL_INSTANCE_ID;
+      }
+    }
   });
 
   test("bounds agent identifiers on model usage metric attributes", async () => {
