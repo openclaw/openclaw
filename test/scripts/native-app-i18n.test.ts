@@ -1,5 +1,13 @@
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { collectNativeI18nEntries, NATIVE_I18N_LOCALES } from "../../scripts/native-app-i18n.ts";
+import {
+  collectNativeI18nEntries,
+  NATIVE_I18N_LOCALES,
+  syncNativeLocale,
+  type NativeI18nEntry,
+} from "../../scripts/native-app-i18n.ts";
 
 describe("native app i18n inventory", () => {
   it("collects stable Android and Apple UI entries", async () => {
@@ -111,5 +119,59 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.path.endsWith("Info.plist"))).toBe(true);
     expect(NATIVE_I18N_LOCALES).toHaveLength(21);
     expect(NATIVE_I18N_LOCALES).toContain("sv");
+  });
+
+  it("creates a first-run locale artifact and leaves a complete artifact unchanged", async () => {
+    const translationsDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-native-i18n-"));
+    const entries: NativeI18nEntry[] = [
+      {
+        id: "native.android.hello",
+        kind: "ui-call",
+        line: 1,
+        path: "apps/android/example.kt",
+        source: "Hello",
+        surface: "android",
+      },
+      {
+        id: "native.apple.request",
+        kind: "ui-call",
+        line: 2,
+        path: "apps/ios/example.swift",
+        source: "Request ID: \\(requestId)",
+        surface: "apple",
+      },
+    ];
+
+    try {
+      const first = await syncNativeLocale("sv", entries, {
+        glossary: [],
+        translationsDir,
+        translate: async (pending) =>
+          new Map(
+            pending.map((entry) => [
+              entry.id,
+              entry.id.endsWith("hello") ? "Hej" : "Begärans-ID: \\(requestId)",
+            ]),
+          ),
+      });
+      expect(first).toEqual({ changed: true, translated: 2 });
+
+      const artifactPath = path.join(translationsDir, "sv.json");
+      const firstContents = await readFile(artifactPath, "utf8");
+      const firstModifiedAt = (await stat(artifactPath)).mtimeMs;
+      const second = await syncNativeLocale("sv", entries, {
+        glossary: [],
+        translationsDir,
+        translate: async () => {
+          throw new Error("no-op refresh must not call the provider");
+        },
+      });
+
+      expect(second).toEqual({ changed: false, translated: 0 });
+      expect(await readFile(artifactPath, "utf8")).toBe(firstContents);
+      expect((await stat(artifactPath)).mtimeMs).toBe(firstModifiedAt);
+    } finally {
+      await rm(translationsDir, { force: true, recursive: true });
+    }
   });
 });

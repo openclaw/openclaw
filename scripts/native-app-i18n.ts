@@ -45,6 +45,12 @@ type NativeTranslationArtifact = {
   locale: string;
   version: 1;
 };
+type NativeTranslator = typeof translateNativeEntries;
+type NativeLocaleSyncOptions = {
+  glossary?: Array<{ source: string; target: string }>;
+  translate?: NativeTranslator;
+  translationsDir?: string;
+};
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
@@ -920,13 +926,19 @@ async function loadGlossary(locale: string): Promise<Array<{ source: string; tar
   }
 }
 
-async function syncNativeLocale(locale: string, entries: NativeI18nEntry[]) {
+export async function syncNativeLocale(
+  locale: string,
+  entries: NativeI18nEntry[],
+  options: NativeLocaleSyncOptions = {},
+) {
   // Native runtime resources are owned by the Android and Apple slices; these
   // artifacts keep the shared translation-memory handoff current between them.
-  const artifactPath = path.join(TRANSLATIONS_DIR, `${locale}.json`);
+  const artifactPath = path.join(options.translationsDir ?? TRANSLATIONS_DIR, `${locale}.json`);
+  let previousRaw = "";
   let previous: NativeTranslationArtifact = { entries: [], locale, version: 1 };
   try {
-    previous = JSON.parse(await readFile(artifactPath, "utf8")) as NativeTranslationArtifact;
+    previousRaw = await readFile(artifactPath, "utf8");
+    previous = JSON.parse(previousRaw) as NativeTranslationArtifact;
   } catch {
     // The first refresh creates the locale artifact.
   }
@@ -942,7 +954,11 @@ async function syncNativeLocale(locale: string, entries: NativeI18nEntry[]) {
       sourcePath: entry.path,
     }));
   const translated = pending.length
-    ? await translateNativeEntries(pending, locale, await loadGlossary(locale))
+    ? await (options.translate ?? translateNativeEntries)(
+        pending,
+        locale,
+        options.glossary ?? (await loadGlossary(locale)),
+      )
     : new Map<string, string>();
   const artifact: NativeTranslationArtifact = {
     version: 1,
@@ -961,11 +977,16 @@ async function syncNativeLocale(locale: string, entries: NativeI18nEntry[]) {
       );
     }
   }
-  await mkdir(TRANSLATIONS_DIR, { recursive: true });
-  await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
+  const rendered = `${JSON.stringify(artifact, null, 2)}\n`;
+  const changed = previousRaw !== rendered;
+  if (changed) {
+    await mkdir(path.dirname(artifactPath), { recursive: true });
+    await writeFile(artifactPath, rendered, "utf8");
+  }
   process.stdout.write(
-    `native-app-i18n: locale=${locale} entries=${entries.length} translated=${translated.size}\n`,
+    `native-app-i18n: locale=${locale} entries=${entries.length} translated=${translated.size} changed=${changed}\n`,
   );
+  return { changed, translated: translated.size };
 }
 
 async function main() {
