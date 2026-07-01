@@ -331,6 +331,56 @@ describe("subagent announce seam flow", () => {
     });
   });
 
+  it("warns when ANNOUNCE_SKIP suppresses a cron job completion", async () => {
+    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:cron-worker",
+      childRunId: "run-cron-announce-skip",
+      requesterSessionKey: "agent:main:cron:daily-report",
+      requesterDisplayKey: "cron:daily-report",
+      task: "cron job",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "ANNOUNCE_SKIP",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining("cron job completion for session=agent:main:cron:daily-report"),
+    );
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("suppressed by ANNOUNCE_SKIP"));
+    logSpy.mockRestore();
+  });
+
+  it("does not warn when fallback reply is delivered for a cron ANNOUNCE_SKIP", async () => {
+    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:cron-worker",
+      childRunId: "run-cron-announce-skip-fallback",
+      requesterSessionKey: "agent:main:cron:daily-report",
+      requesterDisplayKey: "cron:daily-report",
+      task: "cron job",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "ANNOUNCE_SKIP",
+      fallbackReply: "an actual fallback result",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(logSpy).not.toHaveBeenCalled();
+    logSpy.mockRestore();
+  });
+
   it("keeps lifecycle hooks enabled when deleting a completed session-mode child session", async () => {
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
