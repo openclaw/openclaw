@@ -160,4 +160,26 @@ describe("copilot plugin", () => {
     });
     expect(createHarness).toHaveBeenCalledWith(expect.objectContaining({ sessionStore }));
   });
+
+  it("registers without durable session bindings when the host runtime lacks state APIs", () => {
+    const createHarness = vi.mocked(createCopilotAgentHarness);
+    createHarness.mockClear();
+    const registerAgentHarness = vi.fn();
+
+    plugin.register(
+      createTestPluginApi({
+        id: "copilot",
+        name: "GitHub Copilot agent runtime",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: {} as never,
+        registerAgentHarness,
+      }),
+    );
+
+    expect(registerAgentHarness).toHaveBeenCalledTimes(1);
+    expect(createHarness).toHaveBeenCalledTimes(1);
+    expect(createHarness.mock.calls[0]?.[0]).not.toHaveProperty("sessionStore");
+  });
 });

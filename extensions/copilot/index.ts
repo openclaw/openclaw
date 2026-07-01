@@ -30,16 +30,20 @@ export default definePluginEntry({
   description: "Registers the GitHub Copilot agent runtime.",
   register(api) {
     const poolOptions = readPoolOptions(api.pluginConfig);
-    const sessionStore = api.runtime.state.openSyncKeyedStore<CopilotSessionBinding>({
-      namespace: "sdk-sessions",
-      maxEntries: 5000,
-      defaultTtlMs: 90 * 24 * 60 * 60 * 1000,
-    });
+    const openSyncKeyedStore = api.runtime.state?.openSyncKeyedStore;
+    const sessionStore =
+      typeof openSyncKeyedStore === "function"
+        ? openSyncKeyedStore<CopilotSessionBinding>({
+            namespace: "sdk-sessions",
+            maxEntries: 5000,
+            defaultTtlMs: 90 * 24 * 60 * 60 * 1000,
+          })
+        : undefined;
 
     api.registerAgentHarness(
       createCopilotAgentHarness({
         ...(poolOptions ? { poolOptions } : {}),
-        sessionStore,
+        ...(sessionStore ? { sessionStore } : {}),
       }),
     );
   },
