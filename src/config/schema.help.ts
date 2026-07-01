@@ -974,6 +974,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Enable the background model-pricing bootstrap. Set to false to skip OpenRouter and LiteLLM catalog fetches during Gateway startup; changing this value requires a Gateway restart.",
   "models.providers.*.baseUrl":
     "Base URL for the provider endpoint used to serve model requests for that provider entry. Use HTTPS endpoints and keep URLs environment-specific through config templating where needed.",
+  "models.providers.*.baseURL":
+    "Compatibility alias for models.providers.*.baseUrl. OpenClaw normalizes this input to baseUrl; do not set both spellings.",
   "models.providers.*.apiKey":
     "Provider credential used for API-key based authentication when the provider requires direct key auth. Use secret/env substitution and avoid storing real keys in committed config files.",
   "models.providers.*.auth":
