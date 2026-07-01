@@ -7,8 +7,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Base64
 
 class OnboardingFlowLogicTest {
   @Test
@@ -432,4 +434,51 @@ class OnboardingFlowLogicTest {
       ),
     )
   }
+
+  @Test
+  fun resolvesOnboardingSetupCodeConnectConfigForScannedQr() {
+    val setupCode =
+      encodeSetupCode("""{"url":"ws://10.0.2.2:18789","bootstrapToken":"bootstrap-1"}""")
+    val scanned = resolveScannedSetupCodeResult(setupCode)
+
+    val resolved =
+      resolveOnboardingGatewayConnectConfig(
+        setupCode = requireNotNull(scanned.setupCode),
+        manualHost = "127.0.0.1",
+        manualPort = "18789",
+        manualTls = false,
+        token = "stale-shared-token",
+        password = "stale-shared-password",
+      )
+
+    assertEquals("10.0.2.2", resolved?.host)
+    assertEquals(18789, resolved?.port)
+    assertEquals(false, resolved?.tls)
+    assertEquals("bootstrap-1", resolved?.bootstrapToken)
+    assertEquals("", resolved?.token)
+    assertEquals("", resolved?.password)
+    assertNull(scanned.error)
+  }
+
+  @Test
+  fun resolvesOnboardingManualConnectConfigWhenSetupCodeIsBlank() {
+    val resolved =
+      resolveOnboardingGatewayConnectConfig(
+        setupCode = "",
+        manualHost = "127.0.0.1",
+        manualPort = "18789",
+        manualTls = false,
+        token = "shared-token",
+        password = "shared-password",
+      )
+
+    assertEquals("127.0.0.1", resolved?.host)
+    assertEquals(18789, resolved?.port)
+    assertEquals(false, resolved?.tls)
+    assertEquals("", resolved?.bootstrapToken)
+    assertEquals("shared-token", resolved?.token)
+    assertEquals("shared-password", resolved?.password)
+  }
+
+  private fun encodeSetupCode(payloadJson: String): String = Base64.getUrlEncoder().withoutPadding().encodeToString(payloadJson.toByteArray(Charsets.UTF_8))
 }

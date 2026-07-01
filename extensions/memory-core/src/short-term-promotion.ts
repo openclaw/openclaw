@@ -74,6 +74,14 @@ const PHASE_SIGNAL_REM_BOOST_MAX = 0.09;
 const PHASE_SIGNAL_HALF_LIFE_DAYS = 14;
 const DREAMING_TRANSCRIPT_PROMPT_LINE_RE =
   /\[[^\]]*dreaming-narrative[^\]]*]\s*(?:User|Assistant):\s*Write a dream diary entry from these memory fragments:?/i;
+const RAW_SESSION_METADATA_RE =
+  /\bSession Key\b.{0,260}\bSession ID\b|\bSession ID\b.{0,260}\bSession Key\b/i;
+const RAW_CONVERSATION_SUMMARY_RE = /^(?:[-*+]\s*)?Conversation Summary:/i;
+const RAW_TRANSCRIPT_TURN_RE = /^(?:[-*+]\s*)?(?:user|assistant):\s/i;
+const MEMORY_FLUSH_PROMPT_RE =
+  /Save important context from this session to the daily memory file\.\s*STRICT RULES:/i;
+const PROMOTION_SCORE_METADATA_RE =
+  /\[\s*score=\d+(?:\.\d+)?\s+recalls=\d+\s+avg=\d+(?:\.\d+)?\s+source=memory\//i;
 const DREAMING_DIFF_PREFIX_RE = /@@\s*-\d+(?:,\d+)?\s+[-*+]\s+/iy;
 const GENERIC_DAY_HEADING_RE =
   /^(?:(?:mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday|sun|sunday)(?:,\s+)?)?(?:(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)\s+\d{1,2}(?:st|nd|rd|th)?(?:,\s*\d{4})?|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?|\d{4}[/-]\d{2}[/-]\d{2})$/i;
@@ -409,7 +417,12 @@ function isContaminatedDreamingSnippet(raw: string): boolean {
   }
   if (
     /<!--\s*openclaw-memory-promotion:/i.test(snippet) ||
-    DREAMING_TRANSCRIPT_PROMPT_LINE_RE.test(snippet)
+    DREAMING_TRANSCRIPT_PROMPT_LINE_RE.test(snippet) ||
+    RAW_SESSION_METADATA_RE.test(snippet) ||
+    RAW_CONVERSATION_SUMMARY_RE.test(snippet) ||
+    RAW_TRANSCRIPT_TURN_RE.test(snippet) ||
+    MEMORY_FLUSH_PROMPT_RE.test(snippet) ||
+    PROMOTION_SCORE_METADATA_RE.test(snippet)
   ) {
     return true;
   }
