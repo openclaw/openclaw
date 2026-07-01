@@ -285,7 +285,7 @@ export const registerTelegramHandlers = ({
   };
 
   const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
-  const FORWARD_BURST_DEBOUNCE_MS = 80;
+  const FORWARD_BURST_MIN_DEBOUNCE_MS = 80;
   type TelegramDebounceLane = "default" | "forward";
   type TelegramDebounceEntry = {
     ctx: TelegramContext;
@@ -302,7 +302,11 @@ export const registerTelegramHandlers = ({
     spooledReplayParticipant?: TelegramSpooledReplayDeferredParticipant;
   };
   const resolveTelegramDebounceEntryMs = (entry: TelegramDebounceEntry): number =>
-    entry.debounceLane === "forward" ? FORWARD_BURST_DEBOUNCE_MS : debounceMs;
+    entry.debounceLane === "forward"
+      ? debounceMs > 0
+        ? debounceMs
+        : FORWARD_BURST_MIN_DEBOUNCE_MS
+      : debounceMs;
   const shouldDebounceTelegramEntry = (entry: TelegramDebounceEntry): boolean => {
     const text = getTelegramTextParts(entry.msg).text;
     const hasDebounceableText = shouldDebounceTextInbound({
