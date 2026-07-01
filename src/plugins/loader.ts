@@ -70,7 +70,7 @@ import { initializeGlobalHookRunner } from "./hook-runner-global.js";
 import { collectPluginManifestCompatCodes } from "./installed-plugin-index-record-builder.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import {
-  clearPluginInteractiveHandlers,
+  clearPluginInteractiveRuntimeState,
   listPluginInteractiveHandlers,
   restorePluginInteractiveHandlers,
 } from "./interactive-registry.js";
@@ -432,7 +432,9 @@ export function clearActivatedPluginRuntimeState(): void {
   clearPluginCommands();
   clearCompactionProviders();
   clearDetachedTaskLifecycleRuntimeRegistration();
-  clearPluginInteractiveHandlers();
+  // Clear reload bookkeeping without mutating the still-live registry. Failed
+  // replacement loads must leave its registry-owned handlers executable.
+  clearPluginInteractiveRuntimeState();
   clearEmbeddingProviders();
   clearMemoryEmbeddingProviders();
   clearMemoryPluginState();

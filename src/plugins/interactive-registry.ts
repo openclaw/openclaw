@@ -104,8 +104,8 @@ export function registerRegistryPluginInteractiveHandler(
   });
 }
 
-/** Clears all active plugin interactive handlers. */
-export function clearPluginInteractiveHandlers(): void {
+/** Clears process-global interactive handler and dedupe state. */
+export function clearPluginInteractiveRuntimeState(): void {
   clearPluginInteractiveHandlersState();
 }
 
@@ -114,8 +114,8 @@ export function clearPluginInteractiveHandlerRegistrations(): void {
   clearPluginInteractiveHandlerRegistrationsState();
 }
 
-/** Clears active interactive handlers owned by one plugin. */
-export function clearPluginInteractiveHandlersForPlugin(pluginId: string): void {
+/** Clears process-global interactive handler state owned by one plugin. */
+export function clearPluginInteractiveRuntimeStateForPlugin(pluginId: string): void {
   const interactiveHandlers = getPluginInteractiveHandlersState();
   for (const [key, value] of interactiveHandlers.entries()) {
     if (value.pluginId === pluginId) {

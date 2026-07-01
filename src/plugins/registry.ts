@@ -106,7 +106,7 @@ import {
 import { normalizePluginHttpPath } from "./http-path.js";
 import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
 import {
-  clearPluginInteractiveHandlersForPlugin,
+  clearPluginInteractiveRuntimeStateForPlugin,
   registerRegistryPluginInteractiveHandler,
 } from "./interactive-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
@@ -3276,7 +3276,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }
 
     clearPluginCommandsForPlugin(pluginId);
-    clearPluginInteractiveHandlersForPlugin(pluginId);
+    // The loader restores the candidate registry snapshot after this call.
+    // Clear only its global reservation so a live registry with the same
+    // plugin id survives a failed replacement.
+    clearPluginInteractiveRuntimeStateForPlugin(pluginId);
     clearCodeModeNamespacesForPlugin(pluginId);
     clearContextEnginesForOwner(`plugin:${pluginId}`);
 

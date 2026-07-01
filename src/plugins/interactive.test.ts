@@ -13,6 +13,7 @@ import type {
 import { registerRegistryPluginInteractiveHandler } from "./interactive-registry.js";
 import {
   clearPluginInteractiveHandlers,
+  clearPluginInteractiveHandlersForPlugin,
   dispatchPluginInteractiveHandler,
   registerPluginInteractiveHandler,
 } from "./interactive.js";
@@ -707,6 +708,99 @@ describe("plugin interactive handlers", () => {
       ),
     ).resolves.toEqual({ matched: false, handled: false, duplicate: false });
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears registry-owned handlers from live registries", async () => {
+    const handler = vi.fn(async () => ({ handled: true }));
+    const registry = createEmptyPluginRegistry();
+    registry.interactiveHandlers = [
+      {
+        channel: "telegram",
+        namespace: "code-agent",
+        pluginId: "openclaw-code-agent",
+        handler: handler as never,
+      },
+    ];
+    expect(
+      registerRegistryPluginInteractiveHandler("openclaw-code-agent", {
+        channel: "telegram",
+        namespace: "code-agent",
+        handler: handler as never,
+      }),
+    ).toEqual({ ok: true });
+    setActivePluginRegistry(registry);
+
+    clearPluginInteractiveHandlers();
+
+    expect(registry.interactiveHandlers).toStrictEqual([]);
+    await expect(
+      dispatchInteractive(
+        createTelegramDispatchParams({
+          data: "code-agent:resume",
+          callbackId: "cb-code-agent-cleared",
+        }),
+      ),
+    ).resolves.toEqual({ matched: false, handled: false, duplicate: false });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("clears one plugin's registry-owned handlers from live registries", async () => {
+    const firstHandler = vi.fn(async () => ({ handled: true }));
+    const secondHandler = vi.fn(async () => ({ handled: true }));
+    const registry = createEmptyPluginRegistry();
+    registry.interactiveHandlers = [
+      {
+        channel: "telegram",
+        namespace: "first",
+        pluginId: "plugin-a",
+        handler: firstHandler as never,
+      },
+      {
+        channel: "telegram",
+        namespace: "second",
+        pluginId: "plugin-b",
+        handler: secondHandler as never,
+      },
+    ];
+    expect(
+      registerRegistryPluginInteractiveHandler("plugin-a", {
+        channel: "telegram",
+        namespace: "first",
+        handler: firstHandler as never,
+      }),
+    ).toEqual({ ok: true });
+    expect(
+      registerRegistryPluginInteractiveHandler("plugin-b", {
+        channel: "telegram",
+        namespace: "second",
+        handler: secondHandler as never,
+      }),
+    ).toEqual({ ok: true });
+    setActivePluginRegistry(registry);
+
+    clearPluginInteractiveHandlersForPlugin("plugin-a");
+
+    expect(registry.interactiveHandlers?.map((registration) => registration.pluginId)).toEqual([
+      "plugin-b",
+    ]);
+    await expect(
+      dispatchInteractive(
+        createTelegramDispatchParams({
+          data: "first:resume",
+          callbackId: "cb-first-cleared",
+        }),
+      ),
+    ).resolves.toEqual({ matched: false, handled: false, duplicate: false });
+    await expect(
+      dispatchInteractive(
+        createTelegramDispatchParams({
+          data: "second:resume",
+          callbackId: "cb-second-active",
+        }),
+      ),
+    ).resolves.toEqual({ matched: true, handled: true, duplicate: false });
+    expect(firstHandler).not.toHaveBeenCalled();
+    expect(secondHandler).toHaveBeenCalledTimes(1);
   });
 
   it("rejects duplicate namespace registrations", () => {

@@ -1,5 +1,7 @@
 // Resolves interactive plugin entries from registry metadata.
 import {
+  clearPluginInteractiveRuntimeState,
+  clearPluginInteractiveRuntimeStateForPlugin,
   resolvePluginInteractiveNamespaceMatch,
   resolvePluginInteractiveRegistrationsMatch,
 } from "./interactive-registry.js";
@@ -27,12 +29,30 @@ export type PluginInteractiveMatch<TRegistration extends PluginInteractiveDispat
   payload: string;
 };
 
-export {
-  clearPluginInteractiveHandlers,
-  clearPluginInteractiveHandlersForPlugin,
-  registerPluginInteractiveHandler,
-} from "./interactive-registry.js";
+export { registerPluginInteractiveHandler } from "./interactive-registry.js";
 export type { InteractiveRegistrationResult } from "./interactive-registry.js";
+
+/** Clears all active plugin interactive handlers. */
+export function clearPluginInteractiveHandlers(): void {
+  clearPluginInteractiveRuntimeState();
+  for (const registry of collectLivePluginRegistries()) {
+    registry.interactiveHandlers = [];
+  }
+}
+
+/** Clears active interactive handlers owned by one plugin. */
+export function clearPluginInteractiveHandlersForPlugin(pluginId: string): void {
+  clearPluginInteractiveRuntimeStateForPlugin(pluginId);
+  for (const registry of collectLivePluginRegistries()) {
+    const interactiveHandlers = registry.interactiveHandlers;
+    if (!interactiveHandlers?.some((registration) => registration.pluginId === pluginId)) {
+      continue;
+    }
+    registry.interactiveHandlers = interactiveHandlers.filter(
+      (registration) => registration.pluginId !== pluginId,
+    );
+  }
+}
 
 function resolveLivePluginInteractiveNamespaceMatch(channel: string, data: string) {
   const existing = resolvePluginInteractiveNamespaceMatch(channel, data);

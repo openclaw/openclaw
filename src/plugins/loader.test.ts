@@ -48,7 +48,7 @@ import { createHookRunner } from "./hooks.js";
 import { writePersistedInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
 import {
   clearPluginInteractiveHandlerRegistrations,
-  clearPluginInteractiveHandlers,
+  clearPluginInteractiveRuntimeState,
   resolvePluginInteractiveNamespaceMatch,
 } from "./interactive-registry.js";
 import {
@@ -3185,7 +3185,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
     clearInternalHooks();
     clearPluginCommands();
-    clearPluginInteractiveHandlers();
+    clearPluginInteractiveRuntimeState();
 
     const registry = loadOpenClawPlugins({
       cache: false,
@@ -3219,7 +3219,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
     clearInternalHooks();
     clearPluginCommands();
-    clearPluginInteractiveHandlers();
+    clearPluginInteractiveRuntimeState();
   });
 
   it("fails plugin registration when a hook is missing its required name", () => {
