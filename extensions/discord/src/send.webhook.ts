@@ -2,6 +2,7 @@
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveDiscordClientAccountContext } from "./client.js";
@@ -17,6 +18,7 @@ import { createDiscordSendResult } from "./send.receipt.js";
 import type { DiscordSendResult } from "./send.types.js";
 
 const DISCORD_WEBHOOK_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
+const DISCORD_WEBHOOK_JSON_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 
 type DiscordWebhookSendOpts = {
   cfg: OpenClawConfig;
@@ -121,7 +123,13 @@ export async function sendWebhookMessageDiscord(
     await throwWebhookResponseError(response);
   }
 
-  const payload = (await response.json().catch(() => ({}))) as {
+  const body = await readResponseWithLimit(response, DISCORD_WEBHOOK_JSON_RESPONSE_MAX_BYTES, {
+    onOverflow: ({ size, maxBytes }) =>
+      new Error(
+        `Discord webhook JSON response too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+      ),
+  });
+  const payload = JSON.parse(body.toString("utf8")) as {
     id?: string;
     channel_id?: string;
   };
