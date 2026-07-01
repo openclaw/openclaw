@@ -1465,6 +1465,10 @@ export class ChatPage extends LitElement {
         onNavigate: (target) => this.context.navigate(target),
         onRefresh: () => handleChatManualRefresh(state),
         onThinkingSelect: (next) => switchChatThinkingLevel(state, next),
+        onToggleCronSessions: () => {
+          state.sessionsHideCron = !state.sessionsHideCron;
+          state.requestUpdate?.();
+        },
       }),
       sessionWorkspace: createSessionWorkspaceProps(state),
       onRefresh: () => {

@@ -103,6 +103,7 @@ export type ChatModelControlsOptions = {
   onFastModeSelect?: (value: "" | "on" | "off" | "auto") => Promise<unknown> | unknown;
   onModelSelect?: (value: string) => Promise<unknown> | unknown;
   onThinkingSelect?: (value: string) => Promise<unknown> | unknown;
+  onToggleCronSessions?: () => void;
 };
 
 export type ChatControlsOptions = ChatModelControlsOptions & {
@@ -371,8 +372,7 @@ export function renderChatControls(state: ChatControlsState, options: ChatContro
               <button
                 class="btn btn--sm btn--icon chat-settings-action ${hideCron ? "active" : ""}"
                 @click=${() => {
-                  state.sessionsHideCron = !hideCron;
-                  state.requestUpdate?.();
+                  options.onToggleCronSessions?.();
                 }}
                 aria-pressed=${hideCron}
                 aria-label=${cronLabel}
