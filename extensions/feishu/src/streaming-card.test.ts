@@ -41,10 +41,10 @@ type StreamingRequest = {
 const serverStops: Array<() => Promise<void>> = [];
 const HERMETIC_PUBLIC_LOOKUP_ADDRESS = "93.184.216.34";
 
-const hermeticPublicLookup: LookupFn = async () => ({
+const hermeticPublicLookup: LookupFn = (async (_hostname: string, _options?: unknown) => ({
   address: HERMETIC_PUBLIC_LOOKUP_ADDRESS,
   family: 4,
-});
+})) as LookupFn;
 
 async function readRequestBody(req: IncomingMessage): Promise<string> {
   let body = "";
