@@ -48,13 +48,8 @@ describe("parseModelCallbackData", () => {
       "mdl_invalid",
       "mdl_list_",
       "mdl_list_openai_9007199254740993",
-      // Old formats that are no longer valid (#98221)
-      "mdl_sel_anthropic/claude-sonnet-4-5",
-      "mdl_sel_openai/gpt-4/turbo",
-      "mdl_sel/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
-      "mdl_sel/anthropic/claude-3-7-sonnet",
       "mdl_sel_noslash",
-      "mdl_sel/",
+      "mdl_sel_",
     ];
     for (const input of invalid) {
       expect(parseModelCallbackData(input), input).toBeNull();
@@ -115,31 +110,34 @@ describe("resolveModelSelection", () => {
 });
 
 describe("buildModelSelectionCallbackData", () => {
-  it("builds fixed-length index-based callback (#98221)", () => {
-    expect(
-      buildModelSelectionCallbackData({
-        provider: "openai",
-        page: 1,
-        modelIndex: 1,
-        totalCount: 5,
-      }),
-    ).toBe("mdl_sel_openai_1_1_5");
-    expect(
-      buildModelSelectionCallbackData({
-        provider: "anthropic",
-        page: 3,
-        modelIndex: 12,
-        totalCount: 42,
-      }),
-    ).toBe("mdl_sel_anthropic_3_12_42");
-    // Never embeds model name — always fits 64 bytes regardless of model ID length
-    const cb = buildModelSelectionCallbackData({
+  it("builds fixed-length index-based callback with fingerprint (#98221)", () => {
+    const models5 = ["gpt-4", "gpt-4.1", "gpt-5", "claude-3", "gemini-2"];
+    const cb1 = buildModelSelectionCallbackData({
+      provider: "openai",
+      page: 1,
+      modelIndex: 1,
+      totalCount: 5,
+      models: models5,
+    });
+    expect(cb1).toMatch(/^mdl_sel_openai_1_1_5_[a-f0-9]{4}$/);
+    const models42 = Array.from({ length: 42 }, (_, i) => `model-${i}`);
+    const cb2 = buildModelSelectionCallbackData({
+      provider: "anthropic",
+      page: 3,
+      modelIndex: 12,
+      totalCount: 42,
+      models: models42,
+    });
+    expect(cb2).toMatch(/^mdl_sel_anthropic_3_12_42_[a-f0-9]{4}$/);
+    // Never embeds model name — always fits 64 bytes
+    const cb3 = buildModelSelectionCallbackData({
       provider: "a",
       page: 1,
       modelIndex: 1,
       totalCount: 1,
+      models: ["x"],
     });
-    expect(cb.length).toBeLessThan(64);
+    expect(cb3.length).toBeLessThan(64);
   });
 });
 
@@ -238,9 +236,9 @@ describe("buildModelsKeyboard", () => {
       // 2 model rows + back button
       expect(result, testCase.name).toHaveLength(3);
       expect(result[0]?.[0]?.text).toBe(testCase.firstText);
-      expect(result[0]?.[0]?.callback_data).toBe("mdl_sel_anthropic_1_1_2");
+      expect(result[0]?.[0]?.callback_data).toMatch(/^mdl_sel_anthropic_1_1_2_[a-f0-9]{4}$/);
       expect(result[1]?.[0]?.text).toBe("claude-opus-4");
-      expect(result[1]?.[0]?.callback_data).toBe("mdl_sel_anthropic_1_2_2");
+      expect(result[1]?.[0]?.callback_data).toMatch(/^mdl_sel_anthropic_1_2_2_[a-f0-9]{4}$/);
       expect(result[2]?.[0]?.text).toBe("<< Back");
     }
   });
@@ -262,7 +260,7 @@ describe("buildModelsKeyboard", () => {
     expect(result[0]?.[0]?.text).toBe("Claude Sonnet 4");
     expect(result[1]?.[0]?.text).toBe("Claude Opus 4");
     // callback_data uses index format, not model ID (#98221)
-    expect(result[0]?.[0]?.callback_data).toBe("mdl_sel_nexos_1_1_2");
+    expect(result[0]?.[0]?.callback_data).toMatch(/^mdl_sel_nexos_1_1_2_[a-f0-9]{4}$/);
   });
 
   it("falls back to model ID when modelNames does not contain an entry", () => {

@@ -17,7 +17,15 @@ export type ButtonRow = Array<{ text: string; callback_data: string }>;
 export type ParsedModelCallback =
   | { type: "providers" }
   | { type: "list"; provider: string; page: number }
-  | { type: "select"; provider: string; page: number; modelIndex: number; totalCount: number }
+  | {
+      type: "select";
+      provider?: string;
+      page: number;
+      modelIndex: number;
+      totalCount: number;
+      fingerprint?: string;
+      model?: string;
+    }
   | { type: "back" };
 
 export type ProviderInfo = {
@@ -73,19 +81,73 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
     }
   }
 
-  // mdl_sel_{provider}_{page}_{modelIndex}_{totalCount}  (page, modelIndex, totalCount are 1-based)
-  const selMatch = trimmed.match(/^mdl_sel_([a-z0-9_.-]+)_(\d+)_(\d+)_(\d+)$/i);
-  if (selMatch) {
-    const [, provider, pageStr, idxStr, totalStr] = selMatch;
+  // mdl_sel_{provider}_{page}_{modelIndex}_{totalCount}[_{fingerprint}]  (1-based)
+  const idxMatch = trimmed.match(/^mdl_sel_([a-z0-9_.-]+)_(\d+)_(\d+)_(\d+)(?:_([a-f0-9]{4}))?$/i);
+  if (idxMatch) {
+    const [, provider, pageStr, idxStr, totalStr, fingerprint] = idxMatch;
     const page = parseStrictPositiveInteger(pageStr);
     const modelIndex = parseStrictPositiveInteger(idxStr);
     const totalCount = parseStrictPositiveInteger(totalStr);
     if (provider && page !== undefined && modelIndex !== undefined && totalCount !== undefined) {
-      return { type: "select", provider, page, modelIndex, totalCount };
+      return {
+        type: "select",
+        provider,
+        page,
+        modelIndex,
+        totalCount,
+        fingerprint: fingerprint || undefined,
+      };
+    }
+  }
+
+  // Legacy formats (backward compat for in-flight buttons rendered before the index scheme):
+  // mdl_sel/{model} (compact)
+  const compactMatch = trimmed.match(/^mdl_sel\/(.+)$/);
+  if (compactMatch) {
+    const modelRef = compactMatch[1];
+    if (modelRef) {
+      return { type: "select", page: 1, modelIndex: 0, totalCount: 0, model: modelRef };
+    }
+  }
+
+  // mdl_sel_{provider/model} (standard)
+  const selMatch = trimmed.match(/^mdl_sel_(.+)$/);
+  if (selMatch) {
+    const modelRef = selMatch[1];
+    if (modelRef) {
+      const slashIndex = modelRef.indexOf("/");
+      if (slashIndex > 0 && slashIndex < modelRef.length - 1) {
+        return {
+          type: "select",
+          provider: modelRef.slice(0, slashIndex),
+          page: 1,
+          modelIndex: 0,
+          totalCount: 0,
+          model: modelRef.slice(slashIndex + 1),
+        };
+      }
     }
   }
 
   return null;
+}
+
+/**
+ * Compute a short fingerprint of the model list for stale-button detection.
+ * Catches same-count-but-different-content changes that totalCount alone misses.
+ */
+function computeModelListFingerprint(sortedModels: readonly string[]): string {
+  // Use the first and last model names as a lightweight checksum — most
+  // list mutations change one of these boundaries.
+  const first = sortedModels[0] ?? "";
+  const last = sortedModels[sortedModels.length - 1] ?? "";
+  const raw = `${first}|${last}|${sortedModels.length}`;
+  let hash = 0;
+  for (let i = 0; i < raw.length; i++) {
+    hash = (hash << 5) - hash + raw.charCodeAt(i);
+    hash |= 0;
+  }
+  return (hash >>> 0).toString(16).slice(0, 4);
 }
 
 export function buildModelSelectionCallbackData(params: {
@@ -93,12 +155,14 @@ export function buildModelSelectionCallbackData(params: {
   page: number;
   modelIndex: number;
   totalCount: number;
+  models: readonly string[];
 }): string {
   // Fixed-length callback (page, modelIndex, totalCount are 1-based).
   // Never embeds model names, always fits in 64 bytes (#98221).
-  // totalCount guards against stale buttons: if the provider's model list changes
-  // between render and click, the mismatch is detected and rejected.
-  return `${CALLBACK_PREFIX.select}${params.provider}_${params.page}_${params.modelIndex}_${params.totalCount}`;
+  // totalCount + fingerprint guard against stale buttons: if the provider's
+  // model list changes between render and click, the mismatch is detected.
+  const snapshot = computeModelListFingerprint(params.models);
+  return `${CALLBACK_PREFIX.select}${params.provider}_${params.page}_${params.modelIndex}_${params.totalCount}_${snapshot}`;
 }
 
 export function resolveModelSelection(params: {
@@ -106,23 +170,49 @@ export function resolveModelSelection(params: {
   providers: readonly string[];
   byProvider: ReadonlyMap<string, ReadonlySet<string>>;
 }): ResolveModelSelectionResult {
-  const { provider, modelIndex, totalCount } = params.callback;
+  const { provider, modelIndex, totalCount, model: legacyModel } = params.callback;
+
+  // Legacy callback (pre-index format): resolve by model name across providers.
+  if (legacyModel) {
+    if (provider) {
+      return { kind: "resolved", provider, model: legacyModel };
+    }
+    const matchingProviders = params.providers.filter((id) =>
+      params.byProvider.get(id)?.has(legacyModel),
+    );
+    if (matchingProviders.length === 1) {
+      return { kind: "resolved", provider: matchingProviders[0], model: legacyModel };
+    }
+    return { kind: "ambiguous", model: legacyModel, matchingProviders };
+  }
+
+  // Index-based callback: resolve by provider + index, with stale guards.
+  if (!provider) {
+    return { kind: "ambiguous", model: "", matchingProviders: [...params.providers] };
+  }
   const models = params.byProvider.get(provider);
   if (!models || models.size === 0) {
     return { kind: "ambiguous", model: "", matchingProviders: [...params.providers] };
   }
-  // Reject stale buttons: if the provider's model count changed between
-  // render and click, the index may point to a different model (#98221).
-  if (models.size !== totalCount) {
-    return { kind: "ambiguous", model: "", matchingProviders: [...params.providers] };
+  if (totalCount > 0) {
+    // Reject stale buttons via count mismatch (add/remove detected).
+    if (models.size !== totalCount) {
+      return { kind: "ambiguous", model: "", matchingProviders: [...params.providers] };
+    }
+    // Reject stale buttons via fingerprint mismatch (same-count-different-content).
+    const sorted = [...models].toSorted((a, b) => a.localeCompare(b));
+    const expectedFingerprint = computeModelListFingerprint(sorted);
+    if (params.callback.fingerprint && params.callback.fingerprint !== expectedFingerprint) {
+      return { kind: "ambiguous", model: "", matchingProviders: [...params.providers] };
+    }
+    const model = sorted[modelIndex - 1]; // modelIndex is 1-based
+    if (!model) {
+      return { kind: "ambiguous", model: "", matchingProviders: [...params.providers] };
+    }
+    return { kind: "resolved", provider, model };
   }
-  // Sort models the same way buildModelsKeyboard sorts them (#98221)
-  const sorted = [...models].toSorted((a, b) => a.localeCompare(b));
-  const model = sorted[modelIndex - 1]; // modelIndex is 1-based
-  if (!model) {
-    return { kind: "ambiguous", model: "", matchingProviders: [...params.providers] };
-  }
-  return { kind: "resolved", provider, model };
+  // totalCount === 0 means legacy callback with model name — handled above.
+  return { kind: "ambiguous", model: "", matchingProviders: [...params.providers] };
 }
 
 function isCurrentModelSelection(params: {
@@ -196,7 +286,8 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
       provider,
       page: currentPage,
       modelIndex,
-      totalCount: models.length, // guard against stale button clicks
+      totalCount: models.length,
+      models, // snapshot for stale-button detection
     });
 
     const isCurrentModel = isCurrentModelSelection({ currentModel, provider, model });
