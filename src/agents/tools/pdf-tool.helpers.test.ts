@@ -62,6 +62,10 @@ describe("parsePageRange", () => {
     expect(parsePageRange("1-100", 5)).toEqual([1, 2, 3, 4, 5]);
   });
 
+  it("throws when no requested pages are within maxPages", () => {
+    expect(() => parsePageRange("999", 20)).toThrow('No PDF pages matched requested range "999"');
+  });
+
   it("deduplicates and sorts", () => {
     expect(parsePageRange("5,3,1,3,5", 20)).toEqual([1, 3, 5]);
   });

@@ -121,8 +121,9 @@ export function sanitizeReplyDirectiveId(rawReplyToId?: string): string | undefi
   if (!sanitized) {
     return undefined;
   }
-  if (sanitized.length > MAX_REPLY_DIRECTIVE_ID_LENGTH) {
-    return sanitized.slice(0, MAX_REPLY_DIRECTIVE_ID_LENGTH);
+  const chars = Array.from(sanitized);
+  if (chars.length > MAX_REPLY_DIRECTIVE_ID_LENGTH) {
+    return chars.slice(0, MAX_REPLY_DIRECTIVE_ID_LENGTH).join("");
   }
   return sanitized;
 }

@@ -1294,6 +1294,8 @@ export const zh_TW: TranslationMap = {
     settings: "聊天設定",
     thinkingToggle: "切換助手思考/工作輸出",
     toolCallsToggle: "切換工具呼叫與工具結果",
+    commentaryToggle: "在最終答案後保留評註",
+    commentaryLabel: "評註",
     autoScrollMode: "自動捲動模式",
     autoScrollAlways: "一律",
     autoScrollNearBottom: "接近底部",
