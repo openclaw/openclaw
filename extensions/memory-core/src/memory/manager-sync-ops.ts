@@ -36,6 +36,7 @@ import {
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
+  MEMORY_CHUNKER_ALGORITHM_VERSION,
   normalizeExtraMemoryPaths,
   retryTransientMemoryRead,
   runWithConcurrency,
@@ -610,6 +611,7 @@ export abstract class MemoryManagerSyncOps {
         },
       }),
       chunkTokens: this.settings.chunking.tokens,
+      chunkerAlgorithmVersion: MEMORY_CHUNKER_ALGORITHM_VERSION,
       chunkOverlap: this.settings.chunking.overlap,
       vectorReady,
       hasIndexedChunks:
@@ -2447,6 +2449,7 @@ export abstract class MemoryManagerSyncOps {
       }),
       chunkTokens: this.settings.chunking.tokens,
       chunkOverlap: this.settings.chunking.overlap,
+      chunkerAlgorithmVersion: MEMORY_CHUNKER_ALGORITHM_VERSION,
       vectorReady,
       hasIndexedChunks: this.hasIndexedChunks(),
       ftsTokenizer: this.settings.store.fts.tokenizer,
@@ -2476,6 +2479,10 @@ export abstract class MemoryManagerSyncOps {
       indexIdentity.status === "missing" && !hasTargetSessionFiles && canRebuildMissingIdentity;
     const needsExplicitIdentityReindex =
       params?.reason === "cli" && indexIdentity.status !== "valid" && !hasTargetSessionFiles;
+    const needsChunkerAlgorithmReindex =
+      indexIdentity.status === "mismatched" &&
+      indexIdentity.reason === "index chunker algorithm changed" &&
+      !hasTargetSessionFiles;
     const canRunRetryFullReindex =
       indexIdentity.status !== "missing" || needsInitialIndex || canRebuildMissingIdentity;
     const needsFullReindex =
@@ -2483,6 +2490,7 @@ export abstract class MemoryManagerSyncOps {
       needsInitialIndex ||
       needsMissingIdentityReindex ||
       needsExplicitIdentityReindex ||
+      needsChunkerAlgorithmReindex ||
       (this.memoryFullRetryDirty && canRunRetryFullReindex) ||
       (this.sessionsFullRetryDirty && indexIdentity.status !== "valid" && canRunRetryFullReindex);
     const needsFullSessionReindex = needsFullReindex || this.sessionsFullRetryDirty;
@@ -2770,6 +2778,7 @@ export abstract class MemoryManagerSyncOps {
         }),
         chunkTokens: this.settings.chunking.tokens,
         chunkOverlap: this.settings.chunking.overlap,
+        chunkerAlgorithmVersion: MEMORY_CHUNKER_ALGORITHM_VERSION,
         ftsTokenizer: this.settings.store.fts.tokenizer,
       };
       if (this.vector.available && this.vector.dims) {

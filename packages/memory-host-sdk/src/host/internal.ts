@@ -36,6 +36,16 @@ import { normalizeStringEntries, uniqueStrings } from "./string-utils.js";
 export { hashText } from "./hash.js";
 import { hashText } from "./hash.js";
 
+/**
+ * Chunker algorithm version, mixed into the source hash so a meaningful change
+ * to `chunkMarkdown` invalidates persisted chunks on upgrade. Without this,
+ * unchanged source files would keep their old (pre-fix) chunk rows because the
+ * skip-if-unchanged check in `manager-sync-ops.ts` compares source hashes.
+ * Bump whenever the chunker output for the same input changes (e.g. line-join
+ * behavior, fragment packing, overlap math).
+ */
+export const MEMORY_CHUNKER_ALGORITHM_VERSION = "v2-nolineinject";
+
 export type MemoryFileEntry = {
   path: string;
   absPath: string;
@@ -303,7 +313,7 @@ export async function buildFileEntry(
     }
     throw err;
   }
-  const hash = hashText(content);
+  const hash = hashText(`${MEMORY_CHUNKER_ALGORITHM_VERSION}\n${content}`);
   return {
     path: normalizedPath,
     absPath,
@@ -408,7 +418,17 @@ export function chunkMarkdown(
     if (!firstEntry || !lastEntry) {
       return;
     }
-    const text = current.map((entry) => entry.line).join("\n");
+    // Coarse/fine splits of one physical line share lineNo; joining them with
+    // "\n" would inject a newline the source never had, so the chunk text stops
+    // being a substring of the file and corrupts embeddings + search snippets.
+    const text = current.reduce((acc, entry, index) => {
+      if (index === 0) {
+        return entry.line;
+      }
+      const prev = current[index - 1];
+      const separator = prev && prev.lineNo === entry.lineNo ? "" : "\n";
+      return acc + separator + entry.line;
+    }, "");
     const startLine = firstEntry.lineNo;
     const endLine = lastEntry.lineNo;
     chunks.push({

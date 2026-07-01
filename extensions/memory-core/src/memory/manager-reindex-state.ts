@@ -13,6 +13,10 @@ export type MemoryIndexMeta = {
   scopeHash?: string;
   chunkTokens: number;
   chunkOverlap: number;
+  // Algorithm version that built the persisted chunks. Bumped in the host SDK
+  // whenever chunk hashing or splitting semantics change; a mismatch forces a
+  // full rebuild so stale chunks cannot survive an algorithm change.
+  chunkerAlgorithmVersion?: string;
   vectorDims?: number;
   ftsTokenizer?: string;
 };
@@ -134,6 +138,7 @@ export function isMemoryIndexIdentityDirty(params: {
   configuredScopeHash: string;
   chunkTokens: number;
   chunkOverlap: number;
+  chunkerAlgorithmVersion: string;
   vectorReady: boolean;
   hasIndexedChunks?: boolean;
   ftsTokenizer: string;
@@ -151,6 +156,7 @@ export function resolveMemoryIndexIdentityState(params: {
   configuredScopeHash: string;
   chunkTokens: number;
   chunkOverlap: number;
+  chunkerAlgorithmVersion: string;
   vectorReady: boolean;
   hasIndexedChunks?: boolean;
   ftsTokenizer: string;
@@ -207,6 +213,14 @@ export function resolveMemoryIndexIdentityState(params: {
     return {
       status: "mismatched",
       reason: "index chunking changed",
+    };
+  }
+  // Old indexes (pre-versioning) treat the missing field as a mismatch so a
+  // chunker algorithm bump forces a full rebuild on the first run after upgrade.
+  if (meta.chunkerAlgorithmVersion !== params.chunkerAlgorithmVersion) {
+    return {
+      status: "mismatched",
+      reason: "index chunker algorithm changed",
     };
   }
   if (params.vectorReady && params.hasIndexedChunks !== false && !meta.vectorDims) {
