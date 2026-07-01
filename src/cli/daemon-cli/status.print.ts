@@ -25,7 +25,6 @@ import { shortenHomePath } from "../../utils.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   createCliStatusTextStyles,
-  filterDaemonEnv,
   formatRuntimeStatus,
   resolveDaemonContainerContext,
   resolveRuntimeStatusColor,
@@ -38,22 +37,36 @@ import {
   resolvePortListeningAddresses,
 } from "./status.gather.js";
 
+type DaemonStatusCommand = NonNullable<DaemonStatus["service"]["command"]>;
+type DaemonStatusCommandWithEnvSources = DaemonStatusCommand & {
+  environmentValueSources?: unknown;
+};
+
+function sanitizeDaemonCommandForJson(
+  command: DaemonStatus["service"]["command"],
+): DaemonStatus["service"]["command"] {
+  if (!command) {
+    return command;
+  }
+  const {
+    environment: _environment,
+    environmentValueSources: _environmentValueSources,
+    ...safeCommand
+  } = command as DaemonStatusCommandWithEnvSources;
+  return safeCommand;
+}
+
 function sanitizeDaemonStatusForJson(status: DaemonStatus): DaemonStatus {
   // JSON output can be copied into issues; redact service env before serialization.
   const command = status.service.command;
-  if (!command?.environment) {
+  if (!command) {
     return status;
   }
-  const safeEnv = filterDaemonEnv(command.environment);
-  const nextCommand = {
-    ...command,
-    environment: Object.keys(safeEnv).length > 0 ? safeEnv : undefined,
-  };
   return {
     ...status,
     service: {
       ...status.service,
-      command: nextCommand,
+      command: sanitizeDaemonCommandForJson(command),
     },
   };
 }
