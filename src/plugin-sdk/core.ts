@@ -258,6 +258,10 @@ export type { SecretFileReadOptions, SecretFileReadResult } from "../infra/secre
 export { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
 export type { GatewayBindUrlResult } from "../shared/gateway-bind-url.js";
 export { resolveGatewayPort } from "../config/paths.js";
+export async function resolveAdvertisedLanHost(): Promise<string | null> {
+  const runtime = await import("../infra/advertised-lan-host.js");
+  return await runtime.resolveAdvertisedLanHost();
+}
 export { createSubsystemLogger } from "../logging/subsystem.js";
 export {
   normalizeAtHashSlug,

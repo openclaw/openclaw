@@ -332,10 +332,6 @@ function pickMatchingIPv4(predicate: (address: string) => boolean): string | nul
   return null;
 }
 
-function pickLanIPv4(): string | null {
-  return pickMatchingIPv4(isPrivateIPv4);
-}
-
 function pickTailnetIPv4(): string | null {
   return pickMatchingIPv4(isTailnetIPv4);
 }
@@ -396,7 +392,8 @@ function resolveRequiredAuthLabel(
 }
 
 async function resolveGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResult> {
-  const { resolveGatewayBindUrl, resolveGatewayPort } = await loadDevicePairApiModule();
+  const { resolveAdvertisedLanHost, resolveGatewayBindUrl, resolveGatewayPort } =
+    await loadDevicePairApiModule();
   const cfg = api.config;
   const pluginCfg = (api.pluginConfig ?? {}) as DevicePairPluginConfig;
   const scheme = resolveScheme(cfg);
@@ -430,13 +427,14 @@ async function resolveGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResu
     return { url: remoteUrl, source: "gateway.remote.url" };
   }
 
+  const advertisedLanHost = cfg.gateway?.bind === "lan" ? await resolveAdvertisedLanHost() : null;
   const bindResult = resolveGatewayBindUrl({
     bind: cfg.gateway?.bind,
     customBindHost: cfg.gateway?.customBindHost,
     scheme,
     port,
     pickTailnetHost: pickTailnetIPv4,
-    pickLanHost: pickLanIPv4,
+    pickLanHost: () => advertisedLanHost,
   });
   if (bindResult) {
     return bindResult;

@@ -10,6 +10,7 @@ export {
 } from "openclaw/plugin-sdk/device-bootstrap";
 export { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 export {
+  resolveAdvertisedLanHost,
   resolveGatewayBindUrl,
   resolveGatewayPort,
   resolveTailnetHostWithRunner,
