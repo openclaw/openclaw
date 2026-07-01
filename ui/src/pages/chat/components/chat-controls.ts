@@ -1,10 +1,8 @@
 // Chat-owned model, reasoning, speed, quota, and settings controls.
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import type { GatewayHelloOk } from "../../../api/gateway.ts";
 import type {
   AgentsListResult,
-  FastMode,
   GatewayThinkingLevelOption,
   ModelAuthStatusResult,
   ModelCatalogEntry,
@@ -19,10 +17,7 @@ import {
 import { icons } from "../../../components/icons.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import {
-  resolveChatModelOverrideValue,
-  resolveChatModelSelectState,
-} from "../../../lib/chat/model-select-state.ts";
+import { resolveChatModelSelectState } from "../../../lib/chat/model-select-state.ts";
 import {
   formatInheritedThinkingLabel,
   formatThinkingOverrideLabel,
@@ -41,16 +36,11 @@ import { pushUniqueTrimmedSelectOption } from "../../../lib/select-options.ts";
 import { isCronSessionKey } from "../../../lib/session-display.ts";
 import { sessionModelMatchesDefaults } from "../../../lib/session-model-defaults.ts";
 import {
-  scopedAgentParamsForSession,
-  type SessionCapability,
-} from "../../../lib/sessions/index.ts";
-import {
   isSessionKeyTiedToAgent,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../../lib/string-coerce.ts";
-import { refreshCurrentChatSessionList } from "../chat-session.ts";
 
 type ChatInlineSelectOption = {
   value: string;
@@ -77,9 +67,7 @@ type ChatFastModeSelectState = {
 };
 
 export type ChatModelControlsState = {
-  assistantAgentId?: string | null;
   basePath?: string;
-  chatError: string | null;
   chatLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
   chatModelsLoading?: boolean;
@@ -91,21 +79,16 @@ export type ChatModelControlsState = {
   client: unknown;
   connected: boolean;
   agentsList: AgentsListResult | null;
-  hello: GatewayHelloOk | null;
-  lastError: string | null;
   modelAuthStatusResult?: ModelAuthStatusResult | null;
-  onModelChanged?: () => Promise<unknown> | unknown;
-  requestUpdate?: () => void;
   sessionKey: string;
-  sessions: SessionCapability;
   sessionsResult: SessionsListResult | null;
-  sessionsShowArchived: boolean;
 };
 
 export type ChatControlsState = ChatModelControlsState & {
   chatManualRefreshInFlight: boolean;
   chatMobileControlsOpen: boolean;
   onboarding: boolean;
+  requestUpdate?: () => void;
   settings: UiSettings;
   sessionsHideCron: boolean;
   applySettings: (next: UiSettings) => void;
@@ -115,7 +98,14 @@ export type ChatControlsState = ChatModelControlsState & {
   ) => void;
 };
 
-export type ChatControlsOptions = {
+export type ChatModelControlsOptions = {
+  modelOverrides?: Readonly<Record<string, string | null>>;
+  onFastModeSelect?: (value: "" | "on" | "off" | "auto") => Promise<unknown> | unknown;
+  onModelSelect?: (value: string) => Promise<unknown> | unknown;
+  onThinkingSelect?: (value: string) => Promise<unknown> | unknown;
+};
+
+export type ChatControlsOptions = ChatModelControlsOptions & {
   onNavigate?: (routeId: RouteId) => void;
   onRefresh: () => Promise<void> | void;
 };
@@ -128,12 +118,6 @@ const FAST_MODE_PROVIDER_IDS = new Set([
   "openrouter",
   "xai",
 ]);
-
-function setChatError(state: ChatModelControlsState, error: string | null) {
-  state.lastError = error;
-  state.chatError = error;
-  state.requestUpdate?.();
-}
 
 function chatAutoScrollLabel(mode: ChatAutoScrollMode) {
   switch (mode) {
@@ -269,7 +253,7 @@ export function renderChatControls(state: ChatControlsState, options: ChatContro
         }
       }}
     >
-      ${renderChatModelSelect(state)}
+      ${renderChatModelSelect(state, options)}
     </div>
     ${renderChatQuotaPill(state, options.onNavigate)}
     <div class="chat-settings-popover-wrapper">
@@ -404,10 +388,6 @@ export function renderChatControls(state: ChatControlsState, options: ChatContro
   `;
 }
 
-async function refreshSessionOptions(state: ChatModelControlsState) {
-  await refreshCurrentChatSessionList(state);
-}
-
 export function renderChatQuotaPill(
   state: ChatModelControlsState,
   onNavigate?: (routeId: RouteId) => void,
@@ -461,10 +441,17 @@ export function renderChatQuotaPill(
   `;
 }
 
-export function renderChatModelSelect(state: ChatModelControlsState) {
-  const { currentOverride, defaultLabel, options } = resolveChatModelSelectState({
+export function renderChatModelSelect(
+  state: ChatModelControlsState,
+  callbacks: ChatModelControlsOptions = {},
+) {
+  const {
+    currentOverride,
+    defaultLabel,
+    options: selectOptions,
+  } = resolveChatModelSelectState({
     chatModelCatalog: state.chatModelCatalog,
-    modelOverrides: state.sessions.state.modelOverrides,
+    modelOverrides: callbacks.modelOverrides ?? {},
     sessionKey: state.sessionKey,
     sessionsResult: state.sessionsResult,
   });
@@ -476,7 +463,7 @@ export function renderChatModelSelect(state: ChatModelControlsState) {
     !state.connected ||
     busy ||
     Boolean(state.chatModelSwitchPromises?.[state.sessionKey]) ||
-    (state.chatModelsLoading && options.length === 0) ||
+    (state.chatModelsLoading && selectOptions.length === 0) ||
     !state.client;
   const thinkingDisabled =
     !state.connected ||
@@ -486,13 +473,13 @@ export function renderChatModelSelect(state: ChatModelControlsState) {
   const selectedLabel =
     currentOverride === ""
       ? defaultLabel
-      : (options.find((entry) => entry.value === currentOverride)?.label ?? currentOverride);
+      : (selectOptions.find((entry) => entry.value === currentOverride)?.label ?? currentOverride);
   const selectedThinkingLabel =
     thinking.currentOverride === ""
       ? thinking.defaultLabel
       : (thinking.options.find((entry) => entry.value === thinking.currentOverride)?.label ??
         thinking.currentOverride);
-  const modelOptions = [{ value: "", label: defaultLabel }, ...options];
+  const modelOptions = [{ value: "", label: defaultLabel }, ...selectOptions];
 
   return renderChatModelReasoningSelect({
     disabled,
@@ -505,9 +492,9 @@ export function renderChatModelSelect(state: ChatModelControlsState) {
     thinkingDefaultValue: thinking.defaultValue,
     thinkingDisabled,
     thinkingOptions: [{ value: "", label: thinking.defaultLabel }, ...thinking.options],
-    onFastModeSelect: (next) => switchChatFastMode(state, next),
-    onModelSelect: (next) => switchChatModel(state, next),
-    onThinkingSelect: (next) => switchChatThinkingLevel(state, next),
+    onFastModeSelect: async (next) => callbacks.onFastModeSelect?.(next),
+    onModelSelect: async (next) => callbacks.onModelSelect?.(next),
+    onThinkingSelect: async (next) => callbacks.onThinkingSelect?.(next),
   });
 }
 
@@ -1010,162 +997,4 @@ function renderChatModelReasoningSelect(params: {
       </div>
     </details>
   `;
-}
-
-function patchSessionFastMode(
-  state: ChatModelControlsState,
-  sessionKey: string,
-  fastMode: FastMode | undefined,
-) {
-  const current = state.sessionsResult;
-  if (!current) {
-    return;
-  }
-  state.sessionsResult = {
-    ...current,
-    sessions: current.sessions.map((row) =>
-      row.key === sessionKey ? Object.assign({}, row, { fastMode }) : row,
-    ),
-  };
-}
-
-async function switchChatFastMode(
-  state: ChatModelControlsState,
-  nextFastMode: "" | "on" | "off" | "auto",
-) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  const targetSessionKey = state.sessionKey;
-  const activeRow = state.sessionsResult?.sessions?.find((row) => row.key === targetSessionKey);
-  const previousFastMode = activeRow?.fastMode;
-  const next: FastMode | undefined =
-    nextFastMode === "" ? undefined : nextFastMode === "auto" ? "auto" : nextFastMode === "on";
-  if (previousFastMode === next) {
-    return;
-  }
-  setChatError(state, null);
-  patchSessionFastMode(state, targetSessionKey, next);
-  try {
-    await state.sessions.patch(
-      targetSessionKey,
-      {
-        fastMode: next ?? null,
-      },
-      scopedAgentParamsForSession(state, targetSessionKey),
-    );
-    await refreshSessionOptions(state);
-    patchSessionFastMode(state, targetSessionKey, next);
-  } catch (err) {
-    patchSessionFastMode(state, targetSessionKey, previousFastMode);
-    setChatError(state, `Failed to set speed: ${String(err)}`);
-  }
-}
-
-async function switchChatModel(state: ChatModelControlsState, nextModel: string): Promise<boolean> {
-  if (!state.client || !state.connected) {
-    return false;
-  }
-  const currentOverride = resolveChatModelOverrideValue({
-    chatModelCatalog: state.chatModelCatalog,
-    modelOverrides: state.sessions.state.modelOverrides,
-    sessionKey: state.sessionKey,
-    sessionsResult: state.sessionsResult,
-  });
-  if (currentOverride === nextModel) {
-    return true;
-  }
-  const targetSessionKey = state.sessionKey;
-  const previousModelOverride = state.sessions.state.modelOverrides[targetSessionKey];
-  setChatError(state, null);
-  const switchPromiseRef: { current?: Promise<boolean> } = {};
-  const clearPendingSwitch = () => {
-    if (state.chatModelSwitchPromises?.[targetSessionKey] === switchPromiseRef.current) {
-      const nextSwitches = { ...state.chatModelSwitchPromises };
-      delete nextSwitches[targetSessionKey];
-      state.chatModelSwitchPromises = nextSwitches;
-    }
-  };
-  const switchPromise: Promise<boolean> = (async () => {
-    try {
-      await state.sessions.patch(
-        targetSessionKey,
-        {
-          model: nextModel || null,
-        },
-        scopedAgentParamsForSession(state, targetSessionKey),
-      );
-      await state.onModelChanged?.();
-      await refreshSessionOptions(state);
-      return true;
-    } catch (err) {
-      state.sessions.setModelOverride(targetSessionKey, previousModelOverride);
-      setChatError(state, `Failed to set model: ${String(err)}`);
-      return false;
-    } finally {
-      clearPendingSwitch();
-      state.requestUpdate?.();
-    }
-  })();
-  switchPromiseRef.current = switchPromise;
-  state.chatModelSwitchPromises = {
-    ...state.chatModelSwitchPromises,
-    [targetSessionKey]: switchPromise,
-  };
-  state.requestUpdate?.();
-  return switchPromise;
-}
-
-function patchSessionThinkingLevel(
-  state: ChatModelControlsState,
-  sessionKey: string,
-  thinkingLevel: string | undefined,
-) {
-  const current = state.sessionsResult;
-  if (!current) {
-    return;
-  }
-  state.sessionsResult = {
-    ...current,
-    sessions: current.sessions.map((row) =>
-      row.key === sessionKey ? Object.assign({}, row, { thinkingLevel }) : row,
-    ),
-  };
-}
-
-async function switchChatThinkingLevel(state: ChatModelControlsState, nextThinkingLevel: string) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  const targetSessionKey = state.sessionKey;
-  const activeRow = state.sessionsResult?.sessions?.find((row) => row.key === targetSessionKey);
-  const previousThinkingLevel = activeRow?.thinkingLevel;
-  const normalizedNext =
-    (normalizeThinkLevel(nextThinkingLevel) ?? nextThinkingLevel.trim()) || undefined;
-  const normalizedPrev =
-    typeof previousThinkingLevel === "string" && previousThinkingLevel.trim()
-      ? (normalizeThinkLevel(previousThinkingLevel) ?? previousThinkingLevel.trim())
-      : undefined;
-  if ((normalizedPrev ?? "") === (normalizedNext ?? "")) {
-    return;
-  }
-  setChatError(state, null);
-  patchSessionThinkingLevel(state, targetSessionKey, normalizedNext);
-  state.chatThinkingLevel = normalizedNext ?? null;
-  try {
-    await state.sessions.patch(
-      targetSessionKey,
-      {
-        thinkingLevel: normalizedNext ?? null,
-      },
-      scopedAgentParamsForSession(state, targetSessionKey),
-    );
-    await refreshSessionOptions(state);
-    patchSessionThinkingLevel(state, targetSessionKey, normalizedNext);
-    state.chatThinkingLevel = normalizedNext ?? null;
-  } catch (err) {
-    patchSessionThinkingLevel(state, targetSessionKey, previousThinkingLevel);
-    state.chatThinkingLevel = normalizedPrev ?? null;
-    setChatError(state, `Failed to set thinking level: ${String(err)}`);
-  }
 }

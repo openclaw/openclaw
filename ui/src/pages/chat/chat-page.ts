@@ -78,7 +78,13 @@ import {
   steerQueuedChatMessage,
   type ChatHost,
 } from "./chat-send.ts";
-import { clearChatHistory, refreshCurrentChatSessionList } from "./chat-session.ts";
+import {
+  clearChatHistory,
+  refreshCurrentChatSessionList,
+  switchChatFastMode,
+  switchChatModel,
+  switchChatThinkingLevel,
+} from "./chat-session.ts";
 import { renderChatControls } from "./components/chat-controls.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
 import {
@@ -1453,8 +1459,12 @@ export class ChatPage extends LitElement {
       error: state.lastError,
       sessions: state.sessionsResult,
       composerControls: renderChatControls(state, {
+        modelOverrides: state.sessions.state.modelOverrides,
+        onFastModeSelect: (next) => switchChatFastMode(state, next),
+        onModelSelect: (next) => switchChatModel(state, next),
         onNavigate: (target) => this.context.navigate(target),
         onRefresh: () => handleChatManualRefresh(state),
+        onThinkingSelect: (next) => switchChatThinkingLevel(state, next),
       }),
       sessionWorkspace: createSessionWorkspaceProps(state),
       onRefresh: () => {
