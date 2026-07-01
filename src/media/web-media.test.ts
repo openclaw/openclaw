@@ -367,6 +367,24 @@ describe("loadWebMedia", () => {
     expect(result.buffer.length).toBeGreaterThan(0);
   });
 
+  it("ignores unreadable hosted media resolver registries", async () => {
+    const registry = createEmptyPluginRegistry();
+    Object.defineProperty(registry, "hostedMediaResolvers", {
+      get() {
+        throw new Error("hosted media resolver registry exploded");
+      },
+    });
+    setActivePluginRegistry(registry);
+
+    const result = await loadWebMedia(tinyPngFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: [fixtureRoot],
+    });
+
+    expect(result.kind).toBe("image");
+    expect(result.buffer.length).toBeGreaterThan(0);
+  });
+
   it("surfaces Rastermill decode failures when image optimization cannot produce a JPEG", async () => {
     await expect(optimizeImageToJpeg(Buffer.from("not an image"), 8)).rejects.toThrow(
       /Unable to determine image dimensions/,
