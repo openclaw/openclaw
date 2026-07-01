@@ -178,6 +178,11 @@ function isReplaySafeThinkingAssistantMessage(
   return sawThinking && sawToolCall;
 }
 
+/** OpenAI Responses pairs persist as `call_*|fc_*`; invalid on strict Anthropic/Mistral replay. */
+function isOpenAIResponsesCompositeToolCallId(id: string): boolean {
+  return id.includes("|");
+}
+
 function collectReplaySafeThinkingToolIds(
   messages: AgentMessage[],
   allowedToolNames: Set<string> | null,
@@ -195,6 +200,9 @@ function collectReplaySafeThinkingToolIds(
     }
     const toolCalls = extractToolCallsFromAssistant(assistant);
     if (toolCalls.some((toolCall) => reserved.has(toolCall.id))) {
+      continue;
+    }
+    if (toolCalls.some((toolCall) => isOpenAIResponsesCompositeToolCallId(toolCall.id))) {
       continue;
     }
     preservedIndexes.add(index);
@@ -526,10 +534,13 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
     if (role === "assistant") {
       const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
       if (replaySafeThinking?.preservedIndexes.has(index)) {
-        for (const toolCall of extractToolCallsFromAssistant(assistant)) {
-          preserveAssistantId(toolCall.id);
+        const toolCalls = extractToolCallsFromAssistant(assistant);
+        if (!toolCalls.some((toolCall) => isOpenAIResponsesCompositeToolCallId(toolCall.id))) {
+          for (const toolCall of toolCalls) {
+            preserveAssistantId(toolCall.id);
+          }
+          return msg;
         }
-        return msg;
       }
       const next = rewriteAssistantToolCallIds({
         message: assistant,

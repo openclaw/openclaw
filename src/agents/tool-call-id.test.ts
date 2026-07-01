@@ -389,6 +389,39 @@ describe("sanitizeToolCallIdsForCloudCodeAssist", () => {
       expect((out[1] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe("call_1");
     });
 
+    it("sanitizes OpenAI Responses composite ids in replay-safe signed-thinking turns", () => {
+      const compositeId = "call_123|fc_123";
+      const input = castAgentMessages([
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+            { type: "toolCall", id: compositeId, name: "read", arguments: {} },
+          ],
+        },
+        {
+          role: "toolResult",
+          toolCallId: compositeId,
+          toolName: "read",
+          content: [{ type: "text", text: "ok" }],
+        },
+      ]);
+
+      const out = sanitizeToolCallIdsForCloudCodeAssist(input, "strict", {
+        preserveReplaySafeThinkingToolCallIds: true,
+        preserveNativeAnthropicToolUseIds: true,
+        allowedToolNames: ["read"],
+      });
+
+      expect(out).not.toBe(input);
+      expect(
+        ((out[0] as Extract<AgentMessage, { role: "assistant" }>).content[1] as { id?: string }).id,
+      ).toBe("call123fc123");
+      expect((out[1] as Extract<AgentMessage, { role: "toolResult" }>).toolCallId).toBe(
+        "call123fc123",
+      );
+    });
+
     it("rewrites earlier mutable ids away from later preserved signed ids", () => {
       const input = castAgentMessages([
         {

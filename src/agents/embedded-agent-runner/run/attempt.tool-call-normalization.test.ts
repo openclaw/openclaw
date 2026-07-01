@@ -972,6 +972,46 @@ describe("sanitizeReplayToolCallIdsForStream", () => {
     });
   });
 
+  it("sanitizes failover-introduced composite ids when signed-thinking preservation is enabled", () => {
+    const compositeId = "call_AbCdEf0123456789|fc_01a7abc";
+    const out = sanitizeReplayToolCallIdsForStream({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+            { type: "toolUse", id: compositeId, name: "read", input: { path: "." } },
+          ],
+        } as never,
+        {
+          role: "toolResult",
+          toolCallId: compositeId,
+          toolUseId: compositeId,
+          toolName: "read",
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+        } as never,
+      ],
+      mode: "strict",
+      preserveNativeAnthropicToolUseIds: true,
+      preserveReplaySafeThinkingToolCallIds: true,
+      repairToolUseResultPairing: true,
+    });
+
+    expect(requireAssistantMessage(out[0]).content[1]).toMatchObject({
+      type: "toolUse",
+      id: "callAbCdEf0123456789fc01a7abc",
+      name: "read",
+    });
+    expect(toolResultSummary(out[1])).toEqual({
+      role: "toolResult",
+      toolCallId: "callAbCdEf0123456789fc01a7abc",
+      toolUseId: "callAbCdEf0123456789fc01a7abc",
+      toolName: "read",
+      isError: false,
+    });
+  });
+
   it("synthesizes missing tool results after strict id sanitization", () => {
     const rawId = "call_function_av7cbkigmk7x1";
     const out = sanitizeReplayToolCallIdsForStream({
