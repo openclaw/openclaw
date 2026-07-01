@@ -35,6 +35,10 @@ Inside `agents.defaults.workspace`, OpenClaw expects these user-editable files:
 
 On the first turn of a new session, OpenClaw injects the contents of these files into the system prompt's Project Context.
 
+<Note>
+Workspace [capability descriptors](/concepts/workspace-capabilities) under `capabilities/*.md` are not part of the fixed bootstrap set. To make them discoverable, follow the [Discovery Convention](/concepts/agent-workspace#workspace-capability-discovery).
+</Note>
+
 Blank files are skipped. Large files are trimmed and truncated with a marker so prompts stay lean (read the file for full content).
 
 If a file is missing, OpenClaw injects a single "missing file" marker line (and `openclaw setup` will create a safe default template).
