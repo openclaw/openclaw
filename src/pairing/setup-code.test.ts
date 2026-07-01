@@ -591,23 +591,6 @@ describe("pairing setup code", () => {
     });
   });
 
-  it("explains loopback-only pairing without suggesting gateway.bind changes", async () => {
-    const resolved = await resolvePairingSetupFromConfig({
-      gateway: {
-        bind: "loopback",
-        auth: { mode: "token", token: "tok" },
-      },
-    } satisfies ResolveSetupConfig);
-
-    expectResolvedSetupError(resolved, "Keep gateway.bind=loopback");
-    if (!resolved.ok) {
-      expect(resolved.error).toContain(
-        "plugins.entries.device-pair.config.publicUrl/gateway.remote.url",
-      );
-      expect(resolved.error).not.toContain("gateway.bind=lan");
-    }
-  });
-
   it.each([
     {
       name: "errors when gateway is loopback only",

@@ -4,6 +4,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.js";
+import { matchPluginCommand } from "../plugins/commands.js";
 import { listChatCommands, listChatCommandsForConfig } from "./commands-registry-list.js";
 import { normalizeCommandBody } from "./commands-registry-normalize.js";
 import type { CommandNormalizeOptions } from "./commands-registry.types.js";
@@ -87,10 +88,14 @@ export function hasInlineCommandTokens(text?: string): boolean {
   if (!body.trim()) {
     return false;
   }
-  if (/^\/\s+[a-z]/i.test(body.trimStart())) {
-    return true;
-  }
   return /(?:^|\s)[/!][a-z]/i.test(body);
+}
+
+function hasSpacedPluginCommand(text?: string): boolean {
+  const commandBody = text?.match(/(?:^|\s)(\/\s+[a-z][\s\S]*)/i)?.[1];
+  // Only active registered commands affect ingress authorization and mention gating.
+  // This keeps spaced syntax aligned with canonical `/name` command ownership.
+  return commandBody ? matchPluginCommand(commandBody) !== null : false;
 }
 
 /** Returns true when a message may need command authorization metadata. */
@@ -99,5 +104,9 @@ export function shouldComputeCommandAuthorized(
   cfg?: OpenClawConfig,
   options?: CommandNormalizeOptions,
 ): boolean {
-  return isControlCommandMessage(text, cfg, options) || hasInlineCommandTokens(text);
+  return (
+    isControlCommandMessage(text, cfg, options) ||
+    hasInlineCommandTokens(text) ||
+    hasSpacedPluginCommand(text)
+  );
 }

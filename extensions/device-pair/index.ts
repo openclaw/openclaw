@@ -444,7 +444,7 @@ async function resolveGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResu
 
   return {
     error:
-      "Gateway is only bound to loopback. Keep gateway.bind=loopback when Control UI is behind Tailscale Serve; configure gateway.tailscale.mode=serve or plugins.entries.device-pair.config.publicUrl/gateway.remote.url with the Tailscale Serve HTTPS URL for mobile pairing.",
+      "Gateway is only bound to loopback. Set gateway.bind=lan, enable tailscale serve, or configure plugins.entries.device-pair.config.publicUrl.",
   };
 }
 
