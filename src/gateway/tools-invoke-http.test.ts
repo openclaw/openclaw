@@ -183,6 +183,19 @@ vi.mock("../agents/openclaw-tools.js", () => {
       },
     },
     {
+      name: "unreadable_schema_test",
+      parameters: {
+        type: "object",
+        get properties() {
+          throw new Error("schema properties getter exploded");
+        },
+      },
+      execute: async (_toolCallId: string, args: unknown) => ({
+        ok: true,
+        args,
+      }),
+    },
+    {
       name: "diffs_compat_test",
       parameters: {
         type: "object",
@@ -904,6 +917,21 @@ describe("POST /tools/invoke", () => {
     const body = await expectOkInvokeResponse(res);
     expect(body.result?.observedFormat).toBe("pdf");
     expect(body.result?.observedFileFormat).toBeUndefined();
+  });
+
+  it("does not fail HTTP tool invocation when the schema action probe is unreadable", async () => {
+    setMainAllowedTools({ allow: ["unreadable_schema_test"] });
+
+    const res = await invokeToolAuthed({
+      tool: "unreadable_schema_test",
+      action: "legacy",
+      args: { mode: "ok" },
+      sessionKey: "main",
+    });
+
+    const body = await expectOkInvokeResponse(res);
+    expect(body.result?.args).toEqual({ mode: "ok" });
+    expect(firstHookCallArg().params).toEqual({ mode: "ok" });
   });
 
   it("requires operator.write scope for HTTP tool invocation", async () => {
