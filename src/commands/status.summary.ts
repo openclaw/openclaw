@@ -12,6 +12,7 @@ import { resolveSessionTotalTokens, type SessionEntry } from "../config/sessions
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveCronJobsStorePath } from "../cron/store.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
+import { readLatestSessionUsageFromTranscriptAsync } from "../gateway/session-transcript-readers.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -173,6 +174,7 @@ function resolveTrustedSessionContextTokens(params: {
 type SessionCandidate = {
   key: string;
   entry: SessionEntry;
+  storePath: string;
   updatedAt: number | null;
 };
 
@@ -212,6 +214,7 @@ function listSessionCandidates(storePath: string, agentId?: string) {
       .map(({ sessionKey, entry }) => ({
         key: sessionKey,
         entry,
+        storePath,
         updatedAt: entry?.updatedAt ?? null,
       }))
   );
@@ -387,7 +390,7 @@ export async function getStatusSummary(
     opts: { agentIdOverride?: string } = {},
   ) =>
     Promise.all(
-      candidates.map(async ({ key, entry, updatedAt }) => {
+      candidates.map(async ({ key, entry, storePath, updatedAt }) => {
         const age = updatedAt ? now - updatedAt : null;
         const parsedAgentId = parseAgentSessionKey(key)?.agentId;
         const agentId = opts.agentIdOverride ?? parsedAgentId;
@@ -466,6 +469,18 @@ export async function getStatusSummary(
           agentId,
           sessionKey: key,
         });
+        const transcriptUsage = entry?.sessionId
+          ? await readLatestSessionUsageFromTranscriptAsync({
+              agentId,
+              sessionFile: entry.sessionFile,
+              sessionId: entry.sessionId,
+              storePath,
+            }).catch(() => undefined)
+          : undefined;
+        const costUsd =
+          typeof transcriptUsage?.costUsd === "number" && Number.isFinite(transcriptUsage.costUsd)
+            ? transcriptUsage.costUsd
+            : undefined;
 
         return {
           agentId,
@@ -486,6 +501,7 @@ export async function getStatusSummary(
           outputTokens: entry?.outputTokens,
           cacheRead: entry?.cacheRead,
           cacheWrite: entry?.cacheWrite,
+          costUsd,
           totalTokens: total ?? null,
           totalTokensFresh,
           remainingTokens: remaining,

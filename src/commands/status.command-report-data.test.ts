@@ -42,6 +42,7 @@ describe("buildStatusCommandReportData", () => {
     expect(result.pairingRecoveryLines[0]).toBe("warn(Gateway pairing approval required.)");
     expect(result.modelSelectionLines).toEqual([]);
     expect(result.channelsRows[0]?.Channel).toBe("QuietChat");
+    expect(result.sessionsRows[0]?.Cost).toBe("$0.04");
     expect(result.sessionsRows[0]?.Cache).toBe("cache ok");
     expect(result.healthRows?.[0]).toEqual({
       Item: "Gateway",
