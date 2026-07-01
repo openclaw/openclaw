@@ -3398,12 +3398,21 @@ export async function runReplyAgent(replyParams: {
     blockReplyPipeline?.stop();
     typing.markRunComplete();
     // Drain any stale delegates from a failed turn — they must not leak
-    // into the next successful turn for the same session.
+    // into the next successful turn for the same session. Guard the TaskFlow
+    // calls: a throw here runs inside the finally, so it would both mask the
+    // original run error and skip markDispatchIdle() below, leaking the typing
+    // keepalive loop (I4).
     if (sessionKey) {
-      consumePendingDelegates(sessionKey);
-      consumeStagedPostCompactionDelegates(sessionKey);
-      for (const delegate of postCompactionDelegatesToPreserve) {
-        stagePostCompactionDelegate(sessionKey, delegate);
+      try {
+        consumePendingDelegates(sessionKey);
+        consumeStagedPostCompactionDelegates(sessionKey);
+        for (const delegate of postCompactionDelegatesToPreserve) {
+          stagePostCompactionDelegate(sessionKey, delegate);
+        }
+      } catch (drainError) {
+        logVerbose(
+          `failed to drain stale continuation delegates for ${sessionKey}: ${String(drainError)}`,
+        );
       }
     }
     // Safety net: the dispatcher's onIdle callback normally fires

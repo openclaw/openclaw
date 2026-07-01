@@ -344,6 +344,45 @@ const noopSpan: Span = Object.freeze({
 });
 
 /**
+ * Wrap a concrete adapter span so its methods can never throw into the caller's
+ * control flow. Continuation dispatch drives `setStatus/recordException/
+ * traceparent/end` inside the delegate try/catch/finally; a throwing exporter
+ * adapter must not mark a live child failed or escape the loop. Diagnostics are
+ * best-effort — on failure we log (when a logger is provided) and no-op.
+ */
+function guardSpan(span: Span, log?: (message: string) => void): Span {
+  const guard = (op: string, run: () => void): void => {
+    try {
+      run();
+    } catch (err) {
+      log?.(`continuation.delegate.dispatch span ${op} failed: ${String(err)}`);
+    }
+  };
+  return {
+    setAttributes(attrs: SpanAttributes): void {
+      guard("setAttributes", () => span.setAttributes(attrs));
+    },
+    setStatus(status: SpanStatus, message?: string): void {
+      guard("setStatus", () => span.setStatus(status, message));
+    },
+    recordException(err: unknown): void {
+      guard("recordException", () => span.recordException(err));
+    },
+    traceparent(): string | undefined {
+      try {
+        return span.traceparent?.();
+      } catch (err) {
+        log?.(`continuation.delegate.dispatch span traceparent failed: ${String(err)}`);
+        return undefined;
+      }
+    },
+    end(): void {
+      guard("end", () => span.end());
+    },
+  };
+}
+
+/**
  * Default tracer: every method is a no-op. Returned from
  * `getContinuationTracer()` until an adapter is registered. Callers that don't
  * opt in see no behavior change.
@@ -412,7 +451,15 @@ export function formatContinuationTraceparent(
   if (!context) {
     return undefined;
   }
-  const resolved = getContinuationTracer().formatTraceparent?.(context);
+  // The exporter-owned formatTraceparent adapter runs in core continuation
+  // control flow (dispatch/announce). A throwing adapter must not break the
+  // delegate path — fall back to the local formatter (I3).
+  let resolved: string | undefined;
+  try {
+    resolved = getContinuationTracer().formatTraceparent?.(context);
+  } catch {
+    resolved = undefined;
+  }
   return normalizeDiagnosticTraceparent(resolved) ?? formatDiagnosticTraceparent(context);
 }
 
@@ -490,7 +537,11 @@ export function startContinuationDelegateSpan(args: ContinuationDelegateSpanArgs
       attributes: continuationDelegateSpanAttributes(args),
       ...(args.traceparent !== undefined ? { traceparent: args.traceparent } : {}),
     });
-    return span;
+    // Diagnostics must never break the delegate loop: the concrete adapter span
+    // is driven (setStatus/recordException/traceparent/end) inside the dispatch
+    // try/catch/finally, so a throwing OTEL adapter would otherwise mark a live
+    // child failed or escape the loop. Return a guarded span (I3).
+    return guardSpan(span, args.log);
   } catch (err) {
     args.log?.(`Failed to start continuation.delegate.dispatch span: ${String(err)}`);
     return noopSpan;

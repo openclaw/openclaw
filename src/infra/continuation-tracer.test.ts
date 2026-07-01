@@ -16,6 +16,7 @@ import {
   resetContinuationTracer,
   resolveContinuationTraceparent,
   setContinuationTracer,
+  startContinuationDelegateSpan,
   type ContinuationDisabledSignalKind,
   type ContinuationSignalKind,
   type ContinuationSpanAttrs,
@@ -1940,5 +1941,98 @@ describe("continuation-tracer :: compaction.id cross-cutting attr", () => {
     const attrs2 = spans[1]?.options?.attributes as ContinuationSpanAttrs;
     expect(attrs1["compaction.id"]).toBe(count1);
     expect(attrs2["compaction.id"]).toBe(count3);
+  });
+});
+
+describe("continuation-tracer :: diagnostics fail-safe boundary (I3)", () => {
+  function throwingSpan(): Span {
+    return {
+      setAttributes(): void {
+        throw new Error("adapter setAttributes boom");
+      },
+      setStatus(): void {
+        throw new Error("adapter setStatus boom");
+      },
+      recordException(): void {
+        throw new Error("adapter recordException boom");
+      },
+      traceparent(): string | undefined {
+        throw new Error("adapter traceparent boom");
+      },
+      end(): void {
+        throw new Error("adapter end boom");
+      },
+    };
+  }
+
+  it("startContinuationDelegateSpan returns a guarded span whose methods never throw", () => {
+    const logs: string[] = [];
+    const tracer: Tracer = {
+      startSpan(): Span {
+        return throwingSpan();
+      },
+    };
+    setContinuationTracer(tracer);
+
+    const span = startContinuationDelegateSpan({
+      chainId: "chain-guarded",
+      chainStepRemaining: 2,
+      delayMs: 0,
+      delivery: "immediate",
+      log: (message) => logs.push(message),
+    });
+
+    expect(() => span.setAttributes({ "chain.id": "x" })).not.toThrow();
+    expect(() => span.setStatus("OK")).not.toThrow();
+    expect(() => span.recordException(new Error("child failed"))).not.toThrow();
+    expect(() => span.end()).not.toThrow();
+    let tp: string | undefined = "unset";
+    expect(() => {
+      tp = span.traceparent?.();
+    }).not.toThrow();
+    expect(tp).toBeUndefined();
+    // A throwing exporter is logged, not propagated.
+    expect(logs.some((line) => line.includes("span setStatus failed"))).toBe(true);
+  });
+
+  it("startContinuationDelegateSpan returns a no-op span when startSpan itself throws", () => {
+    const tracer: Tracer = {
+      startSpan(): Span {
+        throw new Error("startSpan boom");
+      },
+    };
+    setContinuationTracer(tracer);
+
+    const span = startContinuationDelegateSpan({
+      chainId: "chain-start-throw",
+      chainStepRemaining: 1,
+      delayMs: 0,
+      delivery: "immediate",
+    });
+
+    expect(() => span.setStatus("ERROR", "x")).not.toThrow();
+    expect(() => span.end()).not.toThrow();
+  });
+
+  it("formatContinuationTraceparent falls back to the local formatter when the adapter throws", () => {
+    const tracer: Tracer = {
+      startSpan: () => noopTracer.startSpan("x"),
+      formatTraceparent() {
+        throw new Error("adapter formatTraceparent boom");
+      },
+    };
+    setContinuationTracer(tracer);
+
+    const context = {
+      traceId: "0af7651916cd43dd8448eb211c80319c",
+      spanId: "b7ad6b7169203331",
+      traceFlags: 1,
+    };
+    let result: string | undefined;
+    expect(() => {
+      result = formatContinuationTraceparent(context);
+    }).not.toThrow();
+    // Local fallback still produces a valid W3C traceparent for the context.
+    expect(result).toBe("00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01");
   });
 });
