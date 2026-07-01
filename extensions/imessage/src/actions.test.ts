@@ -48,9 +48,15 @@ vi.mock("./probe.js", () => ({
   probeIMessagePrivateApi: probeMock.probeIMessagePrivateApi,
 }));
 
-vi.mock("./private-api-status.js", () => ({
-  getCachedIMessagePrivateApiStatus: probeMock.getCachedIMessagePrivateApiStatus,
-}));
+vi.mock("./private-api-status.js", async () => {
+  // Exercise the real imessageRpcSupportsMethod gate against the mocked status.
+  const actual =
+    await vi.importActual<typeof import("./private-api-status.js")>("./private-api-status.js");
+  return {
+    ...actual,
+    getCachedIMessagePrivateApiStatus: probeMock.getCachedIMessagePrivateApiStatus,
+  };
+});
 
 vi.mock("./actions.runtime.js", () => ({
   imessageActionsRuntime: runtimeMock,
@@ -194,6 +200,7 @@ describe("imessage message actions", () => {
       available: true,
       v2Ready: true,
       selectors: { editMessage: true, retractMessagePart: true, pollPayloadMessage: true },
+      rpcMethods: ["send", "poll.send"],
     });
     expect(
       imessageMessageActions.describeMessageTool({
@@ -274,6 +281,7 @@ describe("imessage message actions", () => {
       available: true,
       v2Ready: true,
       selectors: { pollPayloadMessage: true },
+      rpcMethods: ["send", "poll.send", "poll.vote"],
     });
     runtimeMock.resolveIMessageMessageId.mockReturnValueOnce("poll-full-guid");
     runtimeMock.sendPollVote.mockResolvedValue({ messageId: "vote-guid", optionText: "Blue" });
@@ -311,6 +319,7 @@ describe("imessage message actions", () => {
       available: true,
       v2Ready: true,
       selectors: { pollPayloadMessage: true },
+      rpcMethods: ["send", "poll.send", "poll.vote"],
     });
     await expect(
       imessageMessageActions.handleAction?.({
@@ -332,6 +341,7 @@ describe("imessage message actions", () => {
       available: true,
       v2Ready: true,
       selectors: { pollPayloadMessage: true },
+      rpcMethods: ["send", "poll.send", "poll.vote"],
     });
     await expect(
       imessageMessageActions.handleAction?.({
@@ -340,6 +350,30 @@ describe("imessage message actions", () => {
         params: { chatGuid: "iMessage;+;chat0000", pollId: "3" },
       } as never),
     ).rejects.toThrow("requires pollOptionIndex");
+    expect(runtimeMock.sendPollVote).not.toHaveBeenCalled();
+  });
+
+  it("rejects a poll vote when imsg does not advertise the poll.vote capability", async () => {
+    // Released imsg carries the pollPayloadMessage selector (poll-send) but no
+    // poll.vote rpc; a direct dispatch that bypasses tool discovery must still
+    // fail closed rather than shell out to a `poll vote` command the CLI rejects.
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: { pollPayloadMessage: true },
+      rpcMethods: ["send", "poll.send", "messages.poll.send"],
+    });
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "poll-vote",
+        cfg: cfg(),
+        params: {
+          chatGuid: "iMessage;+;chat0000",
+          pollId: "3",
+          pollOptionIndex: 2,
+        },
+      } as never),
+    ).rejects.toThrow("poll.vote capability");
     expect(runtimeMock.sendPollVote).not.toHaveBeenCalled();
   });
 

@@ -27,6 +27,7 @@ import {
   rememberIMessageReplyCache,
   type IMessageChatContext,
 } from "./monitor-reply-cache.js";
+import { imessageRpcSupportsMethod } from "./private-api-status.js";
 import { getCachedIMessagePrivateApiStatus, probeIMessagePrivateApi } from "./probe.js";
 import { parseIMessageTarget, type IMessageTarget } from "./targets.js";
 
@@ -775,6 +776,16 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
 
     if (action === "poll-vote") {
       await assertPrivateApiEnabled();
+      // Enforce the poll.vote capability at execution, not just tool discovery:
+      // a caller can dispatch poll-vote directly without going through
+      // describeMessageTool, and released imsg (which carries the
+      // pollPayloadMessage selector for poll-send but predates the `poll vote`
+      // command) would otherwise reject the shell-out with an opaque CLI error.
+      if (!imessageRpcSupportsMethod(privateApiStatus, "poll.vote")) {
+        throw new Error(
+          "iMessage poll-vote requires an imsg build that advertises the poll.vote capability. Update imsg, then run openclaw channels status to refresh capability detection.",
+        );
+      }
       // The poll being voted on is an inbound message; the agent references it
       // by the shared `pollId` param or a message id, which we resolve to the
       // poll's full GUID through the same reply cache the react path uses.
