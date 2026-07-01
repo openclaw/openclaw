@@ -118,7 +118,7 @@ struct RootTabsSourceGuardTests {
         #expect(source.contains(".listRowSeparator(.hidden, edges: .all)"))
         #expect(source.contains(".listSectionSeparator(.hidden, edges: .all)"))
         #expect(source.contains("if self.isSidebarDrawerLayout {"))
-        #expect(source.contains("private var sidebarFooter: some View"))
+        #expect(!source.contains("private var sidebarFooter: some View"))
         #expect(!source.contains("LabeledContent(\"Version\""))
         #expect(navigationSource.contains("SidebarGroup(title: \"CHAT\", destinations: [.chat, .talk])"))
         #expect(!navigationSource.contains("title: \"AGENT\""))
@@ -645,6 +645,7 @@ struct RootTabsSourceGuardTests {
         #expect(actionsSource.contains("Run /pair approve in your OpenClaw chat"))
         #expect(actionsSource.contains("self.resetOnboarding()"))
         #expect(actionsSource.contains("self.gatewayController.trustRotatedGatewayCertificate(from: problem)"))
+        #expect(actionsSource.contains("GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem)"))
         #expect(actionsSource.contains("await self.retryGatewayConnectionFromProblem()"))
 
         #expect(settingsSource.contains("GatewayProblemDetailsSheet("))

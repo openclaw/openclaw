@@ -746,6 +746,50 @@ describe("processResponsesStream", () => {
     ]);
   });
 
+  it("prices cache-write tokens separately from ordinary Responses input", async () => {
+    const model = {
+      ...gpt56SolModel,
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 },
+    } satisfies Model<"openai-responses">;
+    const output = createResponsesAssistantOutput(model, model.api);
+    const stream = new AssistantMessageEventStream();
+
+    await processResponsesStream(
+      responseEvents([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp_cache_write",
+            status: "completed",
+            usage: {
+              input_tokens: 100,
+              input_tokens_details: { cached_tokens: 20, cache_write_tokens: 30 },
+              output_tokens: 10,
+              output_tokens_details: { reasoning_tokens: 0 },
+              total_tokens: 110,
+            },
+          },
+        },
+      ]),
+      output,
+      stream,
+      model,
+    );
+
+    expect(output.usage).toMatchObject({
+      input: 50,
+      output: 10,
+      cacheRead: 20,
+      cacheWrite: 30,
+      totalTokens: 110,
+    });
+    expect(output.usage.cost.input).toBeCloseTo(0.00025);
+    expect(output.usage.cost.output).toBeCloseTo(0.0003);
+    expect(output.usage.cost.cacheRead).toBeCloseTo(0.00001);
+    expect(output.usage.cost.cacheWrite).toBeCloseTo(0.0001875);
+    expect(output.usage.cost.total).toBeCloseTo(0.0007475);
+  });
+
   it("collapses cumulative message snapshot items into one text block (#91959)", async () => {
     const output = createAssistantOutput();
     const stream = new AssistantMessageEventStream();
