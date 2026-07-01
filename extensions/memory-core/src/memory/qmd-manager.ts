@@ -2729,6 +2729,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       // with a stdout snippet instead of a raw SyntaxError with no context.
       throw new Error(
         `qmd mcporter returned non-JSON stdout: ${(err as Error).message}; first 200 chars: ${result.stdout.slice(0, 200)}`,
+        { cause: err },
       );
     }
     const parsedRecord = asRecord(parsedUnknown);
