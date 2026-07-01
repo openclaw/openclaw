@@ -430,6 +430,126 @@ describe("resolveGoogleChatAccount", () => {
     expect(resolved.credentialsFile).toBe("/tmp/googlechat.json");
   });
 
+  it("does not fall back to inline serviceAccount when serviceAccountRef is unresolved", () => {
+    expect(() =>
+      resolveGoogleChatAccount({
+        cfg: {
+          channels: {
+            googlechat: {
+              serviceAccount: {
+                client_email: "bot@example.com",
+                private_key: "legacy-key",
+                type: "service_account",
+              },
+              serviceAccountRef: {
+                source: "exec",
+                provider: "onepassword",
+                id: "service-account.json",
+              },
+            },
+          },
+        },
+        accountId: "default",
+      }),
+    ).toThrow(
+      'channels.googlechat.accounts.default.serviceAccount: unresolved SecretRef "exec:onepassword:service-account.json"',
+    );
+  });
+
+  it("does not inherit top-level serviceAccountRef into account-owned credentials", () => {
+    const resolved = resolveGoogleChatAccount({
+      cfg: {
+        channels: {
+          googlechat: {
+            serviceAccountRef: {
+              source: "exec",
+              provider: "onepassword",
+              id: "default-service-account.json",
+            },
+            accounts: {
+              work: {
+                serviceAccount: {
+                  client_email: "work@example.com",
+                  private_key: "work-key",
+                  type: "service_account",
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.credentialSource).toBe("inline");
+    expect(resolved.credentials).toEqual({
+      client_email: "work@example.com",
+      private_key: "work-key",
+      type: "service_account",
+    });
+    expect(resolved.config.serviceAccountRef).toBeUndefined();
+  });
+
+  it("does not inherit top-level serviceAccountRef into accounts.default inline credentials", () => {
+    const resolved = resolveGoogleChatAccount({
+      cfg: {
+        channels: {
+          googlechat: {
+            serviceAccountRef: {
+              source: "exec",
+              provider: "onepassword",
+              id: "stale-default-service-account.json",
+            },
+            accounts: {
+              default: {
+                serviceAccount: {
+                  client_email: "default@example.com",
+                  private_key: "default-key",
+                  type: "service_account",
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(resolved.credentialSource).toBe("inline");
+    expect(resolved.credentials).toEqual({
+      client_email: "default@example.com",
+      private_key: "default-key",
+      type: "service_account",
+    });
+    expect(resolved.config.serviceAccountRef).toBeUndefined();
+  });
+
+  it("does not inherit top-level serviceAccountRef into accounts.default file credentials", () => {
+    const resolved = resolveGoogleChatAccount({
+      cfg: {
+        channels: {
+          googlechat: {
+            serviceAccountRef: {
+              source: "exec",
+              provider: "onepassword",
+              id: "stale-default-service-account.json",
+            },
+            accounts: {
+              default: {
+                serviceAccountFile: "/tmp/default-service-account.json",
+              },
+            },
+          },
+        },
+      },
+      accountId: "default",
+    });
+
+    expect(resolved.credentialSource).toBe("file");
+    expect(resolved.credentialsFile).toBe("/tmp/default-service-account.json");
+    expect(resolved.config.serviceAccountRef).toBeUndefined();
+  });
+
   it("inherits shared defaults from accounts.default for named accounts", () => {
     const cfg: OpenClawConfig = {
       channels: {
