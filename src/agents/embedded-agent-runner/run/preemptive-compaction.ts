@@ -105,6 +105,15 @@ function estimateContentBlockTokenPressure(
   return CONTENT_BLOCK_OVERHEAD_TOKENS + estimateJsonPayloadTokenPressure(block, charsPerToken);
 }
 
+function safeJsonStringify(value: unknown): string | undefined {
+  try {
+    const serialized = JSON.stringify(value);
+    return typeof serialized === "string" ? serialized : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function estimateToolResultCjkRatio(content: unknown): number {
   if (typeof content === "string") {
     return estimateCjkRatio(content);
@@ -117,20 +126,39 @@ function estimateToolResultCjkRatio(content: unknown): number {
         nonLatinChars += Math.ceil(estimateCjkRatio(block) * block.length);
         totalChars += block.length;
       } else if (isRecord(block)) {
-        if (typeof block.text === "string") {
+        const type = block.type;
+        if (type === "text" && typeof block.text === "string") {
           nonLatinChars += Math.ceil(estimateCjkRatio(block.text) * block.text.length);
           totalChars += block.text.length;
-        } else if (typeof block.thinking === "string") {
+        } else if (type === "thinking" && typeof block.thinking === "string") {
           nonLatinChars += Math.ceil(estimateCjkRatio(block.thinking) * block.thinking.length);
           totalChars += block.thinking.length;
+        } else if (type === "image") {
+          // Image blocks carry no text, so they do not affect the CJK ratio.
+        } else {
+          // JSON blocks and unknown records are sampled from the same serialized
+          // shape that token-pressure estimation counts, so the ratio decision
+          // covers the same payload branches.
+          const serialized = safeJsonStringify(block);
+          if (serialized !== undefined) {
+            nonLatinChars += Math.ceil(estimateCjkRatio(serialized) * serialized.length);
+            totalChars += serialized.length;
+          }
+        }
+      } else {
+        // Non-record blocks are sampled from their serialized shape.
+        const serialized = safeJsonStringify(block);
+        if (serialized !== undefined) {
+          nonLatinChars += Math.ceil(estimateCjkRatio(serialized) * serialized.length);
+          totalChars += serialized.length;
         }
       }
     }
     return totalChars > 0 ? nonLatinChars / totalChars : 0;
   }
   if (content !== undefined) {
-    const serialized = JSON.stringify(content);
-    return estimateCjkRatio(serialized);
+    const serialized = safeJsonStringify(content);
+    return serialized !== undefined ? estimateCjkRatio(serialized) : 0;
   }
   return 0;
 }

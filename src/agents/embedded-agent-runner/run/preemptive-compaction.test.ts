@@ -528,4 +528,78 @@ describe("preemptive-compaction", () => {
     expect(toolResultTokens).toBeGreaterThan(assistantTokens * 1.5);
     expect(toolResultTokens).toBeLessThan(assistantTokens * 2.5);
   });
+
+  it("applies the CJK-aware ratio to JSON tool-result payloads", () => {
+    // A JSON payload that is mostly CJK should use the /4 ratio instead of /2,
+    // avoiding false overflow for CJK-heavy structured tool results.
+    const cjkPayload = {
+      summary: "中文内容".repeat(5_000),
+      note: "更多中文文本".repeat(2_000),
+    };
+    const messages = [makeJsonToolResultMessage(cjkPayload)];
+
+    const estimatedPromptTokens = estimateLlmBoundaryTokenPressure({
+      messages,
+      systemPrompt: "sys",
+      prompt: "continue",
+    });
+
+    // With the old /2 ratio this would have estimated ~120k tokens.
+    expect(estimatedPromptTokens).toBeLessThan(90_000);
+
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages,
+      systemPrompt: "sys",
+      prompt: "continue",
+      contextTokenBudget: 128_000,
+      reserveTokens: 20_000,
+    });
+
+    expect(result.route).toBe("fits");
+    expect(result.shouldCompact).toBe(false);
+    expect(result.overflowTokens).toBe(0);
+  });
+
+  it("does not throw when tool-result content cannot be serialized", () => {
+    // Non-array content that JSON.stringify cannot handle should still complete
+    // precheck estimation instead of interrupting the turn.
+    const circular: Record<string, unknown> = { self: undefined };
+    circular.self = circular;
+
+    expect(() =>
+      estimateLlmBoundaryTokenPressure({
+        messages: [
+          {
+            role: "toolResult",
+            toolCallId: "call_circular",
+            toolName: "bad_tool",
+            content: circular,
+            isError: false,
+            timestamp: timestamp++,
+          } as AgentMessage,
+        ],
+        systemPrompt: "sys",
+        prompt: "continue",
+      }),
+    ).not.toThrow();
+
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages: [
+        {
+          role: "toolResult",
+          toolCallId: "call_circular",
+          toolName: "bad_tool",
+          content: circular,
+          isError: false,
+          timestamp: timestamp++,
+        } as AgentMessage,
+      ],
+      systemPrompt: "sys",
+      prompt: "continue",
+      contextTokenBudget: 128_000,
+      reserveTokens: 20_000,
+    });
+
+    expect(Number.isFinite(result.estimatedPromptTokens)).toBe(true);
+  });
 });
