@@ -17,14 +17,10 @@ function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
   const trimmed = stdout.trim();
   const start = trimmed.indexOf("{");
   const end = trimmed.lastIndexOf("}");
-  try {
-    if (start >= 0 && end > start) {
-      return JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
-    }
-    return JSON.parse(trimmed) as Record<string, unknown>;
-  } catch {
-    return {};
+  if (start >= 0 && end > start) {
+    return JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
   }
+  return JSON.parse(trimmed) as Record<string, unknown>;
 }
 
 /**
@@ -296,8 +292,12 @@ export async function hasTailscaleFunnelRouteForPort(
   } catch {
     return false;
   }
-  const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
-  return tailscaleFunnelStatusCoversPort(parsed, port);
+  try {
+    const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
+    return tailscaleFunnelStatusCoversPort(parsed, port);
+  } catch {
+    return false;
+  }
 }
 
 const TAILSCALE_LOOPBACK_PROXY_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
