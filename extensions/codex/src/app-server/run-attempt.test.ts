@@ -4075,8 +4075,12 @@ describe("runCodexAppServerAttempt", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const agentDir = path.join(tempDir, "agent");
     const pluginConfig = {
+      appServer: {
+        mode: "guardian" as const,
+      },
       codexPlugins: {
         enabled: true,
+        allow_destructive_actions: "ask" as const,
         plugins: {
           "google-calendar": {
             marketplaceName: "openai-curated",
@@ -4185,6 +4189,9 @@ describe("runCodexAppServerAttempt", () => {
           },
         };
       }
+      if (method === "config/read") {
+        return { config: {} };
+      }
       if (method === "thread/start") {
         return threadStartResult("thread-1");
       }
@@ -4253,14 +4260,22 @@ describe("runCodexAppServerAttempt", () => {
     const requestCalls = request.mock.calls as unknown as Array<[string, unknown, unknown?]>;
     const threadStart = requestCalls.find(([method]) => method === "thread/start");
     const threadStartParams = threadStart?.[1] as
-      | { approvalPolicy?: { granular?: { mcp_elicitations?: boolean } } }
+      | {
+          approvalPolicy?: { granular?: { mcp_elicitations?: boolean } };
+          approvalsReviewer?: string;
+        }
       | undefined;
     expect(threadStartParams?.approvalPolicy?.granular?.mcp_elicitations).toBe(true);
+    expect(threadStartParams?.approvalsReviewer).toBe("user");
     const turnStart = requestCalls.find(([method]) => method === "turn/start");
     const turnStartParams = turnStart?.[1] as
-      | { approvalPolicy?: { granular?: { mcp_elicitations?: boolean } } }
+      | {
+          approvalPolicy?: { granular?: { mcp_elicitations?: boolean } };
+          approvalsReviewer?: string;
+        }
       | undefined;
     expect(turnStartParams?.approvalPolicy?.granular?.mcp_elicitations).toBe(true);
+    expect(turnStartParams?.approvalsReviewer).toBe("user");
 
     await notify({
       method: "turn/completed",

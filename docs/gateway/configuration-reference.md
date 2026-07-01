@@ -318,9 +318,10 @@ conversation bindings, or any non-Codex harness.
   default destructive-action policy for migrated plugin app elicitations.
   Use `true` to accept safe Codex approval schemas without prompting, `false`
   to decline them, `"auto"` to route Codex-required approvals through OpenClaw
-  plugin approvals, or `"always"` to ask for every plugin write/destructive
-  action without durable approval. The `"always"` mode clears durable Codex
-  per-tool approval overrides for the affected app before starting the thread.
+  plugin approvals, or `"ask"` to prompt for every plugin write/destructive
+  action without durable approval. The `"ask"` mode clears durable Codex
+  per-tool approval overrides for the affected app and selects the human
+  approvals reviewer for the Codex thread before it starts.
   Default: `true`.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.enabled`: enables a
   migrated plugin entry when global `codexPlugins.enabled` is also true.
@@ -332,7 +333,11 @@ conversation bindings, or any non-Codex harness.
 - `plugins.entries.codex.config.codexPlugins.plugins.<key>.allow_destructive_actions`:
   per-plugin destructive-action override. When omitted, the global
   `allow_destructive_actions` value is used. The per-plugin value accepts the
-  same `true`, `false`, `"auto"`, or `"always"` policies.
+  same `true`, `false`, `"auto"`, or `"ask"` policies.
+
+If any admitted plugin app uses `"ask"`, Codex routes thread approval requests
+to the human reviewer. OpenClaw still applies each app's effective policy in the
+approval bridge, so mixed plugin policies do not inherit `"ask"` behavior.
 
 `codexPlugins.enabled` is the global enablement directive. Explicit plugin
 entries written by migration are the durable install and repair eligibility set.

@@ -599,6 +599,35 @@ describe("Codex app-server native code mode config", () => {
     expect(request.approvalsReviewer).toBe("auto_review");
   });
 
+  it("keeps ask plugin policy on the human reviewer for turn start", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: {
+        ...createAppServerOptions(),
+        approvalsReviewer: "auto_review",
+      } as never,
+      pluginAppPolicyContext: {
+        fingerprint: "plugin-policy-ask",
+        apps: {
+          "google-calendar-app": {
+            configKey: "google-calendar",
+            marketplaceName: "openai-curated",
+            pluginName: "google-calendar",
+            allowDestructiveActions: true,
+            destructiveApprovalMode: "ask",
+            mcpServerNames: ["google-calendar"],
+          },
+        },
+        pluginAppIds: {
+          "google-calendar": ["google-calendar-app"],
+        },
+      },
+    });
+
+    expect(request.approvalsReviewer).toBe("user");
+  });
+
   it("allows thread config to opt into Codex code-mode-only", () => {
     const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
       cwd: "/repo",

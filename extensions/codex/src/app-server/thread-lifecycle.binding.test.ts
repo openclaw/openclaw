@@ -150,6 +150,7 @@ function createDeferredNamedDynamicTool(
 
 function createPluginAppConfigPatch(options: { approvalsReviewer?: "user" } = {}) {
   return {
+    ...(options.approvalsReviewer ? { approvals_reviewer: options.approvalsReviewer } : {}),
     apps: {
       _default: {
         enabled: false,
@@ -161,7 +162,6 @@ function createPluginAppConfigPatch(options: { approvalsReviewer?: "user" } = {}
         destructive_enabled: true,
         open_world_enabled: true,
         default_tools_approval_mode: "auto",
-        ...(options.approvalsReviewer ? { approvals_reviewer: options.approvalsReviewer } : {}),
       },
     },
   };
@@ -1730,7 +1730,10 @@ describe("Codex app-server thread lifecycle bindings", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(sessionFile, workspaceDir);
-    const appServer = createThreadLifecycleAppServerOptions();
+    const appServer = {
+      ...createThreadLifecycleAppServerOptions(),
+      approvalsReviewer: "auto_review" as const,
+    };
     const request = vi.fn(async (method: string) => {
       if (method === "thread/start" || method === "thread/resume") {
         return threadStartResult("thread-plugins");
@@ -1744,14 +1747,14 @@ describe("Codex app-server thread lifecycle bindings", () => {
         ...basePolicyContext.apps,
         "google-calendar-app": {
           ...basePolicyContext.apps["google-calendar-app"],
-          destructiveApprovalMode: "always" as const,
+          destructiveApprovalMode: "ask" as const,
         },
       },
     };
-    const alwaysApprovalConfigPatch = createPluginAppConfigPatch({ approvalsReviewer: "user" });
+    const askApprovalConfigPatch = createPluginAppConfigPatch({ approvalsReviewer: "user" });
     const buildPluginThreadConfig = vi.fn(async () => ({
       enabled: true,
-      configPatch: alwaysApprovalConfigPatch,
+      configPatch: askApprovalConfigPatch,
       fingerprint: "plugin-apps-config-1",
       inputFingerprint: "plugin-apps-input-1",
       policyContext: pluginAppPolicyContext,
@@ -1788,17 +1791,23 @@ describe("Codex app-server thread lifecycle bindings", () => {
 
     expect(binding.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
     expect(buildPluginThreadConfig).toHaveBeenCalledTimes(2);
-    const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
+    const requestCalls = request.mock.calls as unknown as Array<
+      [string, { approvalsReviewer?: string; config?: unknown }]
+    >;
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
+    expect(requestCalls.map(([, requestParams]) => requestParams.approvalsReviewer)).toEqual([
+      "user",
+      "user",
+    ]);
     expect(requestCalls[0]?.[1].config).toEqual({
       "features.hooks": true,
       ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
-      ...alwaysApprovalConfigPatch,
+      ...askApprovalConfigPatch,
     });
     expect(requestCalls[1]?.[1].config).toEqual({
       "features.hooks": true,
       ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
-      ...alwaysApprovalConfigPatch,
+      ...askApprovalConfigPatch,
     });
   });
 

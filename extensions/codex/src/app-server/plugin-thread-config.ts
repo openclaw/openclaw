@@ -255,7 +255,7 @@ export async function buildCodexPluginThreadConfig(
         continue;
       }
       if (
-        record.policy.destructiveApprovalMode === "always" &&
+        record.policy.destructiveApprovalMode === "ask" &&
         !(await clearPersistedAppToolApprovalOverrides({
           request: params.request,
           configCwd: params.configCwd,
@@ -272,9 +272,6 @@ export async function buildCodexPluginThreadConfig(
         open_world_enabled: true,
         default_tools_approval_mode: "auto",
       };
-      if (record.policy.destructiveApprovalMode === "always") {
-        appConfig.approvals_reviewer = "user";
-      }
       apps[app.id] = appConfig;
       policyApps[app.id] = {
         configKey: record.policy.configKey,
@@ -287,7 +284,11 @@ export async function buildCodexPluginThreadConfig(
     }
   }
 
-  const configPatch = { apps };
+  const requiresUserApprovalsReviewer = requiresUserReviewerForAskPolicy(policyApps);
+  const configPatch = {
+    ...(requiresUserApprovalsReviewer ? { approvals_reviewer: "user" } : {}),
+    apps,
+  };
   const policyContext = buildPluginAppPolicyContext(policyApps, pluginAppIds);
   return {
     enabled: true,
@@ -394,10 +395,22 @@ export function buildCodexPluginAppsConfigPatchFromPolicyContext(
       destructive_enabled: policy.allowDestructiveActions,
       open_world_enabled: true,
       default_tools_approval_mode: "auto",
-      ...(policy.destructiveApprovalMode === "always" ? { approvals_reviewer: "user" } : {}),
     };
   }
-  return { apps };
+  const requiresUserApprovalsReviewer = requiresUserReviewerForAskPolicy(policyContext.apps);
+  return {
+    ...(requiresUserApprovalsReviewer ? { approvals_reviewer: "user" } : {}),
+    apps,
+  };
+}
+
+/** Returns true when any admitted app must route destructive approvals to the user. */
+export function requiresUserReviewerForAskPolicy(
+  apps: Record<string, PluginAppPolicyContextEntry>,
+): boolean {
+  // Codex routes approvals per thread. Human routing lets the per-app bridge
+  // enforce ask policy without changing the effective policy of sibling apps.
+  return Object.values(apps).some((policy) => policy.destructiveApprovalMode === "ask");
 }
 
 function buildPluginAppPolicyContext(

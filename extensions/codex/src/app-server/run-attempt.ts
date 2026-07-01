@@ -2508,6 +2508,7 @@ export async function runCodexAppServerAttempt(
       memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
       heartbeatCollaborationInstructions:
         workspaceBootstrapContext.heartbeatCollaborationInstructions,
+      pluginAppPolicyContext: thread.pluginAppPolicyContext,
     });
     codexModelCallDiagnostics.setRequestPayloadBytes(utf8JsonByteLength(turnStartParams));
     const startedTurn = assertCodexTurnStartResponse(

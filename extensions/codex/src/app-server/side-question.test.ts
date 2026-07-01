@@ -585,6 +585,50 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(toolOptions).toHaveProperty("requireExplicitMessageTarget", true);
   });
 
+  it("keeps ask plugin policy on the human reviewer for a side-thread fork", async () => {
+    readCodexAppServerBindingMock.mockResolvedValue({
+      schemaVersion: 2,
+      threadId: "parent-thread",
+      sessionFile: "/tmp/session-1.jsonl",
+      cwd: "/tmp/workspace",
+      authProfileId: "openai:work",
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      pluginAppPolicyContext: {
+        fingerprint: "plugin-policy-ask",
+        apps: {
+          "google-calendar-app": {
+            configKey: "google-calendar",
+            marketplaceName: "openai-curated",
+            pluginName: "google-calendar",
+            allowDestructiveActions: true,
+            destructiveApprovalMode: "ask",
+            mcpServerNames: ["google-calendar"],
+          },
+        },
+        pluginAppIds: {
+          "google-calendar": ["google-calendar-app"],
+        },
+      },
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    });
+    const client = createFakeClient();
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    await runCodexAppServerSideQuestion(sideParams(), {
+      pluginConfig: {
+        appServer: {
+          mode: "guardian",
+        },
+      },
+    });
+
+    const forkCall = client.request.mock.calls.find(([method]) => method === "thread/fork");
+    const forkParams = forkCall?.[1] as { approvalsReviewer?: string } | undefined;
+    expect(forkParams?.approvalsReviewer).toBe("user");
+  });
+
   it("disables hosted search when side-question sender policy removes managed web_search", async () => {
     createOpenClawCodingToolsMock.mockImplementation((options: { senderId?: string }) =>
       options.senderId === "restricted-sender"

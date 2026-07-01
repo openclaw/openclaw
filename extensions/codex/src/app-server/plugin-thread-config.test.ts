@@ -247,7 +247,7 @@ describe("Codex plugin thread config", () => {
       pluginConfig: {
         codexPlugins: {
           enabled: true,
-          allow_destructive_actions: "always",
+          allow_destructive_actions: "ask",
           plugins: {
             "google-calendar": {
               marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -265,15 +265,14 @@ describe("Codex plugin thread config", () => {
     const apps = config.configPatch?.apps as Record<string, unknown> | undefined;
     expect(apps?.["google-calendar-app"]).toEqual({
       enabled: true,
-      approvals_reviewer: "user",
       destructive_enabled: true,
       open_world_enabled: true,
       default_tools_approval_mode: "auto",
     });
-    expect(config.configPatch).not.toHaveProperty("approvals_reviewer");
+    expect(config.configPatch?.approvals_reviewer).toBe("user");
     expect(config.policyContext.apps["google-calendar-app"]).toMatchObject({
       allowDestructiveActions: true,
-      destructiveApprovalMode: "always",
+      destructiveApprovalMode: "ask",
     });
     expect(request).toHaveBeenCalledWith("config/read", { includeLayers: false });
     expect(request.mock.calls.filter(([method]) => method === "config/read")).toHaveLength(2);
@@ -298,14 +297,14 @@ describe("Codex plugin thread config", () => {
     ["auto", "auto", undefined],
     ["boolean true", true, undefined],
     ["boolean false", false, undefined],
-    ["always", "always", "user"],
+    ["ask", "ask", "user"],
   ] as const)(
-    "applies the resolved per-plugin %s reviewer policy over global always",
+    "applies the resolved per-plugin %s reviewer policy over global ask",
     async (_name, pluginOverride, expectedReviewer) => {
       const config = await buildReadyGoogleCalendarThreadConfig({
         codexPlugins: {
           enabled: true,
-          allow_destructive_actions: "always",
+          allow_destructive_actions: "ask",
           plugins: {
             "google-calendar": {
               marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -316,9 +315,7 @@ describe("Codex plugin thread config", () => {
         },
       });
 
-      const apps = config.configPatch?.apps as Record<string, unknown> | undefined;
-      const app = apps?.["google-calendar-app"] as Record<string, unknown> | undefined;
-      expect(app?.approvals_reviewer).toBe(expectedReviewer);
+      expect(config.configPatch?.approvals_reviewer).toBe(expectedReviewer);
       expect(config.policyContext.apps["google-calendar-app"]?.destructiveApprovalMode).toBe(
         pluginOverride === true ? "allow" : pluginOverride === false ? "deny" : pluginOverride,
       );
@@ -329,13 +326,13 @@ describe("Codex plugin thread config", () => {
     const configPatch = buildCodexPluginAppsConfigPatchFromPolicyContext({
       fingerprint: "policy",
       apps: {
-        "always-app": {
-          configKey: "always",
+        "ask-app": {
+          configKey: "ask",
           marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
-          pluginName: "always",
+          pluginName: "ask",
           allowDestructiveActions: true,
-          destructiveApprovalMode: "always",
-          mcpServerNames: ["always"],
+          destructiveApprovalMode: "ask",
+          mcpServerNames: ["ask"],
         },
         "auto-app": {
           configKey: "auto",
@@ -347,21 +344,21 @@ describe("Codex plugin thread config", () => {
         },
       },
       pluginAppIds: {
-        always: ["always-app"],
+        ask: ["ask-app"],
         auto: ["auto-app"],
       },
     });
 
     expect(configPatch).toEqual({
+      approvals_reviewer: "user",
       apps: {
         _default: {
           enabled: false,
           destructive_enabled: false,
           open_world_enabled: false,
         },
-        "always-app": {
+        "ask-app": {
           enabled: true,
-          approvals_reviewer: "user",
           destructive_enabled: true,
           open_world_enabled: true,
           default_tools_approval_mode: "auto",
@@ -374,10 +371,9 @@ describe("Codex plugin thread config", () => {
         },
       },
     });
-    expect(configPatch).not.toHaveProperty("approvals_reviewer");
   });
 
-  it("omits always policy apps when cwd effective approval overrides remain after cleanup", async () => {
+  it("omits ask policy apps when cwd effective approval overrides remain after cleanup", async () => {
     const appCache = new CodexAppInventoryCache();
     await appCache.refreshNow({
       key: "runtime",
@@ -426,7 +422,7 @@ describe("Codex plugin thread config", () => {
       pluginConfig: {
         codexPlugins: {
           enabled: true,
-          allow_destructive_actions: "always",
+          allow_destructive_actions: "ask",
           plugins: {
             "google-calendar": {
               marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -466,7 +462,7 @@ describe("Codex plugin thread config", () => {
           pluginName: "google-calendar",
           enabled: true,
           allowDestructiveActions: true,
-          destructiveApprovalMode: "always",
+          destructiveApprovalMode: "ask",
         },
         message:
           "Could not clear durable Codex app approval overrides for google-calendar-app: effective approval overrides remain for calendar/create",
@@ -474,7 +470,7 @@ describe("Codex plugin thread config", () => {
     ]);
   });
 
-  it("omits always policy apps when approval override writes are overridden", async () => {
+  it("omits ask policy apps when approval override writes are overridden", async () => {
     const appCache = new CodexAppInventoryCache();
     await appCache.refreshNow({
       key: "runtime",
@@ -520,7 +516,7 @@ describe("Codex plugin thread config", () => {
       pluginConfig: {
         codexPlugins: {
           enabled: true,
-          allow_destructive_actions: "always",
+          allow_destructive_actions: "ask",
           plugins: {
             "google-calendar": {
               marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -555,7 +551,7 @@ describe("Codex plugin thread config", () => {
           pluginName: "google-calendar",
           enabled: true,
           allowDestructiveActions: true,
-          destructiveApprovalMode: "always",
+          destructiveApprovalMode: "ask",
         },
         message:
           "Could not clear durable Codex app approval overrides for google-calendar-app: approval override for calendar/create is controlled by another config layer",
@@ -563,7 +559,7 @@ describe("Codex plugin thread config", () => {
     ]);
   });
 
-  it("omits always policy apps when durable approval override cleanup fails", async () => {
+  it("omits ask policy apps when durable approval override cleanup fails", async () => {
     const appCache = new CodexAppInventoryCache();
     await appCache.refreshNow({
       key: "runtime",
@@ -578,7 +574,7 @@ describe("Codex plugin thread config", () => {
       pluginConfig: {
         codexPlugins: {
           enabled: true,
-          allow_destructive_actions: "always",
+          allow_destructive_actions: "ask",
           plugins: {
             "google-calendar": {
               marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -627,7 +623,7 @@ describe("Codex plugin thread config", () => {
           pluginName: "google-calendar",
           enabled: true,
           allowDestructiveActions: true,
-          destructiveApprovalMode: "always",
+          destructiveApprovalMode: "ask",
         },
         message:
           "Could not clear durable Codex app approval overrides for google-calendar-app: readonly config",
