@@ -18,6 +18,7 @@ import {
   normalizeTelegramOutboundTarget,
   parseTelegramTarget,
   stripTelegramInternalPrefixes,
+  telegramContextTargetsMatch,
 } from "./targets.js";
 
 const numericTelegramTargetNormalizers = [
@@ -307,6 +308,76 @@ describe("telegram target normalization", () => {
     expect(looksLikeTelegramTargetId("telegram:123456")).toBe(true);
     expect(looksLikeTelegramTargetId("tg:group:-100123")).toBe(true);
     expect(looksLikeTelegramTargetId("hello world")).toBe(false);
+  });
+});
+
+describe("telegramContextTargetsMatch", () => {
+  it("matches bare user against topic-bound context", () => {
+    expect(
+      telegramContextTargetsMatch("477789300", {
+        currentMessagingTarget: "477789300:topic:340799",
+      }),
+    ).toBe(true);
+  });
+
+  it("matches bare user against bare context", () => {
+    expect(
+      telegramContextTargetsMatch("477789300", {
+        currentMessagingTarget: "477789300",
+      }),
+    ).toBe(true);
+  });
+
+  it("matches the same explicit topic in the same chat", () => {
+    expect(
+      telegramContextTargetsMatch("477789300:topic:340799", {
+        currentMessagingTarget: "477789300:topic:340799",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects a different explicit topic in the same chat", () => {
+    expect(
+      telegramContextTargetsMatch("477789300:topic:340800", {
+        currentMessagingTarget: "477789300:topic:340799",
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects an explicit topic target against a bare context", () => {
+    expect(
+      telegramContextTargetsMatch("477789300:topic:340799", {
+        currentMessagingTarget: "477789300",
+      }),
+    ).toBe(false);
+  });
+
+  it("matches via currentChannelId when currentMessagingTarget is absent", () => {
+    expect(
+      telegramContextTargetsMatch("477789300", {
+        currentChannelId: "477789300:topic:340799",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects a different chat", () => {
+    expect(
+      telegramContextTargetsMatch("999999999", {
+        currentMessagingTarget: "477789300:topic:340799",
+      }),
+    ).toBe(false);
+  });
+
+  it("strips the telegram prefix before comparison", () => {
+    expect(
+      telegramContextTargetsMatch("telegram:477789300", {
+        currentMessagingTarget: "telegram:477789300:topic:340799",
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false without any context targets", () => {
+    expect(telegramContextTargetsMatch("477789300", {})).toBe(false);
   });
 });
 

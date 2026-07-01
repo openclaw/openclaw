@@ -35,6 +35,40 @@ const mocks = vi.hoisted(() => ({
         },
       };
     }
+    if (channel === "telegram") {
+      return {
+        threading: {
+          matchesToolContextTarget: ({
+            target,
+            toolContext,
+          }: {
+            target: string;
+            toolContext: { currentMessagingTarget?: string; currentChannelId?: string };
+          }) => {
+            const parse = (value: string) => {
+              const match = /^(.+):topic:(\d+)$/.exec(value);
+              return match
+                ? { chatId: match[1], topic: match[2] }
+                : { chatId: value, topic: undefined };
+            };
+            const parsedTarget = parse(target);
+            const candidates = [
+              toolContext.currentMessagingTarget,
+              toolContext.currentChannelId,
+            ].filter((value): value is string => Boolean(value));
+            return candidates.some((candidate) => {
+              const parsedCandidate = parse(candidate);
+              if (parsedCandidate.chatId !== parsedTarget.chatId) {
+                return false;
+              }
+              return (
+                parsedTarget.topic === undefined || parsedTarget.topic === parsedCandidate.topic
+              );
+            });
+          },
+        },
+      };
+    }
     if (channel === "richchat") {
       return {
         messaging: {
@@ -297,6 +331,66 @@ describe("outbound policy helpers", () => {
         },
       }),
     ).not.toThrow();
+  });
+
+  it("allows a bare Telegram user target when bound to a topic context", () => {
+    expect(() =>
+      enforceCrossContextPolicy({
+        channel: "telegram",
+        action: "send",
+        args: { to: "477789300" },
+        toolContext: {
+          currentChannelId: "477789300:topic:340799",
+          currentMessagingTarget: "477789300:topic:340799",
+          currentChannelProvider: "telegram",
+        },
+        cfg: {
+          tools: {
+            message: { crossContext: { allowWithinProvider: false } },
+          },
+        },
+      }),
+    ).not.toThrow();
+  });
+
+  it("denies a different Telegram chat when within-provider sends are disabled", () => {
+    expect(() =>
+      enforceCrossContextPolicy({
+        channel: "telegram",
+        action: "send",
+        args: { to: "999999999" },
+        toolContext: {
+          currentChannelId: "477789300:topic:340799",
+          currentMessagingTarget: "477789300:topic:340799",
+          currentChannelProvider: "telegram",
+        },
+        cfg: {
+          tools: {
+            message: { crossContext: { allowWithinProvider: false } },
+          },
+        },
+      }),
+    ).toThrow(/Cross-context messaging denied/);
+  });
+
+  it("denies an explicit different Telegram topic when within-provider sends are disabled", () => {
+    expect(() =>
+      enforceCrossContextPolicy({
+        channel: "telegram",
+        action: "send",
+        args: { to: "477789300:topic:340800" },
+        toolContext: {
+          currentChannelId: "477789300:topic:340799",
+          currentMessagingTarget: "477789300:topic:340799",
+          currentChannelProvider: "telegram",
+        },
+        cfg: {
+          tools: {
+            message: { crossContext: { allowWithinProvider: false } },
+          },
+        },
+      }),
+    ).toThrow(/Cross-context messaging denied/);
   });
 
   it("uses presentation when available and preferred", async () => {
