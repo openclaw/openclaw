@@ -233,7 +233,7 @@ export function createPluginRuntime(_options: CreatePluginRuntimeOptions = {}): 
     // Sourced from the shared OpenClaw version resolver (#52899) so plugins
     // always see the same version the CLI reports, avoiding API-version drift.
     version: VERSION,
-    config: createRuntimeConfig(),
+    config: createRuntimeConfig(_options.getConfig),
     agent: createRuntimeAgent(),
     subagent: createLateBindingSubagent(
       _options.subagent,

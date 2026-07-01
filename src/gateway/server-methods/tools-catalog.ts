@@ -18,7 +18,10 @@ import {
   resolveCoreToolProfiles,
 } from "../../agents/tool-catalog.js";
 import { summarizeToolDescriptionText } from "../../agents/tool-description-summary.js";
+import { getRuntimeConfigSourceSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { listConfiguredBrokeredToolNames } from "../../plugins/credential-broker.js";
+import { loadManifestContractSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -74,8 +77,22 @@ function buildPluginGroups(params: {
 }): ToolCatalogGroup[] {
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const agentDir = resolveAgentDir(params.cfg, params.agentId);
+  const credentialBrokerSourceConfig = getRuntimeConfigSourceSnapshot() ?? params.cfg;
+  const manifestSnapshot = loadManifestContractSnapshot({
+    config: params.cfg,
+    workspaceDir,
+  });
+  const unscopedBrokeredToolKeys = new Set(
+    manifestSnapshot.plugins.flatMap((plugin) =>
+      listConfiguredBrokeredToolNames({
+        sourceConfig: credentialBrokerSourceConfig,
+        plugin,
+      }).map((toolName) => buildPluginToolMetadataKey(plugin.id, toolName)),
+    ),
+  );
   const toolContext = {
     config: params.cfg,
+    runtimeConfig: params.cfg,
     workspaceDir,
     agentDir,
     agentId: params.agentId,
@@ -84,6 +101,7 @@ function buildPluginGroups(params: {
     context: toolContext,
     toolAllowlist: ["group:plugins"],
     allowGatewaySubagentBinding: true,
+    credentialBrokerSourceConfig,
   });
   // Resolve tools through the same plugin registry path used at runtime so the
   // catalog respects conflicts, optional tools, and subagent binding rules.
@@ -94,6 +112,8 @@ function buildPluginGroups(params: {
     suppressNameConflicts: true,
     allowGatewaySubagentBinding: true,
     runtimeRegistry: toolRegistry,
+    credentialBrokerSourceConfig,
+    omitCredentialBrokerToolsWithoutContext: true,
   });
   const catalogRegistry = toolRegistry ?? getActivePluginRegistry();
   const groups = new Map<string, ToolCatalogGroup>();
@@ -153,7 +173,12 @@ function buildPluginGroups(params: {
   for (const entry of catalogRegistry?.tools ?? []) {
     const names = entry.names.length > 0 ? entry.names : (entry.declaredNames ?? []);
     for (const name of names) {
-      if (seenToolIds.has(name) || params.existingToolNames.has(name)) {
+      const toolKey = buildPluginToolMetadataKey(entry.pluginId, name);
+      if (
+        seenToolIds.has(name) ||
+        params.existingToolNames.has(name) ||
+        unscopedBrokeredToolKeys.has(toolKey)
+      ) {
         continue;
       }
       const groupId = `plugin:${entry.pluginId}`;

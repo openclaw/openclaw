@@ -22,6 +22,7 @@ const { resolveQueuedReplyExecutionConfig, resolveQueuedReplyRuntimeConfig } =
   await import("./agent-runner-utils.js");
 const { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
   await import("../../config/config.js");
+const { getRuntimeConfigSourcePair } = await import("../../config/runtime-snapshot.js");
 
 type ResolveCommandSecretRefsCall = {
   config: OpenClawConfig;
@@ -63,8 +64,10 @@ describe("resolveQueuedReplyExecutionConfig channel scope", () => {
 
   it("resolves base runtime targets, then active channel/account targets from originating context", async () => {
     const sourceConfig = { source: true } as unknown as OpenClawConfig;
+    const runtimeConfig = { runtime: true } as unknown as OpenClawConfig;
     const baseResolved = { baseResolved: true } as unknown as OpenClawConfig;
     const scopedResolved = { scopedResolved: true } as unknown as OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
     hoisted.resolveCommandSecretRefsViaGatewayMock
       .mockResolvedValueOnce({
         resolvedConfig: baseResolved,
@@ -89,7 +92,7 @@ describe("resolveQueuedReplyExecutionConfig channel scope", () => {
     expect(resolved).toBe(scopedResolved);
     expect(hoisted.resolveCommandSecretRefsViaGatewayMock).toHaveBeenCalledTimes(2);
     const baseCall = resolveCommandSecretRefsCall();
-    expect(baseCall.config).toBe(sourceConfig);
+    expect(baseCall.config).toBe(runtimeConfig);
     expect(baseCall.commandName).toBe("reply");
     expect(baseCall.targetIds).toEqual(new Set(["skills.entries.*.apiKey"]));
     expect(hoisted.getScopedChannelsCommandSecretTargetsMock).toHaveBeenCalledWith({
@@ -104,6 +107,8 @@ describe("resolveQueuedReplyExecutionConfig channel scope", () => {
     expect(scopedCall.allowedPaths).toEqual(
       new Set(["channels.discord.token", "channels.discord.accounts.work.token"]),
     );
+    expect(getRuntimeConfigSourcePair(baseResolved)).toBe(sourceConfig);
+    expect(getRuntimeConfigSourcePair(scopedResolved)).toBe(sourceConfig);
   });
 
   it("falls back to messageProvider and agentAccountId when originating values are missing", async () => {
@@ -119,6 +124,45 @@ describe("resolveQueuedReplyExecutionConfig channel scope", () => {
       channel: "discord",
       accountId: "ops",
     });
+  });
+
+  it("does not bless an unpaired stale runtime credential as authored config", async () => {
+    const sourceConfig = {
+      plugins: {
+        entries: {
+          tavily: {
+            config: {
+              webSearch: {
+                apiKey: { source: "env", provider: "default", id: "CURRENT_TAVILY_API_KEY" },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const currentRuntimeConfig = {
+      plugins: {
+        entries: { tavily: { config: { webSearch: { apiKey: "current-resolved-value" } } } },
+      },
+    } as OpenClawConfig;
+    const staleRuntimeConfig = {
+      plugins: {
+        entries: { tavily: { config: { webSearch: { apiKey: "stale-resolved-value" } } } },
+      },
+    } as OpenClawConfig;
+    const preparedConfig = structuredClone(staleRuntimeConfig);
+    setRuntimeConfigSnapshot(currentRuntimeConfig, sourceConfig);
+    hoisted.resolveCommandSecretRefsViaGatewayMock.mockResolvedValueOnce({
+      resolvedConfig: preparedConfig,
+      diagnostics: [],
+      targetStatesByPath: {},
+      hadUnresolvedTargets: false,
+    });
+
+    const resolved = await resolveQueuedReplyExecutionConfig(staleRuntimeConfig);
+
+    expect(resolved).toBe(preparedConfig);
+    expect(getRuntimeConfigSourcePair(preparedConfig)).toBeUndefined();
   });
 
   it("skips scoped channel resolution when no active channel can be resolved", async () => {

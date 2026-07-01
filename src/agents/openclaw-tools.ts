@@ -23,6 +23,10 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import {
+  resolveConversationCapabilityProfile,
+  type ResolvedConversationCapabilityProfile,
+} from "./conversation-capability-profile.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import {
   isToolExplicitlyAllowedByFactoryPolicy,
@@ -169,6 +173,8 @@ export function createOpenClawTools(
     authProfileStore?: AuthProfileStore;
     /** Ephemeral session UUID — regenerated on /new and /reset. */
     sessionId?: string;
+    /** Prepared conversation-scoped facts for host-owned security boundaries. */
+    conversationCapabilityProfile?: ResolvedConversationCapabilityProfile;
     /**
      * Explicit one-shot local CLI runs should not keep plugin-owned process
      * resources alive after emitting their result.
@@ -209,6 +215,38 @@ export function createOpenClawTools(
   const spawnWorkspaceDir = resolveWorkspaceRoot(
     options?.spawnWorkspaceDir ?? options?.workspaceDir ?? inferredWorkspaceDir,
   );
+  const conversationCapabilityProfile =
+    options?.conversationCapabilityProfile ??
+    resolveConversationCapabilityProfile({
+      config: resolvedConfig,
+      sessionKey: options?.agentSessionKey,
+      runSessionKey: options?.runSessionKey,
+      sessionId: options?.sessionId,
+      runId: options?.runId,
+      agentId: options?.requesterAgentIdOverride ?? sessionAgentId,
+      agentDir: options?.agentDir,
+      agentAccountId: options?.agentAccountId,
+      messageProvider: options?.agentChannel,
+      messageChannel: options?.agentChannel,
+      messageTo: options?.agentTo,
+      messageThreadId: options?.agentThreadId,
+      currentChannelId: options?.currentChannelId,
+      currentMessagingTarget: options?.currentMessagingTarget,
+      currentThreadTs: options?.currentThreadTs,
+      currentMessageId: options?.currentMessageId,
+      groupId: options?.agentGroupId,
+      groupChannel: options?.agentGroupChannel,
+      groupSpace: options?.agentGroupSpace,
+      memberRoleIds: options?.agentMemberRoleIds,
+      senderId: options?.requesterSenderId,
+      senderIsOwner: options?.senderIsOwner,
+      modelProvider: options?.modelProvider,
+      modelId: options?.modelId,
+      modelHasVision: options?.modelHasVision,
+      workspaceDir,
+      spawnWorkspaceDir,
+      runtimeToolAllowlist: options?.pluginToolAllowlist,
+    });
   options?.recordToolPrepStage?.("openclaw-tools:session-workspace");
   const deliveryContext = normalizeDeliveryContext({
     channel: options?.agentChannel,
@@ -569,7 +607,7 @@ export function createOpenClawTools(
     allTools = [
       ...tools,
       ...resolveOpenClawPluginToolsForOptions({
-        options,
+        options: { ...options, conversationCapabilityProfile },
         resolvedConfig,
         existingToolNames,
       }),

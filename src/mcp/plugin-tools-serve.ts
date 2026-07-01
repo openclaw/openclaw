@@ -16,7 +16,7 @@ import {
   resolveToolProfilePolicy,
 } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig, getRuntimeConfigSourceSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { routeLogsToStderr } from "../logging/console.js";
@@ -40,17 +40,24 @@ function resolvePluginToolPolicy(config: OpenClawConfig): {
   };
 }
 
-function resolveTools(config: OpenClawConfig): AnyAgentTool[] {
+function resolveTools(config: OpenClawConfig, sourceConfig: OpenClawConfig): AnyAgentTool[] {
   const pluginToolPolicy = resolvePluginToolPolicy(config);
+  const context = {
+    config,
+    runtimeConfig: config,
+  };
   const runtimeRegistry = ensureStandalonePluginToolRegistryLoaded({
-    context: { config },
+    context,
     ...pluginToolPolicy,
+    credentialBrokerSourceConfig: sourceConfig,
   });
   return resolvePluginTools({
-    context: { config },
+    context,
     ...pluginToolPolicy,
     suppressNameConflicts: true,
     runtimeRegistry,
+    credentialBrokerSourceConfig: sourceConfig,
+    omitCredentialBrokerToolsWithoutContext: true,
   });
 }
 
@@ -61,7 +68,8 @@ export function createPluginToolsMcpServer(
   } = {},
 ): Server {
   const cfg = params.config ?? getRuntimeConfig();
-  const tools = params.tools ?? resolveTools(cfg);
+  const sourceConfig = params.config ? params.config : (getRuntimeConfigSourceSnapshot() ?? cfg);
+  const tools = params.tools ?? resolveTools(cfg, sourceConfig);
   return createToolsMcpServer({ name: "openclaw-plugin-tools", tools });
 }
 
@@ -71,7 +79,7 @@ export async function servePluginToolsMcp(): Promise<void> {
   routeLogsToStderr();
 
   const config = getRuntimeConfig();
-  const tools = resolveTools(config);
+  const tools = resolveTools(config, getRuntimeConfigSourceSnapshot() ?? config);
   const server = createPluginToolsMcpServer({ config, tools });
   if (tools.length === 0) {
     process.stderr.write("plugin-tools-serve: no plugin tools found\n");

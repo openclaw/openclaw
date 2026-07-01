@@ -923,6 +923,7 @@ export function createOpenClawCodingTools(options?: {
             requesterAgentIdOverride: agentId,
             allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
             authProfileStore: options?.authProfileStore,
+            conversationCapabilityProfile: capabilityProfile,
           },
           resolvedConfig: options?.config,
         });
@@ -1021,6 +1022,7 @@ export function createOpenClawCodingTools(options?: {
           requesterSenderId: options?.senderId,
           senderIsOwner: options?.senderIsOwner,
           authProfileStore: options?.authProfileStore,
+          conversationCapabilityProfile: capabilityProfile,
           sessionId: options?.sessionId,
           oneShotCliRun: options?.oneShotCliRun,
           inheritedToolAllowlist,

@@ -125,7 +125,10 @@ import {
   type RuntimeConfigSnapshotRefreshOptions,
   type RuntimeConfigWriteNotification,
 } from "./runtime-snapshot.js";
-export { projectConfigOntoRuntimeSourceSnapshot } from "./runtime-source-projection.js";
+export {
+  applyMergePatchToPairedRuntimeConfig,
+  projectConfigOntoRuntimeSourceSnapshot,
+} from "./runtime-source-projection.js";
 import { resolveShellEnvExpectedKeys } from "./shell-env-expected-keys.js";
 import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {

@@ -187,6 +187,7 @@ or npm install metadata. Those belong in your plugin code and `package.json`.
 | `videoGenerationProviderMetadata`    | No       | `Record<string, object>`         | Cheap video-generation auth metadata for provider ids declared in `contracts.videoGenerationProviders`, including provider-owned auth aliases and base-url guards.                                                                              |
 | `musicGenerationProviderMetadata`    | No       | `Record<string, object>`         | Cheap music-generation auth metadata for provider ids declared in `contracts.musicGenerationProviders`, including provider-owned auth aliases and base-url guards.                                                                              |
 | `toolMetadata`                       | No       | `Record<string, object>`         | Cheap availability metadata for plugin-owned tools declared in `contracts.tools`. Use it when a tool should not load runtime unless config, env, or auth evidence exists.                                                                       |
+| `credentialBroker`                   | No       | `object`                         | Narrow manifest-declared credentialed operations for plugin tools. Structured SecretRefs stay host-owned and execute through conversation-scoped opaque request handles.                                                                        |
 | `channelConfigs`                     | No       | `Record<string, object>`         | Manifest-owned channel config metadata merged into discovery and validation surfaces before runtime loads.                                                                                                                                      |
 | `skills`                             | No       | `string[]`                       | Skill directories to load, relative to the plugin root.                                                                                                                                                                                         |
 | `name`                               | No       | `string`                         | Human-readable plugin name.                                                                                                                                                                                                                     |
@@ -335,6 +336,109 @@ If a tool has no `toolMetadata`, OpenClaw preserves the existing behavior and
 loads the owning plugin when the tool contract matches policy. For hot-path
 tools whose factory depends on auth/config, plugin authors should declare
 `toolMetadata` instead of making core import runtime to ask.
+
+## credentialBroker reference
+
+Use `credentialBroker` when a plugin tool must make one fixed credentialed
+JSON request without receiving the resolved credential. This is a narrow host
+request boundary, not a general HTTP client or process isolation from installed
+plugin code.
+
+```json
+{
+  "contracts": {
+    "tools": ["team_operation_run"]
+  },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [{ "path": "service.apiKey", "expected": "string" }]
+    }
+  },
+  "credentialBroker": {
+    "operations": [
+      {
+        "id": "run",
+        "tool": "team_operation_run",
+        "secretInputPath": "service.apiKey",
+        "baseUrlConfigPath": "service.baseUrl",
+        "baseUrlEnv": "SERVICE_BASE_URL",
+        "defaultBaseUrl": "https://api.example.com",
+        "path": "/v1/run",
+        "method": "POST",
+        "credentialHeader": "Authorization",
+        "credentialScheme": "Bearer",
+        "headers": {
+          "X-Client-Source": "openclaw"
+        },
+        "maxRequestBodyBytes": 131072,
+        "maxResponseBodyBytes": 16777216,
+        "timeoutMs": 30000
+      }
+    ]
+  }
+}
+```
+
+| Operation field        | Required | Meaning                                                                                                                                                             |
+| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`                   | Yes      | Stable operation id passed to the plugin's broker client.                                                                                                           |
+| `tool`                 | Yes      | Owning tool name. It must match the plugin's runtime registration and `contracts.tools`.                                                                            |
+| `secretInputPath`      | Yes      | Dot path relative to `plugins.entries.<id>.config`. It must match a `configContracts.secretInputs.paths` entry; only a canonical structured SecretRef activates it. |
+| `baseUrlConfigPath`    | No       | Optional dot path for an operator-configured HTTPS base URL.                                                                                                        |
+| `baseUrlEnv`           | No       | Optional existing environment variable for the HTTPS base URL. Config takes precedence.                                                                             |
+| `defaultBaseUrl`       | Yes      | Credential-free HTTPS base URL. Userinfo, query strings, and fragments are rejected.                                                                                |
+| `path`                 | Yes      | Fixed request path appended to the base URL.                                                                                                                        |
+| `method`               | Yes      | `POST`. Other methods are rejected.                                                                                                                                 |
+| `credentialHeader`     | Yes      | `Authorization` or `X-Api-Key`.                                                                                                                                     |
+| `credentialScheme`     | No       | Optional scheme such as `Bearer`.                                                                                                                                   |
+| `headers`              | No       | Static, non-credential request headers. Only `Accept`, `Accept-Language`, `User-Agent`, `X-Client-Source`, and `X-Client-Version` are accepted.                     |
+| `maxRequestBodyBytes`  | Yes      | Positive JSON request-body limit, at most 1 MiB.                                                                                                                    |
+| `maxResponseBodyBytes` | Yes      | Positive JSON response-body limit, at most 64 MiB.                                                                                                                  |
+| `timeoutMs`            | Yes      | Positive request timeout, at most 120 seconds.                                                                                                                      |
+
+When a structured SecretRef activates an operation, OpenClaw restores that
+opaque reference before loading the owning tool-discovery plugin, then removes
+the credential path from the tool factory's `config`, `runtimeConfig`, and live
+config getter. The factory receives `credentialBroker` instead:
+
+```typescript
+const handle = context.credentialBroker?.createRequest({
+  operationId: "run",
+  body: { taskId },
+});
+const result = await handle?.execute({ signal });
+```
+
+The handle exposes only an id, operation id, expiry, and lifecycle state. It is
+single-use, expires after 30 seconds, supports pre-execution revocation, and is
+invalid after process restart. It never serializes the request body, SecretRef,
+or resolved value.
+
+Broker authorization reuses the prepared conversation capability profile and
+existing layered tool policy. The profile must contain agent, conversation,
+channel, and sender identity; the normal default-plugin selection or an active
+policy must allow the tool, plugin id, or `group:plugins`; and every active
+deny/narrowing policy still wins. Missing scope, an optional tool without an
+explicit grant, or a tool excluded by a narrowing policy fails closed.
+Scope-less MCP and control-plane catalogs omit tools activated by structured
+SecretRefs instead of advertising an operation they cannot authorize.
+
+Execution materializes the value from the resolved runtime snapshot paired with
+the prepared run, only inside the broker closure; it does not rerun file or exec
+secret providers on the request path. The request uses the existing guarded
+trusted-endpoint path, pins the declared hostname while honoring standard proxy
+routing, requires HTTPS, disables redirects and debug request capture, and
+enforces the declared timeout and size limits. Returned JSON is redacted for the
+exact credential value before it crosses back to plugin code. Errors contain
+stable broker text or an HTTP status only, never provider response bodies or
+resolver details.
+
+Literal string credentials and environment-variable fallback do not activate
+the broker. A consumer may retain those existing paths for compatibility, but
+must not fall back from a configured structured SecretRef to plaintext.
+Invalid, duplicate, empty, or over-limit broker declarations invalidate the
+plugin manifest so a rejected operation can never fall through to resolved
+plugin config.
 
 ## providerAuthChoices reference
 

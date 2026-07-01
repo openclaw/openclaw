@@ -23,7 +23,12 @@ import {
   selectApplicableRuntimeConfig,
   type OpenClawConfig,
 } from "../../config/config.js";
+import {
+  getRuntimeConfigSourcePair,
+  registerRuntimeConfigSourcePair,
+} from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { hasSecretRefCandidate } from "../../secrets/runtime-secret-scan.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
 import {
@@ -74,12 +79,20 @@ export async function resolveQueuedReplyExecutionConfig(
   },
 ): Promise<OpenClawConfig> {
   const runtimeConfig = resolveQueuedReplyRuntimeConfig(config);
+  const sourceConfig =
+    getRuntimeConfigSourcePair(runtimeConfig) ??
+    (hasSecretRefCandidate(runtimeConfig, undefined) ? runtimeConfig : undefined);
   const { resolvedConfig } = await resolveCommandSecretRefsViaGateway({
     config: runtimeConfig,
     commandName: "reply",
     targetIds: getAgentRuntimeCommandSecretTargetIds(),
   });
   const baseResolvedConfig = resolvedConfig ?? runtimeConfig;
+  // Derived prepared configs must retain their authored SecretRefs across snapshot refreshes.
+  // Otherwise a later tool assembly could mistake resolved credentials for literal plugin config.
+  if (sourceConfig) {
+    registerRuntimeConfigSourcePair(baseResolvedConfig, sourceConfig);
+  }
 
   const scope = resolveMessageSecretScope({
     channel: params?.originatingChannel,
@@ -106,7 +119,11 @@ export async function resolveQueuedReplyExecutionConfig(
     targetIds: scopedTargets.targetIds,
     ...(scopedTargets.allowedPaths ? { allowedPaths: scopedTargets.allowedPaths } : {}),
   });
-  return scopedResolved.resolvedConfig ?? baseResolvedConfig;
+  const scopedResolvedConfig = scopedResolved.resolvedConfig ?? baseResolvedConfig;
+  if (sourceConfig) {
+    registerRuntimeConfigSourcePair(scopedResolvedConfig, sourceConfig);
+  }
+  return scopedResolvedConfig;
 }
 
 /**

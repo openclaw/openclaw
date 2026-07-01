@@ -200,6 +200,126 @@ describe("loadPluginManifest JSON5 tolerance", () => {
     }
   });
 
+  it("normalizes bounded credential broker operations", () => {
+    const dir = makeTempDir();
+    fs.writeFileSync(
+      path.join(dir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "brokered-plugin",
+        contracts: { tools: ["brokered_action"] },
+        configContracts: {
+          secretInputs: { paths: [{ path: "service.token", expected: "string" }] },
+        },
+        credentialBroker: {
+          operations: [
+            {
+              id: "action",
+              tool: "brokered_action",
+              secretInputPath: "service.token",
+              baseUrlConfigPath: "service.baseUrl",
+              baseUrlEnv: "SERVICE_BASE_URL",
+              defaultBaseUrl: "https://api.example.test/v1",
+              path: "/action",
+              method: "POST",
+              credentialHeader: "authorization",
+              credentialScheme: "Bearer",
+              headers: {
+                "X-Client-Source": "openclaw",
+              },
+              maxRequestBodyBytes: 4096,
+              maxResponseBodyBytes: 8192,
+              timeoutMs: 5000,
+            },
+          ],
+        },
+        configSchema: { type: "object" },
+      }),
+      "utf-8",
+    );
+
+    const result = loadPluginManifest(dir, false);
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.manifest.credentialBroker).toEqual({
+        operations: [
+          {
+            id: "action",
+            tool: "brokered_action",
+            secretInputPath: "service.token",
+            baseUrlConfigPath: "service.baseUrl",
+            baseUrlEnv: "SERVICE_BASE_URL",
+            defaultBaseUrl: "https://api.example.test/v1",
+            path: "/action",
+            method: "POST",
+            credentialHeader: "Authorization",
+            credentialScheme: "Bearer",
+            headers: { "X-Client-Source": "openclaw" },
+            maxRequestBodyBytes: 4096,
+            maxResponseBodyBytes: 8192,
+            timeoutMs: 5000,
+          },
+        ],
+      });
+    }
+  });
+
+  it("rejects the manifest when any credential broker operation is unsafe", () => {
+    const dir = makeTempDir();
+    const operation = {
+      id: "action",
+      tool: "brokered_action",
+      secretInputPath: "service.token",
+      defaultBaseUrl: "https://api.example.test",
+      path: "/action",
+      method: "POST",
+      credentialHeader: "Authorization",
+      maxRequestBodyBytes: 4096,
+      maxResponseBodyBytes: 8192,
+      timeoutMs: 5000,
+    };
+    fs.writeFileSync(
+      path.join(dir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "unsafe-brokered-plugin",
+        contracts: { tools: ["brokered_action"] },
+        configContracts: {
+          secretInputs: { paths: [{ path: "service.token", expected: "string" }] },
+        },
+        credentialBroker: {
+          operations: [
+            operation,
+            { ...operation, id: "insecure", defaultBaseUrl: "http://api.example.test" },
+            { ...operation, id: "read", method: "GET" },
+            { ...operation, id: "cookie", credentialHeader: "Cookie" },
+            { ...operation, id: "traversal", secretInputPath: "service..token" },
+            { ...operation, id: "environment", baseUrlEnv: "unsafe-env-name" },
+            { ...operation, id: "header", headers: { Authorization: "static-secret" } },
+            {
+              ...operation,
+              id: "routing-header",
+              headers: { "X-Original-URL": "/admin" },
+            },
+            {
+              ...operation,
+              id: "method-header",
+              headers: { "X-HTTP-Method-Override": "GET" },
+            },
+          ],
+        },
+        configSchema: { type: "object" },
+      }),
+      "utf-8",
+    );
+
+    const result = loadPluginManifest(dir, false);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toBe("plugin manifest credentialBroker is invalid");
+    }
+  });
+
   it("still rejects completely invalid syntax", () => {
     const dir = makeTempDir();
     fs.writeFileSync(path.join(dir, "openclaw.plugin.json"), "not json at all {{{}}", "utf-8");

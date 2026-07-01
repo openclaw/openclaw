@@ -20,6 +20,7 @@ const callGatewayTool = vi.hoisted(() => vi.fn());
 const connectToolsMcpServerToStdioMock = vi.hoisted(() => vi.fn());
 const createToolsMcpServerMock = vi.hoisted(() => vi.fn(() => ({ close: vi.fn() })));
 const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({ plugins: { enabled: true } })));
+const getRuntimeConfigSourceSnapshotMock = vi.hoisted(() => vi.fn(() => null));
 const ensureStandalonePluginToolRegistryLoadedMock = vi.hoisted(() => vi.fn());
 const resolvePluginToolsMock = vi.hoisted(() => vi.fn<() => AnyAgentTool[]>(() => []));
 const routeLogsToStderrMock = vi.hoisted(() => vi.fn());
@@ -30,6 +31,7 @@ vi.mock("../agents/tools/gateway.js", () => ({
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: getRuntimeConfigMock,
+  getRuntimeConfigSourceSnapshot: getRuntimeConfigSourceSnapshotMock,
 }));
 
 vi.mock("../logging/console.js", async (importOriginal) => {
@@ -61,6 +63,8 @@ afterEach(() => {
   createToolsMcpServerMock.mockClear();
   ensureStandalonePluginToolRegistryLoadedMock.mockReset();
   getRuntimeConfigMock.mockClear();
+  getRuntimeConfigSourceSnapshotMock.mockReset();
+  getRuntimeConfigSourceSnapshotMock.mockReturnValue(null);
   resolvePluginToolsMock.mockReset();
   resolvePluginToolsMock.mockReturnValue([]);
   routeLogsToStderrMock.mockReset();
@@ -104,11 +108,18 @@ describe("plugin tools MCP server", () => {
 
     expect(routeLogsToStderrMock).toHaveBeenCalledTimes(1);
     expect(ensureStandalonePluginToolRegistryLoadedMock).toHaveBeenCalledWith({
-      context: { config: { plugins: { enabled: true } } },
+      context: {
+        config: { plugins: { enabled: true } },
+        runtimeConfig: { plugins: { enabled: true } },
+      },
+      credentialBrokerSourceConfig: { plugins: { enabled: true } },
     });
     expect(resolvePluginToolsMock).toHaveBeenCalledTimes(1);
     expect(resolvePluginToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({ runtimeRegistry }),
+      expect.objectContaining({
+        runtimeRegistry,
+        omitCredentialBrokerToolsWithoutContext: true,
+      }),
     );
     expect(ensureStandalonePluginToolRegistryLoadedMock.mock.invocationCallOrder[0]).toBeLessThan(
       resolvePluginToolsMock.mock.invocationCallOrder[0] ?? 0,
@@ -117,6 +128,38 @@ describe("plugin tools MCP server", () => {
       resolvePluginToolsMock.mock.invocationCallOrder[0] ?? 0,
     );
     expect(connectToolsMcpServerToStdioMock).toHaveBeenCalledOnce();
+  });
+
+  it("keeps source SecretRefs separate from the resolved plugin tool config", async () => {
+    const sourceConfig = {
+      plugins: {
+        enabled: true,
+        entries: {
+          tavily: {
+            config: {
+              webSearch: {
+                apiKey: { source: "env", provider: "default", id: "TAVILY_API_KEY" },
+              },
+            },
+          },
+        },
+      },
+    };
+    const runtimeConfig = structuredClone(sourceConfig);
+    runtimeConfig.plugins.entries.tavily.config.webSearch.apiKey = "resolved-value" as never;
+    getRuntimeConfigMock.mockReturnValueOnce(runtimeConfig as never);
+    getRuntimeConfigSourceSnapshotMock.mockReturnValueOnce(sourceConfig as never);
+    const { servePluginToolsMcp } = await import("./plugin-tools-serve.js");
+
+    await servePluginToolsMcp();
+
+    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: { config: runtimeConfig, runtimeConfig },
+        credentialBrokerSourceConfig: sourceConfig,
+        omitCredentialBrokerToolsWithoutContext: true,
+      }),
+    );
   });
 
   it("threads global plugin tool policy into plugin resolution", async () => {

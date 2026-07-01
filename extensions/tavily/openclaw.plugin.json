@@ -15,7 +15,7 @@
   "uiHints": {
     "webSearch.apiKey": {
       "label": "Tavily API Key",
-      "help": "Tavily API key for web search and extraction (fallback: TAVILY_API_KEY env var).",
+      "help": "Tavily API key for web search and extraction. Structured SecretRefs use the scoped broker for explicit Tavily tools; fallback: TAVILY_API_KEY.",
       "sensitive": true,
       "placeholder": "tvly-..."
     },
@@ -28,8 +28,47 @@
     "webSearchProviders": ["tavily"],
     "tools": ["tavily_search", "tavily_extract"]
   },
+  "credentialBroker": {
+    "operations": [
+      {
+        "id": "search",
+        "tool": "tavily_search",
+        "secretInputPath": "webSearch.apiKey",
+        "baseUrlConfigPath": "webSearch.baseUrl",
+        "baseUrlEnv": "TAVILY_BASE_URL",
+        "defaultBaseUrl": "https://api.tavily.com",
+        "path": "/search",
+        "method": "POST",
+        "credentialHeader": "Authorization",
+        "credentialScheme": "Bearer",
+        "headers": { "X-Client-Source": "openclaw" },
+        "maxRequestBodyBytes": 131072,
+        "maxResponseBodyBytes": 16777216,
+        "timeoutMs": 30000
+      },
+      {
+        "id": "extract",
+        "tool": "tavily_extract",
+        "secretInputPath": "webSearch.apiKey",
+        "baseUrlConfigPath": "webSearch.baseUrl",
+        "baseUrlEnv": "TAVILY_BASE_URL",
+        "defaultBaseUrl": "https://api.tavily.com",
+        "path": "/extract",
+        "method": "POST",
+        "credentialHeader": "Authorization",
+        "credentialScheme": "Bearer",
+        "headers": { "X-Client-Source": "openclaw" },
+        "maxRequestBodyBytes": 131072,
+        "maxResponseBodyBytes": 67108864,
+        "timeoutMs": 60000
+      }
+    ]
+  },
   "configContracts": {
-    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
+    "compatibilityRuntimePaths": ["tools.web.search.apiKey"],
+    "secretInputs": {
+      "paths": [{ "path": "webSearch.apiKey", "expected": "string" }]
+    }
   },
   "configSchema": {
     "type": "object",

@@ -90,6 +90,7 @@ export type RuntimeConfigSnapshotMetadata = {
 
 let runtimeConfigSnapshot: OpenClawConfig | null = null;
 let runtimeConfigSourceSnapshot: OpenClawConfig | null = null;
+let runtimeConfigSourcePairs = new WeakMap<OpenClawConfig, OpenClawConfig>();
 let runtimeConfigSnapshotMetadata: RuntimeConfigSnapshotMetadata | null = null;
 let runtimeConfigSnapshotRevision = 0;
 let runtimeConfigSnapshotRefreshHandler: RuntimeConfigSnapshotRefreshHandler | null = null;
@@ -143,12 +144,28 @@ export function setRuntimeConfigSnapshot(
 ): void {
   runtimeConfigSnapshot = config;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
+  if (sourceConfig) {
+    registerRuntimeConfigSourcePair(config, sourceConfig);
+  }
   runtimeConfigSnapshotMetadata = createRuntimeConfigSnapshotMetadata(config, sourceConfig);
+}
+
+/** Retains the authored source paired with a prepared runtime config for its object lifetime. */
+export function registerRuntimeConfigSourcePair(
+  config: OpenClawConfig,
+  sourceConfig: OpenClawConfig,
+): void {
+  runtimeConfigSourcePairs.set(config, sourceConfig);
+}
+
+export function getRuntimeConfigSourcePair(config: OpenClawConfig): OpenClawConfig | undefined {
+  return runtimeConfigSourcePairs.get(config);
 }
 
 export function resetConfigRuntimeState(): void {
   runtimeConfigSnapshot = null;
   runtimeConfigSourceSnapshot = null;
+  runtimeConfigSourcePairs = new WeakMap<OpenClawConfig, OpenClawConfig>();
   runtimeConfigSnapshotMetadata = null;
   runtimeConfigSnapshotRevision = 0;
 }

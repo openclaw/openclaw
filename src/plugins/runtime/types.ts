@@ -1,4 +1,5 @@
 // Plugin runtime types describe activated plugin capabilities exposed to core execution.
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/operator-scopes.js";
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
 
@@ -102,4 +103,6 @@ export type CreatePluginRuntimeOptions = {
   subagent?: PluginRuntime["subagent"];
   nodes?: PluginRuntime["nodes"];
   allowGatewaySubagentBinding?: boolean;
+  /** Host-prepared live config view for an isolated plugin discovery runtime. */
+  getConfig?: () => OpenClawConfig;
 };

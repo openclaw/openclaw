@@ -2,8 +2,13 @@
  * Regression coverage for local-model lean tool filtering.
  * Verifies agent scope, default flags, preserve lists, and message-tool overrides.
  */
-import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "../config/config.js";
+import { getRuntimeConfigSourcePair } from "../config/runtime-snapshot.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import {
   applyLocalModelLeanToolSearchDefaults,
@@ -17,6 +22,10 @@ function tools(names: string[]): AnyAgentTool[] {
 }
 
 describe("local model lean tool filtering", () => {
+  afterEach(() => {
+    resetConfigRuntimeState();
+  });
+
   it("filters heavyweight tools for one configured agent", () => {
     const cfg: OpenClawConfig = {
       agents: {
@@ -252,6 +261,30 @@ describe("local model lean tool filtering", () => {
       maxSearchLimit: 10,
     });
     expect(cfg.tools?.toolSearch).toBeUndefined();
+  });
+
+  it("retains explicit SecretRef provenance when deriving lean config", () => {
+    const secretRef = { source: "env", provider: "default", id: "LEAN_BROKER_TOKEN" } as const;
+    const sourceConfig = {
+      agents: { defaults: { experimental: { localModelLean: true } } },
+      plugins: {
+        entries: { brokered: { config: { service: { token: secretRef } } } },
+      },
+    } as OpenClawConfig;
+    const runtimeConfig = structuredClone(sourceConfig);
+    const runtimePluginConfig = runtimeConfig.plugins?.entries?.brokered?.config as {
+      service: { token: unknown };
+    };
+    runtimePluginConfig.service.token = "resolved-lean-credential";
+    setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+
+    const resolved = applyLocalModelLeanToolSearchDefaults({
+      config: runtimeConfig,
+      agentId: "main",
+    });
+
+    expect(resolved).not.toBe(runtimeConfig);
+    expect(getRuntimeConfigSourcePair(resolved!)).toMatchObject(sourceConfig);
   });
 
   it("preserves explicit Tool Search operator config", () => {

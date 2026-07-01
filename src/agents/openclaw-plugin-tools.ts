@@ -6,10 +6,12 @@
  */
 import { selectApplicableRuntimeConfig } from "../config/config.js";
 import {
+  getRuntimeConfigSourcePair,
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasPreparedCredentialBrokerScope } from "../plugins/credential-broker.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import { resolveApiKeyForProfile, resolveAuthProfileOrder } from "./auth-profiles.js";
@@ -92,6 +94,22 @@ export function resolveOpenClawPluginToolsForOptions(params: {
           provider: providerId,
         })
     : undefined;
+  const credentialBrokerRuntimeConfig = resolveCurrentRuntimeConfig();
+  const pairedCredentialBrokerSourceConfig = credentialBrokerRuntimeConfig
+    ? getRuntimeConfigSourcePair(credentialBrokerRuntimeConfig)
+    : undefined;
+  // A process-global source snapshot is credential metadata only for its paired runtime.
+  // Unrelated explicit configs keep their own literal/env semantics.
+  const credentialBrokerSourceConfig =
+    pairedCredentialBrokerSourceConfig ?? credentialBrokerRuntimeConfig;
+  const pairedCredentialBrokerRuntimeConfig = pairedCredentialBrokerSourceConfig
+    ? credentialBrokerRuntimeConfig
+    : undefined;
+  const conversationCapabilityProfile = params.options?.conversationCapabilityProfile;
+  const hasPreparedBrokerScope = Boolean(
+    conversationCapabilityProfile &&
+    hasPreparedCredentialBrokerScope(conversationCapabilityProfile),
+  );
   const hasAuthForProvider = authProfileStore
     ? (providerId: string) => (resolveAuthProfileIdsForProvider?.(providerId) ?? []).length > 0
     : undefined;
@@ -129,6 +147,19 @@ export function resolveOpenClawPluginToolsForOptions(params: {
     toolDenylist: params.options?.pluginToolDenylist,
     allowGatewaySubagentBinding: params.options?.allowGatewaySubagentBinding,
     ...(hasAuthForProvider ? { hasAuthForProvider } : {}),
+    ...(credentialBrokerSourceConfig ? { credentialBrokerSourceConfig } : {}),
+    ...(hasPreparedBrokerScope && conversationCapabilityProfile && credentialBrokerSourceConfig
+      ? {
+          credentialBrokerContext: {
+            profile: conversationCapabilityProfile,
+            sourceConfig: credentialBrokerSourceConfig,
+            ...(pairedCredentialBrokerRuntimeConfig
+              ? { runtimeConfig: pairedCredentialBrokerRuntimeConfig }
+              : {}),
+          },
+        }
+      : {}),
+    omitCredentialBrokerToolsWithoutContext: true,
   });
 
   return applyPluginToolDeliveryDefaults({

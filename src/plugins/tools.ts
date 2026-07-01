@@ -7,9 +7,19 @@ import {
 import { compileGlobPatterns, matchesAnyGlobPattern } from "../agents/glob-pattern.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
+import {
+  bindCredentialBrokerToToolContext,
+  createCredentialBrokerSafeConfigGetter,
+  createCredentialBrokerClient,
+  hasConfiguredBrokeredSecretInputs,
+  listConfiguredBrokeredToolNames,
+  projectConfiguredBrokeredSecretInputs,
+  type CredentialBrokerContext,
+} from "./credential-broker.js";
 import type { PluginLoadOptions } from "./loader.js";
 import {
   isManifestPluginAvailableForControlPlane,
@@ -201,9 +211,39 @@ function wrapPluginToolFactoryResult(
   return isAgentTool(result) ? wrapPluginToolCallbacks(entry, result) : result;
 }
 
-function resolvePluginToolFactory(entry: PluginToolRegistration, ctx: OpenClawPluginToolContext) {
+function resolvePluginToolFactory(
+  entry: PluginToolRegistration,
+  ctx: OpenClawPluginToolContext,
+  manifestPlugin?: PluginManifestRecord,
+  credentialBrokerContext?: CredentialBrokerContext,
+  credentialBrokerSourceConfig?: OpenClawConfig,
+) {
+  const operations = manifestPlugin?.credentialBroker?.operations;
+  const credentialBroker =
+    operations && credentialBrokerContext
+      ? createCredentialBrokerClient({
+          pluginId: entry.pluginId,
+          operations,
+          registrationToolNames: entry.names.length > 0 ? entry.names : (entry.declaredNames ?? []),
+          defaultToolNames: operations
+            .map((operation) => operation.tool)
+            .filter((toolName) => !isPluginToolOptional({ entry, manifestPlugin, toolName })),
+          context: credentialBrokerContext,
+        })
+      : undefined;
+  const brokerSourceConfig = credentialBrokerSourceConfig ?? credentialBrokerContext?.sourceConfig;
+  const factoryContext =
+    operations && brokerSourceConfig
+      ? bindCredentialBrokerToToolContext({
+          context: ctx,
+          broker: credentialBroker,
+          sourceConfig: brokerSourceConfig,
+          pluginId: entry.pluginId,
+          operations,
+        })
+      : ctx;
   return runWithPluginToolScope(entry, () =>
-    wrapPluginToolFactoryResult(entry, entry.factory(ctx)),
+    wrapPluginToolFactoryResult(entry, entry.factory(factoryContext)),
   );
 }
 
@@ -382,6 +422,9 @@ function createPluginToolFactoryTiming(params: {
 function resolvePluginToolFactoryEntry(params: {
   entry: PluginToolRegistration;
   ctx: OpenClawPluginToolContext;
+  manifestPlugin?: PluginManifestRecord;
+  credentialBrokerContext?: CredentialBrokerContext;
+  credentialBrokerSourceConfig?: OpenClawConfig;
   declaredNames: string[];
   factoryTimingStartedAt: number;
   logError: (message: string) => void;
@@ -395,7 +438,13 @@ function resolvePluginToolFactoryEntry(params: {
   const factoryStartedAt = Date.now();
 
   try {
-    resolved = resolvePluginToolFactory(params.entry, params.ctx);
+    resolved = resolvePluginToolFactory(
+      params.entry,
+      params.ctx,
+      params.manifestPlugin,
+      params.credentialBrokerContext,
+      params.credentialBrokerSourceConfig,
+    );
   } catch (err) {
     failed = true;
     params.logError(`plugin tool failed (${params.entry.pluginId}): ${String(err)}`);
@@ -678,6 +727,8 @@ function createCachedDescriptorPluginTool(params: {
   ctx: OpenClawPluginToolContext;
   loadContext: ReturnType<typeof resolvePluginRuntimeLoadContext>;
   runtimeOptions: PluginLoadOptions["runtimeOptions"];
+  credentialBrokerContext?: CredentialBrokerContext;
+  credentialBrokerSourceConfig?: OpenClawConfig;
 }): AnyAgentTool {
   const { descriptor } = params.descriptor;
   const pluginId = descriptor.owner.kind === "plugin" ? descriptor.owner.pluginId : "";
@@ -697,6 +748,7 @@ function createCachedDescriptorPluginTool(params: {
       const registry = resolvePluginToolRegistry({
         loadOptions,
         onlyPluginIds: [pluginId],
+        forceStandaloneLoad: (params.plugin.credentialBroker?.operations.length ?? 0) > 0,
         retainedRegistry: cachedDescriptorRuntimeRegistries.get(params.descriptor),
         onRetainRegistry: (retainedRegistry) => {
           cachedDescriptorRuntimeRegistries.set(params.descriptor, retainedRegistry);
@@ -721,7 +773,13 @@ function createCachedDescriptorPluginTool(params: {
       const resolveCandidateTool = (
         candidate: PluginToolRegistration,
       ): AnyAgentTool | undefined => {
-        const resolved = resolvePluginToolFactory(candidate, params.ctx);
+        const resolved = resolvePluginToolFactory(
+          candidate,
+          params.ctx,
+          params.plugin,
+          params.credentialBrokerContext,
+          params.credentialBrokerSourceConfig,
+        );
         const listRaw: unknown[] = Array.isArray(resolved) ? resolved : resolved ? [resolved] : [];
         for (const toolRaw of listRaw) {
           const malformedReason = describeMalformedPluginTool(toolRaw);
@@ -781,8 +839,11 @@ function resolveCachedPluginTools(params: {
   ctx: OpenClawPluginToolContext;
   loadContext: ReturnType<typeof resolvePluginRuntimeLoadContext>;
   runtimeOptions: PluginLoadOptions["runtimeOptions"];
+  brokerRuntimeOptions: PluginLoadOptions["runtimeOptions"];
   currentRuntimeConfig?: PluginLoadOptions["config"] | null;
   configCacheKeyMemo: PluginToolDescriptorConfigCacheKeyMemo;
+  credentialBrokerContext?: CredentialBrokerContext;
+  credentialBrokerSourceConfig?: OpenClawConfig;
 }): { tools: AnyAgentTool[]; handledPluginIds: Set<string> } {
   const tools: AnyAgentTool[] = [];
   const handledPluginIds = new Set<string>();
@@ -828,6 +889,15 @@ function resolveCachedPluginTools(params: {
       continue;
     }
     if (params.existingNormalized.has(normalizeToolName(plugin.id))) {
+      continue;
+    }
+    if (
+      params.credentialBrokerSourceConfig &&
+      listConfiguredBrokeredToolNames({
+        sourceConfig: params.credentialBrokerSourceConfig,
+        plugin,
+      }).length > 0
+    ) {
       continue;
     }
     const cached = readCachedPluginToolDescriptors(
@@ -893,7 +963,12 @@ function resolveCachedPluginTools(params: {
           plugin,
           ctx: params.ctx,
           loadContext: params.loadContext,
-          runtimeOptions: params.runtimeOptions,
+          runtimeOptions:
+            (plugin.credentialBroker?.operations.length ?? 0) > 0
+              ? params.brokerRuntimeOptions
+              : params.runtimeOptions,
+          credentialBrokerContext: params.credentialBrokerContext,
+          credentialBrokerSourceConfig: params.credentialBrokerSourceConfig,
         }),
       );
     }
@@ -913,9 +988,19 @@ function resolveCachedPluginTools(params: {
 function resolvePluginToolRegistry(params: {
   loadOptions: PluginLoadOptions;
   onlyPluginIds?: readonly string[];
+  forceStandaloneLoad?: boolean;
   retainedRegistry?: PluginRegistry;
   onRetainRegistry?: (registry: PluginRegistry) => void;
 }) {
+  if (params.forceStandaloneLoad) {
+    return ensureStandaloneRuntimePluginRegistryLoaded({
+      surface: "active",
+      forceLoad: true,
+      installRegistry: false,
+      requiredPluginIds: params.onlyPluginIds,
+      loadOptions: params.loadOptions,
+    });
+  }
   const lookup = {
     env: params.loadOptions.env,
     loadOptions: params.loadOptions,
@@ -991,19 +1076,22 @@ function resolvePluginToolLoadState(params: {
   allowGatewaySubagentBinding?: boolean;
   hasAuthForProvider?: (providerId: string) => boolean;
   env?: NodeJS.ProcessEnv;
+  credentialBrokerContext?: CredentialBrokerContext;
+  credentialBrokerSourceConfig?: OpenClawConfig;
 }):
   | {
       context: ReturnType<typeof resolvePluginRuntimeLoadContext>;
       env: NodeJS.ProcessEnv;
-      loadOptions: PluginLoadOptions;
       onlyPluginIds: string[];
       runtimeOptions: PluginLoadOptions["runtimeOptions"];
+      brokerRuntimeOptions: PluginLoadOptions["runtimeOptions"];
+      brokerPluginIds: Set<string>;
       snapshot: PluginMetadataManifestView;
     }
   | undefined {
   const env = params.env ?? process.env;
   const baseConfig = applyTestPluginDefaults(params.context.config ?? {}, env);
-  const context = resolvePluginRuntimeLoadContext({
+  let context = resolvePluginRuntimeLoadContext({
     config: baseConfig,
     env,
     workspaceDir: params.context.workspaceDir,
@@ -1013,7 +1101,7 @@ function resolvePluginToolLoadState(params: {
     return undefined;
   }
 
-  const runtimeOptions = params.allowGatewaySubagentBinding
+  const baseRuntimeOptions = params.allowGatewaySubagentBinding
     ? { allowGatewaySubagentBinding: true as const }
     : undefined;
   const snapshot = loadManifestContractSnapshot({
@@ -1031,13 +1119,55 @@ function resolvePluginToolLoadState(params: {
     hasAuthForProvider: params.hasAuthForProvider,
     snapshot,
   });
-  const loadOptions = buildPluginRuntimeLoadOptions(context, {
-    activate: false,
-    toolDiscovery: true,
+  const selectedPluginIds = new Set(onlyPluginIds);
+  const selectedPlugins = snapshot.plugins.filter((plugin) => selectedPluginIds.has(plugin.id));
+  const brokerSourceConfig =
+    params.credentialBrokerSourceConfig ?? params.credentialBrokerContext?.sourceConfig;
+  const hasBrokeredSecretInputs = Boolean(
+    brokerSourceConfig &&
+    hasConfiguredBrokeredSecretInputs({
+      sourceConfig: brokerSourceConfig,
+      plugins: selectedPlugins,
+    }),
+  );
+  const brokerPlugins = selectedPlugins.filter(
+    (plugin) => (plugin.credentialBroker?.operations.length ?? 0) > 0,
+  );
+  const brokerPluginIds = new Set(brokerPlugins.map((plugin) => plugin.id));
+  if (hasBrokeredSecretInputs && brokerSourceConfig) {
+    const scrub = (config: OpenClawConfig) =>
+      projectConfiguredBrokeredSecretInputs({
+        config,
+        sourceConfig: brokerSourceConfig,
+        plugins: selectedPlugins,
+      });
+    context = {
+      ...context,
+      rawConfig: scrub(context.rawConfig),
+      config: scrub(context.config),
+      activationSourceConfig: scrub(context.activationSourceConfig),
+    };
+  }
+  const runtimeOptions = baseRuntimeOptions;
+  const brokerRuntimeOptions = brokerPlugins.length
+    ? {
+        ...baseRuntimeOptions,
+        getConfig: createCredentialBrokerSafeConfigGetter({
+          getRuntimeConfig: params.context.getRuntimeConfig,
+          preparedConfig: context.config,
+          plugins: brokerPlugins,
+        }),
+      }
+    : baseRuntimeOptions;
+  return {
+    context,
+    env,
     onlyPluginIds,
     runtimeOptions,
-  });
-  return { context, env, loadOptions, onlyPluginIds, runtimeOptions, snapshot };
+    brokerRuntimeOptions,
+    brokerPluginIds,
+    snapshot,
+  };
 }
 
 export function ensureStandalonePluginToolRegistryLoaded(params: {
@@ -1047,23 +1177,73 @@ export function ensureStandalonePluginToolRegistryLoaded(params: {
   allowGatewaySubagentBinding?: boolean;
   hasAuthForProvider?: (providerId: string) => boolean;
   env?: NodeJS.ProcessEnv;
+  credentialBrokerSourceConfig?: OpenClawConfig;
 }): PluginRegistry | undefined {
   const loadState = resolvePluginToolLoadState(params);
   if (!loadState) {
     return undefined;
   }
-  const registry = ensureStandaloneRuntimePluginRegistryLoaded({
-    surface: "channel",
-    requiredPluginIds: loadState.onlyPluginIds,
-    loadOptions: loadState.loadOptions,
-  });
-  if (registryHasScopedPluginTools(registry, loadState.onlyPluginIds)) {
-    return registry;
+  const regularPluginIds = loadState.onlyPluginIds.filter(
+    (pluginId) => !loadState.brokerPluginIds.has(pluginId),
+  );
+  const registries: Array<{ pluginIds: string[]; registry: PluginRegistry }> = [];
+  if (regularPluginIds.length > 0) {
+    const loadOptions = buildPluginRuntimeLoadOptions(loadState.context, {
+      activate: false,
+      toolDiscovery: true,
+      onlyPluginIds: regularPluginIds,
+      runtimeOptions: loadState.runtimeOptions,
+    });
+    const registry = ensureStandaloneRuntimePluginRegistryLoaded({
+      surface: "channel",
+      requiredPluginIds: regularPluginIds,
+      loadOptions,
+    });
+    const resolved = registryHasScopedPluginTools(registry, regularPluginIds)
+      ? registry
+      : resolvePluginToolRegistry({ loadOptions, onlyPluginIds: regularPluginIds });
+    if (resolved) {
+      registries.push({ pluginIds: regularPluginIds, registry: resolved });
+    }
   }
-  return resolvePluginToolRegistry({
-    loadOptions: loadState.loadOptions,
-    onlyPluginIds: loadState.onlyPluginIds,
-  });
+  const brokerPluginIds = loadState.onlyPluginIds.filter((pluginId) =>
+    loadState.brokerPluginIds.has(pluginId),
+  );
+  if (brokerPluginIds.length > 0) {
+    const loadOptions = buildPluginRuntimeLoadOptions(loadState.context, {
+      activate: false,
+      toolDiscovery: true,
+      onlyPluginIds: brokerPluginIds,
+      runtimeOptions: loadState.brokerRuntimeOptions,
+    });
+    const registry = resolvePluginToolRegistry({
+      loadOptions,
+      onlyPluginIds: brokerPluginIds,
+      forceStandaloneLoad: true,
+    });
+    if (registry) {
+      registries.push({ pluginIds: brokerPluginIds, registry });
+    }
+  }
+  if (registries.length === 0) {
+    return undefined;
+  }
+  if (registries.length === 1) {
+    return registries[0]?.registry;
+  }
+  const first = registries[0]!.registry;
+  return {
+    ...first,
+    tools: registries.flatMap(({ pluginIds, registry }) => {
+      const selected = new Set(pluginIds);
+      return registry.tools.filter((entry) => selected.has(entry.pluginId));
+    }),
+    toolMetadata: registries.flatMap(({ pluginIds, registry }) => {
+      const selected = new Set(pluginIds);
+      return (registry.toolMetadata ?? []).filter((entry) => selected.has(entry.pluginId));
+    }),
+    diagnostics: registries.flatMap(({ registry }) => registry.diagnostics),
+  };
 }
 
 export function resolvePluginTools(params: {
@@ -1076,6 +1256,9 @@ export function resolvePluginTools(params: {
   hasAuthForProvider?: (providerId: string) => boolean;
   env?: NodeJS.ProcessEnv;
   runtimeRegistry?: PluginRegistry;
+  credentialBrokerContext?: CredentialBrokerContext;
+  credentialBrokerSourceConfig?: OpenClawConfig;
+  omitCredentialBrokerToolsWithoutContext?: boolean;
 }): AnyAgentTool[] {
   // Fast path: when plugins are effectively disabled, avoid discovery/jiti entirely.
   // This matters a lot for unit tests and for tool construction hot paths.
@@ -1083,8 +1266,42 @@ export function resolvePluginTools(params: {
   if (!loadState) {
     return [];
   }
-  const { context, env, onlyPluginIds, runtimeOptions, snapshot } = loadState;
+  const {
+    context,
+    env,
+    onlyPluginIds,
+    runtimeOptions,
+    brokerRuntimeOptions,
+    brokerPluginIds,
+    snapshot,
+  } = loadState;
+  const credentialBrokerSourceConfig =
+    params.credentialBrokerSourceConfig ?? params.credentialBrokerContext?.sourceConfig;
   const tools: AnyAgentTool[] = [];
+  const finishTools = (): AnyAgentTool[] => {
+    if (
+      !params.omitCredentialBrokerToolsWithoutContext ||
+      params.credentialBrokerContext ||
+      !credentialBrokerSourceConfig
+    ) {
+      return tools;
+    }
+    const sourceConfig = credentialBrokerSourceConfig;
+    const blocked = new Set(
+      snapshot.plugins.flatMap((plugin) =>
+        listConfiguredBrokeredToolNames({ sourceConfig, plugin }).map((toolName) =>
+          buildPluginToolMetadataKey(plugin.id, normalizeToolName(toolName)),
+        ),
+      ),
+    );
+    return tools.filter((tool) => {
+      const meta = pluginToolMeta.get(tool);
+      return (
+        !meta ||
+        !blocked.has(buildPluginToolMetadataKey(meta.pluginId, normalizeToolName(tool.name)))
+      );
+    });
+  };
   const existing = params.existingToolNames ?? new Set<string>();
   const existingNormalized = new Set(Array.from(existing, (tool) => normalizeToolName(tool)));
   const allowlist = normalizeAllowlist(params.toolAllowlist);
@@ -1113,86 +1330,111 @@ export function resolvePluginTools(params: {
     ctx: params.context,
     loadContext: context,
     runtimeOptions,
+    brokerRuntimeOptions,
     currentRuntimeConfig: currentRuntimeConfigForDescriptorCache,
     configCacheKeyMemo,
+    credentialBrokerContext: params.credentialBrokerContext,
+    credentialBrokerSourceConfig,
   });
   tools.push(...cached.tools);
   const runtimePluginIds = onlyPluginIds.filter(
     (pluginId) => !cached.handledPluginIds.has(pluginId),
   );
   if (runtimePluginIds.length === 0) {
-    return tools;
+    return finishTools();
   }
-  const loadOptions = buildPluginRuntimeLoadOptions(context, {
-    activate: false,
-    toolDiscovery: true,
-    onlyPluginIds: runtimePluginIds,
-    runtimeOptions,
-  });
-  let registry = registryHasScopedPluginTools(params.runtimeRegistry, runtimePluginIds)
-    ? params.runtimeRegistry
-    : undefined;
-  if (!registry) {
-    registry = resolvePluginToolRegistry({
-      loadOptions,
-      onlyPluginIds: runtimePluginIds,
-    });
-  }
-  if (!registry) {
-    // Cold registry: path-based plugins (origin "config") registered via plugins.load.paths
-    // are not pinned to any active channel/surface registry until explicitly loaded.
-    // Trigger a standalone load so their tool factories become available, then retry.
-    try {
-      ensureStandaloneRuntimePluginRegistryLoaded({
-        surface: "channel",
-        requiredPluginIds: runtimePluginIds,
-        loadOptions,
-      });
-    } catch (error) {
-      context.logger.error(
-        `failed to cold-load plugin tool registry for plugin ids [${runtimePluginIds.join(", ")}]: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      throw error;
+  const regularRuntimePluginIds = runtimePluginIds.filter(
+    (pluginId) => !brokerPluginIds.has(pluginId),
+  );
+  const brokerRuntimePluginIds = runtimePluginIds.filter((pluginId) =>
+    brokerPluginIds.has(pluginId),
+  );
+  const registryScopes: Array<{ pluginIds: string[]; registry: PluginRegistry }> = [];
+  for (const scope of [
+    {
+      pluginIds: regularRuntimePluginIds,
+      runtimeOptions,
+      forceStandaloneLoad: false,
+    },
+    {
+      pluginIds: brokerRuntimePluginIds,
+      runtimeOptions: brokerRuntimeOptions,
+      forceStandaloneLoad: true,
+    },
+  ]) {
+    if (scope.pluginIds.length === 0) {
+      continue;
     }
-    registry = resolvePluginToolRegistry({
-      loadOptions,
-      onlyPluginIds: runtimePluginIds,
+    const loadOptions = buildPluginRuntimeLoadOptions(context, {
+      activate: false,
+      toolDiscovery: true,
+      onlyPluginIds: scope.pluginIds,
+      runtimeOptions: scope.runtimeOptions,
     });
+    let registry =
+      !scope.forceStandaloneLoad &&
+      registryHasScopedPluginTools(params.runtimeRegistry, scope.pluginIds)
+        ? params.runtimeRegistry
+        : resolvePluginToolRegistry({
+            loadOptions,
+            onlyPluginIds: scope.pluginIds,
+            forceStandaloneLoad: scope.forceStandaloneLoad,
+          });
+    if (!registry && !scope.forceStandaloneLoad) {
+      // Path-based plugins are not pinned until their first standalone load.
+      try {
+        ensureStandaloneRuntimePluginRegistryLoaded({
+          surface: "channel",
+          requiredPluginIds: scope.pluginIds,
+          loadOptions,
+        });
+      } catch (error) {
+        context.logger.error(
+          `failed to cold-load plugin tool registry for plugin ids [${scope.pluginIds.join(", ")}]: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        throw error;
+      }
+      registry = resolvePluginToolRegistry({ loadOptions, onlyPluginIds: scope.pluginIds });
+    }
     if (!registry) {
       context.logger.warn(
-        `plugin tool registry still unavailable after cold load for plugin ids [${runtimePluginIds.join(
-          ", ",
-        )}]`,
+        `plugin tool registry unavailable for plugin ids [${scope.pluginIds.join(", ")}]`,
       );
-      return tools;
+      continue;
     }
+    const registryToolPluginIds = new Set(registry.tools.map((entry) => entry.pluginId));
+    for (const pluginId of scope.pluginIds) {
+      if (registryToolPluginIds.has(pluginId)) {
+        continue;
+      }
+      registry.diagnostics.push({
+        level: "warn",
+        pluginId,
+        source: "plugin-tools",
+        message: `plugin tool registry did not include selected plugin tools after cold load (${pluginId})`,
+      });
+    }
+    registryScopes.push({ pluginIds: scope.pluginIds, registry });
+  }
+  if (registryScopes.length === 0) {
+    return finishTools();
   }
 
-  const scopedPluginIds = new Set(runtimePluginIds);
-  const registryToolPluginIds = new Set(registry.tools.map((entry) => entry.pluginId));
-  const missingRegistryToolPluginIds = runtimePluginIds.filter(
-    (pluginId) => !registryToolPluginIds.has(pluginId),
-  );
-  for (const pluginId of missingRegistryToolPluginIds) {
-    registry.diagnostics.push({
-      level: "warn",
-      pluginId,
-      source: "plugin-tools",
-      message: `plugin tool registry did not include selected plugin tools after cold load (${pluginId})`,
-    });
-  }
   const blockedPlugins = new Set<string>();
   const factoryTimingStartedAt = Date.now();
   const factoryTimings: PluginToolFactoryTiming[] = [];
   const capturedDescriptorsByPluginId = new Map<string, CachedPluginToolDescriptor[]>();
   const manifestPluginsById = new Map(snapshot.plugins.map((plugin) => [plugin.id, plugin]));
 
-  for (const entry of registry.tools) {
-    if (!scopedPluginIds.has(entry.pluginId)) {
-      continue;
-    }
+  const registryEntries = registryScopes.flatMap(({ pluginIds, registry }) => {
+    const selected = new Set(pluginIds);
+    return registry.tools
+      .filter((entry) => selected.has(entry.pluginId))
+      .map((entry) => ({ entry, registry }));
+  });
+  for (const { entry, registry } of registryEntries) {
     if (denylistBlocksPlugin({ pluginId: entry.pluginId, denylist })) {
       continue;
     }
@@ -1250,6 +1492,9 @@ export function resolvePluginTools(params: {
     const factoryResult = resolvePluginToolFactoryEntry({
       entry,
       ctx: params.context,
+      manifestPlugin,
+      credentialBrokerContext: params.credentialBrokerContext,
+      credentialBrokerSourceConfig,
       declaredNames,
       factoryTimingStartedAt,
       logError: (message) => context.logger.error(message),
@@ -1414,6 +1659,15 @@ export function resolvePluginTools(params: {
     if (!manifestPlugin) {
       continue;
     }
+    if (
+      credentialBrokerSourceConfig &&
+      listConfiguredBrokeredToolNames({
+        sourceConfig: credentialBrokerSourceConfig,
+        plugin: manifestPlugin,
+      }).length > 0
+    ) {
+      continue;
+    }
     const availableToolNames = listManifestToolNamesForAvailability({
       plugin: manifestPlugin,
       toolNames: manifestPlugin.contracts?.tools ?? [],
@@ -1456,5 +1710,5 @@ export function resolvePluginTools(params: {
     }
   }
 
-  return tools;
+  return finishTools();
 }

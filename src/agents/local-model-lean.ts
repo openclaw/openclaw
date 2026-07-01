@@ -3,6 +3,7 @@
  * Removes high-latency or channel-dependent tools for local models while
  * preserving explicitly required delivery tools.
  */
+import { applyMergePatchToPairedRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope-config.js";
@@ -109,11 +110,8 @@ export function applyLocalModelLeanToolSearchDefaults(params: {
   if (params.config.tools?.toolSearch !== undefined) {
     return params.config;
   }
-  return {
-    ...params.config,
-    tools: {
-      ...params.config.tools,
-      toolSearch: LOCAL_MODEL_LEAN_TOOL_SEARCH_DEFAULTS,
-    },
-  };
+  return applyMergePatchToPairedRuntimeConfig({
+    runtimeConfig: params.config,
+    patch: { tools: { toolSearch: LOCAL_MODEL_LEAN_TOOL_SEARCH_DEFAULTS } },
+  });
 }

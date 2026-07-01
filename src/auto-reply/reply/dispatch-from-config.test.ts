@@ -2,7 +2,12 @@
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.core.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import {
+  resetConfigRuntimeState,
+  setRuntimeConfigSnapshot,
+  type OpenClawConfig,
+} from "../../config/config.js";
+import { getRuntimeConfigSourcePair } from "../../config/runtime-snapshot.js";
 import {
   clearApprovalNativeRouteStateForTest,
   createApprovalNativeRouteReporter,
@@ -7875,7 +7880,40 @@ describe("dispatchReplyFromConfig", () => {
 
   it("passes the loaded config plus configOverride patch to replyResolver when provided", async () => {
     setNoAbort();
-    const cfg = emptyConfig;
+    const secretRef = { source: "env", provider: "default", id: "TAVILY_API_KEY" } as const;
+    const sourceConfig = {
+      plugins: {
+        entries: { tavily: { config: { webSearch: { apiKey: secretRef } } } },
+      },
+    } as OpenClawConfig;
+    const cfg = {
+      plugins: {
+        entries: { tavily: { config: { webSearch: { apiKey: "resolved-value" } } } },
+      },
+    } as OpenClawConfig;
+    setRuntimeConfigSnapshot(cfg, sourceConfig);
+    setRuntimeConfigSnapshot(
+      {
+        plugins: {
+          entries: {
+            tavily: { config: { webSearch: { apiKey: "next-resolved-value" } } },
+          },
+        },
+      } as OpenClawConfig,
+      {
+        plugins: {
+          entries: {
+            tavily: {
+              config: {
+                webSearch: {
+                  apiKey: { source: "env", provider: "default", id: "NEXT_TAVILY_API_KEY" },
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    );
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({ Provider: "msteams", Surface: "msteams" });
 
@@ -7893,17 +7931,28 @@ describe("dispatchReplyFromConfig", () => {
       return { text: "hi" } satisfies ReplyPayload;
     };
 
-    await dispatchReplyFromConfig({
-      ctx,
-      cfg,
-      dispatcher,
-      replyResolver,
-      configOverride: overrideCfg,
-    });
+    try {
+      await dispatchReplyFromConfig({
+        ctx,
+        cfg,
+        dispatcher,
+        replyResolver,
+        configOverride: overrideCfg,
+      });
 
-    expect(receivedCfg).not.toBe(cfg);
-    expect(receivedCfg).not.toBe(overrideCfg);
-    expect(receivedCfg).toEqual(overrideCfg);
+      expect(receivedCfg).not.toBe(cfg);
+      expect(receivedCfg).not.toBe(overrideCfg);
+      expect(receivedCfg).toMatchObject(overrideCfg);
+      expect(
+        (
+          getRuntimeConfigSourcePair(receivedCfg!)?.plugins?.entries?.tavily?.config as {
+            webSearch?: { apiKey?: unknown };
+          }
+        ).webSearch?.apiKey,
+      ).toEqual(secretRef);
+    } finally {
+      resetConfigRuntimeState();
+    }
   });
 
   it("passes the already loaded config to replyResolver when configOverride is not provided", async () => {
