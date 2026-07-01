@@ -388,6 +388,9 @@ describe("runtime tasks", () => {
       deliveryStatus: "not_applicable",
       startedAt: 100,
     });
+    if (!coreTask) {
+      throw new Error("expected core task creation to succeed");
+    }
 
     expect(() =>
       taskRuns.lifecycle.progress({
