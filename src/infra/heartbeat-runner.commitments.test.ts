@@ -279,10 +279,9 @@ describe("runHeartbeatOnce commitments", () => {
         return {
           result: resultResult,
           sendTelegram: sendTelegramResult,
-          sessionStore: JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-            string,
-            { heartbeatTaskState?: Record<string, number> }
-          >,
+          sessionStore: readSessionStoreForTest<{
+            heartbeatTaskState?: Record<string, number>;
+          }>(storePath),
           store: await loadCommitmentStore(),
         };
       },
@@ -785,19 +784,14 @@ tasks:
 `,
           "utf-8",
         );
-        await fs.writeFile(
-          storePath,
-          JSON.stringify({
-            [sessionKey]: {
-              sessionId: "sid",
-              updatedAt: Date.now(),
-              lastChannel: "telegram",
-              lastProvider: "telegram",
-              lastTo: "155462274",
-              heartbeatTaskState: { "global-ops-audit": nowMs - 10 * 60_000 },
-            },
-          }),
-        );
+        await seedSessionStore(storePath, sessionKey, {
+          sessionId: "sid",
+          updatedAt: nowMs,
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "155462274",
+          heartbeatTaskState: { "global-ops-audit": nowMs - 10 * 60_000 },
+        });
         enqueueSystemEvent("Reminder: run the global audit", {
           sessionKey,
           deliveryContext: {
@@ -857,10 +851,9 @@ tasks:
           result: resultLocal,
           sendTelegram: sendTelegramLocal,
           pendingEvents: peekSystemEventEntries(sessionKey),
-          sessionStore: JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-            string,
-            { heartbeatTaskState?: Record<string, number> }
-          >,
+          sessionStore: readSessionStoreForTest<{
+            heartbeatTaskState?: Record<string, number>;
+          }>(storePath),
           store: await loadCommitmentStore(),
         };
       });
