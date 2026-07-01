@@ -52,6 +52,61 @@ type CapturedPluginCliRegistration = {
   descriptors: OpenClawPluginCliCommandDescriptor[];
 };
 
+function normalizeCapturedStringEntries(list?: ReadonlyArray<unknown>) {
+  const entries: string[] = [];
+  let unreadable = false;
+  const values = list ?? [];
+  let index = 0;
+  while (index < values.length) {
+    if (!(index in values)) {
+      index += 1;
+      continue;
+    }
+    try {
+      entries.push(...normalizeStringEntries([values[index]]));
+    } catch {
+      unreadable = true;
+    }
+    index += 1;
+  }
+  return { entries, unreadable };
+}
+
+function normalizeCapturedCliDescriptors(
+  descriptors: readonly OpenClawPluginCliCommandDescriptor[],
+) {
+  const normalized: OpenClawPluginCliCommandDescriptor[] = [];
+  let index = 0;
+  while (index < descriptors.length) {
+    if (!(index in descriptors)) {
+      index += 1;
+      continue;
+    }
+    try {
+      const descriptor = descriptors[index];
+      if (!descriptor) {
+        index += 1;
+        continue;
+      }
+      const name = descriptor.name.trim();
+      const description = descriptor.description.trim();
+      if (name && description) {
+        normalized.push({
+          name,
+          description,
+          hasSubcommands: descriptor.hasSubcommands,
+        });
+      }
+    } catch {
+      // Captured registrations are best-effort metadata snapshots. A poisoned
+      // plugin-owned descriptor should not prevent later healthy rows from
+      // being captured for bundled capability planning.
+    }
+    index += 1;
+  }
+  return normalized;
+}
+
 export type CapturedPluginRegistration = {
   api: OpenClawPluginApi;
   providers: ProviderPlugin[];
@@ -176,24 +231,22 @@ export function createCapturedPluginRegistration(params?: {
       resolvePath: (input) => input,
       handlers: {
         registerCli(registrar, opts) {
-          const parentPath = normalizeStringEntries(opts?.parentPath ?? []);
-          const descriptors = (opts?.descriptors ?? [])
-            .map((descriptor) => ({
-              name: descriptor.name.trim(),
-              description: descriptor.description.trim(),
-              hasSubcommands: descriptor.hasSubcommands,
-            }))
-            .filter((descriptor) => descriptor.name && descriptor.description);
-          const commands = normalizeStringEntries([
-            ...(opts?.commands ?? []),
+          const parentPath = normalizeCapturedStringEntries(opts?.parentPath ?? []);
+          if (parentPath.unreadable) {
+            return;
+          }
+          const descriptors = normalizeCapturedCliDescriptors(opts?.descriptors ?? []);
+          const commandRoots = normalizeCapturedStringEntries(opts?.commands ?? []);
+          const commands = [
+            ...commandRoots.entries,
             ...descriptors.map((descriptor) => descriptor.name),
-          ]);
+          ];
           if (commands.length === 0) {
             return;
           }
           cliRegistrars.push({
             register: registrar,
-            parentPath,
+            parentPath: parentPath.entries,
             commands,
             descriptors,
           });
