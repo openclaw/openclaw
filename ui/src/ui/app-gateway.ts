@@ -63,6 +63,7 @@ import {
   parseExecApprovalResolved,
   parsePluginApprovalRequested,
   pruneExecApprovalQueue,
+  refreshPendingApprovalQueue,
 } from "./controllers/exec-approval.ts";
 import { loadHealthState, type HealthState } from "./controllers/health.ts";
 import {
@@ -848,6 +849,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
             console.warn("[openclaw] pending abort failed:", err);
           });
       }
+      void refreshPendingApprovalQueue(host);
       // Reset orphaned chat run state from before disconnect.
       // Any in-flight run's final event was lost during the disconnect window.
       const orphanedRunId = host.chatRunId;
