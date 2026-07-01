@@ -122,6 +122,12 @@ import {
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
+import {
+  evaluateNoOpRearmAdmission,
+  type NoOpRearmWakeClass,
+  recordNoOpRearmOutcome,
+  summarizeEmbeddedRunOutcome,
+} from "./no-op-rearm-guard.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
@@ -1878,6 +1884,32 @@ export async function runReplyAgent(replyParams: {
 
     const runStartedAt = Date.now();
     await persistRestartRecoveryDeliveryContext();
+
+    // Pre-provider no-op replay guard (#1138/#1142). This is the visible-turn and
+    // continuation (getReplyFromConfig) provider path; suppress a self-rearm wake
+    // before buying the turn when the per-session no-op streak is tripped. The
+    // finally block completes the reply operation and typing on the early return.
+    let noOpRearmWakeClass: NoOpRearmWakeClass | undefined;
+    if (replySessionKey) {
+      const admission = evaluateNoOpRearmAdmission({
+        sessionKey: replySessionKey,
+        provenance: followupRun.run.inputProvenance,
+        inboundEventKind: followupRun.currentInboundEventKind,
+        messageId: followupRun.messageId,
+        isHeartbeat,
+        isContinuationWake: isContinuationWake === true,
+      });
+      noOpRearmWakeClass = admission.wake;
+      if (!admission.admit) {
+        if (admission.diagnostic) {
+          defaultRuntime.log?.(admission.diagnostic.message);
+        }
+        // Silent suppression: no provider turn, no visible reply. The finally block
+        // completes the reply operation and typing, identical to a NO_REPLY turn.
+        return returnWithQueuedFollowupDrain(undefined);
+      }
+    }
+
     const runOutcome = await traceAgentPhase("reply.run_agent_turn", () =>
       runAgentTurnWithFallback({
         commandBody,
@@ -1966,6 +1998,26 @@ export async function runReplyAgent(replyParams: {
       await drainPendingToolTasks({
         tasks: pendingToolTasks,
         onTimeout: logVerbose,
+      });
+    }
+
+    // Post-turn no-op replay outcome recording (#1138/#1142). Record before the
+    // continuation/followup scheduling below so a no-op self-rearm turn increments
+    // the streak before it can schedule the next same-family wake. This is also the
+    // recording site for continuation turns driven through getReplyFromConfig.
+    if (noOpRearmWakeClass && replySessionKey) {
+      const facts = summarizeEmbeddedRunOutcome(runResult);
+      const messageToolOnlyWithoutDelivery =
+        opts?.sourceReplyDeliveryMode === "message_tool_only" &&
+        runResult.didSendViaMessagingTool !== true &&
+        runResult.didDeliverSourceReplyViaMessageTool !== true;
+      recordNoOpRearmOutcome({
+        sessionKey: replySessionKey,
+        wakeClass: noOpRearmWakeClass,
+        runId,
+        ...(messageToolOnlyWithoutDelivery
+          ? { facts: { ...facts, hasVisibleReply: false } }
+          : { facts }),
       });
     }
 
@@ -2714,9 +2766,7 @@ export async function runReplyAgent(replyParams: {
         ...(effectiveContinuationSignal.traceparent
           ? { traceparent: effectiveContinuationSignal.traceparent }
           : {}),
-        ...(effectiveContinuationSignal.model
-          ? { model: effectiveContinuationSignal.model }
-          : {}),
+        ...(effectiveContinuationSignal.model ? { model: effectiveContinuationSignal.model } : {}),
       });
       enqueueSystemEvent(
         `[continuation:delegate-staged-post-compaction] Bracket delegate staged for post-compaction release: ${effectiveContinuationSignal.task}`,

@@ -28,6 +28,7 @@ let resolveQueuedReplyExecutionConfigActual:
   | (typeof import("./agent-runner-utils.js"))["resolveQueuedReplyExecutionConfig"]
   | undefined;
 let createFollowupRunner: typeof import("./followup-runner.js").createFollowupRunner;
+let noOpRearmGuardForTest: typeof import("./no-op-rearm-guard.js");
 let clearRuntimeConfigSnapshot: typeof import("../../config/config.js").clearRuntimeConfigSnapshot;
 let loadSessionStore: typeof import("../../config/sessions/store.js").loadSessionStore;
 let saveSessionStore: typeof import("../../config/sessions/store.js").saveSessionStore;
@@ -460,6 +461,7 @@ async function loadFreshFollowupRunnerModuleForTest() {
   ({ testing: cliBackendsTestingForTest } = await import("../../agents/cli-backends.js"));
   setFastFollowupCliBackendDeps();
   ({ createFollowupRunner } = await import("./followup-runner.js"));
+  noOpRearmGuardForTest = await import("./no-op-rearm-guard.js");
   ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
     await import("../../config/config.js"));
   ({ clearSessionStoreCacheForTest, loadSessionStore, saveSessionStore } =
@@ -646,6 +648,150 @@ describe("createFollowupRunner reply-lane admission", () => {
     expect(call.cwd).toBe("/tmp/task-repo");
     const recorder = requireRecord(call.userTurnTranscriptRecorder, "embedded user turn recorder");
     expect(recorder.message).toBe(preparedUserTurnMessage);
+  });
+
+  it("blocks a queued room-event followup before runEmbeddedAgent once the no-op replay streak is tripped (#1138/#1142)", async () => {
+    const sessionKey = "main";
+    // Seed the per-session no-op streak as a stale room-event backlog storm would.
+    for (let i = 0; i < noOpRearmGuardForTest.DEFAULT_NO_OP_REARM_THRESHOLD; i += 1) {
+      noOpRearmGuardForTest.recordNoOpRearmOutcome({
+        sessionKey,
+        wakeClass: { kind: "self_rearm", source: "room_event_backlog" },
+        runId: `seed-room-${i}`,
+        outcome: { kind: "no_op", reason: "seed" },
+      });
+    }
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey,
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentInboundEventKind: "room_event",
+        run: { sessionKey, provider: "anthropic", model: "claude" },
+      }),
+    );
+
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("records message-tool-only final text as no-op when no message tool delivery happened (#1138/#1142)", async () => {
+    const sessionKey = "main";
+    for (let i = 0; i < noOpRearmGuardForTest.DEFAULT_NO_OP_REARM_THRESHOLD - 1; i += 1) {
+      noOpRearmGuardForTest.recordNoOpRearmOutcome({
+        sessionKey,
+        wakeClass: { kind: "self_rearm", source: "room_event_backlog" },
+        runId: `seed-message-tool-only-${i}`,
+        outcome: { kind: "no_op", reason: "seed" },
+      });
+    }
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "I will only speak if the message tool sends this." }],
+      meta: {},
+      didSendViaMessagingTool: false,
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey,
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentInboundEventKind: "room_event",
+        run: {
+          sessionKey,
+          provider: "anthropic",
+          model: "claude",
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      }),
+    );
+    await runner(
+      createQueuedRun({
+        currentInboundEventKind: "room_event",
+        run: {
+          sessionKey,
+          provider: "anthropic",
+          model: "claude",
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      }),
+    );
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
+  it("blocks a restart-recovery followup before runEmbeddedAgent absent a fresh edge (#1138/#1142)", async () => {
+    const sessionKey = "main";
+    for (let i = 0; i < noOpRearmGuardForTest.DEFAULT_NO_OP_REARM_THRESHOLD; i += 1) {
+      noOpRearmGuardForTest.recordNoOpRearmOutcome({
+        sessionKey,
+        wakeClass: { kind: "self_rearm", source: "restart_recovery" },
+        runId: `seed-restart-${i}`,
+        outcome: { kind: "no_op", reason: "seed" },
+      });
+    }
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey,
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          sessionKey,
+          provider: "anthropic",
+          model: "claude",
+          inputProvenance: { kind: "internal_system", sourceTool: "restart-sentinel" },
+        },
+      }),
+    );
+
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("admits and runs a queued room-event followup when a fresh human edge reset the streak (#1138/#1142)", async () => {
+    const sessionKey = "main";
+    for (let i = 0; i < noOpRearmGuardForTest.DEFAULT_NO_OP_REARM_THRESHOLD; i += 1) {
+      noOpRearmGuardForTest.recordNoOpRearmOutcome({
+        sessionKey,
+        wakeClass: { kind: "self_rearm", source: "room_event_backlog" },
+        runId: `seed-reset-${i}`,
+        outcome: { kind: "no_op", reason: "seed" },
+      });
+    }
+    // A fresh human message resets the streak, so the next turn is admitted again.
+    const admission = noOpRearmGuardForTest.evaluateNoOpRearmAdmission({
+      sessionKey,
+      inboundEventKind: "user_request",
+      provenance: { kind: "external_user" },
+      messageId: "fresh-human-1",
+    });
+    expect(admission.admit).toBe(true);
+
+    runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionKey,
+      defaultModel: "anthropic/claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentInboundEventKind: "room_event",
+        run: { sessionKey, provider: "anthropic", model: "claude" },
+      }),
+    );
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
   });
 
   it("runs queued followups with the session id returned by admission", async () => {
