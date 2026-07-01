@@ -23,6 +23,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   formatSqliteSessionFileMarker,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { statSessionEntrySync } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 
@@ -54,16 +55,6 @@ type MemorySessionTranscriptUpdate = {
   };
 };
 
-type MemoryTranscriptUpdateSubscriber = (
-  listener: (update: MemorySessionTranscriptUpdate) => void,
-) => () => void;
-
-const MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY = Symbol.for(
-  "openclaw.memoryCore.sessionTranscriptUpdateSubscriber",
-);
-const originalMemoryTranscriptUpdateSubscriber = (globalThis as Record<symbol, unknown>)[
-  MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY
-];
 const originalStartupStateDir = process.env.OPENCLAW_STATE_DIR;
 const originalStartupConfigPath = process.env.OPENCLAW_CONFIG_PATH;
 let transcriptUpdateListener: ((update: MemorySessionTranscriptUpdate) => void) | undefined;
@@ -89,30 +80,6 @@ function restoreStartupEnv(): void {
   } else {
     Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", originalStartupConfigPath);
   }
-}
-
-function installTestTranscriptUpdateSubscriber(): void {
-  transcriptUpdateListener = undefined;
-  (globalThis as Record<symbol, unknown>)[MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY] = ((
-    listener,
-  ) => {
-    transcriptUpdateListener = listener;
-    return () => {
-      if (transcriptUpdateListener === listener) {
-        transcriptUpdateListener = undefined;
-      }
-    };
-  }) satisfies MemoryTranscriptUpdateSubscriber;
-}
-
-function restoreTestTranscriptUpdateSubscriber(): void {
-  transcriptUpdateListener = undefined;
-  if (originalMemoryTranscriptUpdateSubscriber === undefined) {
-    delete (globalThis as Record<symbol, unknown>)[MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY];
-    return;
-  }
-  (globalThis as Record<symbol, unknown>)[MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY] =
-    originalMemoryTranscriptUpdateSubscriber;
 }
 
 function emitSessionTranscriptUpdate(update: MemorySessionTranscriptUpdate): void {
@@ -246,6 +213,17 @@ class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
     this.sessionUnsubscribe = null;
   }
 
+  protected subscribeSessionTranscriptUpdates(
+    listener: (update: MemorySessionTranscriptUpdate) => void,
+  ): () => void {
+    transcriptUpdateListener = listener;
+    return () => {
+      if (transcriptUpdateListener === listener) {
+        transcriptUpdateListener = undefined;
+      }
+    };
+  }
+
   protected computeProviderKey(): string {
     return "test";
   }
@@ -291,13 +269,13 @@ describe("session startup catch-up", () => {
   beforeEach(async () => {
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-startup-"));
     setStartupStateDir(stateDir);
-    installTestTranscriptUpdateSubscriber();
+    transcriptUpdateListener = undefined;
   });
 
   afterEach(async () => {
     vi.clearAllTimers();
     vi.useRealTimers();
-    restoreTestTranscriptUpdateSubscriber();
+    transcriptUpdateListener = undefined;
     restoreStartupEnv();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
@@ -382,7 +360,7 @@ describe("session startup catch-up", () => {
       storePath,
       sessionId,
       sessionKey,
-      corpusPath: `sessions/main/${sessionId}`,
+      corpusPath: `sessions/main/${sessionId}.jsonl`,
     };
   }
 
@@ -450,6 +428,30 @@ describe("session startup catch-up", () => {
     await expect(harness.markStartupDirtyFiles()).resolves.toEqual([session.marker]);
     expect(harness.getDirtyArchiveFiles()).toEqual([session.marker]);
     expect(harness.isSessionsDirty()).toBe(true);
+    expect(harness.syncCalls).toEqual([]);
+  });
+
+  it("leaves unchanged indexed SQLite sessions clean during startup catch-up", async () => {
+    const session = await writeSqliteSession({ updatedAt: 10 });
+    const state = statSessionEntrySync(session.marker, {
+      sessionKey: session.sessionKey,
+      updatedAtMs: 10,
+    });
+    if (!state) {
+      throw new Error("expected SQLite transcript state");
+    }
+    const harness = new SessionStartupCatchupHarness([
+      {
+        path: state.path,
+        hash: "current-hash",
+        mtime: state.mtimeMs,
+        size: state.size,
+      },
+    ]);
+
+    await expect(harness.markStartupDirtyFiles()).resolves.toEqual([]);
+    expect(harness.getDirtyArchiveFiles()).toEqual([]);
+    expect(harness.isSessionsDirty()).toBe(false);
     expect(harness.syncCalls).toEqual([]);
   });
 
@@ -667,31 +669,17 @@ describe("session startup catch-up", () => {
       targetArchiveFiles: [marker],
     });
 
-    expect(harness.indexedPaths).toEqual(["sessions/main/sqlite-target"]);
+    expect(harness.indexedPaths).toEqual(["sessions/main/sqlite-target.jsonl"]);
     expect(harness.indexedContents[0]).toContain("sqlite targeted memory content");
   });
 
   it("queues transcript update identity without requiring a session file", async () => {
     vi.useFakeTimers();
     const harness = new SessionStartupCatchupHarness([]);
-    const originalSubscriber = (globalThis as Record<symbol, unknown>)[
-      MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY
-    ];
-    let transcriptListener: ((update: MemorySessionTranscriptUpdate) => void) | undefined;
-    (globalThis as Record<symbol, unknown>)[MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY] = ((
-      listener,
-    ) => {
-      transcriptListener = listener;
-      return () => {
-        if (transcriptListener === listener) {
-          transcriptListener = undefined;
-        }
-      };
-    }) satisfies MemoryTranscriptUpdateSubscriber;
     harness.startTranscriptListener();
 
     try {
-      transcriptListener?.({
+      emitSessionTranscriptUpdate({
         target: {
           agentId: "main",
           sessionId: "thread",
@@ -704,14 +692,6 @@ describe("session startup catch-up", () => {
       ]);
     } finally {
       harness.stopTranscriptListener();
-      if (originalSubscriber === undefined) {
-        delete (globalThis as Record<symbol, unknown>)[
-          MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY
-        ];
-      } else {
-        (globalThis as Record<symbol, unknown>)[MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY] =
-          originalSubscriber;
-      }
     }
   });
 

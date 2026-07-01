@@ -17,6 +17,7 @@ import {
   resolveSessionIdentityForTranscriptFile,
   resolveSessionFileForSyncTarget,
   sessionPathForFile,
+  statSessionEntrySync,
   type SessionFileEntry,
 } from "./session-files.js";
 
@@ -218,10 +219,17 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     const liveEntry = requireSessionEntry(
       await buildSessionEntry(turn.sessionFile, { sessionKey, updatedAtMs: updatedAt }),
     );
+    const liveState = statSessionEntrySync(turn.sessionFile, { sessionKey, updatedAtMs: updatedAt });
     const archiveEntry = requireSessionEntry(await buildSessionEntry(archivePath));
 
-    expect(liveEntry.path).toBe("sessions/main/sqlite-live");
+    expect(liveEntry.path).toBe("sessions/main/sqlite-live.jsonl");
     expect(liveEntry.content).toBe("User: Live SQLite transcript text");
+    expect(liveState).toEqual({
+      absPath: turn.sessionFile,
+      path: liveEntry.path,
+      mtimeMs: liveEntry.mtimeMs,
+      size: liveEntry.size,
+    });
     expect(archiveEntry.path).toBe(
       "sessions/main/sqlite-live.jsonl.deleted.2026-06-25T12-01-00.000Z",
     );
@@ -602,20 +610,9 @@ describe("memory session sync targets", () => {
     ).toBeNull();
   });
 
-  it("resolves identity sync targets to the current file-backed transcript", () => {
-    expect(resolveSessionFileForSyncTarget({ sessionId: "active" }, "main")).toEqual({
-      agentId: "main",
-      sessionId: "active",
-      sessionFile: path.join(tmpDir, "agents", "main", "sessions", "active.jsonl"),
-    });
-  });
-
-  it("normalizes agent ids before resolving identity sync targets", () => {
-    expect(resolveSessionFileForSyncTarget({ agentId: "MAIN", sessionId: "active" })).toEqual({
-      agentId: "main",
-      sessionId: "active",
-      sessionFile: path.join(tmpDir, "agents", "main", "sessions", "active.jsonl"),
-    });
+  it("does not synthesize active transcript paths for identity sync targets", () => {
+    expect(resolveSessionFileForSyncTarget({ sessionId: "active" }, "main")).toBeNull();
+    expect(resolveSessionFileForSyncTarget({ agentId: "MAIN", sessionId: "active" })).toBeNull();
   });
 
   it("rejects identity sync targets that would escape the sessions directory", () => {
@@ -626,7 +623,7 @@ describe("memory session sync targets", () => {
     expect(resolveSessionFileForSyncTarget({ sessionId: "foo/../active" }, "main")).toBeNull();
   });
 
-  it("resolves identity sync targets through persisted session keys", () => {
+  it("does not read legacy sessions.json for persisted session-key sync targets", () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     fsSync.mkdirSync(sessionsDir, { recursive: true });
     fsSync.writeFileSync(
@@ -645,31 +642,7 @@ describe("memory session sync targets", () => {
         sessionId: "active",
         sessionKey: "agent:main:chat:thread-456",
       }),
-    ).toEqual({
-      agentId: "main",
-      sessionId: "active",
-      sessionFile: path.join(sessionsDir, "active-thread-456.jsonl"),
-    });
-  });
-
-  it("resolves identity sync targets through persisted session ids", () => {
-    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
-    fsSync.mkdirSync(sessionsDir, { recursive: true });
-    fsSync.writeFileSync(
-      path.join(sessionsDir, "sessions.json"),
-      JSON.stringify({
-        "agent:main:chat:thread-456": {
-          sessionFile: "active-thread-456.jsonl",
-          sessionId: "active",
-        },
-      }),
-    );
-
-    expect(resolveSessionFileForSyncTarget({ agentId: "main", sessionId: "active" })).toEqual({
-      agentId: "main",
-      sessionId: "active",
-      sessionFile: path.join(sessionsDir, "active-thread-456.jsonl"),
-    });
+    ).toBeNull();
   });
 
   it("resolves transcript file identities through persisted session keys", () => {

@@ -1653,3 +1653,15 @@
 {"type":"close","timestamp":"2026-07-01T23:50:11.08567Z","issue_id":"clawdbot-d02.1.9.1.40-68a.25","payload":{}}
 {"type":"close","timestamp":"2026-07-01T23:50:11.875348Z","issue_id":"clawdbot-d02.1.9.1.40-68a.26","payload":{}}
 {"type":"close","timestamp":"2026-07-01T23:50:12.338797Z","issue_id":"clawdbot-d02.1.9.1.40-68a.29","payload":{}}
+{"type":"status_update","timestamp":"2026-07-01T23:07:28.78903Z","issue_id":"clawdbot-d02.1.9.1.40-68a.3","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-07-01T23:07:29.246895Z","issue_id":"clawdbot-d02.1.9.1.40-68a.10","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-07-01T23:07:29.70707Z","issue_id":"clawdbot-d02.1.9.1.40-68a.15","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-07-01T23:07:30.158855Z","issue_id":"clawdbot-d02.1.9.1.40-68a.16","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-07-01T23:07:30.604069Z","issue_id":"clawdbot-d02.1.9.1.40-68a.27","payload":{"status":"in_progress"}}
+{"type":"status_update","timestamp":"2026-07-01T23:07:31.068767Z","issue_id":"clawdbot-d02.1.9.1.40-68a.28","payload":{"status":"in_progress"}}
+{"type":"close","timestamp":"2026-07-01T23:42:53.31908Z","issue_id":"clawdbot-d02.1.9.1.40-68a.3","payload":{}}
+{"type":"close","timestamp":"2026-07-01T23:42:53.764057Z","issue_id":"clawdbot-d02.1.9.1.40-68a.10","payload":{}}
+{"type":"close","timestamp":"2026-07-01T23:42:54.254947Z","issue_id":"clawdbot-d02.1.9.1.40-68a.15","payload":{}}
+{"type":"close","timestamp":"2026-07-01T23:42:54.869871Z","issue_id":"clawdbot-d02.1.9.1.40-68a.16","payload":{}}
+{"type":"close","timestamp":"2026-07-01T23:42:55.421815Z","issue_id":"clawdbot-d02.1.9.1.40-68a.27","payload":{}}
+{"type":"close","timestamp":"2026-07-01T23:42:55.980192Z","issue_id":"clawdbot-d02.1.9.1.40-68a.28","payload":{}}

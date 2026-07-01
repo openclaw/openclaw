@@ -9,7 +9,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createSubsystemLogger,
-  onSessionTranscriptUpdate,
+  onInternalSessionTranscriptUpdate,
   resolveAgentDir,
   resolveSessionTranscriptsDirForAgent,
   resolveUserPath,
@@ -22,9 +22,12 @@ import {
   isUsageCountedSessionTranscriptFileName,
   listSessionTranscriptCorpusEntriesForAgent,
   parseCanonicalSessionSyncTargetFromPath,
+  parseSqliteSessionFileMarker,
+  parseUsageCountedSessionIdFromFileName,
   resolveSessionFileForSyncTarget,
   sessionPathForFile,
   sessionPathForSessionIdentity,
+  statSessionEntrySync,
   type SessionTranscriptCorpusEntry,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
@@ -156,6 +159,10 @@ function sessionPathForCorpusEntry(entry: SessionTranscriptCorpusEntry): string 
     : sessionPathForFile(entry.sessionFile);
 }
 
+function legacyExtensionlessSessionPathForIdentity(agentId: string, sessionId: string): string {
+  return path.join("sessions", normalizeAgentId(agentId), sessionId).replace(/\\/g, "/");
+}
+
 function buildSessionEntryOptions(entry: SessionTranscriptCorpusEntry) {
   return {
     generatedByDreamingNarrative: entry.generatedByDreamingNarrative === true,
@@ -187,9 +194,6 @@ const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
 ]);
 
 const log = createSubsystemLogger("memory");
-const MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY = Symbol.for(
-  "openclaw.memoryCore.sessionTranscriptUpdateSubscriber",
-);
 const TEST_MEMORY_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.memoryWatchFactory");
 const TEST_MEMORY_NATIVE_WATCH_FACTORY_KEY = Symbol.for("openclaw.test.memoryNativeWatchFactory");
 
@@ -203,10 +207,6 @@ type MemorySessionTranscriptUpdate = {
     sessionKey: string;
   };
 };
-
-type MemoryTranscriptUpdateSubscriber = (
-  listener: (update: MemorySessionTranscriptUpdate) => void,
-) => () => void;
 
 function memoryTableExists(db: DatabaseSync, tableName: string): boolean {
   return Boolean(
@@ -225,18 +225,6 @@ type LinuxMemoryDirectoryWatcher = {
   watcher: fsSync.FSWatcher;
   ino: number;
 };
-
-function subscribeMemorySessionTranscriptUpdates(
-  listener: (update: MemorySessionTranscriptUpdate) => void,
-): () => void {
-  const injected = (globalThis as Record<symbol, unknown>)[
-    MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY
-  ];
-  if (typeof injected === "function") {
-    return (injected as MemoryTranscriptUpdateSubscriber)(listener);
-  }
-  return onSessionTranscriptUpdate(listener);
-}
 
 function resolveMemoryWatchFactory(): typeof chokidar.watch {
   if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
@@ -1469,7 +1457,7 @@ export abstract class MemoryManagerSyncOps {
     if (!this.sources.has("sessions") || this.sessionUnsubscribe) {
       return;
     }
-    this.sessionUnsubscribe = subscribeMemorySessionTranscriptUpdates((update) => {
+    this.sessionUnsubscribe = this.subscribeSessionTranscriptUpdates((update) => {
       if (this.closed) {
         return;
       }
@@ -1492,6 +1480,12 @@ export abstract class MemoryManagerSyncOps {
         });
       }
     });
+  }
+
+  protected subscribeSessionTranscriptUpdates(
+    listener: (update: MemorySessionTranscriptUpdate) => void,
+  ): () => void {
+    return onInternalSessionTranscriptUpdate(listener);
   }
 
   private async scheduleCorpusSessionFileDirty(sessionFile: string): Promise<void> {
@@ -1528,18 +1522,10 @@ export abstract class MemoryManagerSyncOps {
         corpusEntries.map(
           (corpusEntry) => async (): Promise<MemorySessionStartupFileState | null> => {
             if (corpusEntry.transcriptSource === "sqlite") {
-              const entry = await buildSessionEntry(
+              return statSessionEntrySync(
                 corpusEntry.sessionFile,
                 buildSessionEntryOptions(corpusEntry),
               );
-              return entry
-                ? {
-                    absPath: corpusEntry.sessionFile,
-                    path: entry.path,
-                    mtimeMs: entry.mtimeMs,
-                    size: entry.size,
-                  }
-                : null;
             }
             const file = corpusEntry.sessionFile;
             try {
@@ -1851,6 +1837,14 @@ export abstract class MemoryManagerSyncOps {
         continue;
       }
       if (corpusMarkers.has(trimmed)) {
+        normalized.add(trimmed);
+        continue;
+      }
+      const sqliteMarker = parseSqliteSessionFileMarker(trimmed);
+      if (
+        sqliteMarker &&
+        normalizeAgentId(sqliteMarker.agentId) === normalizeAgentId(this.agentId)
+      ) {
         normalized.add(trimmed);
         continue;
       }
@@ -2189,7 +2183,13 @@ export abstract class MemoryManagerSyncOps {
           }).rows,
       sessionPathForFile: (file) => {
         const corpusEntry = corpusEntryByPath.get(file);
-        return corpusEntry ? sessionPathForCorpusEntry(corpusEntry) : sessionPathForFile(file);
+        if (corpusEntry) {
+          return sessionPathForCorpusEntry(corpusEntry);
+        }
+        const sqliteMarker = parseSqliteSessionFileMarker(file);
+        return sqliteMarker
+          ? sessionPathForSessionIdentity(sqliteMarker.agentId, sqliteMarker.sessionId)
+          : sessionPathForFile(file);
       },
     });
     const { activePaths, existingRows, existingHashes, indexAll } = sessionPlan;
@@ -2211,6 +2211,20 @@ export abstract class MemoryManagerSyncOps {
     }
 
     const yieldAfterSessionFile = createSessionSyncYield(files.length);
+    const deleteIndexedSessionPath = (memoryPath: string) => {
+      deleteFileByPathAndSource.run(memoryPath, "sessions");
+      if (deleteVectorRowsByPathAndSource) {
+        try {
+          deleteVectorRowsByPathAndSource.run(memoryPath, "sessions");
+        } catch {}
+      }
+      deleteChunksByPathAndSource.run(memoryPath, "sessions");
+      if (deleteFtsRowsByPathAndSource) {
+        try {
+          deleteFtsRowsByPathAndSource.run(memoryPath, "sessions");
+        } catch {}
+      }
+    };
     const deleteStaleRows = async () => {
       if (activePaths === null) {
         return;
@@ -2223,20 +2237,47 @@ export abstract class MemoryManagerSyncOps {
           if (activePaths.has(stale.path)) {
             continue;
           }
-          deleteFileByPathAndSource.run(stale.path, "sessions");
-          if (deleteVectorRowsByPathAndSource) {
-            try {
-              deleteVectorRowsByPathAndSource.run(stale.path, "sessions");
-            } catch {}
-          }
-          deleteChunksByPathAndSource.run(stale.path, "sessions");
-          if (deleteFtsRowsByPathAndSource) {
-            try {
-              deleteFtsRowsByPathAndSource.run(stale.path, "sessions");
-            } catch {}
-          }
+          deleteIndexedSessionPath(stale.path);
         } finally {
           await yieldAfterStaleSessionRow();
+        }
+      }
+    };
+    const deleteTargetArchiveStaleLiveRows = () => {
+      if (!targetArchiveFiles) {
+        return;
+      }
+      const activeCorpusPaths = new Set(
+        corpusEntries
+          .filter((entry) => entry.artifactKind === "active-session")
+          .map((entry) => sessionPathForCorpusEntry(entry)),
+      );
+      const existingSessionPaths = new Set(
+        loadMemorySourceFileState({
+          db: this.db,
+          source: "sessions",
+        }).rows.map((row) => row.path),
+      );
+      for (const file of targetArchiveFiles) {
+        const corpusEntry = corpusEntryByPath.get(file);
+        const sqliteMarker = parseSqliteSessionFileMarker(file);
+        const sessionId =
+          corpusEntry?.sessionId ??
+          sqliteMarker?.sessionId ??
+          parseUsageCountedSessionIdFromFileName(path.basename(file));
+        if (!sessionId) {
+          continue;
+        }
+        const staleAgentId = corpusEntry?.agentId ?? sqliteMarker?.agentId ?? this.agentId;
+        const staleLivePaths = [
+          sessionPathForSessionIdentity(staleAgentId, sessionId),
+          legacyExtensionlessSessionPathForIdentity(staleAgentId, sessionId),
+        ];
+        for (const staleLivePath of staleLivePaths) {
+          if (activeCorpusPaths.has(staleLivePath) || !existingSessionPaths.has(staleLivePath)) {
+            continue;
+          }
+          deleteIndexedSessionPath(staleLivePath);
         }
       }
     };
@@ -2329,6 +2370,7 @@ export abstract class MemoryManagerSyncOps {
       }
 
       await flushPendingIndexItems();
+      deleteTargetArchiveStaleLiveRows();
       await deleteStaleRows();
       return this.emptySourceSyncPlan();
     }
@@ -2395,6 +2437,7 @@ export abstract class MemoryManagerSyncOps {
     });
     await runWithConcurrency(tasks, this.getIndexConcurrency());
 
+    deleteTargetArchiveStaleLiveRows();
     await deleteStaleRows();
     return this.emptySourceSyncPlan();
   }

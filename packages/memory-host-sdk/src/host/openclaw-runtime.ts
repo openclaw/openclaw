@@ -64,6 +64,8 @@ export {
 export {
   loadTranscriptEventsSync,
   listSessionEntries,
+  readTranscriptStatsSync,
+  resolveTranscriptSessionKeyBySessionId,
   resolveStorePath,
 } from "../../../../src/plugin-sdk/session-store-runtime.js";
 export { parseSqliteSessionFileMarker } from "../../../../src/plugin-sdk/session-store-runtime.js";

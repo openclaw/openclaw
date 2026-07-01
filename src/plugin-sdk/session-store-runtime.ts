@@ -10,7 +10,9 @@ import {
   loadSessionEntry,
   patchSessionEntry as patchAccessorSessionEntry,
   readSessionUpdatedAt as readAccessorSessionUpdatedAt,
+  readTranscriptStatsSync as readAccessorTranscriptStatsSync,
   replaceSessionEntry,
+  resolveTranscriptSessionKeyBySessionId as resolveAccessorTranscriptSessionKeyBySessionId,
   type SessionAccessScope,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
@@ -136,6 +138,27 @@ export function loadTranscriptEventsSync(params: {
   storePath?: string;
 }): SessionStoreTranscriptEvent[] {
   return loadAccessorTranscriptEventsSync(params);
+}
+
+/** Reads transcript freshness and byte size without materializing event rows. */
+export function readTranscriptStatsSync(params: {
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+  sessionId: string;
+  sessionKey?: string;
+  storePath?: string;
+}): { eventCount: number; maxSeq: number; sizeBytes: number } {
+  return readAccessorTranscriptStatsSync(params);
+}
+
+/** Resolves the persisted session key for one SQLite transcript identity. */
+export function resolveTranscriptSessionKeyBySessionId(params: {
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+  sessionId: string;
+  storePath?: string;
+}): string | undefined {
+  return resolveAccessorTranscriptSessionKeyBySessionId(params);
 }
 
 /** Patches one session entry by agent/session identity. */

@@ -8,7 +8,6 @@ import {
   listSessionTranscriptCorpusEntriesForAgent,
   parseUsageCountedSessionIdFromFileName,
   sessionPathForFile,
-  sessionPathForSessionIdentity,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
@@ -683,10 +682,16 @@ function hashSessionMessageId(value: string): string {
   return createHash("sha1").update(value).digest("hex");
 }
 
-function buildSessionScopeKey(agentId: string, absolutePath: string): string {
+function buildSessionScopeKey(agentId: string, sessionId: string): string {
+  const logicalSessionId =
+    parseUsageCountedSessionIdFromFileName(`${sessionId}.jsonl`) ?? sessionId;
+  return `${agentId}:${logicalSessionId}`;
+}
+
+function buildSessionFileScopeKey(agentId: string, absolutePath: string): string {
   const fileName = path.basename(absolutePath);
   const logicalSessionId = parseUsageCountedSessionIdFromFileName(fileName) ?? fileName;
-  return `${agentId}:${logicalSessionId}`;
+  return buildSessionScopeKey(agentId, logicalSessionId);
 }
 
 function mergeTrackedMessageHashes(existing: string[], additions: string[]): string[] {
@@ -721,6 +726,10 @@ function areStringArraysEqual(a: string[], b: string[]): boolean {
 
 function buildSessionStateKey(agentId: string, sessionPath: string): string {
   return `${agentId}:${sessionPath}`;
+}
+
+function buildSqliteDreamingSessionPath(agentId: string, sessionId: string): string {
+  return path.join("sessions", agentId, sessionId).replace(/\\/g, "/");
 }
 
 function isCheckpointSessionTranscriptPath(absolutePath: string): boolean {
@@ -846,6 +855,7 @@ async function collectSessionIngestionBatches(params: {
     absolutePath: string;
     generatedByDreamingNarrative: boolean;
     generatedByCronRun: boolean;
+    sessionId: string;
     sessionPath: string;
     transcriptSource?: "sqlite";
     updatedAtMs?: number;
@@ -866,9 +876,10 @@ async function collectSessionIngestionBatches(params: {
         absolutePath,
         generatedByDreamingNarrative: entry.generatedByDreamingNarrative === true,
         generatedByCronRun: entry.generatedByCronRun === true,
+        sessionId: entry.sessionId,
         sessionPath:
           entry.transcriptSource === "sqlite"
-            ? sessionPathForSessionIdentity(entry.agentId, entry.sessionId)
+            ? buildSqliteDreamingSessionPath(entry.agentId, entry.sessionId)
             : sessionPathForFile(absolutePath),
         ...(entry.transcriptSource === "sqlite" ? { transcriptSource: "sqlite" as const } : {}),
         ...(entry.updatedAtMs !== undefined ? { updatedAtMs: entry.updatedAtMs } : {}),
@@ -990,9 +1001,16 @@ async function collectSessionIngestionBatches(params: {
     const sessionScope =
       file.transcriptSource === "sqlite"
         ? `${file.agentId}:${file.sessionPath}`
-        : buildSessionScopeKey(file.agentId, file.absolutePath);
+        : buildSessionFileScopeKey(file.agentId, file.absolutePath);
+    const preFlipSessionScope =
+      file.transcriptSource === "sqlite"
+        ? buildSessionScopeKey(file.agentId, file.sessionId)
+        : undefined;
     const previousSeen = nextSeenMessages[sessionScope] ?? [];
     const seenSet = new Set(previousSeen);
+    const preFlipSeenSet = preFlipSessionScope
+      ? new Set(nextSeenMessages[preFlipSessionScope] ?? [])
+      : null;
     const newSeenHashes: string[] = [];
 
     const lines = entry.content.length > 0 ? entry.content.split("\n") : [];
@@ -1031,7 +1049,13 @@ async function collectSessionIngestionBatches(params: {
       const dedupeBasis =
         messageTimestampMs > 0 ? `ts:${Math.floor(messageTimestampMs)}` : `line:${lineNumber}`;
       const messageHash = hashSessionMessageId(`${sessionScope}\n${dedupeBasis}\n${snippet}`);
-      if (seenSet.has(messageHash)) {
+      const preFlipMessageHash = preFlipSessionScope
+        ? hashSessionMessageId(`${preFlipSessionScope}\n${dedupeBasis}\n${snippet}`)
+        : undefined;
+      if (
+        seenSet.has(messageHash) ||
+        (preFlipMessageHash !== undefined && preFlipSeenSet?.has(preFlipMessageHash))
+      ) {
         continue;
       }
       const rendered = buildSessionRenderedLine({

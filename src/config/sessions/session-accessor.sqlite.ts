@@ -64,6 +64,7 @@ import type {
   SessionEntryUpdateOptions,
   SessionTranscriptAccessScope,
   SessionTranscriptReadScope,
+  SessionTranscriptStats,
   SessionTranscriptTurnMessageAppend,
   SessionTranscriptTurnWriteContext,
   SessionTranscriptWriteScope,
@@ -969,6 +970,32 @@ function loadSqliteTranscriptEventsFromDatabase(
       .orderBy("seq", "asc"),
   ).rows;
   return rows.map((row) => JSON.parse(row.event_json) as TranscriptEvent);
+}
+
+/** Reads transcript freshness and byte size without materializing event rows. */
+export function readSqliteTranscriptStatsSync(
+  scope: SessionTranscriptReadScope,
+): SessionTranscriptStats {
+  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+  const db = getSessionKysely(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select((eb) => [
+        eb.fn.count<number>("seq").as("event_count"),
+        eb.fn.max<number>("seq").as("max_seq"),
+        sql<number>`COALESCE(SUM(LENGTH(CAST(event_json AS BLOB))), 0)
+          + CASE WHEN COUNT(*) > 0 THEN COUNT(*) - 1 ELSE 0 END`.as("size_bytes"),
+      ])
+      .where("session_id", "=", resolved.sessionId),
+  );
+  return {
+    eventCount: Number(row?.event_count ?? 0),
+    maxSeq: Number(row?.max_seq ?? 0),
+    sizeBytes: Number(row?.size_bytes ?? 0),
+  };
 }
 
 function readTranscriptEventJsonSetInTransaction(

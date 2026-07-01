@@ -61,6 +61,12 @@ export type SessionEntrySummary = {
 
 export type TranscriptEvent = unknown;
 
+export type SessionTranscriptStats = {
+  eventCount: number;
+  maxSeq: number;
+  sizeBytes: number;
+};
+
 export type TranscriptMessageAppendOptions<TMessage> = {
   config?: OpenClawConfig;
   cwd?: string;

@@ -1157,6 +1157,9 @@ describe("memory-core dreaming phases", () => {
     const sessionIngestion = await testing.readSessionIngestionState(workspaceDir);
     expect(firstSessionIngestion).toStrictEqual(sessionIngestion);
     expect(Object.keys(sessionIngestion.files)).toContain("main:sessions/main/dreaming-main");
+    expect(Object.keys(sessionIngestion.seenMessages)).toContain(
+      "main:sessions/main/dreaming-main",
+    );
     await expect(
       fs.access(path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt")),
     ).resolves.toBeUndefined();

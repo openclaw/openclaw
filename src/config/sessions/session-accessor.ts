@@ -43,6 +43,7 @@ import {
   loadSqliteSessionEntry,
   loadSqliteTranscriptEvents,
   loadSqliteTranscriptEventsSync,
+  readSqliteTranscriptStatsSync,
   patchSqliteSessionEntry,
   patchSqliteSessionEntryTarget,
   publishSqliteTranscriptUpdate,
@@ -265,6 +266,12 @@ export type ExactSessionEntry = {
 
 /** Raw transcript record for non-message events; message records use appendTranscriptMessage. */
 export type TranscriptEvent = unknown;
+
+export type SessionTranscriptStats = {
+  eventCount: number;
+  maxSeq: number;
+  sizeBytes: number;
+};
 
 export type TranscriptMessageAppendOptions<TMessage> = {
   /** Runtime config used for message redaction and transcript header metadata. */
@@ -2144,6 +2151,13 @@ export function replaceTranscriptEventsSync(
 /** Reads parsed transcript records synchronously from the SQLite transcript store. */
 export function loadTranscriptEventsSync(scope: SessionTranscriptReadScope): TranscriptEvent[] {
   return loadSqliteTranscriptEventsSync(scope);
+}
+
+/** Reads transcript freshness and byte size without materializing event rows. */
+export function readTranscriptStatsSync(
+  scope: SessionTranscriptReadScope,
+): SessionTranscriptStats {
+  return readSqliteTranscriptStatsSync(scope);
 }
 
 /** Reads the latest visible assistant text without materializing the whole transcript. */
