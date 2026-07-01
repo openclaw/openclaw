@@ -643,6 +643,20 @@ function notifyPluginApprovalResolution(
   }
 }
 
+function cancelPluginToolApprovalRequest(id: string): void {
+  void Promise.resolve(
+    callGatewayTool(
+      "plugin.approval.cancel",
+      { timeoutMs: 5_000 },
+      {
+        id,
+      },
+    ),
+  ).catch((err: unknown) => {
+    log.warn(`plugin approval cancel failed: ${String(err)}`);
+  });
+}
+
 async function requestPluginToolApproval(params: {
   approval: PluginApprovalRequest;
   toolName: string;
@@ -655,6 +669,7 @@ async function requestPluginToolApproval(params: {
   const approval = params.approval;
   const timeoutMs = resolvePluginToolApprovalTimeoutMs(approval);
   const gatewayTimeoutMs = resolvePluginToolApprovalGatewayTimeoutMs(timeoutMs);
+  let approvalId: string | undefined;
   try {
     const requestResult: {
       id?: string;
@@ -695,6 +710,7 @@ async function requestPluginToolApproval(params: {
         params: params.baseParams,
       };
     }
+    approvalId = id;
     const hasImmediateDecision = Object.hasOwn(requestResult ?? {}, "decision");
     let decision: string | null | undefined;
     if (hasImmediateDecision) {
@@ -795,6 +811,9 @@ async function requestPluginToolApproval(params: {
         (err instanceof Error &&
           (err.name === "AbortError" || ("cause" in err && err.cause === signal.reason))));
     if (abortCancelled) {
+      if (approvalId) {
+        cancelPluginToolApprovalRequest(approvalId);
+      }
       log.warn(`plugin approval wait cancelled by run abort: ${String(err)}`);
       return {
         blocked: true,

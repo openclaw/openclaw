@@ -48,3 +48,11 @@ export const PluginApprovalResolveParamsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+/** Requester-side cancellation for a pending plugin approval. */
+export const PluginApprovalCancelParamsSchema = Type.Object(
+  {
+    id: NonEmptyString,
+  },
+  { additionalProperties: false },
+);

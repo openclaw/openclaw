@@ -667,3 +667,98 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
 
   params.respond(true, { ok: true }, undefined);
 }
+
+/** Cancels a pending approval requested by the caller and broadcasts cleanup. */
+export async function handleApprovalCancel<TPayload, TResolvedEvent extends object>(params: {
+  manager: ExecApprovalManager<TPayload>;
+  inputId: string;
+  respond: RespondFn;
+  context: GatewayRequestContext;
+  client: GatewayClient | null;
+  exposeAmbiguousPrefixError?: boolean;
+  resolvedEventName: string;
+  buildResolvedEvent: (params: {
+    approvalId: string;
+    decision: null;
+    resolvedBy: string | null;
+    snapshot: ExecApprovalRecord<TPayload>;
+    nowMs: number;
+  }) => TResolvedEvent;
+  forwardResolved?: (event: TResolvedEvent) => Promise<void> | void;
+  forwardResolvedErrorLabel?: string;
+}): Promise<void> {
+  const resolved = resolvePendingApprovalRecord({
+    manager: params.manager,
+    inputId: params.inputId,
+    client: params.client,
+    exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
+  });
+  if (!resolved.ok) {
+    const resolvedRepeat = resolveResolvedApprovalRecord({
+      manager: params.manager,
+      inputId: params.inputId,
+      client: params.client,
+      exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
+    });
+    if (resolvedRepeat.ok) {
+      if (resolveRecordedApprovalDecision(resolvedRepeat.snapshot) === undefined) {
+        params.respond(true, { ok: true }, undefined);
+        return;
+      }
+      params.respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "approval already resolved", {
+          details: APPROVAL_ALREADY_RESOLVED_DETAILS,
+        }),
+      );
+      return;
+    }
+    respondPendingApprovalLookupError({ respond: params.respond, response: resolved.response });
+    return;
+  }
+
+  const resolvedBy =
+    params.client?.connect?.client?.displayName ?? params.client?.connect?.client?.id ?? null;
+  const ok = params.manager.expire(resolved.approvalId, resolvedBy ?? "request-cancelled");
+  if (!ok) {
+    respondUnknownOrExpiredApproval(params.respond);
+    return;
+  }
+
+  const resolvedEvent = params.buildResolvedEvent({
+    approvalId: resolved.approvalId,
+    decision: null,
+    resolvedBy,
+    snapshot: resolved.snapshot,
+    nowMs: Date.now(),
+  });
+  const resolvedEventConnIds = resolveApprovalRequestRecipientConnIds({
+    context: params.context,
+    record: resolved.snapshot,
+  });
+  if (resolvedEventConnIds) {
+    params.context.broadcastToConnIds(
+      params.resolvedEventName,
+      resolvedEvent,
+      resolvedEventConnIds,
+      {
+        dropIfSlow: true,
+      },
+    );
+  } else {
+    params.context.broadcast(params.resolvedEventName, resolvedEvent, { dropIfSlow: true });
+  }
+
+  if (params.forwardResolved) {
+    try {
+      await params.forwardResolved(resolvedEvent);
+    } catch (err) {
+      params.context.logGateway?.error?.(
+        `${params.forwardResolvedErrorLabel ?? "approval cancel follow-up failed"}: ${String(err)}`,
+      );
+    }
+  }
+
+  params.respond(true, { ok: true }, undefined);
+}

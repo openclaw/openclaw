@@ -285,6 +285,10 @@ export function createGatewayAuxHandlers(params: {
         "plugin.approval.waitDecision",
         loadPluginApprovalHandlers,
       ),
+      "plugin.approval.cancel": createLazyHandler(
+        "plugin.approval.cancel",
+        loadPluginApprovalHandlers,
+      ),
       "plugin.approval.resolve": createLazyHandler(
         "plugin.approval.resolve",
         loadPluginApprovalHandlers,

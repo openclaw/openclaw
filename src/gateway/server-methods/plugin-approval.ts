@@ -5,6 +5,7 @@ import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  validatePluginApprovalCancelParams,
   validatePluginApprovalRequestParams,
   validatePluginApprovalResolveParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -18,6 +19,7 @@ import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   bindApprovalRequesterMetadata,
   buildRequestedApprovalEvent,
+  handleApprovalCancel,
   handleApprovalResolve,
   handleApprovalWaitDecision,
   handlePendingApprovalRequest,
@@ -145,6 +147,41 @@ export function createPluginApprovalHandlers(
         inputId: (params as { id?: string }).id,
         client,
         respond,
+      });
+    },
+
+    "plugin.approval.cancel": async ({ params, respond, client, context }) => {
+      if (!validatePluginApprovalCancelParams(params)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid plugin.approval.cancel params: ${formatValidationErrors(
+              validatePluginApprovalCancelParams.errors,
+            )}`,
+          ),
+        );
+        return;
+      }
+      await handleApprovalCancel({
+        manager,
+        inputId: params.id,
+        respond,
+        context,
+        client,
+        exposeAmbiguousPrefixError: false,
+        resolvedEventName: "plugin.approval.resolved",
+        buildResolvedEvent: ({ approvalId, resolvedBy, snapshot, nowMs }) => ({
+          id: approvalId,
+          decision: null,
+          resolvedBy,
+          ts: nowMs,
+          request: snapshot.request,
+        }),
+        forwardResolved: (resolvedEvent) =>
+          opts?.forwarder?.handlePluginApprovalResolved?.(resolvedEvent),
+        forwardResolvedErrorLabel: "plugin approvals: forward cancel failed",
       });
     },
 
