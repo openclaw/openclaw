@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 
 type RequestFn = (method: string, params?: unknown) => Promise<unknown>;
+let OpenClawApp: typeof import("./app.ts").OpenClawApp;
 
 function createExecApproval(overrides: Partial<ExecApprovalRequest> = {}): ExecApprovalRequest {
   return {
@@ -34,7 +35,6 @@ async function createApp(
   request: RequestFn,
   queue: ExecApprovalRequest[] = [createExecApproval()],
 ) {
-  const { OpenClawApp } = await import("./app.ts");
   const app = Object.create(OpenClawApp.prototype) as InstanceType<typeof OpenClawApp>;
   Object.defineProperties(app, {
     client: { value: { request }, writable: true },
@@ -45,7 +45,21 @@ async function createApp(
   return app;
 }
 
+function deferred<T = unknown>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("OpenClawApp exec approval decisions", () => {
+  beforeAll(async () => {
+    ({ OpenClawApp } = await import("./app.ts"));
+  }, 60_000);
+
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
   });
@@ -66,6 +80,53 @@ describe("OpenClawApp exec approval decisions", () => {
       decision: "allow-once",
     });
     expect(app.execApprovalQueue).toEqual([]);
+    expect(app.execApprovalError).toBeNull();
+    expect(app.execApprovalBusy).toBe(false);
+  });
+
+  it("does not show a stale resolve error on a newly active approval", async () => {
+    const resolveAttempt = deferred();
+    const request = vi.fn<RequestFn>(async () => {
+      await resolveAttempt.promise;
+      throw createGatewayError("gateway unavailable");
+    });
+    const active = createExecApproval({ id: "approval-active", createdAtMs: 1000 });
+    const newer = createExecApproval({
+      id: "approval-newer",
+      request: { command: "npm publish" },
+      createdAtMs: 2000,
+    });
+    const app = await createApp(request, [active]);
+
+    const decision = app.handleExecApprovalDecision("allow-once");
+    expect(app.execApprovalBusy).toBe(true);
+
+    app.execApprovalQueue = [newer, active];
+    resolveAttempt.resolve(undefined);
+    await decision;
+
+    expect(app.execApprovalQueue).toEqual([newer, active]);
+    expect(app.execApprovalError).toBeNull();
+    expect(app.execApprovalBusy).toBe(false);
+  });
+
+  it("does not show a stopped-client resolve error after reconnect swaps clients", async () => {
+    const resolveAttempt = deferred();
+    const request = vi.fn<RequestFn>(async () => {
+      await resolveAttempt.promise;
+      throw new Error("gateway client stopped");
+    });
+    const app = await createApp(request);
+
+    const decision = app.handleExecApprovalDecision("deny");
+    expect(app.execApprovalBusy).toBe(true);
+
+    app.client = { request: vi.fn<RequestFn>(async () => ({})) };
+    resolveAttempt.resolve(undefined);
+    await decision;
+
+    expect(app.execApprovalQueue).toHaveLength(1);
+    expect(app.execApprovalQueue[0]?.id).toBe("approval-1");
     expect(app.execApprovalError).toBeNull();
     expect(app.execApprovalBusy).toBe(false);
   });
