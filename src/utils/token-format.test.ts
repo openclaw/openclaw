@@ -5,9 +5,9 @@ import { formatTokenCount } from "./token-format.js";
 describe("formatTokenCount", () => {
   it("returns 0 for undefined or non-finite values", () => {
     expect(formatTokenCount(undefined)).toBe("0");
-    expect(formatTokenCount(NaN)).toBe("0");
-    expect(formatTokenCount(Infinity)).toBe("0");
-    expect(formatTokenCount(-Infinity)).toBe("0");
+    expect(formatTokenCount(Number.NaN)).toBe("0");
+    expect(formatTokenCount(Number.POSITIVE_INFINITY)).toBe("0");
+    expect(formatTokenCount(Number.NEGATIVE_INFINITY)).toBe("0");
   });
 
   it("returns 0 for zero or negative values", () => {
