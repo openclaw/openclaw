@@ -38,6 +38,7 @@ import {
 } from "../../config/sessions/transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { ImageContent, Message, TextContent } from "../../llm/types.js";
+import { logWarn } from "../../logger.js";
 import { getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.js";
 import {
   type AgentMessage,
@@ -46,7 +47,6 @@ import {
   uuidv7,
 } from "../runtime/index.js";
 import { invalidateSessionFileRepairCache } from "../session-file-repair.js";
-import { logWarn } from "../../logger.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 
 export { CURRENT_SESSION_VERSION };
@@ -351,6 +351,7 @@ export function migrateSessionEntries(entries: FileEntry[]): void {
 export function parseSessionEntries(content: string): FileEntry[] {
   const entries: FileEntry[] = [];
   const lines = content.trim().split("\n");
+  let skipped = 0;
 
   for (const line of lines) {
     if (!line.trim()) {
@@ -360,8 +361,15 @@ export function parseSessionEntries(content: string): FileEntry[] {
       const entry = JSON.parse(line) as FileEntry;
       entries.push(entry);
     } catch {
-      // Skip malformed lines
+      skipped++;
     }
+  }
+
+  if (skipped > 0) {
+    logWarn(
+      `parseSessionEntries: skipped ${skipped} malformed JSONL line(s) — ` +
+        `${entries.length} valid entries were loaded`,
+    );
   }
 
   return entries;
