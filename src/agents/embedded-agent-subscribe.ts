@@ -181,7 +181,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     includeReasoning: reasoningMode === "on" && canShowReasoning,
     shouldEmitPartialReplies: !(reasoningMode === "on" && !params.onBlockReply),
     streamReasoning:
-      reasoningMode === "stream" &&
+      (params.streamReasoningInNonStreamModes === true
+        ? reasoningMode !== "on"
+        : reasoningMode === "stream") &&
       canShowReasoning &&
       typeof params.onReasoningStream === "function",
     deltaBuffer: "",
@@ -1167,9 +1169,6 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     if (params.silentExpected) {
       return;
     }
-    if (!state.streamReasoning || !params.onReasoningStream) {
-      return;
-    }
     const trimmed = text.trim();
     if (!trimmed) {
       return;
@@ -1183,7 +1182,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     const delta = trimmed.startsWith(prior) ? trimmed.slice(prior.length) : trimmed;
     state.lastStreamedReasoning = trimmed;
 
-    // Broadcast thinking event to WebSocket clients in real-time
+    // Emit-always: the thinking stream always reaches the bus and session
+    // archive. /reasoning (streamReasoning) gates only the rendering hook
+    // below; display surfaces (TUI showThinking, webchat isReasoning drops)
+    // gate presentation on their side.
     emitAgentEvent({
       runId: params.runId,
       stream: "thinking",
@@ -1193,9 +1195,17 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
       },
     });
 
-    void params.onReasoningStream({
-      text: trimmed,
-    });
+    // Message-tool-only delivery makes later reasoning private: once the
+    // user-facing reply has gone out via the message tool, the channel shows
+    // only what was explicitly sent, so trailing reasoning must stay out of the
+    // render hook — uniformly, whether the thinking block rode in on a tool call
+    // or arrived on its own. It still reaches the bus/archive above.
+    if (state.streamReasoning && !hasMessageToolOnlySourceDelivery() && params.onReasoningStream) {
+      void params.onReasoningStream({
+        text: trimmed,
+        ...(state.reasoningMode === "stream" ? {} : { requiresReasoningProgressOptIn: true }),
+      });
+    }
   };
 
   const resetForCompactionRetry = () => {

@@ -200,6 +200,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: { log: vi.fn(), error: vi.fn() } as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
     });
 
     return firstMockArg(createReplyDispatcherWithTypingMock, "reply dispatcher options");
@@ -215,6 +216,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
       ...overrides,
     });
 
@@ -338,6 +340,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
       replyToMessageId: "om_parent",
     });
 
@@ -353,6 +356,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
       replyToMessageId: "om_parent",
       messageCreateTimeMs: Date.now() - 3 * 60_000,
     });
@@ -369,6 +373,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
       replyToMessageId: "om_parent",
       messageCreateTimeMs: Math.floor((Date.now() - 3 * 60_000) / 1000),
     });
@@ -385,6 +390,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
       replyToMessageId: "om_parent",
       messageCreateTimeMs: Date.now() - 30_000,
     });
@@ -416,6 +422,23 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expectMockArgFields(sendMessageFeishuMock, "message send params", {
       replyToMessageId: "om_topic_root",
       replyInThread: true,
+    });
+  });
+
+  it("routes visible sends to sendTarget while keeping chatId separate", async () => {
+    useNonStreamingAutoAccount();
+    const { options } = createDispatcherHarness({
+      chatId: "oc_p2p_chat",
+      sendTarget: "user:ou_sender",
+      replyToMessageId: "om_direct",
+      skipReplyToInMessages: true,
+    });
+
+    await options.deliver({ text: "plain text" }, { kind: "final" });
+
+    expectMockArgFields(sendMessageFeishuMock, "message send params", {
+      to: "user:ou_sender",
+      replyToMessageId: undefined,
     });
   });
 
@@ -613,6 +636,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
     });
 
     expect(result.replyOptions).toHaveProperty("disableBlockStreaming", true);
@@ -676,6 +700,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
     });
 
     expect(result.replyOptions).toHaveProperty("disableBlockStreaming", true);
@@ -701,6 +726,43 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("strips prose from identity emoji in streaming and static card headers", async () => {
+    const identity = {
+      name: "Agent",
+      emoji: "根据心情/语气自由切换 😊🇺🇸👍🏽👨‍👩‍👧‍👦",
+      theme: "green" as const,
+    };
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      identity,
+    });
+    await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
+
+    expectStreamingStartOptions(0, {
+      header: { title: "😊🇺🇸👍🏽👨‍👩‍👧‍👦 Agent", template: "green" },
+    });
+
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: false,
+      },
+    });
+    const { options: staticOptions } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      identity,
+    });
+    await staticOptions.deliver({ text: "| a | b |\n| - | - |" }, { kind: "final" });
+
+    expectLastMockArgFields(sendStructuredCardFeishuMock, "structured card params", {
+      header: { title: "😊🇺🇸👍🏽👨‍👩‍👧‍👦 Agent", template: "green" },
+    });
   });
 
   it("closes streaming with block text when final reply is missing", async () => {
@@ -2071,6 +2133,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         agentId: "agent",
         runtime: { log: vi.fn(), error: errorMock } as never,
         chatId: "oc_chat",
+        sendTarget: "oc_chat",
       });
 
       const options = firstTypingDispatcherOptions();

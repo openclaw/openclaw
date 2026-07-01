@@ -21,7 +21,6 @@ struct RootTabsPhoneControlHub: View {
                         ForEach(self.groups) { group in
                             self.groupSection(group)
                         }
-                        self.versionFooter
                     }
                     .padding(.vertical, self.isCompactHeight ? 10 : 16)
                 }
@@ -51,7 +50,7 @@ struct RootTabsPhoneControlHub: View {
                             .font(.subheadline.weight(.semibold))
                             .lineLimit(1)
                         Text(self.gatewayDisplayLabel)
-                            .font(.caption)
+                            .font(.footnote)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
@@ -71,7 +70,7 @@ struct RootTabsPhoneControlHub: View {
                                 .font(.headline)
                                 .lineLimit(1)
                             Text(self.gatewayDisplayLabel)
-                                .font(.caption)
+                                .font(.footnote)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                                 .truncationMode(.middle)
@@ -89,7 +88,7 @@ struct RootTabsPhoneControlHub: View {
 
     private var gatewayActionRow: some View {
         Button {
-            self.openRootDestination(.gateway)
+            self.openPhoneRootDestination(.gateway)
         } label: {
             HStack(spacing: 10) {
                 ProStatusDot(color: self.gatewayStateColor)
@@ -98,14 +97,14 @@ struct RootTabsPhoneControlHub: View {
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
                     Text(self.gatewayDisplayLabel)
-                        .font(.caption)
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
                 Spacer(minLength: 8)
                 Text(self.gatewayActionTitle)
-                    .font(.caption.weight(.semibold))
+                    .font(.footnote.weight(.semibold))
                     .foregroundStyle(OpenClawBrand.accent)
                 Image(systemName: "chevron.right")
                     .font(.caption2.weight(.bold))
@@ -140,7 +139,7 @@ struct RootTabsPhoneControlHub: View {
     private func destinationRow(_ destination: RootTabs.SidebarDestination) -> some View {
         if self.opensRootTab(destination) {
             Button {
-                self.openRootDestination(destination)
+                self.openPhoneRootDestination(destination)
             } label: {
                 self.rowLabel(destination)
             }
@@ -157,13 +156,13 @@ struct RootTabsPhoneControlHub: View {
 
     private func rowLabel(_ destination: RootTabs.SidebarDestination) -> some View {
         HStack(alignment: .center, spacing: 12) {
-            ProIconBadge(systemName: destination.systemImage, color: self.color(for: destination))
+            ProIconBadge(systemName: destination.systemImage, color: .secondary)
             VStack(alignment: .leading, spacing: 3) {
                 Text(destination.title)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
                 Text(destination.subtitle)
-                    .font(.caption)
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -177,20 +176,6 @@ struct RootTabsPhoneControlHub: View {
         .contentShape(Rectangle())
     }
 
-    private var versionFooter: some View {
-        ProCard(radius: OpenClawProMetric.cardRadius) {
-            HStack {
-                Spacer()
-                Text("v\(DeviceInfoHelper.openClawVersionString())")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                Spacer()
-            }
-        }
-        .padding(.horizontal, OpenClawProMetric.pagePadding)
-    }
-
     @ViewBuilder
     private func detail(for destination: RootTabs.SidebarDestination) -> some View {
         switch destination {
@@ -198,57 +183,59 @@ struct RootTabsPhoneControlHub: View {
             EmptyView()
         case .overview:
             CommandCenterTab(
+                ownsNavigationStack: false,
                 headerTitle: "Overview",
                 headerLeadingAction: self.phoneDetailBackAction,
                 showsHeaderMark: false,
-                openChat: { self.openRootDestination(.chat) },
-                openSettings: { self.openRootDestination(.gateway) })
+                openChat: { self.openPhoneRootDestination(.chat) },
+                openSettings: { self.openPhoneRootDestination(.gateway) },
+                openSessions: { self.navigationPath.append(.sessions) })
         case .activity:
             IPadActivityScreen(
                 headerLeadingAction: self.phoneDetailBackAction,
-                openChat: { self.openRootDestination(.chat) },
-                openSettings: { self.openRootDestination(.gateway) })
+                openChat: { self.openPhoneRootDestination(.chat) },
+                openSettings: { self.openPhoneRootDestination(.gateway) })
         case .workboard:
             IPadWorkboardScreen(
                 headerLeadingAction: self.phoneDetailBackAction,
-                openChat: { self.openRootDestination(.chat) },
-                openSettings: { self.openRootDestination(.gateway) })
+                openChat: { self.openPhoneRootDestination(.chat) },
+                openSettings: { self.openPhoneRootDestination(.gateway) })
         case .skillWorkshop:
             IPadSkillWorkshopScreen(
                 headerLeadingAction: self.phoneDetailBackAction,
-                openSettings: { self.openRootDestination(.gateway) })
+                openSettings: { self.openPhoneRootDestination(.gateway) })
         case .instances:
             AgentProTab(
                 directRoute: .instances,
                 headerLeadingAction: self.phoneDetailBackAction,
                 headerTitle: "Instances",
-                openSettings: { self.openRootDestination(.gateway) })
+                openSettings: { self.openPhoneRootDestination(.gateway) })
         case .sessions:
             CommandSessionsScreen(
                 headerLeadingAction: self.phoneDetailBackAction,
-                openChat: { self.openRootDestination(.chat) })
+                openChat: { self.openPhoneRootDestination(.chat) })
         case .dreaming:
             AgentProTab(
                 directRoute: .dreaming,
                 headerLeadingAction: self.phoneDetailBackAction,
                 headerTitle: "Dreaming",
-                openSettings: { self.openRootDestination(.gateway) })
+                openSettings: { self.openPhoneRootDestination(.gateway) })
         case .usage:
             AgentProTab(
                 directRoute: .usage,
                 headerLeadingAction: self.phoneDetailBackAction,
                 headerTitle: "Usage",
-                openSettings: { self.openRootDestination(.gateway) })
+                openSettings: { self.openPhoneRootDestination(.gateway) })
         case .cron:
             AgentProTab(
                 directRoute: .cron,
                 headerLeadingAction: self.phoneDetailBackAction,
                 headerTitle: "Cron Jobs",
-                openSettings: { self.openRootDestination(.gateway) })
+                openSettings: { self.openPhoneRootDestination(.gateway) })
         case .docs:
             OpenClawDocsScreen(
                 headerLeadingAction: self.phoneDetailBackAction,
-                gatewayAction: { self.openRootDestination(.gateway) })
+                gatewayAction: { self.openPhoneRootDestination(.gateway) })
         case .settings:
             EmptyView()
         }
@@ -267,6 +254,11 @@ struct RootTabsPhoneControlHub: View {
         self.navigationPath.removeLast()
     }
 
+    private func openPhoneRootDestination(_ destination: RootTabs.SidebarDestination) {
+        self.navigationPath.removeAll()
+        self.openRootDestination(destination)
+    }
+
     private func opensRootTab(_ destination: RootTabs.SidebarDestination) -> Bool {
         RootTabs.shouldOpenRootTabFromPhoneHub(destination)
     }
@@ -276,7 +268,7 @@ struct RootTabsPhoneControlHub: View {
         self.didApplyInitialDestination = true
         guard let initialDestination, initialDestination != .overview else { return }
         if self.opensRootTab(initialDestination) {
-            self.openRootDestination(initialDestination)
+            self.openPhoneRootDestination(initialDestination)
         } else {
             self.navigationPath = [initialDestination]
         }
@@ -341,19 +333,6 @@ struct RootTabsPhoneControlHub: View {
 
     static func bottomScrollInset(verticalSizeClass: UserInterfaceSizeClass?) -> CGFloat {
         verticalSizeClass == .compact ? 72 : 112
-    }
-
-    private func color(for destination: RootTabs.SidebarDestination) -> Color {
-        switch destination {
-        case .chat, .talk, .overview, .gateway:
-            OpenClawBrand.accent
-        case .instances:
-            Color.secondary
-        case .activity, .usage, .docs:
-            OpenClawBrand.accentHot
-        case .agents, .workboard, .skillWorkshop, .sessions, .dreaming, .cron, .settings:
-            OpenClawBrand.ok
-        }
     }
 
     private func resolveDefaultAgentID() -> String {

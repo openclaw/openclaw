@@ -25,9 +25,14 @@ import {
   resolveTimerTimeoutMs,
   clampTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import {
+  createFirstStreamEventAbortController,
+  getFirstStreamEventTimeoutHandler,
+  getFirstStreamEventTimeoutMs,
+} from "../../agents/stream-first-event-timeout.js";
+import { createSseByteGuard } from "../../agents/streaming-byte-guard.js";
 import { stripSystemPromptCacheBoundary } from "../../agents/system-prompt-cache-boundary.js";
 import { getEnvApiKey } from "../env-api-keys.js";
-import { clampThinkingLevel } from "../model-utils.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
 import type {
   Api,
@@ -52,6 +57,7 @@ import {
   convertResponsesMessages,
   convertResponsesToolPayload,
   processResponsesStream,
+  resolveResponsesReasoningEffort,
 } from "./openai-responses-shared.js";
 import { buildBaseOptions } from "./simple-options.js";
 
@@ -66,6 +72,8 @@ const RETRY_AFTER_HTTP_DATE_RE =
   /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT|(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} \d{2}:\d{2}:\d{2} GMT|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/;
 const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
 const WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009;
+const OPENAI_CHATGPT_RESPONSES_ERROR_BODY_MAX_BYTES = 16 * 1024;
+const OPENAI_CHATGPT_RESPONSES_SUCCESS_BODY_MAX_BYTES = 16 * 1024 * 1024;
 
 const CODEX_RESPONSE_STATUSES = new Set<CodexResponseStatus>([
   "completed",
@@ -81,7 +89,7 @@ const CODEX_RESPONSE_STATUSES = new Set<CodexResponseStatus>([
 // ============================================================================
 
 export interface OpenAICodexResponsesOptions extends StreamOptions {
-  reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
+  reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   reasoningSummary?: "auto" | "concise" | "detailed" | "off" | "on" | null;
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
   textVerbosity?: "low" | "medium" | "high";
@@ -203,7 +211,9 @@ export const streamOpenAICodexResponses: StreamFunction<
 
   void (async () => {
     let requestTimeoutMs: number | undefined;
+    let requestTimeoutSignal: AbortSignal | undefined;
     let activeSignal: AbortSignal | undefined;
+    let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
     const output: AssistantMessage = {
       role: "assistant",
       content: [],
@@ -251,7 +261,9 @@ export const streamOpenAICodexResponses: StreamFunction<
       );
       const bodyJson = JSON.stringify(body);
       requestTimeoutMs = resolveRequestTimeoutMs(options);
-      activeSignal = buildRequestSignal(options?.signal, requestTimeoutMs);
+      requestTimeoutSignal = buildRequestSignal(options?.signal, requestTimeoutMs);
+      firstEventAbort = createFirstStreamEventAbortController(requestTimeoutSignal);
+      activeSignal = firstEventAbort.signal;
       const requestOptions =
         activeSignal === options?.signal ? options : { ...options, signal: activeSignal };
       const transport = options?.transport || "auto";
@@ -275,6 +287,7 @@ export const streamOpenAICodexResponses: StreamFunction<
               websocketStarted = true;
             },
             requestOptions,
+            firstEventAbort.abort,
           );
 
           if (activeSignal?.aborted) {
@@ -339,7 +352,7 @@ export const streamOpenAICodexResponses: StreamFunction<
             break;
           }
 
-          const errorText = await response.text();
+          const errorText = await readChatGptResponsesErrorTextLimited(response);
           if (attempt < MAX_RETRIES && isRetryableError(response.status, errorText)) {
             let delayMs = BASE_DELAY_MS * 2 ** attempt;
 
@@ -380,7 +393,12 @@ export const streamOpenAICodexResponses: StreamFunction<
         } catch (error) {
           if (error instanceof Error) {
             if (
-              isRequestTimeoutError(error, options?.signal, activeSignal, requestTimeoutMs) &&
+              isRequestTimeoutError(
+                error,
+                options?.signal,
+                requestTimeoutSignal,
+                requestTimeoutMs,
+              ) &&
               requestTimeoutMs !== undefined
             ) {
               throw formatRequestTimeoutError(requestTimeoutMs, error);
@@ -412,7 +430,7 @@ export const streamOpenAICodexResponses: StreamFunction<
       }
 
       stream.push({ type: "start", partial: output });
-      await processStream(response, output, stream, model, options);
+      await processStream(response, output, stream, model, options, firstEventAbort.abort);
 
       if (activeSignal?.aborted) {
         throw new Error("Request was aborted");
@@ -426,7 +444,7 @@ export const streamOpenAICodexResponses: StreamFunction<
       stream.end();
     } catch (error) {
       const normalizedError =
-        isRequestTimeoutError(error, options?.signal, activeSignal, requestTimeoutMs) &&
+        isRequestTimeoutError(error, options?.signal, requestTimeoutSignal, requestTimeoutMs) &&
         requestTimeoutMs !== undefined
           ? formatRequestTimeoutError(requestTimeoutMs, error)
           : error;
@@ -439,6 +457,8 @@ export const streamOpenAICodexResponses: StreamFunction<
         normalizedError instanceof Error ? normalizedError.message : String(normalizedError);
       stream.push({ type: "error", reason: output.stopReason, error: output });
       stream.end();
+    } finally {
+      firstEventAbort?.dispose();
     }
   })();
 
@@ -455,19 +475,9 @@ export const streamSimpleOpenAICodexResponses: StreamFunction<
   }
 
   const base = buildBaseOptions(model, options, apiKey);
-  const clampedReasoning = options?.reasoning
-    ? clampThinkingLevel(model, options.reasoning)
-    : undefined;
-  const reasoningEffort =
-    clampedReasoning === "off"
-      ? undefined
-      : clampedReasoning === "max"
-        ? "xhigh"
-        : clampedReasoning;
-
   return streamOpenAICodexResponses(model, context, {
     ...base,
-    reasoningEffort,
+    reasoningEffort: resolveResponsesReasoningEffort(model, options?.reasoning),
   } satisfies OpenAICodexResponsesOptions);
 };
 
@@ -616,9 +626,13 @@ async function processStream(
   stream: AssistantMessageEventStream,
   model: Model<"openai-chatgpt-responses">,
   options?: OpenAICodexResponsesOptions,
+  abortFirstEventStream?: (reason: Error) => void,
 ): Promise<void> {
   await processResponsesStream(mapCodexEvents(parseSSE(response)), output, stream, model, {
     serviceTier: options?.serviceTier,
+    firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),
+    abortFirstEventStream,
+    onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
     resolveServiceTier: resolveCodexServiceTier,
     applyServiceTierPricing: (usage, serviceTier) =>
       applyServiceTierPricing(usage, serviceTier, model),
@@ -722,12 +736,23 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
   }
 
   const reader = response.body.getReader();
+  // Cap the streaming 200 success-body read at 16 MiB, mirroring the
+  // non-streaming `readProviderJsonResponse` cap so a hostile or
+  // malfunctioning ChatGPT Responses endpoint cannot exhaust memory by
+  // streaming an unbounded SSE body.
+  const guard = createSseByteGuard(reader, {
+    maxBytes: OPENAI_CHATGPT_RESPONSES_SUCCESS_BODY_MAX_BYTES,
+    onOverflow: ({ size, maxBytes }) =>
+      new Error(
+        `OpenAI ChatGPT Responses success body exceeded ${maxBytes} bytes (received ${size})`,
+      ),
+  });
   const decoder = new TextDecoder();
   let buffer = "";
 
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await guard.read();
       if (done) {
         break;
       }
@@ -760,13 +785,17 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
     }
   } finally {
     try {
-      await reader.cancel();
+      await guard.cancel();
     } catch {}
     try {
       reader.releaseLock();
     } catch {}
   }
 }
+
+// Test-only re-export of the bounded SSE parser. Mirrors
+// `parseAnthropicSseBodyForTest` / `iterateSseMessagesForTest` patterns.
+export const parseSSEForTest = parseSSE;
 
 // ============================================================================
 // WebSocket Parsing
@@ -1426,6 +1455,7 @@ async function processWebSocketStream(
   model: Model<"openai-chatgpt-responses">,
   onStart: () => void,
   options?: OpenAICodexResponsesOptions,
+  abortFirstEventStream?: (reason: Error) => void,
 ): Promise<void> {
   const { socket, entry, reused, release } = await acquireWebSocket(
     url,
@@ -1483,6 +1513,9 @@ async function processWebSocketStream(
       model,
       {
         serviceTier: options?.serviceTier,
+        firstEventTimeoutMs: getFirstStreamEventTimeoutMs(options),
+        abortFirstEventStream,
+        onFirstEventTimeout: getFirstStreamEventTimeoutHandler(options),
         resolveServiceTier: resolveCodexServiceTier,
         applyServiceTierPricing: (usage, serviceTier) =>
           applyServiceTierPricing(usage, serviceTier, model),
@@ -1521,10 +1554,57 @@ async function processWebSocketStream(
 // Error Handling
 // ============================================================================
 
+async function readChatGptResponsesErrorTextLimited(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    return "";
+  }
+
+  const decoder = new TextDecoder();
+  let total = 0;
+  let text = "";
+  let reachedLimit = false;
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (!value || value.byteLength === 0) {
+        continue;
+      }
+      const remaining = OPENAI_CHATGPT_RESPONSES_ERROR_BODY_MAX_BYTES - total;
+      if (remaining <= 0) {
+        reachedLimit = true;
+        break;
+      }
+      const chunk = value.byteLength > remaining ? value.subarray(0, remaining) : value;
+      total += chunk.byteLength;
+      text += decoder.decode(chunk, { stream: true });
+      if (total >= OPENAI_CHATGPT_RESPONSES_ERROR_BODY_MAX_BYTES) {
+        reachedLimit = true;
+        break;
+      }
+    }
+    text += decoder.decode();
+  } finally {
+    if (reachedLimit) {
+      // This provider module is browser-safe, so keep error-body capping on Web APIs.
+      await reader.cancel().catch(() => {});
+    }
+    try {
+      reader.releaseLock();
+    } catch {}
+  }
+
+  return text;
+}
+
 async function parseErrorResponse(
   response: Response,
 ): Promise<{ message: string; friendlyMessage?: string }> {
-  const raw = await response.text();
+  const raw = await readChatGptResponsesErrorTextLimited(response);
   let message = raw || response.statusText || "Request failed";
   let friendlyMessage: string | undefined;
 

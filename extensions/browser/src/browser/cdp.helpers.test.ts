@@ -146,6 +146,28 @@ describe("cdp helpers", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("decodes URL credentials before sending guarded CDP auth headers", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: {
+        ok: true,
+        status: 200,
+      },
+      release,
+    });
+
+    await expect(
+      fetchOk("http://alice:p%40ss%20word@127.0.0.1:9222/json/version", 250),
+    ).resolves.toBeUndefined();
+
+    const request = requireGuardedFetchRequest();
+    expect(request?.url).toBe("http://127.0.0.1:9222/json/version");
+    expect(request?.init?.headers).toEqual({
+      Authorization: `Basic ${Buffer.from("alice:p@ss word").toString("base64")}`,
+    });
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves hostname allowlist while allowing exact loopback CDP fetches", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValueOnce({

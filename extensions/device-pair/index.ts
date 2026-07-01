@@ -7,6 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildDevicePairPairingQrChannelData } from "./pairing-qr-channel-data.js";
 
 type DevicePairApiModule = typeof import("./api.js");
 type NotifyModule = typeof import("./notify.js");
@@ -331,10 +332,6 @@ function pickMatchingIPv4(predicate: (address: string) => boolean): string | nul
   return null;
 }
 
-function pickLanIPv4(): string | null {
-  return pickMatchingIPv4(isPrivateIPv4);
-}
-
 function pickTailnetIPv4(): string | null {
   return pickMatchingIPv4(isTailnetIPv4);
 }
@@ -395,7 +392,8 @@ function resolveRequiredAuthLabel(
 }
 
 async function resolveGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResult> {
-  const { resolveGatewayBindUrl, resolveGatewayPort } = await loadDevicePairApiModule();
+  const { resolveAdvertisedLanHost, resolveGatewayBindUrl, resolveGatewayPort } =
+    await loadDevicePairApiModule();
   const cfg = api.config;
   const pluginCfg = (api.pluginConfig ?? {}) as DevicePairPluginConfig;
   const scheme = resolveScheme(cfg);
@@ -429,13 +427,14 @@ async function resolveGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResu
     return { url: remoteUrl, source: "gateway.remote.url" };
   }
 
+  const advertisedLanHost = cfg.gateway?.bind === "lan" ? await resolveAdvertisedLanHost() : null;
   const bindResult = resolveGatewayBindUrl({
     bind: cfg.gateway?.bind,
     customBindHost: cfg.gateway?.customBindHost,
     scheme,
     port,
     pickTailnetHost: pickTailnetIPv4,
-    pickLanHost: pickLanIPv4,
+    pickLanHost: () => advertisedLanHost,
   });
   if (bindResult) {
     return bindResult;
@@ -834,10 +833,9 @@ export default definePluginEntry({
 
           api.logger.info?.(`device-pair: QR fallback channel=${channel} target=${target}`);
           if (channel === "webchat") {
-            let qrDataUrl: string;
             try {
               const { renderQrPngDataUrl } = await loadDevicePairApiModule();
-              qrDataUrl = await renderQrPngDataUrl(setupCode);
+              await renderQrPngDataUrl(setupCode);
             } catch (err) {
               const { revokeDeviceBootstrapToken } = await loadDevicePairApiModule();
               api.logger.warn?.(
@@ -862,7 +860,10 @@ export default definePluginEntry({
                   expiresAtMs: payload.expiresAtMs,
                 }),
               ].join("\n"),
-              mediaUrl: qrDataUrl,
+              channelData: buildDevicePairPairingQrChannelData({
+                setupCode,
+                expiresAtMs: payload.expiresAtMs,
+              }),
               sensitiveMedia: true,
             };
           }

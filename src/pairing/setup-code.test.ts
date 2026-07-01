@@ -67,6 +67,28 @@ describe("pairing setup code", () => {
     }));
   }
 
+  function createNoRouteRunner() {
+    return vi.fn(async () => ({
+      code: 1,
+      stdout: "",
+      stderr: "",
+    }));
+  }
+
+  function createDefaultRouteRunner(interfaceName: string) {
+    const stdout =
+      process.platform === "win32"
+        ? JSON.stringify({ InterfaceAlias: interfaceName })
+        : process.platform === "linux"
+          ? `default via 10.211.55.1 dev ${interfaceName} proto dhcp metric 100\n`
+          : `   route to: default\ninterface: ${interfaceName}\n`;
+    return vi.fn(async () => ({
+      code: 0,
+      stdout,
+      stderr: "",
+    }));
+  }
+
   function createIpv4NetworkInterfaces(
     address: string,
   ): ReturnType<NonNullable<NonNullable<ResolveSetupOptions>["networkInterfaces"]>> {
@@ -551,6 +573,7 @@ describe("pairing setup code", () => {
   });
 
   it("allows lan bind cleartext setup urls for mobile pairing", async () => {
+    const runCommandWithTimeout = createNoRouteRunner();
     await expectResolvedSetupSuccessCase({
       config: {
         gateway: {
@@ -560,12 +583,60 @@ describe("pairing setup code", () => {
       } satisfies ResolveSetupConfig,
       options: {
         networkInterfaces: () => createIpv4NetworkInterfaces("192.168.1.20"),
+        runCommandWithTimeout,
       } satisfies ResolveSetupOptions,
       expected: {
         authLabel: "password",
         url: "ws://192.168.1.20:18789",
         urlSource: "gateway.bind=lan",
       },
+      runCommandWithTimeout,
+      expectedRunCommandCalls: 1,
+    });
+  });
+
+  it("advertises the routed LAN interface instead of the first private interface", async () => {
+    const runCommandWithTimeout = createDefaultRouteRunner("en1");
+    await expectResolvedSetupSuccessCase({
+      config: {
+        gateway: {
+          bind: "lan",
+          auth: { mode: "password", password: "secret" },
+        },
+      } satisfies ResolveSetupConfig,
+      options: {
+        networkInterfaces: () =>
+          ({
+            bridge100: [
+              {
+                address: "10.37.129.4",
+                family: "IPv4",
+                internal: false,
+                netmask: "255.255.255.0",
+                mac: "00:00:00:00:00:00",
+                cidr: "10.37.129.4/24",
+              },
+            ],
+            en1: [
+              {
+                address: "10.211.55.3",
+                family: "IPv4",
+                internal: false,
+                netmask: "255.255.255.0",
+                mac: "00:00:00:00:00:00",
+                cidr: "10.211.55.3/24",
+              },
+            ],
+          }) as ReturnType<NonNullable<NonNullable<ResolveSetupOptions>["networkInterfaces"]>>,
+        runCommandWithTimeout,
+      } satisfies ResolveSetupOptions,
+      expected: {
+        authLabel: "password",
+        url: "ws://10.211.55.3:18789",
+        urlSource: "gateway.bind=lan",
+      },
+      runCommandWithTimeout,
+      expectedRunCommandCalls: 1,
     });
   });
 

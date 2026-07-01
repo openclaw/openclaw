@@ -1,3 +1,37 @@
 <resources>
     <string name="app_name">OpenClaw Node</string>
+    <string name="gateway_connection">Gateway Connection</string>
+    <string name="connect_gateway">Connect Gateway</string>
+    <string name="disconnect">Disconnect</string>
+    <string name="trust_this_gateway">Trust this gateway?</string>
+    <string name="trust_and_continue">Trust and continue</string>
+    <string name="cancel">Cancel</string>
+    <string name="endpoint">Endpoint</string>
+    <string name="status">Status</string>
+    <string name="connected_gateway_ready">Your gateway is active and ready.</string>
+    <string name="connect_gateway_get_started">Connect to your gateway to get started.</string>
+    <string name="copy_report_for_claw">Copy Report for Claw</string>
+    <string name="advanced_controls">Advanced controls</string>
+    <string name="connection_method">Connection method</string>
+    <string name="setup_code">Setup Code</string>
+    <string name="manual">Manual</string>
+    <string name="paste_setup_code">Paste setup code</string>
+    <string name="host">Host</string>
+    <string name="use_tls">Use TLS</string>
+    <string name="token_optional">Token (optional)</string>
+    <string name="password">Password</string>
+    <string name="run_onboarding_again">Run onboarding again</string>
+    <string name="resolved_endpoint">Resolved endpoint</string>
+    <string name="gateway_setup">Gateway Setup</string>
+    <string name="connect_to_gateway">Connect to your Gateway</string>
+    <string name="scan_setup_code">Scan setup code</string>
+    <string name="use_gateway_qr">Use your Gateway QR or setup code</string>
+    <string name="nearby_gateway">Nearby gateway</string>
+    <string name="enter_gateway_url">Enter gateway URL</string>
+    <string name="connect_manual_url">Connect using a manual URL</string>
+    <string name="permissions">Permissions</string>
+    <string name="done">Done</string>
+    <string name="gateway_trust_first_seen">Verify the certificate fingerprint before trusting this gateway.\n\n%1$s</string>
+    <string name="gateway_trust_changed">The gateway certificate changed. Continue only if you expected this.\n\nOld SHA-256:\n%1$s\n\nNew SHA-256:\n%2$s</string>
+    <string name="gateway_recovery">Gateway Recovery</string>
 </resources>

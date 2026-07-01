@@ -3,9 +3,12 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { clearConfigCache, clearRuntimeConfigSnapshot } from "./openclaw-runtime-session.js";
 import {
   buildSessionEntry,
   listSessionFilesForAgent,
+  listSessionTranscriptCorpusEntriesForAgent,
+  loadSessionTranscriptClassificationForAgent,
   parseCanonicalSessionSyncTargetFromPath,
   resolveSessionIdentityForTranscriptFile,
   resolveSessionFileForSyncTarget,
@@ -14,13 +17,19 @@ import {
 } from "./session-files.js";
 
 function captureStateDirEnv() {
-  const value = process.env.OPENCLAW_STATE_DIR;
+  const stateDir = process.env.OPENCLAW_STATE_DIR;
+  const configPath = process.env.OPENCLAW_CONFIG_PATH;
   return {
     restore() {
-      if (value === undefined) {
+      if (stateDir === undefined) {
         Reflect.deleteProperty(process.env, "OPENCLAW_STATE_DIR");
       } else {
-        Reflect.set(process.env, "OPENCLAW_STATE_DIR", value);
+        Reflect.set(process.env, "OPENCLAW_STATE_DIR", stateDir);
+      }
+      if (configPath === undefined) {
+        Reflect.deleteProperty(process.env, "OPENCLAW_CONFIG_PATH");
+      } else {
+        Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", configPath);
       }
     },
   };
@@ -44,11 +53,15 @@ beforeEach(() => {
   fsSync.mkdirSync(tmpDir, { recursive: true });
   envSnapshot = captureStateDirEnv();
   Reflect.set(process.env, "OPENCLAW_STATE_DIR", tmpDir);
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
 });
 
 afterEach(() => {
   envSnapshot?.restore();
   envSnapshot = undefined;
+  clearRuntimeConfigSnapshot();
+  clearConfigCache();
 });
 
 function requireSessionEntry(entry: SessionFileEntry | null): SessionFileEntry {
@@ -84,6 +97,466 @@ describe("listSessionFilesForAgent", () => {
     expect(files.map((filePath) => path.basename(filePath)).toSorted()).toEqual(
       included.toSorted(),
     );
+  });
+});
+
+describe("listSessionTranscriptCorpusEntriesForAgent", () => {
+  it("lists active session entries with accessor-backed identity and classification", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    fsSync.writeFileSync(path.join(sessionsDir, "narrative.jsonl"), "");
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:dreaming-narrative-run-1": {
+          sessionFile: "narrative.jsonl",
+          sessionId: "narrative",
+        },
+      }),
+    );
+
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([
+      {
+        agentId: "main",
+        artifactKind: "active-session",
+        generatedByDreamingNarrative: true,
+        sessionFile: path.join(sessionsDir, "narrative.jsonl"),
+        sessionId: "narrative",
+        sessionKey: "agent:main:dreaming-narrative-run-1",
+      },
+    ]);
+  });
+
+  it("keeps archive artifacts in the corpus and inherits active session classification", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    const activePath = path.join(sessionsDir, "cron-run.jsonl");
+    const archivePath = path.join(sessionsDir, "cron-run.jsonl.deleted.2026-02-16T22-27-33.000Z");
+    fsSync.writeFileSync(activePath, "");
+    fsSync.writeFileSync(archivePath, "");
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:cron:job-1:run:run-1": {
+          sessionFile: "cron-run.jsonl",
+          sessionId: "cron-run",
+        },
+      }),
+    );
+
+    const classification = loadSessionTranscriptClassificationForAgent("main");
+
+    expect(classification.cronRunTranscriptPaths).toEqual(
+      new Set([activePath, archivePath].map((filePath) => path.resolve(filePath))),
+    );
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toContainEqual({
+      agentId: "main",
+      artifactKind: "archive-artifact",
+      generatedByCronRun: true,
+      sessionFile: archivePath,
+      sessionId: "cron-run",
+    });
+  });
+
+  it("classifies active entries through cron parentage chains", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    const cronPath = path.join(sessionsDir, "cron-run.jsonl");
+    const spawnedChildPath = path.join(sessionsDir, "spawned-child.jsonl");
+    const keyedChildPath = path.join(sessionsDir, "keyed-child.jsonl");
+    const orphanChildPath = path.join(sessionsDir, "orphan-child.jsonl");
+    const normalPath = path.join(sessionsDir, "normal-child.jsonl");
+    for (const filePath of [
+      cronPath,
+      spawnedChildPath,
+      keyedChildPath,
+      orphanChildPath,
+      normalPath,
+    ]) {
+      fsSync.writeFileSync(filePath, "");
+    }
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:cron:job-1:run:run-1": {
+          sessionFile: "cron-run.jsonl",
+          sessionId: "cron-run",
+        },
+        "agent:main:subagent:spawned-child": {
+          sessionFile: "spawned-child.jsonl",
+          sessionId: "spawned-child",
+          spawnedBy: "agent:main:cron:job-1:run:run-1",
+        },
+        "agent:main:subagent:keyed-child": {
+          parentSessionKey: "agent:main:subagent:spawned-child",
+          sessionFile: "keyed-child.jsonl",
+          sessionId: "keyed-child",
+        },
+        "agent:main:subagent:orphan-child": {
+          sessionFile: "orphan-child.jsonl",
+          sessionId: "orphan-child",
+          spawnedBy: "agent:main:cron:job-1:run:missing",
+        },
+        "agent:main:subagent:normal-child": {
+          sessionFile: "normal-child.jsonl",
+          sessionId: "normal-child",
+          spawnedBy: "agent:main:chat:manual",
+        },
+      }),
+    );
+
+    const classification = loadSessionTranscriptClassificationForAgent("main");
+
+    expect(classification.cronRunTranscriptPaths).toEqual(
+      new Set(
+        [cronPath, spawnedChildPath, keyedChildPath, orphanChildPath].map((filePath) =>
+          path.resolve(filePath),
+        ),
+      ),
+    );
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          generatedByCronRun: true,
+          sessionFile: spawnedChildPath,
+          sessionKey: "agent:main:subagent:spawned-child",
+        }),
+        expect.objectContaining({
+          generatedByCronRun: true,
+          sessionFile: keyedChildPath,
+          sessionKey: "agent:main:subagent:keyed-child",
+        }),
+        expect.objectContaining({
+          generatedByCronRun: true,
+          sessionFile: orphanChildPath,
+          sessionKey: "agent:main:subagent:orphan-child",
+        }),
+        expect.objectContaining({
+          sessionFile: normalPath,
+          sessionKey: "agent:main:subagent:normal-child",
+        }),
+      ]),
+    );
+    const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
+    expect(entries.find((entry) => entry.sessionFile === normalPath)?.generatedByCronRun).toBe(
+      undefined,
+    );
+  });
+
+  it("keeps archive classification when the active transcript is missing", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    const archivePath = path.join(sessionsDir, "cron-run.jsonl.reset.2026-02-16T22-26-33.000Z");
+    fsSync.writeFileSync(archivePath, "");
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:cron:job-1:run:run-1": {
+          sessionFile: "cron-run.jsonl",
+          sessionId: "cron-run",
+        },
+      }),
+    );
+
+    const expectedArchivePath = archivePath;
+    const classification = loadSessionTranscriptClassificationForAgent("main");
+
+    expect(classification.cronRunTranscriptPaths).toEqual(new Set([expectedArchivePath]));
+    await expect(listSessionFilesForAgent("main")).resolves.toEqual([expectedArchivePath]);
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([
+      {
+        agentId: "main",
+        artifactKind: "archive-artifact",
+        generatedByCronRun: true,
+        sessionFile: expectedArchivePath,
+        sessionId: "cron-run",
+      },
+    ]);
+  });
+
+  it("omits active session entries whose transcript files are missing", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:chat:missing": {
+          sessionFile: "missing.jsonl",
+          sessionId: "missing",
+        },
+      }),
+    );
+
+    await expect(listSessionFilesForAgent("main")).resolves.toEqual([]);
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
+  });
+
+  it("omits active session entries whose transcript path is a symlink", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    const targetPath = path.join(tmpDir, "external.jsonl");
+    const symlinkPath = path.join(sessionsDir, "linked.jsonl");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    fsSync.writeFileSync(targetPath, "");
+    fsSync.symlinkSync(targetPath, symlinkPath);
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:chat:linked": {
+          sessionFile: "linked.jsonl",
+          sessionId: "linked",
+        },
+      }),
+    );
+
+    await expect(listSessionFilesForAgent("main")).resolves.toEqual([]);
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
+  });
+
+  it("rejects session ids that would escape the sessions directory", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    fsSync.writeFileSync(path.join(tmpDir, "secret.jsonl"), "");
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:chat:escape": {
+          sessionId: "../secret",
+        },
+      }),
+    );
+
+    await expect(listSessionFilesForAgent("main")).resolves.toEqual([]);
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
+  });
+
+  it("does not classify a fallback transcript when explicit sessionFile is invalid", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    const sessionFile = path.join(sessionsDir, "active.jsonl");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    fsSync.writeFileSync(sessionFile, "");
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:cron:job-1:run:run-1": {
+          sessionFile: "../old.jsonl",
+          sessionId: "active",
+        },
+      }),
+    );
+
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([
+      {
+        agentId: "main",
+        artifactKind: "orphan-file-artifact",
+        sessionFile,
+        sessionId: "active",
+      },
+    ]);
+  });
+
+  it("rejects relative sessionFile values that escape through nested segments", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    const secretPath = path.join(tmpDir, "agents", "main", "secret.jsonl");
+    fsSync.mkdirSync(path.join(sessionsDir, "sub"), { recursive: true });
+    fsSync.writeFileSync(secretPath, "");
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:chat:escape-file": {
+          sessionFile: "sub/../../secret.jsonl",
+          sessionId: "secret",
+        },
+      }),
+    );
+
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
+  });
+
+  it("rejects absolute transcript paths owned by another agent", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    const otherSessionsDir = path.join(tmpDir, "agents", "ops", "sessions");
+    const otherSessionFile = path.join(otherSessionsDir, "private.jsonl");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    fsSync.mkdirSync(otherSessionsDir, { recursive: true });
+    fsSync.writeFileSync(otherSessionFile, "");
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:chat:cross-agent": {
+          sessionFile: otherSessionFile,
+          sessionId: "private",
+        },
+      }),
+    );
+
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
+  });
+
+  it("falls back to transcript filename identity when an active row lacks sessionId", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "active-thread-456.jsonl");
+    fsSync.writeFileSync(sessionFile, "");
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:chat:thread-456": {
+          sessionFile: "active-thread-456.jsonl",
+        },
+      }),
+    );
+
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([
+      {
+        agentId: "main",
+        artifactKind: "active-session",
+        sessionFile,
+        sessionId: "active-thread-456",
+        sessionKey: "agent:main:chat:thread-456",
+      },
+    ]);
+  });
+
+  it("lists only the requested agent's active transcripts from a shared custom store", async () => {
+    const sessionsDir = path.join(tmpDir, "custom-sessions");
+    const sessionFile = path.join(sessionsDir, "custom-thread.jsonl");
+    const otherSessionFile = path.join(sessionsDir, "ops-thread.jsonl");
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const configPath = path.join(tmpDir, "openclaw.json");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    fsSync.writeFileSync(sessionFile, "");
+    fsSync.writeFileSync(otherSessionFile, "");
+    fsSync.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:chat:custom": {
+          sessionFile: "custom-thread.jsonl",
+          sessionId: "custom-thread",
+        },
+        "agent:ops:chat:custom": {
+          sessionFile: "ops-thread.jsonl",
+          sessionId: "ops-thread",
+        },
+      }),
+    );
+    fsSync.writeFileSync(configPath, JSON.stringify({ session: { store: storePath } }));
+    Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", configPath);
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+
+    await expect(listSessionFilesForAgent("main")).resolves.toEqual([sessionFile]);
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([
+      {
+        agentId: "main",
+        artifactKind: "active-session",
+        sessionFile,
+        sessionId: "custom-thread",
+        sessionKey: "agent:main:chat:custom",
+      },
+    ]);
+    await expect(listSessionFilesForAgent("ops")).resolves.toEqual([otherSessionFile]);
+  });
+
+  it("keeps unowned archives from an agent-owned fixed session store", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    const archivePath = path.join(sessionsDir, "retained.jsonl.deleted.2026-02-16T22-27-33.000Z");
+    const configPath = path.join(tmpDir, "openclaw.json");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    fsSync.writeFileSync(archivePath, "");
+    fsSync.writeFileSync(path.join(sessionsDir, "sessions.json"), "{}");
+    fsSync.writeFileSync(
+      configPath,
+      JSON.stringify({ session: { store: path.join(sessionsDir, "sessions.json") } }),
+    );
+    Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", configPath);
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+
+    await expect(listSessionFilesForAgent("main")).resolves.toEqual([archivePath]);
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([
+      {
+        agentId: "main",
+        artifactKind: "archive-artifact",
+        sessionFile: archivePath,
+        sessionId: "retained",
+      },
+    ]);
+  });
+
+  it("resolves absolute transcript paths from a fixed custom store", async () => {
+    const storeDir = path.join(tmpDir, "custom-sessions");
+    const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+    const sessionFile = path.join(sessionsDir, "absolute-thread.jsonl");
+    const archivePath = path.join(
+      sessionsDir,
+      "absolute-thread.jsonl.deleted.2026-02-16T22-27-33.000Z",
+    );
+    const storePath = path.join(storeDir, "sessions.json");
+    const configPath = path.join(tmpDir, "openclaw.json");
+    fsSync.mkdirSync(storeDir, { recursive: true });
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    fsSync.writeFileSync(sessionFile, "");
+    fsSync.writeFileSync(archivePath, "");
+    fsSync.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:chat:absolute": {
+          sessionFile,
+          sessionId: "absolute-thread",
+        },
+      }),
+    );
+    fsSync.writeFileSync(configPath, JSON.stringify({ session: { store: storePath } }));
+    Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", configPath);
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+
+    await expect(listSessionFilesForAgent("main")).resolves.toEqual([sessionFile, archivePath]);
+  });
+
+  it("keeps legacy session keys in non-main per-agent stores", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "ops", "sessions");
+    const sessionFile = path.join(sessionsDir, "legacy-thread.jsonl");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    fsSync.writeFileSync(sessionFile, "");
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "slack:workspace:thread": {
+          sessionFile: "legacy-thread.jsonl",
+          sessionId: "legacy-thread",
+        },
+      }),
+    );
+
+    await expect(listSessionFilesForAgent("ops")).resolves.toEqual([sessionFile]);
+    await expect(listSessionFilesForAgent("main")).resolves.toEqual([]);
+  });
+
+  it("keeps legacy main aliases in a renamed default agent store", async () => {
+    const sessionsDir = path.join(tmpDir, "agents", "ops", "sessions");
+    const sessionFile = path.join(sessionsDir, "legacy-main.jsonl");
+    const configPath = path.join(tmpDir, "openclaw.json");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    fsSync.writeFileSync(sessionFile, "");
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        "agent:main:main": {
+          sessionFile: "legacy-main.jsonl",
+          sessionId: "legacy-main",
+        },
+      }),
+    );
+    fsSync.writeFileSync(
+      configPath,
+      JSON.stringify({ agents: { list: [{ id: "ops", default: true }] } }),
+    );
+    Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", configPath);
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+
+    await expect(listSessionFilesForAgent("ops")).resolves.toEqual([sessionFile]);
   });
 });
 

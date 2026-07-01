@@ -484,6 +484,48 @@ const CrestodianSchema = z
   .strict()
   .optional();
 
+function isPlainHttpsUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash;
+  } catch {
+    return false;
+  }
+}
+
+const MarketplaceVerificationSchema = z
+  .object({
+    mode: z.literal("unsigned"),
+  })
+  .strict();
+
+const MarketplaceFeedProfileSchema = z
+  .object({
+    url: z
+      .string()
+      .url()
+      .refine(
+        (value) => isPlainHttpsUrl(value),
+        "Expected https:// URL without credentials, query, or fragment",
+      ),
+    verification: MarketplaceVerificationSchema.optional(),
+  })
+  .strict();
+
+const MarketplaceSourceProfileSchema = z.union([
+  z.object({ type: z.literal("npm") }).strict(),
+  z.object({ type: z.literal("clawhub") }).strict(),
+  z.object({ type: z.literal("git") }).strict(),
+]);
+
+const MarketplacesSchema = z
+  .object({
+    feeds: z.record(z.string().min(1), MarketplaceFeedProfileSchema).optional(),
+    sources: z.record(z.string().min(1), MarketplaceSourceProfileSchema).optional(),
+  })
+  .strict()
+  .optional();
+
 const CommitmentsSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -539,6 +581,7 @@ export const OpenClawSchema = z
         lastRunCommit: z.string().optional(),
         lastRunCommand: z.string().optional(),
         lastRunMode: z.union([z.literal("local"), z.literal("remote")]).optional(),
+        securityAcknowledgedAt: z.string().optional(),
       })
       .strict()
       .optional(),
@@ -739,6 +782,7 @@ export const OpenClawSchema = z
       .strict()
       .optional(),
     secrets: SecretsConfigSchema,
+    marketplaces: MarketplacesSchema,
     auth: z
       .object({
         profiles: z

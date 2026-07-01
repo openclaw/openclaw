@@ -1,5 +1,6 @@
 // Ci Workflow Guards tests cover ci workflow guards script behavior.
-import { readdirSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -8,6 +9,8 @@ const CACHE_V5 = "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae
 const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 const OPENGREP_PR_DIFF_WORKFLOW = ".github/workflows/opengrep-precise.yml";
 const OPENGREP_FULL_WORKFLOW = ".github/workflows/opengrep-precise-full.yml";
+const CONTROL_UI_LOCALE_REFRESH_WORKFLOW = ".github/workflows/control-ui-locale-refresh.yml";
+const NATIVE_APP_LOCALE_REFRESH_WORKFLOW = ".github/workflows/native-app-locale-refresh.yml";
 
 function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
@@ -37,10 +40,17 @@ function readCriticalQualityWorkflow() {
   return readFileSync(".github/workflows/codeql-critical-quality.yml", "utf8");
 }
 
-function readAndroidCompileSdk(path: string): number {
-  const match = readFileSync(path, "utf8").match(/^\s*compileSdk\s*=\s*(\d+)\s*$/mu);
+function readTrackedText(relativePath: string): string {
+  if (existsSync(relativePath)) {
+    return readFileSync(relativePath, "utf8");
+  }
+  return execFileSync("git", ["show", `:${relativePath}`], { encoding: "utf8" });
+}
+
+function readAndroidCompileSdk(relativePath: string): number {
+  const match = readTrackedText(relativePath).match(/^\s*compileSdk\s*=\s*(\d+)\s*$/mu);
   if (!match) {
-    throw new Error(`Missing compileSdk in ${path}`);
+    throw new Error(`Missing compileSdk in ${relativePath}`);
   }
   return Number(match[1]);
 }
@@ -110,6 +120,30 @@ describe("ci workflow guards", () => {
     expect(findUnpinnedExternalActions()).toEqual([]);
   });
 
+  it("keeps locale refresh bots from cancelling active refresh matrices", () => {
+    const controlUiWorkflow = parse(readFileSync(CONTROL_UI_LOCALE_REFRESH_WORKFLOW, "utf8"));
+    const source = readFileSync(NATIVE_APP_LOCALE_REFRESH_WORKFLOW, "utf8");
+    const workflow = parse(source);
+    const refresh = workflow.jobs.refresh;
+    const commitStep = refresh.steps.find(
+      (step: { name?: string }) => step.name === "Commit and push locale artifact",
+    );
+
+    expect(refresh.if).toContain("github.ref == 'refs/heads/main'");
+    expect(refresh.strategy.matrix.locale).toContain("sv");
+    expect(controlUiWorkflow.concurrency["cancel-in-progress"]).toContain(
+      "github.actor != 'github-actions[bot]'",
+    );
+    expect(workflow.concurrency["cancel-in-progress"]).toContain(
+      "github.actor != 'github-actions[bot]'",
+    );
+    expect(workflow.on.push.paths).toContain("ui/src/i18n/.i18n/glossary.*.json");
+    expect(commitStep.run).toContain("for attempt in 1 2 3 4 5");
+    expect(commitStep.run).toContain('git fetch origin "${TARGET_BRANCH}"');
+    expect(commitStep.run).toContain('git rebase --autostash "origin/${TARGET_BRANCH}"');
+    expect(commitStep.run).toContain('git push origin HEAD:"${TARGET_BRANCH}"');
+  });
+
   it("fails OpenGrep SARIF artifact uploads when reports are missing", () => {
     const cases = [
       {
@@ -174,12 +208,12 @@ describe("ci workflow guards", () => {
     expect(workflow.concurrency["cancel-in-progress"]).toContain(
       "github.event_name == 'pull_request'",
     );
-    expect(workflow.jobs["checks-fast-core"].strategy["max-parallel"]).toBe(8);
-    expect(workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"]).toBe(16);
-    expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy["max-parallel"]).toBe(8);
-    expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(8);
-    expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(8);
-    expect(workflow.jobs["check-additional-shard"].strategy["max-parallel"]).toBe(8);
+    expect(workflow.jobs["checks-fast-core"].strategy["max-parallel"]).toBe(12);
+    expect(workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"]).toBe(24);
+    expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy["max-parallel"]).toBe(12);
+    expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(12);
+    expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(12);
+    expect(workflow.jobs["check-additional-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["checks-windows"].strategy["max-parallel"]).toBe(2);
     expect(workflow.jobs.android.strategy["max-parallel"]).toBe(2);
   });
@@ -214,6 +248,18 @@ describe("ci workflow guards", () => {
     expect(source).toContain(
       "cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main') }}",
     );
+  });
+
+  it("keeps CodeQL critical quality scans off Blacksmith registrations", () => {
+    const source = readCriticalQualityWorkflow();
+    const workflow = parse(source);
+    const blacksmithJobs = Object.entries(workflow.jobs)
+      .filter(([, job]) => job && typeof job === "object")
+      .filter(([, job]) => (job as Record<string, unknown>)["runs-on"] !== "ubuntu-24.04")
+      .map(([name]) => name);
+
+    expect(blacksmithJobs).toEqual([]);
+    expect(source).not.toContain("blacksmith-");
   });
 
   it("uses bundled Node shards and telemetry-backed runner sizes", () => {
@@ -376,12 +422,19 @@ describe("ci workflow guards", () => {
   });
 
   it("bounds platform checkout fetches without GNU timeout", () => {
+    const source = readFileSync(".github/workflows/ci.yml", "utf8");
     const workflow = readCiWorkflow();
 
-    for (const jobName of ["checks-windows", "macos-node", "macos-swift"]) {
+    expect(source.match(/&platform_checkout_step/gu) ?? []).toHaveLength(1);
+    expect(source.match(/\*platform_checkout_step/gu) ?? []).toHaveLength(3);
+    expect(source.match(/fetch_checkout_ref_once\(\)/gu) ?? []).toHaveLength(1);
+
+    for (const jobName of ["checks-windows", "macos-node", "macos-swift", "ios-build"]) {
       const checkoutStep = workflow.jobs[jobName].steps.find((step) => step.name === "Checkout");
 
       expect(checkoutStep.run, jobName).toContain("fetch_checkout_ref()");
+      expect(checkoutStep.run, jobName).toContain("fetch_checkout_ref_once()");
+      expect(checkoutStep.run, jobName).toContain("for attempt in 1 2 3");
       expect(checkoutStep.run, jobName).toContain("fetch_timeout_seconds=90");
       expect(checkoutStep.run, jobName).toContain("-c protocol.version=2");
       expect(checkoutStep.run, jobName).toContain(
@@ -392,6 +445,10 @@ describe("ci workflow guards", () => {
       );
       expect(checkoutStep.run, jobName).toContain('kill -TERM "$fetch_pid"');
       expect(checkoutStep.run, jobName).toContain('kill -KILL "$fetch_pid"');
+      expect(checkoutStep.run, jobName).toContain(
+        'if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then',
+      );
+      expect(checkoutStep.run, jobName).toContain("timed out on attempt $attempt; retrying");
       expect(checkoutStep.run, jobName).not.toContain(
         'git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1',
       );
@@ -553,7 +610,11 @@ describe("ci workflow guards", () => {
     expect(runStep.run).toContain("childEnv[key] = value");
   });
 
-  it("uploads a CI timing summary after the run lanes finish", () => {
+  it("keeps the CI timing summary parked for timing optimization work", () => {
+    expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
+      "Re-enable this job when we want to collect CI timing data for timing optimization.",
+    );
+
     const workflow = readCiWorkflow();
     const timingJob = workflow.jobs["ci-timings-summary"];
 
@@ -575,8 +636,10 @@ describe("ci workflow guards", () => {
       "checks-windows",
       "macos-node",
       "macos-swift",
+      "ios-build",
       "android",
     ]);
+    expect(timingJob.if).toContain("false");
     expect(timingJob.if).toContain("always()");
     expect(timingJob.if).toContain("!cancelled()");
 
@@ -643,6 +706,7 @@ describe("ci workflow guards", () => {
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs).not.toHaveProperty("fail_on_qa_failure");
     expect(qaEvidenceWorkflow.on.workflow_call.inputs).not.toHaveProperty("fail_on_qa_failure");
     expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile).not.toHaveProperty("options");
+    expect(qaEvidenceWorkflow.on.workflow_dispatch.inputs.qa_profile.default).toBe("all");
     expect(qaEvidenceWorkflow.on.workflow_call.inputs.qa_profile.type).toBe("string");
     const validateProfileStep = qaRunJob.steps.find(
       (step) => step.name === "Validate QA profile input",
@@ -661,7 +725,7 @@ describe("ci workflow guards", () => {
       // Keep the caller's ref while the callee verifies it against expected_sha.
       ref: "${{ inputs.ref }}",
       expected_sha: "${{ needs.validate_selected_ref.outputs.selected_revision }}",
-      qa_profile: "release",
+      qa_profile: "all",
     });
     expect(generateJob.with).not.toHaveProperty("fail_on_qa_failure");
 
@@ -692,6 +756,8 @@ describe("ci workflow guards", () => {
       (step) => step.name === "Validate QA evidence manifest",
     );
     expect(validateManifestStep.run).toContain("qa-profile-evidence-manifest.json");
+    expect(validateManifestStep.run).toContain("qa-evidence.json profile must be all");
+    expect(validateManifestStep.run).toContain("QA evidence manifest profile must be all");
     expect(validateManifestStep.run).toContain("manifest.targetSha !== targetSha");
 
     expect(qaRunJob.outputs.artifact_name).toBe("${{ steps.evidence.outputs.artifact_name }}");
@@ -774,13 +840,55 @@ describe("ci workflow guards", () => {
 
   it("keeps workflow guards in fast CI-routing checks", () => {
     const workflow = readCiWorkflow();
+    const preflightStep = workflow.jobs.preflight.steps.find(
+      (step) => step.name === "Build CI manifest",
+    );
+    const taxonomy = parse(readFileSync("taxonomy.yaml", "utf8")) as {
+      profiles: Array<{ id: string; categoryIds: string[] }>;
+    };
+    const smokeProfile = taxonomy.profiles.find((profile) => profile.id === "smoke-ci");
+    if (!smokeProfile) {
+      throw new Error("taxonomy.yaml is missing the smoke-ci profile");
+    }
     const fastCoreJob = workflow.jobs["checks-fast-core"];
     const runStep = fastCoreJob.steps.find(
       (step) => step.name === "Run ${{ matrix.task }} (${{ matrix.runtime }})",
     );
+    const uploadStep = fastCoreJob.steps.find(
+      (step) => step.name === "Upload QA smoke profile evidence",
+    );
 
+    const ciWorkflowText = readFileSync(".github/workflows/ci.yml", "utf8");
+
+    expect(preflightStep.run).not.toContain("qa-smoke-profile");
+    expect(preflightStep.run).not.toContain("qa_category");
+    expect(smokeProfile.categoryIds).toHaveLength(30);
+    for (const categoryId of smokeProfile.categoryIds) {
+      expect(ciWorkflowText).not.toContain(`"${categoryId}"`);
+    }
+    expect(runStep.run).toContain("bundled-protocol)");
+    expect(runStep.run).toContain("qa-smoke-ci)");
     expect(runStep.run).toContain("contracts-plugins-ci-routing)");
     expect(runStep.run).toContain("ci-routing)");
+    expect(ciWorkflowText).toContain(
+      '{ check_name: "QA Smoke CI", runtime: "node", task: "qa-smoke-ci" }',
+    );
+    expect(runStep.run).toContain("--qa-profile smoke-ci");
+    expect(runStep.run).toContain("--concurrency 8");
+    expect(runStep.run).not.toContain("--category");
+    expect(runStep.run).not.toContain("--allow-failures");
+    expect(runStep.run).toContain("qa_exit_code=0");
+    expect(runStep.run).toContain('exit "$qa_exit_code"');
+    expect(runStep.run).toContain("scripts/build-all.mjs qaRuntime");
+    expect(runStep.run).not.toContain("OPENAI_API_KEY");
+    expect(runStep.run).toMatch(
+      /bundled-protocol\)\s+pnpm test:bundled\s+pnpm protocol:check\s+;;\s+qa-smoke-ci\)/,
+    );
+    expect(uploadStep.if).toBe("always() && matrix.task == 'qa-smoke-ci'");
+    expect(uploadStep.with).toMatchObject({
+      path: ".artifacts/qa-e2e/smoke-ci-profile/",
+      "if-no-files-found": "warn",
+    });
     expect(runStep.run.match(/test\/scripts\/ci-workflow-guards\.test\.ts/g)?.length).toBe(2);
   });
 

@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/signal",
-  "version": "2026.6.9",
+  "version": "2026.6.11",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/signal",
-      "version": "2026.6.9",
+      "version": "2026.6.11",
       "dependencies": {
         "ws": "8.21.0"
       }

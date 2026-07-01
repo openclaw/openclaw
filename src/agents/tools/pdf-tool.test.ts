@@ -548,6 +548,26 @@ describe("createPdfTool", () => {
     });
   });
 
+  it("rejects explicit page ranges that resolve to no pages before native PDF analysis", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      await stubPdfToolInfra(agentDir, { provider: "anthropic", input: ["text", "document"] });
+      const nativeSpy = vi
+        .spyOn(pdfNativeProviders, "anthropicAnalyzePdf")
+        .mockResolvedValue("native summary");
+      const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+
+      await expect(
+        tool.execute("t1", {
+          prompt: "summarize",
+          pdf: "/tmp/doc.pdf",
+          pages: "999",
+        }),
+      ).rejects.toThrow('No PDF pages matched requested range "999"');
+      expect(nativeSpy).not.toHaveBeenCalled();
+    });
+  });
+
   it("rejects password parameter for native PDF providers", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, { provider: "anthropic", input: ["text", "document"] });

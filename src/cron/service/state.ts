@@ -196,8 +196,11 @@ export type CronServiceState = {
   running: boolean;
   stopped: boolean;
   restartRecoveryPending: boolean;
+  /** Prevents maintenance reads from advancing deferred startup catch-up slots.
+   * Entries are removed when the deferred job runs or becomes irrelevant. */
+  pendingCatchupDeferralJobIds: Set<string>;
   activeManualRunJobIds: Set<string>;
-  manualSetupTimeoutRestartNotified: boolean;
+  manualSetupTimeoutNotified: boolean;
   /** Serializes mutating service operations so store writes and timers stay ordered. */
   op: Promise<unknown>;
   warnedDisabled: boolean;
@@ -220,8 +223,9 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     running: false,
     stopped: false,
     restartRecoveryPending: false,
+    pendingCatchupDeferralJobIds: new Set<string>(),
     activeManualRunJobIds: new Set<string>(),
-    manualSetupTimeoutRestartNotified: false,
+    manualSetupTimeoutNotified: false,
     op: Promise.resolve(),
     warnedDisabled: false,
     warnedInvalidPersistedJobKeys: new Set<string>(),

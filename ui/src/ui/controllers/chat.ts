@@ -204,9 +204,14 @@ function materializeVisibleAssistantStreamMessages(
 ): unknown[] {
   return materializeVisibleStreamState(messages, state, {
     ...opts,
+    persistCommentary: chatPersistCommentaryEnabled(state),
     isHiddenAssistantMessage: shouldHideAssistantChatMessage,
     isHiddenStreamText: isHiddenAssistantStreamText,
   });
+}
+
+function chatPersistCommentaryEnabled(state: ChatState): boolean {
+  return state.settings?.chatPersistCommentary === true;
 }
 
 function hasTranscriptMeta(message: unknown): boolean {
@@ -396,6 +401,7 @@ export type ChatState = {
   chatRunId: string | null;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatVerboseLevel: string | null;
   lastError: string | null;
   chatError?: string | null;
   agentsError?: string | null;
@@ -404,6 +410,7 @@ export type ChatState = {
   agentsList?: ChatAgentsListSnapshot | null;
   agentsSelectedId?: string | null;
   hello?: GatewayHelloOk | null;
+  settings?: { chatPersistCommentary?: boolean };
 };
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
@@ -414,6 +421,7 @@ export type ChatHistoryResult = {
   messages?: Array<unknown>;
   sessionId?: string;
   thinkingLevel?: string;
+  verboseLevel?: string;
   defaults?: GatewaySessionsDefaults;
   sessionInfo?: GatewaySessionRow;
   agentsList?: AgentsListResult;
@@ -762,9 +770,11 @@ async function loadChatHistoryUncached(
       state.reconnectResumeSessionId = null;
     }
     state.chatThinkingLevel = res.sessionInfo?.thinkingLevel ?? res.thinkingLevel ?? null;
+    state.chatVerboseLevel = res.verboseLevel ?? null;
     const resetStream = !state.chatRunId || state.chatRunId === previousRunId;
     if (resetStream) {
       const streamReconciliation = {
+        persistCommentary: chatPersistCommentaryEnabled(state),
         isHiddenAssistantMessage: shouldHideAssistantChatMessage,
         isHiddenStreamText: isHiddenAssistantStreamText,
       };
@@ -858,6 +868,7 @@ async function loadChatHistoryUncached(
     if (isMissingOperatorReadScopeError(err)) {
       state.chatMessages = [];
       state.chatThinkingLevel = null;
+      state.chatVerboseLevel = null;
       setChatError(state, formatMissingOperatorReadScopeMessage("existing chat history"));
     } else {
       setChatError(state, String(err));
@@ -1361,6 +1372,17 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   } else if (payload.state === "final") {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
+      if (
+        hasVisibleStreamParts(state, {
+          includeCurrent: false,
+          isHiddenStreamText: isHiddenAssistantStreamText,
+        })
+      ) {
+        state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state, {
+          includeCurrent: false,
+        });
+        clearToolStreamSegments(state);
+      }
       state.chatMessages = appendTerminalAssistantMessage(state.chatMessages, finalMessage);
     } else {
       state.chatMessages = materializeVisibleAssistantStreamMessages(state.chatMessages, state);

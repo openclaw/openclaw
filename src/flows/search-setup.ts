@@ -1,8 +1,11 @@
 // Search setup flow configures web search providers and defaults.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
+import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
 import type { SecretInputMode } from "../commands/onboard-types.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   DEFAULT_SECRET_PROVIDER_ALIAS,
@@ -47,6 +50,7 @@ type SearchProviderSetupContribution = FlowContribution & {
 
 const SEARCH_INSTALL_CATALOG_ENTRY = Symbol("search-install-catalog-entry");
 const WEB_SEARCH_DOCS_URL = "https://docs.openclaw.ai/tools/web";
+const CODEX_HOSTED_SEARCH_PROVIDER_ID = "codex";
 
 type SearchProviderEntryWithInstall = PluginWebSearchProviderEntry & {
   [SEARCH_INSTALL_CATALOG_ENTRY]?: WebSearchInstallCatalogEntry;
@@ -141,6 +145,38 @@ function resolveSearchProviderSetupContributions(
   );
 }
 
+function defaultModelUsesCodexRuntime(config: OpenClawConfig): boolean {
+  const configuredPrimary = resolveAgentModelPrimaryValue(config.agents?.defaults?.model);
+  if (!configuredPrimary) {
+    return false;
+  }
+  const defaultModel = resolveDefaultModelForAgent({ cfg: config });
+  if (defaultModel.provider === CODEX_HOSTED_SEARCH_PROVIDER_ID) {
+    return true;
+  }
+  return (
+    resolveAgentHarnessPolicy({
+      provider: defaultModel.provider,
+      modelId: defaultModel.model,
+      config,
+    }).runtime === "codex"
+  );
+}
+
+function prioritizeSearchProvider(
+  providers: readonly PluginWebSearchProviderEntry[],
+  preferredProvider: string | undefined,
+): PluginWebSearchProviderEntry[] {
+  if (!preferredProvider) {
+    return [...providers];
+  }
+  const preferred = providers.find((provider) => provider.id === preferredProvider);
+  if (!preferred) {
+    return [...providers];
+  }
+  return [preferred, ...providers.filter((provider) => provider.id !== preferredProvider)];
+}
+
 function resolveSearchProviderEntry(
   config: OpenClawConfig,
   provider: SearchProvider,
@@ -182,6 +218,11 @@ function providerIsReady(
     return true;
   }
   return hasExistingKey(config, entry.id) || hasKeyInEnv(entry);
+}
+
+function formatSearchProviderOptionLabel(label: string, note: string): string {
+  const normalizedNote = normalizeOptionalString(note);
+  return normalizedNote ? `${label} (${normalizedNote})` : label;
 }
 
 function rawKeyValue(config: OpenClawConfig, provider: SearchProvider): unknown {
@@ -413,7 +454,14 @@ export async function runSearchSetupFlow(
   prompter: WizardPrompter,
   opts?: SetupSearchOptions,
 ): Promise<OpenClawConfig> {
-  const providerOptions = resolveSearchProviderOptions(config);
+  const availableProviderOptions = resolveSearchProviderOptions(config);
+  const codexRecommended =
+    defaultModelUsesCodexRuntime(config) &&
+    availableProviderOptions.some((entry) => entry.id === CODEX_HOSTED_SEARCH_PROVIDER_ID);
+  const providerOptions = prioritizeSearchProvider(
+    availableProviderOptions,
+    codexRecommended ? CODEX_HOSTED_SEARCH_PROVIDER_ID : undefined,
+  );
   if (providerOptions.length === 0) {
     await prompter.note(
       [
@@ -440,6 +488,9 @@ export async function runSearchSetupFlow(
   const defaultChoice: SearchProvider = (() => {
     if (existingProvider && providerOptions.some((entry) => entry.id === existingProvider)) {
       return existingProvider;
+    }
+    if (codexRecommended) {
+      return CODEX_HOSTED_SEARCH_PROVIDER_ID;
     }
     // Mirror runtime auto-detect only when it has a concrete configured signal.
     // Keyless providers are selectable, but never preselected; pressing through
@@ -475,13 +526,14 @@ export async function runSearchSetupFlow(
   })();
 
   const options = providerOptions.map((entry) => {
-    const hint =
+    const credentialHint =
       entry.requiresCredential === false
-        ? `${entry.hint} · ${t("wizard.search.keyFree")}`
+        ? t("wizard.search.keyFree")
         : providerIsReady(config, entry)
-          ? `${entry.hint} · ${t("wizard.search.configured")}`
-          : entry.hint;
-    return { value: entry.id, label: entry.label, hint };
+          ? t("wizard.search.configured")
+          : t("wizard.search.apiKeyRequired");
+    const hint = [normalizeOptionalString(entry.hint), credentialHint].filter(Boolean).join(" · ");
+    return { value: entry.id, label: formatSearchProviderOptionLabel(entry.label, hint) };
   });
 
   const choice = await prompter.select({

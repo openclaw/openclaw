@@ -801,6 +801,32 @@ describe("diagnostic-events", () => {
     expect(internalEvents).toEqual(["log.record"]);
   });
 
+  it("emits exec approval followup suppression events on the public stream", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+
+    emitDiagnosticEvent({
+      type: "exec.approval.followup_suppressed",
+      approvalId: "approval-123",
+      reason: "session_rebound",
+      phase: "gateway_preflight",
+    });
+
+    await waitForDiagnosticEventsDrained();
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "exec.approval.followup_suppressed",
+        approvalId: "approval-123",
+        reason: "session_rebound",
+        phase: "gateway_preflight",
+        ts: expect.any(Number),
+      }),
+    );
+  });
+
   it("keeps trusted private data off shared internal diagnostic listeners", async () => {
     const internalEvents: DiagnosticEventPayload[] = [];
     const trustedEvents: Array<{

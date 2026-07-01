@@ -1,8 +1,8 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 /** Public option types for reply generation callbacks, streaming, and delivery policy. */
 import type { ImageContent } from "../llm/types.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
-import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "./reply-payload.js";
 import type { TypingController } from "./reply/typing.js";
 
@@ -53,6 +53,13 @@ export type PartialReplyPayload = Pick<ReplyPayload, "text" | "mediaUrls"> & {
   replace?: true;
 };
 
+type ReasoningStreamPayload = Pick<
+  ReplyPayload,
+  "text" | "mediaUrls" | "isReasoning" | "isReasoningSnapshot"
+> & {
+  requiresReasoningProgressOptIn?: boolean;
+};
+
 /** Reply generation options shared by auto-reply, webchat, channels, and tests. */
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
@@ -73,6 +80,8 @@ export type GetReplyOptions = {
   /** Called when the typing controller cleans up (e.g., run ended with NO_REPLY). */
   onTypingCleanup?: () => void;
   onTypingController?: (typing: TypingController) => void;
+  /** If false, send only the initial typing signal without periodic keepalive refreshes. */
+  typingKeepalive?: boolean;
   isHeartbeat?: boolean;
   /** Policy-level typing control for run classes (user/system/internal/heartbeat). */
   typingPolicy?: TypingPolicy;
@@ -116,7 +125,8 @@ export type GetReplyOptions = {
    */
   onVerboseProgressVisibility?: (isActive: () => boolean) => void;
   onPartialReply?: (payload: PartialReplyPayload) => Promise<void> | void;
-  onReasoningStream?: (payload: ReplyPayload) => Promise<void> | void;
+  onReasoningStream?: (payload: ReasoningStreamPayload) => Promise<void> | void;
+  streamReasoningInNonStreamModes?: boolean;
   /** Called when a thinking/reasoning block ends. */
   onReasoningEnd?: () => Promise<void> | void;
   /** Called when a new assistant message starts (e.g., after tool call or thinking block). */
@@ -153,6 +163,10 @@ export type GetReplyOptions = {
   }) => Promise<void> | void;
   /** In progress mode, classify Claude pre-tool text; true also renders it as commentary. */
   commentaryProgressEnabled?: boolean;
+  /** Deliver durable reasoning payloads to channels that own a separate reasoning lane. */
+  reasoningPayloadsEnabled?: boolean;
+  /** Deliver durable commentary (💬) payloads to channels that own a separate commentary lane. */
+  commentaryPayloadsEnabled?: boolean;
   /** Called when the agent emits a structured plan update. */
   onPlanUpdate?: (payload: {
     phase?: string;

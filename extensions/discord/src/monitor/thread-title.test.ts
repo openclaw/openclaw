@@ -29,4 +29,21 @@ describe("normalizeGeneratedThreadTitle", () => {
       "Weekly Release Summary",
     );
   });
+
+  it("leaves a title with two separate emphasis spans intact", () => {
+    // Not a single wrapped span, so the outer markers must not be stripped.
+    expect(normalizeGeneratedThreadTitle("*Plan* for *project*")).toBe("*Plan* for *project*");
+    expect(normalizeGeneratedThreadTitle("**Bold** vs **Strong**")).toBe("**Bold** vs **Strong**");
+    expect(normalizeGeneratedThreadTitle("_intro_ and _outro_")).toBe("_intro_ and _outro_");
+  });
+
+  it("unwraps nested same-marker emphasis inside bold without stranding markers", () => {
+    // Italic inside bold (`**…*plan*…**`) is valid emphasis nesting, so the
+    // outer bold pair is stripped while the inner italic stays intact.
+    expect(normalizeGeneratedThreadTitle("**Release *plan***")).toBe("Release *plan*");
+    // Bold+italic combined wrappers unwrap to plain text in one pass.
+    expect(normalizeGeneratedThreadTitle("***Release plan***")).toBe("Release plan");
+    // Underscore bold wrapping underscore italic unwraps the same way.
+    expect(normalizeGeneratedThreadTitle("__Release _plan___")).toBe("Release _plan_");
+  });
 });

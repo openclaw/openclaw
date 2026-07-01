@@ -3,13 +3,19 @@
  * auth, account, and version inputs without storing secret material.
  */
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
+import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { readPluginPackageVersion } from "openclaw/plugin-sdk/extension-shared";
 import {
   buildCodexAppInventoryCacheKey,
   type CodexAppInventoryCacheKeyInput,
 } from "./app-inventory-cache.js";
 import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
-import type { CodexAppServerRuntimeOptions, CodexAppServerStartOptions } from "./config.js";
 import type { CodexAppServerRuntimeIdentity } from "./client.js";
+import type { CodexAppServerRuntimeOptions, CodexAppServerStartOptions } from "./config.js";
+
+const require = createRequire(import.meta.url);
+const CODEX_PLUGIN_VERSION = readPluginPackageVersion({ require });
 
 /** Inputs that identify the Codex app inventory cache scope for one runtime. */
 export type CodexPluginAppCacheKeyParams = Omit<
@@ -23,17 +29,21 @@ export type CodexPluginAppCacheKeyParams = Omit<
 
 /** Builds the full app inventory cache key for Codex plugin/app discovery. */
 export function buildCodexPluginAppCacheKey(params: CodexPluginAppCacheKeyParams): string {
-  return buildCodexAppInventoryCacheKey({
-    codexHome:
-      params.runtimeIdentity?.codexHome ??
-      resolveCodexPluginAppCacheCodexHome(params.appServer, params.agentDir),
-    endpoint: resolveCodexPluginAppCacheEndpoint(params.appServer),
-    authProfileId: params.authProfileId,
-    accountId: params.accountId,
-    envApiKeyFingerprint: params.envApiKeyFingerprint,
-    appServerVersion: params.appServerVersion ?? params.runtimeIdentity?.serverVersion,
-    runtimeIdentity: params.runtimeIdentity,
-  });
+  return buildCodexAppInventoryCacheKey(
+    {
+      codexHome:
+        params.runtimeIdentity?.codexHome ??
+        resolveCodexPluginAppCacheCodexHome(params.appServer, params.agentDir),
+      endpoint: resolveCodexPluginAppCacheEndpoint(params.appServer),
+      authProfileId: params.authProfileId,
+      accountId: params.accountId,
+      envApiKeyFingerprint: params.envApiKeyFingerprint,
+      appServerVersion: params.appServerVersion ?? params.runtimeIdentity?.serverVersion,
+      runtimeIdentity: params.runtimeIdentity,
+    },
+    OPENCLAW_VERSION,
+    CODEX_PLUGIN_VERSION,
+  );
 }
 
 /** Builds a durable thread-binding fingerprint for one initialized app-server runtime. */

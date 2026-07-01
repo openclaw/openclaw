@@ -59,6 +59,7 @@ export {
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
   getRuntimeAuthProfileStoreSnapshot,
+  hasAuthProfileStoreSourceForProvider,
   hasAnyAuthProfileStoreSource,
   hasLocalAuthProfileStoreSource,
   loadAuthProfileStoreForSecretsRuntime,

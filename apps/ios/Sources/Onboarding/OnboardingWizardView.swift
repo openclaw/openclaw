@@ -73,10 +73,16 @@ struct OnboardingWizardView: View {
     private static let pairingAutoResumeTicker = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
 
     let allowSkip: Bool
+    let onRequestLocalNetworkAccess: (String) -> Void
     let onClose: () -> Void
 
-    init(allowSkip: Bool, onClose: @escaping () -> Void) {
+    init(
+        allowSkip: Bool,
+        onRequestLocalNetworkAccess: @escaping (String) -> Void,
+        onClose: @escaping () -> Void)
+    {
         self.allowSkip = allowSkip
+        self.onRequestLocalNetworkAccess = onRequestLocalNetworkAccess
         self.onClose = onClose
         _step = State(
             initialValue: OnboardingStateStore.shouldPresentFirstRunIntro() ? .intro : .welcome)
@@ -231,6 +237,7 @@ struct OnboardingWizardView: View {
             }
             .onAppear {
                 self.initializeState()
+                self.requestLocalNetworkAccessIfPastIntro(reason: "onboarding_appear")
             }
             .onDisappear {
                 self.discoveryRestartTask?.cancel()
@@ -723,6 +730,7 @@ extension OnboardingWizardView {
         self.showQRScanner = false
         self.connectMessage = "Connecting via QR code..."
         self.statusLine = "QR loaded. Connecting to \(link.host):\(link.port)..."
+        self.step = .connect
         Task { await self.connectManual() }
     }
 
@@ -864,8 +872,18 @@ extension OnboardingWizardView {
 
     private func advanceFromIntro() {
         OnboardingStateStore.markFirstRunIntroSeen()
+        self.requestLocalNetworkAccess(reason: "onboarding_continue")
         self.statusLine = "In your OpenClaw chat, run /pair qr, then scan the code here."
         self.step = .welcome
+    }
+
+    private func requestLocalNetworkAccessIfPastIntro(reason: String) {
+        guard self.step != .intro else { return }
+        self.requestLocalNetworkAccess(reason: reason)
+    }
+
+    private func requestLocalNetworkAccess(reason: String) {
+        self.onRequestLocalNetworkAccess(reason)
     }
 
     private func navigateBack() {
@@ -1019,9 +1037,11 @@ extension OnboardingWizardView {
         await self.gatewayController.connectLastKnown()
     }
 
-    private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String {
-        if problem.suggestsOnboardingReset { return "Scan QR again" }
-        return problem.canTrustRotatedCertificate ? "Trust certificate" : "Retry connection"
+    private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String? {
+        GatewayProblemPrimaryAction.title(
+            for: problem,
+            retryTitle: "Retry connection",
+            resetTitle: "Scan QR again")
     }
 
     private func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) async {
@@ -1046,6 +1066,10 @@ extension OnboardingWizardView {
             _ = await self.gatewayController.trustRotatedGatewayCertificate(from: problem)
             return
         }
+        if GatewayProblemPrimaryAction.openProtocolMismatchHelpIfNeeded(problem) {
+            return
+        }
+        guard problem.retryable else { return }
         await self.retryLastAttempt()
     }
 }

@@ -542,8 +542,11 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     - **OAuth / CLI login** often leverages subscription access where the
       provider supports it. For Anthropic, OpenClaw's Claude CLI backend uses
       Claude Code `claude -p`; Anthropic currently treats that as Agent
-      SDK/programmatic usage, with a separate monthly Agent SDK credit starting
-      June 15, 2026.
+      SDK/programmatic usage. Anthropic paused the June 15, 2026 separate Agent
+      SDK credit change, so for now this still draws from subscription usage
+      limits. See Anthropic's [Agent SDK plan
+      article](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
+      for the current pause notice.
     - **API keys** use pay-per-token billing.
 
     The wizard explicitly supports Anthropic Claude CLI, OpenAI Codex OAuth, and API keys.

@@ -9,9 +9,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { notifyLlmRequestActivity } from "../../../shared/llm-request-activity.js";
 import type { StreamFn } from "../../runtime/index.js";
-import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
+import {
+  resolveLlmFirstEventTimeoutMs,
+  resolveLlmIdleTimeoutMs,
+  streamWithIdleTimeout,
+} from "./llm-idle-timeout.js";
 
 const DEFAULT_LLM_IDLE_TIMEOUT_MS = 120_000;
+const CRON_LLM_IDLE_TIMEOUT_MS = 60_000;
+const CLOUD_LLM_FIRST_EVENT_TIMEOUT_MS = DEFAULT_LLM_IDLE_TIMEOUT_MS;
+const LOCAL_LLM_FIRST_EVENT_TIMEOUT_MS = 300_000;
 
 describe("resolveLlmIdleTimeoutMs", () => {
   it("returns default when config is undefined", () => {
@@ -41,8 +48,153 @@ describe("resolveLlmIdleTimeoutMs", () => {
     expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 30_000 })).toBe(30_000);
   });
 
-  it("honors explicit cron run timeouts as the idle watchdog ceiling", () => {
-    expect(resolveLlmIdleTimeoutMs({ trigger: "cron", runTimeoutMs: 600_000 })).toBe(600_000);
+  it("caps explicit cron run timeouts so stream stalls can reach model fallbacks", () => {
+    expect(resolveLlmIdleTimeoutMs({ trigger: "cron", runTimeoutMs: 600_000 })).toBe(
+      CRON_LLM_IDLE_TIMEOUT_MS,
+    );
+  });
+
+  it("uses shorter explicit cron run timeouts as the idle watchdog ceiling", () => {
+    expect(resolveLlmIdleTimeoutMs({ trigger: "cron", runTimeoutMs: 30_000 })).toBe(30_000);
+  });
+
+  it("honors explicit cron run timeouts for local provider model calls", () => {
+    expect(
+      resolveLlmIdleTimeoutMs({
+        trigger: "cron",
+        runTimeoutMs: 600_000,
+        model: { baseUrl: "http://127.0.0.1:11434" },
+      }),
+    ).toBe(600_000);
+  });
+
+  it.each([
+    ["ollama", "http://ollama-host:11434"],
+    ["ollama-beelink", "http://ollama-host:11434"],
+    ["lmstudio", "http://lmstudio-box:1234/v1"],
+    ["lmstudio-mac", "http://lmstudio-box:1234/v1"],
+    ["vllm", "http://vllm-rig:8000/v1"],
+    ["sglang", "http://sglang-rig:30000/v1"],
+  ])(
+    "honors explicit cron run timeouts for self-hosted provider %s hostname %s",
+    (provider, baseUrl) => {
+      expect(
+        resolveLlmIdleTimeoutMs({
+          trigger: "cron",
+          runTimeoutMs: 600_000,
+          model: { provider, baseUrl },
+        }),
+      ).toBe(600_000);
+    },
+  );
+
+  it("honors explicit cron run timeouts for explicit local host aliases", () => {
+    expect(
+      resolveLlmIdleTimeoutMs({
+        trigger: "cron",
+        runTimeoutMs: 600_000,
+        model: { baseUrl: "http://host.docker.internal:11434" },
+      }),
+    ).toBe(600_000);
+  });
+
+  it("honors explicit cron run timeouts for custom local provider markers on bare hostnames", () => {
+    const cfg = {
+      models: {
+        providers: {
+          gpu: {
+            baseUrl: "http://gpu-box:8000/v1",
+            api: "openai-completions",
+            apiKey: "custom-local",
+            models: [],
+          },
+          "local-ollama": {
+            baseUrl: "http://ollama-box:11434",
+            api: "ollama",
+            apiKey: "ollama-local",
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveLlmIdleTimeoutMs({
+        cfg,
+        trigger: "cron",
+        runTimeoutMs: 600_000,
+        model: { provider: "gpu", baseUrl: "http://gpu-box:8000/v1" },
+      }),
+    ).toBe(600_000);
+    expect(
+      resolveLlmIdleTimeoutMs({
+        cfg,
+        trigger: "cron",
+        runTimeoutMs: 600_000,
+        model: { provider: "local-ollama", baseUrl: "http://ollama-box:11434" },
+      }),
+    ).toBe(600_000);
+  });
+
+  it("honors explicit cron run timeouts for provider-owned local services on bare hostnames", () => {
+    const cfg = {
+      models: {
+        providers: {
+          ds4: {
+            baseUrl: "http://ds4-box:8000/v1",
+            api: "openai-completions",
+            localService: {
+              command: "/opt/ds4/ds4-server",
+              healthUrl: "http://ds4-box:8000/v1/models",
+            },
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveLlmIdleTimeoutMs({
+        cfg,
+        trigger: "cron",
+        runTimeoutMs: 600_000,
+        model: { provider: "ds4", baseUrl: "http://ds4-box:8000/v1" },
+      }),
+    ).toBe(600_000);
+  });
+
+  it.each([
+    ["openai", "openai/gpt-5.5", "http://api:8080/v1"],
+    ["custom-proxy", "custom-proxy/gpt-5.5", "http://gateway:4000/v1"],
+    ["ollama-cloud", "ollama-cloud/kimi-k2.6", "http://ollama-host:11434"],
+  ])(
+    "keeps the cron stall cap for cloud provider %s routed through single-label host %s",
+    (provider, id, baseUrl) => {
+      expect(
+        resolveLlmIdleTimeoutMs({
+          trigger: "cron",
+          runTimeoutMs: 600_000,
+          model: { provider, id, baseUrl },
+        }),
+      ).toBe(CRON_LLM_IDLE_TIMEOUT_MS);
+    },
+  );
+
+  it("keeps the cron stall cap for remote or cloud hostnames", () => {
+    expect(
+      resolveLlmIdleTimeoutMs({
+        trigger: "cron",
+        runTimeoutMs: 600_000,
+        model: { provider: "openai", id: "openai/gpt-5.5", baseUrl: "https://api.openai.com/v1" },
+      }),
+    ).toBe(CRON_LLM_IDLE_TIMEOUT_MS);
+    expect(
+      resolveLlmIdleTimeoutMs({
+        trigger: "cron",
+        runTimeoutMs: 600_000,
+        model: { provider: "ollama", id: "ollama/gpt-oss:cloud", baseUrl: "http://ollama-host" },
+      }),
+    ).toBe(CRON_LLM_IDLE_TIMEOUT_MS);
   });
 
   it("disables the idle watchdog when an explicit run timeout disables timeouts", () => {
@@ -299,6 +451,73 @@ describe("resolveLlmIdleTimeoutMs", () => {
     expect(resolveLlmIdleTimeoutMs({ cfg, model: { baseUrl: "http://127.0.0.1:11434" } })).toBe(
       30_000,
     );
+  });
+});
+
+describe("resolveLlmFirstEventTimeoutMs", () => {
+  it("uses the cloud first-event timeout by default", () => {
+    expect(resolveLlmFirstEventTimeoutMs()).toBe(CLOUD_LLM_FIRST_EVENT_TIMEOUT_MS);
+  });
+
+  it("uses the longer local first-event timeout for loopback providers", () => {
+    expect(
+      resolveLlmFirstEventTimeoutMs({
+        model: { provider: "lmstudio", baseUrl: "http://127.0.0.1:1234/v1" },
+      }),
+    ).toBe(LOCAL_LLM_FIRST_EVENT_TIMEOUT_MS);
+  });
+
+  it("uses the longer local first-event timeout for self-hosted bare hostnames", () => {
+    expect(
+      resolveLlmFirstEventTimeoutMs({
+        model: { provider: "vllm", baseUrl: "http://gpu-box:8000/v1" },
+      }),
+    ).toBe(LOCAL_LLM_FIRST_EVENT_TIMEOUT_MS);
+  });
+
+  it("keeps Ollama cloud models on the cloud first-event timeout", () => {
+    expect(
+      resolveLlmFirstEventTimeoutMs({
+        model: { provider: "ollama", id: "ollama/kimi-k2.6:cloud", baseUrl: "http://127.0.0.1" },
+      }),
+    ).toBe(CLOUD_LLM_FIRST_EVENT_TIMEOUT_MS);
+  });
+
+  it("honors explicit provider request timeouts", () => {
+    expect(
+      resolveLlmFirstEventTimeoutMs({
+        model: { baseUrl: "http://127.0.0.1:11434" },
+        modelRequestTimeoutMs: 600_000,
+      }),
+    ).toBe(600_000);
+  });
+
+  it("caps first-event timeout by explicit run timeout", () => {
+    expect(
+      resolveLlmFirstEventTimeoutMs({
+        model: { baseUrl: "http://127.0.0.1:11434" },
+        runTimeoutMs: 45_000,
+      }),
+    ).toBe(45_000);
+  });
+
+  it("does not treat the no-timeout run sentinel as an unlimited first-event wait", () => {
+    expect(
+      resolveLlmFirstEventTimeoutMs({
+        model: { baseUrl: "http://127.0.0.1:11434" },
+        runTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+      }),
+    ).toBe(LOCAL_LLM_FIRST_EVENT_TIMEOUT_MS);
+  });
+
+  it("caps first-event timeout by agents.defaults.timeoutSeconds when no explicit run timeout exists", () => {
+    const cfg = { agents: { defaults: { timeoutSeconds: 20 } } } as OpenClawConfig;
+    expect(
+      resolveLlmFirstEventTimeoutMs({
+        cfg,
+        model: { baseUrl: "http://127.0.0.1:11434" },
+      }),
+    ).toBe(20_000);
   });
 });
 

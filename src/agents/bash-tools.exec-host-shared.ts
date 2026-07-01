@@ -5,6 +5,7 @@
  */
 import crypto from "node:crypto";
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
+import { isApprovalNotFoundError } from "../infra/approval-errors.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildExecApprovalUnavailableReplyPayload } from "../infra/exec-approval-reply.js";
 import {
@@ -481,6 +482,9 @@ export async function sendExecApprovalFollowupResult(
         }
       : {}),
   }).catch((error: unknown) => {
+    if (isApprovalNotFoundError(error)) {
+      return;
+    }
     const message = formatErrorMessage(error);
     const key = `${target.approvalId}:${message}`;
     if (!rememberExecApprovalFollowupFailureKey(key)) {

@@ -30,6 +30,7 @@ export type CrossContextDecoration = {
 const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
   "send",
   "poll",
+  "poll-vote",
   "reply",
   "sendWithEffect",
   "sendAttachment",

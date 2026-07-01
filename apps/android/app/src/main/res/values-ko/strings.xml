@@ -1,0 +1,37 @@
+<resources>
+    <string name="app_name">OpenClaw Node</string>
+    <string name="gateway_connection">게이트웨이 연결</string>
+    <string name="connect_gateway">게이트웨이 연결</string>
+    <string name="disconnect">연결 해제</string>
+    <string name="trust_this_gateway">이 게이트웨이를 신뢰하시겠습니까?</string>
+    <string name="trust_and_continue">신뢰하고 계속</string>
+    <string name="cancel">취소</string>
+    <string name="endpoint">엔드포인트</string>
+    <string name="status">상태</string>
+    <string name="connected_gateway_ready">게이트웨이가 활성화되어 준비되었습니다.</string>
+    <string name="connect_gateway_get_started">시작하려면 게이트웨이에 연결하세요.</string>
+    <string name="copy_report_for_claw">Claw용 보고서 복사</string>
+    <string name="advanced_controls">고급 제어</string>
+    <string name="connection_method">연결 방법</string>
+    <string name="setup_code">설정 코드</string>
+    <string name="manual">수동</string>
+    <string name="paste_setup_code">설정 코드 붙여넣기</string>
+    <string name="host">호스트</string>
+    <string name="use_tls">TLS 사용</string>
+    <string name="token_optional">토큰(선택 사항)</string>
+    <string name="password">비밀번호</string>
+    <string name="run_onboarding_again">온보딩 다시 실행</string>
+    <string name="resolved_endpoint">확인된 엔드포인트</string>
+    <string name="gateway_setup">게이트웨이 설정</string>
+    <string name="connect_to_gateway">게이트웨이에 연결</string>
+    <string name="scan_setup_code">설정 코드 스캔</string>
+    <string name="use_gateway_qr">게이트웨이 QR 또는 설정 코드 사용</string>
+    <string name="nearby_gateway">주변 게이트웨이</string>
+    <string name="enter_gateway_url">게이트웨이 URL 입력</string>
+    <string name="connect_manual_url">수동 URL을 사용하여 연결</string>
+    <string name="permissions">권한</string>
+    <string name="done">완료</string>
+    <string name="gateway_trust_first_seen">이 게이트웨이를 신뢰하기 전에 인증서 지문을 확인하세요.\n\n%1$s</string>
+    <string name="gateway_trust_changed">게이트웨이 인증서가 변경되었습니다. 예상한 변경인 경우에만 계속하세요.\n\n이전 SHA-256:\n%1$s\n\n새 SHA-256:\n%2$s</string>
+    <string name="gateway_recovery">게이트웨이 복구</string>
+</resources>

@@ -2342,7 +2342,7 @@ describe("memory cli", () => {
         lastRecalledAt: "<now>",
         queryHashes: ["<hash>"],
         recallDays: ["<today>"],
-        conceptTags: ["backup", "backups", "glacier"],
+        conceptTags: ["backup", "backups", "glacier", "s3"],
       });
       expect(close).toHaveBeenCalled();
     });

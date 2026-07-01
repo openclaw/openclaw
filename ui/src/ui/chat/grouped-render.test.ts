@@ -7,7 +7,7 @@ import type { MessageGroup } from "../types/chat-types.ts";
 import {
   formatChatTimestampForDisplay,
   renderMessageGroup,
-  renderStreamingGroup,
+  renderStreamGroup,
   resetAssistantAttachmentAvailabilityCacheForTest,
 } from "./grouped-render.ts";
 import { normalizeMessage } from "./message-normalizer.ts";
@@ -32,6 +32,7 @@ vi.mock("../../local-storage.ts", () => ({
 }));
 
 vi.mock("../markdown.ts", () => ({
+  isMarkdownBlockArtText: () => false,
   toSanitizedMarkdownHtml: markdownRenderMock,
   toStreamingMarkdownHtml: streamingMarkdownRenderMock,
   toStreamingPlainTextHtml: streamingTextRenderMock,
@@ -881,7 +882,18 @@ describe("grouped chat rendering", () => {
     expect(time?.textContent?.trim()).toBe(display.label);
     expect(time?.getAttribute("title")).toBe(display.title);
 
-    render(renderStreamingGroup("Working", timestamp), container);
+    render(
+      renderStreamGroup([
+        {
+          kind: "stream",
+          key: `stream:${timestamp}`,
+          text: "Working",
+          startedAt: timestamp,
+          isStreaming: true,
+        },
+      ]),
+      container,
+    );
 
     const streamingTime = container.querySelector<HTMLTimeElement>(".chat-group-timestamp");
     expect(streamingTime?.textContent?.trim()).toBe(display.label);
@@ -890,7 +902,18 @@ describe("grouped chat rendering", () => {
   it("omits streaming bubble class for completed stream segments", () => {
     const container = document.createElement("div");
 
-    render(renderStreamingGroup("Completed segment", 1, false), container);
+    render(
+      renderStreamGroup([
+        {
+          kind: "stream",
+          key: "stream:1",
+          text: "Completed segment",
+          startedAt: 1,
+          isStreaming: false,
+        },
+      ]),
+      container,
+    );
 
     const bubble = container.querySelector(".chat-bubble");
     expect(bubble?.classList.contains("streaming")).toBe(false);
@@ -902,13 +925,65 @@ describe("grouped chat rendering", () => {
     streamingMarkdownRenderMock.mockClear();
     streamingTextRenderMock.mockClear();
 
-    render(renderStreamingGroup("**live**\nreply", 1), container);
+    render(
+      renderStreamGroup([
+        {
+          kind: "stream",
+          key: "stream:1",
+          text: "**live**\nreply",
+          startedAt: 1,
+          isStreaming: true,
+        },
+      ]),
+      container,
+    );
 
     expect(markdownRenderMock).not.toHaveBeenCalled();
     expect(streamingTextRenderMock).not.toHaveBeenCalled();
     expect(streamingMarkdownRenderMock).toHaveBeenCalledWith("**live**\nreply", undefined);
     const text = container.querySelector(".streaming-markdown");
     expect(text?.textContent).toBe("**live**\nreply");
+  });
+
+  it("renders a multi-segment stream run as one group with one avatar/footer", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderStreamGroup([
+        { kind: "stream", key: "stream-seg:s:0", text: "first", startedAt: 20, isStreaming: false },
+        {
+          kind: "stream",
+          key: "stream-seg:s:1",
+          text: "second",
+          startedAt: 10,
+          isStreaming: false,
+        },
+        { kind: "stream", key: "stream:s:live", text: "third", startedAt: 30, isStreaming: true },
+      ]),
+      container,
+    );
+
+    expect(container.querySelectorAll(".chat-group.assistant")).toHaveLength(1);
+    expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(1);
+    expect(container.querySelectorAll(".chat-group-footer")).toHaveLength(1);
+    // One bubble per segment, all under the single group.
+    expect(container.querySelectorAll(".chat-bubble")).toHaveLength(3);
+    // Footer time anchors to the earliest segment start, not render order.
+    const display = formatChatTimestampForDisplay(10);
+    expect(container.querySelector(".chat-group-timestamp")?.textContent?.trim()).toBe(
+      display.label,
+    );
+  });
+
+  it("renders a reading-indicator-only run as one group with no footer", () => {
+    const container = document.createElement("div");
+
+    render(renderStreamGroup([{ kind: "reading-indicator", key: "reading" }]), container);
+
+    expect(container.querySelectorAll(".chat-group.assistant")).toHaveLength(1);
+    expect(container.querySelectorAll(".chat-avatar.assistant")).toHaveLength(1);
+    expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
+    expect(container.querySelector(".chat-group-footer")).toBeNull();
   });
 
   it("renders configured local user names", () => {
@@ -1374,6 +1449,98 @@ describe("grouped chat rendering", () => {
     ).toEqual({ status: "error" });
   });
 
+  describe("non-terminal internal tool failure de-promotion (#89683)", () => {
+    function failedToolMessage(callId = "call-failed") {
+      return {
+        id: `tool-${callId}`,
+        role: "toolResult",
+        toolCallId: callId,
+        toolName: "shell",
+        content: JSON.stringify({ status: "failed", exitCode: 1, stdout: "" }, null, 2),
+        isError: true,
+        timestamp: Date.now(),
+      };
+    }
+
+    it("renders a failed tool collapsed (no error banner) when the turn succeeded", () => {
+      const container = document.createElement("div");
+      const group: MessageGroup = {
+        ...createMessageGroup(failedToolMessage(), "tool"),
+        turnSucceeded: true,
+      };
+      renderMessageGroups(container, [group], { isToolMessageExpanded: () => false });
+
+      const summary = expectElement(container, ".chat-tool-msg-summary", HTMLButtonElement);
+      expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(false);
+      expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).not.toBe(
+        "Tool error",
+      );
+      expect(summary.querySelector(".chat-tool-msg-summary__error-badge")).toBeNull();
+    });
+
+    it("still surfaces a failed tool as an error when the turn did not produce a reply", () => {
+      const container = document.createElement("div");
+      // turnSucceeded undefined = terminal/in-progress failure; behavior unchanged.
+      const group = createMessageGroup(failedToolMessage(), "tool");
+      renderMessageGroups(container, [group], { isToolMessageExpanded: () => false });
+
+      const summary = expectElement(container, ".chat-tool-msg-summary", HTMLButtonElement);
+      expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(true);
+      expect(summary.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
+        "Tool error",
+      );
+      expect(summary.querySelector(".chat-tool-msg-summary__error-badge")).not.toBeNull();
+    });
+
+    it("keeps the failed tool detail on expand even when de-promoted", () => {
+      const container = document.createElement("div");
+      const group: MessageGroup = {
+        ...createMessageGroup(failedToolMessage(), "tool"),
+        turnSucceeded: true,
+      };
+      renderMessageGroups(container, [group], { isToolMessageExpanded: () => true });
+      // Info is not deleted: the expanded body still shows the failed tool output.
+      const body = container.querySelector(".chat-tool-msg-body");
+      expect(body).not.toBeNull();
+      expect(body?.textContent).toContain("failed");
+    });
+
+    it("de-promotes a multi-tool activity group when the turn succeeded", () => {
+      const container = document.createElement("div");
+      const group: MessageGroup = {
+        kind: "group",
+        key: "tool:multi",
+        role: "tool",
+        messages: [
+          { key: "t1", message: failedToolMessage("call-1") },
+          { key: "t2", message: failedToolMessage("call-2") },
+        ],
+        timestamp: Date.now(),
+        isStreaming: false,
+        turnSucceeded: true,
+      };
+      renderMessageGroups(container, [group], { isToolMessageExpanded: () => false });
+
+      const summary = expectElement(container, ".chat-activity-group__summary", HTMLButtonElement);
+      expect(summary.classList.contains("chat-activity-group__summary--error")).toBe(false);
+      expect(summary.querySelector(".chat-activity-group__badge")).toBeNull();
+      expect(summary.getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("keeps failed tools hidden when showToolCalls is false regardless of outcome", () => {
+      const container = document.createElement("div");
+      const group: MessageGroup = {
+        ...createMessageGroup(failedToolMessage(), "tool"),
+        turnSucceeded: true,
+      };
+      renderMessageGroups(container, [group], {
+        showToolCalls: false,
+        isToolMessageExpanded: () => false,
+      });
+      expect(container.querySelector(".chat-tool-msg-summary")).toBeNull();
+    });
+  });
+
   it("collapses an inline tool call while keeping matching tool output visible", () => {
     const container = document.createElement("div");
     const groups = [
@@ -1459,6 +1626,32 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-assistant-attachment-badge")?.textContent?.trim()).toBe(
       "Voice note",
     );
+  });
+
+  it("notifies when assistant audio and video attachment metadata loads", () => {
+    const container = document.createElement("div");
+    const onAssistantAttachmentLoaded = vi.fn();
+
+    renderAssistantMessage(
+      container,
+      {
+        id: "assistant-media-layout",
+        role: "assistant",
+        content:
+          "Audio and video\nMEDIA:https://example.com/voice.ogg\nMEDIA:https://example.com/clip.mp4",
+        timestamp: Date.now(),
+      },
+      { showToolCalls: false, onAssistantAttachmentLoaded },
+    );
+
+    expectElement(container, "audio", HTMLAudioElement).dispatchEvent(
+      new Event("loadedmetadata", { bubbles: true }),
+    );
+    expectElement(container, "video", HTMLVideoElement).dispatchEvent(
+      new Event("loadedmetadata", { bubbles: true }),
+    );
+
+    expect(onAssistantAttachmentLoaded).toHaveBeenCalledTimes(2);
   });
 
   it("renders allowed transcript and content image variants", async () => {
@@ -1554,6 +1747,85 @@ describe("grouped chat rendering", () => {
         .querySelector<HTMLImageElement>(".chat-message-image")
         ?.getAttribute("src"),
     ).toBe("data:image/png;base64,cG5n");
+
+    const pairingQrContainer = document.createElement("div");
+    renderAssistantMessage(
+      pairingQrContainer,
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "openclaw_pairing_qr",
+            image_url: "data:image/png;base64,cXJwbmc=",
+            alt: "OpenClaw pairing QR code",
+            expiresAtMs: Date.now() + 60_000,
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      { showToolCalls: false },
+    );
+    const pairingQrImage =
+      pairingQrContainer.querySelector<HTMLImageElement>(".chat-message-image");
+    expect(pairingQrImage?.getAttribute("src")).toBe("data:image/png;base64,cXJwbmc=");
+    expect(pairingQrImage?.getAttribute("alt")).toBe("OpenClaw pairing QR code");
+
+    const expiredPairingQrContainer = document.createElement("div");
+    renderAssistantMessage(
+      expiredPairingQrContainer,
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "openclaw_pairing_qr",
+            image_url: "data:image/png;base64,ZXhwaXJlZA==",
+            alt: "OpenClaw pairing QR code",
+            expiresAtMs: Date.now() - 1,
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      { showToolCalls: false },
+    );
+    expect(expiredPairingQrContainer.querySelector(".chat-message-image")).toBeNull();
+    expect(expiredPairingQrContainer.textContent).toContain("Pairing QR expired");
+    expect(expiredPairingQrContainer.textContent).toContain(
+      "Run /pair qr again to generate a fresh setup code.",
+    );
+
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-06-30T05:45:00Z"));
+      const refreshPairingQr = vi.fn();
+      const expiringPairingQrContainer = document.createElement("div");
+      renderAssistantMessage(
+        expiringPairingQrContainer,
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "openclaw_pairing_qr",
+              image_url: "data:image/png;base64,cXJwbmc=",
+              alt: "OpenClaw pairing QR code",
+              expiresAtMs: Date.now() + 1_000,
+            },
+          ],
+          timestamp: Date.now(),
+        },
+        { showToolCalls: false, onRequestUpdate: refreshPairingQr },
+      );
+      expect(expiringPairingQrContainer.querySelector(".chat-message-image")).not.toBeNull();
+
+      await vi.advanceTimersByTimeAsync(999);
+      expect(refreshPairingQr).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(refreshPairingQr).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+      resetAssistantAttachmentAvailabilityCacheForTest();
+    }
 
     container = renderUserMedia({
       id: "user-history-image-blocked",

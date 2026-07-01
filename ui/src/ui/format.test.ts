@@ -6,6 +6,7 @@ import {
   formatMs,
   formatRelativeTimestamp,
   formatTimeMs,
+  formatTokens,
   formatUnknownText,
   parseSessionKeyParts,
   setUiTimeFormatPreference,
@@ -215,5 +216,17 @@ describe("parseSessionKeyParts", () => {
     expect(parseSessionKeyParts("agent:main")).toBeNull();
     expect(parseSessionKeyParts("agent:main:")).toBeNull();
     expect(parseSessionKeyParts("agent:main:telegram")).toBeNull();
+  });
+});
+
+describe("formatTokens", () => {
+  it("rolls a value that rounds up to 1000k over into the M branch", () => {
+    expect(formatTokens(999_500)).toBe("1.0M");
+    expect(formatTokens(999_999)).toBe("1.0M");
+    expect(formatTokens(999_499)).toBe("999k");
+    expect(formatTokens(1_000_000)).toBe("1.0M");
+    expect(formatTokens(12_345)).toBe("12k");
+    expect(formatTokens(5_500)).toBe("5.5k");
+    expect(formatTokens(null)).toBe("0");
   });
 });

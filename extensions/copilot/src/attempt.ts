@@ -10,6 +10,7 @@ import type {
 import {
   buildAgentHookContextChannelFields,
   detectAndLoadAgentHarnessPromptImages,
+  getModelProviderRequestTransport,
   resolveAgentHarnessBeforePromptBuildResult,
   resolveAttemptFsWorkspaceOnly,
   resolveAttemptSpawnWorkspaceDir,
@@ -27,7 +28,8 @@ import {
   clearActiveEmbeddedRun,
   setActiveEmbeddedRun,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { resolveCopilotAuth } from "./auth-bridge.js";
+import { createCopilotByokAuth, resolveCopilotAuth } from "./auth-bridge.js";
+import { createCopilotByokProxy } from "./byok-proxy.js";
 import {
   createInfiniteSessionConfig,
   type CopilotInfiniteSessionOptions,
@@ -50,6 +52,7 @@ import {
   rejectAllPolicy,
   type CopilotPermissionPolicy,
 } from "./permission-bridge.js";
+import { resolveCopilotProvider, type ResolvedCopilotProvider } from "./provider-bridge.js";
 import {
   classifyResumeFailure,
   computeReplayMetadata,
@@ -79,6 +82,7 @@ export type CopilotSessionConfig = Pick<
   | "model"
   | "onPermissionRequest"
   | "onUserInputRequest"
+  | "provider"
   | "reasoningEffort"
   | "systemMessage"
   | "tools"
@@ -115,7 +119,42 @@ type AttemptParamsLike = AgentHarnessAttemptParams & {
   // internal expansion. Symmetric to `EmbeddedRunAttemptParams.transcriptPrompt`.
   transcriptPrompt?: string;
 };
-type ModelRef = { api?: string; id: string; provider: string };
+type ModelRef = {
+  api?: string;
+  id: string;
+  provider: string;
+  baseUrl?: string;
+  azureApiVersion?: string;
+  headers?: Record<string, string | null | undefined>;
+  authHeader?: boolean;
+  requestAuthMode?: string;
+  requestProxy?: unknown;
+  requestTls?: unknown;
+  requestAllowPrivateNetwork?: unknown;
+  contextTokens?: number;
+  contextWindow?: number;
+  maxTokens?: number;
+};
+
+type ModelRefInputObject = {
+  api?: unknown;
+  id?: unknown;
+  provider?: unknown;
+  baseUrl?: unknown;
+  azureApiVersion?: unknown;
+  params?: { azureApiVersion?: unknown };
+  headers?: ModelRef["headers"];
+  authHeader?: boolean;
+  request?: {
+    auth?: { mode?: unknown };
+    proxy?: unknown;
+    tls?: unknown;
+    allowPrivateNetwork?: unknown;
+  };
+  contextTokens?: number;
+  contextWindow?: number;
+  maxTokens?: number;
+};
 
 export type { AttemptParamsLike as CopilotPoolAcquireInput, ModelRef };
 export { SUPPORTED_PROVIDERS };
@@ -142,6 +181,7 @@ export interface CopilotAttemptDeps {
    * attempt.
    */
   onSessionEstablished?: (info: {
+    compactionSessionConfig?: CopilotSessionConfig;
     sdkSessionId: string;
     pooledClient: PooledClient;
     sessionConfig: CopilotSessionConfig;
@@ -228,6 +268,7 @@ function deferBackgroundCompactionCleanup(params: {
   bridge: ReturnType<typeof attachEventBridge>;
   handle: PooledClient;
   pool: CopilotClientPool;
+  cleanupByokProxy?: () => Promise<void>;
   cleanupToolBridge?: () => void;
   finalizeNativeSubagents?: () => void;
   sdkSessionId?: string;
@@ -260,6 +301,7 @@ function deferBackgroundCompactionCleanup(params: {
         // The attempt has already returned its timeout result.
       }
       params.cleanupToolBridge?.();
+      await params.cleanupByokProxy?.();
       if (outcome !== "completed" && params.sdkSessionId) {
         try {
           await params.handle.client.deleteSession(params.sdkSessionId);
@@ -384,15 +426,18 @@ export async function runCopilotAttempt(
     );
   }
 
-  if (!SUPPORTED_PROVIDERS.has(modelRef.provider)) {
+  try {
+    resolveCopilotProvider({
+      model: modelRef,
+      resolvedApiKey: readString(params.resolvedApiKey),
+      authProfileId: readString(params.authProfileId),
+    });
+  } catch (error) {
     return finishAttempt(
       createResult(input, {
         messagesSnapshot: messages,
         now,
-        promptError: createPromptError(
-          "model_not_supported",
-          `[copilot-attempt] provider ${modelRef.provider} is not supported at MVP (subscription Copilot models only; BYOK arrives via byok-mapping-skeleton)`,
-        ),
+        promptError: createPromptError("model_not_supported", toError(error).message, error),
         sdkSessionId: undefined,
         sessionIdUsed: input.sessionId,
       }),
@@ -549,6 +594,22 @@ export async function runCopilotAttempt(
       })
     : undefined;
   const poolAcquire = resolvePoolAcquire(input);
+  let byokProxy: Awaited<ReturnType<typeof createCopilotByokProxy>>;
+  try {
+    byokProxy = await createCopilotByokProxy(poolAcquire.provider);
+  } catch (error) {
+    return finishAttempt(
+      createResult(input, {
+        messagesSnapshot: messages,
+        now,
+        promptError: createPromptError("model_not_supported", toError(error).message, error),
+        sdkSessionId: undefined,
+        sessionIdUsed: input.sessionId,
+      }),
+    );
+  }
+  const cleanupByokProxy = byokProxy?.close;
+  const sessionProvider = byokProxy?.provider ?? poolAcquire.provider;
 
   // Mutable session holder shared with the tool bridge so onYield
   // (raised inside wrapped-tool execution) can route to the live SDK
@@ -562,6 +623,7 @@ export async function runCopilotAttempt(
     let sdkTools: SdkTool[];
     try {
       const toolBridge = await createToolBridge({
+        allowModelTools: poolAcquire.provider.mode === "byok",
         modelProvider: modelRef.provider,
         modelId: modelRef.id,
         agentId: readString(params.agentId) ?? "copilot",
@@ -654,6 +716,7 @@ export async function runCopilotAttempt(
           developerInstructions: originalDeveloperInstructions,
           messages,
           ctx: hookContext,
+          bootstrapContextRunKind: input.bootstrapContextRunKind,
           ...("beforeAgentStartResult" in input
             ? { beforeAgentStartResult: input.beforeAgentStartResult }
             : {}),
@@ -692,6 +755,7 @@ export async function runCopilotAttempt(
       modelRef.id,
       sdkTools,
       poolAcquire.auth,
+      sessionProvider,
       promptBuild.developerInstructions || undefined,
       effectiveWorkspaceDir,
       effectiveCwd,
@@ -703,6 +767,25 @@ export async function runCopilotAttempt(
           }
         : undefined,
     );
+    const compactionSessionConfig = byokProxy
+      ? createSessionConfig(
+          attemptInput,
+          modelRef.id,
+          sdkTools,
+          poolAcquire.auth,
+          poolAcquire.provider,
+          promptBuild.developerInstructions || undefined,
+          effectiveWorkspaceDir,
+          effectiveCwd,
+          userInputBridge.onUserInputRequest,
+          hasNativePromptHook
+            ? {
+                onUserPromptSubmitted: ({ additionalContext, prompt }) =>
+                  emitLlmInput(prompt, additionalContext),
+              }
+            : undefined,
+        )
+      : sessionConfig;
     const replayDecision = decideReplayAction({
       sdkSessionId: input.initialReplayState?.sdkSessionId,
       replayInvalid: input.initialReplayState?.replayInvalid,
@@ -749,7 +832,12 @@ export async function runCopilotAttempt(
     sessionIdUsed = sdkSessionId ?? input.sessionId;
     if (sdkSessionId && deps.onSessionEstablished) {
       try {
-        deps.onSessionEstablished({ sdkSessionId, pooledClient: handle, sessionConfig });
+        deps.onSessionEstablished({
+          compactionSessionConfig,
+          sdkSessionId,
+          pooledClient: handle,
+          sessionConfig,
+        });
       } catch {
         // never let session-tracking callbacks break attempts
       }
@@ -809,6 +897,7 @@ export async function runCopilotAttempt(
     const messageOptions = await createMessageOptions(attemptInput, {
       effectiveCwd,
       effectiveWorkspaceDir,
+      provider: poolAcquire.provider,
       sandbox,
       workspaceOnly: effectiveFsWorkspaceOnly,
     });
@@ -890,6 +979,7 @@ export async function runCopilotAttempt(
         awaitSessionIdle: !bridge.hasObservedSessionIdle(),
         bridge,
         cleanupToolBridge,
+        cleanupByokProxy,
         finalizeNativeSubagents: () => nativeSubagentTaskMirror?.finalizeActiveRuns(),
         handle,
         pool: deps.pool,
@@ -922,6 +1012,7 @@ export async function runCopilotAttempt(
       await bridge?.awaitAgentEventChain();
       nativeSubagentTaskMirror?.finalizeActiveRuns();
       cleanupToolBridge?.();
+      await cleanupByokProxy?.();
       bridge?.detach();
       params.abortSignal?.removeEventListener("abort", onAbort);
 
@@ -1005,8 +1096,9 @@ export async function runCopilotAttempt(
   // extension. Identity-tagged so re-emits dedupe. Errors are
   // swallowed so a mirror failure cannot break the attempt.
   const sessionFileForMirror = readString(input.sessionFile);
-  const sessionIdForScope = sessionIdUsed ?? readString(input.sessionId);
-  if (sessionFileForMirror && messagesSnapshot.length > 0) {
+  const openClawSessionIdForMirror = readString(input.sessionId);
+  const mirrorScopeSessionId = sessionIdUsed ?? openClawSessionIdForMirror;
+  if (sessionFileForMirror && openClawSessionIdForMirror && messagesSnapshot.length > 0) {
     const taggedMessages = messagesSnapshot.map((message, index) => {
       if (
         message.role !== "user" &&
@@ -1027,16 +1119,16 @@ export async function runCopilotAttempt(
       if (hasMirrorIdentity(message)) {
         return message;
       }
-      const identityScope = sdkSessionId ?? sessionIdForScope ?? "attempt";
+      const identityScope = sdkSessionId ?? mirrorScopeSessionId ?? "attempt";
       return attachCopilotMirrorIdentity(message, `${identityScope}:${message.role}:${index}`);
     });
     await dualWriteCopilotTranscriptBestEffort({
       sessionFile: sessionFileForMirror,
+      sessionId: openClawSessionIdForMirror,
       sessionKey: readString((input as { sessionKey?: unknown }).sessionKey),
-      sessionId: readString(input.sessionId),
       agentId: readString(input.agentId),
       messages: taggedMessages,
-      idempotencyScope: sessionIdForScope ? `copilot:${sessionIdForScope}` : undefined,
+      idempotencyScope: mirrorScopeSessionId ? `copilot:${mirrorScopeSessionId}` : undefined,
       config: (input as { config?: unknown }).config as never,
     }).catch((mirrorError: unknown) => {
       // Defense-in-depth: the best-effort wrapper already swallows
@@ -1190,6 +1282,7 @@ function createSessionConfig(
   sdkModelId: string,
   sdkTools: SdkTool[],
   resolvedAuth: ReturnType<typeof resolveCopilotAuth>,
+  resolvedProvider: ResolvedCopilotProvider,
   systemMessageContent: string | undefined,
   effectiveWorkspaceDir: string | undefined,
   effectiveCwd: string | undefined,
@@ -1224,6 +1317,10 @@ function createSessionConfig(
     // Registers the SDK ask_user bridge. The bridge itself owns pending
     // reply routing so generic mid-run steering still fails closed.
     onUserInputRequest,
+    // The SDK's ResumeSessionConfig declaration omits ProviderConfig, but its
+    // client forwards config.provider on both session.create and session.resume.
+    // Keep one session config so BYOK resume/compaction stays on the same wire.
+    ...(resolvedProvider.provider ? { provider: resolvedProvider.provider } : {}),
     // Preserve the shipped native SDK hook contract. These callbacks expose
     // Copilot-specific events and decisions that generic lifecycle hooks do
     // not model.
@@ -1313,14 +1410,28 @@ async function createMessageOptions(
   context: {
     effectiveCwd: string | undefined;
     effectiveWorkspaceDir: string | undefined;
+    provider: ResolvedCopilotProvider;
     sandbox: SandboxContext | null;
     workspaceOnly: boolean;
   },
 ): Promise<MessageOptions> {
   const attachments = createPromptImageAttachments(await resolvePromptImages(params, context));
-  return attachments.length > 0
-    ? { prompt: params.prompt, attachments }
-    : { prompt: params.prompt };
+  const requestHeaders = resolveProviderRequestHeaders(context.provider);
+  return {
+    prompt: params.prompt,
+    ...(attachments.length > 0 ? { attachments } : {}),
+    // The SDK declares session-level provider headers, but its Anthropic
+    // runtime path consumes per-turn requestHeaders. Mirror them here so BYOK
+    // tenant/proxy headers survive every supported adapter.
+    ...(requestHeaders ? { requestHeaders } : {}),
+  };
+}
+
+function resolveProviderRequestHeaders(
+  provider: ResolvedCopilotProvider,
+): Record<string, string> | undefined {
+  const headers = provider.provider?.headers;
+  return headers && Object.keys(headers).length > 0 ? { ...headers } : undefined;
 }
 
 function createPromptImageAttachments(
@@ -1487,18 +1598,33 @@ function readResolvedAttemptPath(value: unknown): string | undefined {
 }
 
 export function resolveModelRef(params: AttemptParamsLike): ModelRef {
-  const rawModel = params.model;
+  const rawModel = (params as { runtimeModel?: unknown }).runtimeModel ?? params.model;
   if (rawModel && typeof rawModel === "object") {
+    const model = rawModel as ModelRefInputObject;
+    const requestTransport = getModelProviderRequestTransport(rawModel);
+    const rawRequest = model.request;
     return {
-      api: readString(rawModel.api),
+      api: readString(model.api),
       id:
-        readString(rawModel.id) ??
+        readString(model.id) ??
         readString((params as { modelId?: unknown }).modelId) ??
         "unknown-model",
       provider:
-        readString(rawModel.provider) ??
+        readString(model.provider) ??
         readString((params as { provider?: unknown }).provider) ??
         "unknown-provider",
+      baseUrl: readString(model.baseUrl),
+      azureApiVersion: readString(model.azureApiVersion ?? model.params?.azureApiVersion),
+      headers: model.headers,
+      authHeader: model.authHeader,
+      requestAuthMode: readString(requestTransport?.auth?.mode ?? rawRequest?.auth?.mode),
+      requestProxy: requestTransport?.proxy ?? rawRequest?.proxy,
+      requestTls: requestTransport?.tls ?? rawRequest?.tls,
+      requestAllowPrivateNetwork:
+        requestTransport?.allowPrivateNetwork ?? rawRequest?.allowPrivateNetwork,
+      contextTokens: model.contextTokens,
+      contextWindow: model.contextWindow,
+      maxTokens: model.maxTokens,
     };
   }
   return {
@@ -1528,40 +1654,59 @@ export function resolvePoolAcquire(params: AttemptParamsLike): {
    * setting both.
    */
   auth: ReturnType<typeof resolveCopilotAuth>;
+  provider: ResolvedCopilotProvider;
 } {
-  const resolved = resolveCopilotAuth({
-    agentId: readString(params.agentId),
-    agentDir: readString(params.agentDir),
-    workspaceDir: readString(params.workspaceDir),
-    copilotHome: readString(params.copilotHome),
-    auth: params.auth,
-    // Contract-resolved auth (EmbeddedRunAttemptParams): the production
-    // main path for agents with a configured `github-copilot` auth
-    // profile. Falling through to env / useLoggedInUser when absent
-    // keeps the direct-CLI / dogfood paths working unchanged.
+  const model = resolveModelRef(params);
+  const provider = resolveCopilotProvider({
+    model,
     resolvedApiKey: readString(params.resolvedApiKey),
     authProfileId: readString(params.authProfileId),
-    profileVersion: readString(params.profileVersion),
   });
-
+  const auth =
+    provider.mode === "byok"
+      ? createCopilotByokAuth({
+          agentId: readString(params.agentId),
+          agentDir: readString(params.agentDir),
+          workspaceDir: readString(params.workspaceDir),
+          copilotHome: readString(params.copilotHome),
+          authProfileId: provider.authProfileId,
+          authProfileVersion: provider.authProfileVersion,
+        })
+      : resolveCopilotAuth({
+          agentId: readString(params.agentId),
+          agentDir: readString(params.agentDir),
+          workspaceDir: readString(params.workspaceDir),
+          copilotHome: readString(params.copilotHome),
+          auth: params.auth,
+          // Contract-resolved auth (EmbeddedRunAttemptParams): the production
+          // main path for agents with a configured `github-copilot` auth
+          // profile. Falling through to env / useLoggedInUser when absent
+          // keeps the direct-CLI / dogfood paths working unchanged.
+          resolvedApiKey: readString(params.resolvedApiKey),
+          authProfileId: readString(params.authProfileId),
+          profileVersion: readString(params.profileVersion),
+        });
   return {
     key: {
-      agentId: resolved.agentId,
-      authMode: resolved.authMode,
-      ...(resolved.authMode === "gitHubToken"
+      agentId: auth.agentId,
+      authMode: auth.authMode,
+      ...(auth.authMode === "gitHubToken" || auth.authMode === "byok"
         ? {
-            authProfileId: resolved.authProfileId,
-            authProfileVersion: resolved.authProfileVersion,
+            authProfileId: auth.authProfileId,
+            authProfileVersion: auth.authProfileVersion,
           }
         : {}),
-      copilotHome: resolved.copilotHome,
+      copilotHome: auth.copilotHome,
     },
     options: {
-      copilotHome: resolved.copilotHome,
-      gitHubToken: resolved.authMode === "gitHubToken" ? resolved.gitHubToken : undefined,
-      useLoggedInUser: resolved.authMode === "useLoggedInUser",
+      copilotHome: auth.copilotHome,
+      ...(auth.authMode === "gitHubToken" && auth.gitHubToken
+        ? { gitHubToken: auth.gitHubToken }
+        : {}),
+      useLoggedInUser: auth.authMode === "useLoggedInUser",
     },
-    auth: resolved,
+    auth,
+    provider,
   };
 }
 

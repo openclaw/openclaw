@@ -1294,6 +1294,8 @@ export const zh_TW: TranslationMap = {
     settings: "聊天設定",
     thinkingToggle: "切換助手思考/工作輸出",
     toolCallsToggle: "切換工具呼叫與工具結果",
+    commentaryToggle: "在最終答案後保留評註",
+    commentaryLabel: "評註",
     autoScrollMode: "自動捲動模式",
     autoScrollAlways: "一律",
     autoScrollNearBottom: "接近底部",
@@ -1338,6 +1340,11 @@ export const zh_TW: TranslationMap = {
       retry: "重試",
       retrySend: "重新傳送",
       retryQueuedMessage: "重試佇列中的訊息",
+    },
+    pairingQrExpired: {
+      title: "配對 QR 碼已過期",
+      reason: "請再次執行 /pair qr 以產生新的設定碼。",
+      badge: "已過期",
     },
     composer: {
       placeholder: "Message {name} (Enter to send)",
@@ -1405,6 +1412,7 @@ export const zh_TW: TranslationMap = {
     jaJP: "日本語（Japanese）",
     ko: "한국어（Korean）",
     fr: "Français（French）",
+    hi: "हिन्दी (Hindi)",
     ar: "العربية（阿拉伯文）",
     it: "Italiano（義大利文）",
     tr: "Türkçe（Turkish）",
@@ -1415,6 +1423,7 @@ export const zh_TW: TranslationMap = {
     vi: "Tiếng Việt（越南文）",
     nl: "Nederlands（荷蘭文）",
     fa: "فارسی（波斯文）",
+    ru: "Русский (Russian)",
   },
   cron: {
     quickCreate: {

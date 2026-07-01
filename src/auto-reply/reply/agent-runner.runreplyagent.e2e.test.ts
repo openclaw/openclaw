@@ -6,6 +6,10 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { readSessionStoreForTest } from "../../config/sessions/test-helpers.js";
 import type { TypingMode } from "../../config/types.js";
+import {
+  HEARTBEAT_RUN_SCOPE,
+  type ReplyOptionsWithHeartbeatRunScope,
+} from "../../infra/heartbeat-run-scope.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -36,6 +40,8 @@ type AgentRunParams = {
   shouldEmitToolOutput?: () => boolean;
   onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
   silentExpected?: boolean;
+  trigger?: string;
+  bootstrapContextRunKind?: string;
 };
 
 const state = vi.hoisted(() => ({
@@ -159,7 +165,7 @@ beforeEach(() => {
 });
 
 function createMinimalRun(params?: {
-  opts?: GetReplyOptions & ReplyOptionsWithOperationRunState;
+  opts?: GetReplyOptions & ReplyOptionsWithOperationRunState & ReplyOptionsWithHeartbeatRunScope;
   resolvedVerboseLevel?: "off" | "on";
   sessionStore?: Record<string, SessionEntry>;
   sessionEntry?: SessionEntry;
@@ -282,6 +288,21 @@ describe("runReplyAgent heartbeat followup guard", () => {
     await run();
 
     expect(runState.admission).toEqual({ status: "owned" });
+  });
+
+  it("keeps heartbeat mechanics while isolating commitment bootstrap context", async () => {
+    const { run } = createMinimalRun({
+      opts: {
+        isHeartbeat: true,
+        [HEARTBEAT_RUN_SCOPE]: "commitment-only",
+      },
+    });
+
+    await run();
+
+    const [call] = mockCallArgs(state.runEmbeddedAgentMock, "run embedded agent");
+    expect((call as AgentRunParams).trigger).toBe("heartbeat");
+    expect((call as AgentRunParams).bootstrapContextRunKind).toBe("commitment-only");
   });
 
   it("runs visible turns with the session id returned by admission", async () => {

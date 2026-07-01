@@ -27,6 +27,7 @@ import { normalizePluginsConfigWithResolver } from "./config-normalization-share
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { resolveConfiguredGenericEmbeddingProviderId } from "./embedding-provider-config.js";
+import { listRegisteredEmbeddingProviders } from "./embedding-providers.js";
 import {
   collectConfiguredSpeechProviderIds,
   normalizeConfiguredSpeechProviderIdForStartup,
@@ -50,6 +51,7 @@ import {
 } from "./plugin-registry-contributions.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
 import { normalizePluginIdScope } from "./plugin-scope.js";
+import type { PluginRegistry } from "./registry-types.js";
 
 export type GatewayStartupPluginPlan = {
   channelPluginIds: readonly string[];
@@ -752,6 +754,24 @@ export function collectUnregisteredConfiguredMemoryEmbeddingProviders(params: {
         left.configuredId.localeCompare(right.configuredId) ||
         left.source.localeCompare(right.source),
     );
+}
+
+// Registered embedding provider ids the loaded runtime can actually serve: the live
+// registry's memory + general embedding providers plus the global/core embedding
+// registry. Shared by gateway boot (the startup "configured but unregistered" warning)
+// and the `/status plugins` drift line so both agree on what counts as "registered" and
+// never diverge. The `{ provider: entry.adapter }` wrap makes the core registry entries
+// match the registration shape so the id projection stays uniform across all three sources.
+export function collectRegisteredEmbeddingProviderIds(
+  registry: Partial<Pick<PluginRegistry, "embeddingProviders" | "memoryEmbeddingProviders">>,
+): Set<string> {
+  return new Set(
+    [
+      ...(registry.memoryEmbeddingProviders ?? []),
+      ...(registry.embeddingProviders ?? []),
+      ...listRegisteredEmbeddingProviders().map((entry) => ({ provider: entry.adapter })),
+    ].map((entry) => entry.provider.id),
+  );
 }
 
 function addPluginConfigEntryIds(

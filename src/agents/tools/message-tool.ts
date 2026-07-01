@@ -4,7 +4,10 @@
  * Sends, edits, reacts to, polls, and routes messages through channel plugins and Gateway-backed actions.
  */
 import { createHash } from "node:crypto";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  normalizeOptionalStringifiedId,
+} from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings, uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { Type, type TSchema } from "typebox";
 import {
@@ -50,6 +53,7 @@ import {
   runMessageAction,
   type MessageActionRunResult,
 } from "../../infra/outbound/message-action-runner.js";
+import { resolveActionDeliveryTargetAlias } from "../../infra/outbound/message-action-spec.js";
 import {
   resolveAllowedMessageActions,
   shouldApplyCrossContextMarker,
@@ -57,13 +61,9 @@ import {
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
-import {
-  normalizeAccountId,
-  parseAgentSessionKey,
-  parseThreadSessionSuffix,
-} from "../../routing/session-key.js";
+import { normalizeAccountId, parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { listAllChannelSupportedActions, listChannelSupportedActions } from "../channel-tools.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
@@ -165,7 +165,60 @@ function normalizeEscapedLineBreaksForVisibleText(text: string): string {
   return text.replace(/\\r\\n|\\n|\\r/g, "\n");
 }
 
-type VisibleTextSuppressionReason = "internal_runtime_context_echo" | "inbound_metadata_echo";
+type VisibleTextSuppressionReason =
+  | "internal_runtime_context_echo"
+  | "inbound_metadata_echo"
+  | "poll_vote_echo";
+
+const POLL_VOTE_ECHO_TTL_MS = 30_000;
+
+function normalizePollEchoText(text: string): string {
+  return text
+    .replace(/^[\p{Extended_Pictographic}️‍]+\s+/u, "")
+    .replace(/[.!?\s]+$/u, "")
+    .trim()
+    .toLowerCase();
+}
+
+function resolvePollVoteEchoRoute(params: {
+  action: ChannelMessageActionName;
+  args: Record<string, unknown>;
+  channel?: string | null;
+  accountId?: string;
+  currentChannelId?: string;
+  currentMessagingTarget?: string;
+}): string | undefined {
+  const channel = normalizeMessageChannel(params.channel);
+  if (!channel) {
+    return undefined;
+  }
+  let deliveryAliasTarget: string | undefined;
+  try {
+    deliveryAliasTarget = resolveActionDeliveryTargetAlias(params.action, params.args, {
+      channel,
+      aliasSpec: getChannelPlugin(channel)?.actions?.messageActionTargetAliases?.[params.action],
+    });
+  } catch {
+    return undefined;
+  }
+  const targets = ["target", "to", "channelId"]
+    .map((key) => normalizeOptionalStringifiedId(params.args[key]))
+    .concat(deliveryAliasTarget ?? [])
+    .filter((value): value is string => Boolean(value));
+  if (new Set(targets).size > 1) {
+    return undefined;
+  }
+  const target = targets[0];
+  const currentTargets = new Set(
+    [params.currentMessagingTarget, params.currentChannelId].filter((value): value is string =>
+      Boolean(value),
+    ),
+  );
+  // Plugin-declared aliases keep owner-specific target fields out of core.
+  // A route mismatch fails open; provider/account keys prevent cross-send suppression.
+  const routeTarget = !target || currentTargets.has(target) ? "<current-source>" : target;
+  return `${channel}\0${normalizeAccountId(params.accountId ?? "default")}\0${routeTarget}`;
+}
 
 function sanitizeUserVisibleToolTextResult(
   text: string,
@@ -863,7 +916,6 @@ type InferredSessionDelivery = {
   to: string;
 };
 
-const SESSION_DELIVERY_PEER_KINDS = new Set(["channel", "direct", "dm", "group"]);
 const USER_PREFIXED_DIRECT_TARGET_CHANNELS = new Set(["discord", "mattermost", "msteams", "slack"]);
 
 function formatSessionDeliveryTarget(channel: string, peerKind: string, to: string): string {
@@ -876,44 +928,21 @@ function formatSessionDeliveryTarget(channel: string, peerKind: string, to: stri
 function inferDeliveryFromSessionKey(
   sessionKey: string | undefined,
 ): InferredSessionDelivery | null {
-  const parsedThread = parseThreadSessionSuffix(sessionKey);
-  const baseSessionKey = parsedThread.baseSessionKey ?? sessionKey;
-  const parsed = parseAgentSessionKey(baseSessionKey);
-  if (!parsed) {
+  const route = parseSessionDeliveryRoute(sessionKey);
+  if (!route) {
     return null;
   }
-  const parts = parsed.rest.split(":").filter(Boolean);
-  if (parts.length < 3) {
-    return null;
-  }
-  const channel = normalizeMessageChannel(parts[0]);
+  const channel = normalizeMessageChannel(route.channel);
   if (!channel) {
     return null;
   }
-  if (parts.length >= 4 && (parts[2] === "direct" || parts[2] === "dm")) {
-    const accountId = resolveAgentAccountId(parts[1]);
-    const to = parts.slice(3).join(":").trim();
-    return to
-      ? {
-          accountId,
-          channel,
-          threadId: parsedThread.threadId,
-          to: formatSessionDeliveryTarget(channel, parts[2], to),
-        }
-      : null;
-  }
-  const peerKind = parts[1] ?? "";
-  if (SESSION_DELIVERY_PEER_KINDS.has(peerKind)) {
-    const to = parts.slice(2).join(":").trim();
-    return to
-      ? {
-          channel,
-          threadId: parsedThread.threadId,
-          to: formatSessionDeliveryTarget(channel, peerKind, to),
-        }
-      : null;
-  }
-  return null;
+  const accountId = route.accountId ? resolveAgentAccountId(route.accountId) : undefined;
+  return {
+    accountId,
+    channel,
+    threadId: route.threadId,
+    to: formatSessionDeliveryTarget(channel, route.peerKind, route.peerId),
+  };
 }
 
 function resolveEffectiveCurrentChannelContext(options?: MessageToolOptions): {
@@ -1165,6 +1194,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     options?.resolveCommandSecretRefsViaGateway ?? resolveCommandSecretRefsViaGateway;
   const runMessageActionForTool = options?.runMessageAction ?? runMessageAction;
   let generatedIdempotencyCounter = 0;
+  let recentPollVote: { option: string; route: string; recordedAt: number } | undefined;
   const failedAutogeneratedIdempotencyKeys = new Map<string, string>();
   const effectiveCurrentChannel = resolveEffectiveCurrentChannelContext(options);
   const currentThreadTs =
@@ -1175,6 +1205,14 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const replyToMode = options?.replyToMode ?? (currentThreadTs ? "all" : undefined);
   const agentAccountId =
     resolveAgentAccountId(options?.agentAccountId) ?? effectiveCurrentChannel.accountId;
+  const currentChannelIsInternal =
+    normalizeMessageChannel(effectiveCurrentChannel.currentChannelProvider) ===
+    INTERNAL_MESSAGE_CHANNEL;
+  // WebChat tool sends use the private sink without changing the run-level
+  // contract: ordinary final answers must remain automatic and visible.
+  const sourceReplySinkDeliveryMode = currentChannelIsInternal
+    ? "message_tool_only"
+    : options?.sourceReplyDeliveryMode;
   const resolvedAgentId =
     options?.agentId ??
     (options?.agentSessionKey
@@ -1310,6 +1348,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         }
       }
 
+      const gatewayOpts = readGatewayCallOptions(params);
       const rawConfig = options?.config ?? loadConfigForTool();
       const scope = resolveMessageSecretScope({
         channel: params.channel,
@@ -1338,8 +1377,44 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       if (accountId) {
         params.accountId = accountId;
       }
+      const pollVoteEchoRoute = resolvePollVoteEchoRoute({
+        action,
+        args: params,
+        channel: scope.channel ?? effectiveCurrentChannel.currentChannelProvider,
+        accountId,
+        currentChannelId: effectiveCurrentChannel.currentChannelId,
+        currentMessagingTarget: effectiveCurrentChannel.currentMessagingTarget,
+      });
+      if (
+        recentPollVote &&
+        sourceReplySinkDeliveryMode === "message_tool_only" &&
+        (action === "send" || action === "reply")
+      ) {
+        if (Date.now() - recentPollVote.recordedAt > POLL_VOTE_ECHO_TTL_MS) {
+          recentPollVote = undefined;
+        } else if (pollVoteEchoRoute === recentPollVote.route) {
+          const vote = recentPollVote;
+          recentPollVote = undefined;
+          const outboundText =
+            readStringParam(params, "text") ??
+            readStringParam(params, "message") ??
+            readStringParam(params, "content");
+          const normalizedOption = normalizePollEchoText(vote.option);
+          if (
+            outboundText &&
+            normalizedOption &&
+            normalizePollEchoText(outboundText) === normalizedOption
+          ) {
+            return jsonResult({
+              status: "suppressed",
+              reason: "poll_vote_echo" satisfies VisibleTextSuppressionReason,
+              message: "Suppressed outbound text because it only restated the poll vote just cast.",
+            });
+          }
+        }
+      }
 
-      const gatewayResolved = resolveGatewayOptions(readGatewayCallOptions(params));
+      const gatewayResolved = resolveGatewayOptions(gatewayOpts);
       const gateway = {
         url: gatewayResolved.url,
         token: gatewayResolved.token,
@@ -1415,7 +1490,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           sessionId: options?.sessionId,
           agentId: resolvedAgentId,
           sandboxRoot: options?.sandboxRoot,
-          sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+          sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
           inboundEventKind: options?.inboundEventKind,
           inboundAudio: options?.currentInboundAudio,
           abortSignal: signal,
@@ -1438,6 +1513,18 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       }
 
       const toolResult = getToolResult(result);
+      if (
+        action === "poll-vote" &&
+        pollVoteEchoRoute &&
+        sourceReplySinkDeliveryMode === "message_tool_only"
+      ) {
+        const details = toolResult?.details as { pollVotedOption?: unknown } | undefined;
+        const option =
+          typeof details?.pollVotedOption === "string" ? details.pollVotedOption.trim() : "";
+        if (option) {
+          recentPollVote = { option, route: pollVoteEchoRoute, recordedAt: Date.now() };
+        }
+      }
       if (toolResult) {
         return toolResult;
       }

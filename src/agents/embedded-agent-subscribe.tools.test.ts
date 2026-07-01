@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as loggingConfigModule from "../logging/config.js";
 import {
   buildToolLifecycleErrorResult,
+  extractToolResultText,
   extractToolErrorCode,
   extractToolErrorMessage,
   isToolResultError,
@@ -27,6 +28,12 @@ describe("extractToolErrorMessage", () => {
   it("keeps error-like status values", () => {
     expect(extractToolErrorMessage({ details: { status: "failed" } })).toBe("failed");
     expect(extractToolErrorMessage({ details: { status: "timeout" } })).toBe("timeout");
+    expect(
+      extractToolErrorMessage({
+        content: [{ type: "text", text: "Approval is unavailable." }],
+        details: { status: "approval-unavailable" },
+      }),
+    ).toBe("Approval is unavailable.");
   });
 
   it("prefers node-host aggregated denial text over generic failed status", () => {
@@ -85,6 +92,54 @@ describe("extractToolErrorMessage", () => {
         },
       }),
     ).toBe("INVALID_REQUEST");
+  });
+
+  it("preserves structured diagnostic tool error codes through sanitization", () => {
+    const sanitized = sanitizeToolResult({
+      details: {
+        status: "failed",
+        error: {
+          code: "SYSTEM_RUN_DENIED",
+          message: "approval required",
+        },
+      },
+    }) as { details: { error: { code: string; message: string } } };
+
+    expect(sanitized.details.error.code).toBe("SYSTEM_RUN_DENIED");
+    expect(extractToolErrorCode(sanitized)).toBe("SYSTEM_RUN_DENIED");
+  });
+
+  it("preserves structured invalid-request tool error codes through sanitization", () => {
+    const sanitized = sanitizeToolResult({
+      details: {
+        status: "failed",
+        nodeError: {
+          code: "INVALID_REQUEST",
+          message: "approval expired",
+        },
+      },
+    }) as { details: { nodeError: { code: string; message: string } } };
+
+    expect(sanitized.details.nodeError.code).toBe("INVALID_REQUEST");
+    expect(extractToolErrorCode(sanitized)).toBe("INVALID_REQUEST");
+  });
+
+  it("preserves direct structured tool error codes through sanitization", () => {
+    const detailsCode = sanitizeToolResult({
+      details: {
+        status: "failed",
+        code: "output_limit_exceeded",
+      },
+    }) as { details: { code: string } };
+    const rootCode = sanitizeToolResult({
+      status: "failed",
+      code: "output_limit_exceeded",
+    }) as { code: string };
+
+    expect(detailsCode.details.code).toBe("output_limit_exceeded");
+    expect(extractToolErrorCode(detailsCode)).toBe("output_limit_exceeded");
+    expect(rootCode.code).toBe("output_limit_exceeded");
+    expect(extractToolErrorCode(rootCode)).toBe("output_limit_exceeded");
   });
 
   it("does not extract error codes from prose-only tool output", () => {
@@ -386,5 +441,153 @@ describe("sanitizeToolArgs", () => {
       count: 3,
       file_path: "/tmp/x.txt",
     });
+  });
+});
+
+describe("extractToolResultText", () => {
+  it("serializes structured non-image tool result blocks for visible output", () => {
+    const text = extractToolResultText({
+      content: [
+        { type: "json", data: { status: "ok", value: 42 } },
+        { type: "resource", resource: { uri: "file:///tmp/result.json", text: "payload" } },
+      ],
+    });
+
+    expect(text).toContain('"type":"json"');
+    expect(text).toContain('"status":"ok"');
+    expect(text).toContain('"type":"resource"');
+    expect(text).not.toContain("see attached image");
+  });
+
+  it("normalizes top-level CLI result arrays and objects", () => {
+    expect(
+      extractToolResultText([
+        { type: "web_search_result", title: "OpenClaw", url: "https://example.com" },
+      ]),
+    ).toContain('"title":"OpenClaw"');
+    expect(extractToolResultText([{ type: "text", text: "hello" }])).toBe("hello");
+    expect(
+      extractToolResultText({ type: "web_search_tool_result_error", error_code: "unavailable" }),
+    ).toContain('"error_code":"unavailable"');
+    expect(
+      extractToolResultText({
+        type: "code_execution_result",
+        content: [],
+        return_code: 0,
+        stderr: "",
+        stdout: "command output",
+      }),
+    ).toContain('"stdout":"command output"');
+  });
+
+  it("keeps existing text blocks and skips image blocks", () => {
+    const text = extractToolResultText({
+      content: [
+        { type: "text", text: "hello" },
+        { type: "image", data: "abc", mimeType: "image/png" },
+      ],
+    });
+
+    expect(text).toBe("hello");
+  });
+
+  it("keeps existing text output before structured fallback", () => {
+    const text = extractToolResultText({
+      content: [
+        { type: "text", text: "hello" },
+        { type: "json", data: { status: "ok" } },
+      ],
+    });
+
+    expect(text).toBe("hello");
+  });
+
+  it("caps top-level text arrays", () => {
+    const text = extractToolResultText([{ type: "text", text: "x".repeat(9000) }]);
+
+    expect(text).toContain("…(truncated)…");
+    expect(text?.length).toBeLessThanOrEqual(8020);
+  });
+
+  it("redacts whole data URI values without rewriting ordinary data substrings", () => {
+    const text = extractToolResultText({
+      content: [
+        {
+          type: "json",
+          note: "metadata:foo",
+          uri: "data:text/plain;base64,abcdefghijklmnopqrstuvwxyz0123456789",
+        },
+      ],
+    });
+
+    expect(text).toContain('"note":"metadata:foo"');
+    expect(text).toContain('"uri":"[inline data URI:');
+    expect(text).not.toContain("abcdefghijklmnopqrstuvwxyz0123456789");
+  });
+
+  it("suppresses MCP binary fields and structured secrets", () => {
+    const text = extractToolResultText({
+      content: [
+        { type: "audio", data: "audio-base64-secret", mimeType: "audio/mpeg" },
+        {
+          type: "document",
+          source: {
+            type: "base64",
+            media_type: "application/pdf",
+            data: "document-base64-secret",
+          },
+        },
+        {
+          type: "resource",
+          apiKey: "sk-structured-secret-1234567890",
+          resource: {
+            uri: "blob://result",
+            blob: "resource-base64-secret",
+            mimeType: "application/pdf",
+          },
+        },
+      ],
+    });
+
+    expect(text).toContain('"uri":"blob://result"');
+    expect(text).toContain('"blob":"[binary omitted:');
+    expect(text).not.toContain("audio-base64-secret");
+    expect(text).not.toContain("document-base64-secret");
+    expect(text).not.toContain("resource-base64-secret");
+    expect(text).not.toContain("sk-structured-secret-1234567890");
+  });
+
+  it("redacts structured headers and omits opaque CLI payloads before the output cap", () => {
+    const text = extractToolResultText([
+      {
+        type: "web_search_result",
+        encrypted_content: "opaque-search-ciphertext".repeat(500),
+        encrypted_stdout: "opaque-command-ciphertext".repeat(500),
+        apiKey: ["array-valued-api-secret"],
+        headers: {
+          cookie: ["session=structured-cookie-secret"],
+          "set-cookie": ["sid=structured-set-cookie-secret; HttpOnly"],
+        },
+        title: "Useful result",
+      },
+    ]);
+
+    expect(text).toContain('"encrypted_content":"[opaque data omitted:');
+    expect(text).toContain('"encrypted_stdout":"[opaque data omitted:');
+    expect(text).toContain('"title":"Useful result"');
+    expect(text).not.toContain("opaque-search-ciphertext");
+    expect(text).not.toContain("opaque-command-ciphertext");
+    expect(text).not.toContain("array-valued-api-secret");
+    expect(text).not.toContain("structured-cookie-secret");
+    expect(text).not.toContain("structured-set-cookie-secret");
+  });
+
+  it("caps structured fallback output", () => {
+    const text = extractToolResultText({
+      content: [{ type: "json", data: "x".repeat(9000) }],
+    });
+
+    expect(text).toContain("…(truncated)…");
+    expect(text?.length).toBeLessThanOrEqual(8020);
   });
 });

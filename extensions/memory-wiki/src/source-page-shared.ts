@@ -11,6 +11,15 @@ import {
 import { writeGuardedVaultPage } from "./vault-page-write.js";
 
 type ImportedSourceState = Parameters<typeof shouldSkipImportedSourceWrite>[0]["state"];
+type VaultRoot = Awaited<ReturnType<typeof fsRoot>>;
+
+async function readExistingImportedSourcePage(vault: VaultRoot, pagePath: string): Promise<string> {
+  try {
+    return await vault.readText(pagePath);
+  } catch {
+    return await vault.readText(pagePath);
+  }
+}
 
 export async function writeImportedSourcePage(params: {
   vaultRoot: string;
@@ -52,7 +61,7 @@ export async function writeImportedSourcePage(params: {
 
   const raw = await fs.readFile(params.sourcePath, "utf8");
   const rendered = params.buildRendered(raw, updatedAt);
-  const existing = pageStat ? await vault.readText(params.pagePath).catch(() => "") : "";
+  const existing = pageStat ? await readExistingImportedSourcePage(vault, params.pagePath) : "";
   const nextRendered = existing ? preserveHumanNotesBlock(rendered, existing) : rendered;
   if (existing !== nextRendered) {
     await writeGuardedVaultPage({

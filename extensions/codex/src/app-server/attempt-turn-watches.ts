@@ -36,6 +36,7 @@ export function createCodexAttemptTurnWatchController(params: {
   isTerminalTurnNotificationQueued: () => boolean;
   getActiveAppServerTurnRequests: () => number;
   getActiveTurnItemCount: () => number;
+  getActiveCompletionBlockerItemCount: () => number;
   turnCompletionIdleTimeoutMs: number;
   turnAssistantCompletionIdleTimeoutMs: number;
   turnAttemptIdleTimeoutMs: number;
@@ -121,7 +122,8 @@ export function createCodexAttemptTurnWatchController(params: {
       params.isCompleted() ||
       params.signal.aborted ||
       !completionIdleWatchArmed ||
-      params.getActiveAppServerTurnRequests() > 0
+      params.getActiveAppServerTurnRequests() > 0 ||
+      params.getActiveCompletionBlockerItemCount() > 0
     ) {
       return;
     }
@@ -183,7 +185,8 @@ export function createCodexAttemptTurnWatchController(params: {
       params.isTerminalTurnNotificationQueued() ||
       params.signal.aborted ||
       !completionIdleWatchArmed ||
-      params.getActiveAppServerTurnRequests() > 0
+      params.getActiveAppServerTurnRequests() > 0 ||
+      params.getActiveCompletionBlockerItemCount() > 0
     ) {
       return false;
     }
@@ -302,7 +305,8 @@ export function createCodexAttemptTurnWatchController(params: {
       params.isTerminalTurnNotificationQueued() ||
       params.signal.aborted ||
       !completionIdleWatchArmed ||
-      params.getActiveAppServerTurnRequests() > 0
+      params.getActiveAppServerTurnRequests() > 0 ||
+      params.getActiveCompletionBlockerItemCount() > 0
     ) {
       return;
     }

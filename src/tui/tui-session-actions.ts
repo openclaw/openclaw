@@ -89,6 +89,7 @@ function sessionInfoUiEquals(left: SessionInfo, right: SessionInfo): boolean {
     left.outputTokens === right.outputTokens &&
     left.totalTokens === right.totalTokens &&
     left.responseUsage === right.responseUsage &&
+    left.effectiveResponseUsage === right.effectiveResponseUsage &&
     left.displayName === right.displayName &&
     goalEquals(left.goal, right.goal)
   );
@@ -245,6 +246,9 @@ export function createSessionActions(context: SessionActionContext) {
     if (entry?.responseUsage !== undefined) {
       next.responseUsage = entry.responseUsage;
     }
+    if (entry?.effectiveResponseUsage !== undefined) {
+      next.effectiveResponseUsage = entry.effectiveResponseUsage;
+    }
     if (entry?.inputTokens !== undefined) {
       next.inputTokens = entry.inputTokens;
     }
@@ -395,7 +399,7 @@ export function createSessionActions(context: SessionActionContext) {
     chatLog.addSystem(`session ${key}`);
     state.historyLoaded = true;
     void rememberSessionKey?.(key);
-    tui.requestRender();
+    tui.requestRender(true);
   };
 
   const applySessionMutationResult = (result?: TuiSessionMutationResult | null): boolean => {
@@ -554,7 +558,7 @@ export function createSessionActions(context: SessionActionContext) {
     } catch (err) {
       chatLog.addSystem(`history failed: ${String(err)}`);
     }
-    tui.requestRender();
+    tui.requestRender(true);
   };
 
   const setSession = async (rawKey: string) => {

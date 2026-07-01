@@ -11,11 +11,7 @@ import type {
   PluginHookInboundClaimEvent,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-import {
-  loadSessionStore,
-  resolveSessionStoreEntry,
-  resolveStorePath,
-} from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server/app-server-policy.js";
 import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
@@ -57,6 +53,7 @@ import {
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerRequestModelSelection,
 } from "./app-server/thread-lifecycle.js";
+import { canMutateCodexHost, CODEX_NATIVE_EXECUTION_AUTH_ERROR } from "./command-authorization.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 import {
   createCodexConversationBindingData,
@@ -247,6 +244,9 @@ export async function handleCodexConversationInboundClaim(
   const prompt = event.bodyForAgent?.trim() || event.content?.trim() || "";
   if (!prompt) {
     return { handled: true };
+  }
+  if (!canMutateCodexHost(event)) {
+    return { handled: true, reply: { text: CODEX_NATIVE_EXECUTION_AUTH_ERROR } };
   }
   const nativeExecutionBlock =
     data.kind === "codex-cli-node-session"
@@ -881,10 +881,11 @@ function readSessionExecOverrides(params: {
     return undefined;
   }
   const storePath = resolveStorePath(params.config.session?.store, { agentId: params.agentId });
-  const entry = resolveSessionStoreEntry({
-    store: loadSessionStore(storePath, { skipCache: true }),
+  const entry = getSessionEntry({
+    storePath,
     sessionKey,
-  }).existing;
+    readConsistency: "latest",
+  });
   if (!entry?.execSecurity && !entry?.execAsk) {
     return undefined;
   }

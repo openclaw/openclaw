@@ -60,6 +60,15 @@ describe("tool-helpers", () => {
       expect(result).toBe("This is plain text output");
     });
 
+    it("wraps block art output in a fence while preserving quiet-zone whitespace", () => {
+      const input = "  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  ";
+      const result = formatToolOutputForSidebar(input);
+
+      expect(result).toBe(`\`\`\`
+${input}
+\`\`\``);
+    });
+
     it("returns as-is for invalid JSON starting with {", () => {
       const input = "{not valid json";
       const result = formatToolOutputForSidebar(input);
