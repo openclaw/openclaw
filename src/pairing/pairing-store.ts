@@ -359,14 +359,18 @@ async function readAllowFromState(params: {
   filePath: string;
   pairingAdapter?: ChannelPairingAdapter;
 }): Promise<{ current: string[]; normalized: string | null }> {
-  const { value } = await readJsonFile<AllowFromStore>(params.filePath, {
-    version: 1,
-    allowFrom: [],
-  });
   const pairingAdapter = resolvePairingAdapter(params.channel, params.pairingAdapter);
-  const current = normalizeAllowFromList(value, pairingAdapter);
+  const { entries } = await readAllowFromFileWithExists({
+    cacheNamespace: PAIRING_ALLOW_FROM_CACHE_NAMESPACE,
+    filePath: params.filePath,
+    normalizeStore: (store) => normalizeAllowFromList(store, pairingAdapter),
+    // Mutation pre-reads must prove the locked store is readable and normalizable;
+    // otherwise forgiving enforcement reads could let it be atomically replaced.
+    cachePolicy: "refresh",
+    normalizationFailure: "throw",
+  });
   const normalized = normalizeAllowFromInput(params.entry, pairingAdapter);
-  return { current, normalized: normalized || null };
+  return { current: entries, normalized: normalized || null };
 }
 
 async function writeAllowFromState(filePath: string, allowFrom: string[]): Promise<void> {
@@ -750,12 +754,9 @@ export async function approveChannelPairingCode(params: {
       if (!entry) {
         return null;
       }
-      pruned.splice(idx, 1);
-      await writeJsonFile(filePath, {
-        version: 1,
-        requests: pruned,
-      } satisfies PairingStore);
       const entryAccountId = normalizeOptionalString(entry.meta?.accountId);
+      // Grant first so a fail-closed allowFrom read leaves the pairing code retryable.
+      // The grant is idempotent if persisting request removal then fails.
       await addChannelAllowFromStoreEntry({
         channel: params.channel,
         entry: entry.id,
@@ -763,6 +764,11 @@ export async function approveChannelPairingCode(params: {
         env,
         pairingAdapter: params.pairingAdapter,
       });
+      pruned.splice(idx, 1);
+      await writeJsonFile(filePath, {
+        version: 1,
+        requests: pruned,
+      } satisfies PairingStore);
       return { id: entry.id, entry };
     },
   );

@@ -620,6 +620,81 @@ describe("pairing store", () => {
     });
   });
 
+  it("preserves allowFrom bytes and the pairing code when the warm-cached store is unreadable", async () => {
+    await withTempStateDir(async (stateDir, env) => {
+      const allowFromPath = resolveAllowFromFilePath(stateDir, "telegram", "yy");
+      await writeAllowFromFixture({
+        stateDir,
+        channel: "telegram",
+        accountId: "yy",
+        allowFrom: ["1001", "1002"],
+      });
+      const created = await createTelegramPairingRequest("yy", env, "1003");
+      clearPairingAllowFromReadCacheForTest();
+      expect(await readChannelAllowFromStore("telegram", env, "yy")).toEqual(["1001", "1002"]);
+      const originalBytes = fsSync.readFileSync(allowFromPath, "utf8");
+
+      const error = Object.assign(new Error("permission denied"), { code: "EACCES" });
+      const originalReadFile = fsSync.promises.readFile.bind(fsSync.promises);
+      const readSpy = vi
+        .spyOn(fsSync.promises, "readFile")
+        .mockImplementation(async (target, ...rest) => {
+          if (typeof target === "string" && target === allowFromPath) {
+            throw error;
+          }
+          return await originalReadFile(target as never, ...(rest as []));
+        });
+
+      try {
+        await expect(
+          addChannelAllowFromStoreEntry({
+            channel: "telegram",
+            accountId: "yy",
+            entry: "1004",
+            env,
+          }),
+        ).rejects.toBe(error);
+        await expect(
+          approveChannelPairingCode({
+            channel: "telegram",
+            code: created.code,
+            accountId: "yy",
+            env,
+          }),
+        ).rejects.toBe(error);
+      } finally {
+        readSpy.mockRestore();
+      }
+
+      expect(fsSync.readFileSync(allowFromPath, "utf8")).toBe(originalBytes);
+      await expect(listChannelPairingRequests("telegram", env, "yy")).resolves.toMatchObject([
+        { id: "1003", code: created.code },
+      ]);
+    });
+  });
+
+  it("refuses to clobber the allowFrom store when mutation normalization fails", async () => {
+    await withTempStateDir(async (stateDir, env) => {
+      const allowFromPath = resolveAllowFromFilePath(stateDir, "telegram", "yy");
+      fsSync.mkdirSync(path.dirname(allowFromPath), { recursive: true });
+      fsSync.writeFileSync(allowFromPath, '{"version":1,"allowFrom":["1001",42]}\n', "utf8");
+      clearPairingAllowFromReadCacheForTest();
+      expect(await readChannelAllowFromStore("telegram", env, "yy")).toEqual([]);
+      const originalBytes = fsSync.readFileSync(allowFromPath, "utf8");
+
+      await expect(
+        addChannelAllowFromStoreEntry({
+          channel: "telegram",
+          accountId: "yy",
+          entry: "1003",
+          env,
+        }),
+      ).rejects.toThrow();
+
+      expect(fsSync.readFileSync(allowFromPath, "utf8")).toBe(originalBytes);
+    });
+  });
+
   it("reads allowFrom variants with account-scoped isolation", async () => {
     await withTempStateDir(async (stateDir, env) => {
       for (const { setup, accountId, expected, expectedLegacy } of [
