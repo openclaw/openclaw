@@ -139,6 +139,8 @@ describe("nodes-cli coverage", () => {
           "wss://gateway.example.test",
           "--token",
           "secret-token",
+          "--password",
+          "secret-password",
         ],
         { from: "user" },
       ),
@@ -148,9 +150,12 @@ describe("nodes-cli coverage", () => {
     expect(output).toContain("Unknown node pairing requestId: stale-request");
     expect(output).toContain("Pending requestIds: current-request");
     expect(output).toContain("openclaw nodes pending");
-    expect(output).toContain("Reuse the same connection options when rerunning: --url, --token.");
+    expect(output).toContain(
+      "Reuse the same connection options when rerunning: --url, --token, --password.",
+    );
     expect(output).not.toContain("gateway.example.test");
     expect(output).not.toContain("secret-token");
+    expect(output).not.toContain("secret-password");
     expect(output).not.toContain("nodes approve failed: Error:");
     expect(output).not.toContain("GatewayClientRequestError: unknown requestId");
     expect(callGateway.mock.calls.map(([call]) => call.method)).toEqual(["node.pair.list"]);
