@@ -53,12 +53,14 @@ export function resolveAnnounceTargetFromKey(sessionKey: string): AnnounceTarget
 }
 
 function buildAgentSessionLines(params: {
+  requesterName?: string;
   requesterSessionKey?: string;
   requesterChannel?: string;
   targetSessionKey: string;
   targetChannel?: string;
 }): string[] {
   return [
+    params.requesterName ? `Agent 1 (requester) name: ${params.requesterName}.` : undefined,
     // Session keys are high-cardinality (thread/run ids), so concrete values churn the
     // system prompt and break provider prompt-cache reuse across A2A turns. Channels are
     // low-cardinality and inform reply formatting, so they stay concrete.
@@ -73,6 +75,7 @@ function buildAgentSessionLines(params: {
 
 /** Builds the initial prompt context for a sessions_send agent-to-agent request. */
 export function buildAgentToAgentMessageContext(params: {
+  requesterName?: string;
   requesterSessionKey?: string;
   requesterChannel?: string;
   targetSessionKey: string;
@@ -85,6 +88,7 @@ export function buildAgentToAgentMessageContext(params: {
 
 /** Builds the bounded ping-pong reply prompt for the current A2A participant. */
 export function buildAgentToAgentReplyContext(params: {
+  requesterName?: string;
   requesterSessionKey?: string;
   requesterChannel?: string;
   targetSessionKey: string;
@@ -107,6 +111,7 @@ export function buildAgentToAgentReplyContext(params: {
 
 /** Builds the final announce prompt that decides whether to post back to the target channel. */
 export function buildAgentToAgentAnnounceContext(params: {
+  requesterName?: string;
   requesterSessionKey?: string;
   requesterChannel?: string;
   targetSessionKey: string;
