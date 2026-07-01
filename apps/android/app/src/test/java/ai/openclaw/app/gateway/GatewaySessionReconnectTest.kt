@@ -208,6 +208,36 @@ class GatewaySessionReconnectTest {
   }
 
   @Test
+  fun protocolMismatchPausesReconnect() {
+    val error =
+      GatewaySession.ErrorShape(
+        code = "INVALID_REQUEST",
+        message = "protocol mismatch",
+        details =
+          GatewayConnectErrorDetails(
+            code = "PROTOCOL_MISMATCH",
+            canRetryWithDeviceToken = false,
+            recommendedNextStep = null,
+            clientMinProtocol = 4,
+            clientMaxProtocol = 4,
+            expectedProtocol = 5,
+            minimumProbeProtocol = 4,
+          ),
+      )
+
+    assertTrue(
+      shouldPauseGatewayReconnectAfterAuthFailure(
+        error = error,
+        hasBootstrapToken = false,
+        role = "node",
+        scopes = emptyList(),
+        deviceTokenRetryBudgetUsed = false,
+        pendingDeviceTokenRetry = false,
+      ),
+    )
+  }
+
+  @Test
   fun bootstrapRoleUpgradeStillPausesReconnect() {
     val error =
       GatewaySession.ErrorShape(
@@ -294,6 +324,41 @@ class GatewaySessionReconnectTest {
         assertEquals("PAIRING_REQUIRED", error.details?.code)
         assertEquals("not-paired", error.details?.reason)
         assertNull(error.details?.requestId)
+        assertTrue(pauseReconnect)
+      } finally {
+        shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
+  fun protocolMismatchFailurePreservesProtocolDetailsAndPausesReconnect() =
+    runBlocking {
+      val json = Json { ignoreUnknownKeys = true }
+      val connectFailure = CompletableDeferred<Pair<GatewaySession.ErrorShape, Boolean>>()
+      val server =
+        startGatewayServer(json = json) { webSocket, id, method ->
+          if (method == "connect") {
+            webSocket.send(
+              """
+              {"type":"res","id":"$id","ok":false,"error":{"code":"INVALID_REQUEST","message":"protocol mismatch","details":{"code":"PROTOCOL_MISMATCH","clientMinProtocol":4,"clientMaxProtocol":4,"expectedProtocol":5,"minimumProbeProtocol":4}}}
+              """.trimIndent(),
+            )
+          }
+        }
+      val harness =
+        createReconnectHarness { error, pauseReconnect ->
+          connectFailure.complete(error to pauseReconnect)
+        }
+
+      try {
+        connectNodeSession(harness.session, server.port)
+        val (error, pauseReconnect) = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connectFailure.await() }
+
+        assertEquals("PROTOCOL_MISMATCH", error.details?.code)
+        assertEquals(4, error.details?.clientMinProtocol)
+        assertEquals(4, error.details?.clientMaxProtocol)
+        assertEquals(5, error.details?.expectedProtocol)
+        assertEquals(4, error.details?.minimumProbeProtocol)
         assertTrue(pauseReconnect)
       } finally {
         shutdownReconnectHarness(harness, server)
