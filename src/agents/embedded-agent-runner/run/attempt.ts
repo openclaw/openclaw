@@ -738,17 +738,33 @@ function isUserAgentMessage(message: AgentMessage | undefined): message is UserM
   return message?.role === "user";
 }
 
-function removeTrailingUserMessageForOrphanRepair(
+function optionalMessageFieldMatches(left: AgentMessage, right: UserMessage, field: string): boolean {
+  const leftValue = (left as Record<string, unknown>)[field];
+  const rightValue = (right as Record<string, unknown>)[field];
+  return rightValue === undefined || leftValue === undefined || leftValue === rightValue;
+}
+
+function isMatchingUserMessageForOrphanRepair(
+  message: AgentMessage | undefined,
+  orphanMessage: SessionMessageEntry["message"],
+): message is UserMessage {
+  return (
+    isUserAgentMessage(message) &&
+    isUserAgentMessage(orphanMessage) &&
+    contentValuesEqual(message.content, orphanMessage.content) &&
+    optionalMessageFieldMatches(message, orphanMessage, "timestamp") &&
+    optionalMessageFieldMatches(message, orphanMessage, "id")
+  );
+}
+
+function removeUserMessageForOrphanRepair(
   messages: AgentMessage[],
   orphanMessage: SessionMessageEntry["message"],
 ): AgentMessage[] {
-  const lastMessage = messages.at(-1);
-  if (
-    isUserAgentMessage(lastMessage) &&
-    isUserAgentMessage(orphanMessage) &&
-    contentValuesEqual(lastMessage.content, orphanMessage.content)
-  ) {
-    return messages.slice(0, -1);
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (isMatchingUserMessageForOrphanRepair(messages[index], orphanMessage)) {
+      return [...messages.slice(0, index), ...messages.slice(index + 1)];
+    }
   }
   return messages;
 }
@@ -4235,7 +4251,7 @@ export async function runEmbeddedAttempt(
               sessionManager,
               orphanRepair?.trailingEntries ?? [],
             );
-            activeSession.agent.state.messages = removeTrailingUserMessageForOrphanRepair(
+            activeSession.agent.state.messages = removeUserMessageForOrphanRepair(
               activeSession.messages,
               leafEntry.message,
             );

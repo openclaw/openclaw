@@ -1526,6 +1526,52 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     ]);
   });
 
+  it("removes the repaired orphan from assembled history when the context engine appends the active prompt", async () => {
+    const marker =
+      "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]";
+    const olderPrompt = "OLD_TURN_76888: stale assembled history";
+    const latestPrompt = "LATEST_TURN_76888: active assembled prompt";
+    hoisted.sessionManager.getLeafEntry.mockReturnValueOnce({
+      id: "orphan-leaf",
+      parentId: "parent-leaf",
+      type: "message",
+      message: { role: "user", content: olderPrompt, timestamp: 1 },
+    });
+    const seen: { prompt?: string; messages?: AgentMessage[] } = {};
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createTestContextEngine({
+        bootstrap: async () => ({ bootstrapped: true }),
+        assemble: async ({ messages }: { messages: AgentMessage[] }) => ({
+          messages: [
+            ...messages,
+            { role: "user", content: latestPrompt, timestamp: 2 } as AgentMessage,
+          ],
+          estimatedTokens: 1,
+        }),
+      }),
+      sessionKey,
+      tempPaths,
+      sessionMessages: [{ role: "user", content: olderPrompt, timestamp: 1 } as AgentMessage],
+      attemptOverrides: {
+        prompt: latestPrompt,
+      },
+      sessionPrompt: async (session, prompt) => {
+        seen.prompt = prompt;
+        seen.messages = [...session.messages] as AgentMessage[];
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 3 },
+        ];
+      },
+    });
+
+    expect(seen.prompt).toBe(`${marker}\n${olderPrompt}\n\n${latestPrompt}`);
+    expect(JSON.stringify(seen.messages)).not.toContain(olderPrompt);
+    expect(JSON.stringify(seen.messages)).toContain(latestPrompt);
+    expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
+  });
+
   it("keeps hidden runtime context hidden when orphan repair merges a transcript prompt", async () => {
     hoisted.sessionManager.getLeafEntry.mockReturnValueOnce({
       id: "orphan-leaf",
