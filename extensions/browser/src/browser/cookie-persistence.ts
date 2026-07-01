@@ -35,6 +35,50 @@ export function resolveCookieStorePath(userDataDir: string): string {
   return path.join(path.dirname(userDataDir), COOKIE_STORE_FILENAME);
 }
 
+/** Delete the managed Chrome cookie sidecar, if present. */
+export function deleteManagedChromeCookieStore(userDataDir: string): void {
+  fs.rmSync(resolveCookieStorePath(userDataDir), { force: true });
+}
+
+function normalizeSavedCookieParam(
+  cookie: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (typeof cookie.name !== "string" || typeof cookie.value !== "string") {
+    return null;
+  }
+
+  const normalized: Record<string, unknown> = {
+    name: cookie.name,
+    value: cookie.value,
+  };
+  for (const key of [
+    "domain",
+    "path",
+    "secure",
+    "httpOnly",
+    "sameSite",
+    "priority",
+    "sameParty",
+    "sourceScheme",
+    "sourcePort",
+    "partitionKey",
+  ]) {
+    if (cookie[key] !== undefined) {
+      normalized[key] = cookie[key];
+    }
+  }
+
+  if (
+    typeof cookie.expires === "number" &&
+    Number.isFinite(cookie.expires) &&
+    cookie.expires >= 0
+  ) {
+    normalized.expires = cookie.expires;
+  }
+
+  return normalized;
+}
+
 /**
  * Snapshot all cookies over CDP into the sidecar (0600). A successful empty
  * result clears the sidecar so logout / cookie clearing is not undone later.
@@ -53,7 +97,7 @@ export async function saveManagedChromeCookies(wsUrl: string, userDataDir: strin
     const cookies = res.cookies;
     const file = resolveCookieStorePath(userDataDir);
     if (cookies.length === 0) {
-      fs.rmSync(file, { force: true });
+      deleteManagedChromeCookieStore(userDataDir);
       log.debug(`cleared saved cookies for ${userDataDir}`);
       return;
     }
@@ -82,10 +126,20 @@ export async function restoreManagedChromeCookies(
       return;
     }
     // Storage.getCookies returns Cookie[]; Storage.setCookies accepts
-    // CookieParam[]. Cookie is a superset (extra read-only fields are ignored),
-    // so the snapshot round-trips back in directly. Browser-level target only.
-    await withCdpSocket(wsUrl, (send) => send("Storage.setCookies", { cookies }), cdpOpts);
-    log.debug(`restored ${cookies.length} cookies for ${userDataDir}`);
+    // CookieParam[]. Session cookies are represented as expires=-1 in the
+    // snapshot and must omit expires when restored.
+    const cookieParams = cookies
+      .map((cookie) => normalizeSavedCookieParam(cookie))
+      .filter((cookie): cookie is Record<string, unknown> => cookie !== null);
+    if (cookieParams.length === 0) {
+      return;
+    }
+    await withCdpSocket(
+      wsUrl,
+      (send) => send("Storage.setCookies", { cookies: cookieParams }),
+      cdpOpts,
+    );
+    log.debug(`restored ${cookieParams.length} cookies for ${userDataDir}`);
   } catch (err) {
     log.debug(`cookie restore skipped: ${err instanceof Error ? err.message : String(err)}`);
   }

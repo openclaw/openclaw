@@ -110,6 +110,49 @@ describe("managed Chrome cookie persistence", () => {
     expect(send).toHaveBeenCalledWith("Storage.setCookies", { cookies });
   });
 
+  it("normalizes session cookie snapshots before restore", async () => {
+    await fsp.writeFile(
+      resolveCookieStorePath(userDataDir),
+      JSON.stringify({
+        cookies: [
+          {
+            name: "session",
+            value: "abc",
+            domain: "example.com",
+            path: "/",
+            expires: -1,
+            httpOnly: true,
+            secure: true,
+            sameSite: "Lax",
+            size: 10,
+            session: true,
+          },
+        ],
+      }),
+      { mode: 0o600 },
+    );
+    const send = vi.fn(async () => ({}));
+    withCdpSocketMock.mockImplementationOnce(async (_wsUrl, callback) => {
+      return await callback(send);
+    });
+
+    await restoreManagedChromeCookies("ws://127.0.0.1/devtools/browser/mock", userDataDir);
+
+    expect(send).toHaveBeenCalledWith("Storage.setCookies", {
+      cookies: [
+        {
+          name: "session",
+          value: "abc",
+          domain: "example.com",
+          path: "/",
+          httpOnly: true,
+          secure: true,
+          sameSite: "Lax",
+        },
+      ],
+    });
+  });
+
   it("starts an unrefed periodic cookie flush timer", () => {
     vi.useFakeTimers();
     withCdpSocketMock.mockResolvedValue({ cookies: [{ name: "session" }] });

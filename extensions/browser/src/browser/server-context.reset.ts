@@ -3,6 +3,7 @@
  */
 import fs from "node:fs";
 import type { ResolvedBrowserProfile } from "./config.js";
+import { deleteManagedChromeCookieStore } from "./cookie-persistence.js";
 import { BrowserResetUnsupportedError } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { closePlaywrightBrowserConnectionForProfile } from "./server-context.lifecycle.js";
@@ -52,6 +53,7 @@ export function createProfileResetOps({
     }
 
     await closePlaywrightBrowserConnectionForProfile(profile.cdpUrl);
+    deleteManagedChromeCookieStore(userDataDir);
 
     if (!fs.existsSync(userDataDir)) {
       return { moved: false, from: userDataDir };
