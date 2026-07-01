@@ -23,6 +23,13 @@ function sha256(input: string): string {
   return createHash("sha256").update(input).digest("hex");
 }
 
+const EMPTY_SCHEMA_STATS: Pick<ToolReportEntry, "propertiesCount" | "schemaChars" | "schemaHash"> =
+  {
+    schemaChars: 0,
+    schemaHash: sha256(""),
+    propertiesCount: null,
+  };
+
 function extractBetween(input: string, startMarker: string, endMarker: string): string {
   const start = input.indexOf(startMarker);
   if (start === -1) {
@@ -48,13 +55,87 @@ function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChar
     .filter((b) => b.blockChars > 0);
 }
 
+function readToolStringField(
+  tool: AgentTool,
+  field: "description" | "label" | "name",
+): string | undefined {
+  try {
+    const value = (tool as unknown as Record<string, unknown>)[field];
+    return typeof value === "string" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readToolParameters(tool: AgentTool): AgentTool["parameters"] | undefined {
+  try {
+    return tool.parameters;
+  } catch {
+    return undefined;
+  }
+}
+
+function getCachedToolEntry(tool: AgentTool): ToolReportEntry | undefined {
+  try {
+    return toolReportEntryCache.get(tool);
+  } catch {
+    return undefined;
+  }
+}
+
+function cacheToolEntry(tool: AgentTool, entry: ToolReportEntry): void {
+  try {
+    toolReportEntryCache.set(tool, entry);
+  } catch {
+    // Prompt reports are diagnostics; malformed tool descriptors should not block a turn.
+  }
+}
+
+function getCachedSchemaStats(
+  parameters: object,
+): Pick<ToolReportEntry, "propertiesCount" | "schemaChars" | "schemaHash"> | undefined {
+  try {
+    return toolSchemaStatsCache.get(parameters);
+  } catch {
+    return undefined;
+  }
+}
+
+function cacheSchemaStats(
+  parameters: object,
+  stats: Pick<ToolReportEntry, "propertiesCount" | "schemaChars" | "schemaHash">,
+): void {
+  try {
+    toolSchemaStatsCache.set(parameters, stats);
+  } catch {
+    // Schema stat caching is an optimization only.
+  }
+}
+
+function countSchemaProperties(parameters: object): number | null {
+  let properties: unknown;
+  try {
+    properties = (parameters as Record<string, unknown>).properties;
+  } catch {
+    return null;
+  }
+  if (!properties || typeof properties !== "object") {
+    return null;
+  }
+  try {
+    return Object.keys(properties as Record<string, unknown>).length;
+  } catch {
+    return null;
+  }
+}
+
 function buildToolSchemaStats(
-  parameters: AgentTool["parameters"],
+  parameters: AgentTool["parameters"] | undefined,
 ): Pick<ToolReportEntry, "propertiesCount" | "schemaChars" | "schemaHash"> {
   if (!parameters || typeof parameters !== "object") {
-    return { schemaChars: 0, schemaHash: sha256(""), propertiesCount: null };
+    return EMPTY_SCHEMA_STATS;
   }
-  const cached = toolSchemaStatsCache.get(parameters);
+  const cached = getCachedSchemaStats(parameters);
   if (cached) {
     return cached;
   }
@@ -67,33 +148,27 @@ function buildToolSchemaStats(
   const stats = {
     schemaChars: schemaJson.length,
     schemaHash: sha256(schemaJson),
-    propertiesCount: (() => {
-      const schema = parameters as Record<string, unknown>;
-      const props = typeof schema.properties === "object" ? schema.properties : null;
-      if (!props || typeof props !== "object") {
-        return null;
-      }
-      return Object.keys(props as Record<string, unknown>).length;
-    })(),
+    propertiesCount: countSchemaProperties(parameters),
   };
-  // Tool parameter objects are reused across runs; cache their stable size/hash
-  // so report generation stays cheap during frequent prompt rebuilds.
-  toolSchemaStatsCache.set(parameters, stats);
+  cacheSchemaStats(parameters, stats);
   return stats;
 }
 
 function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools"]["entries"] {
   return tools.map((tool) => {
-    const cached = toolReportEntryCache.get(tool);
+    const cached = getCachedToolEntry(tool);
     if (cached) {
       return cached;
     }
-    const name = tool.name;
-    const summary = tool.description?.trim() || tool.label?.trim() || "";
+    const name = readToolStringField(tool, "name") ?? "(unknown)";
+    const summary =
+      readToolStringField(tool, "description")?.trim() ||
+      readToolStringField(tool, "label")?.trim() ||
+      "";
     const summaryChars = summary.length;
-    const schemaStats = buildToolSchemaStats(tool.parameters);
+    const schemaStats = buildToolSchemaStats(readToolParameters(tool));
     const entry = { name, summaryChars, summaryHash: sha256(summary), ...schemaStats };
-    toolReportEntryCache.set(tool, entry);
+    cacheToolEntry(tool, entry);
     return entry;
   });
 }
