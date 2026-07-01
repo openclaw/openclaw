@@ -37,6 +37,22 @@ vi.mock("./conversation-store-state.js", () => ({
 const TOKEN = "test-graph-token";
 const CHAT_ID = "19:abc@thread.tacv2";
 const CHANNEL_TO = "team-id-1/channel-id-1";
+const NAMED_ACCOUNT_CFG = {
+  channels: {
+    msteams: {
+      appId: "default-app-id",
+      appPassword: "default-secret",
+      tenantId: "tenant-id",
+      accounts: {
+        secondary: {
+          appId: "secondary-app-id",
+          appPassword: "secondary-secret",
+          webhook: { port: 3979 },
+        },
+      },
+    },
+  },
+} as OpenClawConfig;
 
 function postGraphBodyAt(index: number): Record<string, unknown> {
   const call = mockState.postGraphJson.mock.calls[index];
@@ -183,6 +199,21 @@ describe("addParticipantMSTeams", () => {
       },
     });
   });
+
+  it("resolves Graph tokens with the named account id", async () => {
+    mockState.postGraphJson.mockResolvedValue({});
+
+    await addParticipantMSTeams({
+      cfg: NAMED_ACCOUNT_CFG,
+      accountId: "secondary",
+      to: CHAT_ID,
+      userId: "user-aad-id-1",
+    });
+
+    expect(mockState.resolveGraphToken).toHaveBeenCalledWith(NAMED_ACCOUNT_CFG, {
+      accountId: "secondary",
+    });
+  });
 });
 
 describe("removeParticipantMSTeams", () => {
@@ -289,6 +320,24 @@ describe("removeParticipantMSTeams", () => {
       path: `/chats/${encodeURIComponent(CHAT_ID)}/members/membership-9`,
     });
   });
+
+  it("resolves Graph tokens with the named account id", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: [{ id: "membership-1", userId: "user-aad-id-1" }],
+    });
+    mockState.deleteGraphRequest.mockResolvedValue(undefined);
+
+    await removeParticipantMSTeams({
+      cfg: NAMED_ACCOUNT_CFG,
+      accountId: "secondary",
+      to: CHAT_ID,
+      userId: "user-aad-id-1",
+    });
+
+    expect(mockState.resolveGraphToken).toHaveBeenCalledWith(NAMED_ACCOUNT_CFG, {
+      accountId: "secondary",
+    });
+  });
 });
 
 describe("renameGroupMSTeams", () => {
@@ -328,6 +377,21 @@ describe("renameGroupMSTeams", () => {
       token: TOKEN,
       path: "/teams/team-id-1/channels/channel-id-1",
       body: { displayName: "New Channel Name" },
+    });
+  });
+
+  it("resolves Graph tokens with the named account id", async () => {
+    mockState.patchGraphJson.mockResolvedValue(undefined);
+
+    await renameGroupMSTeams({
+      cfg: NAMED_ACCOUNT_CFG,
+      accountId: "secondary",
+      to: CHAT_ID,
+      name: "New Chat Name",
+    });
+
+    expect(mockState.resolveGraphToken).toHaveBeenCalledWith(NAMED_ACCOUNT_CFG, {
+      accountId: "secondary",
     });
   });
 });

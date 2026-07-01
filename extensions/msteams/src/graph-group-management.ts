@@ -1,10 +1,6 @@
 // Msteams plugin module implements graph group management behavior.
 import type { OpenClawConfig } from "../runtime-api.js";
-import {
-  resolveConversationPath,
-  resolveGraphConversationId,
-  resolveMSTeamsGraphConfig,
-} from "./graph-messages.js";
+import { resolveConversationPath, resolveGraphConversationId } from "./graph-messages.js";
 import {
   deleteGraphRequest,
   escapeOData,
@@ -49,8 +45,7 @@ function normalizeConversationMemberRole(role: string | undefined): Conversation
 export async function addParticipantMSTeams(
   params: AddParticipantMSTeamsParams,
 ): Promise<AddParticipantMSTeamsResult> {
-  const cfg = resolveMSTeamsGraphConfig(params.cfg, params.accountId);
-  const token = await resolveGraphToken(cfg);
+  const token = await resolveGraphToken(params.cfg, { accountId: params.accountId });
   const conversationId = await resolveGraphConversationId(params.to, {
     cfg: params.cfg,
     accountId: params.accountId,
@@ -104,8 +99,7 @@ type GraphConversationMemberResponse = {
 export async function removeParticipantMSTeams(
   params: RemoveParticipantMSTeamsParams,
 ): Promise<RemoveParticipantMSTeamsResult> {
-  const cfg = resolveMSTeamsGraphConfig(params.cfg, params.accountId);
-  const token = await resolveGraphToken(cfg);
+  const token = await resolveGraphToken(params.cfg, { accountId: params.accountId });
   const conversationId = await resolveGraphConversationId(params.to, {
     cfg: params.cfg,
     accountId: params.accountId,
@@ -168,8 +162,7 @@ type RenameGroupMSTeamsResult = {
 export async function renameGroupMSTeams(
   params: RenameGroupMSTeamsParams,
 ): Promise<RenameGroupMSTeamsResult> {
-  const cfg = resolveMSTeamsGraphConfig(params.cfg, params.accountId);
-  const token = await resolveGraphToken(cfg);
+  const token = await resolveGraphToken(params.cfg, { accountId: params.accountId });
   const conversationId = await resolveGraphConversationId(params.to, {
     cfg: params.cfg,
     accountId: params.accountId,

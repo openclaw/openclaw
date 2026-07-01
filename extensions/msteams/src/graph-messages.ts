@@ -180,8 +180,7 @@ export type GetMessageMSTeamsResult = {
 export async function getMessageMSTeams(
   params: GetMessageMSTeamsParams,
 ): Promise<GetMessageMSTeamsResult> {
-  const cfg = resolveMSTeamsGraphConfig(params.cfg, params.accountId);
-  const token = await resolveGraphToken(cfg);
+  const token = await resolveGraphToken(params.cfg, { accountId: params.accountId });
   const conversationId = await resolveGraphConversationId(params.to, {
     cfg: params.cfg,
     accountId: params.accountId,
@@ -218,8 +217,7 @@ export type PinMessageMSTeamsParams = {
 export async function pinMessageMSTeams(
   params: PinMessageMSTeamsParams,
 ): Promise<{ ok: true; pinnedMessageId?: string }> {
-  const cfg = resolveMSTeamsGraphConfig(params.cfg, params.accountId);
-  const token = await resolveGraphToken(cfg);
+  const token = await resolveGraphToken(params.cfg, { accountId: params.accountId });
   const conversationId = await resolveGraphConversationId(params.to, {
     cfg: params.cfg,
     accountId: params.accountId,
@@ -266,8 +264,7 @@ export type UnpinMessageMSTeamsParams = {
 export async function unpinMessageMSTeams(
   params: UnpinMessageMSTeamsParams,
 ): Promise<{ ok: true }> {
-  const cfg = resolveMSTeamsGraphConfig(params.cfg, params.accountId);
-  const token = await resolveGraphToken(cfg);
+  const token = await resolveGraphToken(params.cfg, { accountId: params.accountId });
   const conversationId = await resolveGraphConversationId(params.to, {
     cfg: params.cfg,
     accountId: params.accountId,
@@ -307,8 +304,7 @@ const LIST_PINS_MAX_PAGES = 10;
 export async function listPinsMSTeams(
   params: ListPinsMSTeamsParams,
 ): Promise<ListPinsMSTeamsResult> {
-  const cfg = resolveMSTeamsGraphConfig(params.cfg, params.accountId);
-  const token = await resolveGraphToken(cfg);
+  const token = await resolveGraphToken(params.cfg, { accountId: params.accountId });
   const conversationId = await resolveGraphConversationId(params.to, {
     cfg: params.cfg,
     accountId: params.accountId,
@@ -490,8 +486,7 @@ export async function unreactMessageMSTeams(
 export async function listReactionsMSTeams(
   params: ListReactionsMSTeamsParams,
 ): Promise<ListReactionsMSTeamsResult> {
-  const cfg = resolveMSTeamsGraphConfig(params.cfg, params.accountId);
-  const token = await resolveGraphToken(cfg);
+  const token = await resolveGraphToken(params.cfg, { accountId: params.accountId });
   const conversationId = await resolveGraphConversationId(params.to, {
     cfg: params.cfg,
     accountId: params.accountId,
@@ -564,8 +559,7 @@ const SEARCH_MAX_LIMIT = 50;
 export async function searchMessagesMSTeams(
   params: SearchMessagesMSTeamsParams,
 ): Promise<SearchMessagesMSTeamsResult> {
-  const cfg = resolveMSTeamsGraphConfig(params.cfg, params.accountId);
-  const token = await resolveGraphToken(cfg);
+  const token = await resolveGraphToken(params.cfg, { accountId: params.accountId });
   const conversationId = await resolveGraphConversationId(params.to, {
     cfg: params.cfg,
     accountId: params.accountId,

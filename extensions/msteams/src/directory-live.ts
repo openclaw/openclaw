@@ -4,7 +4,6 @@ import {
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ChannelDirectoryEntry, OpenClawConfig } from "../runtime-api.js";
-import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import { searchGraphUsers } from "./graph-users.js";
 import {
   listChannelsForTeam,
@@ -12,20 +11,6 @@ import {
   normalizeQuery,
   resolveGraphToken,
 } from "./graph.js";
-
-function resolveDirectoryGraphConfig(params: { cfg: unknown; accountId?: string | null }): unknown {
-  if (!params.accountId) {
-    return params.cfg;
-  }
-  const cfg = params.cfg as OpenClawConfig;
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      msteams: resolveMSTeamsAccountConfig(cfg, params.accountId),
-    },
-  };
-}
 
 export async function listMSTeamsDirectoryPeersLive(params: {
   cfg: unknown;
@@ -37,7 +22,9 @@ export async function listMSTeamsDirectoryPeersLive(params: {
   if (!query) {
     return [];
   }
-  const token = await resolveGraphToken(resolveDirectoryGraphConfig(params));
+  const token = await resolveGraphToken(params.cfg as OpenClawConfig, {
+    accountId: params.accountId,
+  });
   const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : 20;
 
   const users = await searchGraphUsers({ token, query, top: limit });
@@ -71,7 +58,9 @@ export async function listMSTeamsDirectoryGroupsLive(params: {
   if (!rawQuery) {
     return [];
   }
-  const token = await resolveGraphToken(resolveDirectoryGraphConfig(params));
+  const token = await resolveGraphToken(params.cfg as OpenClawConfig, {
+    accountId: params.accountId,
+  });
   const limit = typeof params.limit === "number" && params.limit > 0 ? params.limit : 20;
   const [teamQuery, channelQuery] = rawQuery.includes("/")
     ? normalizeStringEntries(rawQuery.split("/", 2))

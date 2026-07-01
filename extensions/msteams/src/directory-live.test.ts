@@ -93,7 +93,7 @@ describe("msteams directory live", () => {
     });
   });
 
-  it("resolves directory graph credentials from the named account config", async () => {
+  it("resolves directory graph credentials with the named account id", async () => {
     resolveGraphTokenMock.mockResolvedValue("graph-token");
     searchGraphUsersMock.mockResolvedValue([]);
     const cfg = {
@@ -119,14 +119,8 @@ describe("msteams directory live", () => {
       query: "alice",
     });
 
-    expect(resolveGraphTokenMock).toHaveBeenCalledWith({
-      channels: {
-        msteams: expect.objectContaining({
-          appId: "secondary-app-id",
-          appPassword: "secondary-secret",
-          tenantId: "tenant-id",
-        }),
-      },
+    expect(resolveGraphTokenMock).toHaveBeenCalledWith(cfg, {
+      accountId: "secondary",
     });
   });
 
@@ -190,5 +184,36 @@ describe("msteams directory live", () => {
     ]);
 
     expect(listTeamsByNameMock).toHaveBeenCalledWith("graph-token", "plat");
+  });
+
+  it("resolves group directory graph credentials with the named account id", async () => {
+    resolveGraphTokenMock.mockResolvedValue("graph-token");
+    listTeamsByNameMock.mockResolvedValue([]);
+    const cfg = {
+      channels: {
+        msteams: {
+          appId: "default-app-id",
+          appPassword: "default-secret",
+          tenantId: "tenant-id",
+          accounts: {
+            secondary: {
+              appId: "secondary-app-id",
+              appPassword: "secondary-secret",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    };
+
+    await listMSTeamsDirectoryGroupsLive({
+      cfg,
+      accountId: "secondary",
+      query: "platform",
+    });
+
+    expect(resolveGraphTokenMock).toHaveBeenCalledWith(cfg, {
+      accountId: "secondary",
+    });
   });
 });

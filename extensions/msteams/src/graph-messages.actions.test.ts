@@ -49,6 +49,23 @@ const emptyReactionCases: Array<{
   },
 ];
 
+const NAMED_ACCOUNT_CFG = {
+  channels: {
+    msteams: {
+      appId: "default-app-id",
+      appPassword: "default-secret",
+      tenantId: "tenant-id",
+      accounts: {
+        secondary: {
+          appId: "secondary-app-id",
+          appPassword: "secondary-secret",
+          webhook: { port: 3979 },
+        },
+      },
+    },
+  },
+} as OpenClawConfig;
+
 describe("MSTeams reaction validation", () => {
   it.each(emptyReactionCases)("$name rejects empty reaction type", async ({ invoke }) => {
     await expect(invoke()).rejects.toThrow(/Reaction type is required/);
@@ -87,6 +104,21 @@ describe("pinMessageMSTeams", () => {
     ).rejects.toThrow(/Pin\/unpin is not supported for channel messages/);
     expect(mockState.postGraphJson).not.toHaveBeenCalled();
   });
+
+  it("resolves Graph tokens with the named account id", async () => {
+    mockState.postGraphJson.mockResolvedValue({ id: "pinned-1" });
+
+    await pinMessageMSTeams({
+      cfg: NAMED_ACCOUNT_CFG,
+      accountId: "secondary",
+      to: CHAT_ID,
+      messageId: "msg-1",
+    });
+
+    expect(mockState.resolveGraphToken).toHaveBeenCalledWith(NAMED_ACCOUNT_CFG, {
+      accountId: "secondary",
+    });
+  });
 });
 
 describe("unpinMessageMSTeams", () => {
@@ -115,6 +147,21 @@ describe("unpinMessageMSTeams", () => {
       }),
     ).rejects.toThrow(/Pin\/unpin is not supported for channel messages/);
     expect(mockState.deleteGraphRequest).not.toHaveBeenCalled();
+  });
+
+  it("resolves Graph tokens with the named account id", async () => {
+    mockState.deleteGraphRequest.mockResolvedValue(undefined);
+
+    await unpinMessageMSTeams({
+      cfg: NAMED_ACCOUNT_CFG,
+      accountId: "secondary",
+      to: CHAT_ID,
+      pinnedMessageId: "pinned-1",
+    });
+
+    expect(mockState.resolveGraphToken).toHaveBeenCalledWith(NAMED_ACCOUNT_CFG, {
+      accountId: "secondary",
+    });
   });
 });
 
