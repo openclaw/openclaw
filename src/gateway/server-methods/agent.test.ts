@@ -2567,7 +2567,7 @@ describe("gateway agent handler", () => {
     resetTimeConfig();
   });
 
-  it("forwards continuation metadata to the ingress agent command", async () => {
+  it("forwards continuation metadata to the ingress agent command for backend callers", async () => {
     primeMainAgentRun();
 
     await invokeAgent(
@@ -2579,7 +2579,7 @@ describe("gateway agent handler", () => {
         drainsContinuationDelegateQueue: true,
         idempotencyKey: "test-continuation-trigger-forward",
       },
-      { reqId: "continuation-trigger-1" },
+      { reqId: "continuation-trigger-1", client: backendGatewayClient() },
     );
 
     await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
@@ -2588,6 +2588,57 @@ describe("gateway agent handler", () => {
       | undefined;
     expect(call?.continuationTrigger).toBe("delegate-return");
     expect(call?.drainsContinuationDelegateQueue).toBe(true);
+  });
+
+  it("ignores internal continuation controls from non-backend callers", async () => {
+    primeMainAgentRun();
+
+    await invokeAgent(
+      {
+        message: "delegate finished",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        continuationTrigger: "delegate-return",
+        drainsContinuationDelegateQueue: true,
+        traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+        idempotencyKey: "test-continuation-trigger-non-backend",
+      },
+      { reqId: "continuation-trigger-non-backend", client: operatorWriteGatewayClient() },
+    );
+
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as
+      | {
+          continuationTrigger?: string;
+          drainsContinuationDelegateQueue?: boolean;
+          traceparent?: string;
+        }
+      | undefined;
+    // Raw RPC clients cannot force continuation queue-drain / heartbeat-like
+    // semantics or inject trace context (these fields are backend-only).
+    expect(call?.continuationTrigger).toBeUndefined();
+    expect(call?.drainsContinuationDelegateQueue).toBeUndefined();
+    expect(call?.traceparent).toBeUndefined();
+  });
+
+  it("honors a request traceparent from backend callers", async () => {
+    primeMainAgentRun();
+    const traceparent = "00-1af7651916cd43dd8448eb211c80319c-c7ad6b7169203331-01";
+
+    await invokeAgent(
+      {
+        message: "delegate finished",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        traceparent,
+        idempotencyKey: "test-continuation-traceparent-backend",
+      },
+      { reqId: "continuation-traceparent-backend", client: backendGatewayClient() },
+    );
+
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const call = mocks.agentCommand.mock.calls.at(-1)?.[0] as { traceparent?: string } | undefined;
+    expect(call?.traceparent).toBe(traceparent);
   });
 
   it.each([

@@ -2753,7 +2753,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           const execApprovalFollowupElevatedDefaults =
             execApprovalFollowupRuntimeHandoff?.bashElevated;
           const inheritedTraceparent =
-            request.traceparent ??
+            (canUseInternalRuntimeHandoff ? request.traceparent : undefined) ??
             consumeSubagentTraceparentHandoff({
               idempotencyKey: idem,
               sessionKey: resolvedSessionKey,
@@ -2818,8 +2818,17 @@ export const agentHandlers: GatewayRequestHandlers = {
                   internalEvents: request.internalEvents,
                 }),
               cleanupBundleMcpOnRunEnd: request.cleanupBundleMcpOnRunEnd,
-              drainsContinuationDelegateQueue: request.drainsContinuationDelegateQueue,
-              continuationTrigger: request.continuationTrigger,
+              // Internal continuation controls: reserved for backend callers.
+              // These fields are stripped from the public generated schema, but
+              // raw RPC clients can still set them. Ignore them for non-backend
+              // clients so an ordinary caller cannot force continuation
+              // queue-drain semantics or mark runs continuation/heartbeat-like.
+              drainsContinuationDelegateQueue: canUseInternalRuntimeHandoff
+                ? request.drainsContinuationDelegateQueue
+                : undefined,
+              continuationTrigger: canUseInternalRuntimeHandoff
+                ? request.continuationTrigger
+                : undefined,
               traceparent: inheritedTraceparent,
               abortSignal: activeRunAbort.controller.signal,
               lifecycleGeneration,
