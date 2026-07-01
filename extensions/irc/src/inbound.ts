@@ -42,13 +42,21 @@ const ircIngressIdentity = defineStableChannelIngressIdentity({
   normalizeSubject: normalizeLowercaseStringOrEmpty,
   sensitivity: "pii",
   aliases: [
-    ...["irc-id-nick-user", "irc-id-nick-host"].map((key) => ({
-      key,
+    {
+      key: "irc-id-nick-user",
+      kind: "stable-id" as const,
+      normalizeEntry: normalizeIrcNickUserEntry,
+      normalizeSubject: normalizeLowercaseStringOrEmpty,
+      dangerous: true,
+      sensitivity: "pii" as const,
+    },
+    {
+      key: "irc-id-nick-host",
       kind: "stable-id" as const,
       normalizeEntry: () => null,
       normalizeSubject: normalizeLowercaseStringOrEmpty,
       sensitivity: "pii" as const,
-    })),
+    },
     {
       key: "irc-nick",
       kind: IRC_NICK_KIND,
@@ -69,9 +77,25 @@ function isBareNick(value: string): boolean {
   return !value.includes("!") && !value.includes("@");
 }
 
+function hasVerifiedHost(value: string): boolean {
+  return value.includes("@");
+}
+
+function isHostlessNickUser(value: string): boolean {
+  return value.includes("!") && !value.includes("@");
+}
+
 function normalizeIrcStableEntry(value: string): string | null {
   const normalized = normalizeIrcAllowEntry(value);
-  if (!normalized || normalized === "*" || isBareNick(normalized)) {
+  if (!normalized || normalized === "*" || !hasVerifiedHost(normalized)) {
+    return null;
+  }
+  return normalized;
+}
+
+function normalizeIrcNickUserEntry(value: string): string | null {
+  const normalized = normalizeIrcAllowEntry(value);
+  if (!normalized || normalized === "*" || !isHostlessNickUser(normalized)) {
     return null;
   }
   return normalized;
@@ -91,14 +115,12 @@ function hasEntries(entries: Array<string | number> | undefined): boolean {
 
 function createIrcIngressSubject(message: IrcInboundMessage) {
   const candidates = buildIrcAllowlistCandidates(message, { allowNameMatching: true });
-  const stableCandidates = candidates.filter((candidate) => !isBareNick(candidate));
+  const stableCandidates = candidates.filter((candidate) => hasVerifiedHost(candidate));
   const nick = normalizeLowercaseStringOrEmpty(message.senderNick);
   return {
     stableId: stableCandidates[stableCandidates.length - 1] ?? nick,
     aliases: {
-      "irc-id-nick-user": stableCandidates.find(
-        (candidate) => candidate.includes("!") && !candidate.includes("@"),
-      ),
+      "irc-id-nick-user": candidates.find((candidate) => isHostlessNickUser(candidate)),
       "irc-id-nick-host": stableCandidates.find(
         (candidate) => !candidate.includes("!") && candidate.includes("@"),
       ),

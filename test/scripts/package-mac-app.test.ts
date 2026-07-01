@@ -390,6 +390,10 @@ describe("package-mac-app plist stamping", () => {
       script.indexOf("running_packaged_app_pids()"),
     );
 
+    expect(script).toContain(
+      'node --import tsx "$ROOT_DIR/scripts/apple-app-i18n.ts" compile-macos',
+    );
+    expect(script).toContain('--output "$APP_ROOT/Contents/Resources"');
     expect(openClawKitBlock).toContain("ERROR: OpenClawKit resource bundle not found");
     expect(openClawKitBlock).toContain("exit 1");
     expect(openClawKitBlock).not.toContain("WARN:");

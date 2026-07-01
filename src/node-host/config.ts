@@ -17,6 +17,8 @@ export type NodeHostGatewayConfig = {
   port?: number;
   tls?: boolean;
   tlsFingerprint?: string;
+  /** Gateway WebSocket context path (e.g. "/openclaw-gw"). */
+  contextPath?: string;
 };
 
 type NodeHostConfig = {

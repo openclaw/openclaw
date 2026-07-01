@@ -1332,6 +1332,7 @@ export async function startGatewayServer(
       nextConfig: OpenClawConfig;
       changedPaths: readonly string[];
       beforeReplace: (channels: ReadonlySet<ChannelId>) => Promise<void>;
+      isAborted?: () => boolean;
     }): Promise<GatewayPluginReloadResult> => {
       const beforeChannelTargets = listAttachedChannelConfigTargets();
       const beforeChannelIds = new Set(beforeChannelTargets.keys());
@@ -1372,6 +1373,15 @@ export async function startGatewayServer(
         }
       }
       await params.beforeReplace(channelsToStopBeforeReplace);
+      // If an in-process restart signalled abort during beforeReplace,
+      // stop before any plugin metadata/runtime side effects continue.
+      if (params.isAborted?.()) {
+        return {
+          restartChannels: new Set(),
+          activeChannels: new Set(beforeChannelIds),
+          cancelled: true,
+        };
+      }
       setCurrentPluginMetadataSnapshot(nextPluginLookUpTable, {
         config: params.nextConfig,
         env: process.env,
