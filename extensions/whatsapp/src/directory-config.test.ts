@@ -18,6 +18,7 @@ vi.mock("./active-listener.js", () => ({
 
 vi.mock("./auth-store.js", () => ({
   readWebAuthExistsForDecision: vi.fn(),
+  resolveDefaultWebAuthDir: vi.fn().mockReturnValue("/tmp/wa-auth-default"),
 }));
 
 vi.mock("./session.js", () => ({
@@ -173,8 +174,9 @@ describe("whatsapp directory groups live", () => {
     ).resolves.toEqual([{ kind: "group", id: "120363111111111111@g.us" }]);
   });
 
-  it("falls back to config when no authDir is configured", async () => {
+  it("falls back to config when using default auth dir and auth is not linked", async () => {
     mockController(null);
+    mockStandaloneAuth(false);
 
     const cfg = {
       channels: {

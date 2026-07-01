@@ -8,7 +8,7 @@ import {
 import { resolveMergedWhatsAppAccountConfig } from "./account-config.js";
 import type { WhatsAppAccountConfig } from "./account-types.js";
 import { resolveWebAccountId } from "./active-listener.js";
-import { readWebAuthExistsForDecision } from "./auth-store.js";
+import { readWebAuthExistsForDecision, resolveDefaultWebAuthDir } from "./auth-store.js";
 import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "./normalize.js";
 import { createWaSocket, waitForWaConnection } from "./session.js";
@@ -106,10 +106,7 @@ export async function listWhatsAppDirectoryGroupsLive(
     cfg: params.cfg,
     accountId: params.accountId,
   });
-  const authDir = account.authDir;
-  if (!authDir) {
-    return listWhatsAppDirectoryGroupsFromConfig(params);
-  }
+  const authDir = account.authDir || resolveDefaultWebAuthDir();
 
   const authState = await readWebAuthExistsForDecision(authDir);
   if (!("exists" in authState) || !authState.exists) {
