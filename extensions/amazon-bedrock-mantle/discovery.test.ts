@@ -507,6 +507,64 @@ describe("bedrock mantle discovery", () => {
     expect(provider).toBeNull();
   });
 
+  it("logs 'IAM token generation unavailable' at most once per region across repeated implicit-discovery calls (#67288)", async () => {
+    // Regression for #67288: previously the per-request implicit-discovery
+    // call wrote `[bedrock-mantle-discovery] Mantle IAM token generation
+    // unavailable` on every catalog refresh when the AWS default credential
+    // chain returned no usable creds, producing operator log spam. The fix
+    // dedupes the failure log per region per process lifetime via
+    // iamTokenFailureLogged so the diagnostic fires at most once.
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const tokenProviderFactory = vi.fn(() => {
+      throw new Error("no credentials");
+    });
+
+    try {
+      const first = await resolveImplicitMantleProvider({
+        env: { AWS_REGION: "us-east-1" } as NodeJS.ProcessEnv,
+        tokenProviderFactory,
+      });
+      const second = await resolveImplicitMantleProvider({
+        env: { AWS_REGION: "us-east-1" } as NodeJS.ProcessEnv,
+        tokenProviderFactory,
+      });
+      const third = await resolveImplicitMantleProvider({
+        env: { AWS_REGION: "us-east-1" } as NodeJS.ProcessEnv,
+        tokenProviderFactory,
+      });
+
+      expect(first).toBeNull();
+      expect(second).toBeNull();
+      expect(third).toBeNull();
+      // The token factory ran on every call (preserves IAM-chain fallback
+      // semantics — we do not short-circuit hosts that rely on instance roles
+      // / IRSA / SSO etc.) but the diagnostic log line is deduped per region.
+      expect(tokenProviderFactory).toHaveBeenCalledTimes(3);
+    } finally {
+      logSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("honors pluginConfig.discovery.enabled=false even when AWS creds are present (#67288)", async () => {
+    const tokenProviderFactory = vi.fn(() => {
+      throw new Error("should not be called");
+    });
+
+    const provider = await resolveImplicitMantleProvider({
+      env: {
+        AWS_BEARER_TOKEN_BEDROCK: "my-token", // pragma: allowlist secret
+        AWS_REGION: "us-east-1",
+      } as NodeJS.ProcessEnv,
+      pluginConfig: { discovery: { enabled: false } },
+      tokenProviderFactory,
+    });
+
+    expect(provider).toBeNull();
+    expect(tokenProviderFactory).not.toHaveBeenCalled();
+  });
+
   it("uses a generated IAM token when no explicit token is set", async () => {
     const tokenProvider = vi.fn(async () => "bedrock-api-key-iam"); // pragma: allowlist secret
     const tokenProviderFactory = createTokenProviderFactory(tokenProvider);
