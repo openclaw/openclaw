@@ -1,6 +1,7 @@
 // Control UI module implements app tool stream behavior.
 import { stripInlineDirectiveTagsForDelivery } from "../../../src/utils/directive-tags.js";
 import { updateActivityFromToolEvent, type ActivityEntry } from "./activity-model.ts";
+export { hasActiveToolExecution, resolveActiveToolRunId } from "./activity-model.ts";
 import { createChatModelOverride } from "./chat-model-ref.ts";
 import type { ChatModelOverride } from "./chat-model-ref.types.ts";
 import type { ChatStreamSegment } from "./chat/stream-text.ts";

@@ -1,8 +1,13 @@
 // Control UI module implements app chat behavior.
 import { isNonTerminalAgentRunStatus } from "../../../src/shared/agent-run-status.js";
+import type { ActivityEntry } from "./activity-model.ts";
 import { setLastActiveSessionKey } from "./app-last-active-session.ts";
 import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
-import { resetToolStream } from "./app-tool-stream.ts";
+import {
+  resetToolStream,
+  hasActiveToolExecution,
+  resolveActiveToolRunId,
+} from "./app-tool-stream.ts";
 import {
   cloneChatAttachmentsMetadata,
   discardChatAttachmentDataUrls,
@@ -135,6 +140,8 @@ export type ChatHost = ChatInputHistoryState & {
   eventLogBuffer?: unknown[];
   eventLog?: unknown[];
   tab?: string;
+  /** Activity entries from the tool event stream. */
+  activityEntries?: ActivityEntry[];
   /** Callback for slash-command side effects that need app-level access. */
   onSlashAction?: (action: string) => void | Promise<void>;
   /** Selected message to reply to (right-click / keyboard shortcut). */
@@ -250,8 +257,13 @@ export function hasAbortableSessionRun(host: {
   chatRunId?: string | null;
   sessionKey: string;
   sessionsResult?: SessionsListResult | null;
+  activityEntries?: ActivityEntry[];
 }): boolean {
   if (host.chatRunId) {
+    return true;
+  }
+  // Bridge: if agent event stream reports active tool execution, treat as abortable
+  if (host.activityEntries && hasActiveToolExecution({ activityEntries: host.activityEntries })) {
     return true;
   }
   return Boolean(
@@ -382,7 +394,12 @@ export function scopedAgentListParamsForRefreshTarget(
 }
 
 export async function handleAbortChat(host: ChatHost, opts?: ChatAbortOptions) {
-  const activeRunId = host.chatRunId;
+  // Resolve runId: prefer chatRunId, fallback to tool stream's active runId
+  const activeRunId =
+    host.chatRunId ??
+    (host.activityEntries
+      ? resolveActiveToolRunId({ activityEntries: host.activityEntries })
+      : null);
   const clearDraft = () => {
     if (opts?.preserveDraft) {
       return;
