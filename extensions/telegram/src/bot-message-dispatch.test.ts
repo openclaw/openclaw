@@ -2796,6 +2796,61 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("renders a labelless first tool line exactly once with no backticks", async () => {
+    // Regression: renderTelegramProgressDraftPreview used to treat the first plain
+    // text line as a bold heading whenever the compositor emitted more text lines
+    // than it rendered structured lines. With `progress.label: false` there is no
+    // heading in the plain text, so the first CONTENT line — which the compositor
+    // formatted with formatTelegramProgressLine backticks for the plain-text lane —
+    // got emitted as `<b>`🧩 Skill`</b>` above the structured `<b>🧩 Skill</b>`: the
+    // same first line rendered twice, once with visible backticks and once plain.
+    // The heading is now derived only when the `\n\n` label separator is present
+    // (or the draft is label-only), so a labelless draft carries no heading.
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({
+          name: "Skill",
+          phase: "start",
+          toolCallId: "call-1",
+        });
+        await replyOptions?.onToolStart?.({
+          name: "Bash",
+          phase: "start",
+          toolCallId: "call-2",
+          args: { command: "ls" },
+        });
+        await dispatcherOptions.deliver({ text: "DONE" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress", progress: { label: false } } },
+    });
+
+    const previews = answerDraftStream.updatePreview.mock.calls.map(
+      (call) => (call[0] as { text?: string } | undefined)?.text ?? "",
+    );
+    // Every rendered preview: the Skill line appears at most once and never carries
+    // markdown backticks leaked from the plain-text lane.
+    for (const preview of previews) {
+      expect((preview.match(/🧩 Skill/gu) ?? []).length).toBeLessThanOrEqual(1);
+      expect(preview).not.toContain("`");
+    }
+    // The final preview shows both tool lines with no leading bold heading (the
+    // Bash arg summary is the branch's existing rendering, unrelated to the fix).
+    expect(answerDraftStream.updatePreview).toHaveBeenLastCalledWith(
+      telegramProgressPreview(
+        "🧩 Skill\n🛠️ Bash: ls",
+        "<b>🧩 Skill</b>\n<b>🛠️ Bash</b> <code>🛠️ list files</code>",
+      ),
+    );
+    expectDeliveredReply(0, { text: "DONE" });
+  });
+
   it("renders api progress item edge cases as HTML transport previews", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {

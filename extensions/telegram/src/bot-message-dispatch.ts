@@ -433,11 +433,21 @@ function renderTelegramProgressDraftPreview(
 ): TelegramDraftPreview {
   const trimmed = text.trimEnd();
   const renderedLines = lines.map(renderTelegramProgressLine).filter(Boolean);
-  const textLines = trimmed
-    .split(/\r?\n/u)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const heading = textLines.length > renderedLines.length ? textLines[0] : undefined;
+  // formatChannelProgressDraftText writes a draft label as `${label}\n\n${content}`
+  // and joins the content lines with `\n`. Only treat the leading text as a bold
+  // heading when the compositor actually wrote a label: either the draft is
+  // label-only (no structured lines) or the blank-line separator is present. The
+  // older `textLines.length > renderedLines.length` heuristic misfired when a
+  // structural line rendered empty — renderedLines shrank below textLines and the
+  // first content line got duplicated as a bogus heading (once bold with visible
+  // backticks, once plain).
+  const separatorIndex = trimmed.indexOf("\n\n");
+  const heading =
+    lines.length === 0
+      ? trimmed
+      : separatorIndex >= 0
+        ? trimmed.slice(0, separatorIndex).trim()
+        : undefined;
   const htmlParts = heading
     ? [`<b>${escapeTelegramProgressHtml(heading)}</b>`, ...renderedLines]
     : renderedLines;
