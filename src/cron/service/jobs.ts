@@ -26,6 +26,7 @@ import type {
   CronJobPatch,
   CronPayload,
   CronPayloadPatch,
+  CronSchedule,
 } from "../types.js";
 import { normalizeHttpWebhookUrl } from "../webhook-url.js";
 import { resolveInitialCronDelivery } from "./initial-delivery.js";
@@ -312,6 +313,54 @@ function assertCronExpressionSatisfiable(job: CronJob, nowMs: number) {
   throw new Error(
     `cron expression "${job.schedule.expr}" has no upcoming run time and would never fire`,
   );
+}
+
+function hasInvalidDeleteAfterRunSchedule(job: Pick<CronJob, "deleteAfterRun" | "schedule">) {
+  return job.deleteAfterRun === true && job.schedule.kind !== "at";
+}
+
+function assertDeleteAfterRunSchedule(job: Pick<CronJob, "deleteAfterRun" | "schedule">) {
+  if (!hasInvalidDeleteAfterRunSchedule(job)) {
+    return;
+  }
+  throw new Error('cron deleteAfterRun is only supported for schedule.kind="at"');
+}
+
+function schedulesEqual(a: CronSchedule, b: CronSchedule): boolean {
+  if (a.kind !== b.kind) {
+    return false;
+  }
+  if (a.kind === "at") {
+    return b.kind === "at" && a.at === b.at;
+  }
+  if (a.kind === "every") {
+    return b.kind === "every" && a.everyMs === b.everyMs && a.anchorMs === b.anchorMs;
+  }
+  return b.kind === "cron" && a.expr === b.expr && a.tz === b.tz && a.staggerMs === b.staggerMs;
+}
+
+function assertDeleteAfterRunSchedulePatch(params: {
+  before: Pick<CronJob, "deleteAfterRun" | "enabled" | "schedule">;
+  after: Pick<CronJob, "deleteAfterRun" | "enabled" | "schedule">;
+}) {
+  if (!hasInvalidDeleteAfterRunSchedule(params.after)) {
+    return;
+  }
+  if (!hasInvalidDeleteAfterRunSchedule(params.before)) {
+    throw new Error('cron deleteAfterRun is only supported for schedule.kind="at"');
+  }
+  if (!params.after.enabled) {
+    return;
+  }
+  if (!params.before.enabled && params.after.enabled) {
+    throw new Error('cron deleteAfterRun is only supported for schedule.kind="at"');
+  }
+  if (
+    params.before.deleteAfterRun !== params.after.deleteAfterRun ||
+    !schedulesEqual(params.before.schedule, params.after.schedule)
+  ) {
+    throw new Error('cron deleteAfterRun is only supported for schedule.kind="at"');
+  }
 }
 
 function assertMainSessionAgentId(
@@ -828,6 +877,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
     },
   };
   assertSupportedJobSpec(job);
+  assertDeleteAfterRunSchedule(job);
   assertMainSessionAgentId(job, state.deps.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
@@ -842,6 +892,11 @@ export function applyJobPatch(
   patch: CronJobPatch,
   opts?: { defaultAgentId?: string; scheduleValidationNowMs?: number },
 ) {
+  const beforeDeleteAfterRunSchedule = {
+    deleteAfterRun: job.deleteAfterRun,
+    enabled: job.enabled,
+    schedule: job.schedule,
+  };
   if ("name" in patch) {
     job.name = normalizeRequiredName(patch.name);
   }
@@ -917,6 +972,10 @@ export function applyJobPatch(
     job.sessionKey = normalizeOptionalString((patch as { sessionKey?: unknown }).sessionKey);
   }
   assertSupportedJobSpec(job);
+  assertDeleteAfterRunSchedulePatch({
+    before: beforeDeleteAfterRunSchedule,
+    after: job,
+  });
   assertMainSessionAgentId(job, opts?.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);

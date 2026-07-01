@@ -525,6 +525,159 @@ describe("gateway server cron", () => {
     }
   });
 
+  test("rejects delete-after-run recurring cron creation", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-delete-after-recurring-",
+      cronEnabled: false,
+    });
+    const cronState = await createDirectCronState();
+
+    try {
+      for (const schedule of [
+        { kind: "every", everyMs: 60_000 },
+        { kind: "cron", expr: "*/5 * * * *" },
+      ]) {
+        const addRes = await directCronReq(cronState, "cron.add", {
+          name: `invalid ${schedule.kind}`,
+          enabled: true,
+          deleteAfterRun: true,
+          schedule,
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "hello" },
+        });
+        expect(addRes.ok).toBe(false);
+        expect(addRes.error?.message).toContain(
+          'cron deleteAfterRun is only supported for schedule.kind="at"',
+        );
+      }
+
+      const listRes = await directCronReq(cronState, "cron.list", { includeDisabled: true });
+      expect(listRes.ok).toBe(true);
+      expect((listRes.payload as { jobs?: unknown[] } | null)?.jobs).toEqual([]);
+    } finally {
+      await cleanupCronTestRun({ cronState, prevSkipCron });
+    }
+  });
+
+  test("rejects updates that make delete-after-run jobs recurring", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-delete-after-update-",
+      cronEnabled: false,
+    });
+    const cronState = await createDirectCronState();
+
+    try {
+      const oneShotRes = await directCronReq(cronState, "cron.add", {
+        name: "one shot",
+        enabled: true,
+        schedule: { kind: "at", at: new Date(Date.now() + 60_000).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "hello" },
+      });
+      const oneShotId = expectCronJobIdFromResponse(oneShotRes);
+
+      const recurringPatchRes = await directCronReq(cronState, "cron.update", {
+        id: oneShotId,
+        patch: {
+          schedule: { kind: "every", everyMs: 60_000 },
+        },
+      });
+      expect(recurringPatchRes.ok).toBe(false);
+      expect(recurringPatchRes.error?.message).toContain(
+        'cron deleteAfterRun is only supported for schedule.kind="at"',
+      );
+
+      const recurringRes = await directCronReq(cronState, "cron.add", {
+        name: "recurring",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "hello" },
+      });
+      const recurringId = expectCronJobIdFromResponse(recurringRes);
+
+      const deleteAfterRunPatchRes = await directCronReq(cronState, "cron.update", {
+        id: recurringId,
+        patch: { deleteAfterRun: true },
+      });
+      expect(deleteAfterRunPatchRes.ok).toBe(false);
+      expect(deleteAfterRunPatchRes.error?.message).toContain(
+        'cron deleteAfterRun is only supported for schedule.kind="at"',
+      );
+    } finally {
+      await cleanupCronTestRun({ cronState, prevSkipCron });
+    }
+  });
+
+  test("allows safe recovery updates for legacy delete-after-run recurring jobs", async () => {
+    const now = Date.now();
+    const legacyJobId = "legacy-delete-after-run-recurring";
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-delete-after-legacy-recovery-",
+      cronEnabled: false,
+      jobs: [
+        {
+          id: legacyJobId,
+          name: "legacy invalid",
+          enabled: true,
+          deleteAfterRun: true,
+          createdAtMs: now - 60_000,
+          updatedAtMs: now - 60_000,
+          schedule: { kind: "every", everyMs: 60_000, anchorMs: now - 60_000 },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "hello" },
+          state: { nextRunAtMs: now + 60_000 },
+        },
+      ],
+    });
+    const cronState = await createDirectCronState();
+
+    try {
+      const renameRes = await directCronReq(cronState, "cron.update", {
+        id: legacyJobId,
+        patch: { name: "renamed legacy invalid" },
+      });
+      expect(renameRes.ok).toBe(true);
+      expect((renameRes.payload as { name?: unknown } | null)?.name).toBe("renamed legacy invalid");
+
+      const disableRes = await directCronReq(cronState, "cron.update", {
+        id: legacyJobId,
+        patch: { enabled: false },
+      });
+      expect(disableRes.ok).toBe(true);
+      expect((disableRes.payload as { enabled?: unknown } | null)?.enabled).toBe(false);
+
+      const reenableRes = await directCronReq(cronState, "cron.update", {
+        id: legacyJobId,
+        patch: { enabled: true },
+      });
+      expect(reenableRes.ok).toBe(false);
+      expect(reenableRes.error?.message).toContain(
+        'cron deleteAfterRun is only supported for schedule.kind="at"',
+      );
+
+      const clearRes = await directCronReq(cronState, "cron.update", {
+        id: legacyJobId,
+        patch: { deleteAfterRun: false },
+      });
+      expect(clearRes.ok).toBe(true);
+      expect((clearRes.payload as { deleteAfterRun?: unknown } | null)?.deleteAfterRun).toBe(false);
+
+      const validReenableRes = await directCronReq(cronState, "cron.update", {
+        id: legacyJobId,
+        patch: { enabled: true },
+      });
+      expect(validReenableRes.ok).toBe(true);
+      expect((validReenableRes.payload as { enabled?: unknown } | null)?.enabled).toBe(true);
+    } finally {
+      await cleanupCronTestRun({ cronState, prevSkipCron });
+    }
+  });
+
   test("routes forced cron runs to the configured session", async () => {
     const { prevSkipCron } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-route-",
