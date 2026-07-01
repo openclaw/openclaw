@@ -222,6 +222,16 @@ describe("turn outcome classification", () => {
     expect(classifyNoOpRearmTurnOutcome(facts).kind).toBe("no_op");
   });
 
+  it("does not treat reasoning-prefixed silent payload text as a visible reply", () => {
+    const result: EmbeddedAgentRunResult = {
+      payloads: [{ text: "<think>internal notes</think>\nNO_REPLY" }],
+      meta: { durationMs: 1 },
+    };
+    const facts = summarizeEmbeddedRunOutcome(result);
+    expect(facts.hasVisibleReply).toBe(false);
+    expect(classifyNoOpRearmTurnOutcome(facts).kind).toBe("no_op");
+  });
+
   it("does not treat structural continuation markers as visible replies", () => {
     for (const text of ["CONTINUE_WORK", "[[CONTINUE_WORK]]", "[[CONTINUE_DELEGATE: hold]]"]) {
       const result: EmbeddedAgentRunResult = {
@@ -406,6 +416,22 @@ describe("NoOpRearmGuard admission + recording", () => {
     t += 120_000; // beyond the 60s window
     guard.record({ sessionKey, wakeClass: wake, runId: "c", result: noOpResult() });
     expect(guard.peekStreak({ sessionKey })).toBe(1);
+  });
+
+  it("does not block self-rearm wakes after a tripped streak expires", () => {
+    let t = 1_000;
+    const guard = makeGuard(() => t);
+    const sessionKey = "s";
+    recordSelfRearmNoOps(guard, sessionKey, 3);
+    expect(guard.evaluate(roomEventWake({ sessionKey })).admit).toBe(false);
+
+    t += 120_000; // beyond the 60s window
+    const later = guard.evaluate(roomEventWake({ sessionKey }));
+    expect(later.admit).toBe(true);
+    if (later.admit) {
+      expect(later.reason).toBe("below-threshold");
+    }
+    expect(guard.peekStreak({ sessionKey })).toBe(0);
   });
 
   it("downgrades a replayed (already-seen) human message id to self-rearm", () => {

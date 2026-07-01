@@ -20,7 +20,11 @@ import {
   type InputProvenance,
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../sessions/input-provenance.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN, stripContinuationSignal } from "../tokens.js";
+import {
+  isSilentReplyPayloadText,
+  SILENT_REPLY_TOKEN,
+  stripContinuationSignal,
+} from "../tokens.js";
 
 /** Provenance sourceTool used by restart/pending-delivery recovery replays. */
 const RESTART_SENTINEL_SOURCE_TOOL = "restart-sentinel";
@@ -237,12 +241,7 @@ export type NoOpRearmTurnOutcome =
   | { kind: "error_no_gain"; reason: string };
 
 function isNoReplyText(text: string | undefined): boolean {
-  const normalized = normalizeOptionalString(text)?.toUpperCase();
-  return (
-    normalized === SILENT_REPLY_TOKEN ||
-    normalized === `[[${SILENT_REPLY_TOKEN}]]` ||
-    isSilentReplyText(text, SILENT_REPLY_TOKEN)
-  );
+  return isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN);
 }
 
 function isContinuationMarkerOnlyText(text: string | undefined): boolean {
@@ -525,6 +524,9 @@ export class NoOpRearmGuard {
 
     // self_rearm
     entry.lastWakeSource = wake.source;
+    if (entry.lastNoOpAtMs !== undefined && this.now() - entry.lastNoOpAtMs > this.windowMs) {
+      this.resetEntry(entry);
+    }
     if (entry.streak >= this.threshold) {
       const diagnostic = entry.diagnosedEpisode
         ? undefined
