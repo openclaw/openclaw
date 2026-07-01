@@ -301,6 +301,10 @@ extension OnboardingView {
                 showAdvancedConnection: self.showAdvancedConnection,
                 remoteToken: self.state.remoteToken,
                 remoteTokenUnsupported: self.state.remoteTokenUnsupported,
+                authIssue: self.remoteAuthIssue) ||
+            Self.shouldShowRemotePasswordField(
+                showAdvancedConnection: self.showAdvancedConnection,
+                remotePassword: self.state.remotePassword,
                 authIssue: self.remoteAuthIssue)
     }
 
@@ -310,6 +314,14 @@ extension OnboardingView {
             showAdvancedConnection: self.showAdvancedConnection,
             remoteToken: self.state.remoteToken,
             remoteTokenUnsupported: self.state.remoteTokenUnsupported,
+            authIssue: self.remoteAuthIssue)
+    }
+
+    private var shouldShowRemotePasswordField: Bool {
+        guard self.shouldShowRemoteConnectionSection else { return false }
+        return Self.shouldShowRemotePasswordField(
+            showAdvancedConnection: self.showAdvancedConnection,
+            remotePassword: self.state.remotePassword,
             authIssue: self.remoteAuthIssue)
     }
 
@@ -368,6 +380,10 @@ extension OnboardingView {
                 self.remoteTokenField()
             }
 
+            if self.shouldShowRemotePasswordField {
+                self.remotePasswordField()
+            }
+
             if let message = self.remoteProbePreflightMessage, self.remoteProbeState != .checking {
                 Text(message)
                     .font(.caption)
@@ -380,6 +396,22 @@ extension OnboardingView {
             if let issue = self.remoteAuthIssue {
                 self.remoteAuthPromptView(issue: issue)
             }
+        }
+    }
+
+    private func remotePasswordField() -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 12) {
+                Text("Gateway password")
+                    .font(.callout.weight(.semibold))
+                    .frame(width: 110, alignment: .leading)
+                SecureField("remote gateway password (gateway.remote.password)", text: self.$state.remotePassword)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 320)
+            }
+            Text("Used when the remote gateway requires password auth.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -512,7 +544,7 @@ extension OnboardingView {
         case .setupCodeExpired:
             ("qrcode.viewfinder", .orange)
         case .passwordRequired:
-            ("lock.slash.fill", .orange)
+            ("lock.fill", .orange)
         case .pairingRequired:
             ("link.badge.plus", .orange)
         }
@@ -528,6 +560,16 @@ extension OnboardingView {
             remoteTokenUnsupported ||
             !remoteToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
             authIssue?.showsTokenField == true
+    }
+
+    static func shouldShowRemotePasswordField(
+        showAdvancedConnection: Bool,
+        remotePassword: String,
+        authIssue: RemoteGatewayAuthIssue?) -> Bool
+    {
+        showAdvancedConnection ||
+            !remotePassword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+            authIssue?.showsPasswordField == true
     }
 
     static func shouldResetRemoteProbeFeedback(
