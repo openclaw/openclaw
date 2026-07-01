@@ -23,21 +23,21 @@ The supported default Google model path should be API-backed and explicit:
 
 Provider auth should not implicitly provision Google projects, scrape local CLI state, or require Cloud Code Assist internal endpoints.
 
-## Initial boundary change
+## Current boundary change
 
-The lightweight setup entry now registers the Gemini CLI harness only when this flag is explicitly enabled:
+The bundled Google plugin and lightweight setup entry now register the Gemini CLI provider/backend only when this flag is explicitly enabled:
 
 ```bash
 OPENCLAW_ENABLE_GOOGLE_GEMINI_CLI_HARNESS=1
 ```
 
-This keeps the deprecated harness path available for users who deliberately opt into it, while keeping setup-oriented Google registration focused on official provider surfaces.
+Without that flag, normal Google registration stays on the official API-backed provider path and does not register the Gemini CLI harness.
 
 ## Follow-up work
 
 A full rebuild should land as small follow-up PRs:
 
-1. Move Gemini CLI registration out of default onboarding and into an explicit harness choice.
+1. Remove Gemini CLI OAuth from default onboarding metadata or mark it manual-only behind the same opt-in boundary.
 2. Add a first-class Gemini API provider implementation for the current official API surface.
 3. Keep Vertex AI as a separate provider with its own auth and endpoint resolution.
 4. Remove Cloud Code Assist project discovery from provider auth paths.
