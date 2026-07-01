@@ -8,7 +8,7 @@ export const isLocalBaseUrl = (baseUrl: string) => {
     const host = normalizeLowercaseStringOrEmpty(url.hostname).replace(/^\[|\]$/g, "");
     return (
       host === "localhost" ||
-      host === "127.0.0.1" ||
+      host.startsWith("127.") ||
       host === "0.0.0.0" ||
       host === "::" ||
       host === "::1" ||
