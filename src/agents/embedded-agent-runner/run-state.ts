@@ -27,8 +27,21 @@ export type EmbeddedAgentQueueHandle = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };
 
+/**
+ * Steering mode for a queued message targeting an active embedded run.
+ *
+ * - "all" (default): queue the message and inject it at the next mid-turn
+ *   or tool-call boundary. Never aborts the active stream.
+ * - "interrupt": first ask the active run to cancel itself with reason
+ *   "user_abort" via `EmbeddedAgentQueueHandle.cancel`, then queue the
+ *   message so it is picked up by the *next* turn instead of after the
+ *   current long-running `model_call` finishes. Falls back to "all"
+ *   semantics if the handle exposes no `cancel` hook.
+ */
+export type SteeringMode = "all" | "interrupt";
+
 export type EmbeddedAgentQueueMessageOptions = {
-  steeringMode?: "all";
+  steeringMode?: SteeringMode;
   debounceMs?: number;
   deliveryTimeoutMs?: number;
   waitForTranscriptCommit?: boolean;

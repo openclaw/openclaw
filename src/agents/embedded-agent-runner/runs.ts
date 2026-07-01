@@ -424,6 +424,25 @@ function prepareEmbeddedAgentQueueMessage(
       outcome: createQueueFailureOutcome(sessionId, "source_reply_delivery_mode_mismatch"),
     };
   }
+  // interrupt mode: ask the active run to abort itself (best-effort) so the
+  // queued message is picked up by the next turn instead of waiting for the
+  // current long-running model_call (e.g. M3 reasoning) to finish.
+  if (options?.steeringMode === "interrupt") {
+    if (typeof handle.cancel === "function") {
+      try {
+        handle.cancel("user_abort");
+        diag.debug(`queue message interrupted active run: sessionId=${sessionId}`);
+      } catch (err) {
+        diag.debug(
+          `queue message interrupt cancel failed: sessionId=${sessionId} err=${formatQueueError(err)}`,
+        );
+      }
+    } else {
+      diag.debug(
+        `queue message interrupt requested but no cancel hook: sessionId=${sessionId} falling_back=all`,
+      );
+    }
+  }
   return { kind: "embedded_run", handle };
 }
 

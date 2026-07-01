@@ -45,6 +45,7 @@ type RunHandle = Parameters<typeof setActiveEmbeddedRun>[1];
 function createRunHandle(
   overrides: {
     abort?: () => void;
+    cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
     isCompacting?: boolean;
     isStreaming?: boolean;
     supportsTranscriptCommitWait?: boolean;
@@ -59,6 +60,7 @@ function createRunHandle(
     isCompacting: () => overrides.isCompacting ?? false,
     supportsTranscriptCommitWait: overrides.supportsTranscriptCommitWait,
     abort,
+    cancel: overrides.cancel,
   };
 }
 
@@ -589,4 +591,45 @@ describe("embedded-agent runner run registry", () => {
     expect(getActiveEmbeddedRunSnapshot("session-snapshot")).toBeUndefined();
   });
 
+});
+
+describe("embedded-agent queue interrupt steeringMode", () => {
+  it("cancels the active run with user_abort reason before queuing", async () => {
+    const cancel = vi.fn();
+    const queue = vi.fn().mockResolvedValue(undefined);
+    setActiveEmbeddedRun("session-int", {
+      ...createRunHandle({ cancel, isStreaming: true }),
+      queueMessage: queue,
+    });
+
+    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+      "session-int",
+      "stop and answer this instead",
+      { steeringMode: "interrupt" },
+    );
+
+    expect(outcome.queued).toBe(true);
+    expect(cancel).toHaveBeenCalledWith("user_abort");
+    expect(queue).toHaveBeenCalledWith(
+      "stop and answer this instead",
+      expect.objectContaining({ steeringMode: "interrupt" }),
+    );
+  });
+
+  it("falls back to queue-only when handle has no cancel hook", async () => {
+    const queue = vi.fn().mockResolvedValue(undefined);
+    setActiveEmbeddedRun("session-nocancel", {
+      ...createRunHandle({ isStreaming: true }),
+      queueMessage: queue,
+    });
+
+    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+      "session-nocancel",
+      "hello",
+      { steeringMode: "interrupt" },
+    );
+
+    expect(outcome.queued).toBe(true);
+    expect(queue).toHaveBeenCalledTimes(1);
+  });
 });
