@@ -17,6 +17,7 @@ const localeDirectory = (locale: string) => `values-${ANDROID_QUALIFIERS[locale]
 const LOCALES = ["values", ...NATIVE_I18N_LOCALES.map(localeDirectory)] as const;
 const STRING_RE = /<string\s+name="([A-Za-z0-9_]+)"[^>]*>([\s\S]*?)<\/string>/gu;
 const FORMAT_RE = /%\d+\$[a-z]/giu;
+const INVALID_APOSTROPHE_RE = /(?:&apos;|(?<!\\)')/u;
 
 async function readStrings(locale: string): Promise<Map<string, string>> {
   const source = await readFile(path.join(RESOURCE_ROOT, locale, "strings.xml"), "utf8");
@@ -46,6 +47,16 @@ async function readAndroidSource(root = SOURCE_ROOT): Promise<string> {
   return sources.join("\n");
 }
 
+function findInvalidResourceSyntax(strings: Map<string, string>): string[] {
+  return [...strings]
+    .filter(([, value]) => {
+      const trimmed = value.trim();
+      const isQuoted = trimmed.startsWith('"') && trimmed.endsWith('"');
+      return !isQuoted && INVALID_APOSTROPHE_RE.test(trimmed);
+    })
+    .map(([key]) => key);
+}
+
 export async function checkAndroidAppI18n() {
   const [source, localeStrings] = await Promise.all([
     readAndroidSource(),
@@ -69,8 +80,10 @@ export async function checkAndroidAppI18n() {
       [`${locale} missing`, [...baseKeys].filter((key) => !keys.has(key))],
       [`${locale} extra`, [...keys].filter((key) => !baseKeys.has(key))],
       [`${locale} placeholders`, placeholderMismatches],
+      [`${locale} syntax`, findInvalidResourceSyntax(strings)],
     ] as const;
   });
+  problems.push(["English syntax", findInvalidResourceSyntax(base)]);
   const unusedBaseKeys = [...baseKeys].filter(
     (key) => !source.includes(`R.string.${key}`) && !source.includes(`@string/${key}`),
   );
