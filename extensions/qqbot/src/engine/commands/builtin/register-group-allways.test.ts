@@ -128,6 +128,24 @@ describe("bot-group-allways command", () => {
     expect(reply).toContain(testCase.expectedReply);
   });
 
+  it("shows default account status from accounts.default when present", async () => {
+    const { result, reply, writes } = await runGroupAllwaysCommand({
+      config: createConfig({
+        allowFrom: ["*"],
+        defaultRequireMention: true,
+        accounts: {
+          default: {
+            defaultRequireMention: false,
+          },
+        },
+      }),
+    });
+
+    expect(result).toBe("handled");
+    expect(writes).toHaveLength(0);
+    expect(reply).toContain("自主判断何时发言");
+  });
+
   it.each([
     {
       arg: "on",
@@ -161,6 +179,69 @@ describe("bot-group-allways command", () => {
       testCase.expectedDefaultRequireMention,
     );
     expect(reply).toContain(testCase.expectedReply);
+  });
+
+  it("reads current runtime config instead of the stale account snapshot for sequential toggles", async () => {
+    const writes: OpenClawConfig[] = [];
+    const config = createConfig({
+      allowFrom: ["*"],
+      defaultRequireMention: true,
+    });
+    const account = createAccount();
+    const commandCtx = {
+      account,
+      cfg: config,
+      getMessagePeerId: () => "c2c:TRUSTED_OPENID",
+      getQueueSnapshot: () => queueSnapshot,
+    };
+    installCommandRuntime(config, writes);
+
+    await expect(trySlashCommand(createGroupAllwaysMessage("on"), commandCtx)).resolves.toBe(
+      "handled",
+    );
+    await expect(trySlashCommand(createGroupAllwaysMessage("off"), commandCtx)).resolves.toBe(
+      "handled",
+    );
+
+    expect(writes).toHaveLength(2);
+    expect(getAllwaysConfig(writes[0])?.defaultRequireMention).toBe(false);
+    expect(getAllwaysConfig(writes[1])?.defaultRequireMention).toBe(true);
+    expect(vi.mocked(sendText).mock.calls.at(1)?.[1]).toContain("**off**");
+  });
+
+  it("mirrors sequential default-account toggles into accounts.default when present", async () => {
+    const writes: OpenClawConfig[] = [];
+    const config = createConfig({
+      allowFrom: ["*"],
+      defaultRequireMention: true,
+      accounts: {
+        default: {
+          defaultRequireMention: true,
+        },
+      },
+    });
+    const account = createAccount();
+    const commandCtx = {
+      account,
+      cfg: config,
+      getMessagePeerId: () => "c2c:TRUSTED_OPENID",
+      getQueueSnapshot: () => queueSnapshot,
+    };
+    installCommandRuntime(config, writes);
+
+    await expect(trySlashCommand(createGroupAllwaysMessage("on"), commandCtx)).resolves.toBe(
+      "handled",
+    );
+    await expect(trySlashCommand(createGroupAllwaysMessage("off"), commandCtx)).resolves.toBe(
+      "handled",
+    );
+
+    expect(writes).toHaveLength(2);
+    expect(getAllwaysConfig(writes[0])?.defaultRequireMention).toBe(false);
+    expect(getAllwaysConfig(writes[0])?.accounts?.default?.defaultRequireMention).toBe(false);
+    expect(getAllwaysConfig(writes[1])?.defaultRequireMention).toBe(true);
+    expect(getAllwaysConfig(writes[1])?.accounts?.default?.defaultRequireMention).toBe(true);
+    expect(vi.mocked(sendText).mock.calls.at(1)?.[1]).toContain("**off**");
   });
 
   it("writes to accounts.{accountId}.defaultRequireMention for named accounts", async () => {

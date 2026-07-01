@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createSdkAccessAdapter } from "../../bridge/sdk-adapter.js";
 import { registerPlatformAdapter, type PlatformAdapter } from "../adapter/index.js";
 import type { InteractionEvent } from "../types.js";
+import { InteractionType } from "./constants.js";
 import { createInteractionHandler } from "./interaction-handler.js";
 import type { GatewayAccount, GatewayPluginRuntime } from "./types.js";
 
@@ -355,5 +356,81 @@ describe("createInteractionHandler approval buttons", () => {
       { content: "Approval is unavailable." },
     );
     expect(resolveApprovalMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("createInteractionHandler config updates", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    installPlatformAdapter();
+  });
+
+  it("mirrors default-account require_mention group updates into accounts.default", async () => {
+    const writes: OpenClawConfig[] = [];
+    let activeConfig = {
+      channels: {
+        qqbot: {
+          appId: "app",
+          clientSecret: "secret",
+          groups: {
+            "group-1": { requireMention: true },
+          },
+          accounts: {
+            default: {
+              groups: {
+                "group-1": { requireMention: true },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const configRuntime = {
+      config: {
+        current: () => activeConfig,
+        replaceConfigFile: vi.fn(async ({ nextConfig }: { nextConfig: OpenClawConfig }) => {
+          activeConfig = nextConfig;
+          writes.push(nextConfig);
+        }),
+      },
+      channel: {
+        routing: {
+          resolveAgentRoute: vi.fn(() => ({ agentId: "default" })),
+        },
+      },
+    } as unknown as GatewayPluginRuntime;
+    const handler = createInteractionHandler(account, configRuntime);
+
+    handler(
+      makeApprovalEvent({
+        data: {
+          type: InteractionType.CONFIG_UPDATE,
+          resolved: {
+            claw_cfg: { require_mention: "always" },
+          },
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(configRuntime.config?.replaceConfigFile).toHaveBeenCalled());
+
+    const qqbot = writes[0]?.channels?.qqbot as
+      | {
+          groups?: Record<string, { requireMention?: unknown }>;
+          accounts?: Record<string, { groups?: Record<string, { requireMention?: unknown }> }>;
+        }
+      | undefined;
+    expect(qqbot?.groups?.["group-1"]?.requireMention).toBe(false);
+    expect(qqbot?.accounts?.default?.groups?.["group-1"]?.requireMention).toBe(false);
+    await vi.waitFor(() =>
+      expect(acknowledgeInteractionMock).toHaveBeenCalledWith(
+        { appId: "app", clientSecret: "secret" },
+        "interaction-1",
+        0,
+        expect.objectContaining({
+          claw_cfg: expect.objectContaining({ require_mention: "always" }),
+        }),
+      ),
+    );
   });
 });
