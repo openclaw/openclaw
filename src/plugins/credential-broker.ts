@@ -377,14 +377,33 @@ function resolveDestination(params: {
   return url.toString();
 }
 
-function replaceExactSecret(value: unknown, secret: string, seen = new WeakSet<object>()): unknown {
+function parseJsonNumericSecret(secret: string): number | undefined {
+  try {
+    const value = JSON.parse(secret) as unknown;
+    return typeof value === "number" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function replaceExactSecret(value: unknown, secret: string): unknown {
+  return replaceExactSecretValue(value, secret, parseJsonNumericSecret(secret), new WeakSet());
+}
+
+function replaceExactSecretValue(
+  value: unknown,
+  secret: string,
+  numericSecret: number | undefined,
+  seen: WeakSet<object>,
+): unknown {
   if (typeof value === "string") {
     return value.includes(secret) ? value.replaceAll(secret, REDACTED_VALUE) : value;
   }
-  if (
-    (value === null || typeof value === "number" || typeof value === "boolean") &&
-    String(value) === secret
-  ) {
+  const matchesScalar = (value === null || typeof value === "boolean") && String(value) === secret;
+  const matchesNumber =
+    typeof value === "number" &&
+    (String(value) === secret || (numericSecret !== undefined && Object.is(value, numericSecret)));
+  if (matchesScalar || matchesNumber) {
     return REDACTED_VALUE;
   }
   if (!value || typeof value !== "object") {
@@ -395,7 +414,9 @@ function replaceExactSecret(value: unknown, secret: string, seen = new WeakSet<o
   }
   seen.add(value);
   if (Array.isArray(value)) {
-    const result = value.map((entry) => replaceExactSecret(entry, secret, seen));
+    const result = value.map((entry) =>
+      replaceExactSecretValue(entry, secret, numericSecret, seen),
+    );
     seen.delete(value);
     return result;
   }
@@ -406,7 +427,7 @@ function replaceExactSecret(value: unknown, secret: string, seen = new WeakSet<o
   const result: Record<string, unknown> = Object.create(null);
   for (const [key, entry] of Object.entries(value)) {
     const redactedKey = key.includes(secret) ? key.replaceAll(secret, REDACTED_VALUE) : key;
-    result[redactedKey] = replaceExactSecret(entry, secret, seen);
+    result[redactedKey] = replaceExactSecretValue(entry, secret, numericSecret, seen);
   }
   seen.delete(value);
   return result;

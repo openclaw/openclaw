@@ -430,6 +430,9 @@ describe("credential broker", () => {
 
   it.each([
     { credential: "1234", responseBody: '{"echo":1234}' },
+    { credential: "1e3", responseBody: '{"echo":1e3}' },
+    { credential: "1.0", responseBody: '{"echo":1.0}' },
+    { credential: "-0", responseBody: '{"echo":-0}' },
     { credential: "true", responseBody: '{"echo":true}' },
     { credential: "null", responseBody: '{"echo":null}' },
   ])("redacts a credential echoed as a JSON scalar", async ({ credential, responseBody }) => {
