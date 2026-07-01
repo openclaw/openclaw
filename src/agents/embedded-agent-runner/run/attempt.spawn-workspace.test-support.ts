@@ -53,10 +53,15 @@ function normalizeMockProviderId(providerId?: string): string {
 
 type SessionManagerMocks = {
   getLeafEntry: UnknownMock;
+  getEntry: UnknownMock;
   branch: UnknownMock;
   resetLeaf: UnknownMock;
   buildSessionContext: Mock<() => { messages: AgentMessage[] }>;
+  appendThinkingLevelChange: UnknownMock;
+  appendModelChange: UnknownMock;
   appendCustomEntry: UnknownMock;
+  appendSessionInfo: UnknownMock;
+  appendLabelChange: UnknownMock;
   rewriteFile: UnknownMock;
   flushPendingToolResults: UnknownMock;
   clearPendingToolResults: UnknownMock;
@@ -204,10 +209,15 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const embeddedSystemPromptInputs: unknown[] = [];
   const sessionManager = {
     getLeafEntry: vi.fn(() => null),
+    getEntry: vi.fn(() => undefined),
     branch: vi.fn(),
     resetLeaf: vi.fn(),
     buildSessionContext: vi.fn<() => { messages: AgentMessage[] }>(() => ({ messages: [] })),
+    appendThinkingLevelChange: vi.fn(),
+    appendModelChange: vi.fn(),
     appendCustomEntry: vi.fn(),
+    appendSessionInfo: vi.fn(),
+    appendLabelChange: vi.fn(),
     rewriteFile: vi.fn(),
     flushPendingToolResults: vi.fn(),
     clearPendingToolResults: vi.fn(),
@@ -1029,12 +1039,17 @@ export function resetEmbeddedAttemptHarness(
   hoisted.systemPromptTexts.length = 0;
   hoisted.embeddedSystemPromptInputs.length = 0;
   hoisted.sessionManager.getLeafEntry.mockReset().mockReturnValue(null);
+  hoisted.sessionManager.getEntry.mockReset().mockReturnValue(undefined);
   hoisted.sessionManager.branch.mockReset();
   hoisted.sessionManager.resetLeaf.mockReset();
   hoisted.sessionManager.buildSessionContext
     .mockReset()
     .mockReturnValue({ messages: params.sessionMessages ?? [] });
+  hoisted.sessionManager.appendThinkingLevelChange.mockReset();
+  hoisted.sessionManager.appendModelChange.mockReset();
   hoisted.sessionManager.appendCustomEntry.mockReset();
+  hoisted.sessionManager.appendSessionInfo.mockReset();
+  hoisted.sessionManager.appendLabelChange.mockReset();
   hoisted.sessionManager.rewriteFile.mockReset();
   if (params.subscribeImpl) {
     hoisted.subscribeEmbeddedAgentSessionMock.mockImplementation(params.subscribeImpl);

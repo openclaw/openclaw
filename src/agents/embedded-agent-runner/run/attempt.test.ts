@@ -356,7 +356,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       merged: true,
       removeLeaf: true,
       prompt:
-        "[Queued user message that arrived while the previous turn was still active]\n" +
+        "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
         "older active-turn message\n\nnewest inbound message",
     });
   });
@@ -390,7 +390,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       merged: true,
       removeLeaf: true,
       prompt:
-        "[Queued user message that arrived while the previous turn was still active]\n" +
+        "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
         "ok\n\nplease inspect this token",
     });
   });
@@ -412,7 +412,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       merged: true,
       removeLeaf: true,
       prompt:
-        "[Queued user message that arrived while the previous turn was still active]\n" +
+        "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
         "please inspect this\n" +
         "[image_url] https://example.test/cat.png\n" +
         "[input_audio] https://example.test/cat.wav\n\n" +
@@ -498,7 +498,7 @@ describe("mergeOrphanedTrailingUserPrompt", () => {
       merged: true,
       removeLeaf: true,
       prompt:
-        "[Queued user message that arrived while the previous turn was still active]\n" +
+        "[Queued user message from a previous active turn; preserved as context only. Continue with the active prompt below.]\n" +
         "older active-turn message\n\nHEARTBEAT_OK",
     });
   });

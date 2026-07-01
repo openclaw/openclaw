@@ -24,7 +24,7 @@ import {
   type OwnedSessionTranscriptWriteOptions,
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
-import type { SessionEntry } from "../../../config/sessions/types.js";
+import type { SessionEntry as ConfigSessionEntry } from "../../../config/sessions/types.js";
 import {
   assertContextEngineHostSupport,
   OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST,
@@ -47,7 +47,7 @@ import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summar
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../../../infra/os-summary.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
-import type { AssistantMessage } from "../../../llm/types.js";
+import type { AssistantMessage, UserMessage } from "../../../llm/types.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugin-metadata-snapshot.js";
 import {
@@ -204,7 +204,12 @@ import {
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "../../session-transcript-repair.js";
 import { acquireSessionWriteLock } from "../../session-write-lock.js";
-import { createAgentSession, SessionManager } from "../../sessions/index.js";
+import {
+  createAgentSession,
+  SessionManager,
+  type SessionEntry as SessionManagerEntry,
+  type SessionMessageEntry,
+} from "../../sessions/index.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { detectRuntimeShell } from "../../shell-utils.js";
 import { buildActiveSubagentSystemPromptAddition } from "../../subagent-active-context.js";
@@ -647,6 +652,131 @@ function flushSessionManagerFile(sessionManager: ReturnType<typeof guardSessionM
   (sessionManager as unknown as { rewriteFile?: () => void }).rewriteFile?.();
 }
 
+type OrphanRepairSessionManager = Pick<
+  ReturnType<typeof guardSessionManager>,
+  | "getLeafEntry"
+  | "getEntry"
+  | "appendThinkingLevelChange"
+  | "appendModelChange"
+  | "appendCustomEntry"
+  | "appendSessionInfo"
+  | "appendLabelChange"
+>;
+
+type OrphanRepairCandidate = {
+  messageEntry: SessionMessageEntry;
+  trailingEntries: SessionManagerEntry[];
+};
+
+function canSkipTrailingEntryForOrphanRepair(entry: SessionManagerEntry): boolean {
+  return (
+    entry.type === "thinking_level_change" ||
+    entry.type === "model_change" ||
+    entry.type === "custom" ||
+    entry.type === "label" ||
+    entry.type === "session_info"
+  );
+}
+
+function findTrailingMessageEntryForOrphanRepair(
+  sessionManager: OrphanRepairSessionManager,
+): OrphanRepairCandidate | undefined {
+  const visited = new Set<string>();
+  const trailingEntries: SessionManagerEntry[] = [];
+  let entry = sessionManager.getLeafEntry();
+  while (entry && entry.type !== "message" && canSkipTrailingEntryForOrphanRepair(entry)) {
+    if (visited.has(entry.id)) {
+      return undefined;
+    }
+    visited.add(entry.id);
+    trailingEntries.push(entry);
+    entry = entry.parentId ? sessionManager.getEntry(entry.parentId) : undefined;
+  }
+  return entry?.type === "message"
+    ? { messageEntry: entry, trailingEntries: trailingEntries.toReversed() }
+    : undefined;
+}
+
+function appendTrailingEntryForOrphanRepair(
+  sessionManager: OrphanRepairSessionManager,
+  entry: SessionManagerEntry,
+  replayedEntryIds: Map<string, string>,
+): void {
+  if (entry.type === "thinking_level_change") {
+    replayedEntryIds.set(entry.id, sessionManager.appendThinkingLevelChange(entry.thinkingLevel));
+    return;
+  }
+  if (entry.type === "model_change") {
+    replayedEntryIds.set(entry.id, sessionManager.appendModelChange(entry.provider, entry.modelId));
+    return;
+  }
+  if (entry.type === "custom") {
+    replayedEntryIds.set(entry.id, sessionManager.appendCustomEntry(entry.customType, entry.data));
+    return;
+  }
+  if (entry.type === "session_info") {
+    replayedEntryIds.set(entry.id, sessionManager.appendSessionInfo(entry.name ?? ""));
+    return;
+  }
+  if (entry.type === "label") {
+    const targetId = replayedEntryIds.get(entry.targetId) ?? entry.targetId;
+    replayedEntryIds.set(entry.id, sessionManager.appendLabelChange(targetId, entry.label));
+  }
+}
+
+function replayTrailingEntriesForOrphanRepair(
+  sessionManager: OrphanRepairSessionManager,
+  trailingEntries: SessionManagerEntry[],
+): void {
+  const replayedEntryIds = new Map<string, string>();
+  for (const entry of trailingEntries) {
+    appendTrailingEntryForOrphanRepair(sessionManager, entry, replayedEntryIds);
+  }
+}
+
+function contentValuesEqual(left: unknown, right: unknown): boolean {
+  try {
+    return JSON.stringify(left) === JSON.stringify(right);
+  } catch {
+    return false;
+  }
+}
+
+function isUserAgentMessage(message: AgentMessage | undefined): message is UserMessage {
+  return message?.role === "user";
+}
+
+function optionalMessageFieldMatches(left: AgentMessage, right: UserMessage, field: string): boolean {
+  const leftValue = (left as unknown as Record<string, unknown>)[field];
+  const rightValue = (right as unknown as Record<string, unknown>)[field];
+  return rightValue === undefined || leftValue === undefined || leftValue === rightValue;
+}
+
+function isMatchingUserMessageForOrphanRepair(
+  message: AgentMessage | undefined,
+  orphanMessage: SessionMessageEntry["message"],
+): message is UserMessage {
+  return (
+    isUserAgentMessage(message) &&
+    isUserAgentMessage(orphanMessage) &&
+    contentValuesEqual(message.content, orphanMessage.content) &&
+    optionalMessageFieldMatches(message, orphanMessage, "timestamp") &&
+    optionalMessageFieldMatches(message, orphanMessage, "id")
+  );
+}
+
+function removeUserMessageForOrphanRepair(
+  messages: AgentMessage[],
+  orphanMessage: SessionMessageEntry["message"],
+): AgentMessage[] {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (isMatchingUserMessageForOrphanRepair(messages[index], orphanMessage)) {
+      return [...messages.slice(0, index), ...messages.slice(index + 1)];
+    }
+  }
+  return messages;
+}
+
 function repairAttemptToolUseResultPairing(
   messages: AgentMessage[],
   isOpenAIResponsesApi: boolean,
@@ -809,7 +939,7 @@ function collectAttemptExplicitToolAllowlistSources(params: {
 async function loadAttemptSessionEntryAfterQuotaMaintenance(params: {
   storePath: string;
   sessionKey: string;
-}): Promise<SessionEntry | undefined> {
+}): Promise<ConfigSessionEntry | undefined> {
   const entry = loadSessionEntry({
     storePath: params.storePath,
     sessionKey: params.sessionKey,
@@ -4117,8 +4247,11 @@ export async function runEmbeddedAttempt(
         let transcriptPromptForRuntimeSplit = effectiveTranscriptPrompt;
         let promptForRuntimeContextSplit = promptBeforePromptBuildHooks;
         // Repair orphaned trailing user messages so new prompts don't violate role ordering.
-        const leafEntry = isRawModelRun ? null : sessionManager.getLeafEntry();
-        if (leafEntry?.type === "message" && leafEntry.message.role === "user") {
+        const orphanRepair = isRawModelRun
+          ? undefined
+          : findTrailingMessageEntryForOrphanRepair(sessionManager);
+        const leafEntry = orphanRepair?.messageEntry;
+        if (leafEntry?.message.role === "user") {
           const messageMergeStrategy = resolveMessageMergeStrategy();
           const orphanPromptMerge = messageMergeStrategy.mergeOrphanedTrailingUserPrompt({
             prompt: effectivePrompt,
@@ -4149,8 +4282,14 @@ export async function runEmbeddedAttempt(
             } else {
               sessionManager.resetLeaf();
             }
-            const sessionContext = sessionManager.buildSessionContext();
-            activeSession.agent.state.messages = sessionContext.messages;
+            replayTrailingEntriesForOrphanRepair(
+              sessionManager,
+              orphanRepair?.trailingEntries ?? [],
+            );
+            activeSession.agent.state.messages = removeUserMessageForOrphanRepair(
+              activeSession.messages,
+              leafEntry.message,
+            );
           }
           const orphanRepairMessage =
             `${
