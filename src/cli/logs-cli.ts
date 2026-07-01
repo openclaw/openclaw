@@ -51,6 +51,19 @@ type LogCursorState = {
   journalSince?: string;
 };
 
+type GatewayRecoveryResult =
+  | { ok: true; payload: LogsTailPayload; startedAt: string }
+  | { ok: false; error: unknown };
+
+type GatewayRecoveryState =
+  | { kind: "idle" }
+  | {
+      kind: "probing";
+      promise: Promise<GatewayRecoveryResult>;
+      abortController: AbortController;
+    }
+  | { kind: "settled"; result: GatewayRecoveryResult };
+
 type LogSourceIdentity = {
   file?: string;
   source?: string;
@@ -134,6 +147,25 @@ function buildLogMetaRecord(payload: LogsTailPayload): Record<string, unknown> {
   };
 }
 
+async function fetchGatewayLogs(
+  opts: LogsCliOptions,
+  gatewayCursor: number | undefined,
+  showProgress: boolean,
+  params: { limit: number; maxBytes: number; signal?: AbortSignal },
+): Promise<LogsTailPayload> {
+  const gatewayExtra = buildLogsTailGatewayExtra(opts, showProgress);
+  const payload = await callGatewayFromCli(
+    "logs.tail",
+    opts,
+    { cursor: gatewayCursor, limit: params.limit, maxBytes: params.maxBytes },
+    params.signal ? { ...gatewayExtra, signal: params.signal } : gatewayExtra,
+  );
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Unexpected logs.tail response");
+  }
+  return payload as LogsTailPayload;
+}
+
 async function fetchLogs(
   opts: LogsCliOptions,
   cursors: LogCursorState,
@@ -142,16 +174,7 @@ async function fetchLogs(
 ): Promise<LogsTailPayload> {
   const { limit, maxBytes } = params;
   try {
-    const payload = await callGatewayFromCli(
-      "logs.tail",
-      opts,
-      { cursor: cursors.gateway, limit, maxBytes },
-      buildLogsTailGatewayExtra(opts, showProgress),
-    );
-    if (!payload || typeof payload !== "object") {
-      throw new Error("Unexpected logs.tail response");
-    }
-    return payload as LogsTailPayload;
+    return await fetchGatewayLogs(opts, cursors.gateway, showProgress, params);
   } catch (error) {
     if (!shouldUseLocalLogsFallback(opts, error)) {
       throw error;
@@ -182,6 +205,10 @@ function normalizeErrorMessage(error: unknown): string {
     return error.message;
   }
   return String(error);
+}
+
+function normalizeError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 function shouldUseLocalLogsFallback(opts: LogsCliOptions, error: unknown): boolean {
@@ -437,10 +464,11 @@ function formatLogLine(
   return [head, messageValue].filter(Boolean).join(" ").trim();
 }
 
-function createLogWriters() {
+function createLogWriters(onOutputClosed?: () => void) {
   const writer = createSafeStreamWriter({
     beforeWrite: () => clearActiveProgressLine(),
     onBrokenPipe: (err, stream) => {
+      onOutputClosed?.();
       const code = err.code ?? "EPIPE";
       const target = stream === process.stdout ? "stdout" : "stderr";
       const message = `openclaw logs: output ${target} closed (${code}). Stopping tail.`;
@@ -523,13 +551,33 @@ export function registerLogsCli(program: Command) {
   addGatewayClientOptions(logs);
 
   logs.action(async (opts: LogsCliOptions) => {
-    const { logLine, errorLine, emitJsonLine } = createLogWriters();
+    let gatewayRecovery: GatewayRecoveryState = { kind: "idle" };
+    const abortGatewayRecoveryProbe = () => {
+      if (gatewayRecovery.kind === "probing") {
+        gatewayRecovery.abortController.abort();
+        gatewayRecovery = { kind: "idle" };
+      }
+    };
+    const clearConsumedGatewayRecovery = (
+      promise: Promise<GatewayRecoveryResult>,
+      result: GatewayRecoveryResult,
+    ) => {
+      const isMatchingProbe =
+        gatewayRecovery.kind === "probing" && gatewayRecovery.promise === promise;
+      const isMatchingResult =
+        gatewayRecovery.kind === "settled" && gatewayRecovery.result === result;
+      if (isMatchingProbe || isMatchingResult) {
+        gatewayRecovery = { kind: "idle" };
+      }
+    };
+    const { logLine, errorLine, emitJsonLine } = createLogWriters(abortGatewayRecoveryProbe);
     const interval = parsePositiveInt(opts.interval, 1000, "--interval");
     const limit = parsePositiveInt(opts.limit, 200, "--limit");
     const maxBytes = parsePositiveInt(opts.maxBytes, 250_000, "--max-bytes");
     let gatewayCursor: number | undefined;
     let journalCursor: string | undefined;
     let journalSince: string | undefined;
+    let preferJournal = false;
     let first = true;
     let lastSourceIdentity: string | undefined;
     const jsonMode = Boolean(opts.json);
@@ -537,19 +585,86 @@ export function registerLogsCli(program: Command) {
     const rich = isRich() && opts.color !== false;
     const localTime = !opts.utc;
 
+    const startGatewayRecoveryProbe = () => {
+      if (!preferJournal || gatewayRecovery.kind !== "idle") {
+        return;
+      }
+      const startedAt = new Date().toISOString();
+      const abortController = new AbortController();
+      const promise = fetchGatewayLogs(opts, gatewayCursor, false, {
+        limit,
+        maxBytes,
+        signal: abortController.signal,
+      }).then(
+        (payload): GatewayRecoveryResult => ({ ok: true, payload, startedAt }),
+        (error: unknown): GatewayRecoveryResult => ({ ok: false, error }),
+      );
+      gatewayRecovery = { kind: "probing", promise, abortController };
+      void promise.then((result) => {
+        if (gatewayRecovery.kind === "probing" && gatewayRecovery.promise === promise) {
+          gatewayRecovery = { kind: "settled", result };
+        }
+      });
+    };
+
+    const readJournalWhileProbingRecovery = async (): Promise<{
+      payload: LogsTailPayload;
+      gatewayPollStartedAt?: string;
+    }> => {
+      let fallbackError: Error | undefined;
+      if (gatewayRecovery.kind === "settled") {
+        const result = gatewayRecovery.result;
+        gatewayRecovery = { kind: "idle" };
+        if (result.ok) {
+          return { payload: result.payload, gatewayPollStartedAt: result.startedAt };
+        }
+        if (!shouldUseLocalLogsFallback(opts, result.error)) {
+          throw normalizeError(result.error);
+        }
+        fallbackError = normalizeError(result.error);
+      }
+
+      const activeProbe = gatewayRecovery.kind === "probing" ? gatewayRecovery.promise : undefined;
+      const journalPayload = await readSystemdJournalFallback({
+        cursor: journalCursor,
+        since: journalSince,
+        limit,
+        maxBytes,
+      });
+      if (journalPayload) {
+        return { payload: journalPayload };
+      }
+      if (activeProbe) {
+        const result = await activeProbe;
+        clearConsumedGatewayRecovery(activeProbe, result);
+        if (result.ok) {
+          return { payload: result.payload, gatewayPollStartedAt: result.startedAt };
+        }
+        throw normalizeError(result.error);
+      }
+      throw fallbackError ?? new Error("Active systemd journal unavailable for logs follow");
+    };
+
     let followRetryAttempt = 0;
     while (true) {
       let payload: LogsTailPayload;
       // Show progress spinner only on first fetch, not during follow polling
       const showProgress = first && !opts.follow;
-      const gatewayPollStartedAt = new Date().toISOString();
+      let gatewayPollStartedAt = new Date().toISOString();
       try {
-        payload = await fetchLogs(
-          opts,
-          { gateway: gatewayCursor, journal: journalCursor, journalSince },
-          showProgress,
-          { limit, maxBytes },
-        );
+        if (preferJournal) {
+          startGatewayRecoveryProbe();
+          const result = await readJournalWhileProbingRecovery();
+          payload = result.payload;
+          gatewayPollStartedAt = result.gatewayPollStartedAt ?? gatewayPollStartedAt;
+        } else {
+          payload = await fetchLogs(
+            opts,
+            { gateway: gatewayCursor, journal: journalCursor, journalSince },
+            showProgress,
+            { limit, maxBytes },
+          );
+        }
       } catch (err) {
         if (opts.follow && followRetryAttempt < MAX_FOLLOW_RETRIES && isTransientFollowError(err)) {
           followRetryAttempt += 1;
@@ -683,20 +798,28 @@ export function registerLogsCli(program: Command) {
         }
       }
       if (payload.sourceKind === "journal") {
-        // Journal fallback is a temporary bridge for transient local RPC outages.
-        // Keep the journal cursor so repeated outages do not duplicate journal lines,
-        // but keep probing logs.tail on the next follow iteration so recovered RPC
-        // switches back to the Gateway's normal file/log formatting.
+        // The journal is an at-least-once bridge: retain its cursor, leave the
+        // Gateway cursor unchanged, and probe RPC alongside the next journal read.
+        // Recovery may replay overlap; reconciling unrelated cursors could drop lines.
+        preferJournal = true;
         if (typeof payload.cursor === "string" && payload.cursor.trim().length > 0) {
           journalCursor = payload.cursor;
         }
-      } else if (typeof payload.cursor === "number" && Number.isFinite(payload.cursor)) {
-        gatewayCursor = payload.cursor;
-        if (opts.follow) {
-          journalSince = gatewayPollStartedAt;
+        startGatewayRecoveryProbe();
+      } else {
+        preferJournal = false;
+        gatewayRecovery = { kind: "idle" };
+        if (typeof payload.cursor === "number" && Number.isFinite(payload.cursor)) {
+          gatewayCursor = payload.cursor;
+          if (opts.follow) {
+            // A recovered Gateway cursor supersedes the prior journal bridge.
+            // A later fallback must start from this poll, not replay the old outage.
+            journalCursor = undefined;
+            journalSince = gatewayPollStartedAt;
+          }
+        } else if (typeof payload.cursor === "string" && payload.cursor.trim().length > 0) {
+          journalCursor = payload.cursor;
         }
-      } else if (typeof payload.cursor === "string" && payload.cursor.trim().length > 0) {
-        journalCursor = payload.cursor;
       }
       if (sourceIdentity !== undefined) {
         lastSourceIdentity = sourceIdentity;
