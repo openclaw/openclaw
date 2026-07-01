@@ -275,10 +275,11 @@ function renderPendingNodeApprovalDiagnostic(node: NodeListNode, opts: GatewayRp
   const requestId = normalizeNonEmptyString(node.pendingRequestId);
   const label = sanitizeForLog(normalizeNonEmptyString(node.displayName) ?? node.nodeId);
   const action = node.approvalState === "pending-reapproval" ? "reapproval" : "approval";
-  const command = requestId ? formatNodeApprovalCommand(requestId, opts) : null;
-  return command
-    ? `Node ${action} pending for ${label} (${sanitizeForLog(requestId)}). Run ${sanitizeForLog(command)}`
-    : `Node ${action} pending for ${label}.`;
+  if (!requestId) {
+    return `Node ${action} pending for ${label}.`;
+  }
+  const command = formatNodeApprovalCommand(requestId, opts);
+  return `Node ${action} pending for ${label} (${sanitizeForLog(requestId)}). Run ${sanitizeForLog(command)}`;
 }
 
 function formatStabilityEvent(record: DiagnosticStabilityEventRecord): string {
