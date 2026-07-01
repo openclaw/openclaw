@@ -295,12 +295,6 @@ export function extractDurableCoordinationExternalRefs(
   };
 }
 
-function isTerminalRun(status: DurableRuntimeRunStatus): boolean {
-  return (
-    status === "succeeded" || status === "failed" || status === "cancelled" || status === "lost"
-  );
-}
-
 function extractRecoveryDiagnostic(
   run: DurableRuntimeRun,
 ): DurableCoordinationRecoveryDiagnostic | undefined {
@@ -388,7 +382,6 @@ export function buildDurableCoordinationProjection(
   const childLinks = input.childLinks ?? [];
   const currentStep = latestOpenStep(steps) ?? latestStep(steps);
   const waitingReason = inferWaitingReason({ run: input.run, currentStep });
-  const terminal = isTerminalRun(input.run.status);
   const recovery = extractRecoveryDiagnostic(input.run);
   return {
     runtimeRunId: input.run.runtimeRunId,
@@ -411,20 +404,10 @@ export function buildDurableCoordinationProjection(
     external: extractDurableCoordinationExternalRefs(input.run),
     children: childCounts(childLinks),
     controls: {
-      canCancel: !terminal,
-      canRetry: terminal || input.run.recoveryState === "unknown_after_side_effect",
-      canResume:
-        !terminal &&
-        (input.run.status === "waiting" ||
-          input.run.status === "waiting_signal" ||
-          input.run.status === "waiting_timer" ||
-          input.run.status === "waiting_child" ||
-          input.run.status === "retry_scheduled"),
-      canSignal:
-        !terminal &&
-        (input.run.status === "waiting" ||
-          input.run.status === "waiting_signal" ||
-          input.run.recoveryState === "waiting_signal"),
+      canCancel: false,
+      canRetry: false,
+      canResume: false,
+      canSignal: false,
       canOpenTimeline: true,
     },
     ...(recovery ? { recovery } : {}),
