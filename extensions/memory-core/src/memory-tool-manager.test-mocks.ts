@@ -24,7 +24,9 @@ type MemoryBackend = "builtin" | "qmd";
 let backend: MemoryBackend = "builtin";
 let workspaceDir = "/workspace";
 let customStatus: Record<string, unknown> | undefined;
+let searchTimeoutMs: number | undefined;
 let searchImpl: SearchImpl = async () => [];
+let syncImpl: () => Promise<void> = async () => {};
 let getManagerImpl:
   | ((params: { cfg?: unknown; agentId?: string; purpose?: string }) => Promise<{
       manager?: unknown;
@@ -55,9 +57,10 @@ const stubManager = {
     sourceCounts: [{ source: "memory" as const, files: 1, chunks: 1 }],
     custom: customStatus,
   }),
-  sync: vi.fn(),
+  sync: vi.fn(async () => await syncImpl()),
+  getSearchTimeoutMs: vi.fn(() => searchTimeoutMs ?? 15_000),
   probeVectorAvailability: vi.fn(async () => true),
-  close: vi.fn(),
+  close: vi.fn((_timeoutMs?: number) => Promise.resolve()),
 };
 
 const getMemorySearchManagerMock = vi.fn(
@@ -97,6 +100,14 @@ export function setMemorySearchImpl(next: SearchImpl): void {
   searchImpl = next;
 }
 
+export function setMemorySyncImpl(next: () => Promise<void>): void {
+  syncImpl = next;
+}
+
+export function setMemorySearchTimeoutMs(next: number | undefined): void {
+  searchTimeoutMs = next;
+}
+
 export function setMemorySearchManagerImpl(
   next: (params: { cfg?: unknown; agentId?: string; purpose?: string }) => Promise<{
     manager?: unknown;
@@ -120,8 +131,10 @@ export function resetMemoryToolMockState(overrides?: {
   backend = overrides?.backend ?? "builtin";
   workspaceDir = "/workspace";
   customStatus = undefined;
+  searchTimeoutMs = undefined;
   getManagerImpl = undefined;
   searchImpl = overrides?.searchImpl ?? (async () => []);
+  syncImpl = async () => {};
   readFileImpl =
     overrides?.readFileImpl ??
     (async (params: MemoryReadParams) => ({
@@ -143,6 +156,10 @@ export function getMemorySyncMockCalls(): number {
 
 export function getMemoryCloseMockCalls(): number {
   return stubManager.close.mock.calls.length;
+}
+
+export function getMemoryCloseMockArgs(): Array<{ timeoutMs?: number }> {
+  return stubManager.close.mock.calls.map(([timeoutMs]) => ({ timeoutMs }));
 }
 
 export function getMemorySearchManagerMockConfigs(): unknown[] {

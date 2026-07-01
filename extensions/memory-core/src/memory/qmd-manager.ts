@@ -119,6 +119,8 @@ function asAbortError(signal: AbortSignal): Error {
 
 const SNIPPET_HEADER_RE = /@@\s*-([0-9]+),([0-9]+)/;
 const SEARCH_PENDING_UPDATE_WAIT_MS = 500;
+const QMD_WHOLE_SEARCH_OVERHEAD_MS = 2_000;
+const MEMORY_SEARCH_DEFAULT_OUTER_TIMEOUT_MS = 15_000;
 const MAX_QMD_OUTPUT_CHARS = 200_000;
 const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
@@ -253,6 +255,38 @@ function resolveQmdWriteLockOptions(expectedMs: number, minWaitMs: number) {
 
 export function resolveQmdMcporterSearchProcessTimeoutMs(timeoutMs: number): number {
   return Math.max(addTimerTimeoutGraceMs(timeoutMs, 2_000) ?? 1, 5_000);
+}
+
+export function resolveQmdWholeSearchTimeoutMs(params: {
+  timeoutMs: number;
+  updateTimeoutMs: number;
+  embedTimeoutMs: number;
+  searchMode: ResolvedQmdConfig["searchMode"];
+  collectionCount: number;
+  mcporterEnabled: boolean;
+  onSearchSync: boolean;
+}): number {
+  const qmdCommandTimeoutMs = normalizePositiveInteger(params.timeoutMs, 1);
+  const collectionCount = Math.max(1, Math.floor(params.collectionCount));
+  const searchModeAttempts = params.searchMode === "query" ? 1 : 2;
+  const missingCollectionRepairAttempts = 2;
+  const directMultiCollectionProbeMs =
+    params.mcporterEnabled || collectionCount <= 1 ? 0 : Math.min(qmdCommandTimeoutMs, 5_000);
+  const searchCommandBudgetMs =
+    directMultiCollectionProbeMs +
+    collectionCount * searchModeAttempts * missingCollectionRepairAttempts * qmdCommandTimeoutMs;
+  const dirtySyncBudgetMs = params.onSearchSync
+    ? normalizePositiveInteger(params.updateTimeoutMs, 1) +
+      (qmdUsesVectors(params.searchMode) ? normalizePositiveInteger(params.embedTimeoutMs, 1) : 0)
+    : 0;
+  return (
+    addTimerTimeoutGraceMs(
+      searchCommandBudgetMs +
+        dirtySyncBudgetMs +
+        SEARCH_PENDING_UPDATE_WAIT_MS +
+        QMD_WHOLE_SEARCH_OVERHEAD_MS,
+    ) ?? qmdCommandTimeoutMs
+  );
 }
 
 // Cross-process serialization for qmd embeds (heavy ML work, serialized globally).
@@ -1513,6 +1547,21 @@ export class QmdMemoryManager implements MemorySearchManager {
     return true;
   }
 
+  getSearchTimeoutMs(opts?: { qmdSearchModeOverride?: "query" | "search" | "vsearch" }): number {
+    if (this.qmd.limits.timeoutMs <= MEMORY_SEARCH_DEFAULT_OUTER_TIMEOUT_MS) {
+      return MEMORY_SEARCH_DEFAULT_OUTER_TIMEOUT_MS;
+    }
+    return resolveQmdWholeSearchTimeoutMs({
+      timeoutMs: this.qmd.limits.timeoutMs,
+      updateTimeoutMs: this.qmd.update.updateTimeoutMs,
+      embedTimeoutMs: this.qmd.update.embedTimeoutMs,
+      searchMode: opts?.qmdSearchModeOverride ?? this.qmd.searchMode,
+      collectionCount: this.qmd.collections.length,
+      mcporterEnabled: this.qmd.mcporter.enabled,
+      onSearchSync: this.syncSettings?.onSearch === true,
+    });
+  }
+
   async search(
     query: string,
     opts?: {
@@ -1921,7 +1970,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
   }
 
-  async close(): Promise<void> {
+  async close(timeoutMs?: number): Promise<void> {
     if (this.closed) {
       return;
     }
@@ -1944,8 +1993,46 @@ export class QmdMemoryManager implements MemorySearchManager {
       this.watcher = null;
     }
     this.queuedForcedRuns = 0;
-    await this.pendingUpdate?.catch(() => undefined);
-    await this.queuedForcedUpdate?.catch(() => undefined);
+    const pendingUpdates = [
+      { label: "pending update", promise: this.pendingUpdate },
+      { label: "queued forced update", promise: this.queuedForcedUpdate },
+    ].filter(
+      (update): update is { label: string; promise: Promise<void> } =>
+        update.promise !== null && update.promise !== undefined,
+    );
+    if (pendingUpdates.length > 0) {
+      const cleanupTimeoutMs =
+        typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+          ? Math.floor(timeoutMs)
+          : undefined;
+      const updatesDone = Promise.all(
+        pendingUpdates.map(async ({ promise }) => await promise.catch(() => undefined)),
+      ).then(() => undefined);
+
+      if (cleanupTimeoutMs === undefined) {
+        await updatesDone;
+      } else {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const labels = pendingUpdates.map(({ label }) => label).join(" and ");
+        const timeoutPromise = new Promise<void>((resolve) => {
+          timer = setTimeout(() => {
+            log.warn(
+              `qmd close timed out waiting for ${labels} after ${cleanupTimeoutMs}ms; proceeding with cleanup`,
+            );
+            resolve();
+          }, cleanupTimeoutMs);
+          timer.unref?.();
+        });
+
+        try {
+          await Promise.race([updatesDone, timeoutPromise]);
+        } finally {
+          if (timer) {
+            clearTimeout(timer);
+          }
+        }
+      }
+    }
     if (this.db) {
       this.db.close();
       this.db = null;

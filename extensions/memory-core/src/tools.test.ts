@@ -2,6 +2,7 @@
 import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getMemoryCloseMockArgs,
   getMemoryCloseMockCalls,
   getMemorySearchManagerMockCalls,
   getMemorySearchManagerMockConfigs,
@@ -12,6 +13,8 @@ import {
   setMemoryCustomStatus,
   setMemorySearchImpl,
   setMemorySearchManagerImpl,
+  setMemorySearchTimeoutMs,
+  setMemorySyncImpl,
 } from "./memory-tool-manager.test-mocks.js";
 import { createMemorySearchTool, testing as memoryToolsTesting } from "./tools.js";
 import {
@@ -190,6 +193,33 @@ describe("memory_search unavailable payloads", () => {
     }
   });
 
+  it("keeps qmd manager setup on the default memory_search deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      setMemoryBackend("qmd");
+      setMemorySearchTimeoutMs(60_000);
+      setMemorySearchManagerImpl(async () => await new Promise(() => {}));
+      const tool = createMemorySearchToolOrThrow({
+        config: {
+          agents: { list: [{ id: "main", default: true }] },
+          memory: { citations: "off", backend: "qmd", qmd: { limits: { timeoutMs: 60_000 } } },
+        },
+      });
+
+      const resultPromise = tool.execute("qmd-manager-timeout", { query: "hello" });
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      const result = await resultPromise;
+      expectUnavailableMemorySearchDetails(result.details, {
+        error: "memory_search timed out after 15s",
+        warning: "Memory search is unavailable due to an embedding/provider error.",
+        action: "Check embedding provider configuration and retry memory_search.",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("returns unavailable metadata when memory search does not settle", async () => {
     vi.useFakeTimers();
     try {
@@ -220,6 +250,189 @@ describe("memory_search unavailable payloads", () => {
         action: "Check embedding provider configuration and retry memory_search.",
       });
       expect(searchCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses the qmd manager whole-search budget for slow memory searches", async () => {
+    vi.useFakeTimers();
+    try {
+      setMemoryBackend("qmd");
+      setMemorySearchTimeoutMs(60_000);
+      setMemorySearchImpl(
+        async () =>
+          await new Promise((resolve) => {
+            setTimeout(
+              () =>
+                resolve([
+                  {
+                    path: "MEMORY.md",
+                    startLine: 1,
+                    endLine: 1,
+                    score: 0.9,
+                    snippet: "QMD slow search survived past fifteen seconds.",
+                    source: "memory" as const,
+                  },
+                ]),
+              16_000,
+            );
+          }),
+      );
+      const tool = createMemorySearchToolOrThrow({
+        config: {
+          agents: { list: [{ id: "main", default: true }] },
+          memory: { citations: "off", backend: "qmd", qmd: { limits: { timeoutMs: 60_000 } } },
+        },
+      });
+
+      const resultPromise = tool.execute("qmd-slow-search", { query: "hello" });
+      await vi.advanceTimersByTimeAsync(15_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      const result = await resultPromise;
+      expect((result.details as { results?: Array<{ path: string }> }).results).toEqual([
+        {
+          corpus: "memory",
+          path: "MEMORY.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "QMD slow search survived past fifteen seconds.",
+          source: "memory",
+        },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps builtin forced-sync retry inside the original memory_search deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      let searchCalls = 0;
+      let retrySignal: AbortSignal | undefined;
+      setMemorySearchImpl(async (opts) => {
+        searchCalls += 1;
+        if (searchCalls === 1) {
+          return await new Promise((resolve) => {
+            setTimeout(() => resolve([]), 10_000);
+          });
+        }
+        retrySignal = opts?.signal;
+        return await new Promise(() => {});
+      });
+      const tool = createMemorySearchToolOrThrow();
+
+      const resultPromise = tool.execute("builtin-retry-timeout", { query: "hello" });
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      const result = await resultPromise;
+      expectUnavailableMemorySearchDetails(result.details, {
+        error: "memory_search timed out after 15s",
+        warning: "Memory search is unavailable due to an embedding/provider error.",
+        action: "Check embedding provider configuration and retry memory_search.",
+      });
+      expect(searchCalls).toBe(2);
+      expect(retrySignal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps qmd zero-hit forced-sync retry inside one whole-search deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      setMemoryBackend("qmd");
+      setMemorySearchTimeoutMs(60_000);
+      let searchCalls = 0;
+      let retrySignal: AbortSignal | undefined;
+      setMemorySearchImpl(async (opts) => {
+        searchCalls += 1;
+        if (searchCalls === 1) {
+          return await new Promise((resolve) => {
+            setTimeout(() => resolve([]), 10_000);
+          });
+        }
+        retrySignal = opts?.signal;
+        return await new Promise(() => {});
+      });
+      setMemorySyncImpl(
+        async () =>
+          await new Promise((resolve) => {
+            setTimeout(resolve, 10_000);
+          }),
+      );
+      const tool = createMemorySearchToolOrThrow({
+        config: {
+          agents: { list: [{ id: "main", default: true }] },
+          memory: { citations: "off", backend: "qmd", qmd: { limits: { timeoutMs: 60_000 } } },
+        },
+      });
+
+      const resultPromise = tool.execute("qmd-zero-hit-retry-timeout", { query: "hello" });
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(40_000);
+
+      const result = await resultPromise;
+      expectUnavailableMemorySearchDetails(result.details, {
+        error: "memory_search timed out after 60s",
+        warning: "Memory search is unavailable due to an embedding/provider error.",
+        action: "Check embedding provider configuration and retry memory_search.",
+      });
+      expect(searchCalls).toBe(2);
+      expect(getMemorySyncMockCalls()).toBe(1);
+      expect(retrySignal?.aborted).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("closes one-shot CLI qmd manager with timeout when forced sync never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      setMemoryBackend("qmd");
+      setMemorySearchTimeoutMs(60_000);
+      let searchCalls = 0;
+      setMemorySearchImpl(async () => {
+        searchCalls += 1;
+        if (searchCalls === 1) {
+          return await new Promise((resolve) => {
+            setTimeout(() => resolve([]), 10_000);
+          });
+        }
+        return await new Promise(() => {});
+      });
+      setMemorySyncImpl(async () => await new Promise(() => {}));
+      const tool = createMemorySearchToolOrThrow({
+        config: {
+          agents: { list: [{ id: "main", default: true }] },
+          memory: { citations: "off", backend: "qmd", qmd: { limits: { timeoutMs: 60_000 } } },
+        },
+        oneShotCliRun: true,
+      });
+
+      const resultPromise = tool.execute("cli-qmd-forced-sync-timeout", { query: "hello" });
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(40_000);
+
+      const result = await resultPromise;
+      expectUnavailableMemorySearchDetails(result.details, {
+        error: "memory_search timed out after 60s",
+        warning: "Memory search is unavailable due to an embedding/provider error.",
+        action: "Check embedding provider configuration and retry memory_search.",
+      });
+      // The forced sync never settles, so the deadline fires after the first
+      // search + sync attempt. The retry search is never reached because the
+      // sync timeout throws before the second search can run.
+      expect(searchCalls).toBe(1);
+      expect(getMemorySyncMockCalls()).toBe(1);
+      expect(getMemoryCloseMockCalls()).toBe(1);
+      const closeArgs = getMemoryCloseMockArgs();
+      expect(closeArgs[0]?.timeoutMs).toBe(5_000);
     } finally {
       vi.useRealTimers();
     }

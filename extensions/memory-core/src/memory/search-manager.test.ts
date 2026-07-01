@@ -332,6 +332,33 @@ describe("getMemorySearchManager caching", () => {
     expect(second.debug?.qmdIdentityHash).toBe(first.debug?.qmdIdentityHash);
   });
 
+  it("forwards timeout mode overrides through cached full qmd manager", async () => {
+    const agentId = "cached-qmd-timeout-opts";
+    const cfg = createQmdCfg(agentId);
+    const getSearchTimeoutMs = vi.fn(
+      (opts?: { qmdSearchModeOverride?: "query" | "search" | "vsearch" }) =>
+        opts?.qmdSearchModeOverride === "vsearch" ? 123_000 : 15_000,
+    );
+    (
+      mockPrimary as typeof mockPrimary & {
+        getSearchTimeoutMs: typeof getSearchTimeoutMs;
+      }
+    ).getSearchTimeoutMs = getSearchTimeoutMs;
+
+    try {
+      const first = await getMemorySearchManager({ cfg, agentId });
+      const second = await getMemorySearchManager({ cfg, agentId });
+      const manager = requireManager(second);
+
+      expect(first.manager).toBe(second.manager);
+      expect(second.debug?.managerCacheState).toBe("cached-full-hit");
+      expect(manager.getSearchTimeoutMs?.({ qmdSearchModeOverride: "vsearch" })).toBe(123_000);
+      expect(getSearchTimeoutMs).toHaveBeenLastCalledWith({ qmdSearchModeOverride: "vsearch" });
+    } finally {
+      delete (mockPrimary as Partial<{ getSearchTimeoutMs: unknown }>).getSearchTimeoutMs;
+    }
+  });
+
   it("keeps the cached QMD manager active when the caller cancels a search", async () => {
     const agentId = "cancelled-search";
     const cfg = createQmdCfg(agentId);
@@ -370,7 +397,13 @@ describe("getMemorySearchManager caching", () => {
     const fallbackResults = await firstManager.search("hello", { signal: controller.signal });
     expect(fallbackResults).toHaveLength(1);
     expect(fallbackResults[0]?.path).toBe("MEMORY.md");
-    expect(fallbackSearch).toHaveBeenCalledWith("hello", { signal: controller.signal });
+    const [, fallbackOpts] = fallbackSearch.mock.calls[0] as unknown as [
+      string,
+      { signal?: AbortSignal },
+    ];
+    expect(fallbackOpts?.signal).toBeInstanceOf(AbortSignal);
+    expect(fallbackOpts?.signal).not.toBe(controller.signal);
+    expect(fallbackOpts?.signal?.aborted).toBe(false);
 
     const second = await getMemorySearchManager({ cfg, agentId: retryAgentId });
     requireManager(second);
@@ -1005,6 +1038,29 @@ describe("getMemorySearchManager caching", () => {
     expect(results).toHaveLength(1);
     expect(results[0]?.path).toBe("MEMORY.md");
     expect(fallbackSearch).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds builtin fallback search after qmd fails", async () => {
+    vi.useFakeTimers();
+    try {
+      const retryAgentId = "retry-agent-fallback-timeout";
+      const { manager: firstManager } = await createFailedQmdSearchHarness({
+        agentId: retryAgentId,
+        errorMessage: "qmd query failed",
+      });
+      fallbackSearch.mockImplementationOnce(async () => await new Promise(() => {}));
+
+      const searchPromise = firstManager.search("hello");
+      const searchExpectation = expect(searchPromise).rejects.toThrow(
+        "memory_search timed out after 15s",
+      );
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      await searchExpectation;
+      expect(fallbackSearch).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps original qmd error when fallback manager initialization fails", async () => {
