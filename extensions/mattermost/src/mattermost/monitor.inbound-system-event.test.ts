@@ -103,9 +103,14 @@ vi.mock("./client.js", async () => {
   };
 });
 
-vi.mock("./draft-stream.js", () => ({
-  createMattermostDraftStream: mockState.createMattermostDraftStream,
-}));
+vi.mock("./draft-stream.js", async () => {
+  const actual = await vi.importActual<typeof import("./draft-stream.js")>("./draft-stream.js");
+  return {
+    createMattermostDraftStream: mockState.createMattermostDraftStream,
+    createMattermostDraftPreviewBoundaryController:
+      actual.createMattermostDraftPreviewBoundaryController,
+  };
+});
 
 vi.mock("./monitor-resources.js", () => ({
   createMattermostMonitorResources: () => ({
@@ -1110,5 +1115,103 @@ describe("mattermost inbound user posts", () => {
     expect(updateLastRoute?.to).toBe("user:user-1");
     expect(updateLastRoute?.accountId).toBe("default");
     expect(updateLastRoute?.mainDmOwnerPin).toBeUndefined();
+  });
+
+  it("keeps consecutive tool-progress updates on one post in block streaming", async () => {
+    const blockConfig: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "open",
+          groupPolicy: "open",
+          streaming: { mode: "block", preview: { toolProgress: true } },
+        },
+      },
+    };
+    mockState.runtimeCore = createRuntimeCore(blockConfig);
+    const draftUpdate = vi.fn();
+    const forceNewMessage = vi.fn(async () => {});
+    mockState.createMattermostDraftStream.mockReturnValue({
+      update: draftUpdate,
+      forceNewMessage,
+      stop: vi.fn(async () => {}),
+    });
+
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+
+    const monitor = monitorMattermostProvider({
+      config: blockConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await socket.emitMessage({
+      event: "posted",
+      data: {
+        channel_id: "chan-1",
+        channel_name: "town-square",
+        channel_display_name: "Town Square",
+        sender_name: "alice",
+        post: JSON.stringify({
+          id: "post-tool-progress",
+          channel_id: "chan-1",
+          user_id: "user-1",
+          message: "run a tool",
+          create_at: 1_714_000_000_000,
+        }),
+      },
+      broadcast: {
+        channel_id: "chan-1",
+        user_id: "user-1",
+      },
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    const replyOptions = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].replyOptions;
+    const onToolStart = replyOptions?.onToolStart as (payload: {
+      name?: string;
+      phase?: string;
+      args?: Record<string, unknown>;
+      detailMode?: "explain" | "raw";
+    }) => Promise<void>;
+    expect(onToolStart).toBeTypeOf("function");
+
+    await onToolStart({ name: "bash", phase: "start", detailMode: "raw", args: { command: "ls" } });
+    await onToolStart({
+      name: "bash",
+      phase: "update",
+      detailMode: "raw",
+      args: { command: "ls -a" },
+    });
+    await onToolStart({
+      name: "bash",
+      phase: "update",
+      detailMode: "raw",
+      args: { command: "ls -al" },
+    });
+
+    expect(draftUpdate).toHaveBeenCalledTimes(3);
+    expect(forceNewMessage).not.toHaveBeenCalled();
+
+    await onToolStart({
+      name: "read",
+      phase: "start",
+      detailMode: "raw",
+      args: { path: "README.md" },
+    });
+    expect(forceNewMessage).toHaveBeenCalledTimes(1);
   });
 });
