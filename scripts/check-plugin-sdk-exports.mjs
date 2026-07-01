@@ -52,6 +52,12 @@ const requiredSubpathExports = {
     "normalizeSecretInputString",
     "resolveSecretInputString",
   ],
+  "security-runtime": ["appendRegularFile", "privateFileStore", "privateFileStoreSync", "root"],
+  "realtime-voice": [
+    "createTalkSessionController",
+    "recordTalkObservabilityEvent",
+    "resolveRealtimeVoiceFastContextConsult",
+  ],
 };
 
 // The root plugin-sdk entry intentionally stays tiny. Keep this list aligned
