@@ -302,10 +302,15 @@ function decodeGoogleOauthTokenResponseBody(bytes: Buffer, contentEncoding: stri
       const decoded = gunzipSync(bytes, { maxOutputLength: MAX_DECODED_TOKEN_BODY_BYTES });
       return decoded.toString("utf8");
     } catch (err) {
-      // zlib throws ERR_ZLIB_OUTPUT_LENGTH_EXCEEDED when the decompressed
-      // output exceeds maxOutputLength — surface a clear error instead of
+      // zlib throws ERR_ZLIB_OUTPUT_LENGTH_EXCEEDED (Node <24) or
+      // ERR_BUFFER_TOO_LARGE (Node 24+) when the decompressed output
+      // exceeds maxOutputLength — surface a clear error instead of
       // returning raw binary as UTF-8.
-      if (err instanceof Error && "code" in err && err.code === "ERR_ZLIB_OUTPUT_LENGTH_EXCEEDED") {
+      if (
+        err instanceof Error &&
+        "code" in err &&
+        (err.code === "ERR_ZLIB_OUTPUT_LENGTH_EXCEEDED" || err.code === "ERR_BUFFER_TOO_LARGE")
+      ) {
         throw new Error(
           `google-vertex-adc: decompressed token response exceeds ${MAX_DECODED_TOKEN_BODY_BYTES} bytes`,
           { cause: err },
