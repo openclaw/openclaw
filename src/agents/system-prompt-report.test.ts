@@ -188,6 +188,63 @@ describe("buildSystemPromptReport", () => {
     expect(sameLengthChangedPrompt.systemPrompt.hash).not.toBe(report.systemPrompt.hash);
   });
 
+  it("keeps tool reporting lossy-safe when tool metadata is unreadable", () => {
+    const file = makeBootstrapFile({ path: "/tmp/workspace/AGENTS.md" });
+    const unreadableTool = Object.defineProperties(
+      {},
+      {
+        name: {
+          get() {
+            throw new Error("system report name getter exploded");
+          },
+        },
+        description: {
+          get() {
+            throw new Error("system report description getter exploded");
+          },
+        },
+        label: {
+          get() {
+            throw new Error("system report label getter exploded");
+          },
+        },
+        parameters: {
+          get() {
+            throw new Error("system report parameters getter exploded");
+          },
+        },
+      },
+    );
+
+    const report = buildSystemPromptReport({
+      source: "run",
+      generatedAt: 0,
+      bootstrapMaxChars: 20_000,
+      systemPrompt: "system",
+      bootstrapFiles: [file],
+      injectedFiles: [],
+      skillsPrompt: "",
+      tools: [
+        unreadableTool,
+        {
+          name: "read",
+          description: "Read files",
+          parameters: {
+            type: "object",
+            properties: {},
+          },
+        },
+      ] as never,
+    });
+
+    expect(report.tools.entries.map((tool) => tool.name)).toEqual(["tool[0]", "read"]);
+    expect(report.tools.entries[0]).toMatchObject({
+      summaryChars: 0,
+      schemaChars: 0,
+      propertiesCount: null,
+    });
+  });
+
   it("keeps reporting when a tool schema cannot be stringified", () => {
     const file = makeBootstrapFile({ path: "/tmp/workspace/AGENTS.md" });
     const circularSchema: Record<string, unknown> = {
