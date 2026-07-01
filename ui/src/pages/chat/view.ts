@@ -16,6 +16,8 @@ import { icons, type IconName } from "../../components/icons.ts";
 import { handleMarkdownCodeBlockCopy } from "../../components/markdown.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
+import { CHAT_HISTORY_RENDER_LIMIT } from "../../lib/chat/chat-types.ts";
+import type { ChatStreamSegment } from "../../lib/chat/chat-types.ts";
 import {
   CATEGORY_LABELS,
   SLASH_COMMANDS,
@@ -40,6 +42,7 @@ import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcom
 import type { SidebarContent } from "./components/chat-sidebar.ts";
 import { renderContextNotice } from "./context-notice.ts";
 import { DeletedMessages } from "./deleted-messages.ts";
+import "./components/chat-sidebar.ts";
 import { exportChatMarkdown } from "./export.ts";
 import {
   getAssistantAttachmentAvailabilityRenderVersion,
@@ -47,8 +50,6 @@ import {
   renderStreamGroup,
   type StreamGroupPart,
 } from "./grouped-render.ts";
-import "./components/chat-sidebar.ts";
-import { CHAT_HISTORY_RENDER_LIMIT } from "./history-limits.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
 import { PinnedMessages } from "./pinned-messages.ts";
 import { getPinnedMessageSummary } from "./pinned-summary.ts";
@@ -70,7 +71,6 @@ import {
   renderCompactionIndicator,
   renderFallbackIndicator,
 } from "./status-indicators.ts";
-import type { ChatStreamSegment } from "./stream-text.ts";
 import { getExpandedToolCards, syncToolCardExpansionState } from "./tool-expansion-state.ts";
 import type { ChatAttachment, ChatQueueItem } from "./types.ts";
 import "../../components/resizable-divider.ts";

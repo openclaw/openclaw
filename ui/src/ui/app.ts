@@ -43,6 +43,7 @@ import {
 } from "../app/theme.ts";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
 import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
+import type { ChatStreamSegment } from "../lib/chat/chat-types.ts";
 import { resolveAgentIdFromSessionKey } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import type { ActivityEntry, ActivityStatus } from "../pages/activity/data.ts";
@@ -106,7 +107,6 @@ import {
 } from "../pages/chat/scroll.ts";
 import type { ChatMessageCache } from "../pages/chat/session-message-cache.ts";
 import type { ChatSideResult } from "../pages/chat/side-result.ts";
-import type { ChatStreamSegment } from "../pages/chat/stream-text.ts";
 import type { ChatAttachment, ChatQueueItem } from "../pages/chat/types.ts";
 import { loadCronPage } from "../pages/cron/data.ts";
 import { DEFAULT_CRON_FORM } from "../pages/cron/data.ts";

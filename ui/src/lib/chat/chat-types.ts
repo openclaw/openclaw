@@ -16,6 +16,31 @@ export type ChatItem =
   | { kind: "stream"; key: string; text: string; startedAt: number; isStreaming: boolean }
   | { kind: "reading-indicator"; key: string };
 
+export const CHAT_HISTORY_RENDER_LIMIT = 100;
+export const CHAT_HISTORY_RENDER_CHAR_BUDGET = 240_000;
+
+export type ChatStreamSegment = {
+  text: string;
+  ts: number;
+  toolCallId?: string;
+  itemId?: string;
+};
+
+export function streamSegmentHasItemId(segment: { itemId?: unknown }): boolean {
+  return typeof segment.itemId === "string" && segment.itemId.trim().length > 0;
+}
+
+export function streamSegmentUsesAccumulatedText(segment: { itemId?: unknown }): boolean {
+  return !streamSegmentHasItemId(segment);
+}
+
+export function trimAccumulatedStreamPrefix(text: string, previousText: string | null): string {
+  if (!previousText || !text.startsWith(previousText)) {
+    return text;
+  }
+  return text.slice(previousText.length).trimStart();
+}
+
 /** A group of consecutive messages from the same role (Slack-style layout) */
 export type MessageGroup = {
   kind: "group";

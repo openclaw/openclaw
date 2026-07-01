@@ -5,6 +5,20 @@ import type {
   NormalizedMessage,
   ToolCard,
 } from "../../lib/chat/chat-types.ts";
+import {
+  CHAT_HISTORY_RENDER_CHAR_BUDGET,
+  CHAT_HISTORY_RENDER_LIMIT,
+} from "../../lib/chat/chat-types.ts";
+import {
+  streamSegmentHasItemId,
+  streamSegmentUsesAccumulatedText,
+  trimAccumulatedStreamPrefix,
+  type ChatStreamSegment,
+} from "../../lib/chat/chat-types.ts";
+import {
+  isAssistantHeartbeatAckForDisplay,
+  stripHeartbeatTokenForDisplay,
+} from "../../lib/chat/heartbeat-display.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import {
   normalizeMessage,
@@ -13,17 +27,6 @@ import {
 import { normalizeRoleForGrouping } from "../../lib/chat/role-normalizer.ts";
 import { messageMatchesSearchQuery } from "../../lib/chat/search-match.ts";
 import { extractToolCardsCached, extractToolPreview } from "../../lib/chat/tool-cards.ts";
-import {
-  isAssistantHeartbeatAckForDisplay,
-  stripHeartbeatTokenForDisplay,
-} from "./heartbeat-display.ts";
-import { CHAT_HISTORY_RENDER_CHAR_BUDGET, CHAT_HISTORY_RENDER_LIMIT } from "./history-limits.ts";
-import {
-  streamSegmentHasItemId,
-  streamSegmentUsesAccumulatedText,
-  trimAccumulatedStreamPrefix,
-  type ChatStreamSegment,
-} from "./stream-text.ts";
 import type { ChatQueueItem } from "./types.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 

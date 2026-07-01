@@ -1,5 +1,6 @@
 // Control UI module implements app tool stream behavior.
 import { stripInlineDirectiveTagsForDelivery } from "../../../src/utils/directive-tags.js";
+import type { ChatStreamSegment } from "../lib/chat/chat-types.ts";
 import { formatUnknownText, truncateText } from "../lib/format.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import {
@@ -11,7 +12,6 @@ import {
 } from "../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../lib/string-coerce.ts";
 import { updateActivityFromToolEvent, type ActivityEntry } from "../pages/activity/data.ts";
-import type { ChatStreamSegment } from "./chat/stream-text.ts";
 
 const TOOL_STREAM_LIMIT = 50;
 const TOOL_STREAM_THROTTLE_MS = 80;
