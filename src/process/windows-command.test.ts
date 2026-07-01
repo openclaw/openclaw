@@ -33,6 +33,16 @@ describe("resolveWindowsCommandShim", () => {
     ).toBe("corepack.cmd");
   });
 
+  it("appends .cmd for Gemini CLI on Windows when configured", () => {
+    expect(
+      resolveWindowsCommandShim({
+        command: "gemini",
+        cmdCommands: ["gemini"],
+        platform: "win32",
+      }),
+    ).toBe("gemini.cmd");
+  });
+
   it("keeps explicit extensions on Windows", () => {
     expect(
       resolveWindowsCommandShim({
