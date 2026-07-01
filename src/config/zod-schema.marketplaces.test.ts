@@ -2,6 +2,14 @@
 import { describe, expect, it } from "vitest";
 import { OpenClawSchema } from "./zod-schema.js";
 
+const ACME_ROOT_PUBLIC_KEY = "lHseHhZT8bJYRcI-1M9n7BBeC6trLjN1ccXKufO8WpY";
+const ACME_BACKUP_PUBLIC_KEY = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const ACME_ROOT_PUBLIC_KEY_PEM = [
+  "-----BEGIN PUBLIC KEY-----",
+  "MCowBQYDK2VwAyEAlHseHhZT8bJYRcI+1M9n7BBeC6trLjN1ccXKufO8WpY=",
+  "-----END PUBLIC KEY-----",
+].join("\n");
+
 function expectMarketplacesConfig(value: unknown) {
   const result = OpenClawSchema.safeParse(value);
   if (!result.success) {
@@ -21,7 +29,20 @@ describe("OpenClawSchema marketplaces config", () => {
           },
           acme: {
             url: "https://packages.acme.example/openclaw/feed",
-            verification: { mode: "unsigned" },
+            verification: {
+              mode: "signed",
+              keys: [
+                {
+                  keyId: "acme-root-2026",
+                  publicKey: ACME_ROOT_PUBLIC_KEY,
+                },
+                {
+                  keyId: "acme-backup-2026",
+                  publicKey: ACME_BACKUP_PUBLIC_KEY,
+                },
+              ],
+              threshold: 2,
+            },
           },
         },
         sources: {
@@ -35,6 +56,20 @@ describe("OpenClawSchema marketplaces config", () => {
     });
 
     expect(marketplaces?.feeds?.acme.url).toBe("https://packages.acme.example/openclaw/feed");
+    expect(marketplaces?.feeds?.acme.verification).toEqual({
+      mode: "signed",
+      keys: [
+        {
+          keyId: "acme-root-2026",
+          publicKey: ACME_ROOT_PUBLIC_KEY,
+        },
+        {
+          keyId: "acme-backup-2026",
+          publicKey: ACME_BACKUP_PUBLIC_KEY,
+        },
+      ],
+      threshold: 2,
+    });
     expect(marketplaces?.sources?.["acme-git"].type).toBe("git");
   });
 
@@ -67,7 +102,7 @@ describe("OpenClawSchema marketplaces config", () => {
     }
   });
 
-  it("rejects refresh, auth, and signed verification until loader enforcement exists", () => {
+  it("rejects refresh and auth until loader enforcement exists", () => {
     expect(
       OpenClawSchema.safeParse({
         marketplaces: {
@@ -92,18 +127,92 @@ describe("OpenClawSchema marketplaces config", () => {
         },
       }).success,
     ).toBe(false);
-    expect(
-      OpenClawSchema.safeParse({
+  });
+
+  it("rejects signed feed verification without usable local trust anchors", () => {
+    for (const verification of [
+      { mode: "signed" },
+      { mode: "signed", keys: [] },
+      { mode: "signed", keys: [{ keyId: "", publicKey: "abc" }] },
+      { mode: "signed", keys: [{ keyId: "acme-root", publicKey: "" }] },
+      { mode: "signed", keys: [{ keyId: "acme-root", publicKey: "abc" }] },
+      { mode: "signed", keys: [{ keyId: "acme-root", publicKey: `${ACME_ROOT_PUBLIC_KEY}!` }] },
+      {
+        mode: "signed",
+        keys: [
+          {
+            keyId: "acme-root",
+            publicKey:
+              "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n-----END PRIVATE KEY-----",
+          },
+        ],
+      },
+      {
+        mode: "signed",
+        keys: [{ keyId: "acme-root", publicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" }],
+        threshold: 0,
+      },
+      {
+        mode: "signed",
+        keys: [{ keyId: "acme-root", publicKey: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" }],
+        threshold: 2,
+      },
+    ]) {
+      expect(
+        OpenClawSchema.safeParse({
+          marketplaces: {
+            feeds: {
+              acme: {
+                url: "https://packages.acme.example/openclaw/feed",
+                verification,
+              },
+            },
+          },
+        }).success,
+      ).toBe(false);
+    }
+  });
+
+  it("rejects duplicate signed feed trust anchors", () => {
+    for (const verification of [
+      {
+        mode: "signed",
+        keys: [
+          { keyId: "acme-root", publicKey: ACME_ROOT_PUBLIC_KEY },
+          { keyId: "acme-root", publicKey: ACME_BACKUP_PUBLIC_KEY },
+        ],
+        threshold: 2,
+      },
+      {
+        mode: "signed",
+        keys: [
+          { keyId: "acme-root-a", publicKey: ACME_ROOT_PUBLIC_KEY },
+          { keyId: "acme-root-b", publicKey: ACME_ROOT_PUBLIC_KEY },
+        ],
+        threshold: 2,
+      },
+      {
+        mode: "signed",
+        keys: [
+          { keyId: "acme-root-a", publicKey: ACME_ROOT_PUBLIC_KEY },
+          { keyId: "acme-root-b", publicKey: ACME_ROOT_PUBLIC_KEY_PEM },
+        ],
+        threshold: 2,
+      },
+    ]) {
+      const result = OpenClawSchema.safeParse({
         marketplaces: {
           feeds: {
             acme: {
               url: "https://packages.acme.example/openclaw/feed",
-              verification: { mode: "signed" },
+              verification,
             },
           },
         },
-      }).success,
-    ).toBe(false);
+      });
+
+      expect(result.success).toBe(false);
+    }
   });
 
   it("rejects unknown source profile types", () => {
