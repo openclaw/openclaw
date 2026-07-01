@@ -332,6 +332,29 @@ struct GatewayChannelConnectTests {
         }
     }
 
+    @Test func `protocol mismatch connect failure is terminal`() async throws {
+        let session = self.makeSession(response: .authFailed(
+            delayMs: 0,
+            detailCode: GatewayConnectAuthDetailCode.protocolMismatch.rawValue,
+            canRetryWithDeviceToken: false,
+            recommendedNextStep: nil))
+        let channel = try GatewayChannelActor(
+            url: #require(URL(string: "ws://example.invalid")),
+            token: nil,
+            session: WebSocketSessionBox(session: session))
+
+        do {
+            try await channel.connect()
+            Issue.record("expected GatewayConnectAuthError")
+        } catch let error as GatewayConnectAuthError {
+            #expect(error.detail == .protocolMismatch)
+            #expect(error.detailCode == GatewayConnectAuthDetailCode.protocolMismatch.rawValue)
+            #expect(error.isNonRecoverable)
+        } catch {
+            Issue.record("unexpected error: \(error)")
+        }
+    }
+
     @Test func `connect maps user cancelled authentication with cached TLS failure`() async throws {
         let failure = GatewayTLSValidationFailure(
             kind: .pinMismatch,
