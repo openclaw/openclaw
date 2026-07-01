@@ -463,6 +463,9 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
         `  ${emoji ? `${emoji} ` : ""}${sanitizeForLog(skill.name)} ${theme.muted(`(${reason})`)}`,
       );
     }
+    lines.push(
+      `  ${theme.muted("Fix:")} set frontmatter \`disable-model-invocation: false\` to expose the skill to the model.`,
+    );
   }
 
   if (agentFiltered.length > 0) {
@@ -474,6 +477,9 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
         `  ${emoji ? `${emoji} ` : ""}${sanitizeForLog(skill.name)} ${theme.muted("(loaded, but this agent is not allowed to see/use it)")}`,
       );
     }
+    lines.push(
+      `  ${theme.muted("Fix:")} add the skill name to this agent's \`agents.list[].skills\` allowlist (or \`agents.defaults.skills\`, which applies only when the agent sets no explicit list).`,
+    );
   }
 
   if (missingReqs.length > 0) {
@@ -486,6 +492,9 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
         `  ${emoji ? `${emoji} ` : ""}${sanitizeForLog(skill.name)} ${theme.muted(`(${missing})`)}`,
       );
     }
+    lines.push(
+      `  ${theme.muted("Fix:")} run ${formatCliCommand("openclaw skills info <name>")} for install hints.`,
+    );
   }
 
   return appendClawHubHint(lines.join("\n"), opts.json);
