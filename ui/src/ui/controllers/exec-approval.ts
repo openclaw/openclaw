@@ -303,16 +303,41 @@ function scheduleApprovalExpiryPrune(
 ): void {
   const delay = Math.max(0, entry.expiresAtMs - Date.now() + 500);
   globalThis.setTimeout(() => {
-    removeExecApprovalFromState(state, entry.id);
+    removeExecApprovalEntryFromState(state, entry);
   }, delay);
 }
 
-function removeExecApprovalFromState(state: ExecApprovalPromptState, id: string): void {
+function isSamePendingApprovalEntry(
+  left: ExecApprovalRequest,
+  right: ExecApprovalRequest,
+): boolean {
+  return (
+    left.id === right.id &&
+    left.kind === right.kind &&
+    left.createdAtMs === right.createdAtMs &&
+    left.expiresAtMs === right.expiresAtMs
+  );
+}
+
+function removeExecApprovalFromState(state: ExecApprovalPromptState, id: string): boolean {
   const activeId = state.execApprovalQueue[0]?.id ?? null;
+  const hadEntry = state.execApprovalQueue.some((entry) => entry.id === id);
   state.execApprovalQueue = removeExecApproval(state.execApprovalQueue, id);
   if (activeId !== (state.execApprovalQueue[0]?.id ?? null)) {
     state.execApprovalError = null;
   }
+  return hadEntry;
+}
+
+function removeExecApprovalEntryFromState(
+  state: ExecApprovalPromptState,
+  entry: ExecApprovalRequest,
+): boolean {
+  const currentEntry = state.execApprovalQueue.find((candidate) => candidate.id === entry.id);
+  if (!currentEntry || !isSamePendingApprovalEntry(currentEntry, entry)) {
+    return false;
+  }
+  return removeExecApprovalFromState(state, entry.id);
 }
 
 export function enqueueExecApprovalPrompt(
@@ -368,6 +393,17 @@ export async function refreshPendingApprovalQueue(state: ExecApprovalPromptState
 export function dismissExecApprovalPrompt(state: ExecApprovalPromptState, id: string): void {
   removeExecApprovalFromState(state, id);
   state.execApprovalRefreshRemovedIds?.add(id);
+  state.execApprovalError = null;
+}
+
+export function dismissExecApprovalEntryPrompt(
+  state: ExecApprovalPromptState,
+  entry: ExecApprovalRequest,
+): void {
+  if (!removeExecApprovalEntryFromState(state, entry)) {
+    return;
+  }
+  state.execApprovalRefreshRemovedIds?.add(entry.id);
   state.execApprovalError = null;
 }
 

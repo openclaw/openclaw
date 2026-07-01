@@ -6,6 +6,7 @@ import {
   parseExecApprovalRequested,
   parsePluginApprovalRequested,
   clearResolvedExecApprovalPrompt,
+  enqueueExecApprovalPrompt,
   refreshPendingApprovalQueue,
   type ExecApprovalPromptState,
   type ExecApprovalRequest,
@@ -261,6 +262,42 @@ describe("clearResolvedExecApprovalPrompt", () => {
 
     expect(state.execApprovalQueue).toEqual([]);
     expect(state.execApprovalError).toBeNull();
+  });
+});
+
+describe("enqueueExecApprovalPrompt", () => {
+  it("does not let an old expiry timer remove a newer approval with the same id", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
+    try {
+      const oldApproval = createExecApproval({
+        id: "approval-reused",
+        createdAtMs: Date.now(),
+        expiresAtMs: Date.now() + 1_000,
+      });
+      const newerApproval = createExecApproval({
+        id: "approval-reused",
+        createdAtMs: Date.now() + 2_000,
+        expiresAtMs: Date.now() + 60_000,
+      });
+      const state = createPromptState(
+        vi.fn<RequestFn>(async () => ({})),
+        [],
+      );
+
+      enqueueExecApprovalPrompt(state, oldApproval);
+      enqueueExecApprovalPrompt(state, newerApproval);
+
+      vi.advanceTimersByTime(1_500);
+
+      expect(state.execApprovalQueue).toEqual([newerApproval]);
+
+      vi.advanceTimersByTime(59_000);
+
+      expect(state.execApprovalQueue).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

@@ -70,6 +70,40 @@ describe("OpenClawApp exec approval decisions", () => {
     expect(app.execApprovalBusy).toBe(false);
   });
 
+  it("keeps a newer same-id approval when an older resolve finishes", async () => {
+    let resolveApproval!: (value: unknown) => void;
+    const resolvePromise = new Promise<unknown>((resolve) => {
+      resolveApproval = resolve;
+    });
+    const request = vi.fn<RequestFn>(async (method) => {
+      if (method === "exec.approval.resolve") {
+        return resolvePromise;
+      }
+      return {};
+    });
+    const active = createExecApproval({
+      id: "approval-reused",
+      createdAtMs: 1000,
+      expiresAtMs: Date.now() + 1_000,
+    });
+    const replacement = createExecApproval({
+      id: "approval-reused",
+      createdAtMs: 2000,
+      expiresAtMs: Date.now() + 60_000,
+    });
+    const app = await createApp(request, [active]);
+
+    const decisionPromise = app.handleExecApprovalDecision("allow-once");
+    app.execApprovalQueue = [replacement];
+    app.execApprovalError = "Approval failed: replacement still active";
+    resolveApproval({ ok: true });
+    await decisionPromise;
+
+    expect(app.execApprovalQueue).toEqual([replacement]);
+    expect(app.execApprovalError).toBe("Approval failed: replacement still active");
+    expect(app.execApprovalBusy).toBe(false);
+  });
+
   it("dismisses and refreshes when the backend reports an already resolved approval", async () => {
     const request = vi.fn<RequestFn>(async (method) => {
       if (method === "exec.approval.resolve") {
