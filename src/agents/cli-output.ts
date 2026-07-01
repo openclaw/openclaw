@@ -6,6 +6,11 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { CliBackendConfig } from "../config/types.js";
+import type {
+  CliBackendJsonlUsage,
+  CliBackendParseJsonlEvent,
+  CliBackendParsedJsonlEvent,
+} from "../plugins/types.js";
 import { extractBalancedJsonFragments } from "../shared/balanced-json.js";
 import { isRecord } from "../utils.js";
 import type {
@@ -13,13 +18,7 @@ import type {
   MessagingToolSourceReplyPayload,
 } from "./embedded-agent-messaging.types.js";
 
-type CliUsage = {
-  input?: number;
-  output?: number;
-  cacheRead?: number;
-  cacheWrite?: number;
-  total?: number;
-};
+type CliUsage = CliBackendJsonlUsage;
 
 type CliProcessDiagnostics = {
   backendId: string;
@@ -94,12 +93,23 @@ function isGeminiStreamJsonDialect(params: {
   );
 }
 
-/** Returns whether JSONL output carries correlated provider tool events. */
-export function supportsCliJsonlToolEvents(params: {
+function isClaudeStreamJsonDialect(params: {
   backend: CliBackendConfig;
   providerId: string;
 }): boolean {
   return (
+    params.backend.jsonlDialect === "claude-stream-json" || isClaudeCliProvider(params.providerId)
+  );
+}
+
+/** Returns whether JSONL output carries correlated provider tool events. */
+export function supportsCliJsonlToolEvents(params: {
+  backend: CliBackendConfig;
+  providerId: string;
+  parseJsonlEvent?: CliBackendParseJsonlEvent;
+}): boolean {
+  return (
+    params.parseJsonlEvent !== undefined ||
     params.backend.jsonlDialect === "claude-stream-json" ||
     isClaudeCliProvider(params.providerId) ||
     isGeminiStreamJsonDialect(params)
@@ -111,7 +121,7 @@ function isClaudeStreamJsonResult(params: {
   providerId: string;
   parsed: Record<string, unknown>;
 }): boolean {
-  return supportsCliJsonlToolEvents(params) && params.parsed.type === "result";
+  return isClaudeStreamJsonDialect(params) && params.parsed.type === "result";
 }
 
 function extractJsonObjectCandidates(raw: string): string[] {
@@ -412,7 +422,7 @@ function parseClaudeCliJsonlResult(params: {
   sessionId?: string;
   usage?: CliUsage;
 }): CliOutput | null {
-  if (!supportsCliJsonlToolEvents(params)) {
+  if (!isClaudeStreamJsonDialect(params)) {
     return null;
   }
   if (
@@ -439,7 +449,7 @@ function parseClaudeCliStreamingDelta(params: {
   sessionId?: string;
   usage?: CliUsage;
 }): CliStreamingDelta | null {
-  if (!supportsCliJsonlToolEvents(params)) {
+  if (!isClaudeStreamJsonDialect(params)) {
     return null;
   }
   if (params.parsed.type !== "stream_event" || !isRecord(params.parsed.event)) {
@@ -554,7 +564,7 @@ function dispatchClaudeCliStreamingToolEvent(params: {
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
 }): void {
-  if (!supportsCliJsonlToolEvents(params)) {
+  if (!isClaudeStreamJsonDialect(params)) {
     return;
   }
   const tracker = params.tracker;
@@ -743,9 +753,12 @@ function readGeminiCliStreamJsonError(parsed: Record<string, unknown>): string |
 export function createCliJsonlStreamingParser(params: {
   backend: CliBackendConfig;
   providerId: string;
+  parseJsonlEvent?: CliBackendParseJsonlEvent;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
+  onDisplayToolUseStart?: (delta: CliToolUseStartDelta) => void;
+  onDisplayToolResult?: (delta: CliToolResultDelta) => void;
   onCommentaryText?: (text: string) => void;
 }) {
   let lineBuffer = "";
@@ -759,7 +772,7 @@ export function createCliJsonlStreamingParser(params: {
   // Classification is keyed on consumer presence so reclassified pre-tool text
   // always has a destination; a separate enable flag let it be dropped (#92092).
   const classifyClaudeCommentary =
-    Boolean(params.onCommentaryText) && supportsCliJsonlToolEvents(params);
+    Boolean(params.onCommentaryText) && isClaudeStreamJsonDialect(params);
 
   const flushPendingClaudeAssistantText = () => {
     if (!pendingClaudeText) {
@@ -785,6 +798,88 @@ export function createCliJsonlStreamingParser(params: {
     if (text) {
       params.onCommentaryText?.(text);
     }
+  };
+
+  const handleCustomJsonlEvent = (event: CliBackendParsedJsonlEvent) => {
+    if (event.kind === "sessionId") {
+      const nextSessionId = event.sessionId.trim();
+      if (nextSessionId) {
+        sessionId = nextSessionId;
+      }
+      return;
+    }
+    if (event.kind === "text") {
+      if (!event.text) {
+        return;
+      }
+      assistantText = `${assistantText}${event.text}`;
+      params.onAssistantDelta({
+        text: assistantText,
+        delta: event.text,
+        sessionId,
+        usage,
+      });
+      return;
+    }
+    if (event.kind === "thinking") {
+      const text = event.text.trim();
+      if (text) {
+        params.onCommentaryText?.(text);
+      }
+      return;
+    }
+    if (event.kind === "toolStart") {
+      emitToolStartOnce(
+        toolTracker,
+        event.toolCallId,
+        event.name,
+        event.args ?? {},
+        params.onDisplayToolUseStart ?? params.onToolUseStart,
+      );
+      return;
+    }
+    if (event.kind === "toolResult") {
+      if (event.name) {
+        toolTracker.nameById.set(event.toolCallId, event.name);
+      }
+      emitToolResultOnce(
+        toolTracker,
+        event.toolCallId,
+        event.isError === true,
+        event.result,
+        params.onDisplayToolResult ?? params.onToolResult,
+      );
+      return;
+    }
+    if (event.sessionId?.trim()) {
+      sessionId = event.sessionId.trim();
+    }
+    usage = event.usage ?? usage;
+    const text = typeof event.text === "string" ? event.text : assistantText;
+    output = {
+      text: text.trim(),
+      sessionId,
+      usage,
+      ...(event.errorText ? { errorText: event.errorText } : {}),
+    };
+  };
+
+  const handleCustomJsonlLine = (line: string): boolean => {
+    if (!params.parseJsonlEvent) {
+      return false;
+    }
+    const parsed = params.parseJsonlEvent(line, {
+      backendId: params.providerId,
+      backend: params.backend,
+    });
+    if (parsed == null) {
+      return false;
+    }
+    const events = Array.isArray(parsed) ? parsed : [parsed];
+    for (const event of events) {
+      handleCustomJsonlEvent(event);
+    }
+    return true;
   };
 
   const handleParsedRecord = (parsed: Record<string, unknown>) => {
@@ -928,6 +1023,9 @@ export function createCliJsonlStreamingParser(params: {
       if (!line) {
         continue;
       }
+      if (handleCustomJsonlLine(line)) {
+        continue;
+      }
       for (const parsed of parseJsonRecordCandidates(line)) {
         handleParsedRecord(parsed);
       }
@@ -938,6 +1036,9 @@ export function createCliJsonlStreamingParser(params: {
     const tail = lineBuffer.trim();
     lineBuffer = "";
     if (!tail) {
+      return;
+    }
+    if (handleCustomJsonlLine(tail)) {
       return;
     }
     for (const parsed of parseJsonRecordCandidates(tail)) {
@@ -963,7 +1064,10 @@ export function createCliJsonlStreamingParser(params: {
       if (output) {
         return output;
       }
-      if (isGeminiStreamJsonDialect(params) && (assistantText.trim() || sessionId || usage)) {
+      if (
+        (params.parseJsonlEvent || isGeminiStreamJsonDialect(params)) &&
+        (assistantText.trim() || sessionId || usage)
+      ) {
         return { text: assistantText.trim(), sessionId, usage };
       }
       const text = texts.join("\n").trim();

@@ -202,6 +202,7 @@ only for behavior that really belongs to the backend.
 | `normalizeConfig(config, context)` | Rewrite legacy user config after merge                                      |
 | `resolveExecutionArgs(ctx)`        | Add request-scoped flags such as thinking effort or side-question isolation |
 | `prepareExecution(ctx)`            | Create temporary auth or config bridges before launch                       |
+| `parseJsonlEvent(line, ctx)`       | Map provider JSONL lines to text, thinking, result, and native tool events  |
 | `transformSystemPrompt(ctx)`       | Apply a final CLI-specific system prompt transform                          |
 | `textTransforms`                   | Bidirectional prompt/output replacements                                    |
 | `defaultAuthProfileId`             | Prefer a specific OpenClaw auth profile                                     |
@@ -220,6 +221,18 @@ as disabling native tools, session persistence, or resume behavior for BTW. If a
 backend normally has `nativeToolMode: "always-on"` but its side-question argv
 reliably disables those tools, also set `sideQuestionToolMode: "disabled"`;
 otherwise OpenClaw fails closed when BTW requires a no-tools CLI run.
+
+### `parseJsonlEvent`: native display events for custom JSONL streams
+
+If `output: "jsonl"` uses a provider-specific stream format, add
+`parseJsonlEvent(line, ctx)` to the registered backend. The hook receives one
+stdout line and returns one normalized event, an array of events, or `undefined`
+when the line is not recognized. Supported event kinds are `text`, `thinking`,
+`toolStart`, `toolResult`, `result`, and `sessionId`.
+
+Use `toolStart` / `toolResult` only to report tool execution the CLI already
+performed itself. These events are display-only native tool cards; they do not
+register or execute tools through OpenClaw's tool catalog.
 
 ### `ownsNativeCompaction`: opting out of OpenClaw compaction
 

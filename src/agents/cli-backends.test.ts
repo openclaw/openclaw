@@ -5,6 +5,7 @@ import type { CliBackendConfig } from "../config/types.js";
 import type {
   CliBackendAuthEpochMode,
   CliBackendNormalizeConfigContext,
+  CliBackendParseJsonlEvent,
   CliBackendResolveExecutionArgs,
   CliBundleMcpMode,
 } from "../plugins/types.js";
@@ -35,6 +36,7 @@ function createBackendEntry(params: {
   ownsNativeCompaction?: boolean;
   prepareExecution?: () => Promise<null>;
   resolveExecutionArgs?: CliBackendResolveExecutionArgs;
+  parseJsonlEvent?: CliBackendParseJsonlEvent;
   normalizeConfig?: (
     config: CliBackendConfig,
     context?: CliBackendNormalizeConfigContext,
@@ -55,6 +57,7 @@ function createBackendEntry(params: {
       ...(params.ownsNativeCompaction ? { ownsNativeCompaction: params.ownsNativeCompaction } : {}),
       ...(params.prepareExecution ? { prepareExecution: params.prepareExecution } : {}),
       ...(params.resolveExecutionArgs ? { resolveExecutionArgs: params.resolveExecutionArgs } : {}),
+      ...(params.parseJsonlEvent ? { parseJsonlEvent: params.parseJsonlEvent } : {}),
       ...(params.normalizeConfig ? { normalizeConfig: params.normalizeConfig } : {}),
       liveTest: {
         defaultModelRef:
@@ -1120,6 +1123,28 @@ describe("resolveCliBackendConfig google-gemini-cli defaults", () => {
     const resolved = requireCliBackendConfig("claude-cli");
 
     expect(resolved?.resolveExecutionArgs).toBe(resolveExecutionArgs);
+  });
+
+  it("preserves backend-owned JSONL line parsers", () => {
+    const parseJsonlEvent: CliBackendParseJsonlEvent = () => ({
+      kind: "text",
+      text: "hello",
+    });
+    runtimeBackendEntries = [
+      createRuntimeBackendEntry({
+        pluginId: "custom",
+        id: "custom-cli",
+        config: {
+          command: "custom-cli",
+          output: "jsonl",
+        },
+        parseJsonlEvent,
+      }),
+    ];
+
+    const resolved = requireCliBackendConfig("custom-cli");
+
+    expect(resolved?.parseJsonlEvent).toBe(parseJsonlEvent);
   });
 });
 
