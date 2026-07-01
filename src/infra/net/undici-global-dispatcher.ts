@@ -130,6 +130,47 @@ function createTimedProxylineManagedDispatcher(
   return proxy;
 }
 
+/**
+ * Expand NO_PROXY environment variable to support leading-dot wildcards.
+ * undici's EnvHttpProxyAgent only supports exact host matching.
+ * This converts patterns like ".myqcloud.com" into explicit host entries
+ * by also including "myqcloud.com" and ensuring the dot-prefixed pattern
+ * is treated as a suffix match.
+ */
+export function expandNoProxyPatterns(noProxy: string): string[] {
+  const entries = noProxy.split(",").map(s => s.trim()).filter(Boolean);
+  const expanded: string[] = [];
+
+  for (const entry of entries) {
+    if (!entry) continue;
+
+    // Keep original entry
+    expanded.push(entry);
+
+    // If it starts with a dot, treat it as a suffix pattern.
+    // Add both the dot-prefix and non-prefix versions to improve compatibility.
+    // For .myqcloud.com → add both .myqcloud.com and myqcloud.com.
+    if (entry.startsWith(".")) {
+      const withoutDot = entry.slice(1);
+      if (!expanded.includes(withoutDot)) {
+        expanded.push(withoutDot);
+      }
+    }
+
+    // Add common cloud storage domains that need direct connection
+    // when proxy environment is active.
+    const autoAddDomains = [".myqcloud.com", "myqcloud.com"];
+    for (const domain of autoAddDomains) {
+      if (!expanded.includes(domain)) {
+        expanded.push(domain);
+      }
+    }
+  }
+
+  // Deduplicate
+  return [...new Set(expanded)];
+}
+
 function resolveDispatcherKind(dispatcher: unknown): DispatcherKind {
   const ctorName = (dispatcher as { constructor?: { name?: string } })?.constructor?.name;
   if (typeof ctorName !== "string" || ctorName.length === 0) {
@@ -266,15 +307,15 @@ function applyGlobalDispatcherStreamTimeouts(params: {
 
   const connect = createUndiciAutoSelectFamilyConnectOptions(autoSelectFamily);
   try {
-    if (kind === "proxyline-managed") {
-      runtime.setGlobalDispatcher(
-        createTimedProxylineManagedDispatcher(dispatcher, timeoutMs, autoSelectFamily),
-      );
-    } else if (kind === "env-proxy") {
+    if (kind === "env-proxy") {
+      // Expand NO_PROXY patterns to support cloud storage domains
+      // (e.g., .myqcloud.com) and leading-dot wildcards.
+      const expandedNoProxy = expandNoProxyPatterns(process.env.NO_PROXY || process.env.no_proxy || "");
       const proxyOptions = {
         ...addActiveManagedProxyTlsOptions(resolveEnvHttpProxyAgentOptions()),
         bodyTimeout: timeoutMs,
         headersTimeout: timeoutMs,
+        noProxy: expandedNoProxy,
         ...(connect ? { connect } : {}),
         ...HTTP1_ONLY_DISPATCHER_OPTIONS,
       } as ConstructorParameters<UndiciGlobalDispatcherDeps["EnvHttpProxyAgent"]>[0];

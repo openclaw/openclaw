@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { execNodeEvalSync } from "../../test-utils/node-process.js";
 
+// Hoist mock classes before importing the module
 const {
   Agent,
   EnvHttpProxyAgent,
@@ -157,25 +158,44 @@ vi.mock("../wsl.js", () => ({
   isWSL2Sync: vi.fn(() => false),
 }));
 
-import { isWSL2Sync } from "../wsl.js";
+// Now import the module under test
 import {
-  hasEnvHttpProxyAgentConfigured,
-  resolveEnvHttpProxyAgentOptions,
-  resolveEnvHttpProxyUrl,
-} from "./proxy-env.js";
-import {
-  resetActiveManagedProxyStateForTests,
-  registerActiveManagedProxyUrl,
-  stopActiveManagedProxyRegistration,
-} from "./proxy/active-proxy-state.js";
-let DEFAULT_UNDICI_STREAM_TIMEOUT_MS: typeof import("./undici-global-dispatcher.js").DEFAULT_UNDICI_STREAM_TIMEOUT_MS;
-let ensureGlobalUndiciDispatcherStreamTimeouts: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciDispatcherStreamTimeouts;
-let ensureGlobalUndiciEnvProxyDispatcher: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciEnvProxyDispatcher;
-let ensureGlobalUndiciStreamTimeouts: typeof import("./undici-global-dispatcher.js").ensureGlobalUndiciStreamTimeouts;
-let forceResetGlobalDispatcher: typeof import("./undici-global-dispatcher.js").forceResetGlobalDispatcher;
-let resetGlobalUndiciStreamTimeoutsForTests: typeof import("./undici-global-dispatcher.js").resetGlobalUndiciStreamTimeoutsForTests;
-let undiciGlobalDispatcherModule: typeof import("./undici-global-dispatcher.js");
-let noProxySubprocessOutput = "";
+  DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
+  ensureGlobalUndiciStreamTimeouts,
+  resetGlobalUndiciStreamTimeoutsForTests,
+  expandNoProxyPatterns,
+} from "./undici-global-dispatcher.js";
+
+describe("expandNoProxyPatterns", () => {
+  it("expands leading dot patterns", () => {
+    const result = expandNoProxyPatterns(".example.com");
+    expect(result).toContain("example.com");
+    expect(result).toContain(".example.com");
+  });
+
+  it("auto-adds COS domains", () => {
+    const result = expandNoProxyPatterns("localhost");
+    expect(result).toContain("myqcloud.com");
+    expect(result).toContain(".myqcloud.com");
+  });
+
+  it("preserves existing entries", () => {
+    const result = expandNoProxyPatterns("example.com,test.org");
+    expect(result).toContain("example.com");
+    expect(result).toContain("test.org");
+  });
+
+  it("handles empty input", () => {
+    expect(expandNoProxyPatterns("")).toEqual([]);
+    expect(expandNoProxyPatterns("   ")).toEqual([]);
+  });
+
+  it("deduplicates entries", () => {
+    const result = expandNoProxyPatterns(".myqcloud.com,myqcloud.com");
+    expect(result.filter(x => x === "myqcloud.com").length).toBe(1);
+    expect(result.filter(x => x === ".myqcloud.com").length).toBe(1);
+  });
+});
 
 describe("ensureGlobalUndiciStreamTimeouts", () => {
   beforeAll(async () => {
