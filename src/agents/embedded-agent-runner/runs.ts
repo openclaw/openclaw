@@ -18,6 +18,7 @@ import {
 import {
   diagnosticLogger as diag,
   logEmbeddedAgentSteerEvent,
+  logMessageQueued,
   logSessionStateChange,
   updateDiagnosticSessionFile,
 } from "../../logging/diagnostic.js";
@@ -312,7 +313,7 @@ export function queueEmbeddedAgentMessageWithOutcome(
   if (prepared.kind === "complete") {
     return prepared.outcome;
   }
-  logEmbeddedAgentSteerEvent({ sessionId, sessionKey: prepared.sessionKey });
+  logEmbeddedAgentSteerEvent({ sessionId });
   void prepared.handle
     .queueMessage(text, options ?? { steeringMode: "all" })
     .catch((err: unknown) => {
@@ -360,7 +361,7 @@ export async function queueEmbeddedAgentMessageWithOutcomeAsync(
     const enqueuedAtMs = Date.now();
     await prepared.handle.queueMessage(text, options ?? { steeringMode: "all" });
     const deliveredAtMs = options?.waitForTranscriptCommit ? Date.now() : undefined;
-    logEmbeddedAgentSteerEvent({ sessionId, sessionKey: prepared.sessionKey });
+    logEmbeddedAgentSteerEvent({ sessionId });
     return {
       queued: true,
       sessionId,
@@ -385,7 +386,7 @@ function prepareEmbeddedAgentQueueMessage(
   if (!handle) {
     const queuedReplyRunMessage = queueReplyRunMessage(sessionId, text);
     if (queuedReplyRunMessage) {
-      logEmbeddedAgentSteerEvent({ sessionId });
+      logMessageQueued({ sessionId, source: "embedded-agent-runner" });
       return {
         kind: "complete",
         outcome: {

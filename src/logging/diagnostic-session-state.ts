@@ -117,8 +117,6 @@ function mergeSessionState(target: SessionState, source: SessionState): void {
   target.lastActivity = Math.max(target.lastActivity, source.lastActivity);
   // Queue depth is additive when session id/key aliases collapse into one diagnostic entry.
   target.queueDepth += source.queueDepth;
-  target.embeddedSteeredCount =
-    (target.embeddedSteeredCount ?? 0) + (source.embeddedSteeredCount ?? 0);
   target.activeQueuedTurn ||= source.activeQueuedTurn;
   target.lastStuckWarnAgeMs =
     target.lastStuckWarnAgeMs === undefined || source.lastStuckWarnAgeMs === undefined
