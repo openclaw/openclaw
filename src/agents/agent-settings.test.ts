@@ -7,8 +7,6 @@ import {
   DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
   isSilentOverflowProneModel,
   resolveEffectiveCompactionMode,
-  resolveCompactionReserveTokensFloor,
-  shouldDisableAgentAutoCompaction,
 } from "./agent-settings.js";
 
 describe("applyAgentCompactionSettingsFromConfig", () => {
@@ -332,26 +330,6 @@ describe("applyAgentCompactionSettingsFromConfig", () => {
   });
 });
 
-describe("resolveCompactionReserveTokensFloor", () => {
-  it("returns the default when config is missing", () => {
-    expect(resolveCompactionReserveTokensFloor()).toBe(
-      DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
-    );
-  });
-
-  it("accepts configured floors, including zero", () => {
-    expect(
-      resolveCompactionReserveTokensFloor({
-        agents: { defaults: { compaction: { reserveTokensFloor: 24_000 } } },
-      }),
-    ).toBe(24_000);
-    expect(
-      resolveCompactionReserveTokensFloor({
-        agents: { defaults: { compaction: { reserveTokensFloor: 0 } } },
-      }),
-    ).toBe(0);
-  });
-});
 describe("resolveEffectiveCompactionMode", () => {
   it("defaults to default compaction mode", () => {
     expect(resolveEffectiveCompactionMode()).toBe("default");
@@ -468,36 +446,6 @@ describe("isSilentOverflowProneModel", () => {
     expect(
       isSilentOverflowProneModel({ provider: undefined, modelId: undefined, baseUrl: null }),
     ).toBe(false);
-  });
-});
-
-describe("shouldDisableAgentAutoCompaction", () => {
-  it("returns false with no owner, default mode, and ordinary provider behavior", () => {
-    expect(shouldDisableAgentAutoCompaction({})).toBe(false);
-    expect(shouldDisableAgentAutoCompaction({ compactionMode: "default" })).toBe(false);
-    expect(
-      shouldDisableAgentAutoCompaction({
-        contextEngineInfo: { id: "legacy", name: "Legacy", ownsCompaction: false },
-        compactionMode: "default",
-        silentOverflowProneProvider: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("returns true when a context engine owns compaction", () => {
-    expect(
-      shouldDisableAgentAutoCompaction({
-        contextEngineInfo: { id: "third-party", name: "Third-party", ownsCompaction: true },
-      }),
-    ).toBe(true);
-  });
-
-  it("returns true when effective compaction mode is safeguard", () => {
-    expect(shouldDisableAgentAutoCompaction({ compactionMode: "safeguard" })).toBe(true);
-  });
-
-  it("returns true for silent-overflow-prone providers", () => {
-    expect(shouldDisableAgentAutoCompaction({ silentOverflowProneProvider: true })).toBe(true);
   });
 });
 

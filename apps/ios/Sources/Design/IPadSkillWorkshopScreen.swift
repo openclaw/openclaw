@@ -1036,7 +1036,7 @@ struct IPadSkillProposalRow: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .background(
-            self.isSelected ? Color.red.opacity(0.08) : Color.clear,
+            self.isSelected ? OpenClawBrand.danger.opacity(0.08) : Color.clear,
             in: RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }

@@ -44,7 +44,9 @@ describe("agent end side effects", () => {
       },
       ctx: {
         runId: "run-1",
+        sessionKey: "agent:main:main",
         workspaceDir: "/workspace",
+        trigger: "user",
         config: {
           skills: {
             workshop: {
@@ -58,14 +60,27 @@ describe("agent end side effects", () => {
     });
 
     expect(mockRunAgentEndHook).toHaveBeenCalledTimes(1);
-    expect(mockAutoCapture).toHaveBeenCalledWith({
-      event: {
-        messages: [],
-        success: true,
-      },
-      ctx: {
-        runId: "run-1",
-        workspaceDir: "/workspace",
+    await vi.waitFor(() => {
+      expect(mockAutoCapture).toHaveBeenCalledWith({
+        event: {
+          messages: [],
+          success: true,
+        },
+        ctx: {
+          runId: "run-1",
+          sessionKey: "agent:main:main",
+          workspaceDir: "/workspace",
+          trigger: "user",
+          config: {
+            skills: {
+              workshop: {
+                autonomous: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
         config: {
           skills: {
             workshop: {
@@ -75,16 +90,7 @@ describe("agent end side effects", () => {
             },
           },
         },
-      },
-      config: {
-        skills: {
-          workshop: {
-            autonomous: {
-              enabled: true,
-            },
-          },
-        },
-      },
+      });
     });
 
     resolveCapture?.();

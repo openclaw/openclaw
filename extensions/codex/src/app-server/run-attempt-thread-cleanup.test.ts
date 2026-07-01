@@ -83,6 +83,21 @@ function turnStartResult(turnId = "turn-1") {
   };
 }
 
+function getMockServerVersion() {
+  return "0.132.0";
+}
+
+function getMockRuntimeIdentity() {
+  return { serverVersion: getMockServerVersion() };
+}
+
+function mockClientRuntimeMethods() {
+  return {
+    getRuntimeIdentity: getMockRuntimeIdentity,
+    getServerVersion: getMockServerVersion,
+  };
+}
+
 describe("Codex app-server main thread cleanup", () => {
   beforeEach(async () => {
     vi.useRealTimers();
@@ -119,6 +134,7 @@ describe("Codex app-server main thread cleanup", () => {
 
     const clientFactory: CodexAppServerClientFactory = async () => {
       return {
+        ...mockClientRuntimeMethods(),
         request,
         addNotificationHandler: (handler: typeof notify) => {
           notify = handler;
@@ -175,6 +191,7 @@ describe("Codex app-server main thread cleanup", () => {
 
     const clientFactory: CodexAppServerClientFactory = async () => {
       return {
+        ...mockClientRuntimeMethods(),
         request,
         addNotificationHandler: () => () => undefined,
         addRequestHandler: () => () => undefined,

@@ -2,19 +2,42 @@
 
 set -euo pipefail
 
+usage() {
+  echo "usage: bash scripts/plugin-clawhub-publish.sh [--dry-run|--publish|--pack] <package-dir>"
+}
+
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+  usage
+  exit 0
+fi
+
 mode="${1:-}"
-package_dir="${2:-}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "${script_dir}/.." && pwd)"
 invocation_root="$(pwd)"
 
 if [[ "${mode}" != "--dry-run" && "${mode}" != "--publish" && "${mode}" != "--pack" ]]; then
-  echo "usage: bash scripts/plugin-clawhub-publish.sh [--dry-run|--publish|--pack] <package-dir>" >&2
+  usage >&2
   exit 2
 fi
+shift
 
+if [[ "${1:-}" == "--" ]]; then
+  shift
+fi
+package_dir=""
+if [[ "$#" -gt 0 ]]; then
+  case "$1" in
+    -*) echo "unexpected plugin ClawHub package-dir option: $1" >&2; exit 2 ;;
+    *) package_dir="$1"; shift ;;
+  esac
+fi
 if [[ -z "${package_dir}" ]]; then
   echo "missing package dir" >&2
+  exit 2
+fi
+if [[ "$#" -gt 0 ]]; then
+  echo "unexpected plugin ClawHub publish argument: $1" >&2
   exit 2
 fi
 

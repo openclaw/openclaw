@@ -12,6 +12,19 @@ import { normalizeAgentId, parseAgentSessionKey } from "../session-key.ts";
 import { loadLocalAssistantIdentity } from "../storage.ts";
 import { normalizeOptionalString } from "../string-coerce.ts";
 
+const SEAM_COLOR_CSS_VARIABLES = [
+  "--ring",
+  "--accent",
+  "--accent-hover",
+  "--accent-muted",
+  "--accent-subtle",
+  "--accent-glow",
+  "--primary",
+  "--focus",
+  "--focus-ring",
+  "--focus-glow",
+] as const;
+
 export type ControlUiBootstrapState = {
   basePath: string;
   assistantName: string;
@@ -31,6 +44,45 @@ export type ControlUiBootstrapState = {
   password?: string | null;
 };
 
+function normalizeSeamColor(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const hex = value.trim().replace(/^#/, "");
+  return /^[0-9a-fA-F]{6}$/.test(hex) ? `#${hex}` : null;
+}
+
+function applyControlUiSeamColor(value: unknown) {
+  if (typeof document === "undefined") {
+    return;
+  }
+  const root = document.documentElement;
+  const color = normalizeSeamColor(value);
+  if (!color) {
+    for (const property of SEAM_COLOR_CSS_VARIABLES) {
+      root.style.removeProperty(property);
+    }
+    return;
+  }
+
+  root.style.setProperty("--ring", color);
+  root.style.setProperty("--accent", color);
+  root.style.setProperty("--accent-hover", "color-mix(in srgb, var(--accent) 82%, white 18%)");
+  root.style.setProperty("--accent-muted", color);
+  root.style.setProperty("--accent-subtle", "color-mix(in srgb, var(--accent) 16%, transparent)");
+  root.style.setProperty("--accent-glow", "color-mix(in srgb, var(--accent) 30%, transparent)");
+  root.style.setProperty("--primary", color);
+  root.style.setProperty("--focus", "color-mix(in srgb, var(--ring) 22%, transparent)");
+  root.style.setProperty(
+    "--focus-ring",
+    "0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 80%, transparent)",
+  );
+  root.style.setProperty(
+    "--focus-glow",
+    "0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow)",
+  );
+}
+
 function resolveActiveAgentId(state: ControlUiBootstrapState): string | null {
   const sessionAgentId = parseAgentSessionKey(state.sessionKey)?.agentId;
   if (sessionAgentId) {
@@ -46,7 +98,7 @@ function resolveBootstrapAgentId(value: string | null | undefined): string | nul
 }
 
 function applyLocalAssistantAvatarOverride(state: ControlUiBootstrapState) {
-  const localAvatar = loadLocalAssistantIdentity().avatar;
+  const localAvatar = loadLocalAssistantIdentity({ agentId: resolveActiveAgentId(state) }).avatar;
   if (!localAvatar) {
     return;
   }
@@ -119,7 +171,6 @@ export async function loadControlUiBootstrapConfig(
         state.assistantAvatarReason = normalized.avatarReason ?? null;
         state.assistantAgentId = normalized.agentId ?? null;
       }
-      // Local override always wins — same pattern as the user avatar.
       applyLocalAssistantAvatarOverride(state);
     }
     state.serverVersion = parsed.serverVersion ?? null;
@@ -137,6 +188,7 @@ export async function loadControlUiBootstrapConfig(
       typeof parsed.chatMessageMaxWidth === "string" && parsed.chatMessageMaxWidth.trim()
         ? parsed.chatMessageMaxWidth
         : null;
+    applyControlUiSeamColor(parsed.seamColor);
     setUiTimeFormatPreference(parsed.timeFormat);
   } catch {
     // Ignore bootstrap failures; UI will update identity after connecting.

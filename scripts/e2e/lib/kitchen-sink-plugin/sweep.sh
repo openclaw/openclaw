@@ -39,12 +39,8 @@ fi
 
 print_kitchen_sink_log() {
   local log_file="$1"
-  local max_bytes="${OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES:-65536}"
-  if ! [[ "$max_bytes" =~ ^[0-9]+$ ]] || [ "$max_bytes" -lt 1 ]; then
-    max_bytes="65536"
-  else
-    max_bytes="$((10#$max_bytes))"
-  fi
+  local max_bytes
+  max_bytes="$(openclaw_e2e_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536)" || return $?
   if [ ! -f "$log_file" ]; then
     return 0
   fi
@@ -61,6 +57,8 @@ print_kitchen_sink_log() {
   echo "--- ${log_file} truncated: showing last ${max_bytes} of ${log_bytes} bytes ---"
   tail -c "$max_bytes" "$log_file"
 }
+
+openclaw_e2e_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536 >/dev/null
 
 run_kitchen_sink_openclaw_logged() {
   local label="$1"
@@ -109,7 +107,8 @@ start_kitchen_sink_clawhub_fixture_server() {
   KITCHEN_SINK_CLAWHUB_FIXTURE_DIR="$fixture_dir"
   KITCHEN_SINK_CLAWHUB_PID_FILE="$server_pid_file"
 
-  local wait_attempts="${OPENCLAW_CLAWHUB_FIXTURE_WAIT_ATTEMPTS:-600}"
+  local wait_attempts
+  wait_attempts="$(openclaw_e2e_read_positive_int_env OPENCLAW_CLAWHUB_FIXTURE_WAIT_ATTEMPTS 600)" || return $?
   for _ in $(seq 1 "$wait_attempts"); do
     if [[ -s "$server_port_file" ]]; then
       export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$server_port_file")"

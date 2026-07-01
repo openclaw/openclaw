@@ -24,7 +24,10 @@ import {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
-import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { firstDefined, normalizeLineAllowEntry } from "./bot-access.js";
 import {
   buildLineMessageContext,
@@ -467,7 +470,11 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
 
   if (isDownloadableLineMessageType(message.type)) {
     try {
-      const media = await downloadLineMedia(message.id, account.channelAccessToken, mediaMaxBytes);
+      const originalFilename =
+        message.type === "file" ? normalizeOptionalString(message.fileName) : undefined;
+      const media = await downloadLineMedia(message.id, account.channelAccessToken, mediaMaxBytes, {
+        originalFilename,
+      });
       allMedia.push({
         path: media.path,
         contentType: media.contentType,

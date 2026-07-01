@@ -122,7 +122,13 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     onReplyStart?: () => Promise<void> | void;
     onIdle?: () => Promise<void> | void;
     deliver: (
-      payload: { text?: string; mediaUrl?: string; mediaUrls?: string[]; audioAsVoice?: boolean },
+      payload: {
+        text?: string;
+        mediaUrl?: string;
+        mediaUrls?: string[];
+        audioAsVoice?: boolean;
+        isError?: boolean;
+      },
       meta: { kind: string },
     ) => Promise<void> | void;
   };
@@ -194,6 +200,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: { log: vi.fn(), error: vi.fn() } as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
     });
 
     return firstMockArg(createReplyDispatcherWithTypingMock, "reply dispatcher options");
@@ -209,6 +216,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
       ...overrides,
     });
 
@@ -332,6 +340,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
       replyToMessageId: "om_parent",
     });
 
@@ -347,6 +356,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
       replyToMessageId: "om_parent",
       messageCreateTimeMs: Date.now() - 3 * 60_000,
     });
@@ -363,6 +373,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
       replyToMessageId: "om_parent",
       messageCreateTimeMs: Math.floor((Date.now() - 3 * 60_000) / 1000),
     });
@@ -379,6 +390,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
       replyToMessageId: "om_parent",
       messageCreateTimeMs: Date.now() - 30_000,
     });
@@ -410,6 +422,23 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expectMockArgFields(sendMessageFeishuMock, "message send params", {
       replyToMessageId: "om_topic_root",
       replyInThread: true,
+    });
+  });
+
+  it("routes visible sends to sendTarget while keeping chatId separate", async () => {
+    useNonStreamingAutoAccount();
+    const { options } = createDispatcherHarness({
+      chatId: "oc_p2p_chat",
+      sendTarget: "user:ou_sender",
+      replyToMessageId: "om_direct",
+      skipReplyToInMessages: true,
+    });
+
+    await options.deliver({ text: "plain text" }, { kind: "final" });
+
+    expectMockArgFields(sendMessageFeishuMock, "message send params", {
+      to: "user:ou_sender",
+      replyToMessageId: undefined,
     });
   });
 
@@ -549,18 +578,23 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
-  it("does not attach automatic mentions to non-streaming plain text replies", async () => {
+  it("passes mention-forward targets to non-streaming plain text replies without rewriting body text", async () => {
     useNonStreamingAutoAccount();
 
     const { options } = createDispatcherHarness({
       replyToMessageId: "om_msg",
+      mentionTargets: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
     });
-    await options.deliver({ text: "plain text" }, { kind: "final" });
+    await options.deliver(
+      { text: 'plain text <at user_id="ou_body">Body User</at>' },
+      { kind: "final" },
+    );
 
     expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
-    expect(firstMockArg(sendMessageFeishuMock, "send message params")).not.toHaveProperty(
-      "mentions",
-    );
+    expectMockArgFields(sendMessageFeishuMock, "message send params", {
+      text: 'plain text <at user_id="ou_body">Body User</at>',
+      mentions: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
+    });
   });
 
   it("does not attach automatic mentions to card replies", async () => {
@@ -602,6 +636,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
     });
 
     expect(result.replyOptions).toHaveProperty("disableBlockStreaming", true);
@@ -665,6 +700,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       agentId: "agent",
       runtime: {} as never,
       chatId: "oc_chat",
+      sendTarget: "oc_chat",
     });
 
     expect(result.replyOptions).toHaveProperty("disableBlockStreaming", true);
@@ -692,6 +728,43 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("strips prose from identity emoji in streaming and static card headers", async () => {
+    const identity = {
+      name: "Agent",
+      emoji: "根据心情/语气自由切换 😊🇺🇸👍🏽👨‍👩‍👧‍👦",
+      theme: "green" as const,
+    };
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      identity,
+    });
+    await options.deliver({ text: "```ts\nconst x = 1\n```" }, { kind: "final" });
+
+    expectStreamingStartOptions(0, {
+      header: { title: "😊🇺🇸👍🏽👨‍👩‍👧‍👦 Agent", template: "green" },
+    });
+
+    resolveFeishuAccountMock.mockReturnValue({
+      accountId: "main",
+      appId: "app_id",
+      appSecret: "app_secret",
+      domain: "feishu",
+      config: {
+        renderMode: "card",
+        streaming: false,
+      },
+    });
+    const { options: staticOptions } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      identity,
+    });
+    await staticOptions.deliver({ text: "| a | b |\n| - | - |" }, { kind: "final" });
+
+    expectLastMockArgFields(sendStructuredCardFeishuMock, "structured card params", {
+      header: { title: "😊🇺🇸👍🏽👨‍👩‍👧‍👦 Agent", template: "green" },
+    });
+  });
+
   it("closes streaming with block text when final reply is missing", async () => {
     const { options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
@@ -707,7 +780,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     });
   });
 
-  it("coalesces distinct final payloads into one streaming card until idle", async () => {
+  it("coalesces cumulative final payloads into one streaming card until idle", async () => {
     const { options } = createDispatcherHarness({
       runtime: createRuntimeLogger(),
     });
@@ -725,6 +798,76 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     );
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
     expect(sendMarkdownCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("appends an independent error final without replacing the assistant answer", async () => {
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.deliver({ text: "The file is ready." }, { kind: "final" });
+    await options.deliver({ text: "⚠️ Exec failed", isError: true }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith(
+      "The file is ready.\n\n⚠️ Exec failed",
+      { note: "Agent: agent" },
+    );
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("does not duplicate the answer from a cumulative error final", async () => {
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.deliver({ text: "The file is ready." }, { kind: "final" });
+    await options.deliver(
+      { text: "The file is ready.\n\n⚠️ Exec failed", isError: true },
+      { kind: "final" },
+    );
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith(
+      "The file is ready.\n\n⚠️ Exec failed",
+      { note: "Agent: agent" },
+    );
+  });
+
+  it("replaces a partial preview when the first final is an error", async () => {
+    const { result, options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    result.replyOptions.onPartialReply?.({ text: "Working on it..." });
+    await options.deliver({ text: "⚠️ Exec failed", isError: true }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].close).toHaveBeenCalledWith("⚠️ Exec failed", {
+      note: "Agent: agent",
+    });
+  });
+
+  it("falls back to chunked text when an appended error exceeds the streaming limit", async () => {
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(20);
+
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+    });
+    await options.deliver({ text: "123456789012345678" }, { kind: "final" });
+    await options.deliver({ text: "⚠️ Exec failed", isError: true }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(streamingInstances).toHaveLength(1);
+    expect(streamingInstances[0].discard).toHaveBeenCalledTimes(1);
+    expect(streamingInstances[0].close).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expectLastMockArgFields(sendMessageFeishuMock, "message send params", {
+      text: "123456789012345678\n\n⚠️ Exec failed",
+    });
   });
 
   it("skips exact duplicate final text after streaming close", async () => {
@@ -1990,6 +2133,7 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
         agentId: "agent",
         runtime: { log: vi.fn(), error: errorMock } as never,
         chatId: "oc_chat",
+        sendTarget: "oc_chat",
       });
 
       const options = firstTypingDispatcherOptions();

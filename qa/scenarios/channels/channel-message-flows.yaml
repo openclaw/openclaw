@@ -1,0 +1,27 @@
+title: Channel message flow evidence
+
+scenario:
+  id: channel-message-flows
+  surface: channels
+  coverage:
+    primary:
+      - channels.streaming
+    secondary:
+      - channels.threads
+      - runtime.delivery
+      - runtime.reasoning-visibility
+  objective: Exercise Telegram draft/final delivery sequencing through QA Lab evidence.
+  successCriteria:
+    - Thinking updates flush, clear, and send the final answer in order.
+    - Working previews are cleared before final delivery.
+    - Thread IDs are preserved in Telegram flow thread specs.
+  docsRefs:
+    - docs/channels/telegram.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - extensions/telegram/src/channel-message-flows.qa.e2e.test.ts
+    - extensions/telegram/src/test-support/channel-message-flows.ts
+  execution:
+    kind: vitest
+    path: extensions/telegram/src/channel-message-flows.qa.e2e.test.ts
+    summary: Vitest coverage for channel message flow sequencing.

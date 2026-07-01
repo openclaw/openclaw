@@ -188,6 +188,27 @@ export const PLUGIN_COMPAT_RECORDS = [
       "WhatsApp WebInboundMessage flat fields remain wired as deprecated aliases while callbacks migrate to nested inbound contexts.",
   },
   {
+    code: "whatsapp-web-inbound-admission-top-level-fields",
+    status: "deprecated",
+    owner: "channel",
+    introduced: "2026-06-14",
+    deprecated: "2026-06-14",
+    warningStarts: "2026-06-14",
+    removeAfter: "2026-08-30",
+    replacement:
+      "WhatsApp `WebInboundMessage.admission` fields: `conversation.id`, `accountId`, `ingress.decision`, and `conversation.kind`",
+    docsPath: "/plugins/compatibility",
+    surfaces: [
+      "@openclaw/whatsapp WebInboundMessage top-level admission fields",
+      "WhatsApp monitorWebInbox onMessage callback",
+      "WhatsApp monitorWebChannel listenerFactory injected messages",
+    ],
+    diagnostics: ["TypeScript @deprecated WebInboundMessage admission field annotations"],
+    tests: ["src/plugins/compat/registry.test.ts"],
+    releaseNote:
+      "WhatsApp WebInboundMessage top-level admission fields remain available while callbacks migrate to the admission envelope.",
+  },
+  {
     code: "bundled-channel-sdk-compat-facades",
     status: "active",
     owner: "sdk",

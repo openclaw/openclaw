@@ -8,6 +8,7 @@ import {
 import {
   isMessagingToolDeliveryAction,
   isMessagingToolSendAction,
+  isMessagingToolTargetEvidenceAction,
 } from "./embedded-agent-messaging.js";
 
 beforeEach(() => {
@@ -32,6 +33,16 @@ beforeEach(() => {
 describe("messaging delivery action classification", () => {
   it("keeps visible side effects broader than terminal reply sends", () => {
     expect(isMessagingToolSendAction("message", { action: "poll" })).toBe(false);
+    expect(isMessagingToolTargetEvidenceAction("message", { action: "poll" })).toBe(true);
+    expect(isMessagingToolTargetEvidenceAction("message", { action: "reply" })).toBe(true);
+    expect(isMessagingToolTargetEvidenceAction("message", { action: "sticker" })).toBe(true);
+    expect(isMessagingToolTargetEvidenceAction("message", { action: "thread-create" })).toBe(true);
+    expect(isMessagingToolTargetEvidenceAction("message", { action: "topic-create" })).toBe(true);
+    expect(isMessagingToolTargetEvidenceAction("message", { action: "threadCreate" })).toBe(true);
+    expect(isMessagingToolTargetEvidenceAction("message", { action: "createForumTopic" })).toBe(
+      true,
+    );
+    expect(isMessagingToolTargetEvidenceAction("message", { action: "edit" })).toBe(false);
     expect(isMessagingToolDeliveryAction("message", { action: "poll" })).toBe(true);
     expect(isMessagingToolDeliveryAction("message", { action: "broadcast" })).toBe(true);
     expect(isMessagingToolDeliveryAction("message", { action: "thread-create" })).toBe(true);
@@ -62,6 +73,7 @@ describe("isDeliveredMessagingToolResult", () => {
         result: [{ type: "text", text: JSON.stringify({ result: { messageId: "msg-1" } }) }],
       }),
     ).toBe(true);
+    expect(isDeliveredMessagingToolResult({ result: { content: [{ text: "sent" }] } })).toBe(true);
     expect(isDeliveredMessagingToolResult({ result: { status: "sent" } })).toBe(true);
   });
 
@@ -96,6 +108,7 @@ describe("isDeliveredMessagingToolResult", () => {
       { ok: true, removed: 0 },
       { ok: true, removed: [] },
       { ok: true, changed: false },
+      { content: [{ text: "sent" }], details: { sent: false } },
     ]) {
       expect(
         isDeliveredMessagingToolResult({
@@ -316,6 +329,49 @@ describe("isDeliveredMessageToolOnlySourceReplyResult", () => {
         toolName: "message",
         args: { action: "send", target: "elsewhere", message: "reply" },
         result: { deliveryStatus: "sent" },
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts confirmed explicit routes when the caller verified the source route", () => {
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: "message_tool_only",
+        toolName: "message",
+        args: {
+          action: "reply",
+          channel: "imessage",
+          target: "+12069106512",
+          message: "reply",
+        },
+        result: { ok: true, messageId: "imessage-853" },
+        allowExplicitSourceRoute: true,
+      }),
+    ).toBe(true);
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: "message_tool_only",
+        toolName: "message",
+        args: {
+          action: "reply",
+          channel: "imessage",
+          target: "+12069106512",
+          message: "reply",
+        },
+        result: { ok: true, messageId: "imessage-853" },
+      }),
+    ).toBe(false);
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
+        sourceReplyDeliveryMode: "message_tool_only",
+        toolName: "message",
+        args: {
+          action: "react",
+          channel: "imessage",
+          target: "+12069106512",
+        },
+        result: { ok: true },
+        allowExplicitSourceRoute: true,
       }),
     ).toBe(false);
   });

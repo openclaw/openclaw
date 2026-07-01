@@ -4,16 +4,14 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { normalizeAcceptedSessionSpawnResult } from "../accepted-session-spawn.js";
 import { setCompactionSafeguardRuntime } from "../agent-hooks/compaction-safeguard-runtime.js";
 import compactionSafeguardExtension from "../agent-hooks/compaction-safeguard.js";
 import contextPruningExtension from "../agent-hooks/context-pruning.js";
 import { setContextPruningRuntime } from "../agent-hooks/context-pruning/runtime.js";
 import { computeEffectiveSettings } from "../agent-hooks/context-pruning/settings.js";
 import { makeToolPrunablePredicate } from "../agent-hooks/context-pruning/tools.js";
-import {
-  ensureAgentCompactionReserveTokens,
-  resolveEffectiveCompactionMode,
-} from "../agent-settings.js";
+import { resolveEffectiveCompactionMode } from "../agent-settings.js";
 import {
   finalizeToolTerminalPresentation,
   peekAdjustedParamsForToolCall,
@@ -92,7 +90,14 @@ function buildAgentToolResultMiddlewareFactory(
         isError: event.isError,
         result: current,
       });
-      const isError = event.isError === true || inputHadErrorStatus || isToolResultError(result);
+      const isAcceptedSessionSpawn =
+        event.toolName === "sessions_spawn" && normalizeAcceptedSessionSpawnResult(result) !== null;
+      const isError =
+        !isAcceptedSessionSpawn &&
+        (event.isError === true || inputHadErrorStatus || isToolResultError(result));
+      const clearsAcceptedSessionSpawnError =
+        isAcceptedSessionSpawn &&
+        (event.isError === true || inputHadErrorStatus || isToolResultError(result));
       if (eventToolCallId) {
         finalizeToolTerminalPresentation({
           toolCallId: eventToolCallId,
@@ -105,6 +110,7 @@ function buildAgentToolResultMiddlewareFactory(
         content: result.content,
         details: result.details,
         ...(isError ? { isError: true } : {}),
+        ...(clearsAcceptedSessionSpawnError ? { isError: false } : {}),
       };
     });
   };
@@ -209,5 +215,3 @@ export function buildEmbeddedExtensionFactories(params: {
   factories.push(buildAgentToolResultMiddlewareFactory(params.sessionManager, params.runId));
   return factories;
 }
-
-export { ensureAgentCompactionReserveTokens };

@@ -106,8 +106,7 @@ function resolveBranchWithGitAsync(repoDir: string): Promise<string | null> {
  * Provides git branch and extension statuses - data not otherwise accessible to extensions.
  * Token stats, model info available via ctx.sessionManager and ctx.model.
  */
-export class FooterDataProvider {
-  private cwd: string;
+class FooterDataProvider {
   private static readonly WATCH_DEBOUNCE_MS = 500;
 
   private extensionStatuses = new Map<string, string>();
@@ -126,7 +125,6 @@ export class FooterDataProvider {
   private disposed = false;
 
   constructor(cwd: string) {
-    this.cwd = cwd;
     this.gitPaths = findGitPaths(cwd);
     this.setupGitWatcher();
   }
@@ -159,11 +157,6 @@ export class FooterDataProvider {
     }
   }
 
-  /** Internal: clear extension statuses */
-  clearExtensionStatuses(): void {
-    this.extensionStatuses.clear();
-  }
-
   /** Number of unique providers with available models (for footer display) */
   getAvailableProviderCount(): number {
     return this.availableProviderCount;
@@ -172,23 +165,6 @@ export class FooterDataProvider {
   /** Internal: update available provider count */
   setAvailableProviderCount(count: number): void {
     this.availableProviderCount = count;
-  }
-
-  setCwd(cwd: string): void {
-    if (this.cwd === cwd) {
-      return;
-    }
-
-    this.cwd = cwd;
-    if (this.refreshTimer) {
-      clearTimeout(this.refreshTimer);
-      this.refreshTimer = null;
-    }
-    this.clearGitWatchers();
-    this.cachedBranch = undefined;
-    this.gitPaths = findGitPaths(cwd);
-    this.setupGitWatcher();
-    this.notifyBranchChange();
   }
 
   /** Internal: cleanup */

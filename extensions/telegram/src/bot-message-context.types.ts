@@ -16,6 +16,7 @@ export type TelegramMediaRef = {
   path: string;
   contentType?: string;
   stickerMetadata?: StickerMetadata;
+  sourceMessageId?: string;
 };
 
 export type TelegramMessageContextOptions = {

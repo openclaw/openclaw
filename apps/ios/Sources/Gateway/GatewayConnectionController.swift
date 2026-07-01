@@ -127,6 +127,8 @@ final class GatewayConnectionController {
     private let discovery = GatewayDiscoveryModel()
     private let discoveryEnabled: Bool
     private weak var appModel: NodeAppModel?
+    private var localNetworkAccessRequested: Bool
+    private var currentScenePhase: ScenePhase = .inactive
     private var didAutoConnect = false
     private var pendingServiceResolvers: [String: GatewayServiceResolver] = [:]
     private var pendingTrustConnect: PendingTrustConnect?
@@ -137,9 +139,14 @@ final class GatewayConnectionController {
         let useTLS: Bool
     }
 
-    init(appModel: NodeAppModel, startDiscovery: Bool = true) {
+    init(
+        appModel: NodeAppModel,
+        startDiscovery: Bool = true,
+        deferDiscoveryUntilLocalNetworkRequest: Bool = false)
+    {
         self.discoveryEnabled = startDiscovery
         self.appModel = appModel
+        self.localNetworkAccessRequested = !deferDiscoveryUntilLocalNetworkRequest
 
         GatewaySettingsStore.bootstrapPersistence()
         let defaults = UserDefaults.standard
@@ -148,7 +155,7 @@ final class GatewayConnectionController {
         self.updateFromDiscovery()
         self.observeDiscovery()
 
-        if self.discoveryEnabled {
+        if self.discoveryEnabled, self.localNetworkAccessRequested {
             self.discovery.start()
         }
     }
@@ -157,11 +164,29 @@ final class GatewayConnectionController {
         self.discovery.setDebugLoggingEnabled(enabled)
     }
 
+    func requestLocalNetworkAccess(reason: String) {
+        guard self.discoveryEnabled else {
+            self.discovery.stop()
+            self.updateFromDiscovery()
+            return
+        }
+
+        self.localNetworkAccessRequested = true
+        GatewayDiagnostics.log("local network access requested reason=\(reason)")
+
+        guard self.currentScenePhase != .background else { return }
+        self.discovery.start()
+        self.updateFromDiscovery()
+        self.attemptAutoReconnectIfNeeded()
+    }
+
     func setScenePhase(_ phase: ScenePhase) {
+        self.currentScenePhase = phase
         guard self.discoveryEnabled else {
             self.discovery.stop()
             return
         }
+        guard self.localNetworkAccessRequested else { return }
 
         switch phase {
         case .background:
@@ -181,6 +206,10 @@ final class GatewayConnectionController {
             self.updateFromDiscovery()
             return
         }
+        guard self.localNetworkAccessRequested else {
+            self.requestLocalNetworkAccess(reason: "restart_discovery")
+            return
+        }
 
         self.discovery.stop()
         self.didAutoConnect = false
@@ -197,6 +226,7 @@ final class GatewayConnectionController {
         _ gateway: GatewayDiscoveryModel.DiscoveredGateway,
         forceReconnect: Bool = false) async -> String?
     {
+        self.requestLocalNetworkAccess(reason: "connect_discovered_gateway")
         let instanceId = UserDefaults.standard.string(forKey: "node.instanceId")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if instanceId.isEmpty {
@@ -275,6 +305,7 @@ final class GatewayConnectionController {
         authOverride: ManualAuthOverride? = nil,
         forceReconnect: Bool = false) async
     {
+        self.requestLocalNetworkAccess(reason: "connect_manual")
         let instanceId = GatewaySettingsStore.currentInstanceID()
         let token =
             authOverride.map(\.token) ?? GatewaySettingsStore.loadGatewayToken(instanceId: instanceId)
@@ -340,6 +371,7 @@ final class GatewayConnectionController {
     }
 
     func connectLastKnown() async {
+        self.requestLocalNetworkAccess(reason: "connect_last_known")
         guard let last = GatewaySettingsStore.loadLastGatewayConnection() else { return }
         switch last {
         case let .manual(host, port, useTLS, _):

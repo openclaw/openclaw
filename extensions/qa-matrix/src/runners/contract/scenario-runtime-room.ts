@@ -927,6 +927,19 @@ async function runMatrixToolProgressScenario(
     event.relatesTo?.relType === "m.replace" &&
     event.relatesTo.eventId === previewRootEventId &&
     matchesExpectedProgress(event.body);
+  const throwProgressTimeout = (err: unknown, previewEventId: string): never => {
+    throw new Error(
+      buildMatrixQaToolProgressTimeoutMessage({
+        cause: err,
+        events: context.observedEvents,
+        expectedPreviewKind: params.expectedPreviewKind,
+        previewEventId,
+        roomId: context.roomId,
+        startIndex: startObservedIndex,
+        sutUserId: context.sutUserId,
+      }),
+    );
+  };
   const preview = await client
     .waitForRoomEvent({
       observedEvents: context.observedEvents,
@@ -940,19 +953,7 @@ async function runMatrixToolProgressScenario(
       since: startSince,
       timeoutMs: context.timeoutMs,
     })
-    .catch((err: unknown) => {
-      throw new Error(
-        buildMatrixQaToolProgressTimeoutMessage({
-          cause: err,
-          events: context.observedEvents,
-          expectedPreviewKind: params.expectedPreviewKind,
-          previewEventId: "<not observed>",
-          roomId: context.roomId,
-          startIndex: startObservedIndex,
-          sutUserId: context.sutUserId,
-        }),
-      );
-    });
+    .catch((err: unknown) => throwProgressTimeout(err, "<not observed>"));
   if (isFinalReply(preview.event)) {
     if (
       (params.allowFinalBeforeProgress === true ||
@@ -967,19 +968,7 @@ async function runMatrixToolProgressScenario(
           since: preview.since,
           timeoutMs: context.timeoutMs,
         })
-        .catch((err: unknown) => {
-          throw new Error(
-            buildMatrixQaToolProgressTimeoutMessage({
-              cause: err,
-              events: context.observedEvents,
-              expectedPreviewKind: params.expectedPreviewKind,
-              previewEventId: "<not observed>",
-              roomId: context.roomId,
-              startIndex: startObservedIndex,
-              sutUserId: context.sutUserId,
-            }),
-          );
-        });
+        .catch((err: unknown) => throwProgressTimeout(err, "<not observed>"));
       const progressPreviewEventId = getPreviewRootEventId(progressAfterFinal.event);
       const unexpectedWorkingEvents = findMatrixQaUnexpectedWorkingEvents({
         events: context.observedEvents,
@@ -1079,19 +1068,7 @@ async function runMatrixToolProgressScenario(
         since: preview.since,
         timeoutMs: context.timeoutMs,
       })
-      .catch((err: unknown) => {
-        throw new Error(
-          buildMatrixQaToolProgressTimeoutMessage({
-            cause: err,
-            events: context.observedEvents,
-            expectedPreviewKind: params.expectedPreviewKind,
-            previewEventId: previewRootEventId,
-            roomId: context.roomId,
-            startIndex: startObservedIndex,
-            sutUserId: context.sutUserId,
-          }),
-        );
-      });
+      .catch((err: unknown) => throwProgressTimeout(err, previewRootEventId));
     if (isFinalReply(progressOrFinal.event)) {
       topLevelFinalBeforeProgress = progressOrFinal;
       progress = await client
@@ -1102,19 +1079,7 @@ async function runMatrixToolProgressScenario(
           since: progressOrFinal.since,
           timeoutMs: context.timeoutMs,
         })
-        .catch((err: unknown) => {
-          throw new Error(
-            buildMatrixQaToolProgressTimeoutMessage({
-              cause: err,
-              events: context.observedEvents,
-              expectedPreviewKind: params.expectedPreviewKind,
-              previewEventId: previewRootEventId,
-              roomId: context.roomId,
-              startIndex: startObservedIndex,
-              sutUserId: context.sutUserId,
-            }),
-          );
-        });
+        .catch((err: unknown) => throwProgressTimeout(err, previewRootEventId));
     } else {
       progress = progressOrFinal;
     }

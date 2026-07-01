@@ -22,8 +22,6 @@ import {
   type ModelRegistry as AgentModelRegistry,
 } from "./sessions/index.js";
 
-export { AuthStorage, ModelRegistry };
-
 type ProviderRuntimeModelLike = Model & {
   contextTokens?: number;
 };

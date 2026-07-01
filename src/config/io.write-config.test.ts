@@ -3,13 +3,18 @@ import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { clearLoadPluginMetadataSnapshotMemo } from "../plugins/plugin-metadata-snapshot.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { hashConfigIncludeRaw } from "./includes.js";
-import { CONFIG_CLOBBER_SNAPSHOT_LIMIT } from "./io.clobber-snapshot.js";
 import {
   createConfigIO,
   getRuntimeConfigSourceSnapshot,
@@ -22,6 +27,9 @@ import {
 } from "./io.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.openclaw.js";
+
+const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
+type ConfigHealthDatabase = Pick<OpenClawStateKyselyDatabase, "config_health_entries">;
 
 // Mock the plugin manifest registry so we can register a fake channel whose
 // AJV JSON Schema carries a `default` value.  This lets the #56772 regression
@@ -99,6 +107,7 @@ describe("config io write", () => {
   });
 
   afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
     resetConfigRuntimeState();
     clearLoadPluginMetadataSnapshotMemo();
     mockMaintainConfigBackups.mockReset();
@@ -106,9 +115,22 @@ describe("config io write", () => {
   });
 
   afterAll(async () => {
+    closeOpenClawStateDatabaseForTest();
     resetConfigRuntimeState();
     await suiteRootTracker.cleanup();
   });
+
+  function readConfigHealthRow(home: string, configPath: string) {
+    const { db } = openOpenClawStateDatabase({ env: { HOME: home } as NodeJS.ProcessEnv });
+    const healthDb = getNodeSqliteKysely<ConfigHealthDatabase>(db);
+    return executeSqliteQueryTakeFirstSync(
+      db,
+      healthDb
+        .selectFrom("config_health_entries")
+        .select(["config_path", "last_known_good_json"])
+        .where("config_path", "=", configPath),
+    );
+  }
 
   const expectInputOwnerDisplayUnchanged = (input: Record<string, unknown>) => {
     expect((input.commands as Record<string, unknown>).ownerDisplay).toBe("hash");
@@ -168,30 +190,7 @@ describe("config io write", () => {
       logger: silentLogger,
     });
 
-  function withHealthStateWriteFailure(healthPath: string): typeof fsNode {
-    const writeFile = fsNode.promises.writeFile.bind(fsNode.promises);
-    const writeFileSync = fsNode.writeFileSync.bind(fsNode);
-    return {
-      ...fsNode,
-      promises: {
-        ...fsNode.promises,
-        writeFile: async (target, data, options) => {
-          if (target === healthPath) {
-            throw new Error("health write failed");
-          }
-          return await writeFile(target, data, options);
-        },
-      },
-      writeFileSync: (target, data, options) => {
-        if (target === healthPath) {
-          throw new Error("health write failed");
-        }
-        return writeFileSync(target, data, options);
-      },
-    };
-  }
-
-  it("logs health-state write failures through public config reads", async () => {
+  it("writes health state to SQLite through public config reads", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       const healthPath = path.join(home, ".openclaw", "logs", "config-health.json");
@@ -205,7 +204,6 @@ describe("config io write", () => {
       const io = createConfigIO({
         configPath,
         env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
-        fs: withHealthStateWriteFailure(healthPath),
         homedir: () => home,
         logger: { warn, error: vi.fn() },
       });
@@ -213,9 +211,14 @@ describe("config io write", () => {
       const snapshot = await io.readConfigFileSnapshot();
       expect(snapshot.exists).toBe(true);
       expect(io.loadConfig().gateway).toEqual({ mode: "local" });
-
-      const expectedHealthWarning = `Config health-state write failed: ${healthPath}: health write failed`;
-      expect(warn.mock.calls).toEqual([[expectedHealthWarning], [expectedHealthWarning]]);
+      await expect(fs.stat(healthPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(readConfigHealthRow(home, configPath)).toMatchObject({
+        config_path: configPath,
+        last_known_good_json: expect.any(String),
+      });
+      expect(warn.mock.calls.flat()).not.toContainEqual(
+        expect.stringContaining("Config health-state write failed"),
+      );
     });
   });
 
@@ -558,10 +561,8 @@ describe("config io write", () => {
         spec: "demo@1.0.0",
         installPath: pluginDir,
       });
-      expect(warn.mock.calls).toEqual([
-        [
-          "Config warnings:\n- plugins.entries.demo: plugin not found: demo (stale config entry ignored; remove it from plugins config)",
-        ],
+      expect(warn.mock.calls).toContainEqual([
+        "Config warnings:\n- plugins.entries.demo: plugin not found: demo (stale config entry ignored; remove it from plugins config)",
       ]);
 
       await expect(io.writeConfigFile({ gateway: { mode: "local" } })).rejects.toThrow(

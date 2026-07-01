@@ -11,6 +11,7 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.test-support.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
@@ -77,6 +78,16 @@ describe("openclaw state database", () => {
       createSqliteSchemaShapeFromSql(new URL("./openclaw-state-schema.sql", import.meta.url)),
     );
     expect(database.path).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
+  });
+
+  it.runIf(process.platform === "linux")("closes the database when initialization fails", () => {
+    const databasePath = path.join(createTempStateDir(), "openclaw.sqlite");
+    fs.writeFileSync(databasePath, "not a sqlite database");
+
+    expect(() => openOpenClawStateDatabase({ path: databasePath })).toThrow(
+      "file is not a database",
+    );
+    expect(listOpenFileDescriptorsForPath(databasePath)).toEqual([]);
   });
 
   it("migrates requester and executor attribution for existing cross-agent tasks", () => {
@@ -593,7 +604,7 @@ describe("openclaw state database", () => {
       | { journal_mode?: string }
       | undefined;
     expect(journalMode?.journal_mode?.toLowerCase()).toBe("delete");
-    expect(statfs).toHaveBeenCalledWith(path.join(stateDir, "state"));
+    expect(statfs).toHaveBeenCalledWith(fs.realpathSync(path.join(stateDir, "state")));
   });
 
   it("records durable schema metadata", () => {

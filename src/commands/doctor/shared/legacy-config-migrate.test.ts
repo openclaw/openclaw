@@ -64,6 +64,54 @@ describe("compatibility binding repair migrate", () => {
 });
 
 describe("legacy memory search config migrate", () => {
+  it("removes sidecar memory search index paths", () => {
+    const res = migrateLegacyConfigForTest({
+      memorySearch: {
+        provider: "openai",
+        store: {
+          path: "/tmp/openclaw-memory-{agentId}.sqlite",
+          vector: { enabled: false },
+        },
+      },
+      agents: {
+        defaults: {
+          memorySearch: {
+            store: {
+              path: "/tmp/default-memory.sqlite",
+              fts: { tokenizer: "trigram" },
+            },
+          },
+        },
+        list: [
+          {
+            id: "ops",
+            memorySearch: {
+              store: {
+                path: "/tmp/ops-memory.sqlite",
+                vector: { enabled: true },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect((res.config as Record<string, unknown> | undefined)?.memorySearch).toBeUndefined();
+    expect(res.config?.agents?.defaults?.memorySearch?.store).toEqual({
+      fts: { tokenizer: "trigram" },
+      vector: { enabled: false },
+    });
+    expect(res.config?.agents?.list?.[0]?.memorySearch?.store).toEqual({
+      vector: { enabled: true },
+    });
+    expect(res.changes).toContain(
+      "Removed agents.defaults.memorySearch.store.path; memory indexes now use each agent database.",
+    );
+    expect(res.changes).toContain(
+      "Removed agents.list[0].memorySearch.store.path; memory indexes now use each agent database.",
+    );
+  });
+
   it("moves legacy OpenAI Codex provider config to canonical OpenAI provider config", () => {
     const res = migrateLegacyConfigForTest({
       models: {
@@ -2412,6 +2460,207 @@ describe("legacy model compat migrate", () => {
       'config.agents.defaults.models key from "github-copilot/gpt-5-mini" to "github-copilot/gpt-5.4-mini"',
       'config.plugins.entries.lossless-claw.config.summaryModel from "anthropic/claude-3-5-sonnet" to "anthropic/claude-sonnet-4-6"',
       'config.channels.modelByChannel.telegram.* from "anthropic/claude-opus-4-5" to "anthropic/claude-opus-4-7"',
+    ]);
+  });
+
+  it("deep-merges colliding retired model refs and reports only unequal fields", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-4o": {
+              params: {
+                reasoning: { effort: "high", budget: 100 },
+                tags: ["stable"],
+              },
+              streaming: false,
+            },
+            "openai/gpt-4": {
+              params: {
+                reasoning: { effort: "low", summary: "auto" },
+                tags: ["stable"],
+              },
+              alias: "legacy-four",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.5": {
+        params: {
+          reasoning: { effort: "high", budget: 100, summary: "auto" },
+          tags: ["stable"],
+        },
+        streaming: false,
+        alias: "legacy-four",
+      },
+    });
+    expect(res.changes.filter((change) => change.includes("Merged"))).toEqual([
+      'Merged config.agents.defaults.models key "openai/gpt-4" into "openai/gpt-5.5"; kept existing values for conflicting fields: params.reasoning.effort.',
+    ]);
+  });
+
+  it("does not report conflicts between model refs that normalize to the same value", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": { params: { fallbacks: ["openai/gpt-4"] } },
+            "openai/gpt-4o": { params: { fallbacks: ["openai/gpt-5.5"] } },
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.5": { params: { fallbacks: ["openai/gpt-5.5"] } },
+    });
+    expect(res.changes.filter((change) => change.includes("Merged"))).toEqual([
+      'Merged config.agents.defaults.models key "openai/gpt-4o" into "openai/gpt-5.5".',
+    ]);
+  });
+
+  it.each(["first", "last"] as const)(
+    "keeps canonical values when the canonical key appears %s",
+    (canonicalPosition) => {
+      const canonical = [
+        "openai/gpt-5.5",
+        {
+          alias: "canonical-five",
+          params: { reasoning: { effort: "medium", canonicalOnly: true } },
+          agentRuntime: { id: "codex" },
+        },
+      ] as const;
+      const retired = [
+        [
+          "openai/gpt-4",
+          {
+            alias: "legacy-four",
+            params: { reasoning: { effort: "low", fourOnly: true } },
+          },
+        ],
+        [
+          "openai/gpt-4o",
+          {
+            streaming: false,
+            params: { reasoning: { effort: "high", fourOOnly: true } },
+          },
+        ],
+      ] as const;
+      const entries =
+        canonicalPosition === "first" ? [canonical, ...retired] : [...retired, canonical];
+      const res = migrateLegacyConfigForTest({
+        agents: { defaults: { models: Object.fromEntries(entries) } },
+      });
+
+      expect(res.config?.agents?.defaults?.models).toEqual({
+        "openai/gpt-5.5": {
+          alias: "canonical-five",
+          params: {
+            reasoning: {
+              effort: "medium",
+              canonicalOnly: true,
+              fourOnly: true,
+              fourOOnly: true,
+            },
+          },
+          agentRuntime: { id: "codex" },
+          streaming: false,
+        },
+      });
+      expect(res.changes.filter((change) => change.includes("Merged"))).toEqual([
+        'Merged config.agents.defaults.models key "openai/gpt-4" into "openai/gpt-5.5"; kept existing values for conflicting fields: alias, params.reasoning.effort.',
+        'Merged config.agents.defaults.models key "openai/gpt-4o" into "openai/gpt-5.5"; kept existing values for conflicting fields: params.reasoning.effort.',
+      ]);
+    },
+  );
+
+  it("merges colliding model refs in per-agent model maps", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        list: [
+          {
+            id: "research",
+            models: {
+              "openai/gpt-4": { alias: "legacy-four" },
+              "openai/gpt-4o": { streaming: false },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.config?.agents?.list?.[0]?.models).toEqual({
+      "openai/gpt-5.5": { alias: "legacy-four", streaming: false },
+    });
+    expect(res.changes.filter((change) => change.includes("Merged"))).toEqual([
+      'Merged config.agents.list.0.models key "openai/gpt-4o" into "openai/gpt-5.5".',
+    ]);
+  });
+
+  it.each([
+    {
+      side: "canonical",
+      raw: '{"agents":{"defaults":{"models":{"openai/gpt-5.5":{"__proto__":{"polluted":true},"alias":"canonical-five","params":{"nested":{"__proto__":{"polluted":true},"model":"openai/gpt-4o"}}},"openai/gpt-4":{"streaming":false}}}}}',
+    },
+    {
+      side: "retired",
+      raw: '{"agents":{"defaults":{"models":{"openai/gpt-5.5":{"alias":"canonical-five"},"openai/gpt-4":{"__proto__":{"polluted":true},"streaming":false,"params":{"nested":{"__proto__":{"polluted":true},"model":"openai/gpt-4o"}}}}}}}',
+    },
+  ])("filters blocked keys recursively from the $side collision side", ({ raw }) => {
+    const res = migrateLegacyConfigForTest(JSON.parse(raw));
+    const merged = res.config?.agents?.defaults?.models?.["openai/gpt-5.5"] as Record<
+      string,
+      unknown
+    >;
+    const params = merged.params as Record<string, unknown>;
+    const nested = params.nested as Record<string, unknown>;
+
+    for (const record of [merged, params, nested]) {
+      expect(Object.getOwnPropertyNames(record)).not.toContain("__proto__");
+      expect(Object.getPrototypeOf(record)).toBe(Object.prototype);
+      expect(record.polluted).toBeUndefined();
+    }
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(merged).toEqual({
+      alias: "canonical-five",
+      params: { nested: { model: "openai/gpt-5.5" } },
+      streaming: false,
+    });
+  });
+
+  it("does not invoke prototype setters when copying the rewritten config root", () => {
+    const raw = JSON.parse(
+      '{"__proto__":{"polluted":true},"agents":{"defaults":{"model":"openai/gpt-4"}}}',
+    ) as Record<string, unknown>;
+    const res = migrateLegacyConfigForTest(raw);
+    const config = res.config as unknown as Record<string, unknown>;
+
+    expect(Object.getPrototypeOf(config)).toBe(Object.prototype);
+    expect(Object.hasOwn(config, "__proto__")).toBe(true);
+    expect(config.polluted).toBeUndefined();
+    expect(res.config?.agents?.defaults?.model).toBe("openai/gpt-5.5");
+  });
+
+  it("reports malformed scalar collisions without claiming equal values conflict", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.5": false,
+            "openai/gpt-4": true,
+            "openai/gpt-4o": false,
+          },
+        },
+      },
+    });
+
+    expect(res.config?.agents?.defaults?.models?.["openai/gpt-5.5"]).toBe(false);
+    expect(res.changes.filter((change) => change.includes("Merged"))).toEqual([
+      'Merged config.agents.defaults.models key "openai/gpt-4" into "openai/gpt-5.5"; kept existing values for conflicting fields: value.',
+      'Merged config.agents.defaults.models key "openai/gpt-4o" into "openai/gpt-5.5".',
     ]);
   });
 

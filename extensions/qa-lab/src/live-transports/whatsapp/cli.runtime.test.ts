@@ -49,6 +49,7 @@ function makeEvidenceSummary(status: "pass" | "fail" | "blocked" | "skipped") {
     kind: "openclaw.qa.evidence-summary",
     schemaVersion: 2,
     generatedAt: "2026-05-01T00:00:00.000Z",
+    evidenceMode: "full",
     entries: [
       {
         test: {

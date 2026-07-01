@@ -142,6 +142,274 @@ describe("buildChatItems", () => {
     expect(groups[0].messages[0].duplicateCount).toBe(3);
   });
 
+  it("deduplicates relay-labeled assistant copies by source message id", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          id: "reply-1",
+          role: "assistant",
+          content: [{ type: "text", text: "Parzival There it is." }],
+          senderLabel: "Parzival",
+          timestamp: 1,
+        },
+        {
+          id: "reply-1",
+          role: "assistant",
+          content: [{ type: "text", text: "There it is." }],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].senderLabel).toBeNull();
+    expect(groups[0].messages).toHaveLength(1);
+    expect(messageRecord(groups[0]).content).toStrictEqual([
+      { type: "text", text: "There it is." },
+    ]);
+  });
+
+  it("deduplicates relay-labeled assistant copies by event messageId", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          messageId: "reply-2",
+          role: "assistant",
+          content: [{ type: "text", text: "Parzival Found it." }],
+          senderLabel: "Parzival",
+          timestamp: 1,
+        },
+        {
+          messageId: "reply-2",
+          role: "assistant",
+          content: [{ type: "text", text: "Found it." }],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].senderLabel).toBeNull();
+    expect(groups[0].messages).toHaveLength(1);
+    expect(messageRecord(groups[0]).content).toStrictEqual([{ type: "text", text: "Found it." }]);
+  });
+
+  it("deduplicates relay-labeled assistant copies by OpenClaw transcript metadata id", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          __openclaw: { id: "reply-3" },
+          role: "assistant",
+          content: [{ type: "text", text: "Parzival On it." }],
+          senderLabel: "Parzival",
+          timestamp: 1,
+        },
+        {
+          __openclaw: { id: "reply-3" },
+          role: "assistant",
+          content: [{ type: "text", text: "On it." }],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].senderLabel).toBeNull();
+    expect(groups[0].messages).toHaveLength(1);
+    expect(messageRecord(groups[0]).content).toStrictEqual([{ type: "text", text: "On it." }]);
+  });
+
+  it("deduplicates relay-labeled assistant copies by OpenClaw metadata before surface ids", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          id: "relay-surface-copy",
+          __openclaw: { id: "reply-4" },
+          role: "assistant",
+          content: [{ type: "text", text: "Parzival Ship it." }],
+          senderLabel: "Parzival",
+          timestamp: 1,
+        },
+        {
+          id: "native-surface-copy",
+          __openclaw: { id: "reply-4" },
+          role: "assistant",
+          content: [{ type: "text", text: "Ship it." }],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].senderLabel).toBeNull();
+    expect(groups[0].messages).toHaveLength(1);
+    expect(messageRecord(groups[0]).content).toStrictEqual([{ type: "text", text: "Ship it." }]);
+  });
+
+  it("keeps native assistant updates separate when source message id repeats with new text", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          __openclaw: { id: "reply-5" },
+          role: "assistant",
+          content: [{ type: "text", text: "Draft one" }],
+          timestamp: 1,
+        },
+        {
+          __openclaw: { id: "reply-5" },
+          role: "assistant",
+          content: [{ type: "text", text: "Draft two" }],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].messages).toHaveLength(2);
+    expect(messageRecord(groups[0], 0).content).toStrictEqual([
+      { type: "text", text: "Draft one" },
+    ]);
+    expect(messageRecord(groups[0], 1).content).toStrictEqual([
+      { type: "text", text: "Draft two" },
+    ]);
+  });
+
+  it("keeps formatting-only assistant updates separate for the same source message", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          __openclaw: { id: "reply-formatted" },
+          role: "assistant",
+          content: [{ type: "text", text: "Parzival first\n\nsecond" }],
+          senderLabel: "Parzival",
+          timestamp: 1,
+        },
+        {
+          __openclaw: { id: "reply-formatted" },
+          role: "assistant",
+          content: [{ type: "text", text: "first second" }],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(2);
+    expect(messageRecord(groups[0]).content).toStrictEqual([
+      { type: "text", text: "Parzival first\n\nsecond" },
+    ]);
+    expect(messageRecord(groups[1]).content).toStrictEqual([
+      { type: "text", text: "first second" },
+    ]);
+  });
+
+  it("keeps differently cased sender text separate for the same source message", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          __openclaw: { id: "reply-case-change" },
+          role: "assistant",
+          content: [{ type: "text", text: "PARZIVAL answer" }],
+          senderLabel: "Parzival",
+          timestamp: 1,
+        },
+        {
+          __openclaw: { id: "reply-case-change" },
+          role: "assistant",
+          content: [{ type: "text", text: "answer" }],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(2);
+    expect(messageRecord(groups[0]).content).toStrictEqual([
+      { type: "text", text: "PARZIVAL answer" },
+    ]);
+    expect(messageRecord(groups[1]).content).toStrictEqual([{ type: "text", text: "answer" }]);
+  });
+
+  it("keeps relay-labeled assistant updates separate when source message id repeats with new text", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          __openclaw: { id: "reply-6" },
+          role: "assistant",
+          content: [{ type: "text", text: "Parzival Draft one" }],
+          senderLabel: "Parzival",
+          timestamp: 1,
+        },
+        {
+          __openclaw: { id: "reply-6" },
+          role: "assistant",
+          content: [{ type: "text", text: "Parzival Draft two" }],
+          senderLabel: "Parzival",
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].senderLabel).toBe("Parzival");
+    expect(groups[0].messages).toHaveLength(2);
+    expect(messageRecord(groups[0], 0).content).toStrictEqual([
+      { type: "text", text: "Parzival Draft one" },
+    ]);
+    expect(messageRecord(groups[0], 1).content).toStrictEqual([
+      { type: "text", text: "Parzival Draft two" },
+    ]);
+  });
+
+  it("keeps identical assistant text separate when source message ids differ", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          id: "reply-7",
+          role: "assistant",
+          content: [{ type: "text", text: "Same update" }],
+          senderLabel: "Parzival",
+          timestamp: 1,
+        },
+        {
+          id: "reply-8",
+          role: "assistant",
+          content: [{ type: "text", text: "Same update" }],
+          senderLabel: "Parzival",
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].messages).toHaveLength(2);
+    expect(groups[0].messages[0].duplicateCount).toBeUndefined();
+    expect(groups[0].messages[1].duplicateCount).toBeUndefined();
+  });
+
+  it("keeps same-id user relay copies separate so sender identity is preserved", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          __openclaw: { id: "user-1" },
+          role: "user",
+          content: [{ type: "text", text: "Alice hello" }],
+          senderLabel: "Alice",
+          timestamp: 1,
+        },
+        {
+          __openclaw: { id: "user-1" },
+          role: "user",
+          content: [{ type: "text", text: "hello" }],
+          timestamp: 2,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(2);
+    expect(groups.map((group) => group.senderLabel)).toEqual(["Alice", null]);
+    expect(groups[0].messages).toHaveLength(1);
+    expect(groups[1].messages).toHaveLength(1);
+  });
+
   it("suppresses assistant HEARTBEAT_OK acknowledgements before rendering history", () => {
     const groups = messageGroups({
       messages: [
@@ -281,6 +549,65 @@ describe("buildChatItems", () => {
       { text: "After tool." },
       { text: "Final sentence." },
     ]);
+  });
+
+  it("keeps distinct keyed preamble segments independent from accumulated stream snapshots", () => {
+    const items = buildChatItems(
+      createProps({
+        streamSegments: [
+          { text: "Checking workspace", ts: 0, itemId: "preamble-1" },
+          { text: "Checking workspace", ts: 0, itemId: "preamble-2" },
+          { text: "Checking workspace details", ts: 0, itemId: "preamble-3" },
+        ],
+        toolMessages: [{ role: "toolResult", content: "Tool output", timestamp: 1 }],
+      }),
+    );
+
+    expect(items).toMatchObject([
+      { kind: "stream", text: "Checking workspace", startedAt: 0 },
+      { kind: "stream", text: "Checking workspace", startedAt: 0 },
+      { kind: "stream", text: "Checking workspace details", startedAt: 0 },
+      { kind: "group", role: "tool" },
+    ]);
+  });
+
+  it("keeps already-visible tool cards before matching-timestamp keyed preambles", () => {
+    const items = buildChatItems(
+      createProps({
+        streamSegments: [{ text: "Checking after the tool", ts: 1, itemId: "preamble-after-tool" }],
+        toolMessages: [{ role: "toolResult", content: "Tool output", timestamp: 1 }],
+      }),
+    );
+
+    expect(items).toMatchObject([
+      { kind: "group", role: "tool" },
+      { kind: "stream", text: "Checking after the tool", startedAt: 1 },
+    ]);
+  });
+
+  it("orders a keyed preamble that arrived before a later tool above that tool", () => {
+    // Regression: keyed commentary must merge into the timestamp ordering path
+    // rather than render below every tool card. A preamble that arrived between
+    // an earlier and a later tool should stay between them while the run is live.
+    const items = buildChatItems(
+      createProps({
+        streamSegments: [
+          { text: "Planning the next step", ts: 2, itemId: "preamble-between-tools" },
+        ],
+        toolMessages: [
+          { role: "toolResult", content: "First tool", timestamp: 1 },
+          { role: "toolResult", content: "Second tool", timestamp: 3 },
+        ],
+      }),
+    );
+
+    expect(items).toMatchObject([
+      { kind: "group", role: "tool" },
+      { kind: "stream", text: "Planning the next step", startedAt: 2 },
+      { kind: "group", role: "tool" },
+    ]);
+    const streamItems = items.filter((item) => item.kind === "stream");
+    expect(streamItems).toHaveLength(1);
   });
 
   it("suppresses metadata-only history messages before grouping", () => {
@@ -870,3 +1197,60 @@ function createAssistantCanvasBlock(params: { suffix: string }) {
     },
   };
 }
+
+describe("tool turn outcome annotation (#89683)", () => {
+  function failedTool(timestamp: number) {
+    return {
+      role: "toolResult",
+      toolName: "shell",
+      content: JSON.stringify({ status: "failed", exitCode: 1 }),
+      isError: true,
+      timestamp,
+    };
+  }
+  function userMsg(text: string, timestamp: number) {
+    return { role: "user", content: text, timestamp };
+  }
+  function assistantReply(text: string, timestamp: number) {
+    return { role: "assistant", content: [{ type: "text", text }], timestamp };
+  }
+  function toolGroups(messages: unknown[]): MessageGroup[] {
+    return messageGroups({ messages }).filter((group) => group.role === "tool");
+  }
+
+  it("marks a failed tool followed by an assistant reply as turnSucceeded", () => {
+    const tools = toolGroups([
+      userMsg("search foo", 1),
+      failedTool(2),
+      assistantReply("No matches found.", 3),
+    ]);
+    expect(tools).toHaveLength(1);
+    expect(tools[0].turnSucceeded).toBe(true);
+  });
+
+  it("leaves a terminal failed tool (no assistant reply) as not-succeeded", () => {
+    const tools = toolGroups([userMsg("search foo", 1), failedTool(2)]);
+    expect(tools).toHaveLength(1);
+    expect(tools[0].turnSucceeded).toBe(false);
+  });
+
+  it("does not count an assistant group without reply text as success", () => {
+    const tools = toolGroups([
+      userMsg("search foo", 1),
+      failedTool(2),
+      { role: "assistant", content: [], timestamp: 3 },
+    ]);
+    expect(tools[0].turnSucceeded).toBe(false);
+  });
+
+  it("scopes the outcome per turn at user boundaries", () => {
+    const tools = toolGroups([
+      userMsg("first", 1),
+      failedTool(2),
+      assistantReply("done", 3),
+      userMsg("second", 4),
+      failedTool(5),
+    ]);
+    expect(tools.map((group) => group.turnSucceeded)).toEqual([true, false]);
+  });
+});

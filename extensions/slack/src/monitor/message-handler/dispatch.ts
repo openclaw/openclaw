@@ -122,7 +122,8 @@ const UNICODE_TO_SLACK: Record<string, string> = {
   "🛠️": "hammer_and_wrench",
   "💻": "computer",
 };
-const SLACK_REASONING_TAG_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
+const SLACK_REASONING_TAG_RE =
+  /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/gi;
 const SLACK_REASONING_LABEL_PREFIX_RE = /^\s*(?:>\s*)?Reasoning:\s*/iu;
 const SLACK_THINKING_LABEL_PREFIX_RE = /^\s*(?:>\s*)?Thinking\.{0,3}(?=\s*(?:\n|_))/iu;
 
@@ -465,7 +466,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         iconUrl: outboundIdentity.avatarUrl,
         iconEmoji: outboundIdentity.emoji,
       }
-    : undefined;
+    : prepared.relayIdentity;
 
   if (prepared.isDirectMessage) {
     const sessionCfg = cfg.session;
@@ -687,7 +688,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     shouldEnableSlackPreviewStreaming({
       mode: slackStreaming.mode,
     });
+  // Slack's native streaming APIs do not accept chat:write.customize identity
+  // fields. Keep custom-identity replies on the draft/standard postMessage
+  // path so the configured username and icon are not silently discarded.
   const streamingEnabled =
+    !slackIdentity &&
     !sourceRepliesAreToolOnly &&
     isSlackStreamingEnabled({
       mode: slackStreaming.mode,
@@ -1864,6 +1869,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         disableBlockStreaming,
         onModelSelected,
         suppressDefaultToolProgressMessages: suppressDefaultToolProgressMessages ? true : undefined,
+        allowProgressCallbacksWhenSourceDeliverySuppressed:
+          sourceReplyDeliveryMode === "message_tool_only" && statusReactionsEnabled
+            ? true
+            : undefined,
+        allowToolLifecycleWhenProgressHidden: statusReactionsEnabled ? true : undefined,
         onPartialReply: useStreaming
           ? undefined
           : !previewStreamingEnabled
@@ -2037,11 +2047,17 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     } catch (err) {
       if (err instanceof SlackStreamNotDeliveredError) {
         streamFallbackDelivered = await deliverPendingStreamFallback(finalStream, err);
+        if (!streamFallbackDelivered) {
+          dispatchError ??= err;
+        }
       } else {
         const error = formatSlackError(err);
         emitAcknowledgedStreamedDeliveries();
         emitFailedPendingStreamedDeliveries(error);
         runtime.error?.(danger(`slack-stream: failed to stop stream: ${error}`));
+        if (!finalStream.delivered) {
+          dispatchError ??= err;
+        }
       }
     }
   }
@@ -2099,10 +2115,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
   }
 
-  if (dispatchError) {
-    throw toLintErrorObject(dispatchError, "Slack dispatch failed");
-  }
-
   // Record thread participation only when we actually delivered a reply and
   // know the thread ts that was used (set by deliverNormally, streaming start,
   // or draft stream). Falls back to statusThreadTs for edge cases.
@@ -2111,6 +2123,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     recordSlackThreadParticipation(account.accountId, message.channel, participationThreadTs, {
       agentId: route.agentId,
     });
+  }
+  if (dispatchError) {
+    throw toLintErrorObject(dispatchError, "Slack dispatch failed");
   }
   if (!anyReplyDelivered && !draftPreviewCommitted) {
     await draftStream?.clear();

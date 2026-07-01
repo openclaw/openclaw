@@ -5,11 +5,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { writeRestartSentinel } from "../infra/restart-sentinel.js";
 import type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
 } from "../plugins/hook-types.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
 const hoisted = vi.hoisted(() => {
@@ -38,7 +40,6 @@ const hoisted = vi.hoisted(() => {
     skipped: 0,
   }));
   const scheduleRestartAbortedMainSessionRecovery = vi.fn();
-  const shouldWakeFromRestartSentinel = vi.fn(() => false);
   const scheduleRestartSentinelWake = vi.fn();
   const refreshLatestUpdateRestartSentinel = vi.fn<
     typeof import("./server-restart-sentinel.js").refreshLatestUpdateRestartSentinel
@@ -91,7 +92,6 @@ const hoisted = vi.hoisted(() => {
     markStartupOrphanedMainSessionsForRecovery,
     recoverStartupOrphanedMainSessions,
     scheduleRestartAbortedMainSessionRecovery,
-    shouldWakeFromRestartSentinel,
     scheduleRestartSentinelWake,
     refreshLatestUpdateRestartSentinel,
     getAcpRuntimeBackend,
@@ -137,7 +137,9 @@ vi.mock("../config/paths.js", async () => {
     STATE_DIR: "/tmp/openclaw-state",
     resolveConfigPath: vi.fn(() => "/tmp/openclaw-state/openclaw.json"),
     resolveGatewayPort: vi.fn(() => 18789),
-    resolveStateDir: vi.fn(() => "/tmp/openclaw-state"),
+    resolveStateDir: vi.fn((env: NodeJS.ProcessEnv = process.env) =>
+      env.OPENCLAW_STATE_DIR?.trim() ? actual.resolveStateDir(env) : "/tmp/openclaw-state",
+    ),
   };
 });
 
@@ -177,7 +179,6 @@ vi.mock("../acp/runtime/registry.js", () => ({
 vi.mock("./server-restart-sentinel.js", () => ({
   refreshLatestUpdateRestartSentinel: hoisted.refreshLatestUpdateRestartSentinel,
   scheduleRestartSentinelWake: hoisted.scheduleRestartSentinelWake,
-  shouldWakeFromRestartSentinel: hoisted.shouldWakeFromRestartSentinel,
 }));
 
 vi.mock("./server-startup-memory.js", () => ({
@@ -298,6 +299,7 @@ function firstGatewayStartCall(
 
 describe("startGatewayPostAttachRuntime", () => {
   beforeEach(() => {
+    closeOpenClawStateDatabaseForTest();
     vi.stubEnv("OPENCLAW_SKIP_CHANNELS", "0");
     vi.stubEnv("OPENCLAW_SKIP_PROVIDERS", "0");
     hoisted.startPluginServices.mockClear();
@@ -327,8 +329,9 @@ describe("startGatewayPostAttachRuntime", () => {
       skipped: 0,
     });
     hoisted.scheduleRestartAbortedMainSessionRecovery.mockClear();
-    hoisted.shouldWakeFromRestartSentinel.mockReturnValue(false);
     hoisted.scheduleRestartSentinelWake.mockClear();
+    hoisted.refreshLatestUpdateRestartSentinel.mockReset();
+    hoisted.refreshLatestUpdateRestartSentinel.mockResolvedValue(null);
     hoisted.getAcpRuntimeBackend.mockReset();
     hoisted.getAcpRuntimeBackend.mockReturnValue(null);
     hoisted.reconcilePendingSessionIdentities.mockClear();
@@ -359,6 +362,7 @@ describe("startGatewayPostAttachRuntime", () => {
   });
 
   afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
     vi.useRealTimers();
     vi.unstubAllEnvs();
   });
@@ -384,6 +388,11 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.setInternalHooksEnabled).not.toHaveBeenCalled();
     expect(hoisted.logGatewayStartup).toHaveBeenCalledTimes(1);
     expect(firstStartupLog().loadedPluginIds).toEqual(["beta", "alpha"]);
+    expect(hoisted.logGatewayStartup).toHaveBeenCalledWith(
+      expect.objectContaining({
+        activationSourceConfig: { hooks: { internal: { enabled: false } } },
+      }),
+    );
     expect(log.info).toHaveBeenCalledWith("gateway ready");
     expect(hoisted.scheduleRestartAbortedMainSessionRecovery).toHaveBeenCalledWith({
       cfg: { hooks: { internal: { enabled: false } } },
@@ -559,63 +568,82 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("skips heavy restart sentinel refresh when no sentinel file exists", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-no-sentinel-"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-
-    const result = await testing.refreshLatestUpdateRestartSentinelIfPresent();
-
-    expect(result).toBeNull();
-    expect(hoisted.refreshLatestUpdateRestartSentinel).not.toHaveBeenCalled();
-    fs.rmSync(stateDir, { recursive: true, force: true });
-  });
-
-  it("refreshes the restart sentinel when the sentinel file exists", async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sentinel-"));
-    fs.writeFileSync(path.join(stateDir, "restart-sentinel.json"), "{}\n");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const sentinel = { kind: "update", status: "ok", ts: 1 } as const;
-    hoisted.refreshLatestUpdateRestartSentinel.mockResolvedValue(sentinel);
-
-    const result = await testing.refreshLatestUpdateRestartSentinelIfPresent();
-
-    expect(result).toBe(sentinel);
-    expect(hoisted.refreshLatestUpdateRestartSentinel).toHaveBeenCalledOnce();
-    fs.rmSync(stateDir, { recursive: true, force: true });
-  });
-
-  it("expands tilde-based restart sentinel state paths", async () => {
-    const osHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-home-"));
     try {
-      const openclawHome = path.join(osHome, "openclaw-home");
-      const stateDirFromHome = path.join(openclawHome, ".openclaw");
-      fs.mkdirSync(stateDirFromHome, { recursive: true });
-      fs.writeFileSync(path.join(stateDirFromHome, "restart-sentinel.json"), "{}\n");
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        hoisted.refreshLatestUpdateRestartSentinel.mockClear();
+
+        const result = await testing.refreshLatestUpdateRestartSentinelIfPresent();
+
+        expect(result).toBeNull();
+        expect(hoisted.refreshLatestUpdateRestartSentinel).not.toHaveBeenCalled();
+      });
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes the restart sentinel when the sentinel row exists", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sentinel-"));
+    try {
+      await writeRestartSentinel(
+        {
+          kind: "update",
+          status: "ok",
+          ts: 1,
+        },
+        { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
+      );
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const sentinel = { kind: "update", status: "ok", ts: 1 } as const;
+        hoisted.refreshLatestUpdateRestartSentinel.mockClear();
+        hoisted.refreshLatestUpdateRestartSentinel.mockResolvedValue(sentinel);
+
+        const result = await testing.refreshLatestUpdateRestartSentinelIfPresent();
+
+        expect(result).toBe(sentinel);
+        expect(hoisted.refreshLatestUpdateRestartSentinel).toHaveBeenCalledOnce();
+      });
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("detects restart sentinel rows in explicit state directories", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sentinel-state-"));
+    try {
+      await writeRestartSentinel(
+        {
+          kind: "update",
+          status: "ok",
+          ts: 1,
+        },
+        { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
+      );
 
       expect(
-        await testing.hasRestartSentinelFileFast({
-          HOME: osHome,
-          OPENCLAW_HOME: "~/openclaw-home",
-        } as NodeJS.ProcessEnv),
-      ).toBe(true);
-
-      const backslashStateDir = path.resolve(`${osHome}\\openclaw-state`);
-      fs.mkdirSync(backslashStateDir, { recursive: true });
-      fs.writeFileSync(path.join(backslashStateDir, "restart-sentinel.json"), "{}\n");
-
-      expect(
-        await testing.hasRestartSentinelFileFast({
-          HOME: osHome,
-          OPENCLAW_STATE_DIR: "~\\openclaw-state",
+        await testing.hasRestartSentinelFast({
+          OPENCLAW_STATE_DIR: stateDir,
         } as NodeJS.ProcessEnv),
       ).toBe(true);
     } finally {
-      fs.rmSync(osHome, { recursive: true, force: true });
+      closeOpenClawStateDatabaseForTest();
+      fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
 
   it("avoids sync filesystem probes while checking restart sentinel presence", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-async-sentinel-"));
     try {
-      fs.writeFileSync(path.join(stateDir, "restart-sentinel.json"), "{}\n");
+      await writeRestartSentinel(
+        {
+          kind: "update",
+          status: "ok",
+          ts: 1,
+        },
+        { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
+      );
       const actualExistsSync = fs.existsSync;
       const existsSync = vi.spyOn(fs, "existsSync").mockImplementation((candidate) => {
         if (String(candidate).startsWith(stateDir)) {
@@ -625,7 +653,7 @@ describe("startGatewayPostAttachRuntime", () => {
       });
       try {
         await expect(
-          testing.hasRestartSentinelFileFast({
+          testing.hasRestartSentinelFast({
             OPENCLAW_STATE_DIR: stateDir,
           } as NodeJS.ProcessEnv),
         ).resolves.toBe(true);
@@ -636,6 +664,7 @@ describe("startGatewayPostAttachRuntime", () => {
         existsSync.mockRestore();
       }
     } finally {
+      closeOpenClawStateDatabaseForTest();
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
@@ -2216,6 +2245,7 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
       error: vi.fn(),
     },
     gatewayPluginConfigAtStart: { hooks: { internal: { enabled: false } } } as never,
+    activationSourceConfig: { hooks: { internal: { enabled: false } } } as never,
     pluginRegistry: {
       plugins: [
         { id: "beta", status: "loaded" },

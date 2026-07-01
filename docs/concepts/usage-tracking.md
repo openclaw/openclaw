@@ -30,6 +30,68 @@ title: "Usage tracking"
 - CLI: `openclaw channels list` prints the same usage snapshot alongside provider config (use `--no-usage` to skip).
 - macOS menu bar: "Usage" section under Context (only if available).
 
+## Default usage footer mode
+
+`/usage off|tokens|full` sets the footer for a session and is remembered for that
+session. `messages.responseUsage` seeds that mode for sessions that have not
+chosen one, so the footer can be on by default without typing `/usage` each time.
+
+Set one mode for every channel, or a per-channel map with a `default` fallback:
+
+```jsonc
+{
+  "messages": {
+    "responseUsage": "tokens",
+    // or: { "default": "off", "discord": "full" }
+  },
+}
+```
+
+### Three distinct session states
+
+A session's `responseUsage` field has three representable states, each with
+different semantics:
+
+| State               | Stored value                    | Effective mode                                                        |
+| ------------------- | ------------------------------- | --------------------------------------------------------------------- |
+| **Unset / inherit** | `undefined` (absent)            | Falls through to `messages.responseUsage` config default, then `off`. |
+| **Explicit off**    | `"off"` (stored)                | Always off — a non-off config default cannot re-enable the footer.    |
+| **Explicit on**     | `"tokens"` or `"full"` (stored) | That mode, regardless of config default.                              |
+
+### Precedence
+
+Effective mode = session override → channel config entry → `default` → `off`.
+
+An explicit `/usage off` is **persisted** as the literal value `"off"` in the
+session, not the same as "unset." This means a non-off `messages.responseUsage`
+default cannot turn the footer back on once the user has explicitly disabled it.
+
+### Resetting vs. turning off
+
+- `/usage off` — forces the footer off and persists that choice. A configured
+  non-off default cannot override this.
+- `/usage reset` (aliases: `inherit`, `clear`, `default`) — clears the session
+  override. The session then **inherits** the effective config default
+  (`messages.responseUsage`). If no default is configured, the footer is off
+  (unchanged from before). Use this to "go back to default" without explicitly
+  turning the footer on.
+- A full session reset (`/reset` or `/new`) or a session rollover **preserves**
+  the explicit usage-mode preference so the user's display choice survives
+  session rollovers. Only `/usage reset` (and its aliases) actually clears the
+  override.
+
+### Toggle behavior
+
+`/usage` with no arguments cycles: off → tokens → full → off. The starting point
+for the cycle is the **effective** current mode (session override falling through
+to the config default when unset), so the cycle is always consistent with what
+the user sees in the footer.
+
+### Config
+
+With no config the prior behavior holds (footer off until `/usage`). Use
+`/usage reset` to clear a session override and re-inherit the configured default.
+
 ## Custom `/usage full` footer
 
 `/usage full` shows a built-in compact footer with model, reasoning, fast/slow,

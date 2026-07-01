@@ -2,10 +2,9 @@ project("OpenClaw.xcodeproj")
 scheme("OpenClawUITests")
 configuration("Debug")
 
-devices([
-  "iPhone 16 Pro Max",
-  "iPad Pro 13-inch (M4)",
-])
+# The Fastfile screenshot lane resolves concrete device names from the installed
+# Xcode simulators. Fastlane validates Snapfile devices before lane overrides, so
+# this file intentionally does not hardcode simulator model names.
 
 languages([
   "en-US",

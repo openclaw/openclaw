@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { projectLiveAssistantBufferedText } from "./live-chat-projector.js";
+import { createChatAbortMarker, type ChatAbortMarker } from "./server-chat-state.js";
 
 const DEFAULT_CHAT_RUN_ABORT_GRACE_MS = 60_000;
 
@@ -337,7 +338,7 @@ export function boundInFlightRunSnapshotForChatHistory(params: {
 export type ChatAbortOps = {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   chatRunBuffers: Map<string, string>;
-  chatAbortedRuns: Map<string, number>;
+  chatAbortedRuns: Map<string, ChatAbortMarker>;
   clearChatRunState: (runId: string) => void;
   removeChatRun: (
     sessionId: string,
@@ -350,7 +351,7 @@ export type ChatAbortOps = {
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
 };
 
-export type TrackedChatRunAbortOps = {
+type TrackedChatRunAbortOps = {
   chatAbortControllers: ChatAbortOps["chatAbortControllers"];
   chatRunBuffers: ChatAbortOps["chatRunBuffers"];
   chatRunState: {
@@ -469,7 +470,7 @@ export function abortChatRunById(
 
   const bufferedText = ops.chatRunBuffers.get(runId);
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
-  ops.chatAbortedRuns.set(runId, Date.now());
+  ops.chatAbortedRuns.set(runId, createChatAbortMarker());
   if (stopReason) {
     active.abortStopReason = stopReason;
   }

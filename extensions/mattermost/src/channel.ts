@@ -258,10 +258,8 @@ function resolveMattermostAutoThreadId(params: {
     typeof context?.currentMessageId === "number"
       ? String(context.currentMessageId)
       : normalizeOptionalString(context?.currentMessageId);
-  const currentTarget = context?.currentChannelId
-    ? normalizeMattermostMessagingTarget(context.currentChannelId)
-    : undefined;
-  if (currentThreadId && currentTarget === normalizeMattermostMessagingTarget(params.to)) {
+  const currentTarget = normalizeMattermostThreadTarget(context?.currentChannelId);
+  if (currentThreadId && currentTarget === normalizeMattermostThreadTarget(params.to)) {
     if (replyToId === currentMessageId) {
       return currentThreadId;
     }
@@ -274,6 +272,28 @@ function resolveMattermostAutoThreadId(params: {
     }
   }
   return replyToId;
+}
+
+function normalizeMattermostThreadTarget(raw: string | undefined): string | undefined {
+  const normalized = raw ? normalizeMattermostMessagingTarget(raw) : undefined;
+  if (normalized) {
+    return normalized;
+  }
+  const trimmed = normalizeOptionalString(raw);
+  return trimmed && /^[a-z0-9]{26}$/i.test(trimmed) ? `channel:${trimmed}` : undefined;
+}
+
+function matchesMattermostToolContextTarget(params: {
+  target: string;
+  toolContext: ChannelThreadingToolContext;
+}): boolean {
+  const target = normalizeMattermostThreadTarget(params.target);
+  if (!target) {
+    return false;
+  }
+  return [params.toolContext.currentChannelId, params.toolContext.currentMessagingTarget].some(
+    (currentTarget) => normalizeMattermostThreadTarget(currentTarget) === target,
+  );
 }
 
 function normalizeMattermostThreadId(value: string | number | undefined): string | undefined {
@@ -420,12 +440,13 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       : typeof params.message === "string"
         ? params.message
         : "";
-    // Match the shared runner semantics: trim empty reply IDs away before
-    // falling back from replyToId to replyTo on direct plugin calls.
+    // Mattermost post root_id is the thread root. A generic replyTo can name
+    // the current child post, so prefer threadId unless the caller supplied the
+    // Mattermost-specific replyToId root directly.
     const replyToId =
       normalizeOptionalString(params.replyToId) ??
-      normalizeOptionalString(params.replyTo) ??
-      normalizeOptionalString(params.threadId);
+      normalizeOptionalString(params.threadId) ??
+      normalizeOptionalString(params.replyTo);
     const resolvedAccountId = accountId || undefined;
 
     const attachmentMedia = collectMattermostAttachmentMedia(params);
@@ -837,6 +858,7 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
         extra: {
           botTokenSource: account.botTokenSource,
           baseUrl: account.baseUrl,
+          dmPolicy: account.config.dmPolicy ?? "pairing",
           connected: runtime?.connected ?? false,
           lastConnectedAt: runtime?.lastConnectedAt ?? null,
           lastDisconnect: runtime?.lastDisconnect ?? null,
@@ -896,16 +918,18 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = create
     },
     resolveAutoThreadId: ({ to, replyToId, toolContext }) =>
       resolveMattermostAutoThreadId({ to, replyToId, toolContext }),
+    matchesToolContextTarget: ({ target, toolContext }) =>
+      matchesMattermostToolContextTarget({ target, toolContext }),
     resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit, replyDelivery }) => {
       const ambientThreadId = threadId != null ? String(threadId) : undefined;
       const resolvedThreadId =
         replyDelivery?.chatType === "direct"
           ? undefined
-          : replyToIsExplicit
-            ? (replyToId ?? ambientThreadId)
-            : replyDelivery
-              ? (ambientThreadId ?? replyToId ?? undefined)
-              : (replyToId ?? ambientThreadId);
+          : replyDelivery
+            ? replyToIsExplicit
+              ? (replyToId ?? ambientThreadId)
+              : (ambientThreadId ?? replyToId ?? undefined)
+            : (ambientThreadId ?? replyToId);
       return {
         replyToId: replyDelivery?.chatType === "direct" ? null : resolvedThreadId,
         threadId: resolvedThreadId ?? null,

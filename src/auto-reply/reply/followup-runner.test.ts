@@ -2757,6 +2757,63 @@ describe("createFollowupRunner progress forwarding", () => {
     expect(sessionStore.main.compactionCount).toBe(1);
   });
 
+  it("forwards opted-in queued tool lifecycle feedback while verbose progress is disabled", async () => {
+    const onToolStart = vi.fn(async () => {});
+    const onItemEvent = vi.fn(async () => {});
+    const onCommandOutput = vi.fn(async () => {});
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => Promise<void>;
+      }) => {
+        await args.onAgentEvent?.({
+          stream: "tool",
+          data: { phase: "start", name: "exec", args: { command: "echo hidden" } },
+        });
+        await args.onAgentEvent?.({
+          stream: "item",
+          data: { phase: "start", itemId: "item-1", title: "hidden item" },
+        });
+        await args.onAgentEvent?.({
+          stream: "command_output",
+          data: { phase: "chunk", output: "hidden output" },
+        });
+        return { payloads: [{ text: "final" }], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      opts: {
+        allowToolLifecycleWhenProgressHidden: true,
+        onToolStart,
+        onItemEvent,
+        onCommandOutput,
+      },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          messageProvider: "discord",
+          sourceReplyDeliveryMode: "message_tool_only",
+          verboseLevel: "off",
+        },
+      }),
+    );
+
+    expect(onToolStart).toHaveBeenCalledWith({
+      name: "exec",
+      phase: "start",
+      args: { command: "echo hidden" },
+      detailMode: undefined,
+    });
+    expect(onItemEvent).not.toHaveBeenCalled();
+    expect(onCommandOutput).not.toHaveBeenCalled();
+  });
+
   it("keeps queued follow-up progress quiet when verbose state is missing", async () => {
     const onToolStart = vi.fn(async () => {});
     const onCommandOutput = vi.fn(async () => {});
@@ -3302,6 +3359,7 @@ describe("createFollowupRunner compaction", () => {
       main: sessionEntry,
     };
     registerFollowupTestSessionStore(storePath, sessionStore);
+    const persistSpy = vi.spyOn(sessionRunAccounting, "persistRunSessionUsage");
 
     compactEmbeddedAgentSessionMock.mockResolvedValueOnce({
       ok: true,
@@ -3390,6 +3448,8 @@ describe("createFollowupRunner compaction", () => {
     expect(embeddedCalls[0]?.extraSystemPrompt).toContain("Post-compaction context refresh");
     expect(embeddedCalls[0]?.extraSystemPrompt).toContain("Read AGENTS.md before replying.");
     expect(sessionStore.main?.compactionCount).toBe(2);
+    expect(requireMockCallArg(persistSpy, 0).preserveFreshTotalTokensOnStaleUsage).toBe(true);
+    persistSpy.mockRestore();
   });
 
   it("registers the post-preflight session id for lifecycle event stamping", async () => {
@@ -3751,6 +3811,137 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     expect(persistCall.sessionKey).toBe(sessionKey);
     expect(persistCall.cfg).toBe(cfg);
     persistSpy.mockRestore();
+  });
+
+  it("appends configured responseUsage footers during followup delivery", async () => {
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
+    const cfg = {
+      messages: {
+        responseUsage: "tokens",
+      },
+    } as OpenClawConfig;
+
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [{ text: "hello world!" }],
+        meta: {
+          agentMeta: {
+            usage: { input: 1_000, output: 50 },
+            model: "claude-opus-4-6",
+            provider: "anthropic",
+          },
+        },
+      },
+      runnerOverrides: {
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+      },
+      queued: createQueuedRun({
+        run: {
+          config: cfg,
+          messageProvider: "discord",
+          sessionKey,
+        },
+      }),
+    });
+
+    const payload = requireMockCallArg(onBlockReply, 0);
+    expect(payload.text).toContain("hello world!");
+    expect(payload.text).toContain("Usage:");
+    expect(payload.text).toContain("out");
+  });
+
+  it("renders full responseUsage followup footers without exposing the session key", async () => {
+    const sessionKey = "discord:channel:user";
+    const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
+    const cfg = {
+      messages: {
+        responseUsage: "full",
+        usageTemplate: {
+          output: {
+            default: [
+              {
+                text: "model={model.display_name} tokens={usage.input_tokens|num}/{usage.output_tokens|num}",
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [{ text: "hello world!" }],
+        meta: {
+          agentMeta: {
+            usage: { input: 1_000, output: 50 },
+            model: "claude-opus-4-6",
+            provider: "anthropic",
+          },
+        },
+      },
+      runnerOverrides: {
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+      },
+      queued: createQueuedRun({
+        run: {
+          config: cfg,
+          messageProvider: "discord",
+          sessionKey,
+        },
+      }),
+    });
+
+    const payload = requireMockCallArg(onBlockReply, 0);
+    expect(payload.text).toContain("hello world!");
+    expect(payload.text).toContain("model=claude-opus-4-6 tokens=1.0k/50");
+    expect(payload.text).not.toContain(sessionKey);
+  });
+
+  it("keeps explicit responseUsage off during followup delivery", async () => {
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      responseUsage: "off",
+    };
+    const cfg = {
+      messages: {
+        responseUsage: "tokens",
+      },
+    } as OpenClawConfig;
+
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [{ text: "hello world!" }],
+        meta: {
+          agentMeta: {
+            usage: { input: 1_000, output: 50 },
+            model: "claude-opus-4-6",
+            provider: "anthropic",
+          },
+        },
+      },
+      runnerOverrides: {
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+      },
+      queued: createQueuedRun({
+        run: {
+          config: cfg,
+          messageProvider: "discord",
+          sessionKey,
+        },
+      }),
+    });
+
+    const payload = requireMockCallArg(onBlockReply, 0);
+    expect(payload.text).toBe("hello world!");
   });
 
   it("uses providerUsed for snapshot freshness when agent metadata overrides the run provider", async () => {

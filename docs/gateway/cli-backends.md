@@ -199,6 +199,10 @@ claude auth status --text
 openclaw models auth login --provider anthropic --method cli --set-default
 ```
 
+Docker installs need Claude Code installed and logged in inside the persisted
+container home, not only on the host. See
+[Claude CLI backend in Docker](/install/docker#claude-cli-backend-in-docker).
+
 Use `agents.defaults.cliBackends.claude-cli.command` only when the `claude`
 binary is not already on `PATH`.
 
@@ -287,8 +291,10 @@ load local files from plain paths.
 ## Inputs / outputs
 
 - `output: "json"` (default) tries to parse JSON and extract text + session id.
-- For Gemini CLI JSON output, OpenClaw reads reply text from `response` and
-  usage from `stats` when `usage` is missing or empty.
+- For Gemini CLI JSON output, OpenClaw reads reply text from `response` and usage
+  from `stats` when `usage` is missing or empty. The bundled Gemini CLI default
+  uses `stream-json`, but old `--output-format json` overrides still use the
+  JSON parser.
 - `output: "jsonl"` parses JSONL streams and extracts the final agent message plus session
   identifiers when present.
 - `output: "text"` treats stdout as the final response.
@@ -318,8 +324,11 @@ The bundled Anthropic plugin registers a default for `claude-cli`:
 The bundled Google plugin also registers a default for `google-gemini-cli`:
 
 - `command: "gemini"`
-- `args: ["--output-format", "json", "--prompt", "{prompt}"]`
-- `resumeArgs: ["--resume", "{sessionId}", "--output-format", "json", "--prompt", "{prompt}"]`
+- `args: ["--skip-trust", "--approval-mode", "auto_edit", "--output-format", "stream-json", "--prompt", "{prompt}"]`
+- `resumeArgs: ["--skip-trust", "--approval-mode", "auto_edit", "--resume", "{sessionId}", "--output-format", "stream-json", "--prompt", "{prompt}"]`
+- `output: "jsonl"`
+- `resumeOutput: "jsonl"`
+- `jsonlDialect: "gemini-stream-json"`
 - `imageArg: "@"`
 - `imagePathScope: "workspace"`
 - `modelArg: "--model"`
@@ -330,9 +339,13 @@ Prerequisite: the local Gemini CLI must be installed and available as
 `gemini` on `PATH` (`brew install gemini-cli` or
 `npm install -g @google/gemini-cli`).
 
-Gemini CLI JSON notes:
+Gemini CLI output notes:
 
-- Reply text is read from the JSON `response` field.
+- The default `stream-json` parser reads assistant `message` events, tool events,
+  final `result` usage, and fatal Gemini error events.
+- If you override Gemini args to `--output-format json`, OpenClaw normalizes that
+  backend back to `output: "json"` and reads reply text from the JSON `response`
+  field.
 - Usage falls back to `stats` when `usage` is absent or empty.
 - `stats.cached` is normalized into OpenClaw `cacheRead`.
 - If `stats.input` is missing, OpenClaw derives input tokens from
@@ -369,11 +382,16 @@ api.registerTextTransforms({
 ```
 
 `input` rewrites the system prompt and user prompt passed to the CLI. `output`
-rewrites streamed assistant deltas and parsed final text before OpenClaw handles
-its own control markers and channel delivery.
+rewrites streamed assistant text and parsed final text before OpenClaw handles
+its own control markers and channel delivery. For provider-backed model calls,
+`output` also restores string values inside structured tool-call arguments after
+stream repair and before tool execution. Raw provider JSON fragments remain
+unchanged; consumers should use the structured partial, end, or result payload.
 
-For CLIs that emit Claude Code stream-json compatible JSONL, set
-`jsonlDialect: "claude-stream-json"` on that backend's config.
+For CLIs that emit provider-specific JSONL events, set `jsonlDialect` on that
+backend's config. Supported dialects are `claude-stream-json` for Claude
+Code-compatible streams and `gemini-stream-json` for Gemini CLI `stream-json`
+events.
 
 ## Native compaction ownership
 

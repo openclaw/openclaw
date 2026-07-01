@@ -18,6 +18,7 @@ import {
   getCronChannelOptions,
   parseCronCommandArgv,
   parseCronCommandEnv,
+  parseCronFallbacks,
   parseCronToolsAllow,
   parseDurationMs,
   warnIfCronSchedulerDisabled,
@@ -87,10 +88,7 @@ export function registerCronEditCommand(cron: Command) {
       .option("--session-key <key>", "Set session key for job routing")
       .option("--clear-session-key", "Unset session key", false)
       .option("--wake <mode>", "Wake mode (now|next-heartbeat)")
-      .option(
-        "--at <when>",
-        "Set one-shot time (ISO, offset-less uses --tz) or duration like 20m",
-      )
+      .option("--at <when>", "Set one-shot time (ISO, offset-less uses --tz) or duration like 20m")
       .option("--every <duration>", "Set interval duration like 10m")
       .option("--cron <expr>", "Set cron expression")
       .option(
@@ -114,7 +112,14 @@ export function registerCronEditCommand(cron: Command) {
         "--thinking <level>",
         "Thinking level for agent jobs (off|minimal|low|medium|high|xhigh)",
       )
+      .option(
+        "--clear-thinking",
+        "Remove the per-job thinking override (restore normal cron thinking precedence)",
+        false,
+      )
       .option("--model <model>", "Model override for agent jobs")
+      .option("--fallbacks <list>", "Fallback model list for agent jobs")
+      .option("--clear-fallbacks", "Remove per-job fallback override", false)
       .option(
         "--clear-model",
         "Remove the per-job model override (restore normal cron model precedence)",
@@ -138,6 +143,10 @@ export function registerCronEditCommand(cron: Command) {
       )
       .option("--thread-id <id>", "Telegram forum topic thread id")
       .option("--account <id>", "Channel account id for delivery (multi-account setups)")
+      .option("--clear-channel", "Unset the delivery channel", false)
+      .option("--clear-to", "Unset the delivery destination", false)
+      .option("--clear-thread-id", "Unset the Telegram forum topic thread id", false)
+      .option("--clear-account", "Unset the per-job delivery account override", false)
       .option(
         "--best-effort-deliver",
         "Do not fail job if delivery fails (also implies --announce when used alone)",
@@ -288,6 +297,13 @@ export function registerCronEditCommand(cron: Command) {
             throw new Error("Use --model or --clear-model, not both");
           }
           const thinking = normalizeOptionalString(opts.thinking);
+          if (thinking && opts.clearThinking) {
+            throw new Error("Use --thinking or --clear-thinking, not both");
+          }
+          const fallbacks = parseCronFallbacks(opts.fallbacks);
+          if (typeof opts.fallbacks === "string" && opts.clearFallbacks) {
+            throw new Error("Use --fallbacks or --clear-fallbacks, not both");
+          }
           const toolsAllow = parseCronToolsAllow(opts.tools);
           const rawTimeoutSeconds =
             opts.timeoutSeconds === undefined ? undefined : String(opts.timeoutSeconds).trim();
@@ -322,11 +338,28 @@ export function registerCronEditCommand(cron: Command) {
           const threadId = parseCronThreadIdOption(opts.threadId);
           const hasDeliveryThreadId = typeof threadId === "number";
           const hasDeliveryTarget =
-            typeof opts.channel === "string" || typeof opts.to === "string" || hasDeliveryThreadId;
-          const hasDeliveryAccount = typeof opts.account === "string";
+            typeof opts.channel === "string" ||
+            typeof opts.to === "string" ||
+            hasDeliveryThreadId ||
+            Boolean(opts.clearChannel) ||
+            Boolean(opts.clearTo) ||
+            Boolean(opts.clearThreadId);
+          const hasDeliveryAccount = typeof opts.account === "string" || Boolean(opts.clearAccount);
           const hasBestEffort = typeof opts.bestEffortDeliver === "boolean";
           if (hasWebhookDelivery && (hasDeliveryTarget || hasDeliveryAccount)) {
             throw new Error("--webhook cannot be combined with chat delivery options.");
+          }
+          if (typeof opts.channel === "string" && opts.clearChannel) {
+            throw new Error("Use --channel or --clear-channel, not both");
+          }
+          if (typeof opts.to === "string" && opts.clearTo) {
+            throw new Error("Use --to or --clear-to, not both");
+          }
+          if (hasDeliveryThreadId && opts.clearThreadId) {
+            throw new Error("Use --thread-id or --clear-thread-id, not both");
+          }
+          if (typeof opts.account === "string" && opts.clearAccount) {
+            throw new Error("Use --account or --clear-account, not both");
           }
           const hasCommandSpecificPayloadField =
             Boolean(commandShell) ||
@@ -342,7 +375,10 @@ export function registerCronEditCommand(cron: Command) {
             !hasCommandSpecificPayloadField &&
             typeof opts.message !== "string" &&
             !model &&
+            typeof opts.fallbacks !== "string" &&
+            !opts.clearFallbacks &&
             !thinking &&
+            !opts.clearThinking &&
             typeof opts.lightContext !== "boolean" &&
             typeof opts.tools !== "string" &&
             !Array.isArray(opts.tools) &&
@@ -355,7 +391,10 @@ export function registerCronEditCommand(cron: Command) {
             typeof opts.message === "string" ||
             Boolean(model) ||
             Boolean(opts.clearModel) ||
+            typeof opts.fallbacks === "string" ||
+            Boolean(opts.clearFallbacks) ||
             Boolean(thinking) ||
+            Boolean(opts.clearThinking) ||
             (hasTimeoutSeconds &&
               !hasCommandSpecificPayloadField &&
               timeoutOnlyPayloadKind !== "command") ||
@@ -387,7 +426,13 @@ export function registerCronEditCommand(cron: Command) {
             } else {
               assignIf(payload, "model", model, Boolean(model));
             }
-            assignIf(payload, "thinking", thinking, Boolean(thinking));
+            assignIf(payload, "fallbacks", fallbacks, typeof opts.fallbacks === "string");
+            assignIf(payload, "fallbacks", null, Boolean(opts.clearFallbacks));
+            if (opts.clearThinking) {
+              payload.thinking = null;
+            } else {
+              assignIf(payload, "thinking", thinking, Boolean(thinking));
+            }
             assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
             assignIf(
               payload,
@@ -444,21 +489,29 @@ export function registerCronEditCommand(cron: Command) {
               // Back-compat: best-effort true and payload edits historically implied announce mode.
               delivery.mode = "announce";
             }
-            if (typeof opts.channel === "string") {
+            if (opts.clearChannel) {
+              delivery.channel = null;
+            } else if (typeof opts.channel === "string") {
               const channel = opts.channel.trim();
               delivery.channel = channel ? channel : undefined;
             }
             if (hasWebhookDelivery) {
               const webhook = normalizeOptionalString(opts.webhook) ?? "";
               delivery.to = webhook ? webhook : undefined;
+            } else if (opts.clearTo) {
+              delivery.to = null;
             } else if (typeof opts.to === "string") {
               const to = opts.to.trim();
               delivery.to = to ? to : undefined;
             }
-            if (hasDeliveryThreadId) {
+            if (opts.clearThreadId) {
+              delivery.threadId = null;
+            } else if (hasDeliveryThreadId) {
               delivery.threadId = threadId;
             }
-            if (typeof opts.account === "string") {
+            if (opts.clearAccount) {
+              delivery.accountId = null;
+            } else if (typeof opts.account === "string") {
               const account = opts.account.trim();
               delivery.accountId = account ? account : undefined;
             }

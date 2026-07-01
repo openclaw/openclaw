@@ -7,6 +7,10 @@ import type { AgentMessage } from "../agents/runtime/index.js";
 import type { FileEntry, SessionEntry, SessionHeader } from "../agents/sessions/session-manager.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
+  isCanonicalSessionTranscriptEntry,
+  scanSessionTranscriptTree,
+} from "../config/sessions/transcript-tree.js";
+import {
   jsonSupportBundleFile,
   jsonlSupportBundleFile,
   supportBundleContents,
@@ -180,18 +184,26 @@ async function readSessionBranch(filePath: string): Promise<{
   const entries = fileEntries.filter(
     (entry): entry is SessionEntry =>
       entry.type !== "session" &&
-      typeof (entry as { id?: unknown }).id === "string" &&
-      (typeof (entry as { timestamp?: unknown }).timestamp === "string" ||
-        typeof (entry as { timestamp?: unknown }).timestamp === "number"),
+      isCanonicalSessionTranscriptEntry(entry) &&
+      typeof (entry as { id?: unknown }).id === "string",
   );
-  const byId = new Map(entries.map((entry) => [entry.id, entry]));
-  const leafId = entries.at(-1)?.id ?? null;
+  const tree = scanSessionTranscriptTree(fileEntries);
+  if (!tree.hasLeafUpdate) {
+    return {
+      header,
+      leafId: entries.at(-1)?.id ?? null,
+      branchEntries: entries,
+      warnings,
+    };
+  }
+  const entriesById = new Map(entries.map((entry) => [entry.id, entry]));
   const branchEntries: SessionEntry[] = [];
   const seen = new Set<string>();
-  let currentId = leafId;
+  let descendantEntry: SessionEntry | undefined;
+  let currentId = tree.leafId;
   while (currentId) {
     if (seen.has(currentId)) {
-      const cycleEntry = byId.get(currentId);
+      const cycleEntry = tree.byId.get(currentId)?.entry;
       warnings.push({
         source: "session",
         code: "cyclic-session-branch",
@@ -201,7 +213,7 @@ async function readSessionBranch(filePath: string): Promise<{
       break;
     }
     seen.add(currentId);
-    const current = byId.get(currentId);
+    const current = tree.byId.get(currentId);
     if (!current) {
       warnings.push({
         source: "session",
@@ -211,20 +223,27 @@ async function readSessionBranch(filePath: string): Promise<{
       });
       break;
     }
-    branchEntries.unshift(current);
-    const parentId = typeof current.parentId === "string" ? current.parentId : null;
-    if (parentId && !byId.has(parentId)) {
+    const visibleEntry = entriesById.get(currentId);
+    if (visibleEntry) {
+      const normalizedEntry = { ...visibleEntry, parentId: current.parentId };
+      if (descendantEntry) {
+        descendantEntry.parentId = normalizedEntry.id;
+      }
+      branchEntries.unshift(normalizedEntry);
+      descendantEntry = normalizedEntry;
+    }
+    if (current.parentId && !tree.byId.has(current.parentId)) {
       warnings.push({
         source: "session",
         code: "incomplete-session-branch",
-        row: rowByEntry.get(current) ?? 0,
+        row: rowByEntry.get(current.entry) ?? 0,
         message: "Exported the reachable session branch suffix after a missing parent link.",
       });
       break;
     }
-    currentId = parentId;
+    currentId = current.parentId;
   }
-  return { header, leafId, branchEntries, warnings };
+  return { header, leafId: tree.leafId, branchEntries, warnings };
 }
 
 async function parseJsonlFile<T>(

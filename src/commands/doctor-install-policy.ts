@@ -12,7 +12,7 @@ import {
   type InstallPolicyStaticValidation,
 } from "../security/install-policy.js";
 
-export type InstallPolicyHealthOptions = {
+type InstallPolicyHealthOptions = {
   deep?: boolean;
   env?: NodeJS.ProcessEnv;
 };

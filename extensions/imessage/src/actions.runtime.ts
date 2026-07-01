@@ -12,7 +12,10 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { appendIMessageCliStderrTail, appendIMessageCliStdout } from "./cli-output.js";
 import { createIMessageRpcClient } from "./client.js";
 import { extractMarkdownFormatRuns } from "./markdown-format.js";
-import { resolveIMessageMessageId as resolveIMessageMessageIdImpl } from "./monitor-reply-cache.js";
+import {
+  normalizeDirectChatIdentifier,
+  resolveIMessageMessageId as resolveIMessageMessageIdImpl,
+} from "./monitor-reply-cache.js";
 import type { IMessageTarget } from "./targets.js";
 
 type CliRunOptions = {
@@ -115,7 +118,7 @@ function chatListCacheSet(
  * forms — the action surface synthesizes `iMessage;-;<phone>` from a
  * handle target, while imsg's chats.list returns `identifier: <phone>`
  * and `guid: any;-;<phone>`. Comparing the raw strings would falsely
- * miss the match. Mirror of the same helper in monitor-reply-cache.ts.
+ * miss the match.
  */
 export function normalizeDirectChatIdentifierForTest(raw: string): string {
   return normalizeDirectChatIdentifier(raw);
@@ -126,17 +129,6 @@ export function findChatGuidForTest(
   target: Extract<IMessageTarget, { kind: "chat_id" | "chat_identifier" }>,
 ): string | null {
   return findChatGuid(chats, target);
-}
-
-function normalizeDirectChatIdentifier(raw: string): string {
-  const trimmed = raw.trim();
-  const lowered = trimmed.toLowerCase();
-  for (const prefix of ["imessage;-;", "sms;-;", "any;-;"]) {
-    if (lowered.startsWith(prefix)) {
-      return trimmed.slice(prefix.length);
-    }
-  }
-  return trimmed;
 }
 
 function findChatGuid(

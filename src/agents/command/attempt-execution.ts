@@ -2,15 +2,13 @@
  * Orchestrates one agent attempt across embedded, CLI, and ACP runtimes.
  */
 import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
-import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
-import {
-  readTailAssistantTextFromSessionTranscript,
-  resolveSessionTranscriptFile,
-} from "../../config/sessions/transcript.js";
+import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
+import { readTailAssistantTextFromSessionTranscript } from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -24,9 +22,8 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
-import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
-  appendUserTurnTranscriptMessage,
+  preparePersistedUserTurnMessageForTranscriptWrite,
   type PersistedUserTurnMessage,
 } from "../../sessions/user-turn-transcript.js";
 import { buildWorkspaceSkillSnapshot } from "../../skills/loading/workspace.js";
@@ -35,6 +32,7 @@ import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
+import { resolveCliBackendConfig } from "../cli-backends.js";
 import { runCliAgent } from "../cli-runner.js";
 import { getCliSessionBinding } from "../cli-session.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
@@ -47,14 +45,12 @@ import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import type { AgentMessage } from "../runtime/index.js";
-import { acquireSessionWriteLock, resolveSessionWriteLockOptions } from "../session-write-lock.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import {
   buildClaudeCliFallbackContextPrelude,
   claudeCliSessionTranscriptHasContent,
   resolveFallbackRetryPrompt,
 } from "./attempt-execution.helpers.js";
-import { persistSessionEntry } from "./attempt-execution.shared.js";
 import { resolveAgentRunContext } from "./run-context.js";
 import { clearCliSessionInStore } from "./session-store.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -98,6 +94,14 @@ const ACP_TRANSCRIPT_USAGE = {
     total: 0,
   },
 } as const;
+const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
+const GOOGLE_PROVIDER_ID = "google";
+
+function shouldSuppressEmbeddedLiveStreamOutput(params: {
+  opts: AgentCommandOpts;
+}): boolean {
+  return params.opts.sessionEffects === "internal" && params.opts.deliver !== true;
+}
 
 type TranscriptUsage = {
   input?: number;
@@ -129,6 +133,10 @@ type PersistTextTurnTranscriptParams = {
     usage?: TranscriptUsage;
   };
 };
+
+type PersistTextTurnTranscriptResult =
+  | { kind: "persisted"; sessionEntry: SessionEntry | undefined }
+  | { kind: "session-rebound"; sessionEntry: undefined };
 
 type HarnessAuthProfileSelection = {
   authProfileId?: string;
@@ -180,6 +188,10 @@ function resolveHarnessAuthProfileSelection(params: {
     };
   }
 
+  if (!params.allowHarnessAuthProfileForwarding) {
+    return { authProfileProvider: params.authProfileProvider };
+  }
+
   const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
     provider: params.provider,
     authProfileProvider: params.authProfileProvider,
@@ -215,6 +227,64 @@ function resolveHarnessAuthProfileSelection(params: {
     : { authProfileProvider: params.authProfileProvider };
 }
 
+function cliBackendAcceptsAuthProfileForwarding(params: {
+  provider: string;
+  config: OpenClawConfig;
+  agentId?: string;
+}): boolean {
+  const backend = resolveCliBackendConfig(params.provider, params.config, {
+    agentId: params.agentId,
+  });
+  return backend?.id === "google-gemini-cli";
+}
+
+function resolveCliExecutionAuthProfileId(params: {
+  cliExecutionProvider: string;
+  authProfileProvider: string;
+  config: OpenClawConfig;
+  agentDir: string;
+  selected: HarnessAuthProfileSelection;
+}): string | undefined {
+  if (params.selected.authProfileId) {
+    if (
+      params.selected.authProfileProvider === params.cliExecutionProvider ||
+      (params.cliExecutionProvider === GOOGLE_GEMINI_CLI_PROVIDER_ID &&
+        params.selected.authProfileIdSource !== "auto")
+    ) {
+      return params.selected.authProfileId;
+    }
+  }
+
+  const store = ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+    externalCliProviderIds: [params.cliExecutionProvider],
+  });
+  const cliProfileId = resolveAuthProfileOrder({
+    cfg: params.config,
+    store,
+    provider: params.cliExecutionProvider,
+  })[0];
+  if (cliProfileId) {
+    return cliProfileId;
+  }
+
+  if (
+    params.cliExecutionProvider !== GOOGLE_GEMINI_CLI_PROVIDER_ID ||
+    params.authProfileProvider !== GOOGLE_PROVIDER_ID
+  ) {
+    return undefined;
+  }
+
+  return resolveAuthProfileOrder({
+    cfg: params.config,
+    store,
+    provider: GOOGLE_PROVIDER_ID,
+  }).find((profileId) => {
+    const credential = store.profiles[profileId];
+    return credential?.provider === GOOGLE_PROVIDER_ID && credential.type === "api_key";
+  });
+}
+
 function resolveTranscriptUsage(usage: PersistTextTurnTranscriptParams["assistant"]["usage"]) {
   if (!usage) {
     return ACP_TRANSCRIPT_USAGE;
@@ -230,117 +300,84 @@ function resolveTranscriptUsage(usage: PersistTextTurnTranscriptParams["assistan
 
 async function persistTextTurnTranscript(
   params: PersistTextTurnTranscriptParams,
-): Promise<SessionEntry | undefined> {
+): Promise<PersistTextTurnTranscriptResult> {
   const promptText = params.transcriptBody ?? params.body;
   const replyText = params.finalText;
   if (!promptText && !replyText) {
-    return params.sessionEntry;
+    return { kind: "persisted", sessionEntry: params.sessionEntry };
   }
 
-  const { sessionFile, sessionEntry } = await resolveSessionTranscriptFile({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    sessionEntry: params.sessionEntry,
-    sessionStore: params.sessionStore,
-    storePath: params.storePath,
-    agentId: params.sessionAgentId,
-    threadId: params.threadId,
-  });
-  const lock = await acquireSessionWriteLock({
-    sessionFile,
-    ...resolveSessionWriteLockOptions(params.config),
-    allowReentrant: true,
-  });
-  let transcriptMarkerUpdatedAt: number | undefined;
-  try {
-    let wroteTranscript = false;
-    const userMessage = params.userMessage;
-    if (userMessage || promptText) {
-      await appendUserTurnTranscriptMessage({
-        transcriptPath: sessionFile,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        cwd: params.sessionCwd,
-        config: params.config,
-        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
-        ...(userMessage
-          ? { message: userMessage }
-          : {
-              input: {
-                text: promptText,
-                timestamp: Date.now(),
-              },
-            }),
-        updateMode: "none",
-      });
-      wroteTranscript = true;
-    }
+  const messages = [];
+  const userMessage =
+    params.userMessage ??
+    (promptText
+      ? ({
+          role: "user",
+          content: promptText,
+          timestamp: Date.now(),
+        } as PersistedUserTurnMessage)
+      : undefined);
+  if (userMessage) {
+    messages.push({
+      message: userMessage,
+      idempotencyLookup: "scan" as const,
+      prepareMessageAfterIdempotencyCheck: (message: unknown) =>
+        preparePersistedUserTurnMessageForTranscriptWrite(message as PersistedUserTurnMessage, {
+          agentId: params.sessionAgentId,
+          sessionKey: params.sessionKey,
+          beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+        }),
+    });
+  }
 
-    if (replyText) {
-      let appendAssistant = true;
-      if (params.embeddedAssistantGapFill) {
+  if (replyText) {
+    messages.push({
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: replyText }],
+        api: params.assistant.api,
+        provider: params.assistant.provider,
+        model: params.assistant.model,
+        usage: resolveTranscriptUsage(params.assistant.usage),
+        stopReason: "stop",
+        timestamp: Date.now(),
+      },
+      shouldAppend: async ({ sessionFile }: { sessionFile: string }) => {
+        if (!params.embeddedAssistantGapFill) {
+          return true;
+        }
         const latest = await readTailAssistantTextFromSessionTranscript(sessionFile);
         const normalizedReply = normalizeTranscriptMirrorText(replyText);
         const normalizedLatest = latest?.text ? normalizeTranscriptMirrorText(latest.text) : "";
-        if (normalizedLatest && normalizedLatest === normalizedReply) {
-          appendAssistant = false;
-        }
-      }
-      if (appendAssistant) {
-        await appendSessionTranscriptMessage({
-          transcriptPath: sessionFile,
-          sessionId: params.sessionId,
-          cwd: params.sessionCwd,
-          config: params.config,
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: replyText }],
-            api: params.assistant.api,
-            provider: params.assistant.provider,
-            model: params.assistant.model,
-            usage: resolveTranscriptUsage(params.assistant.usage),
-            stopReason: "stop",
-            timestamp: Date.now(),
-          },
-        });
-        wroteTranscript = true;
-      }
-    }
-    if (wroteTranscript) {
-      transcriptMarkerUpdatedAt = Date.now();
-    }
-  } finally {
-    await lock.release();
+        return !normalizedLatest || normalizedLatest !== normalizedReply;
+      },
+    });
   }
 
-  let updatedSessionEntry = sessionEntry;
-  if (params.sessionStore && params.storePath && transcriptMarkerUpdatedAt !== undefined) {
-    const currentEntry = params.sessionStore[params.sessionKey] ?? sessionEntry;
-    if (currentEntry?.sessionId === params.sessionId) {
-      // Keep updatedAt as the registry marker for transcript writes we own.
-      // Session reuse checks compare transcript mtime against this marker, not endedAt.
-      updatedSessionEntry =
-        (await persistSessionEntry({
-          sessionStore: params.sessionStore,
-          sessionKey: params.sessionKey,
-          storePath: params.storePath,
-          entry: {
-            sessionId: params.sessionId,
-            sessionFile,
-            updatedAt: transcriptMarkerUpdatedAt,
-          },
-          preserveTranscriptMarkerUpdatedAt: true,
-          shouldPersist: (current) => current?.sessionId === params.sessionId,
-        })) ?? updatedSessionEntry;
-    }
+  const turn = await persistSessionTranscriptTurn(
+    {
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      sessionEntry: params.sessionEntry,
+      sessionStore: params.sessionStore,
+      storePath: params.storePath,
+      agentId: params.sessionAgentId,
+      threadId: params.threadId,
+    },
+    {
+      config: params.config,
+      cwd: params.sessionCwd,
+      messages,
+      publishWhen: "always",
+      touchSessionEntry: true,
+      updateMode: "file-only",
+      ...(params.sessionStore && params.storePath ? { expectedSessionId: params.sessionId } : {}),
+    },
+  );
+  if (turn.rejectedReason === "session-rebound") {
+    return { kind: "session-rebound", sessionEntry: undefined };
   }
-
-  emitSessionTranscriptUpdate({
-    sessionFile,
-    sessionKey: params.sessionKey,
-    agentId: params.sessionAgentId,
-  });
-  return updatedSessionEntry;
+  return { kind: "persisted", sessionEntry: turn.sessionEntry };
 }
 
 function resolveCliTranscriptReplyText(result: EmbeddedAgentRunResult): string {
@@ -373,7 +410,7 @@ export async function persistAcpTurnTranscript(params: {
   threadId?: string | number;
   sessionCwd: string;
   config: OpenClawConfig;
-}): Promise<SessionEntry | undefined> {
+}): Promise<PersistTextTurnTranscriptResult> {
   return await persistTextTurnTranscript({
     ...params,
     assistant: {
@@ -399,7 +436,7 @@ export async function persistCliTurnTranscript(params: {
   sessionCwd: string;
   config: OpenClawConfig;
   embeddedAssistantGapFill?: boolean;
-}): Promise<SessionEntry | undefined> {
+}): Promise<PersistTextTurnTranscriptResult> {
   const replyText = resolveCliTranscriptReplyText(params.result);
   const provider = params.result.meta.agentMeta?.provider?.trim() ?? "cli";
   const model = params.result.meta.agentMeta?.model?.trim() ?? "default";
@@ -444,7 +481,10 @@ export function runAgentAttempt(params: {
   body: string;
   isFallbackRetry: boolean;
   resolvedThinkLevel: ThinkLevel;
-  fastMode?: boolean;
+  fastMode?: FastMode;
+  fastModeStartedAtMs?: number;
+  fastModeAutoOnSeconds?: number;
+  isFinalFallbackAttempt?: boolean;
   timeoutMs: number;
   runTimeoutOverrideMs?: number;
   runId: string;
@@ -510,6 +550,14 @@ export function runAgentAttempt(params: {
         modelId: params.modelOverride,
         authProfileId: params.sessionEntry?.authProfileOverride,
       }) ?? params.providerOverride);
+  const isCliExecutionProvider = isCliProvider(cliExecutionProvider, params.cfg);
+  const allowCliAuthProfileForwarding =
+    isCliExecutionProvider &&
+    cliBackendAcceptsAuthProfileForwarding({
+      provider: cliExecutionProvider,
+      config: params.cfg,
+      agentId: params.sessionAgentId,
+    });
   const agentHarnessPolicy = isRawModelRun
     ? ({ runtime: "openclaw", runtimeSource: "model" } as const)
     : resolveAvailableAgentHarnessPolicy({
@@ -531,7 +579,7 @@ export function runAgentAttempt(params: {
     harnessRuntime: agentHarnessPolicy.runtime,
     ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
     providerAuthAliasesEnabled: params.pluginsEnabled,
-    allowHarnessAuthProfileForwarding: !isCliProvider(cliExecutionProvider, params.cfg),
+    allowHarnessAuthProfileForwarding: !isCliExecutionProvider,
   });
   const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
     provider: params.providerOverride,
@@ -544,9 +592,18 @@ export function runAgentAttempt(params: {
     providerAuthAliasesEnabled: params.pluginsEnabled,
     harnessId: requestedAgentHarnessId,
     harnessRuntime: agentHarnessPolicy.runtime,
-    allowHarnessAuthProfileForwarding: !isCliProvider(cliExecutionProvider, params.cfg),
+    allowHarnessAuthProfileForwarding: !isCliExecutionProvider,
   });
-  const authProfileId = runtimeAuthPlan.forwardedAuthProfileId;
+  const cliAuthProfileId = allowCliAuthProfileForwarding
+    ? resolveCliExecutionAuthProfileId({
+        cliExecutionProvider,
+        authProfileProvider: params.authProfileProvider,
+        config: params.cfg,
+        agentDir: params.agentDir,
+        selected: harnessAuthSelection,
+      })
+    : undefined;
+  const authProfileId = cliAuthProfileId ?? runtimeAuthPlan.forwardedAuthProfileId;
   const embeddedAgentProvider = resolveOpenAIRuntimeProvider({
     provider: params.providerOverride,
     harnessRuntime: agentHarnessPolicy.runtime,
@@ -561,7 +618,7 @@ export function runAgentAttempt(params: {
     (agentHarnessPolicy.runtime === "openclaw" && agentHarnessPolicy.runtimeSource !== "implicit"
       ? "openclaw"
       : undefined);
-  if (!isRawModelRun && isCliProvider(cliExecutionProvider, params.cfg)) {
+  if (!isRawModelRun && isCliExecutionProvider) {
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
     const cliProcessCwd = params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir;
     const cliPrompt =
@@ -644,8 +701,11 @@ export function runAgentAttempt(params: {
         streamParams: params.opts.streamParams,
         messageProvider: params.opts.messageProvider ?? params.messageChannel,
         currentChannelId: params.runContext.currentChannelId,
+        chatId: params.runContext.chatId,
+        channelContext: params.runContext.channelContext,
         currentThreadTs: params.runContext.currentThreadTs,
         currentInboundAudio: params.runContext.currentInboundAudio,
+        approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
         agentAccountId: params.runContext.accountId,
         senderId: params.runContext.senderId,
         senderIsOwner: params.opts.senderIsOwner,
@@ -714,6 +774,8 @@ export function runAgentAttempt(params: {
     groupSpace: params.runContext.groupSpace,
     spawnedBy: params.spawnedBy,
     currentChannelId: params.runContext.currentChannelId,
+    chatId: params.runContext.chatId,
+    channelContext: params.runContext.channelContext,
     currentThreadTs: params.runContext.currentThreadTs,
     currentInboundAudio: params.runContext.currentInboundAudio,
     replyToMode: params.runContext.replyToMode,
@@ -738,12 +800,19 @@ export function runAgentAttempt(params: {
     authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,
     thinkLevel: params.resolvedThinkLevel,
     fastMode: params.fastMode,
+    fastModeStartedAtMs: params.fastModeStartedAtMs,
+    fastModeAutoOnSeconds: params.fastModeAutoOnSeconds,
+    isFinalFallbackAttempt: params.isFinalFallbackAttempt,
     verboseLevel: params.resolvedVerboseLevel,
     bashElevated: params.opts.bashElevated,
+    approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
     timeoutMs: params.timeoutMs,
     runId: params.runId,
     lifecycleGeneration: params.lifecycleGeneration,
     lane: params.opts.lane,
+    // Hidden internal runs have no assistant-event consumer. Visible subagent
+    // lanes can still feed Control UI, session subscribers, and ACP parent relays.
+    suppressLiveStreamOutput: shouldSuppressEmbeddedLiveStreamOutput(params),
     abortSignal: params.opts.abortSignal,
     extraSystemPrompt: params.opts.extraSystemPrompt,
     bootstrapContextMode: params.opts.bootstrapContextMode,
@@ -938,9 +1007,6 @@ export function emitAcpLifecycleError(params: {
     },
   });
 }
-
-/** @deprecated use formatAcpErrorChain from src/acp/runtime/errors.ts */
-export const formatAcpLifecycleError = formatAcpErrorChain;
 
 export function emitAcpAssistantDelta(params: { runId: string; text: string; delta: string }) {
   emitAgentEvent({

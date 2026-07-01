@@ -84,7 +84,7 @@ export type TraceAttempt = {
   status?: number;
 };
 
-export type ExecutionTrace = {
+type ExecutionTrace = {
   winnerProvider?: string;
   winnerModel?: string;
   attempts?: TraceAttempt[];
@@ -92,7 +92,7 @@ export type ExecutionTrace = {
   runner?: "embedded" | "cli";
 };
 
-export type RequestShapingTrace = {
+type RequestShapingTrace = {
   authMode?: string;
   thinking?: string;
   reasoning?: string;
@@ -102,7 +102,7 @@ export type RequestShapingTrace = {
   blockStreaming?: string;
 };
 
-export type PromptSegmentTrace = {
+type PromptSegmentTrace = {
   key: string;
   chars: number;
 };
@@ -114,13 +114,13 @@ export type ToolSummaryTrace = {
   totalToolTimeMs?: number;
 };
 
-export type CompletionTrace = {
+type CompletionTrace = {
   finishReason?: string;
   stopReason?: string;
   refusal?: boolean;
 };
 
-export type ContextManagementTrace = {
+type ContextManagementTrace = {
   sessionCompactions?: number;
   lastTurnCompactions?: number;
   preflightCompactionApplied?: boolean;
@@ -193,6 +193,8 @@ export type EmbeddedAgentRunResult = {
     replyToId?: string;
     isError?: boolean;
     isReasoning?: boolean;
+    /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
+    isCommentary?: boolean;
     audioAsVoice?: boolean;
     trustedLocalMedia?: boolean;
     channelData?: Record<string, unknown>;

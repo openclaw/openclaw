@@ -752,6 +752,7 @@ vi.mock("./doctor/channel-capabilities.js", () => {
       channelName && channelName in byChannel
         ? byChannel[channelName as keyof typeof byChannel]
         : fallback,
+    resolveDoctorChannelAccountIds: () => undefined,
   };
 });
 
@@ -1241,7 +1242,6 @@ vi.mock("./doctor/shared/preview-warnings.js", () => {
         warningNotes: await collectWarnings(params),
       };
     }),
-    collectDoctorPreviewWarnings: vi.fn(collectWarnings),
   };
 });
 

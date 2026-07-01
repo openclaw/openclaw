@@ -8,6 +8,9 @@ import { CONFIG_DIR, resolveUserPath } from "openclaw/plugin-sdk/text-utility-ru
 
 const WHATSAPP_FENCE_PLACEHOLDER = "\x00FENCE";
 const WHATSAPP_INLINE_CODE_PLACEHOLDER = "\x00CODE";
+// Terminates the numeric index in a placeholder so the restore regex cannot
+// absorb a digit from adjacent user text (e.g. `code`5) into the index.
+const WHATSAPP_PLACEHOLDER_TERMINATOR = "\x00";
 
 export type WebChannel = "web";
 
@@ -72,9 +75,88 @@ export type JidToE164Options = {
   logMissing?: boolean;
 };
 
-type LidLookup = {
+export type LidLookup = {
+  getLIDForPN?: (jid: string) => Promise<string | null>;
   getPNForLID?: (jid: string) => Promise<string | null>;
 };
+
+function addUniqueString(target: string[], value: string | null | undefined): void {
+  const normalized = value?.trim();
+  if (normalized && !target.includes(normalized)) {
+    target.push(normalized);
+  }
+}
+
+async function tryLookupMappedJid(
+  lookup: (() => Promise<string | null> | undefined) | undefined,
+): Promise<string | null> {
+  if (!lookup) {
+    return null;
+  }
+  try {
+    return (await lookup()) ?? null;
+  } catch (err) {
+    if (shouldLogVerbose()) {
+      logVerbose(`LID mapping lookup failed: ${String(err)}`);
+    }
+    return null;
+  }
+}
+
+const DIRECT_PN_JID_RE = /^(\d+)(?::\d+)?@(s\.whatsapp\.net|hosted)$/i;
+const DIRECT_LID_JID_RE = /^(\d+)(?::\d+)?@(lid|hosted\.lid)$/i;
+
+function addEquivalentDirectChatCandidate(target: string[], jid: string | null | undefined): void {
+  addUniqueString(target, jid);
+  const pnMatch = jid?.match(DIRECT_PN_JID_RE);
+  if (pnMatch) {
+    addUniqueString(target, `${pnMatch[1]}@${pnMatch[2]}`);
+    return;
+  }
+  const lidMatch = jid?.match(DIRECT_LID_JID_RE);
+  if (lidMatch) {
+    addUniqueString(target, `${lidMatch[1]}@${lidMatch[2]}`);
+  }
+}
+
+export async function resolveEquivalentWhatsAppDirectChatJids(
+  jid: string | null | undefined,
+  opts?: JidToE164Options & { lidLookup?: LidLookup },
+): Promise<string[]> {
+  const normalized = jid?.trim();
+  if (!normalized) {
+    return [];
+  }
+
+  const candidates: string[] = [];
+  addEquivalentDirectChatCandidate(candidates, normalized);
+  const pnMatch = normalized.match(DIRECT_PN_JID_RE);
+  if (pnMatch) {
+    const mappedLid = await tryLookupMappedJid(() => opts?.lidLookup?.getLIDForPN?.(normalized));
+    addEquivalentDirectChatCandidate(candidates, mappedLid);
+
+    const mappedLocalLid = readLidForwardMapping({ phoneDigits: pnMatch[1], opts });
+    const localLidDomain = pnMatch[2].toLowerCase() === "hosted" ? "hosted.lid" : "lid";
+    addUniqueString(candidates, mappedLocalLid ? `${mappedLocalLid}@${localLidDomain}` : null);
+    return candidates;
+  }
+
+  const lidMatch = normalized.match(DIRECT_LID_JID_RE);
+  if (lidMatch) {
+    const mappedPn = await tryLookupMappedJid(() => opts?.lidLookup?.getPNForLID?.(normalized));
+    addEquivalentDirectChatCandidate(candidates, mappedPn);
+
+    const e164 = jidToE164(normalized, { ...opts, logMissing: false });
+    const localPnJid =
+      e164 && lidMatch[2].toLowerCase() === "hosted.lid"
+        ? `${e164.replace(/\D/g, "")}@hosted`
+        : e164
+          ? toWhatsappJid(e164)
+          : null;
+    addUniqueString(candidates, localPnJid);
+  }
+  return candidates;
+}
 
 function resolveLidMappingDirs(params: { opts?: JidToE164Options }): string[] {
   const dirs = new Set<string>();
@@ -197,25 +279,35 @@ export function markdownToWhatsApp(text: string): string {
   const fences: string[] = [];
   let result = text.replace(/```[\s\S]*?```/g, (match) => {
     fences.push(match);
-    return `${WHATSAPP_FENCE_PLACEHOLDER}${fences.length - 1}`;
+    return `${WHATSAPP_FENCE_PLACEHOLDER}${fences.length - 1}${WHATSAPP_PLACEHOLDER_TERMINATOR}`;
   });
 
   const inlineCodes: string[] = [];
   result = result.replace(/`[^`\n]+`/g, (match) => {
     inlineCodes.push(match);
-    return `${WHATSAPP_INLINE_CODE_PLACEHOLDER}${inlineCodes.length - 1}`;
+    return `${WHATSAPP_INLINE_CODE_PLACEHOLDER}${inlineCodes.length - 1}${WHATSAPP_PLACEHOLDER_TERMINATOR}`;
   });
+
+  // Convert combined GFM strong+emphasis before plain strong so the plain
+  // rules cannot leave literal `**` around the inner emphasis.
+  result = result.replace(/\*\*\*(.+?)\*\*\*/g, "*_$1_*");
+  result = result.replace(/___(.+?)___/g, "*_$1_*");
+  result = result.replace(/\*\*_(.+?)_\*\*/g, "*_$1_*");
+  result = result.replace(/__\*(.+?)\*__/g, "*_$1_*");
+  result = result.replace(/_\*\*(.+?)\*\*_/g, "*_$1_*");
+  result = result.replace(/\*__(.+?)__\*/g, "*_$1_*");
 
   result = result.replace(/\*\*(.+?)\*\*/g, "*$1*");
   result = result.replace(/__(.+?)__/g, "*$1*");
   result = result.replace(/~~(.+?)~~/g, "~$1~");
 
+  const terminator = escapeRegExp(WHATSAPP_PLACEHOLDER_TERMINATOR);
   result = result.replace(
-    new RegExp(`${escapeRegExp(WHATSAPP_INLINE_CODE_PLACEHOLDER)}(\\d+)`, "g"),
+    new RegExp(`${escapeRegExp(WHATSAPP_INLINE_CODE_PLACEHOLDER)}(\\d+)${terminator}`, "g"),
     (_, idx) => inlineCodes[Number(idx)] ?? "",
   );
   result = result.replace(
-    new RegExp(`${escapeRegExp(WHATSAPP_FENCE_PLACEHOLDER)}(\\d+)`, "g"),
+    new RegExp(`${escapeRegExp(WHATSAPP_FENCE_PLACEHOLDER)}(\\d+)${terminator}`, "g"),
     (_, idx) => fences[Number(idx)] ?? "",
   );
   return result;

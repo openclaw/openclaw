@@ -22,18 +22,12 @@ on:
   push:
     branches:
       - main
-    paths:
-      - ".github/actions/**"
-      - ".github/codeql/**"
-      - ".github/workflows/**"
-      - "packages/**"
-      - "src/**"
   schedule:
     - cron: "0 6 * * *"
 
 concurrency:
-  group: codeql-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event_name == 'pull_request' && github.event.pull_request.number || github.sha }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: codeql-${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && format('manual-{0}', github.run_id) || github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('ref-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -55,32 +49,32 @@ jobs:
         include:
           - language: javascript-typescript
             category: core-auth-secrets
-            runs_on: blacksmith-8vcpu-ubuntu-2404
+            runs_on: ubuntu-24.04
             timeout_minutes: 25
             config_file: ./.github/codeql/codeql-core-auth-secrets-critical-security.yml
           - language: javascript-typescript
             category: channel-runtime-boundary
-            runs_on: blacksmith-8vcpu-ubuntu-2404
+            runs_on: ubuntu-24.04
             timeout_minutes: 25
             config_file: ./.github/codeql/codeql-channel-runtime-boundary-critical-security.yml
           - language: javascript-typescript
             category: network-ssrf-boundary
-            runs_on: blacksmith-4vcpu-ubuntu-2404
+            runs_on: ubuntu-24.04
             timeout_minutes: 25
             config_file: ./.github/codeql/codeql-network-ssrf-boundary-critical-security.yml
           - language: javascript-typescript
             category: mcp-process-tool-boundary
-            runs_on: blacksmith-4vcpu-ubuntu-2404
+            runs_on: ubuntu-24.04
             timeout_minutes: 25
             config_file: ./.github/codeql/codeql-mcp-process-tool-boundary-critical-security.yml
           - language: javascript-typescript
             category: plugin-trust-boundary
-            runs_on: blacksmith-4vcpu-ubuntu-2404
+            runs_on: ubuntu-24.04
             timeout_minutes: 25
             config_file: ./.github/codeql/codeql-plugin-trust-boundary-critical-security.yml
           - language: actions
             category: actions
-            runs_on: blacksmith-8vcpu-ubuntu-2404
+            runs_on: ubuntu-24.04
             timeout_minutes: 10
             config_file: ./.github/codeql/codeql-actions-critical-security.yml
     steps:

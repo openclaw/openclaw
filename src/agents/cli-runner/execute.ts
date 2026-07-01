@@ -33,6 +33,7 @@ import {
   extractCliErrorMessage,
   parseCliOutput,
   type CliOutput,
+  type CliStreamingDelta,
 } from "../cli-output.js";
 import { classifyFailoverReason } from "../embedded-agent-helpers.js";
 import {
@@ -43,6 +44,7 @@ import {
   isMessagingTool,
   isMessagingToolDeliveryAction,
   isMessagingToolSendAction,
+  isMessagingToolTargetEvidenceAction,
 } from "../embedded-agent-messaging.js";
 import type {
   MessagingToolSend,
@@ -123,7 +125,7 @@ function extractCliMessagingTarget(
     normalizedToolName === "message" && currentProvider && !hasExplicitProvider
       ? { ...args, provider: currentProvider }
       : args;
-  if (!isMessagingToolSendAction(normalizedToolName, targetArgs)) {
+  if (!isMessagingToolTargetEvidenceAction(normalizedToolName, targetArgs)) {
     return undefined;
   }
   return extractMessagingToolSend(normalizedToolName, targetArgs, {
@@ -311,6 +313,8 @@ const CLI_ENV_AUTH_LOG_KEYS = [
   "OPENROUTER_API_KEY",
 ] as const;
 
+const CLI_ENV_RUNTIME_LOG_KEYS = ["GEMINI_CLI_HOME", "GEMINI_CLI_SYSTEM_SETTINGS_PATH"] as const;
+
 const CLI_BACKEND_PRESERVE_ENV = "OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV";
 
 function parseCliBackendPreserveEnv(raw: string | undefined): Set<string> {
@@ -340,6 +344,13 @@ function parseCliBackendPreserveEnv(raw: string | undefined): Set<string> {
 
 function listPresentCliAuthEnvKeys(env: Record<string, string | undefined>): string[] {
   return CLI_ENV_AUTH_LOG_KEYS.filter((key) => {
+    const value = env[key];
+    return typeof value === "string" && value.length > 0;
+  });
+}
+
+function listPresentCliRuntimeEnvKeys(env: Record<string, string | undefined>): string[] {
+  return CLI_ENV_RUNTIME_LOG_KEYS.filter((key) => {
     const value = env[key];
     return typeof value === "string" && value.length > 0;
   });
@@ -404,10 +415,17 @@ export function buildCliEnvAuthLog(childEnv: Record<string, string>): string {
   const childKeys = listPresentCliAuthEnvKeys(childEnv);
   const childKeySet = new Set(childKeys);
   const clearedKeys = hostKeys.filter((key) => !childKeySet.has(key));
+  const runtimeHostKeys = listPresentCliRuntimeEnvKeys(process.env);
+  const runtimeChildKeys = listPresentCliRuntimeEnvKeys(childEnv);
+  const runtimeChildKeySet = new Set(runtimeChildKeys);
+  const runtimeClearedKeys = runtimeHostKeys.filter((key) => !runtimeChildKeySet.has(key));
   return [
     `host=${formatCliEnvKeyList(hostKeys)}`,
     `child=${formatCliEnvKeyList(childKeys)}`,
     `cleared=${formatCliEnvKeyList(clearedKeys)}`,
+    `runtimeHost=${formatCliEnvKeyList(runtimeHostKeys)}`,
+    `runtimeChild=${formatCliEnvKeyList(runtimeChildKeys)}`,
+    `runtimeCleared=${formatCliEnvKeyList(runtimeClearedKeys)}`,
   ].join(" ");
 }
 
@@ -559,6 +577,7 @@ export async function executePreparedCliRun(
         : undefined;
       let gatewayCaptureKey: string | undefined;
       let cleanupMcpCaptureAttempt: (() => Promise<void>) | undefined;
+      let yielded = false;
       let didSendViaMessagingTool = false;
       let didDeliverSourceReplyViaMessageTool = false;
       let inFlightUnclassifiedMcpRequests = 0;
@@ -611,9 +630,10 @@ export async function executePreparedCliRun(
         runFailed = true;
         runError = error;
       };
-      const withMessagingDeliveryEvidence = (output: CliOutput): CliOutput => {
+      const withExecutionEvidence = (output: CliOutput): CliOutput => {
         return {
           ...output,
+          ...(yielded ? { yielded: true as const } : {}),
           ...(didSendViaMessagingTool ? { didSendViaMessagingTool: true } : {}),
           ...(didDeliverSourceReplyViaMessageTool
             ? { didDeliverSourceReplyViaMessageTool: true }
@@ -657,6 +677,7 @@ export async function executePreparedCliRun(
           : buildCliMcpCaptureKey(context);
         const mcpCaptureAttempt = await prepareCliBundleMcpCaptureAttempt({
           mode: context.backendResolved.bundleMcpMode,
+          backend,
           env: context.preparedBackend.env,
           captureKey: initialGatewayCaptureKey,
         });
@@ -673,12 +694,16 @@ export async function executePreparedCliRun(
             }
             delete next[key];
           }
-          if (backend.env && Object.keys(backend.env).length > 0) {
+          const backendEnv = {
+            ...backend.env,
+            ...context.preparedBackend.env,
+          };
+          if (Object.keys(backendEnv).length > 0) {
             Object.assign(
               next,
               sanitizeHostExecEnv({
                 baseEnv: {},
-                overrides: backend.env,
+                overrides: backendEnv,
                 blockPathOverrides: true,
               }),
             );
@@ -733,38 +758,40 @@ export async function executePreparedCliRun(
           }
           didSendViaMessagingTool = true;
           const toolArgs = paramsLocal.args ?? {};
-          if (!isMessagingToolSendAction(paramsLocal.toolName, toolArgs)) {
-            return;
-          }
-          const content = extractCliMessagingContent(toolArgs, paramsLocal.result);
-          appendUniqueCliMessagingEvidence(
-            messagingToolSentTexts,
-            messagingToolSentTextKeys,
-            content.text ? [content.text] : [],
-          );
-          appendUniqueCliMessagingEvidence(
-            messagingToolSentMediaUrls,
-            messagingToolSentMediaUrlKeys,
-            content.mediaUrls ?? [],
-          );
-          if (
-            isDeliveredMessageToolOnlySourceReplyResult({
-              sourceReplyDeliveryMode: context.params.sourceReplyDeliveryMode,
-              toolName: paramsLocal.toolName,
-              args: paramsLocal.args,
-              result: paramsLocal.result,
-              isError: paramsLocal.isError,
-            })
-          ) {
-            didDeliverSourceReplyViaMessageTool = true;
-            const sourceReplyPayload = extractMessagingToolSourceReplyPayload(paramsLocal.result);
-            if (sourceReplyPayload) {
-              if (messagingToolSourceReplyPayloads.length >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
-                messagingToolSourceReplyPayloads.shift();
+          const isMessagingSend = isMessagingToolSendAction(paramsLocal.toolName, toolArgs);
+          const content = isMessagingSend
+            ? extractCliMessagingContent(toolArgs, paramsLocal.result)
+            : {};
+          if (isMessagingSend) {
+            appendUniqueCliMessagingEvidence(
+              messagingToolSentTexts,
+              messagingToolSentTextKeys,
+              content.text ? [content.text] : [],
+            );
+            appendUniqueCliMessagingEvidence(
+              messagingToolSentMediaUrls,
+              messagingToolSentMediaUrlKeys,
+              content.mediaUrls ?? [],
+            );
+            if (
+              isDeliveredMessageToolOnlySourceReplyResult({
+                sourceReplyDeliveryMode: context.params.sourceReplyDeliveryMode,
+                toolName: paramsLocal.toolName,
+                args: paramsLocal.args,
+                result: paramsLocal.result,
+                isError: paramsLocal.isError,
+              })
+            ) {
+              didDeliverSourceReplyViaMessageTool = true;
+              const sourceReplyPayload = extractMessagingToolSourceReplyPayload(paramsLocal.result);
+              if (sourceReplyPayload) {
+                if (messagingToolSourceReplyPayloads.length >= CLI_MESSAGING_EVIDENCE_MAX_CALLS) {
+                  messagingToolSourceReplyPayloads.shift();
+                }
+                // Each internal source-reply send is a distinct delivery, even when
+                // two intentional sends have identical text or media.
+                messagingToolSourceReplyPayloads.push(sourceReplyPayload);
               }
-              // Each internal source-reply send is a distinct delivery, even when
-              // two intentional sends have identical text or media.
-              messagingToolSourceReplyPayloads.push(sourceReplyPayload);
             }
           }
           if (paramsLocal.target) {
@@ -815,6 +842,9 @@ export async function executePreparedCliRun(
           };
           beginMcpLoopbackToolCallCapture({
             captureKey: gatewayCaptureKey,
+            onYield: () => {
+              yielded = true;
+            },
             onRequestStart: () => {
               inFlightUnclassifiedMcpRequests += 1;
             },
@@ -964,6 +994,28 @@ export async function executePreparedCliRun(
             },
           });
         };
+        const emitCliAssistantDelta = ({ text, delta }: CliStreamingDelta) => {
+          if (text || delta) {
+            observedCliActivity = true;
+          }
+          if (!emitLiveEvents) {
+            return;
+          }
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "assistant",
+            data: {
+              text: applyPluginTextReplacements(
+                text,
+                context.backendResolved.textTransforms?.output,
+              ),
+              delta: applyPluginTextReplacements(
+                delta,
+                context.backendResolved.textTransforms?.output,
+              ),
+            },
+          });
+        };
         if (shouldUseClaudeLiveSession(context)) {
           if (!hasJsonlOutput) {
             throw new Error("Claude live session requires JSONL streaming parser");
@@ -990,28 +1042,7 @@ export async function executePreparedCliRun(
             useResume,
             noOutputTimeoutMs,
             getProcessSupervisor: executeDeps.getProcessSupervisor,
-            onAssistantDelta: ({ text, delta }) => {
-              if (text || delta) {
-                observedCliActivity = true;
-              }
-              if (!emitLiveEvents) {
-                return;
-              }
-              emitAgentEvent({
-                runId: params.runId,
-                stream: "assistant",
-                data: {
-                  text: applyPluginTextReplacements(
-                    text,
-                    context.backendResolved.textTransforms?.output,
-                  ),
-                  delta: applyPluginTextReplacements(
-                    delta,
-                    context.backendResolved.textTransforms?.output,
-                  ),
-                },
-              });
-            },
+            onAssistantDelta: emitCliAssistantDelta,
             onToolUseStart: emitCliToolUseStart,
             onToolResult: emitCliToolResult,
             onCommentaryText:
@@ -1044,28 +1075,7 @@ export async function executePreparedCliRun(
             ? createCliJsonlStreamingParser({
                 backend,
                 providerId: context.backendResolved.id,
-                onAssistantDelta: ({ text, delta }) => {
-                  if (text || delta) {
-                    observedCliActivity = true;
-                  }
-                  if (!emitLiveEvents) {
-                    return;
-                  }
-                  emitAgentEvent({
-                    runId: params.runId,
-                    stream: "assistant",
-                    data: {
-                      text: applyPluginTextReplacements(
-                        text,
-                        context.backendResolved.textTransforms?.output,
-                      ),
-                      delta: applyPluginTextReplacements(
-                        delta,
-                        context.backendResolved.textTransforms?.output,
-                      ),
-                    },
-                  });
-                },
+                onAssistantDelta: emitCliAssistantDelta,
                 onToolUseStart: emitCliToolUseStart,
                 onToolResult: emitCliToolResult,
                 onCommentaryText:
@@ -1082,9 +1092,13 @@ export async function executePreparedCliRun(
           });
           let stdoutTail: Buffer = Buffer.alloc(0);
           let stdoutParseBuffer: Buffer = Buffer.alloc(0);
+          let stdoutBytes = 0;
+          const stdoutHash = crypto.createHash("sha256");
           let stdoutParseExceeded = false;
           let stderrTail: Buffer = Buffer.alloc(0);
           let stderrParseBuffer: Buffer = Buffer.alloc(0);
+          let stderrBytes = 0;
+          const stderrHash = crypto.createHash("sha256");
           let stderrParseExceeded = false;
 
           params.onExecutionPhase?.({
@@ -1107,6 +1121,8 @@ export async function executePreparedCliRun(
             input: stdinPayload,
             captureOutput: false,
             onStdout: (chunk: string) => {
+              stdoutBytes += Buffer.byteLength(chunk);
+              stdoutHash.update(chunk);
               stdoutTail = appendCliOutputTail(stdoutTail, chunk);
               if (!stdoutParseExceeded) {
                 const nextStdoutParse = appendCliOutputParseBuffer(stdoutParseBuffer, chunk);
@@ -1116,6 +1132,8 @@ export async function executePreparedCliRun(
               streamingParser?.push(chunk);
             },
             onStderr: (chunk: string) => {
+              stderrBytes += Buffer.byteLength(chunk);
+              stderrHash.update(chunk);
               stderrTail = appendCliOutputTail(stderrTail, chunk);
               if (!stderrParseExceeded) {
                 const nextStderrParse = appendCliOutputParseBuffer(stderrParseBuffer, chunk);
@@ -1163,6 +1181,18 @@ export async function executePreparedCliRun(
           const stdoutDiagnostic = stdoutTail.toString("utf8").trim();
           const stderr = stderrParseBuffer.toString("utf8").trim();
           const stderrDiagnostic = stderrTail.toString("utf8").trim();
+          const processDiagnostics = {
+            backendId: context.backendResolved.id,
+            processReason: result.reason,
+            exitCode: result.exitCode,
+            exitSignal: result.exitSignal,
+            durationMs: result.durationMs,
+            stdoutBytes,
+            stdoutHash: stdoutHash.digest("hex").slice(0, 12),
+            stderrBytes,
+            stderrHash: stderrHash.digest("hex").slice(0, 12),
+            useResume,
+          };
           if (logOutputText) {
             if (stdoutDiagnostic) {
               cliBackendLog.info(`cli stdout:\n${stdoutDiagnostic}`);
@@ -1313,12 +1343,28 @@ export async function executePreparedCliRun(
               outputMode,
               fallbackSessionId: resolvedSessionId,
             });
+          if (parsed.errorText) {
+            const reason =
+              classifyFailoverReason(parsed.errorText, { provider: params.provider }) ?? "unknown";
+            throw new FailoverError(parsed.errorText, {
+              reason,
+              provider: params.provider,
+              model: context.modelId,
+              sessionId: params.sessionId,
+              lane: params.lane,
+              status: resolveFailoverStatus(reason),
+            });
+          }
           const rawText = parsed.text;
           cliBackendLog.info(
             `cli turn: provider=${params.provider} model=${context.modelId} durationMs=${Date.now() - cliTurnStartedAt} ${formatCliBackendOutputDigest(rawText)}`,
           );
           runOutput = {
             ...parsed,
+            diagnostics: {
+              ...parsed.diagnostics,
+              process: processDiagnostics,
+            },
             rawText,
             finalPromptText: prompt,
             text: applyPluginTextReplacements(
@@ -1421,7 +1467,7 @@ export async function executePreparedCliRun(
       if (!runOutput) {
         throw new Error("CLI run completed without output");
       }
-      return withMessagingDeliveryEvidence(runOutput);
+      return withExecutionEvidence(runOutput);
     });
     return completedOutput;
   } catch (error) {

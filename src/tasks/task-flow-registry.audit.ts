@@ -31,7 +31,7 @@ export type TaskFlowAuditSummary = {
   byCode: Record<TaskFlowAuditCode, number>;
 };
 
-export type TaskFlowAuditOptions = {
+type TaskFlowAuditOptions = {
   now?: number;
   flows?: TaskFlowRecord[];
   staleRunningMs?: number;
@@ -120,7 +120,7 @@ function findTimestampInconsistency(flow: TaskFlowRecord): TaskFlowAuditFinding 
   return null;
 }
 
-export function createEmptyTaskFlowAuditSummary(): TaskFlowAuditSummary {
+function createEmptyTaskFlowAuditSummary(): TaskFlowAuditSummary {
   return {
     total: 0,
     warnings: 0,

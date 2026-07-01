@@ -23,12 +23,108 @@ describe("telegram actions contract", () => {
     ],
   });
 
-  it("advertises Telegram rich text to the agent prompt", () => {
+  it.each([
+    { richMessages: undefined, expected: false },
+    { richMessages: false, expected: false },
+    { richMessages: true, expected: true },
+  ])("advertises Telegram rich text only when enabled", ({ richMessages, expected }) => {
     const capabilities = telegramPlugin.agentPrompt?.messageToolCapabilities?.({
       cfg: {
         channels: {
           telegram: {
             botToken: "123:telegram-test-token",
+            richMessages,
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(capabilities).toContain("inlineButtons");
+    expect(capabilities?.includes("richText")).toBe(expected);
+  });
+
+  it("advertises inline buttons when legacy Telegram capabilities are empty", () => {
+    const capabilities = telegramPlugin.agentPrompt?.messageToolCapabilities?.({
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "123:telegram-test-token",
+            capabilities: [],
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(capabilities).toContain("inlineButtons");
+  });
+
+  it("does not advertise inline buttons for non-empty legacy Telegram capabilities without inlineButtons", () => {
+    const capabilities = telegramPlugin.agentPrompt?.messageToolCapabilities?.({
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "123:telegram-test-token",
+            capabilities: ["vision"],
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(capabilities).not.toContain("inlineButtons");
+  });
+
+  it("uses the selected Telegram account's rich text setting", () => {
+    const capabilities = telegramPlugin.agentPrompt?.messageToolCapabilities?.({
+      cfg: {
+        channels: {
+          telegram: {
+            botToken: "123:telegram-test-token",
+            richMessages: true,
+            accounts: {
+              ops: {
+                richMessages: false,
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      accountId: "ops",
+    });
+
+    expect(capabilities).not.toContain("richText");
+  });
+
+  it("does not resolve Telegram credentials while checking prompt capabilities", () => {
+    expect(() =>
+      telegramPlugin.agentPrompt?.messageToolCapabilities?.({
+        cfg: {
+          channels: {
+            telegram: {
+              tokenFile: "/definitely/missing/telegram-token",
+              richMessages: true,
+            },
+          },
+        } as OpenClawConfig,
+      }),
+    ).not.toThrow();
+  });
+
+  it("uses the configured default Telegram account for prompt capabilities", () => {
+    const capabilities = telegramPlugin.agentPrompt?.messageToolCapabilities?.({
+      cfg: {
+        channels: {
+          telegram: {
+            defaultAccount: "ops",
+            accounts: {
+              default: {
+                botToken: "123:default-token",
+                richMessages: false,
+              },
+              ops: {
+                botToken: "123:ops-token",
+                richMessages: true,
+              },
+            },
           },
         },
       } as OpenClawConfig,

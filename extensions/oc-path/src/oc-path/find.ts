@@ -11,6 +11,7 @@ import { isMap, isScalar, isSeq, type Node, type Pair } from "yaml";
 import type { MdAst } from "./ast.js";
 import type { JsoncValue } from "./jsonc/ast.js";
 import type { JsonlAst, JsonlLine } from "./jsonl/ast.js";
+import { pickJsonlLine } from "./jsonl/line.js";
 import type { OcPath } from "./oc-path.js";
 import {
   MAX_TRAVERSAL_DEPTH,
@@ -364,7 +365,7 @@ const jsonlOps: WalkOps<JsonlAst> = {
     }
   },
   lookup(ast, key) {
-    const line = pickLine(ast, key);
+    const line = pickJsonlLine(ast, key);
     if (line === null) {
       return null;
     }
@@ -436,37 +437,6 @@ function topLevelLeafText(value: JsoncValue, key: string): string | null {
   }
   if (v.kind === "number" || v.kind === "boolean") {
     return String(v.value);
-  }
-  return null;
-}
-
-function pickLine(ast: JsonlAst, addr: string): JsonlLine | null {
-  if (addr === "$first") {
-    for (const l of ast.lines) {
-      if (l.kind === "value") {
-        return l;
-      }
-    }
-    return null;
-  }
-  if (addr === "$last") {
-    for (let i = ast.lines.length - 1; i >= 0; i--) {
-      const l = ast.lines[i];
-      if (l !== undefined && l.kind === "value") {
-        return l;
-      }
-    }
-    return null;
-  }
-  const m = /^L(\d+)$/.exec(addr);
-  if (m === null || m[1] === undefined) {
-    return null;
-  }
-  const target = Number(m[1]);
-  for (const l of ast.lines) {
-    if (l.line === target) {
-      return l;
-    }
   }
   return null;
 }

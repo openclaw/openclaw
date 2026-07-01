@@ -160,9 +160,10 @@ Legacy key migration:
 Telegram:
 
 - Uses `sendMessage` + `editMessageText` preview updates across DMs and group/topics.
+- Short initial previews are still debounced for push-notification UX, but Telegram now materializes them after a bounded delay so active runs do not stay visually silent.
 - Final text edits the active preview in place; long finals reuse that message for the first chunk and send only the remaining chunks.
 - `block` mode rotates the preview into a new message at `streaming.preview.chunk.maxChars` (default 800, capped at Telegram's 4096 edit limit); other modes grow one preview up to 4096 characters.
-- `progress` mode keeps tool progress in an editable status draft, clears that draft at completion, and sends the final answer through normal delivery.
+- `progress` mode keeps tool progress in an editable status draft, materializes the status label when answer streaming is active but no tool line is available yet, clears that draft at completion, and sends the final answer through normal delivery.
 - If the final edit fails before the completed text is confirmed, OpenClaw uses normal final delivery and cleans up the stale preview.
 - Preview streaming is skipped when Telegram block streaming is explicitly enabled (to avoid double-streaming).
 - `/reasoning stream` can write reasoning to a transient preview that is deleted after final delivery.
@@ -212,6 +213,22 @@ Supported surfaces:
 - Tool-progress edits follow the active preview streaming mode; they are skipped when preview streaming is `off` or when block streaming has taken over the message. On Telegram, `streaming.mode: "off"` is final-only: generic progress chatter is also suppressed instead of being delivered as standalone status messages, while approval prompts, media payloads, and errors still route normally.
 - To keep preview streaming but hide tool-progress lines, set `streaming.preview.toolProgress` to `false` for that channel. To keep tool-progress lines visible while hiding command/exec text, set `streaming.preview.commandText` to `"status"` or `streaming.progress.commandText` to `"status"`; the default is `"raw"` to preserve released behavior. This policy is shared by draft/progress channels that use OpenClaw's compact progress renderer, including Discord, Matrix, Microsoft Teams, Mattermost, Slack draft previews, and Telegram. To disable preview edits entirely, set `streaming.mode` to `off`.
 - Telegram selected quote replies are an exception: when `replyToMode` is not `"off"` and selected quote text is present, OpenClaw skips the answer preview stream for that turn so tool-progress preview lines cannot render. Current-message replies without selected quote text still keep preview streaming. See [Telegram channel docs](/channels/telegram) for details.
+
+### Commentary progress lane
+
+Beyond tool-progress, the compact progress renderer can surface one more lane in the draft:
+
+- **`streaming.progress.commentary`** — render the model's pre-tool **commentary** (💬) — short "I'll check… then…" narration — interleaved with tool lines in the progress draft.
+
+```json
+{
+  "channels": {
+    "discord": {
+      "streaming": { "mode": "progress", "progress": { "commentary": true } }
+    }
+  }
+}
+```
 
 Keep progress lines visible but hide raw command/exec text:
 
