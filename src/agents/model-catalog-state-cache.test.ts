@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseForTest, openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   buildAgentModelCatalogCacheKey,
@@ -116,6 +116,31 @@ describe("model catalog state cache", () => {
         nowMs: 31 * 60 * 1_000,
       }),
     ).toEqual([{ provider: "openai", id: "gpt-5.6", name: "GPT-5.6" }]);
+  });
+
+  it("returns undefined for corrupt cached JSON instead of throwing", () => {
+    writeCachedAgentModelCatalog({
+      agentDir: "/agent/main",
+      catalogKey: "corrupt-key",
+      entries: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }],
+      nowMs: 1_000,
+    });
+
+    // Directly corrupt the stored JSON
+    const database = openOpenClawStateDatabase();
+    database.db
+      .prepare(
+        "UPDATE agent_model_catalogs SET raw_json = ? WHERE catalog_key = ? AND agent_dir = ?",
+      )
+      .run("{corrupt", "corrupt-key", "/agent/main");
+
+    expect(
+      readCachedAgentModelCatalog({
+        agentDir: "/agent/main",
+        catalogKey: "corrupt-key",
+        nowMs: 1_000,
+      }),
+    ).toBeUndefined();
   });
 
   it("builds stable keys that change with relevant catalog inputs", () => {

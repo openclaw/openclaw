@@ -551,4 +551,118 @@ describe("channel ingress queue", () => {
       expect(await queue.listClaims()).toEqual([]);
     });
   });
+
+  describe("corrupt JSON resilience", () => {
+    it("skips rows with corrupt payload_json instead of throwing", async () => {
+      await withTempState(async (stateDir) => {
+        const queue = createChannelIngressQueue<{ text: string }>({
+          channelId: "test",
+          accountId: "corrupt",
+          stateDir,
+          now: () => 100,
+        });
+
+        await queue.enqueue("good", { text: "valid" }, { receivedAt: 1 });
+
+        // Insert a corrupt row directly into the DB, bypassing the queue API
+        // that always writes valid JSON.
+        const database = openOpenClawStateDatabase({
+          env: createStateDirEnv(stateDir),
+        });
+        const kysely = getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db);
+        executeSqliteQuerySync(
+          database.db,
+          kysely.insertInto("channel_ingress_events").values({
+            queue_name: JSON.stringify(["test", "corrupt"]),
+            event_id: "corrupt-row",
+            channel_id: "test",
+            account_id: "corrupt",
+            status: "pending",
+            payload_json: "{",
+            metadata_json: null,
+            received_at: 50,
+            updated_at: 50,
+            attempts: 0,
+            lane_key: null,
+            claim_token: null,
+            claim_owner: null,
+            claimed_at: null,
+            last_attempt_at: null,
+            last_error: null,
+            completed_metadata_json: null,
+            completed_at: null,
+            failed_at: null,
+            failed_reason: null,
+          }),
+        );
+
+        // listPending should not crash — corrupt rows surface with null payload
+        const pending = await queue.listPending();
+        expect(pending).toHaveLength(2);
+        const good = pending.find((r) => r.id === "good");
+        const corrupt = pending.find((r) => r.id === "corrupt-row");
+        expect(good?.payload).toEqual({ text: "valid" });
+        expect(corrupt?.payload).toBeNull();
+
+        // listClaims should not crash
+        const claims = await queue.listClaims();
+        expect(claims).toHaveLength(0);
+      });
+    });
+
+    it("skips rows with corrupt metadata_json instead of throwing", async () => {
+      await withTempState(async (stateDir) => {
+        const queue = createChannelIngressQueue<{ text: string }, { source: string }>({
+          channelId: "test",
+          accountId: "corrupt-meta",
+          stateDir,
+          now: () => 100,
+        });
+
+        await queue.enqueue(
+          "meta-good",
+          { text: "valid" },
+          { metadata: { source: "ok" }, receivedAt: 1 },
+        );
+
+        const database = openOpenClawStateDatabase({
+          env: createStateDirEnv(stateDir),
+        });
+        const kysely = getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db);
+        executeSqliteQuerySync(
+          database.db,
+          kysely.insertInto("channel_ingress_events").values({
+            queue_name: JSON.stringify(["test", "corrupt-meta"]),
+            event_id: "corrupt-meta-row",
+            channel_id: "test",
+            account_id: "corrupt-meta",
+            status: "pending",
+            payload_json: "{}",
+            metadata_json: "not json",
+            received_at: 50,
+            updated_at: 50,
+            attempts: 0,
+            lane_key: null,
+            claim_token: null,
+            claim_owner: null,
+            claimed_at: null,
+            last_attempt_at: null,
+            last_error: null,
+            completed_metadata_json: null,
+            completed_at: null,
+            failed_at: null,
+            failed_reason: null,
+          }),
+        );
+
+        const pending = await queue.listPending();
+        expect(pending).toHaveLength(2);
+        const good = pending.find((r) => r.id === "meta-good");
+        const corruptMeta = pending.find((r) => r.id === "corrupt-meta-row");
+        expect(good?.payload).toEqual({ text: "valid" });
+        expect(corruptMeta?.payload).toEqual({});
+        expect(corruptMeta?.metadata).toBeNull();
+      });
+    });
+  });
 });

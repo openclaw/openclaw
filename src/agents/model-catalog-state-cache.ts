@@ -94,11 +94,17 @@ export function buildAgentModelCatalogCacheKey(input: AgentModelCatalogCacheKeyI
 }
 
 function parseCachedAgentModelCatalog(rawJson: string): unknown[] | undefined {
-  const parsed = JSON.parse(rawJson) as CachedAgentModelCatalogPayload;
-  if (parsed?.version !== AGENT_MODEL_CATALOG_CACHE_VERSION || !Array.isArray(parsed.entries)) {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawJson);
+  } catch {
     return undefined;
   }
-  return parsed.entries;
+  const catalog = parsed as CachedAgentModelCatalogPayload;
+  if (catalog?.version !== AGENT_MODEL_CATALOG_CACHE_VERSION || !Array.isArray(catalog.entries)) {
+    return undefined;
+  }
+  return catalog.entries;
 }
 
 export function readCachedAgentModelCatalog(

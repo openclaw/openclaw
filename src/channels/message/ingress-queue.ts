@@ -219,7 +219,11 @@ function affectedRows(result: { numAffectedRows?: bigint }): number {
 }
 
 function parseJson(value: string): unknown {
-  return JSON.parse(value);
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
 }
 
 function baseRecord<TPayload, TMetadata>(
