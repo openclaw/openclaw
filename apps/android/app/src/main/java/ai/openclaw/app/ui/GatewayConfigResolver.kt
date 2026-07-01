@@ -264,6 +264,8 @@ internal fun decodeGatewaySetupCode(rawInput: String): GatewaySetupCode? {
   }
 }
 
+internal fun manualTokenLooksLikeSetupCode(rawInput: String): Boolean = resolveSetupCodeCandidate(rawInput)?.let(::decodeGatewaySetupCode) != null
+
 /** Resolves QR scanner text to setup-code or validation error for UI copy. */
 internal fun resolveScannedSetupCodeResult(rawInput: String): GatewayScannedSetupCodeResult {
   val setupCode =

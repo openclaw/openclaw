@@ -78,6 +78,21 @@ class SecurePrefsTest {
   }
 
   @Test
+  fun cameraSharing_defaultsOffAndPersistsOptIn() {
+    val context = RuntimeEnvironment.getApplication()
+    val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)
+    plainPrefs.edit().clear().commit()
+    val prefs = SecurePrefs(context)
+
+    assertFalse(prefs.cameraEnabled.value)
+
+    prefs.setCameraEnabled(true)
+
+    assertTrue(prefs.cameraEnabled.value)
+    assertTrue(plainPrefs.getBoolean("camera.enabled", false))
+  }
+
+  @Test
   fun appearanceThemeMode_defaultsDarkForExistingInstalls() {
     val context = RuntimeEnvironment.getApplication()
     val plainPrefs = context.getSharedPreferences("openclaw.node", Context.MODE_PRIVATE)

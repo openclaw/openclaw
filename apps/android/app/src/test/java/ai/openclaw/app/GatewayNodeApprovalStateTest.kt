@@ -19,6 +19,14 @@ class GatewayNodeApprovalStateTest {
   }
 
   @Test
+  fun nodePairingEventsInvalidateNodeDeviceState() {
+    assertTrue(gatewayEventInvalidatesNodesDevices("node.pair.requested"))
+    assertTrue(gatewayEventInvalidatesNodesDevices("node.pair.resolved"))
+    assertFalse(gatewayEventInvalidatesNodesDevices("device.pair.resolved"))
+    assertFalse(gatewayEventInvalidatesNodesDevices("exec.approval.resolved"))
+  }
+
+  @Test
   fun parsesNodeListApprovalFields() {
     val node =
       parseGatewayNodeSummary(
@@ -86,7 +94,7 @@ class GatewayNodeApprovalStateTest {
           paired = true,
           connected = true,
           approvalState = GatewayNodeApprovalState.PendingApproval,
-          pendingRequestId = null,
+          pendingRequestId = "request-self",
           capabilities = emptyList(),
           commands = emptyList(),
         ),
@@ -97,8 +105,22 @@ class GatewayNodeApprovalStateTest {
       currentNodeCapabilityApprovalState(nodes = nodes, selfNodeId = "self"),
     )
     assertEquals(
+      GatewayNodeApprovalStatus(
+        state = GatewayNodeApprovalState.PendingApproval,
+        pendingRequestId = "request-self",
+      ),
+      currentNodeCapabilityApprovalStatus(nodes = nodes, selfNodeId = "self"),
+    )
+    assertEquals(
       GatewayNodeApprovalState.Loading,
       currentNodeCapabilityApprovalState(nodes = nodes, selfNodeId = "missing"),
+    )
+    assertEquals(
+      GatewayNodeApprovalStatus(
+        state = GatewayNodeApprovalState.Loading,
+        pendingRequestId = null,
+      ),
+      currentNodeCapabilityApprovalStatus(nodes = nodes, selfNodeId = "missing"),
     )
   }
 

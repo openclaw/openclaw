@@ -169,10 +169,11 @@ operator token:
 ```
 
 The operator handoff is intentionally bounded so QR onboarding can start the
-mobile operator loop without granting `operator.admin` or `operator.pairing`.
-It does include `operator.talk.secrets` so the native client can read the Talk
-configuration it needs after bootstrap. Broader admin and pairing scopes require
-a separate approved operator pairing or token flow. Clients should persist
+mobile operator loop and complete native setup without granting pairing
+mutation scopes or `operator.admin`. It includes `operator.talk.secrets` so the
+native client can read the Talk configuration it needs after bootstrap. Broader
+pairing and admin access requires a separate approved operator pairing or token
+flow. Clients should persist
 `hello-ok.auth.deviceTokens` only
 when the connect used bootstrap auth on trusted transport such as `wss://` or
 loopback/local pairing.
@@ -731,8 +732,8 @@ rather than the pre-handshake defaults.
 - Built-in setup-code bootstrap returns the primary node
   `hello-ok.auth.deviceToken` plus a bounded operator token in
   `hello-ok.auth.deviceTokens` for trusted mobile handoff. The operator token
-  includes `operator.talk.secrets` for native Talk configuration reads and
-  excludes `operator.admin` and `operator.pairing`.
+  includes `operator.talk.secrets` for native Talk configuration reads, but
+  excludes pairing mutation scopes and `operator.admin`.
 - While a non-baseline setup-code bootstrap is waiting for approval, `PAIRING_REQUIRED`
   details include `recommendedNextStep: "wait_then_retry"`, `retryable: true`,
   and `pauseReconnect: false`. Clients should keep reconnecting with the same

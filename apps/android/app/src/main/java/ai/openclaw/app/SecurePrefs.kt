@@ -68,7 +68,7 @@ class SecurePrefs(
     MutableStateFlow(loadOrMigrateDisplayName(context = context))
   val displayName: StateFlow<String> = _displayName
 
-  private val _cameraEnabled = MutableStateFlow(plainPrefs.getBoolean("camera.enabled", true))
+  private val _cameraEnabled = MutableStateFlow(plainPrefs.getBoolean("camera.enabled", false))
   val cameraEnabled: StateFlow<Boolean> = _cameraEnabled
 
   private val _locationMode = MutableStateFlow(loadLocationMode())

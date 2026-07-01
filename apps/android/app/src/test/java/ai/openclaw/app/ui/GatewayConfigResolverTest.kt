@@ -249,6 +249,17 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun resolveScannedSetupCodeResultAcceptsEmulatorSetupCode() {
+    val setupCode =
+      encodeSetupCode("""{"url":"ws://10.0.2.2:18789","bootstrapToken":"bootstrap-1"}""")
+
+    val resolved = resolveScannedSetupCodeResult(setupCode)
+
+    assertEquals(setupCode, resolved.setupCode)
+    assertNull(resolved.error)
+  }
+
+  @Test
   fun resolveScannedSetupCodeResultAcceptsQrJsonPayload() {
     val setupCode =
       encodeSetupCode("""{"url":"wss://gateway.example:18789","bootstrapToken":"bootstrap-1"}""")
@@ -405,84 +416,154 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun manualTokenDetectsSetupCodePayloads() {
+    val setupCode =
+      encodeSetupCode("""{"url":"ws://10.0.2.2:18789","bootstrapToken":"bootstrap-1"}""")
+    val qrPayload = """{"setupCode":"$setupCode"}"""
+
+    assertEquals(true, manualTokenLooksLikeSetupCode(setupCode))
+    assertEquals(true, manualTokenLooksLikeSetupCode(qrPayload))
+    assertEquals(false, manualTokenLooksLikeSetupCode("local-mobile-test"))
+    assertEquals(false, manualTokenLooksLikeSetupCode(""))
+  }
+
+  @Test
   fun resolveGatewayConnectConfigPrefersBootstrapTokenFromSetupCode() {
     val setupCode =
-      encodeSetupCode(
-        """{"url":"wss://gateway.example:18789","bootstrapToken":"bootstrap-1"}""",
-      )
+      encodeSetupCode("""{"url":"wss://gateway.example:18789","bootstrapToken":"bootstrap-1"}""")
 
     val resolved =
       resolveGatewayConnectConfig(
         useSetupCode = true,
         setupCode = setupCode,
+        savedManualHost = "",
+        savedManualPort = "",
+        savedManualTls = true,
         manualHostInput = "",
         manualPortInput = "",
-        manualTlsInput = false,
-        bootstrapTokenInput = "",
-        tokenInput = "shared-token",
-        passwordInput = "shared-password",
+        manualTlsInput = true,
+        fallbackBootstrapToken = "",
+        fallbackToken = "shared-token",
+        fallbackPassword = "shared-password",
       )
 
     assertEquals("gateway.example", resolved?.host)
     assertEquals(18789, resolved?.port)
     assertEquals(true, resolved?.tls)
     assertEquals("bootstrap-1", resolved?.bootstrapToken)
-    assertEquals("", resolved?.token)
-    assertEquals("", resolved?.password)
+    assertNull(resolved?.token?.takeIf { it.isNotEmpty() })
+    assertNull(resolved?.password?.takeIf { it.isNotEmpty() })
+  }
+
+  @Test
+  fun resolveGatewayConnectConfigAcceptsQrJsonSetupCodePayload() {
+    val setupCode =
+      encodeSetupCode("""{"url":"wss://gateway.example:18789","bootstrapToken":"bootstrap-1"}""")
+    val qrPayload = """{"setupCode":"$setupCode"}"""
+
+    val resolved =
+      resolveGatewayConnectConfig(
+        useSetupCode = true,
+        setupCode = qrPayload,
+        savedManualHost = "",
+        savedManualPort = "",
+        savedManualTls = true,
+        manualHostInput = "",
+        manualPortInput = "",
+        manualTlsInput = true,
+        fallbackBootstrapToken = "",
+        fallbackToken = "shared-token",
+        fallbackPassword = "shared-password",
+      )
+
+    assertEquals("gateway.example", resolved?.host)
+    assertEquals(18789, resolved?.port)
+    assertEquals(true, resolved?.tls)
+    assertEquals("bootstrap-1", resolved?.bootstrapToken)
+    assertNull(resolved?.token?.takeIf { it.isNotEmpty() })
+    assertNull(resolved?.password?.takeIf { it.isNotEmpty() })
   }
 
   @Test
   fun resolveGatewayConnectConfigDefaultsPortlessWssSetupCodeTo443() {
     val setupCode =
-      encodeSetupCode(
-        """{"url":"wss://gateway.example","bootstrapToken":"bootstrap-1"}""",
-      )
+      encodeSetupCode("""{"url":"wss://gateway.example","bootstrapToken":"bootstrap-1"}""")
 
     val resolved =
       resolveGatewayConnectConfig(
         useSetupCode = true,
         setupCode = setupCode,
+        savedManualHost = "",
+        savedManualPort = "",
+        savedManualTls = true,
         manualHostInput = "",
         manualPortInput = "",
-        manualTlsInput = false,
-        bootstrapTokenInput = "",
-        tokenInput = "",
-        passwordInput = "",
+        manualTlsInput = true,
+        fallbackBootstrapToken = "",
+        fallbackToken = "shared-token",
+        fallbackPassword = "shared-password",
       )
 
     assertEquals("gateway.example", resolved?.host)
     assertEquals(443, resolved?.port)
     assertEquals(true, resolved?.tls)
+    assertEquals("bootstrap-1", resolved?.bootstrapToken)
+    assertNull(resolved?.token?.takeIf { it.isNotEmpty() })
+    assertNull(resolved?.password?.takeIf { it.isNotEmpty() })
+  }
+
+  @Test
+  fun resolveGatewayConnectConfigRejectsInvalidSetupCodeEvenWhenManualFieldsAreValid() {
+    val resolved =
+      resolveGatewayConnectConfig(
+        useSetupCode = true,
+        setupCode = "not-a-setup-code",
+        savedManualHost = "127.0.0.1",
+        savedManualPort = "18789",
+        savedManualTls = false,
+        manualHostInput = "127.0.0.1",
+        manualPortInput = "18789",
+        manualTlsInput = false,
+        fallbackBootstrapToken = "",
+        fallbackToken = "shared-token",
+        fallbackPassword = "",
+      )
+
+    assertNull(resolved)
   }
 
   @Test
   fun resolveGatewayConnectConfigAllowsMdnsCleartextSetupCode() {
     val setupCode =
-      encodeSetupCode(
-        """{"url":"ws://gateway.local:18789","bootstrapToken":"bootstrap-1"}""",
-      )
+      encodeSetupCode("""{"url":"ws://gateway.local:18789","bootstrapToken":"bootstrap-1"}""")
 
     val resolved =
       resolveGatewayConnectConfig(
         useSetupCode = true,
         setupCode = setupCode,
+        savedManualHost = "",
+        savedManualPort = "",
+        savedManualTls = false,
         manualHostInput = "",
         manualPortInput = "",
         manualTlsInput = false,
-        bootstrapTokenInput = "",
-        tokenInput = "",
-        passwordInput = "",
+        fallbackBootstrapToken = "",
+        fallbackToken = "shared-token",
+        fallbackPassword = "shared-password",
       )
 
     assertEquals("gateway.local", resolved?.host)
     assertEquals(18789, resolved?.port)
     assertEquals(false, resolved?.tls)
+    assertEquals("bootstrap-1", resolved?.bootstrapToken)
+    assertNull(resolved?.token?.takeIf { it.isNotEmpty() })
+    assertNull(resolved?.password?.takeIf { it.isNotEmpty() })
   }
 
   @Test
-  fun resolveGatewayConnectPlanPreservesRuntimeOwnedAuthForUnchangedEndpoint() {
-    val plan =
-      resolveGatewayConnectPlan(
+  fun resolveGatewayConnectConfigManualPreservesBootstrapTokenWhenNoReplacementAuthExists() {
+    val resolved =
+      resolveGatewayConnectConfig(
         useSetupCode = false,
         setupCode = "",
         savedManualHost = "127.0.0.1",
@@ -491,21 +572,45 @@ class GatewayConfigResolverTest {
         manualHostInput = "127.0.0.1",
         manualPortInput = "18789",
         manualTlsInput = false,
-        bootstrapTokenInput = "",
-        tokenInput = "",
-        passwordInput = "",
+        fallbackBootstrapToken = "bootstrap-1",
+        fallbackToken = "",
+        fallbackPassword = "",
       )
 
-    assertEquals(GatewaySavedAuthAction.PRESERVE, plan?.savedAuthAction)
-    assertEquals("", plan?.config?.bootstrapToken)
-    assertEquals("", plan?.config?.token)
-    assertEquals("", plan?.config?.password)
+    assertEquals("127.0.0.1", resolved?.host)
+    assertEquals(18789, resolved?.port)
+    assertEquals(false, resolved?.tls)
+    assertEquals("bootstrap-1", resolved?.bootstrapToken)
+    assertEquals("", resolved?.token)
+    assertEquals("", resolved?.password)
   }
 
   @Test
-  fun resolveGatewayConnectPlanReplacesAuthWhenEndpointChanges() {
-    val plan =
-      resolveGatewayConnectPlan(
+  fun resolveGatewayConnectConfigManualDropsBootstrapTokenWhenReplacementPasswordExists() {
+    val resolved =
+      resolveGatewayConnectConfig(
+        useSetupCode = false,
+        setupCode = "",
+        savedManualHost = "127.0.0.1",
+        savedManualPort = "18789",
+        savedManualTls = false,
+        manualHostInput = "127.0.0.1",
+        manualPortInput = "18789",
+        manualTlsInput = false,
+        fallbackBootstrapToken = "bootstrap-1",
+        fallbackToken = "",
+        fallbackPassword = "password-1",
+      )
+
+    assertEquals("", resolved?.bootstrapToken)
+    assertEquals("", resolved?.token)
+    assertEquals("password-1", resolved?.password)
+  }
+
+  @Test
+  fun resolveGatewayConnectConfigManualDropsBootstrapTokenWhenEndpointChanges() {
+    val resolved =
+      resolveGatewayConnectConfig(
         useSetupCode = false,
         setupCode = "",
         savedManualHost = "127.0.0.1",
@@ -514,123 +619,13 @@ class GatewayConfigResolverTest {
         manualHostInput = "127.0.0.2",
         manualPortInput = "18789",
         manualTlsInput = false,
-        bootstrapTokenInput = "",
-        tokenInput = "",
-        passwordInput = "",
+        fallbackBootstrapToken = "bootstrap-1",
+        fallbackToken = "",
+        fallbackPassword = "",
       )
 
-    assertEquals(GatewaySavedAuthAction.REPLACE_ENDPOINT, plan?.savedAuthAction)
-    assertEquals("127.0.0.2", plan?.config?.host)
-  }
-
-  @Test
-  fun resolveGatewayConnectPlanTreatsMissingSavedEndpointAsReplacement() {
-    val plan =
-      resolveGatewayConnectPlan(
-        useSetupCode = false,
-        setupCode = "",
-        savedManualHost = "",
-        savedManualPort = "",
-        savedManualTls = false,
-        manualHostInput = "127.0.0.1",
-        manualPortInput = "18789",
-        manualTlsInput = false,
-        bootstrapTokenInput = "",
-        tokenInput = "",
-        passwordInput = "",
-      )
-
-    assertEquals(GatewaySavedAuthAction.REPLACE_ENDPOINT, plan?.savedAuthAction)
-  }
-
-  @Test
-  fun resolveGatewayConnectPlanMarksSetupCodeAsExplicitReplacement() {
-    val setupCode =
-      encodeSetupCode(
-        """{"url":"wss://gateway.example:18789","bootstrapToken":"bootstrap-1"}""",
-      )
-
-    val plan =
-      resolveGatewayConnectPlan(
-        useSetupCode = true,
-        setupCode = setupCode,
-        savedManualHost = "127.0.0.1",
-        savedManualPort = "18789",
-        savedManualTls = false,
-        manualHostInput = "127.0.0.1",
-        manualPortInput = "18789",
-        manualTlsInput = false,
-        bootstrapTokenInput = "",
-        tokenInput = "",
-        passwordInput = "",
-      )
-
-    assertEquals(GatewaySavedAuthAction.REPLACE_SETUP, plan?.savedAuthAction)
-    assertEquals("bootstrap-1", plan?.config?.bootstrapToken)
-    assertEquals("", plan?.config?.token)
-  }
-
-  @Test
-  fun resolveGatewayConnectPlanUsesOneExplicitCredentialFamily() {
-    val plan =
-      resolveGatewayConnectPlan(
-        useSetupCode = false,
-        setupCode = "",
-        savedManualHost = "127.0.0.1",
-        savedManualPort = "18789",
-        savedManualTls = false,
-        manualHostInput = "127.0.0.1",
-        manualPortInput = "18789",
-        manualTlsInput = false,
-        bootstrapTokenInput = "bootstrap",
-        tokenInput = "token",
-        passwordInput = "password",
-      )
-
-    assertEquals("token", plan?.config?.token)
-    assertEquals("", plan?.config?.bootstrapToken)
-    assertEquals("", plan?.config?.password)
-  }
-
-  @Test
-  fun resolveGatewayConnectPlanReplacesStalePairingForExplicitBootstrapAuth() {
-    val plan =
-      resolveGatewayConnectPlan(
-        useSetupCode = false,
-        setupCode = "",
-        savedManualHost = "gateway.local",
-        savedManualPort = "18789",
-        savedManualTls = false,
-        manualHostInput = "gateway.local",
-        manualPortInput = "18789",
-        manualTlsInput = false,
-        bootstrapTokenInput = "replacement-bootstrap",
-        tokenInput = "",
-        passwordInput = "",
-      )
-
-    assertEquals(GatewaySavedAuthAction.REPLACE_SETUP, plan?.savedAuthAction)
-    assertEquals("replacement-bootstrap", plan?.config?.bootstrapToken)
-  }
-
-  @Test
-  fun resolveGatewayConnectPlanPreservesAuthForHostnameCaseOnlyEdit() {
-    val plan =
-      resolveGatewayConnectPlan(
-        useSetupCode = false,
-        setupCode = "",
-        savedManualHost = "Gateway.Local",
-        savedManualPort = "18789",
-        savedManualTls = false,
-        manualHostInput = "gateway.local",
-        manualPortInput = "18789",
-        manualTlsInput = false,
-        bootstrapTokenInput = "",
-        tokenInput = "",
-        passwordInput = "",
-      )
-
-    assertEquals(GatewaySavedAuthAction.PRESERVE, plan?.savedAuthAction)
+    assertEquals("", resolved?.bootstrapToken)
+    assertEquals("127.0.0.2", resolved?.host)
   }
 
   @Test
@@ -639,12 +634,15 @@ class GatewayConfigResolverTest {
       resolveGatewayConnectConfig(
         useSetupCode = false,
         setupCode = "",
+        savedManualHost = "",
+        savedManualPort = "",
+        savedManualTls = false,
         manualHostInput = "192.168.31.100",
         manualPortInput = "18789",
         manualTlsInput = false,
-        bootstrapTokenInput = "bootstrap-1",
-        tokenInput = "",
-        passwordInput = "",
+        fallbackBootstrapToken = "bootstrap-1",
+        fallbackToken = "",
+        fallbackPassword = "",
       )
 
     assertEquals("192.168.31.100", resolved?.host)
@@ -658,12 +656,15 @@ class GatewayConfigResolverTest {
       resolveGatewayConnectConfig(
         useSetupCode = false,
         setupCode = "",
+        savedManualHost = "",
+        savedManualPort = "",
+        savedManualTls = false,
         manualHostInput = "gateway.local",
         manualPortInput = "18789",
         manualTlsInput = false,
-        bootstrapTokenInput = "bootstrap-1",
-        tokenInput = "",
-        passwordInput = "",
+        fallbackBootstrapToken = "bootstrap-1",
+        fallbackToken = "",
+        fallbackPassword = "",
       )
 
     assertEquals("gateway.local", resolved?.host)
@@ -700,16 +701,41 @@ class GatewayConfigResolverTest {
       resolveGatewayConnectConfig(
         useSetupCode = false,
         setupCode = "",
+        savedManualHost = "",
+        savedManualPort = "",
+        savedManualTls = false,
         manualHostInput = "ws://192.168.178.57:18790",
         manualPortInput = "18789",
         manualTlsInput = true,
-        bootstrapTokenInput = "",
-        tokenInput = "",
-        passwordInput = "",
+        fallbackBootstrapToken = "",
+        fallbackToken = "",
+        fallbackPassword = "",
       )
 
     assertEquals("192.168.178.57", resolved?.host)
     assertEquals(18790, resolved?.port)
+    assertEquals(false, resolved?.tls)
+  }
+
+  @Test
+  fun resolveGatewayConnectConfigAllowsIpv6ManualCleartextEndpoint() {
+    val resolved =
+      resolveGatewayConnectConfig(
+        useSetupCode = false,
+        setupCode = "",
+        savedManualHost = "",
+        savedManualPort = "",
+        savedManualTls = false,
+        manualHostInput = "fe80::1",
+        manualPortInput = "18789",
+        manualTlsInput = false,
+        fallbackBootstrapToken = "",
+        fallbackToken = "",
+        fallbackPassword = "",
+      )
+
+    assertEquals("fe80::1", resolved?.host)
+    assertEquals(18789, resolved?.port)
     assertEquals(false, resolved?.tls)
   }
 
@@ -766,12 +792,15 @@ class GatewayConfigResolverTest {
       resolveGatewayConnectConfig(
         useSetupCode = false,
         setupCode = "",
+        savedManualHost = "",
+        savedManualPort = "",
+        savedManualTls = true,
         manualHostInput = "mydevice.tail1234.ts.net",
         manualPortInput = "",
         manualTlsInput = true,
-        bootstrapTokenInput = "",
-        tokenInput = "",
-        passwordInput = "",
+        fallbackBootstrapToken = "",
+        fallbackToken = "",
+        fallbackPassword = "",
       )
 
     assertEquals("mydevice.tail1234.ts.net", resolved?.host)
