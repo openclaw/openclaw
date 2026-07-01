@@ -231,6 +231,37 @@ describe("embedded-agent runner run registry", () => {
     expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "all" });
   });
 
+  it("keeps accepted active embedded steering out of diagnostic queue depth", async () => {
+    setDiagnosticsEnabledForProcess(true);
+    const queueMessage = vi.fn(async () => {});
+    const handle = {
+      ...createRunHandle(),
+      queueMessage,
+    };
+    setActiveEmbeddedRun("session-active-steer", handle, "agent:main");
+
+    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+      "session-active-steer",
+      "continue",
+    );
+
+    expect(outcome.queued).toBe(true);
+    expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "all" });
+    expect(
+      getDiagnosticSessionState({ sessionId: "session-active-steer", sessionKey: "agent:main" })
+        .queueDepth,
+    ).toBe(0);
+
+    clearActiveEmbeddedRun("session-active-steer", handle, "agent:main");
+
+    const state = getDiagnosticSessionState({
+      sessionId: "session-active-steer",
+      sessionKey: "agent:main",
+    });
+    expect(state.state).toBe("idle");
+    expect(state.queueDepth).toBe(0);
+  });
+
   it("returns a structured no-active-run queue failure", () => {
     const outcome = queueEmbeddedAgentMessageWithOutcome("session-missing", "continue");
 
