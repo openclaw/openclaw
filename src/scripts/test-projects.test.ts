@@ -873,6 +873,12 @@ describe("test-projects args", () => {
         watchMode: false,
       },
       {
+        config: "test/vitest/vitest.unit.config.ts",
+        forwardedArgs: ["src/skills/loading/local-loader.test.ts"],
+        includePatterns: null,
+        watchMode: false,
+      },
+      {
         config: "test/vitest/vitest.tooling.config.ts",
         forwardedArgs: [],
         includePatterns: [
