@@ -623,7 +623,17 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       typeof tool === "function" ? tool : (_ctx: OpenClawPluginToolContext) => tool;
 
     if (typeof tool !== "function") {
-      names.push(tool.name);
+      try {
+        names.push(tool.name);
+      } catch {
+        pushDiagnostic({
+          level: "error",
+          pluginId: record.id,
+          source: record.source,
+          message: "plugin tool registration failed: unreadable tool name",
+        });
+        return;
+      }
     }
 
     const normalized = normalizePluginToolNames(names);
