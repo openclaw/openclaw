@@ -98,6 +98,104 @@ describe("getLoadedRuntimePluginRegistry", () => {
     ).toBeUndefined();
   });
 
+  it("keeps healthy runtime plugins after unreadable plugin record metadata", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push({
+      get id() {
+        throw new Error("plugin id getter exploded");
+      },
+      status: "loaded",
+    } as never);
+    registry.plugins.push({
+      id: "healthy",
+      status: "loaded",
+    } as never);
+    setActivePluginRegistry(registry, "healthy", "default", "/tmp/ws");
+
+    expect(
+      getLoadedRuntimePluginRegistry({
+        workspaceDir: "/tmp/ws",
+        requiredPluginIds: ["healthy"],
+      }),
+    ).toBe(registry);
+  });
+
+  it("does not treat unreadable runtime metadata as an empty plugin scope", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push({
+      get id() {
+        throw new Error("plugin id getter exploded");
+      },
+      status: "loaded",
+    } as never);
+    setActivePluginRegistry(registry, "broken", "default", "/tmp/ws");
+
+    expect(
+      getLoadedRuntimePluginRegistry({
+        workspaceDir: "/tmp/ws",
+        requiredPluginIds: [],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not treat unreadable plugin status as loaded through registrations", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push({
+      id: "broken",
+      get status() {
+        throw new Error("plugin status getter exploded");
+      },
+    } as never);
+    registry.tools.push({
+      pluginId: "broken",
+    } as never);
+    setActivePluginRegistry(registry, "broken", "default", "/tmp/ws");
+
+    expect(
+      getLoadedRuntimePluginRegistry({
+        workspaceDir: "/tmp/ws",
+        requiredPluginIds: ["broken"],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps healthy runtime plugins after unreadable registration owner metadata", () => {
+    const registry = createRegistryWithPlugin("healthy");
+    registry.tools.push({
+      get pluginId() {
+        throw new Error("plugin registration owner getter exploded");
+      },
+    } as never);
+    registry.tools.push({
+      pluginId: "healthy",
+    } as never);
+    setActivePluginRegistry(registry, "healthy", "default", "/tmp/ws");
+
+    expect(
+      getLoadedRuntimePluginRegistry({
+        workspaceDir: "/tmp/ws",
+        requiredPluginIds: ["healthy"],
+      }),
+    ).toBe(registry);
+  });
+
+  it("does not treat unreadable registration owner metadata as an empty plugin scope", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.tools.push({
+      get pluginId() {
+        throw new Error("plugin registration owner getter exploded");
+      },
+    } as never);
+    setActivePluginRegistry(registry, "broken", "default", "/tmp/ws");
+
+    expect(
+      getLoadedRuntimePluginRegistry({
+        workspaceDir: "/tmp/ws",
+        requiredPluginIds: [],
+      }),
+    ).toBeUndefined();
+  });
+
   it("does not reuse workspace-agnostic registries for workspace-specific requests", () => {
     setActivePluginRegistry(createRegistryWithPlugin("demo"), "demo");
 
