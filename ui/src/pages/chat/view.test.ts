@@ -9,12 +9,12 @@ import {
 } from "../../components/markdown.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   createModelCatalog,
   createSessionsListResult,
   DEFAULT_CHAT_MODEL_CATALOG,
-} from "../../lib/chat/model.test-helpers.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
+} from "../../test-helpers/chat-model.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import type { GatewayBrowserClient } from "../../ui/gateway.ts";
 import {

@@ -1,15 +1,15 @@
 // Control UI tests cover chat model select state behavior.
 import { describe, expect, it } from "vitest";
 import {
-  resolveChatModelOverrideValue,
-  resolveChatModelSelectState,
-} from "./model-select-state.ts";
-import {
   createModelCatalog,
   createSessionsListResult,
   DEEPSEEK_CHAT_MODEL,
   DEFAULT_CHAT_MODEL_CATALOG,
-} from "./model.test-helpers.ts";
+} from "../../test-helpers/chat-model.ts";
+import {
+  resolveChatModelOverrideValue,
+  resolveChatModelSelectState,
+} from "./model-select-state.ts";
 
 type ChatModelStateInput = Parameters<typeof resolveChatModelSelectState>[0];
 

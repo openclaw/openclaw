@@ -1,6 +1,12 @@
 // Control UI tests cover chat model ref behavior.
 import { describe, expect, it } from "vitest";
 import {
+  createAmbiguousModelCatalog,
+  createModelCatalog,
+  DEEPSEEK_CHAT_MODEL,
+  OPENAI_GPT5_MINI_MODEL,
+} from "../../test-helpers/chat-model.ts";
+import {
   buildChatModelOption,
   buildQualifiedChatModelValue,
   createChatModelOverride,
@@ -10,12 +16,6 @@ import {
   resolvePreferredServerChatModelValue,
   resolveServerChatModelValue,
 } from "./model-ref.ts";
-import {
-  createAmbiguousModelCatalog,
-  createModelCatalog,
-  DEEPSEEK_CHAT_MODEL,
-  OPENAI_GPT5_MINI_MODEL,
-} from "./model.test-helpers.ts";
 
 const catalog = createModelCatalog(OPENAI_GPT5_MINI_MODEL, {
   id: "claude-sonnet-4-5",
